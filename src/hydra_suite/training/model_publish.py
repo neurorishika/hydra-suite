@@ -6,7 +6,7 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .contracts import TrainingRole
 
@@ -90,6 +90,27 @@ def load_model_registry() -> dict[str, Any]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def iter_registry_entries() -> "Iterable[tuple[str, dict[str, Any]]]":
+    """Yield ``(key, metadata)`` pairs from the registry, accepting both the
+    current flat-root format and the future v2 root format.
+
+    During phases 1–6 the registry is still written in flat-root format;
+    this helper lets UI code read either layout transparently. Phase 7
+    removes flat-root support.
+    """
+    data = load_model_registry()
+    if not data:
+        return
+    if data.get("schema_version") == 2 and isinstance(data.get("entries"), dict):
+        for key, meta in data["entries"].items():
+            if isinstance(meta, dict):
+                yield str(key), meta
+        return
+    for key, meta in data.items():
+        if isinstance(meta, dict):
+            yield str(key), meta
 
 
 def save_model_registry(registry: dict[str, Any]) -> None:
