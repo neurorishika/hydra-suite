@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .contracts import CustomCNNParams, TrainingRole, TrainingRunSpec
 
@@ -517,6 +517,52 @@ def _save_tiny_checkpoint(
         "model_state_dict": model.state_dict(),
     }
     _torch.save(ckpt_dict, str(save_path))
+
+
+def emit_yolo_multihead_manifest(
+    *,
+    manifest_path: str,
+    factors: list[tuple[str, Path, list[str]]],
+    input_size: tuple[int, int],
+    monochrome: bool,
+) -> Path:
+    """Write a .multihead.json manifest for a multi-head YOLO bundle.
+
+    ``factors`` is a list of ``(factor_name, pt_path, class_names)`` tuples.
+    Per-factor .pt paths are stored relative to the manifest location.
+    """
+    import json as _json
+
+    manifest_abs = Path(manifest_path).expanduser().resolve()
+    manifest_abs.parent.mkdir(parents=True, exist_ok=True)
+
+    factor_names: list[str] = []
+    factor_entries: list[dict[str, Any]] = []
+    for factor_name, pt_path, class_names in factors:
+        pt_abs = Path(pt_path).expanduser().resolve()
+        try:
+            rel = pt_abs.relative_to(manifest_abs.parent).as_posix()
+        except ValueError:
+            rel = str(pt_abs)
+        factor_names.append(str(factor_name))
+        factor_entries.append(
+            {
+                "factor": str(factor_name),
+                "path": rel,
+                "class_names": [str(c) for c in class_names],
+            }
+        )
+
+    payload = {
+        "schema_version": 2,
+        "kind": "yolo_multihead_bundle",
+        "factor_names": factor_names,
+        "factor_models": factor_entries,
+        "input_size": [int(input_size[0]), int(input_size[1])],
+        "monochrome": bool(monochrome),
+    }
+    manifest_abs.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+    return manifest_abs
 
 
 def _try_onnx_export(model, ckpt_dict, out_ckpt, log_cb):

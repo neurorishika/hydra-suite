@@ -198,3 +198,38 @@ def test_yolo_flat_publish_writes_sidecar(tmp_path, monkeypatch):
     assert data["class_names_per_factor"] == [["antA", "antB", "antC"]]
     assert data["input_size"] == [224, 224]
     assert data["monochrome"] is False
+
+
+def test_multihead_yolo_manifest_emission(tmp_path):
+    """emit_yolo_multihead_manifest writes a manifest that references per-factor .pt paths."""
+    import json
+
+    from hydra_suite.training.runner import emit_yolo_multihead_manifest
+
+    factor_dirs = []
+    for fname, classes in [("color", ["r", "g", "b"]), ("shape", ["sq", "ci"])]:
+        fdir = tmp_path / fname
+        fdir.mkdir()
+        pt = fdir / "best.pt"
+        pt.write_bytes(b"fake")
+        factor_dirs.append((fname, pt, classes))
+
+    manifest_path = tmp_path / "bundle.multihead.json"
+    emit_yolo_multihead_manifest(
+        manifest_path=str(manifest_path),
+        factors=factor_dirs,
+        input_size=(224, 224),
+        monochrome=False,
+    )
+
+    data = json.loads(manifest_path.read_text())
+    assert data["schema_version"] == 2
+    assert data["kind"] == "yolo_multihead_bundle"
+    assert data["factor_names"] == ["color", "shape"]
+    assert data["input_size"] == [224, 224]
+    assert data["monochrome"] is False
+    assert len(data["factor_models"]) == 2
+    assert data["factor_models"][0]["factor"] == "color"
+    assert data["factor_models"][0]["class_names"] == ["r", "g", "b"]
+    # Paths are relative to the manifest location
+    assert data["factor_models"][0]["path"] == "color/best.pt"
