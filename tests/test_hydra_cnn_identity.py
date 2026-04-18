@@ -352,63 +352,132 @@ def test_track_cnn_history_build_list():
 
 
 def test_hungarian_cnn_match_bonus_applied():
-    """When detection class == track identity, cost decreases by match_bonus."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class="tag_3",
-        track_identity="tag_3",
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+    """When detection class == track identity, delta is -match_bonus."""
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        apply_cnn_identity_cost,
     )
-    assert adjusted == pytest.approx(50.0 - 20.0)
+
+    det = ClassPrediction(
+        det_index=0,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.9,),
+    )
+    delta = apply_cnn_identity_cost(
+        track_identity=("antA",),
+        det=det,
+        match_bonus=0.5,
+        mismatch_penalty=1.0,
+        scoring_mode="atomic",
+    )
+    assert delta == -0.5
 
 
 def test_hungarian_cnn_mismatch_penalty_applied():
-    """When detection class != track identity, cost increases by mismatch_penalty."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class="tag_0",
-        track_identity="tag_3",
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+    """When detection class != track identity, delta is +mismatch_penalty."""
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        apply_cnn_identity_cost,
     )
-    assert adjusted == pytest.approx(50.0 + 50.0)
+
+    det = ClassPrediction(
+        det_index=0,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.9,),
+    )
+    delta = apply_cnn_identity_cost(
+        track_identity=("antB",),
+        det=det,
+        match_bonus=0.5,
+        mismatch_penalty=1.0,
+        scoring_mode="atomic",
+    )
+    assert delta == 1.0
 
 
 def test_hungarian_cnn_no_adjustment_when_det_none():
-    """No cost adjustment when det_class is None (low confidence)."""
+    """No cost adjustment when det is None."""
     from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
 
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class=None,
-        track_identity="tag_3",
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+    delta = apply_cnn_identity_cost(
+        track_identity=("antA",),
+        det=None,
+        match_bonus=0.5,
+        mismatch_penalty=1.0,
+        scoring_mode="atomic",
     )
-    assert adjusted == pytest.approx(50.0)
+    assert delta == pytest.approx(0.0)
 
 
 def test_hungarian_cnn_no_adjustment_when_track_identity_none():
     """No cost adjustment when track identity is None (unassigned)."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class="tag_3",
-        track_identity=None,
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        apply_cnn_identity_cost,
     )
-    assert adjusted == pytest.approx(50.0)
+
+    det = ClassPrediction(
+        det_index=0,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.9,),
+    )
+    delta = apply_cnn_identity_cost(
+        track_identity=None,
+        det=det,
+        match_bonus=0.5,
+        mismatch_penalty=1.0,
+        scoring_mode="atomic",
+    )
+    assert delta == pytest.approx(0.0)
+
+
+def test_apply_cnn_identity_cost_atomic_multi_factor():
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        apply_cnn_identity_cost,
+    )
+
+    track_identity = ("B", "G")
+    det = ClassPrediction(
+        det_index=0,
+        factor_names=("color", "shape"),
+        class_names=("B", "B"),
+        confidences=(0.9, 0.9),
+    )
+    delta = apply_cnn_identity_cost(
+        track_identity=track_identity,
+        det=det,
+        match_bonus=0.5,
+        mismatch_penalty=1.0,
+        scoring_mode="atomic",
+    )
+    assert delta == 1.0
+
+
+def test_apply_cnn_identity_cost_per_head_average_multi_factor():
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        apply_cnn_identity_cost,
+    )
+
+    track_identity = ("B", "unknown")
+    det = ClassPrediction(
+        det_index=0,
+        factor_names=("color", "shape"),
+        class_names=("B", "G"),
+        confidences=(0.9, 0.9),
+    )
+    delta = apply_cnn_identity_cost(
+        track_identity=track_identity,
+        det=det,
+        match_bonus=0.5,
+        mismatch_penalty=1.0,
+        scoring_mode="per_head_average",
+    )
+    assert abs(delta - (-0.5 / 2)) < 1e-9
 
 
 # ---------------------------------------------------------------------------

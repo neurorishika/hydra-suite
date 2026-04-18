@@ -415,21 +415,35 @@ class TrackCNNHistory:
 
 
 def apply_cnn_identity_cost(
-    cost: float,
-    det_class: str | None,
-    track_identity: str | None,
+    *,
+    track_identity: tuple[str | None, ...] | None,
+    det: ClassPrediction | None,
     match_bonus: float,
     mismatch_penalty: float,
+    scoring_mode: str,
 ) -> float:
-    """Apply CNN identity match bonus / mismatch penalty to a cost value.
-
-    Returns cost unchanged when either side is uncertain (None).
+    """Compute the cost delta contributed by a CNN identity classifier for a
+    (track, detection) pair under the given scoring mode.
     """
-    if det_class is None or track_identity is None:
-        return cost
-    if det_class == track_identity:
-        return cost - match_bonus
-    return cost + mismatch_penalty
+    if track_identity is None or det is None:
+        return 0.0
+    det_tuple = tuple(det.class_names)
+    if scoring_mode == "atomic":
+        return cost_atomic(
+            track_identity,
+            det_tuple,
+            match_bonus=match_bonus,
+            mismatch_penalty=mismatch_penalty,
+        )
+    if scoring_mode == "per_head_average":
+        return cost_per_head_average(
+            track_identity,
+            det_tuple,
+            match_bonus=match_bonus,
+            mismatch_penalty=mismatch_penalty,
+            K=len(det_tuple),
+        )
+    raise ValueError(f"unknown scoring_mode {scoring_mode!r}")
 
 
 def cost_atomic(
