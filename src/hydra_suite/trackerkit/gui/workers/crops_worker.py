@@ -226,38 +226,36 @@ class InterpolatedCropsWorker(BaseWorker):
         return cnn_backends, cnn_labels
 
     def _init_headtail_analyzer(self):
-        """Initialize head-tail direction analyzer. Returns analyzer or None."""
+        """Initialize head-tail direction analyzer. Returns analyzer or None.
+
+        Raises:
+            ClassifierFormatError: if the configured model path exists but
+                cannot be loaded by any supported backend.  Callers in
+                BaseWorker.run() forward this to the ``error`` signal.
+        """
         headtail_model_path = str(self.params.get("YOLO_HEADTAIL_MODEL_PATH", ""))
         if not headtail_model_path or not os.path.exists(headtail_model_path):
             return None
-        try:
-            from hydra_suite.core.identity.classification.headtail import (
-                HeadTailAnalyzer,
-            )
+        from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-            _ht_device = _runtime_to_native_device(
-                self.params.get(
-                    "HEADTAIL_COMPUTE_RUNTIME",
-                    self.params.get("COMPUTE_RUNTIME", "cpu"),
-                )
+        _ht_device = _runtime_to_native_device(
+            self.params.get(
+                "HEADTAIL_COMPUTE_RUNTIME",
+                self.params.get("COMPUTE_RUNTIME", "cpu"),
             )
-            analyzer = HeadTailAnalyzer(
-                model_path=headtail_model_path,
-                device=_ht_device,
-                conf_threshold=float(
-                    self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)
-                ),
-                reference_aspect_ratio=float(
-                    self.params.get("REFERENCE_ASPECT_RATIO", 2.0)
-                ),
-            )
-            if not analyzer.is_available:
-                analyzer.close()
-                return None
-            return analyzer
-        except Exception as exc:
-            logger.warning("Interpolated head-tail analysis disabled: %s", exc)
+        )
+        analyzer = HeadTailAnalyzer(
+            model_path=headtail_model_path,
+            device=_ht_device,
+            conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
+            reference_aspect_ratio=float(
+                self.params.get("REFERENCE_ASPECT_RATIO", 2.0)
+            ),
+        )
+        if not analyzer.is_available:
+            analyzer.close()
             return None
+        return analyzer
 
     def _init_interpolation_backends(self, output_dir):
         """Initialize optional analysis backends after eligible gap tasks exist."""

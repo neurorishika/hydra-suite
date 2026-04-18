@@ -247,7 +247,12 @@ class HeadTailAnalyzer:
     # ------------------------------------------------------------------
 
     def _load_model(self, model_path_str: str) -> None:
-        """Load classifier artifact, preferring v2 ClassifierBackend path."""
+        """Load classifier artifact, preferring v2 ClassifierBackend path.
+
+        Raises:
+            ClassifierFormatError: if the file exists but cannot be loaded by
+                any supported path (v2, legacy tiny, or YOLO classify).
+        """
         from hydra_suite.core.identity.classification.backend import ClassifierBackend
         from hydra_suite.core.identity.classification.errors import (
             ClassifierFormatError,
@@ -258,8 +263,9 @@ class HeadTailAnalyzer:
         path_obj = Path(path).expanduser().resolve()
 
         if not path_obj.exists():
-            logger.warning("HeadTailAnalyzer: path does not exist: %s", path)
-            return
+            raise ClassifierFormatError(
+                f"HeadTailAnalyzer: path does not exist: {path!r}"
+            )
 
         # Attempt v2 ClassifierBackend path first.
         # For .pth/.pt files, we peek at schema_version to avoid feeding
@@ -340,8 +346,19 @@ class HeadTailAnalyzer:
                 "HeadTailAnalyzer: loaded YOLO classify model from %s",
                 path_obj.name,
             )
+            return
         except Exception as exc:
-            logger.warning("HeadTailAnalyzer: failed to load model: %s", exc)
+            logger.debug(
+                "HeadTailAnalyzer: YOLO classify path failed for %s: %s", path, exc
+            )
+
+        # All loading paths failed — surface as a hard error so callers and the
+        # tracking worker error signal receive a structured exception rather than
+        # a silent no-op.
+        raise ClassifierFormatError(
+            f"Cannot load {path!r} as a v2 classifier, legacy tiny checkpoint, "
+            "or YOLO classify model."
+        )
 
     @staticmethod
     def _is_legacy_checkpoint(path: str) -> bool:

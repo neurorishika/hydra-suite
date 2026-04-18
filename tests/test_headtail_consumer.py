@@ -105,3 +105,14 @@ def test_headtail_predict_labels_returns_normalized(tiny_flat_headtail):
     for label, conf in out:
         assert label in HeadTailAnalyzer.valid_output_labels()
         assert 0.0 <= conf <= 1.0
+
+
+def test_headtail_load_failure_surfaces_as_exception(tmp_path):
+    """Invalid checkpoints raise ClassifierError, not silent warnings."""
+    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+
+    bad = tmp_path / "not_a_checkpoint.pth"
+    bad.write_bytes(b"garbage")
+    with pytest.raises(ClassifierFormatError):
+        HeadTailAnalyzer(model_path=str(bad), compute_runtime="cpu")
