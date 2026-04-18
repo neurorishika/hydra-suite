@@ -272,6 +272,8 @@ When adding a new model/method: define a pipeline key, add capability rules in `
 - `src/hydra_suite/core/assigners/hungarian.py`
 - `src/hydra_suite/core/post/processing.py`
 - `src/hydra_suite/core/identity/runtime_api.py`
+- `src/hydra_suite/core/identity/classification/backend.py` — shared classifier loader
+- `src/hydra_suite/core/identity/classification/errors.py` — classifier error hierarchy
 - `src/hydra_suite/runtime/compute_runtime.py`
 - `src/hydra_suite/paths.py` — central path resolution (all asset/data paths)
 - `src/hydra_suite/widgets/workers.py` — BaseWorker base class (in-progress)

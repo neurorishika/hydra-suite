@@ -52,6 +52,8 @@ Current examples:
 - `yolo_obb_detection`
 - `yolo_pose`
 - `sleap_pose`
+- `cnn_identity`
+- `head_tail`
 
 For future additions, use names like:
 
