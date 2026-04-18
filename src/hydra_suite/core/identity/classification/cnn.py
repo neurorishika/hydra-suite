@@ -30,9 +30,10 @@ class CNNIdentityConfig:
     confidence: float = 0.5
     label: str = ""
     batch_size: int = 64
-    match_bonus: float = 20.0
-    mismatch_penalty: float = 50.0
+    match_bonus: float = 0.5
+    mismatch_penalty: float = 1.0
     window: int = 10
+    scoring_mode: str = "atomic"
 
 
 @dataclass(frozen=True)
@@ -506,3 +507,40 @@ def apply_cnn_identity_cost(
     if det_class == track_identity:
         return cost - match_bonus
     return cost + mismatch_penalty
+
+
+def cost_atomic(
+    track: tuple[str | None, ...],
+    det: tuple[str | None, ...],
+    *,
+    match_bonus: float,
+    mismatch_penalty: float,
+) -> float:
+    """Atomic tuple compare: any ``None`` or ``"unknown"`` in either side -> no signal."""
+    for x in (*track, *det):
+        if x is None or x == "unknown":
+            return 0.0
+    return -float(match_bonus) if track == det else +float(mismatch_penalty)
+
+
+def cost_per_head_average(
+    track: tuple[str | None, ...],
+    det: tuple[str | None, ...],
+    *,
+    match_bonus: float,
+    mismatch_penalty: float,
+    K: int,
+) -> float:
+    """Per-head average cost. Divisor is always K (not the number of comparable heads)."""
+    if K <= 0:
+        return 0.0
+    contributions = 0.0
+    for k in range(K):
+        tk = track[k] if k < len(track) else None
+        dk = det[k] if k < len(det) else None
+        if tk is None or tk == "unknown":
+            continue
+        if dk is None or dk == "unknown":
+            continue
+        contributions += -float(match_bonus) if tk == dk else +float(mismatch_penalty)
+    return contributions / float(K)

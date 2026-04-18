@@ -17,9 +17,10 @@ def test_cnn_identity_config_defaults():
     assert cfg.confidence == 0.5
     assert cfg.label == ""
     assert cfg.batch_size == 64
-    assert cfg.match_bonus == 20.0
-    assert cfg.mismatch_penalty == 50.0
+    assert cfg.match_bonus == 0.5
+    assert cfg.mismatch_penalty == 1.0
     assert cfg.window == 10
+    assert cfg.scoring_mode == "atomic"
 
 
 def test_cnn_identity_config_custom():
@@ -485,3 +486,17 @@ def test_class_prediction_flat_accessors_error_on_multi_factor():
         _ = p.class_name
     with pytest.raises(ValueError):
         _ = p.confidence
+
+
+def test_cnn_identity_config_scoring_mode_default():
+    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+
+    cfg = CNNIdentityConfig()
+    assert cfg.scoring_mode == "atomic"
+
+
+def test_cnn_identity_config_accepts_per_head_average():
+    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+
+    cfg = CNNIdentityConfig(scoring_mode="per_head_average")
+    assert cfg.scoring_mode == "per_head_average"
