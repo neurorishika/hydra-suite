@@ -121,3 +121,55 @@ class HeadTailImportDialog(BaseDialog):
 
     def description(self) -> str:
         return self._desc_edit.text().strip()
+
+
+def annotate_discovered_headtail_entry(
+    *,
+    rel_path: str,
+    species: str,
+    description: str,
+) -> None:
+    """Write a TrackerKit-side annotation for a discovered head-tail model.
+
+    The file is not copied; the registry entry references the existing managed path.
+    """
+    from datetime import datetime
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.identity.classification.headtail import (
+        validate_headtail_labels,
+    )
+    from hydra_suite.training.model_publish import (
+        get_models_root,
+        load_model_registry,
+        save_model_registry,
+    )
+
+    models_root = get_models_root()
+    abs_path = str(models_root / rel_path)
+    backend = ClassifierBackend(abs_path, compute_runtime="cpu")
+    try:
+        meta = backend.metadata
+    finally:
+        backend.close()
+    normalized = validate_headtail_labels(meta.class_names_per_factor[0])
+
+    entry = {
+        "schema_version": 2,
+        "arch": meta.arch,
+        "factor_names": ["flat"],
+        "class_names_per_factor": [normalized],
+        "input_size": [meta.input_size[0], meta.input_size[1]],
+        "monochrome": meta.monochrome,
+        "species": species or "unknown",
+        "description": description,
+        "added_at": datetime.now().isoformat(timespec="seconds"),
+        "task_family": "classify",
+        "usage_role": "head_tail",
+    }
+    reg = load_model_registry()
+    if reg.get("schema_version") == 2 and isinstance(reg.get("entries"), dict):
+        reg["entries"][rel_path] = entry
+    else:
+        reg[rel_path] = entry
+    save_model_registry(reg)

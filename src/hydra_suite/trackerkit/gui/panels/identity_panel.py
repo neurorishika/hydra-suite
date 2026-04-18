@@ -1161,7 +1161,50 @@ class IdentityPanel(QWidget):
         if rel_path == "__add_new__":
             self._handle_add_new_cnn_identity_model()
             return
+        if rel_path and not self._registry_has_cnn_entry(rel_path):
+            self._annotate_discovered_cnn_model(rel_path)
+            return
         self._update_cnn_identity_verification_panel(rel_path)
+
+    def _registry_has_cnn_entry(self, rel_path: str) -> bool:
+        from hydra_suite.training.model_publish import iter_registry_entries
+
+        return any(
+            key == rel_path and meta.get("usage_role") == "cnn_identity"
+            for key, meta in iter_registry_entries()
+        )
+
+    def _annotate_discovered_cnn_model(self, rel_path: str) -> None:
+        """Open the import dialog for a discovered classkit-published model."""
+        from hydra_suite.trackerkit.gui.dialogs.cnn_identity_import_dialog import (
+            CNNIdentityImportDialog,
+            annotate_discovered_cnn_entry,
+            describe_cnn_identity_candidate,
+        )
+        from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
+
+        abs_path = os.path.join(get_models_root_directory(), rel_path)
+        try:
+            summary = describe_cnn_identity_candidate(abs_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Error", f"Cannot read model: {exc}")
+            return
+
+        dlg = CNNIdentityImportDialog(summary, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            self._refresh_cnn_identity_model_combo()
+            return
+        annotate_discovered_cnn_entry(
+            rel_path=rel_path,
+            species=dlg.species(),
+            classification_label=dlg.classification_label(),
+            scoring_mode=dlg.scoring_mode(),
+        )
+        self._refresh_cnn_identity_model_combo()
+        idx = self.combo_cnn_identity_model.findData(rel_path)
+        if idx >= 0:
+            self.combo_cnn_identity_model.setCurrentIndex(idx)
+            self._update_cnn_identity_verification_panel(rel_path)
 
     def _update_cnn_identity_verification_panel(self, rel_path: str) -> None:
         """Populate the read-only verification labels from the registry entry."""

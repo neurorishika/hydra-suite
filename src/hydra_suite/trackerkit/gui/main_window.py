@@ -2228,11 +2228,16 @@ class MainWindow(QMainWindow):
             )
 
     def on_yolo_headtail_model_changed(self: object, index: object) -> object:
-        """Handle head/tail classification model combo-box changes, opening the add-model dialog when the sentinel item is selected."""
-        if (
-            self._identity_panel.combo_yolo_headtail_model.itemData(index, Qt.UserRole)
-            == "__add_new__"
-        ):
+        """Handle head/tail classification model combo-box changes.
+
+        Handles three cases:
+        1. ``__add_new__`` sentinel — opens the add-model file dialog.
+        2. Discovered (unannotated) classkit entry — opens the annotation dialog.
+        3. Normal registered entry — syncs analysis mode UI.
+        """
+        combo = self._identity_panel.combo_yolo_headtail_model
+        rel_path = combo.itemData(index, Qt.UserRole)
+        if rel_path == "__add_new__":
             ht_type = getattr(
                 self._identity_panel, "combo_yolo_headtail_model_type", None
             )
@@ -2245,7 +2250,7 @@ class MainWindow(QMainWindow):
             )
             os.makedirs(repo_dir, exist_ok=True)
             self._handle_add_new_yolo_model(
-                combo=self._identity_panel.combo_yolo_headtail_model,
+                combo=combo,
                 refresh_callback=self._identity_panel._refresh_yolo_headtail_model_combo,
                 selection_callback=self._set_yolo_headtail_model_selection,
                 task_family="classify",
@@ -2254,8 +2259,55 @@ class MainWindow(QMainWindow):
                 repository_dir=repo_dir,
             )
             return
+        if rel_path and self._headtail_is_discovered_entry(rel_path):
+            self._annotate_discovered_headtail_model(rel_path)
+            return
         if hasattr(self, "_detection_panel"):
             self._detection_panel._on_yolo_mode_changed(index)
+        self._sync_individual_analysis_mode_ui()
+
+    def _headtail_is_discovered_entry(self, rel_path: str) -> bool:
+        """Return True if rel_path is not yet annotated as head_tail in the registry."""
+        from hydra_suite.training.model_publish import iter_registry_entries
+
+        return all(
+            not (key == rel_path and meta.get("usage_role") == "head_tail")
+            for key, meta in iter_registry_entries()
+        )
+
+    def _annotate_discovered_headtail_model(self, rel_path: str) -> None:
+        """Open the head-tail import dialog for a discovered classkit-published model."""
+        from PySide6.QtWidgets import QDialog, QMessageBox
+
+        from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
+            HeadTailImportDialog,
+            annotate_discovered_headtail_entry,
+            describe_headtail_candidate,
+        )
+
+        abs_path = os.path.join(get_models_root_directory(), rel_path)
+        try:
+            summary = describe_headtail_candidate(abs_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Cannot read head-tail model: {exc}"
+            )
+            return
+
+        dlg = HeadTailImportDialog(summary, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            self._identity_panel._refresh_yolo_headtail_model_combo()
+            return
+        annotate_discovered_headtail_entry(
+            rel_path=rel_path,
+            species=dlg.species(),
+            description=dlg.description(),
+        )
+        self._identity_panel._refresh_yolo_headtail_model_combo()
+        combo = self._identity_panel.combo_yolo_headtail_model
+        idx = combo.findData(rel_path)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
         self._sync_individual_analysis_mode_ui()
 
     def _handle_add_new_yolo_model(
