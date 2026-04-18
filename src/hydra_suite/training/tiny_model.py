@@ -110,15 +110,16 @@ def export_tiny_to_onnx(
 ) -> Path:
     """Export a TinyClassifier to ONNX format.
 
-    Uses ``input_size`` from *ckpt* to build the dummy input (default 128×64).
-    Axes 0 (batch) are dynamic so any batch size works at runtime.
+    Uses ``input_size`` from *ckpt* to build the dummy input (``[H, W]``,
+    default ``[64, 128]``). Axes 0 (batch) are dynamic so any batch size
+    works at runtime.
 
     Returns the path of the exported ONNX file.
     """
     import torch
 
     onnx_path = Path(onnx_path)
-    input_w, input_h = ckpt.get("input_size", [128, 64])
+    input_h, input_w = ckpt.get("input_size", [64, 128])
     dummy = torch.zeros(1, 3, int(input_h), int(input_w))
     model.eval()
     torch.onnx.export(

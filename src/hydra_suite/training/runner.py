@@ -476,73 +476,47 @@ def _run_tiny_validation(model, val_loader, device):
 
 
 def _save_tiny_checkpoint(
+    *,
     model,
-    spec,
-    run_dir,
-    class_to_idx,
-    num_classes,
-    input_w,
-    input_h,
+    save_path: str,
+    class_names: list,
+    input_size: tuple,
+    monochrome: bool,
+    hidden_layers: int,
+    hidden_dim: int,
+    dropout: float,
     best_val_acc,
     history,
-    log_cb,
-):
-    """Save .pth checkpoint, attempt ONNX export, and write metrics JSON.
+) -> None:
+    """Save a TinyClassifier checkpoint in the v2 classifier-artifact format.
 
-    Returns (artifact_path, onnx_path, metrics_path).
+    ``input_size`` is serialised as ``[H, W]``. ``class_names_per_factor`` is
+    a length-1 list of the flat class list; ``class_names`` is kept for
+    readability. ``schema_version`` is pinned at 2.
+
+    ``history`` may be a list of per-epoch dicts (from the tiny training loop)
+    or a plain dict; it is stored as-is.
     """
-    import json as _json
+    import torch as _torch
 
-    import torch
-
-    weights_dir = run_dir / "weights"
-    weights_dir.mkdir(parents=True, exist_ok=True)
-
-    _role_slug = (
-        spec.role.value.replace("classify_", "")
-        .replace("_tiny", "_tiny")
-        .replace("_yolo", "_yolo")
-    )
-    sorted_class_items = sorted(class_to_idx.items(), key=lambda kv: int(kv[1]))
-    _class_slug = "-".join(name for name, _idx in sorted_class_items)
-    if len(_class_slug) > 48:
-        _class_slug = f"{num_classes}cls"
-    _run_stem = run_dir.parent.name
-    _model_filename = f"classkit_{_role_slug}_{_class_slug}_{_run_stem}.pth"
-    out_ckpt = weights_dir / _model_filename
-
-    _ckpt_dict = {
-        "model_state_dict": model.state_dict(),
+    h, w = int(input_size[0]), int(input_size[1])
+    ckpt_dict = {
+        "schema_version": 2,
         "arch": "tinyclassifier",
-        "input_size": [input_w, input_h],
-        "num_classes": num_classes,
-        "class_names": [name for name, _idx in sorted_class_items],
+        "input_size": [h, w],
+        "factor_names": ["flat"],
+        "class_names_per_factor": [list(class_names)],
+        "class_names": list(class_names),
+        "num_classes": len(class_names),
+        "monochrome": bool(monochrome),
+        "hidden_layers": int(hidden_layers),
+        "hidden_dim": int(hidden_dim),
+        "dropout": float(dropout),
         "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
-        "history": history,
-        "hidden_layers": int(spec.tiny_params.hidden_layers),
-        "hidden_dim": int(spec.tiny_params.hidden_dim),
-        "dropout": float(spec.tiny_params.dropout),
-        "monochrome": bool(getattr(spec.augmentation_profile, "monochrome", False)),
+        "history": history if history is not None else [],
+        "model_state_dict": model.state_dict(),
     }
-    torch.save(_ckpt_dict, out_ckpt)
-
-    _onnx_path = _try_onnx_export(model, _ckpt_dict, out_ckpt, log_cb)
-
-    metrics_path = run_dir / "tiny_metrics.json"
-    metrics_path.write_text(
-        _json.dumps(
-            {
-                "best_val_acc": (
-                    float(best_val_acc) if best_val_acc is not None else None
-                ),
-                "history": history,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    return out_ckpt, _onnx_path, metrics_path
+    _torch.save(ckpt_dict, str(save_path))
 
 
 def _try_onnx_export(model, ckpt_dict, out_ckpt, log_cb):
@@ -748,19 +722,56 @@ def _train_tiny_classify(
         model.load_state_dict(best_state, strict=True)
 
     _safe_log(log_cb, "Saving checkpoint and attempting ONNX export...")
-    out_ckpt, _onnx_path, metrics_path = _save_tiny_checkpoint(
-        model,
-        spec,
-        run_dir,
-        class_to_idx,
-        num_classes,
-        input_w,
-        input_h,
-        best_val_acc,
-        history,
-        log_cb,
+
+    # Path derivation
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    sorted_class_items = sorted(class_to_idx.items(), key=lambda kv: int(kv[1]))
+    _role_slug = spec.role.value.replace("classify_", "")
+    _class_slug = "-".join(name for name, _idx in sorted_class_items)
+    if len(_class_slug) > 48:
+        _class_slug = f"{num_classes}cls"
+    _run_stem = run_dir.parent.name
+    _model_filename = f"classkit_{_role_slug}_{_class_slug}_{_run_stem}.pth"
+    out_ckpt = weights_dir / _model_filename
+
+    class_names_list = [name for name, _idx in sorted_class_items]
+
+    _save_tiny_checkpoint(
+        model=model,
+        save_path=str(out_ckpt),
+        class_names=class_names_list,
+        input_size=(int(input_h), int(input_w)),
+        monochrome=bool(getattr(spec.augmentation_profile, "monochrome", False)),
+        hidden_layers=int(spec.tiny_params.hidden_layers),
+        hidden_dim=int(spec.tiny_params.hidden_dim),
+        dropout=float(spec.tiny_params.dropout),
+        best_val_acc=best_val_acc,
+        history=history,
     )
-    _safe_log(log_cb, f"Checkpoint saved: {Path(out_ckpt).name}")
+
+    # ONNX export
+    _ckpt_for_onnx = {"input_size": [int(input_h), int(input_w)]}
+    _onnx_path = _try_onnx_export(model, _ckpt_for_onnx, out_ckpt, log_cb)
+
+    # Metrics JSON
+    import json as _json
+
+    metrics_path = run_dir / "tiny_metrics.json"
+    metrics_path.write_text(
+        _json.dumps(
+            {
+                "best_val_acc": (
+                    float(best_val_acc) if best_val_acc is not None else None
+                ),
+                "history": history,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    _safe_log(log_cb, f"Checkpoint saved: {out_ckpt.name}")
 
     _total_elapsed = _time.monotonic() - _t0
     _safe_log(
