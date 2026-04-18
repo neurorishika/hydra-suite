@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import os
-from collections import Counter as _Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -424,66 +423,79 @@ class CNNIdentityBackend:
 
 
 class TrackCNNHistory:
-    """Maintains a sliding-window CNN identity history for every track slot.
+    """Sliding-window per-track history of multi-factor classifier predictions.
 
-    Follows the same pattern as TrackTagHistory in tag_features.py.
-    The majority class across the window is the track's assigned identity.
-    Returns ``None`` when no majority exists (empty window or exact tie).
+    Per-factor majority vote excludes ``None`` and ``"unknown"`` observations.
+    Ties return ``None`` for that factor.
     """
 
-    def __init__(self, n_tracks: int, window: int = 10) -> None:
-        self._window = max(1, window)
-        # _history[track_idx] is a list of (frame_idx, class_name) pairs
-        self._history: list[list[tuple[int, str]]] = [[] for _ in range(n_tracks)]
+    def __init__(self, *, window: int, factor_names: tuple[str, ...]) -> None:
+        if window <= 0:
+            raise ValueError("window must be positive")
+        if not factor_names:
+            raise ValueError("factor_names must be non-empty")
+        self._window = int(window)
+        self._factor_names = tuple(str(n) for n in factor_names)
+        # per-track deque of (class_names_tuple, confidences_tuple)
+        from collections import deque
+
+        self._deque_cls = deque
+        self._history: dict[
+            int, "deque[tuple[tuple[str | None, ...], tuple[float, ...]]]"
+        ] = {}
 
     @property
-    def n_tracks(self) -> int:
-        """Number of track slots currently tracked in the history."""
-        return len(self._history)
+    def factor_names(self) -> tuple[str, ...]:
+        return self._factor_names
 
-    def resize(self, n_tracks: int) -> None:
-        """Grow (never shrink) the history to accommodate *n_tracks*."""
-        while len(self._history) < n_tracks:
-            self._history.append([])
+    def record(
+        self,
+        *,
+        track_id: int,
+        class_names: tuple[str | None, ...],
+        confidences: tuple[float, ...],
+    ) -> None:
+        if len(class_names) != len(self._factor_names):
+            raise ValueError(
+                f"class_names length {len(class_names)} does not match "
+                f"factor_names length {len(self._factor_names)}"
+            )
+        if len(confidences) != len(self._factor_names):
+            raise ValueError(
+                f"confidences length {len(confidences)} does not match "
+                f"factor_names length {len(self._factor_names)}"
+            )
+        buf = self._history.get(track_id)
+        if buf is None:
+            buf = self._deque_cls(maxlen=self._window)
+            self._history[track_id] = buf
+        buf.append((tuple(class_names), tuple(confidences)))
 
-    def record(self, track_idx: int, frame_idx: int, class_name: str) -> None:
-        """Record a confident CNN prediction for *track_idx* on *frame_idx*."""
-        if track_idx >= len(self._history):
-            self.resize(track_idx + 1)
-        self._history[track_idx].append((frame_idx, class_name))
-        # Trim entries older than window
-        cutoff = frame_idx - self._window
-        hist = self._history[track_idx]
-        while hist and hist[0][0] <= cutoff:
-            hist.pop(0)
+    def majority_class(self, track_id: int) -> tuple[str | None, ...]:
+        buf = self._history.get(track_id)
+        if not buf:
+            return tuple(None for _ in self._factor_names)
+        result: list[str | None] = []
+        for k in range(len(self._factor_names)):
+            counts: dict[str, int] = {}
+            for names_tuple, _confs in buf:
+                name = names_tuple[k]
+                if name is None or name == "unknown":
+                    continue
+                counts[name] = counts.get(name, 0) + 1
+            if not counts:
+                result.append(None)
+                continue
+            max_count = max(counts.values())
+            winners = [name for name, n in counts.items() if n == max_count]
+            result.append(winners[0] if len(winners) == 1 else None)
+        return tuple(result)
 
-    def majority_class(self, track_idx: int) -> str | None:
-        """Return majority-vote class for *track_idx*, or None if no clear winner."""
-        if track_idx >= len(self._history):
-            return None
-        hist = self._history[track_idx]
-        if not hist:
-            return None
-        counts = _Counter(cls for _, cls in hist)
-        if len(counts) == 0:
-            return None
-        top_two = counts.most_common(2)
-        if len(top_two) == 2 and top_two[0][1] == top_two[1][1]:
-            return None  # exact tie → no majority
-        return str(top_two[0][0])
+    def clear_track(self, track_id: int) -> None:
+        self._history.pop(track_id, None)
 
-    def clear_track(self, track_idx: int) -> None:
-        """Clear history for a track slot (e.g., after identity loss)."""
-        if track_idx < len(self._history):
-            self._history[track_idx].clear()
-
-    def build_track_identity_list(self, n_tracks: int) -> list[str | None]:
-        """Return list of length *n_tracks*: majority class per slot (or None).
-
-        This is what goes into each CNN phase payload as ``track_identities``.
-        """
-        self.resize(n_tracks)
-        return [self.majority_class(i) for i in range(n_tracks)]
+    def build_track_identity_list(self) -> dict[int, tuple[str | None, ...]]:
+        return {tid: self.majority_class(tid) for tid in self._history}
 
 
 # ---------------------------------------------------------------------------

@@ -1481,7 +1481,10 @@ class TrackingWorker(QThread):
             if isinstance(live_or_path, LiveCNNIdentityStore):
                 from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
 
-                _hist = TrackCNNHistory(N, window=int(cnn_cfg_dict.get("window", 10)))
+                _hist = TrackCNNHistory(
+                    window=int(cnn_cfg_dict.get("window", 10)),
+                    factor_names=("flat",),
+                )
                 _cnn_phase_states.append(
                     (
                         label,
@@ -1517,7 +1520,8 @@ class TrackingWorker(QThread):
 
                     _cache = CNNIdentityCache(_path)
                     _hist = TrackCNNHistory(
-                        N, window=int(cnn_cfg_dict.get("window", 10))
+                        window=int(cnn_cfg_dict.get("window", 10)),
+                        factor_names=("flat",),
                     )
                     _cnn_phase_states.append(
                         (

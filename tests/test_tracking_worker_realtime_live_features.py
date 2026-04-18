@@ -238,15 +238,12 @@ class _FakeTrackTagHistory:
 
 
 class _FakeTrackCNNHistory:
-    def __init__(self, n_tracks: int, window: int = 10):
-        self.n_tracks = n_tracks
+    def __init__(self, *, window: int = 10, factor_names: tuple = ("flat",)):
         self.window = window
+        self.factor_names = factor_names
 
-    def build_track_identity_list(self, n_tracks: int):
-        return [None] * n_tracks
-
-    def resize(self, _n_tracks: int):
-        return None
+    def build_track_identity_list(self):
+        return {}
 
     def record(self, *_args, **_kwargs):
         return None
@@ -1056,7 +1053,7 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
         cnn_cache = CNNIdentityCache(str(cnn_cache_path))
         det_classes, track_identities, frame_preds = cnn_build_association_entries(
             cnn_cache,
-            _FakeTrackCNNHistory(1),
+            _FakeTrackCNNHistory(window=10, factor_names=("flat",)),
             0,
             1,
             1,

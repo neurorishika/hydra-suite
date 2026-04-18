@@ -307,61 +307,62 @@ def test_track_cnn_history_majority_vote():
     """3 out of 5 frames predict the same class → that class is the identity."""
     from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
 
-    hist = TrackCNNHistory(n_tracks=1, window=10)
-    hist.record(0, 1, "tag_3")
-    hist.record(0, 2, "tag_3")
-    hist.record(0, 3, "tag_3")
-    hist.record(0, 4, "tag_0")
-    hist.record(0, 5, "tag_1")
-    assert hist.majority_class(0) == "tag_3"
+    hist = TrackCNNHistory(window=10, factor_names=("flat",))
+    hist.record(track_id=0, class_names=("tag_3",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_3",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_3",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.8,))
+    hist.record(track_id=0, class_names=("tag_1",), confidences=(0.8,))
+    assert hist.majority_class(0) == ("tag_3",)
 
 
 def test_track_cnn_history_no_observations_returns_none():
     from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
 
-    hist = TrackCNNHistory(n_tracks=2, window=10)
-    assert hist.majority_class(0) is None
-    assert hist.majority_class(1) is None
+    hist = TrackCNNHistory(window=10, factor_names=("flat",))
+    assert hist.majority_class(0) == (None,)
+    assert hist.majority_class(1) == (None,)
 
 
 def test_track_cnn_history_tied_returns_none():
     """Exact tie in majority vote → no clear identity."""
     from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
 
-    hist = TrackCNNHistory(n_tracks=1, window=10)
-    hist.record(0, 1, "tag_0")
-    hist.record(0, 2, "tag_1")
-    # Tied: no majority → returns None
-    assert hist.majority_class(0) is None
+    hist = TrackCNNHistory(window=10, factor_names=("flat",))
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_1",), confidences=(0.9,))
+    # Tied: no majority → returns None for that factor
+    assert hist.majority_class(0) == (None,)
 
 
 def test_track_cnn_history_window_drops_old():
     """Observations outside the window are not counted."""
     from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
 
-    hist = TrackCNNHistory(n_tracks=1, window=3)
-    # Old observations (frames 0-2): tag_0 wins
-    hist.record(0, 0, "tag_0")
-    hist.record(0, 1, "tag_0")
-    hist.record(0, 2, "tag_0")
-    # New observations (frames 3-5): tag_1 wins; frame 0-2 drop out
-    hist.record(0, 3, "tag_1")
-    hist.record(0, 4, "tag_1")
-    hist.record(0, 5, "tag_1")
-    assert hist.majority_class(0) == "tag_1"
+    # window=3: only the last 3 recorded observations are kept
+    hist = TrackCNNHistory(window=3, factor_names=("flat",))
+    # First 3 observations: tag_0 (will be evicted as window fills)
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.9,))
+    # Next 3 observations: tag_1 wins; tag_0 entries evicted by maxlen=3
+    hist.record(track_id=0, class_names=("tag_1",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_1",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_1",), confidences=(0.9,))
+    assert hist.majority_class(0) == ("tag_1",)
 
 
 def test_track_cnn_history_build_list():
     from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
 
-    hist = TrackCNNHistory(n_tracks=3, window=10)
-    hist.record(0, 1, "tag_0")
-    hist.record(0, 2, "tag_0")
-    hist.record(2, 1, "no_tag")
-    identity_list = hist.build_track_identity_list(3)
-    assert identity_list[0] == "tag_0"
-    assert identity_list[1] is None
-    assert identity_list[2] == "no_tag"
+    hist = TrackCNNHistory(window=10, factor_names=("flat",))
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.9,))
+    hist.record(track_id=0, class_names=("tag_0",), confidences=(0.9,))
+    hist.record(track_id=2, class_names=("no_tag",), confidences=(0.9,))
+    identity_dict = hist.build_track_identity_list()
+    assert identity_dict[0] == ("tag_0",)
+    assert 1 not in identity_dict  # track 1 was never recorded
+    assert identity_dict[2] == ("no_tag",)
 
 
 # ---------------------------------------------------------------------------
@@ -500,3 +501,41 @@ def test_cnn_identity_config_accepts_per_head_average():
 
     cfg = CNNIdentityConfig(scoring_mode="per_head_average")
     assert cfg.scoring_mode == "per_head_average"
+
+
+# ---------------------------------------------------------------------------
+# TrackCNNHistory per-factor tests
+# ---------------------------------------------------------------------------
+
+
+def test_track_history_multi_factor_majority():
+    """TrackCNNHistory majority vote is computed per-factor independently."""
+    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
+
+    hist = TrackCNNHistory(window=5, factor_names=("color", "shape"))
+    # Observations: two (red, sq), one (red, ci), one (blue, sq)
+    for tup in [("red", "sq"), ("red", "sq"), ("red", "ci"), ("blue", "sq")]:
+        hist.record(track_id=1, class_names=tup, confidences=(0.9, 0.9))
+    identity = hist.majority_class(1)
+    assert identity == ("red", "sq")
+
+
+def test_track_history_multi_factor_tied_returns_none_per_factor():
+    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
+
+    hist = TrackCNNHistory(window=5, factor_names=("color", "shape"))
+    hist.record(track_id=1, class_names=("red", "sq"), confidences=(0.9, 0.9))
+    hist.record(track_id=1, class_names=("blue", "ci"), confidences=(0.9, 0.9))
+    # Tie per factor -> None per factor
+    assert hist.majority_class(1) == (None, None)
+
+
+def test_track_history_skips_none_and_unknown_in_majority():
+    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
+
+    hist = TrackCNNHistory(window=5, factor_names=("flat",))
+    hist.record(track_id=1, class_names=(None,), confidences=(0.3,))
+    hist.record(track_id=1, class_names=("unknown",), confidences=(0.9,))
+    hist.record(track_id=1, class_names=("antA",), confidences=(0.95,))
+    hist.record(track_id=1, class_names=("antA",), confidences=(0.95,))
+    assert hist.majority_class(1) == ("antA",)
