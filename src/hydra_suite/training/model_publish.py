@@ -169,6 +169,34 @@ def enumerate_classifier_artifacts(
             }
 
 
+def count_legacy_registry_entries() -> int:
+    """Return the number of registry entries missing v2-required fields.
+
+    These are skipped silently by ``iter_registry_entries`` but reported via
+    the GUI banner so users know why a model disappeared.
+    """
+    data = load_model_registry()
+    if not data:
+        return 0
+    if data.get("schema_version") != 2 or not isinstance(data.get("entries"), dict):
+        # Whole file is pre-v2 — every entry is legacy.
+        count = sum(1 for v in data.values() if isinstance(v, dict))
+        return count
+    count = 0
+    for meta in data["entries"].values():
+        if not isinstance(meta, dict):
+            continue
+        required = (
+            "schema_version",
+            "factor_names",
+            "class_names_per_factor",
+            "input_size",
+        )
+        if any(k not in meta for k in required) or meta.get("schema_version") != 2:
+            count += 1
+    return count
+
+
 def iter_registry_entries() -> "Iterable[tuple[str, dict[str, Any]]]":
     """Yield ``(key, metadata)`` pairs from the v2-rooted registry.
 

@@ -104,6 +104,15 @@ class IdentityPanel(QWidget):
         )
         identity_content_layout.addWidget(self.lbl_identity_help)
 
+        # Legacy registry banner — shown when pre-v2 entries are detected.
+        self.lbl_legacy_banner = QLabel()
+        self.lbl_legacy_banner.setWordWrap(True)
+        self.lbl_legacy_banner.setStyleSheet(
+            "color: #f48771; font-size: 11px; padding: 2px 0;"
+        )
+        self.lbl_legacy_banner.setVisible(False)
+        identity_content_layout.addWidget(self.lbl_legacy_banner)
+
         # Hidden legacy widgets (referenced by model-import dialog)
         self.line_color_tag_model = QLineEdit()
         self.line_color_tag_model.setPlaceholderText("path/to/color_tag_model.pt")
@@ -1173,6 +1182,20 @@ class IdentityPanel(QWidget):
         if idx >= 0:
             self.combo_cnn_identity_model.setCurrentIndex(idx)
         self.combo_cnn_identity_model.blockSignals(False)
+        self._update_legacy_registry_banner()
+
+    def _update_legacy_registry_banner(self) -> None:
+        from hydra_suite.training.model_publish import count_legacy_registry_entries
+
+        n = count_legacy_registry_entries()
+        if n == 0:
+            self.lbl_legacy_banner.setVisible(False)
+            return
+        self.lbl_legacy_banner.setText(
+            f"\u26a0 {n} model registry entry/entries use an unsupported legacy "
+            f"format. Re-import them from the Models folder to use them."
+        )
+        self.lbl_legacy_banner.setVisible(True)
 
     def _on_cnn_identity_model_selected(self, index: int) -> None:
         """Handle combo activation — sentinel triggers import dialog."""
@@ -1488,6 +1511,7 @@ class IdentityPanel(QWidget):
             )
         except ImportError:
             self._sync_headtail_model_remove_button()
+            self._update_legacy_registry_banner()
             return
 
         registry_paths = {
@@ -1514,6 +1538,7 @@ class IdentityPanel(QWidget):
             self.combo_yolo_headtail_model.addItem(display, entry["path"])
 
         self._sync_headtail_model_remove_button()
+        self._update_legacy_registry_banner()
 
     def _get_selected_yolo_headtail_model_path(self) -> object:
         """Return the effective head-tail model path for runtime use."""
