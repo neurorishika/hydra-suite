@@ -1107,35 +1107,49 @@ class IdentityPanel(QWidget):
         self.lbl_individual_batch_notice.setVisible(True)
 
     def _refresh_cnn_identity_model_combo(self) -> None:
-        """Populate the CNN identity model combo from model_registry.json."""
-        from hydra_suite.trackerkit.gui.main_window import get_yolo_model_registry_path
+        """Populate the CNN identity combo from the registry and ClassKit publish roots."""
+        from hydra_suite.training.model_publish import (
+            enumerate_classifier_artifacts,
+            iter_registry_entries,
+        )
 
-        registry_path = get_yolo_model_registry_path()
-        try:
-            with open(registry_path) as f:
-                registry = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            registry = {}
+        registry_by_path = {
+            key: meta
+            for key, meta in iter_registry_entries()
+            if meta.get("usage_role") == "cnn_identity"
+        }
+        discovered = list(enumerate_classifier_artifacts(roles=("cnn_identity",)))
+
         self.combo_cnn_identity_model.blockSignals(True)
         current_path = self.combo_cnn_identity_model.currentData()
         self.combo_cnn_identity_model.clear()
         self.combo_cnn_identity_model.addItem("— select model —", "")
-        for rel_path, meta in registry.items():
-            if meta.get("usage_role") != "cnn_identity":
-                continue
+
+        # First the registered (annotated) entries
+        for rel_path, meta in registry_by_path.items():
             arch = meta.get("arch", "?")
-            label = meta.get("classification_label", "")
+            factors = meta.get("factor_names") or ["flat"]
+            k = len(factors)
             species = meta.get("species", "")
-            n_cls = meta.get("num_classes", "?")
-            display = f"{arch} | {n_cls} cls"
-            if species:
-                display += f" | {species}"
+            label = meta.get("classification_label", "")
+            tag = " [multi-head]" if k > 1 else ""
+            display = f"{arch}{tag} | {species}"
             if label:
                 display += f" | {label}"
             self.combo_cnn_identity_model.addItem(display, rel_path)
+
+        # Then discovered-but-not-yet-annotated artifacts
+        seen = set(registry_by_path)
+        for entry in discovered:
+            if entry["path"] in seen:
+                continue
+            display = f"[classkit] {entry['path']}"
+            self.combo_cnn_identity_model.addItem(display, entry["path"])
+
         self.combo_cnn_identity_model.addItem(
             "\uff0b Add New Model\u2026", "__add_new__"
         )
+
         idx = self.combo_cnn_identity_model.findData(current_path)
         if idx >= 0:
             self.combo_cnn_identity_model.setCurrentIndex(idx)
@@ -1395,6 +1409,43 @@ class IdentityPanel(QWidget):
             usage_role="headtail",
             repository_dir=repo_dir,
         )
+
+        # Append [classkit] discovered head-tail artifacts not already in the combo.
+        try:
+            from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
+                describe_headtail_candidate,
+            )
+            from hydra_suite.training.model_publish import (
+                enumerate_classifier_artifacts,
+                iter_registry_entries,
+            )
+        except ImportError:
+            self._sync_headtail_model_remove_button()
+            return
+
+        registry_paths = {
+            key
+            for key, meta in iter_registry_entries()
+            if meta.get("usage_role") == "head_tail"
+        }
+        existing_data = set()
+        for i in range(self.combo_yolo_headtail_model.count()):
+            existing_data.add(self.combo_yolo_headtail_model.itemData(i))
+
+        for entry in enumerate_classifier_artifacts(roles=("head_tail",)):
+            if entry["path"] in existing_data:
+                continue
+            if entry["path"] in registry_paths:
+                continue
+            try:
+                summary = describe_headtail_candidate(entry["abs_path"])
+            except Exception:
+                continue
+            if not summary.get("valid"):
+                continue
+            display = f"[classkit] {entry['path']}"
+            self.combo_yolo_headtail_model.addItem(display, entry["path"])
+
         self._sync_headtail_model_remove_button()
 
     def _get_selected_yolo_headtail_model_path(self) -> object:
