@@ -6,7 +6,6 @@ Pure Python — no Qt dependency.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -77,6 +76,7 @@ class ClassPrediction:
 # ---------------------------------------------------------------------------
 
 _SENTINEL_NONE = "__NONE__"  # stored in npz when class_name is None
+_CACHE_SCHEMA_V2 = 2  # multi-factor format marker
 
 
 class CNNIdentityCache:
@@ -85,51 +85,86 @@ class CNNIdentityCache:
     Data is accumulated in memory via ``save()`` and written to disk in a
     single compressed write via ``flush()``.  Call ``load()`` during the
     tracking loop to retrieve per-frame predictions.
+
+    Supports two on-disk formats:
+
+    - **Legacy** (no ``factor_names`` key in the .npz): flat single-factor,
+      keys ``f{N}_det``, ``f{N}_cls``, ``f{N}_conf``.  Reconstructed on
+      load as ``factor_names=("flat",)``.
+    - **v2** (``cache_schema_version == 2`` and ``factor_names`` present):
+      multi-factor, keys ``f{N}_det``, ``f{N}_cls_k{K}``,
+      ``f{N}_conf_k{K}`` for each factor index K.
+
+    The ``factor_names`` constructor argument is used only when writing new
+    caches. When loading an existing file the stored factor_names always wins.
     """
 
-    def __init__(self, cache_path: str | Path) -> None:
+    def __init__(
+        self,
+        cache_path: str | Path,
+        factor_names: tuple[str, ...] | None = None,
+    ) -> None:
         self._path = Path(cache_path)
+        # Default to ("flat",) when not provided — backward-compat signature.
+        self._factor_names: tuple[str, ...] = (
+            tuple(factor_names) if factor_names is not None else ("flat",)
+        )
         self._data: dict[str, Any] = {}
+        self._is_legacy = False
         if self._path.exists():
             raw = np.load(str(self._path), allow_pickle=True)
             self._data = dict(raw)
+            if "factor_names" not in self._data:
+                # Legacy flat format: force factor_names to ("flat",)
+                self._is_legacy = True
+                self._factor_names = ("flat",)
+            else:
+                # v2 format: authoritative factor_names from disk
+                stored = self._data["factor_names"]
+                self._factor_names = tuple(str(n) for n in stored)
 
     def exists(self) -> bool:
         """Return True if the cache file exists on disk."""
         return self._path.exists()
 
+    @property
+    def factor_names(self) -> tuple[str, ...]:
+        return self._factor_names
+
     def save(self, frame_idx: int, predictions: list[ClassPrediction]) -> None:
         """Update in-memory cache for *frame_idx*. Call flush() when done."""
+        K = len(self._factor_names)
         if not predictions:
             self._data[f"f{frame_idx}_det"] = np.array([], dtype=np.int32)
-            self._data[f"f{frame_idx}_cls"] = np.array([], dtype=object)
-            self._data[f"f{frame_idx}_conf"] = np.array([], dtype=np.float32)
+            for k in range(K):
+                self._data[f"f{frame_idx}_cls_k{k}"] = np.array([], dtype=object)
+                self._data[f"f{frame_idx}_conf_k{k}"] = np.array([], dtype=np.float32)
         else:
             det_arr = np.array([p.det_index for p in predictions], dtype=np.int32)
-            cls_arr = np.array(
-                [
-                    (
-                        p.class_names[0]
-                        if p.class_names[0] is not None
-                        else _SENTINEL_NONE
-                    )
-                    for p in predictions
-                ],
-                dtype=object,
-            )
-            conf_arr = np.array(
-                [p.confidences[0] for p in predictions], dtype=np.float32
-            )
             self._data[f"f{frame_idx}_det"] = det_arr
-            self._data[f"f{frame_idx}_cls"] = cls_arr
-            self._data[f"f{frame_idx}_conf"] = conf_arr
+            for k in range(K):
+                cls_col = []
+                conf_col = []
+                for p in predictions:
+                    raw = p.class_names[k] if k < len(p.class_names) else None
+                    cls_col.append(raw if raw is not None else _SENTINEL_NONE)
+                    conf_col.append(
+                        float(p.confidences[k]) if k < len(p.confidences) else 0.0
+                    )
+                self._data[f"f{frame_idx}_cls_k{k}"] = np.array(cls_col, dtype=object)
+                self._data[f"f{frame_idx}_conf_k{k}"] = np.array(
+                    conf_col, dtype=np.float32
+                )
 
     def flush(self) -> None:
-        """Write all in-memory predictions to disk."""
+        """Write all in-memory predictions to disk (v2 format)."""
         if not self._data:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(str(self._path), **self._data)
+        out = dict(self._data)
+        out["factor_names"] = np.array(list(self._factor_names), dtype=object)
+        out["cache_schema_version"] = np.array(_CACHE_SCHEMA_V2, dtype=np.int32)
+        np.savez_compressed(str(self._path), **out)
 
     def load(self, frame_idx: int) -> list[ClassPrediction]:
         """Return saved predictions for *frame_idx*, or [] if not found."""
@@ -137,18 +172,60 @@ class CNNIdentityCache:
         if key_det not in self._data:
             return []
         det_arr = self._data[key_det]
-        cls_arr = self._data[f"f{frame_idx}_cls"]
-        conf_arr = self._data[f"f{frame_idx}_conf"]
+        if len(det_arr) == 0:
+            return []
+
+        if self._is_legacy:
+            # Legacy single-factor format: keys f{N}_cls and f{N}_conf
+            cls_arr = self._data.get(f"f{frame_idx}_cls", np.array([], dtype=object))
+            conf_arr = self._data.get(
+                f"f{frame_idx}_conf", np.zeros(len(det_arr), dtype=np.float32)
+            )
+            results = []
+            for i in range(len(det_arr)):
+                raw_cls = str(cls_arr[i]) if i < len(cls_arr) else _SENTINEL_NONE
+                class_name = None if raw_cls == _SENTINEL_NONE else raw_cls
+                results.append(
+                    ClassPrediction(
+                        det_index=int(det_arr[i]),
+                        factor_names=("flat",),
+                        class_names=(class_name,),
+                        confidences=(float(conf_arr[i]) if i < len(conf_arr) else 0.0,),
+                    )
+                )
+            return results
+
+        # v2 multi-factor format: keys f{N}_cls_k{K} and f{N}_conf_k{K}
+        K = len(self._factor_names)
+        per_factor_cls: list[Any] = []
+        per_factor_conf: list[Any] = []
+        for k in range(K):
+            per_factor_cls.append(
+                self._data.get(
+                    f"f{frame_idx}_cls_k{k}",
+                    np.full(len(det_arr), _SENTINEL_NONE),
+                )
+            )
+            per_factor_conf.append(
+                self._data.get(
+                    f"f{frame_idx}_conf_k{k}",
+                    np.zeros(len(det_arr), dtype=np.float32),
+                )
+            )
         results = []
         for i in range(len(det_arr)):
-            raw_cls = str(cls_arr[i])
-            class_name = None if raw_cls == _SENTINEL_NONE else raw_cls
+            names: list[str | None] = []
+            confs: list[float] = []
+            for k in range(K):
+                raw = str(per_factor_cls[k][i])
+                names.append(None if raw == _SENTINEL_NONE else raw)
+                confs.append(float(per_factor_conf[k][i]))
             results.append(
                 ClassPrediction(
                     det_index=int(det_arr[i]),
-                    factor_names=("flat",),
-                    class_names=(class_name,),
-                    confidences=(float(conf_arr[i]),),
+                    factor_names=self._factor_names,
+                    class_names=tuple(names),
+                    confidences=tuple(confs),
                 )
             )
         return results
@@ -172,13 +249,9 @@ class CNNIdentityCache:
 
 
 class CNNIdentityBackend:
-    """Wraps model loading and batch inference for CNN identity classification.
-
-    Supports:
-    - .pth checkpoints (TinyClassifier or torchvision — detected via 'arch' field)
-    - YOLO .pt checkpoints (ultralytics)
-    Runtime selection via compute_runtime (cpu/mps/cuda). ONNX artifacts are
-    derived lazily from .pth and cached alongside the source file.
+    """High-level wrapper around ``ClassifierBackend`` that adds CNN identity
+    semantics: per-factor confidence thresholding, class-name lookup, and
+    scoring-mode validation.
     """
 
     def __init__(
@@ -187,234 +260,72 @@ class CNNIdentityBackend:
         model_path: str | None = None,
         compute_runtime: str = "cpu",
     ) -> None:
+        from hydra_suite.core.identity.classification.backend import ClassifierBackend
+        from hydra_suite.core.identity.classification.errors import (
+            ClassifierConfigError,
+        )
+
         self._config = config
-        self._model_path = str(model_path or config.model_path or "")
-        self._compute_runtime = str(compute_runtime or "cpu")
-        self._model = None
-        self._class_names: list[str] = []
-        self._input_size: tuple[int, int] = (224, 224)
-        self._arch: str = "tinyclassifier"
-        self._is_yolo: bool = self._model_path.endswith(".pt")
-        self._loaded: bool = False
-        self._infer_fn = None
-
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-
-        use_onnx = (
-            self._compute_runtime.startswith("onnx_")
-            or self._compute_runtime == "tensorrt"
+        resolved_path = str(model_path or config.model_path or "")
+        if not resolved_path:
+            raise ClassifierConfigError("CNN identity backend requires a model_path")
+        self._backend = ClassifierBackend(
+            resolved_path, compute_runtime=compute_runtime
         )
-        device = self._torch_device(self._compute_runtime)
-
-        if self._is_yolo:
-            self._load_yolo(use_onnx, device)
-        else:
-            self._load_pth(use_onnx, device)
-        self._loaded = True
-
-    def _torch_device(self, rt: str) -> str:
-        if rt in ("cuda", "onnx_cuda", "tensorrt"):
-            return "cuda"
-        if rt in ("mps", "onnx_coreml"):
-            return "mps"
-        if rt in ("rocm", "onnx_rocm"):
-            return "cuda"
-        return "cpu"
-
-    def _load_pth(self, use_onnx: bool, device: str) -> None:
-        import torch
-
-        ckpt = torch.load(self._model_path, map_location="cpu", weights_only=False)
-        self._class_names = ckpt.get("class_names", [])
-        raw_size = ckpt.get("input_size", (224, 224))
-        self._input_size = (
-            tuple(raw_size)
-            if isinstance(raw_size, (list, tuple))
-            else (raw_size, raw_size)
-        )
-        self._arch = ckpt.get("arch", "tinyclassifier")
-
-        if use_onnx:
-            onnx_path = self._derive_onnx(ckpt, device)
-            import onnxruntime as ort
-
-            from hydra_suite.runtime.compute_runtime import (
-                derive_onnx_execution_providers,
+        meta = self._backend.metadata
+        if meta.is_multihead and config.scoring_mode not in (
+            "atomic",
+            "per_head_average",
+        ):
+            raise ClassifierConfigError(
+                f"multi-head CNN identity model {resolved_path!r} requires "
+                f"scoring_mode in {{atomic, per_head_average}}; got "
+                f"{config.scoring_mode!r}"
             )
 
-            providers = derive_onnx_execution_providers(self._compute_runtime)
-            self._model = ort.InferenceSession(onnx_path, providers=providers)
-            self._infer_fn = self._infer_onnx
-        else:
-            if self._arch == "tinyclassifier":
-                from hydra_suite.training.tiny_model import load_tiny_classifier
+    @property
+    def metadata(self):
+        return self._backend.metadata
 
-                self._model, _ = load_tiny_classifier(self._model_path, device=device)
-            else:
-                # Requires Spec A (ClassKit Extended Training) to be implemented first
-                from hydra_suite.training.torchvision_model import (
-                    load_torchvision_classifier,
-                )
-
-                self._model, _ = load_torchvision_classifier(
-                    self._model_path, device=device
-                )
-            self._infer_fn = lambda batch_np, dev=device: self._infer_torch(
-                batch_np, dev
-            )
-
-    def _load_yolo(self, use_onnx: bool, device: str) -> None:
-        from ultralytics import YOLO
-
-        yolo = YOLO(self._model_path)
-        names = yolo.names
-        self._class_names = [names[i] for i in sorted(names.keys())]
-        self._input_size = (224, 224)
-        self._arch = "yolo"
-        if use_onnx:
-            onnx_path = str(Path(self._model_path).with_suffix(".onnx"))
-            if not os.path.exists(onnx_path):
-                yolo.export(format="onnx", imgsz=224)
-            import onnxruntime as ort
-
-            from hydra_suite.runtime.compute_runtime import (
-                derive_onnx_execution_providers,
-            )
-
-            self._model = ort.InferenceSession(
-                onnx_path,
-                providers=derive_onnx_execution_providers(self._compute_runtime),
-            )
-            self._infer_fn = self._infer_onnx
-        else:
-            self._model = yolo
-            self._infer_fn = self._infer_yolo
-
-    def _derive_onnx(self, ckpt: dict, device: str) -> str:
-        """Lazy-derive ONNX from .pth. Returns path to .onnx file."""
-        onnx_path = str(Path(self._model_path).with_suffix(".onnx"))
-        if os.path.exists(onnx_path):
-            return onnx_path
-        if self._arch == "tinyclassifier":
-            import torch
-
-            from hydra_suite.training.tiny_model import load_tiny_classifier
-
-            model, _ = load_tiny_classifier(self._model_path, device="cpu")
-            h, w = self._input_size
-            dummy = torch.zeros(1, 3, h, w)
-            torch.onnx.export(
-                model,
-                dummy,
-                onnx_path,
-                opset_version=17,
-                input_names=["input"],
-                output_names=["logits"],
-                dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},
-            )
-        else:
-            from hydra_suite.training.torchvision_model import (
-                export_torchvision_to_onnx,
-                load_torchvision_classifier,
-            )
-
-            model, loaded_ckpt = load_torchvision_classifier(
-                self._model_path, device="cpu"
-            )
-            export_torchvision_to_onnx(model, loaded_ckpt, onnx_path)
-        return onnx_path
-
-    def _infer_torch(self, batch_np: np.ndarray, device: str) -> np.ndarray:
-        import torch
-
-        t = torch.from_numpy(batch_np).to(device)
-        with torch.no_grad():
-            logits = self._model(t).cpu().numpy()
-        return logits
-
-    def _infer_onnx(self, batch_np: np.ndarray) -> np.ndarray:
-        input_name = self._model.get_inputs()[0].name
-        return self._model.run(None, {input_name: batch_np.astype(np.float32)})[0]
-
-    def _infer_yolo(self, crops: list[np.ndarray]) -> np.ndarray:
-        # YOLO classify expects list of numpy arrays in HWC uint8 format
-        results = self._model(crops, verbose=False)
-        probs = np.array([r.probs.data.cpu().numpy() for r in results])
-        return np.log(np.clip(probs, 1e-9, 1.0))
-
-    def _preprocess(self, crops: list[np.ndarray]) -> np.ndarray:
-        """Resize and normalize crops to the model's expected input format.
-
-        Uses vectorised OpenCV operations instead of per-crop PIL conversion.
-        """
-        import cv2
-
-        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 1, 3)
-        std = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 1, 3)
-        h, w = self._input_size
-        n = len(crops)
-
-        # Pre-allocate batch (N, H, W, 3) float32
-        batch_hwc = np.empty((n, h, w, 3), dtype=np.float32)
-
-        for i, crop in enumerate(crops):
-            if crop is None or crop.size == 0:
-                batch_hwc[i] = 0.0
-                continue
-            resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
-            # BGR→RGB and uint8→float32 in one step
-            batch_hwc[i] = resized[:, :, ::-1].astype(np.float32) * (1.0 / 255.0)
-
-        # Vectorised normalise: (N, H, W, 3)
-        batch_hwc = (batch_hwc - mean) / std
-
-        # Transpose to (N, 3, H, W) for PyTorch / ONNX
-        return batch_hwc.transpose(0, 3, 1, 2).astype(np.float32)
+    @property
+    def factor_names(self) -> tuple[str, ...]:
+        return tuple(self._backend.metadata.factor_names)
 
     def predict_batch(self, crops: list[np.ndarray]) -> list[ClassPrediction]:
-        """Run inference on *crops*. Returns one ClassPrediction per crop."""
+        """Run inference and return per-crop ``ClassPrediction`` instances with
+        per-factor confidence thresholding applied.
+        """
         if not crops:
             return []
-        self._ensure_loaded()
-        # YOLO native inference does its own preprocessing — pass raw crops
-        if self._is_yolo and self._compute_runtime not in (
-            "onnx_coreml",
-            "onnx_cpu",
-            "onnx_cuda",
-            "onnx_rocm",
-            "tensorrt",
-        ):
-            logits = self._infer_fn(crops)
-        else:
-            batch_np = self._preprocess(crops)
-            logits = self._infer_fn(batch_np)
-        exp = np.exp(logits - logits.max(axis=1, keepdims=True))
-        probs = exp / exp.sum(axis=1, keepdims=True)
-        results = []
-        for i, prob in enumerate(probs):
-            best_idx = int(np.argmax(prob))
-            best_conf = float(prob[best_idx])
-            if best_conf >= self._config.confidence and self._class_names:
-                class_name = self._class_names[best_idx]
-            else:
-                class_name = None
+        raw = self._backend.predict_batch(crops)
+        meta = self._backend.metadata
+        factor_names = tuple(meta.factor_names)
+        threshold = float(self._config.confidence)
+        results: list[ClassPrediction] = []
+        for det_idx, per_factor in enumerate(raw):
+            names: list[str | None] = []
+            confs: list[float] = []
+            for k, probs in enumerate(per_factor):
+                best_idx = int(np.argmax(probs))
+                best_conf = float(probs[best_idx])
+                class_list = meta.class_names_per_factor[k]
+                if best_conf >= threshold and 0 <= best_idx < len(class_list):
+                    names.append(class_list[best_idx])
+                else:
+                    names.append(None)
+                confs.append(best_conf)
             results.append(
                 ClassPrediction(
-                    det_index=i,
-                    factor_names=("flat",),
-                    class_names=(class_name,),
-                    confidences=(best_conf,),
+                    det_index=det_idx,
+                    factor_names=factor_names,
+                    class_names=tuple(names),
+                    confidences=tuple(confs),
                 )
             )
         return results
 
     def close(self) -> None:
-        """Release the loaded model and inference function, marking the backend as unloaded."""
-        self._model = None
-        self._infer_fn = None
-        self._loaded = False
+        self._backend.close()
 
 
 # ---------------------------------------------------------------------------
