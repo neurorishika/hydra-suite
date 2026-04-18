@@ -152,6 +152,7 @@ def publish_trained_model(
     factor_index: int | None = None,
     factor_name: str | None = None,
     training_params: dict[str, Any] | None = None,
+    classifier_v2_meta: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """Copy trained artifact into repository and register metadata.
 
@@ -218,6 +219,15 @@ def publish_trained_model(
     }
     if training_params:
         metadata["training_params"] = dict(training_params)
+
+    # v2 sidecar for YOLO-style artifacts whose weight file cannot embed our schema.
+    if classifier_v2_meta:
+        import json as _json
+
+        sidecar = dst.with_suffix(".v2meta.json")
+        payload = {"schema_version": 2, **dict(classifier_v2_meta)}
+        sidecar.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+        metadata["v2_sidecar"] = sidecar.name
 
     reg = load_model_registry()
     reg[key] = metadata

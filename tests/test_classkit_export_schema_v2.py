@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
@@ -153,3 +155,46 @@ def test_torchvision_checkpoint_v2_multihead_schema(tmp_path):
         ["square", "circle"],
     ]
     assert "class_names" not in ckpt
+
+
+def test_yolo_flat_publish_writes_sidecar(tmp_path, monkeypatch):
+    """publish_trained_model writes a {stem}.v2meta.json sidecar for YOLO .pt artifacts."""
+    import json
+
+    from hydra_suite.training import model_publish
+    from hydra_suite.training.contracts import TrainingRole
+
+    src = tmp_path / "best.pt"
+    src.write_bytes(b"fake yolo weights")
+
+    models_root = tmp_path / "models"
+    monkeypatch.setattr(model_publish, "get_models_root", lambda: models_root)
+
+    key, dst = model_publish.publish_trained_model(
+        role=TrainingRole.CLASSIFY_FLAT_YOLO,
+        artifact_path=str(src),
+        size="small",
+        species="ant",
+        model_info="id",
+        trained_from_run_id="run1",
+        dataset_fingerprint="abc123",
+        base_model="yolov8n-cls",
+        scheme_name="scheme",
+        classifier_v2_meta={
+            "arch": "yolo",
+            "input_size": [224, 224],
+            "factor_names": ["flat"],
+            "class_names_per_factor": [["antA", "antB", "antC"]],
+            "monochrome": False,
+        },
+    )
+
+    sidecar = Path(dst).with_suffix(".v2meta.json")
+    assert sidecar.exists(), "v2 sidecar manifest was not written"
+    data = json.loads(sidecar.read_text())
+    assert data["schema_version"] == 2
+    assert data["arch"] == "yolo"
+    assert data["factor_names"] == ["flat"]
+    assert data["class_names_per_factor"] == [["antA", "antB", "antC"]]
+    assert data["input_size"] == [224, 224]
+    assert data["monochrome"] is False
