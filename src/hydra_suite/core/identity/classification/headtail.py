@@ -19,21 +19,74 @@ logger = logging.getLogger(__name__)
 
 # Canonical class sets (shared with engine.py)
 _HEADTAIL_DIRECTIONAL_CLASS_SET = frozenset({"left", "right"})
-_HEADTAIL_FIVE_CLASS_SET = frozenset({"left", "right", "up", "down", "unknown"})
 
-# Label aliases
+HEADTAIL_CANONICAL_LABELS: frozenset[str] = frozenset(
+    {"up", "down", "left", "right", "unknown"}
+)
+
 _LABEL_ALIASES: Dict[str, str] = {
-    "left": "left",
-    "head_left": "left",
-    "right": "right",
-    "head_right": "right",
+    "u": "up",
     "up": "up",
-    "head_up": "up",
+    "n": "up",
+    "north": "up",
+    "d": "down",
     "down": "down",
+    "s": "down",
+    "south": "down",
+    "l": "left",
+    "left": "left",
+    "w": "left",
+    "west": "left",
+    "head_left": "left",
+    "r": "right",
+    "right": "right",
+    "e": "right",
+    "east": "right",
+    "head_right": "right",
+    "head_up": "up",
     "head_down": "down",
+    "?": "unknown",
     "unknown": "unknown",
+    "none": "unknown",
+    "na": "unknown",
     "head_unknown": "unknown",
 }
+
+
+def normalize_headtail_label(raw: str) -> str:
+    """Return the canonical head-tail label for ``raw``.
+
+    Accepts case-insensitive aliases listed in ``_LABEL_ALIASES``. Raises
+    ``ValueError`` for unrecognised tokens.
+    """
+    key = str(raw).strip().lower()
+    if key in _LABEL_ALIASES:
+        return _LABEL_ALIASES[key]
+    raise ValueError(f"unknown head-tail label {raw!r}")
+
+
+def validate_headtail_labels(labels: list[str]) -> list[str]:
+    """Validate a checkpoint's class labels against the head-tail contract.
+
+    Each label must normalize to a member of ``HEADTAIL_CANONICAL_LABELS``.
+    Returns the list of normalized labels in input order. Raises
+    ``HeadTailFormatError`` listing offending entries when the check fails.
+    """
+    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+
+    normalized: list[str] = []
+    offending: list[str] = []
+    for raw in labels:
+        try:
+            normalized.append(normalize_headtail_label(raw))
+        except ValueError:
+            offending.append(str(raw))
+    if offending or not normalized:
+        raise HeadTailFormatError(
+            "head-tail model labels must be a non-empty subset of "
+            f"{{up, down, left, right, unknown}}; offending labels: {offending}"
+        )
+    return normalized
 
 
 class HeadTailAnalyzer:
@@ -597,7 +650,7 @@ class HeadTailAnalyzer:
                 )
             if normalized_set not in (
                 _HEADTAIL_DIRECTIONAL_CLASS_SET,
-                _HEADTAIL_FIVE_CLASS_SET,
+                HEADTAIL_CANONICAL_LABELS,
             ):
                 raise ValueError(
                     f"Unsupported head-tail class schema in {source}: {ordered}. "
