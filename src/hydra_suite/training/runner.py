@@ -1021,6 +1021,7 @@ def _run_torchvision_training_loop(
                     history=history,
                     trainable_layers=params.trainable_layers,
                     backbone_lr_scale=params.backbone_lr_scale,
+                    monochrome=bool(checkpoint_extra_meta.get("monochrome", False)),
                     extra_meta=checkpoint_extra_meta,
                     path=best_ckpt_path,
                 )
@@ -1045,6 +1046,7 @@ def _run_torchvision_training_loop(
             history=history,
             trainable_layers=params.trainable_layers,
             backbone_lr_scale=params.backbone_lr_scale,
+            monochrome=bool(checkpoint_extra_meta.get("monochrome", False)),
             extra_meta=checkpoint_extra_meta,
             path=best_ckpt_path,
         )

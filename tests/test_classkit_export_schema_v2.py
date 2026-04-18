@@ -76,3 +76,80 @@ def test_tiny_checkpoint_v2_consumable_by_backend(tmp_path):
     assert meta.factor_names == ["flat"]
     assert meta.input_size == (64, 64)
     backend.close()
+
+
+def test_torchvision_checkpoint_v2_flat_schema(tmp_path):
+    pytest.importorskip("cv2")
+    pytest.importorskip("torch")
+    import torch
+
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    model = build_torchvision_classifier(
+        "tinyclassifier", num_classes=4, trainable_layers=-1
+    )
+    out_path = tmp_path / "tv_flat.pth"
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="tinyclassifier",
+        class_names=["a", "b", "c", "d"],
+        factor_names=["flat"],
+        input_size=(128, 96),
+        best_val_acc=0.75,
+        history={},
+        trainable_layers=-1,
+        backbone_lr_scale=1.0,
+        monochrome=True,
+        path=str(out_path),
+    )
+
+    ckpt = torch.load(str(out_path), map_location="cpu", weights_only=False)
+    assert ckpt["schema_version"] == 2
+    assert ckpt["input_size"] == [128, 96]
+    assert ckpt["factor_names"] == ["flat"]
+    assert ckpt["class_names_per_factor"] == [["a", "b", "c", "d"]]
+    assert ckpt["class_names"] == ["a", "b", "c", "d"]
+    assert ckpt["monochrome"] is True
+
+
+def test_torchvision_checkpoint_v2_multihead_schema(tmp_path):
+    """Multi-head torchvision writes class_names_per_factor and omits flat class_names."""
+    pytest.importorskip("cv2")
+    pytest.importorskip("torch")
+    import torch
+
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    model = build_torchvision_classifier(
+        "tinyclassifier", num_classes=5, trainable_layers=-1
+    )
+    out_path = tmp_path / "tv_multi.pth"
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="tinyclassifier",
+        class_names=[],  # ignored in multi-head path
+        class_names_per_factor=[["red", "green", "blue"], ["square", "circle"]],
+        factor_names=["color", "shape"],
+        input_size=(224, 224),
+        best_val_acc=None,
+        history={},
+        trainable_layers=-1,
+        backbone_lr_scale=1.0,
+        monochrome=False,
+        path=str(out_path),
+    )
+
+    ckpt = torch.load(str(out_path), map_location="cpu", weights_only=False)
+    assert ckpt["schema_version"] == 2
+    assert ckpt["factor_names"] == ["color", "shape"]
+    assert ckpt["class_names_per_factor"] == [
+        ["red", "green", "blue"],
+        ["square", "circle"],
+    ]
+    assert "class_names" not in ckpt

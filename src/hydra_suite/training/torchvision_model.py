@@ -286,26 +286,59 @@ def save_torchvision_checkpoint(
     history: dict[str, Any],
     trainable_layers: int,
     backbone_lr_scale: float,
+    monochrome: bool,
+    class_names_per_factor: list[list[str]] | None = None,
     extra_meta: dict[str, Any] | None = None,
     path: str | Path,
 ) -> Path:
-    """Save a torchvision model checkpoint in the unified ClassKit .pth format."""
+    """Save a torchvision model checkpoint in the v2 classifier-artifact format.
+
+    Flat checkpoints pass ``class_names`` and may omit ``class_names_per_factor``
+    (it will be synthesised as ``[class_names]``). Multi-head checkpoints must
+    pass ``class_names_per_factor`` explicitly and leave ``class_names`` empty;
+    ``class_names`` is then omitted from the saved checkpoint.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    ckpt = {
+
+    factor_names = list(factor_names or ["flat"])
+    is_multihead = len(factor_names) > 1
+
+    if class_names_per_factor is None:
+        if is_multihead:
+            raise ValueError("multi-head checkpoint requires class_names_per_factor")
+        class_names_per_factor = [list(class_names)]
+    else:
+        class_names_per_factor = [list(inner) for inner in class_names_per_factor]
+
+    if len(class_names_per_factor) != len(factor_names):
+        raise ValueError(
+            "factor_names and class_names_per_factor must have the same length"
+        )
+
+    h, w = int(input_size[0]), int(input_size[1])
+    num_classes = sum(len(inner) for inner in class_names_per_factor)
+
+    ckpt: dict[str, Any] = {
+        "schema_version": 2,
         "arch": backbone,
-        "class_names": class_names,
         "factor_names": factor_names,
-        "input_size": input_size,
-        "num_classes": len(class_names),
+        "class_names_per_factor": class_names_per_factor,
+        "input_size": [h, w],
+        "num_classes": num_classes,
+        "monochrome": bool(monochrome),
         "model_state_dict": model.state_dict(),
         "best_val_acc": best_val_acc,
         "history": history,
         "trainable_layers": trainable_layers,
         "backbone_lr_scale": backbone_lr_scale,
     }
+    if not is_multihead:
+        ckpt["class_names"] = list(class_names_per_factor[0])
     if isinstance(extra_meta, dict) and extra_meta:
-        ckpt.update(extra_meta)
+        for k, v in extra_meta.items():
+            if k not in ckpt:
+                ckpt[k] = v
     torch.save(ckpt, str(path))
     return path
 
