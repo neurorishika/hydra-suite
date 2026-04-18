@@ -153,3 +153,25 @@ def test_backend_torchvision_flat_metadata_and_inference(torchvision_flat_identi
         assert len(per_crop) == 1
         assert per_crop[0].shape == (3,)
     backend.close()
+
+
+def test_backend_tiny_multi_metadata_and_inference(tiny_multi_identity):
+    """ClassifierBackend parses multi-head metadata and splits logits per factor."""
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    backend = ClassifierBackend(str(tiny_multi_identity), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.is_multihead is True
+    assert meta.factor_names == ["color", "shape"]
+    assert meta.class_names_per_factor == [["r", "g", "b"], ["sq", "ci"]]
+
+    crops = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(2)]
+    out = backend.predict_batch(crops)
+    assert len(out) == 2
+    for per_crop in out:
+        assert len(per_crop) == 2  # K=2
+        assert per_crop[0].shape == (3,)
+        assert per_crop[1].shape == (2,)
+        assert abs(per_crop[0].sum() - 1.0) < 1e-5
+        assert abs(per_crop[1].sum() - 1.0) < 1e-5
+    backend.close()

@@ -158,3 +158,39 @@ def torchvision_flat_identity(fixtures_dir: Path) -> Path:
         path=str(path),
     )
     return path
+
+
+@pytest.fixture(scope="session")
+def tiny_multi_identity(fixtures_dir: Path) -> Path:
+    """TinyClassifier-backed multi-head v2 checkpoint: 3×2 output (color × shape)."""
+    path = fixtures_dir / "tiny_multi_identity.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    # build_torchvision_classifier accepts 'tinyclassifier' and returns a
+    # flat-output model. For the purposes of schema testing we do not need a
+    # truly multi-headed architecture — the backend splits the flat logit
+    # tensor according to class_names_per_factor cardinalities.
+    total = 3 + 2
+    model = build_torchvision_classifier(
+        "tinyclassifier", num_classes=total, trainable_layers=-1
+    )
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="tinyclassifier",
+        class_names=[],
+        class_names_per_factor=[["r", "g", "b"], ["sq", "ci"]],
+        factor_names=["color", "shape"],
+        input_size=(64, 64),
+        best_val_acc=None,
+        history={},
+        trainable_layers=-1,
+        backbone_lr_scale=1.0,
+        monochrome=False,
+        path=str(path),
+    )
+    return path

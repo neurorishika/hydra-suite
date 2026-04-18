@@ -125,8 +125,8 @@ def _parse_factor_structure(
     return [str(n) for n in factor_names], class_names_per_factor, is_multihead
 
 
-class _TinyFlatLoader:
-    """Loader for flat TinyClassifier v2 .pth checkpoints."""
+class _TinyLoader:
+    """Loader for TinyClassifier v2 .pth checkpoints (flat and multi-head)."""
 
     @staticmethod
     def parse_metadata(path: str) -> ClassifierMetadata:
@@ -137,14 +137,10 @@ class _TinyFlatLoader:
             raise ClassifierFormatError(f"{path!r}: expected checkpoint dict")
         _require_v2(ckpt, path)
         factor_names, cnpf, is_multi = _parse_factor_structure(ckpt, path)
-        if is_multi:
-            raise ClassifierFormatError(
-                f"{path!r}: multi-head tiny loader lands in a later phase"
-            )
         return ClassifierMetadata(
             arch=str(ckpt.get("arch", "tinyclassifier")),
             input_size=_normalize_input_size(ckpt.get("input_size")),
-            is_multihead=False,
+            is_multihead=is_multi,
             factor_names=factor_names,
             class_names_per_factor=cnpf,
             monochrome=bool(ckpt.get("monochrome", False)),
@@ -186,8 +182,8 @@ class _YoloFlatLoader:
         return YOLO(path)
 
 
-class _TorchvisionFlatLoader:
-    """Loader for flat torchvision v2 .pth checkpoints."""
+class _TorchvisionLoader:
+    """Loader for torchvision v2 .pth checkpoints (flat and multi-head)."""
 
     @staticmethod
     def parse_metadata(path: str) -> ClassifierMetadata:
@@ -198,14 +194,10 @@ class _TorchvisionFlatLoader:
             raise ClassifierFormatError(f"{path!r}: expected checkpoint dict")
         _require_v2(ckpt, path)
         factor_names, cnpf, is_multi = _parse_factor_structure(ckpt, path)
-        if is_multi:
-            raise ClassifierFormatError(
-                f"{path!r}: multi-head torchvision loader lands in a later task"
-            )
         return ClassifierMetadata(
             arch=str(ckpt["arch"]),
             input_size=_normalize_input_size(ckpt.get("input_size")),
-            is_multihead=False,
+            is_multihead=is_multi,
             factor_names=factor_names,
             class_names_per_factor=cnpf,
             monochrome=bool(ckpt.get("monochrome", False)),
@@ -239,8 +231,8 @@ def _select_loader(path: str):
     if suffix == ".pth":
         arch = _peek_ckpt_arch(path)
         if arch == "tinyclassifier":
-            return _TinyFlatLoader
-        return _TorchvisionFlatLoader
+            return _TinyLoader
+        return _TorchvisionLoader
     if suffix == ".pt":
         return _YoloFlatLoader
     raise ClassifierFormatError(
@@ -343,6 +335,9 @@ class ClassifierBackend:
         exp = np.exp(shifted)
         return exp / exp.sum(axis=-1, keepdims=True)
 
+    def _cardinalities(self) -> list[int]:
+        return [len(names) for names in self._metadata.class_names_per_factor]
+
     def predict_batch(self, crops: list[np.ndarray]) -> list[list[np.ndarray]]:
         """Run inference on ``crops``. Returns ``[N_crops][K_factors]`` probability vectors."""
         if not crops:
@@ -360,8 +355,26 @@ class ClassifierBackend:
             raise ClassifierRuntimeError(
                 f"inference failure for {self._model_path!r}: {exc}"
             ) from exc
-        probs = self._softmax(logits)
-        return [[probs[i]] for i in range(probs.shape[0])]
+
+        # Split concatenated logits into per-factor slices, then softmax each.
+        cardinalities = self._cardinalities()
+        expected_total = sum(cardinalities)
+        if logits.shape[-1] != expected_total:
+            raise ClassifierRuntimeError(
+                f"{self._model_path!r}: model output width {logits.shape[-1]} "
+                f"does not match expected total {expected_total} across factors "
+                f"{self._metadata.factor_names}"
+            )
+        results: list[list[np.ndarray]] = []
+        for row in logits:
+            per_factor: list[np.ndarray] = []
+            offset = 0
+            for width in cardinalities:
+                factor_logits = row[offset : offset + width]
+                per_factor.append(self._softmax(factor_logits))
+                offset += width
+            results.append(per_factor)
+        return results
 
     def close(self) -> None:
         """Release model weights; subsequent predict_batch will reload."""
