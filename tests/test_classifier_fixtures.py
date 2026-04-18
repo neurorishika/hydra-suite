@@ -236,3 +236,29 @@ def yolo_multihead_bundle(fixtures_dir: Path) -> Path:
         monochrome=False,
     )
     return manifest
+
+
+@pytest.fixture(scope="session")
+def tiny_flat_monochrome(fixtures_dir: Path) -> Path:
+    """Tiny flat v2 checkpoint with monochrome=True — exercises averaged ImageNet stats."""
+    path = fixtures_dir / "tiny_flat_monochrome.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.runner import _save_tiny_checkpoint
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    model = TinyClassifier(n_classes=3, hidden_layers=1, hidden_dim=16, dropout=0.0)
+    _save_tiny_checkpoint(
+        model=model,
+        save_path=str(path),
+        class_names=["a", "b", "c"],
+        input_size=(64, 64),
+        monochrome=True,
+        hidden_layers=1,
+        hidden_dim=16,
+        dropout=0.0,
+        best_val_acc=None,
+        history={},
+    )
+    return path

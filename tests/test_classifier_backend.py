@@ -224,3 +224,23 @@ def test_backend_tiny_onnx_lazy_derive(tiny_flat_headtail):
     backend2.predict_batch(crops)
     assert onnx_peer.stat().st_mtime == mtime
     backend2.close()
+
+
+def test_backend_monochrome_uses_averaged_imagenet_stats(tiny_flat_monochrome):
+    """Monochrome checkpoints use averaged ImageNet mean/std in preprocessing."""
+    from hydra_suite.core.identity.classification.backend import (
+        _IMAGENET_MEAN,
+        _IMAGENET_STD,
+        ClassifierBackend,
+    )
+
+    backend = ClassifierBackend(str(tiny_flat_monochrome))
+    assert backend.metadata.monochrome is True
+
+    mean, std = backend._normalization_stats()
+    # All three channels equal the mean of the ImageNet stats
+    expected_mean = float(_IMAGENET_MEAN.mean())
+    expected_std = float(_IMAGENET_STD.mean())
+    assert np.allclose(mean.flatten(), [expected_mean] * 3)
+    assert np.allclose(std.flatten(), [expected_std] * 3)
+    backend.close()
