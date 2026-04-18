@@ -1066,7 +1066,7 @@ def test_headtail_hint_uses_batched_classify_call() -> None:
 
     calls = {"count": 0}
 
-    def _mock_analyze(frames, per_frame_obb_corners):
+    def _mock_analyze(frames, per_frame_obb_corners, profiler=None):
         calls["count"] += 1
         # Return (heading=0.5, conf=0.95, directed=1) for each detection
         return [[(0.5, 0.95, 1) for _ in corners] for corners in per_frame_obb_corners]
@@ -1143,6 +1143,8 @@ def test_load_headtail_yolo_model_requires_supported_schema() -> None:
         self._canonical_margin = 1.3
         self._padding_fraction = 0.3
         self._predict_device = None
+        self._backend_obj = None
+        self._canonical_labels = ()
 
     HeadTailAnalyzer.__init__ = _skip_init
     try:
@@ -1184,6 +1186,8 @@ def test_load_headtail_model_rejects_invalid_named_schema() -> None:
         self._canonical_margin = 1.3
         self._padding_fraction = 0.3
         self._predict_device = None
+        self._backend_obj = None
+        self._canonical_labels = ("left", "right", "unknown")
 
     HeadTailAnalyzer.__init__ = _load_with_bad_names
     try:
@@ -1203,7 +1207,7 @@ def test_classkit_headtail_hints_abstain_on_up_down_unknown() -> None:
 
     # Build a mock analyzer that returns canned classkit_tiny-style results
     # simulating up/unknown/left/right predictions
-    def _mock_analyze(frames, per_frame_obb_corners):
+    def _mock_analyze(frames, per_frame_obb_corners, profiler=None):
         results = []
         for corners in per_frame_obb_corners:
             frame_results = []

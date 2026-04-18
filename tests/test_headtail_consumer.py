@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 
@@ -53,3 +54,54 @@ def test_validate_headtail_labels_rejects_out_of_set():
 
     with pytest.raises(HeadTailFormatError):
         validate_headtail_labels(["cat", "dog"])
+
+
+def test_headtail_accepts_flat_tiny_five_class(tiny_flat_headtail):
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+
+    analyzer = HeadTailAnalyzer(
+        model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+    )
+    assert analyzer.is_loaded()
+    # Expect the normalized label set in order of the checkpoint.
+    assert analyzer.canonical_labels == ("up", "down", "left", "right", "unknown")
+
+
+def test_headtail_accepts_flat_tiny_subset(tiny_flat_subset):
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+
+    analyzer = HeadTailAnalyzer(model_path=str(tiny_flat_subset), compute_runtime="cpu")
+    assert analyzer.canonical_labels == ("left", "right")
+
+
+def test_headtail_rejects_multi_head(tiny_multi_identity):
+    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+
+    with pytest.raises(HeadTailFormatError):
+        HeadTailAnalyzer(model_path=str(tiny_multi_identity), compute_runtime="cpu")
+
+
+def test_headtail_rejects_non_headtail_labels(torchvision_flat_identity):
+    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+
+    with pytest.raises(HeadTailFormatError):
+        HeadTailAnalyzer(
+            model_path=str(torchvision_flat_identity), compute_runtime="cpu"
+        )
+
+
+def test_headtail_predict_labels_returns_normalized(tiny_flat_headtail):
+    """predict_labels returns (canonical_label, confidence) tuples per crop."""
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+
+    analyzer = HeadTailAnalyzer(
+        model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+    )
+    crops = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(2)]
+    out = analyzer.predict_labels(crops)
+    assert len(out) == 2
+    for label, conf in out:
+        assert label in HeadTailAnalyzer.valid_output_labels()
+        assert 0.0 <= conf <= 1.0
