@@ -212,6 +212,79 @@ class _TorchvisionLoader:
         return model
 
 
+class _YoloMultiheadBundleLoader:
+    """Loader for a .multihead.json manifest describing N per-factor YOLO models."""
+
+    @staticmethod
+    def parse_metadata(path: str) -> "ClassifierMetadata":
+        import json
+
+        manifest_path = Path(path)
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ClassifierFormatError(
+                f"{path!r}: cannot read multi-head manifest: {exc}"
+            ) from exc
+        if data.get("schema_version") != 2:
+            raise ClassifierFormatError(f"{path!r}: manifest schema_version must be 2")
+        if data.get("kind") != "yolo_multihead_bundle":
+            raise ClassifierFormatError(
+                f"{path!r}: unexpected manifest kind {data.get('kind')!r}"
+            )
+        factor_names = data.get("factor_names")
+        factor_models = data.get("factor_models")
+        if not isinstance(factor_names, list) or not factor_names:
+            raise ClassifierFormatError(f"{path!r}: missing factor_names")
+        if not isinstance(factor_models, list) or len(factor_models) != len(
+            factor_names
+        ):
+            raise ClassifierFormatError(
+                f"{path!r}: factor_models length does not match factor_names"
+            )
+        class_names_per_factor: list[list[str]] = []
+        for expected_name, entry in zip(factor_names, factor_models):
+            if not isinstance(entry, dict):
+                raise ClassifierFormatError(f"{path!r}: factor entry must be dict")
+            if entry.get("factor") != expected_name:
+                raise ClassifierFormatError(
+                    f"{path!r}: factor order mismatch "
+                    f"(expected {expected_name!r}, got {entry.get('factor')!r})"
+                )
+            names = entry.get("class_names")
+            if not isinstance(names, list) or not names:
+                raise ClassifierFormatError(
+                    f"{path!r}: factor {expected_name!r} missing class_names"
+                )
+            class_names_per_factor.append([str(n) for n in names])
+
+        return ClassifierMetadata(
+            arch="yolo_multihead",
+            input_size=_normalize_input_size(data.get("input_size")),
+            is_multihead=True,
+            factor_names=[str(n) for n in factor_names],
+            class_names_per_factor=class_names_per_factor,
+            monochrome=bool(data.get("monochrome", False)),
+            source_path=path,
+        )
+
+    @staticmethod
+    def load(path: str, device: str):
+        """Load each per-factor YOLO model; returns a list of ultralytics YOLO objects."""
+        import json
+
+        from ultralytics import YOLO
+
+        manifest_path = Path(path)
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        base = manifest_path.parent
+        models = []
+        for entry in data["factor_models"]:
+            pt_path = (base / entry["path"]).resolve()
+            models.append(YOLO(str(pt_path)))
+        return models
+
+
 def _peek_ckpt_arch(path: str) -> str:
     """Read the ``arch`` field from a .pth checkpoint without instantiating weights."""
     import torch
@@ -227,6 +300,9 @@ def _peek_ckpt_arch(path: str) -> str:
 def _select_loader(path: str):
     """Pick a loader from the artifact's suffix and, for .pth, the arch field."""
     p = Path(path)
+    name_lower = p.name.lower()
+    if name_lower.endswith(".multihead.json"):
+        return _YoloMultiheadBundleLoader
     suffix = p.suffix.lower()
     if suffix == ".pth":
         arch = _peek_ckpt_arch(path)
@@ -329,6 +405,19 @@ class ClassifierBackend:
         probs = np.array([r.probs.data.cpu().numpy() for r in results])
         return np.log(np.clip(probs, 1e-9, 1.0))
 
+    def _forward_yolo_multi(self, crops: list[np.ndarray]) -> np.ndarray:
+        """Run each per-factor YOLO model and return per-factor stacked log-probs.
+
+        Returns an ``(N, sum(C_k))`` array shaped like a flat multi-head logit
+        tensor so the existing ``predict_batch`` split logic applies.
+        """
+        per_factor_logits: list[np.ndarray] = []
+        for yolo in self._model:  # self._model is a list of YOLO objects
+            results = yolo(crops, verbose=False)
+            probs = np.array([r.probs.data.cpu().numpy() for r in results])
+            per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
+        return np.concatenate(per_factor_logits, axis=-1)
+
     @staticmethod
     def _softmax(logits: np.ndarray) -> np.ndarray:
         shifted = logits - logits.max(axis=-1, keepdims=True)
@@ -346,6 +435,8 @@ class ClassifierBackend:
         try:
             if self._metadata.arch == "yolo":
                 logits = self._forward_yolo(crops)
+            elif self._metadata.arch == "yolo_multihead":
+                logits = self._forward_yolo_multi(crops)
             else:
                 batch_np = self._preprocess(crops)
                 logits = self._forward_torch(batch_np)

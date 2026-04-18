@@ -194,3 +194,45 @@ def tiny_multi_identity(fixtures_dir: Path) -> Path:
         path=str(path),
     )
     return path
+
+
+@pytest.fixture(scope="session")
+def yolo_multihead_bundle(fixtures_dir: Path) -> Path:
+    """Two per-factor YOLO classify models with a .multihead.json manifest."""
+    bundle_dir = fixtures_dir / "yolo_bundle"
+    manifest = bundle_dir / "bundle.multihead.json"
+    if manifest.exists():
+        return manifest
+    pytest.importorskip("ultralytics")
+    import torch
+    from ultralytics import YOLO
+
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    factor_specs = [
+        ("color", ["r", "g", "b"]),
+        ("shape", ["sq", "ci"]),
+    ]
+    factors = []
+    for factor_name, classes in factor_specs:
+        fdir = bundle_dir / factor_name
+        fdir.mkdir(exist_ok=True)
+        pt = fdir / "best.pt"
+        model = YOLO("yolov8n-cls.pt")
+        # Replace the final Linear layer so inference outputs the correct number
+        # of classes for this factor, not 1000 (ImageNet default).
+        old_linear = model.model.model[9].linear
+        n_classes = len(classes)
+        model.model.model[9].linear = torch.nn.Linear(old_linear.in_features, n_classes)
+        model.model.names = {i: c for i, c in enumerate(classes)}
+        model.save(str(pt))
+        factors.append((factor_name, pt, classes))
+
+    from hydra_suite.training.runner import emit_yolo_multihead_manifest
+
+    emit_yolo_multihead_manifest(
+        manifest_path=str(manifest),
+        factors=factors,
+        input_size=(224, 224),
+        monochrome=False,
+    )
+    return manifest

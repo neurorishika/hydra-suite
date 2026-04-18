@@ -175,3 +175,24 @@ def test_backend_tiny_multi_metadata_and_inference(tiny_multi_identity):
         assert abs(per_crop[0].sum() - 1.0) < 1e-5
         assert abs(per_crop[1].sum() - 1.0) < 1e-5
     backend.close()
+
+
+def test_backend_yolo_multihead_bundle(yolo_multihead_bundle):
+    """ClassifierBackend loads .multihead.json manifests and runs each YOLO per factor."""
+    pytest.importorskip("ultralytics")
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    backend = ClassifierBackend(str(yolo_multihead_bundle), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.arch == "yolo_multihead"
+    assert meta.is_multihead is True
+    assert meta.factor_names == ["color", "shape"]
+    assert meta.class_names_per_factor == [["r", "g", "b"], ["sq", "ci"]]
+
+    crops = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(2)]
+    out = backend.predict_batch(crops)
+    for per_crop in out:
+        assert len(per_crop) == 2
+        assert per_crop[0].shape == (3,)
+        assert per_crop[1].shape == (2,)
+    backend.close()
