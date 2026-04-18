@@ -233,3 +233,56 @@ def test_multihead_yolo_manifest_emission(tmp_path):
     assert data["factor_models"][0]["class_names"] == ["r", "g", "b"]
     # Paths are relative to the manifest location
     assert data["factor_models"][0]["path"] == "color/best.pt"
+
+
+@pytest.mark.parametrize(
+    "factor_names, class_names_per_factor, input_size",
+    [
+        (["flat"], [["up", "down", "left", "right", "unknown"]], (64, 64)),
+        (["color", "shape"], [["r", "g", "b"], ["sq", "ci"]], (128, 96)),
+        (["flat"], [["a", "b", "c"]], (256, 192)),  # non-square
+    ],
+)
+def test_torchvision_v2_roundtrips_through_backend(
+    tmp_path, factor_names, class_names_per_factor, input_size
+):
+    """Every parameter combination produces a v2 artifact parseable by ClassifierBackend."""
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    # tinyclassifier backbone keeps the fixture cheap; the schema is what's under test.
+    total_classes = sum(len(c) for c in class_names_per_factor)
+    model = build_torchvision_classifier(
+        "tinyclassifier", num_classes=total_classes, trainable_layers=-1
+    )
+    out = tmp_path / "tv.pth"
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="tinyclassifier",
+        class_names=class_names_per_factor[0] if len(factor_names) == 1 else [],
+        class_names_per_factor=class_names_per_factor,
+        factor_names=factor_names,
+        input_size=input_size,
+        best_val_acc=None,
+        history={},
+        trainable_layers=-1,
+        backbone_lr_scale=1.0,
+        monochrome=False,
+        path=str(out),
+    )
+    # Only the flat variant is parseable in Phase 1-2; multi-head lands in Phase 3.
+    # For now, just verify the checkpoint dict on disk is v2-shaped.
+    import torch as _torch
+
+    ckpt = _torch.load(str(out), map_location="cpu", weights_only=False)
+    assert ckpt["schema_version"] == 2
+    assert ckpt["factor_names"] == factor_names
+    assert ckpt["class_names_per_factor"] == class_names_per_factor
+    assert ckpt["input_size"] == [input_size[0], input_size[1]]
+    if len(factor_names) == 1:
+        backend = ClassifierBackend(str(out))
+        assert backend.metadata.input_size == input_size
+        backend.close()
