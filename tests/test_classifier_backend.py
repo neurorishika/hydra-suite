@@ -133,3 +133,23 @@ def test_backend_yolo_flat_predict_batch_shape(yolo_flat_headtail):
         assert probs.shape == (5,)
         assert abs(probs.sum() - 1.0) < 1e-3
     backend.close()
+
+
+def test_backend_torchvision_flat_metadata_and_inference(torchvision_flat_identity):
+    """ClassifierBackend loads a torchvision flat v2 checkpoint and returns per-factor probs."""
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    backend = ClassifierBackend(str(torchvision_flat_identity), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.arch == "resnet18"
+    assert meta.input_size == (64, 64)
+    assert meta.is_multihead is False
+    assert meta.class_names_per_factor == [["antA", "antB", "antC"]]
+
+    crops = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(2)]
+    out = backend.predict_batch(crops)
+    assert len(out) == 2
+    for per_crop in out:
+        assert len(per_crop) == 1
+        assert per_crop[0].shape == (3,)
+    backend.close()

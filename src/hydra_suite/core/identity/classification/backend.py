@@ -186,11 +186,61 @@ class _YoloFlatLoader:
         return YOLO(path)
 
 
+class _TorchvisionFlatLoader:
+    """Loader for flat torchvision v2 .pth checkpoints."""
+
+    @staticmethod
+    def parse_metadata(path: str) -> ClassifierMetadata:
+        import torch
+
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        if not isinstance(ckpt, dict):
+            raise ClassifierFormatError(f"{path!r}: expected checkpoint dict")
+        _require_v2(ckpt, path)
+        factor_names, cnpf, is_multi = _parse_factor_structure(ckpt, path)
+        if is_multi:
+            raise ClassifierFormatError(
+                f"{path!r}: multi-head torchvision loader lands in a later task"
+            )
+        return ClassifierMetadata(
+            arch=str(ckpt["arch"]),
+            input_size=_normalize_input_size(ckpt.get("input_size")),
+            is_multihead=False,
+            factor_names=factor_names,
+            class_names_per_factor=cnpf,
+            monochrome=bool(ckpt.get("monochrome", False)),
+            source_path=path,
+        )
+
+    @staticmethod
+    def load(path: str, device: str):
+        from hydra_suite.training.torchvision_model import load_torchvision_classifier
+
+        model, _ = load_torchvision_classifier(path, device=device)
+        return model
+
+
+def _peek_ckpt_arch(path: str) -> str:
+    """Read the ``arch`` field from a .pth checkpoint without instantiating weights."""
+    import torch
+
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(ckpt, dict) or "arch" not in ckpt:
+        raise ClassifierFormatError(
+            f"{path!r}: cannot determine arch; expected v2 checkpoint dict"
+        )
+    return str(ckpt["arch"])
+
+
 def _select_loader(path: str):
-    """Pick a loader from the artifact's suffix."""
-    suffix = Path(path).suffix.lower()
+    """Pick a loader from the artifact's suffix and, for .pth, the arch field."""
+    p = Path(path)
+    suffix = p.suffix.lower()
     if suffix == ".pth":
-        return _TinyFlatLoader
+        arch = _peek_ckpt_arch(path)
+        if arch == "tinyclassifier":
+            return _TinyFlatLoader
+        return _TorchvisionFlatLoader
     if suffix == ".pt":
         return _YoloFlatLoader
     raise ClassifierFormatError(
@@ -273,7 +323,7 @@ class ClassifierBackend:
         batch = (batch - mean) / std
         return batch.transpose(0, 3, 1, 2).astype(np.float32)
 
-    def _forward_tiny(self, batch_np: np.ndarray) -> np.ndarray:
+    def _forward_torch(self, batch_np: np.ndarray) -> np.ndarray:
         import torch
 
         device = _torch_device(self._compute_runtime)
@@ -303,7 +353,7 @@ class ClassifierBackend:
                 logits = self._forward_yolo(crops)
             else:
                 batch_np = self._preprocess(crops)
-                logits = self._forward_tiny(batch_np)
+                logits = self._forward_torch(batch_np)
         except ClassifierError:
             raise
         except Exception as exc:
