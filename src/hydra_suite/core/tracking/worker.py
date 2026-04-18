@@ -619,6 +619,7 @@ class TrackingWorker(QThread):
             cnn_cfg = CNNIdentityConfig(
                 model_path=model_path,
                 confidence=float(cnn_cfg_dict.get("confidence", 0.5)),
+                scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
                 batch_size=clamp_realtime_individual_batch_size(
                     cnn_cfg_dict.get("batch_size", 64),
                     max_animals=params.get("MAX_TARGETS", 1),

@@ -785,6 +785,19 @@ def collect_active_targets(
     )
     if headtail_model:
         headtail_runtimes = supported_runtimes_for_pipeline("headtail")
+        headtail_batch_widget = getattr(
+            main_window._identity_panel,
+            "spin_headtail_batch",
+            None,
+        )
+        current_headtail_batch = max(
+            1,
+            (
+                int(headtail_batch_widget.value())
+                if headtail_batch_widget is not None
+                else min(max_targets, 4)
+            ),
+        )
         targets.append(
             BenchmarkTargetSpec(
                 key="headtail",
@@ -792,10 +805,12 @@ def collect_active_targets(
                 pipeline="headtail",
                 model_path=headtail_model,
                 runtimes=headtail_runtimes or ["cpu"],
-                batch_sizes=_default_batch_sizes(max_targets, max_targets),
+                batch_sizes=_default_batch_sizes(
+                    current_headtail_batch,
+                    max(max_targets, current_headtail_batch * 2),
+                ),
                 current_runtime=main_window._selected_headtail_runtime(),
-                current_batch_size=min(max_targets, 4),
-                supports_batch_apply=False,
+                current_batch_size=current_headtail_batch,
             )
         )
     elif headtail_enabled and raw_headtail_model:

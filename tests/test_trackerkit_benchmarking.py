@@ -849,6 +849,7 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
         ),
         _identity_panel=SimpleNamespace(
             spin_pose_batch=SimpleNamespace(value=lambda: 4),
+            spin_headtail_batch=SimpleNamespace(value=lambda: 32),
             _get_selected_yolo_headtail_model_path=lambda: "classification/orientation/model.onnx",
         ),
         _setup_panel=SimpleNamespace(spin_max_targets=SimpleNamespace(value=lambda: 8)),
@@ -880,3 +881,5 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
         "tensorrt",
     ]
     assert headtail_targets[0].current_runtime == "onnx_coreml"
+    assert headtail_targets[0].current_batch_size == 32
+    assert headtail_targets[0].supports_batch_apply is True

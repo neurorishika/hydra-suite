@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from math import floor
+from pathlib import Path
 from typing import Hashable, Sequence
 
 
@@ -21,6 +22,104 @@ def _normalize_groups(
     if len(normalized) != n_items:
         raise ValueError("groups must have the same length as labels")
     return normalized
+
+
+def _resolve_label_expansion_destination(
+    src_label: Hashable,
+    mapping: dict[str, str],
+    *,
+    known_labels: Sequence[Hashable] | None = None,
+) -> tuple[bool, str | None]:
+    """Resolve one label-expansion mapping row to a canonical destination label."""
+
+    src_name = str(src_label).strip()
+    src_name_ci = src_name.lower()
+    dst_name = mapping.get(src_name)
+    if dst_name is None:
+        for key, value in mapping.items():
+            if str(key).strip().lower() == src_name_ci:
+                dst_name = value
+                break
+    if dst_name is None:
+        return False, None
+
+    dst_name_clean = str(dst_name).strip()
+    if not dst_name_clean:
+        return True, None
+
+    if known_labels is None:
+        return True, dst_name_clean
+
+    known_by_ci = {
+        str(label).strip().lower(): str(label).strip() for label in known_labels
+    }
+    return True, known_by_ci.get(dst_name_clean.lower())
+
+
+def build_label_expansion_records(
+    labels: Sequence[Hashable],
+    *,
+    label_expansion: dict[str, dict[str, str]] | None = None,
+    groups: Sequence[Hashable] | None = None,
+    known_labels: Sequence[Hashable] | None = None,
+) -> list[dict[str, object]]:
+    """Return original-plus-expanded sample records for split planning.
+
+    Expanded samples retain their source group so grouped holdouts keep related
+    original and mirrored samples together when grouping is enabled.
+    """
+
+    labels_list = [str(label).strip() for label in labels]
+    normalized_groups = _normalize_groups(groups, n_items=len(labels_list))
+    normalized_expansion = dict(label_expansion or {})
+
+    records: list[dict[str, object]] = []
+    for index, label_name in enumerate(labels_list):
+        group = normalized_groups[index] if normalized_groups is not None else None
+        records.append(
+            {
+                "source_index": index,
+                "label": label_name,
+                "group": group,
+                "is_expanded": False,
+                "axis": "",
+            }
+        )
+        for axis, mapping in normalized_expansion.items():
+            matched_rule, dst_name = _resolve_label_expansion_destination(
+                label_name,
+                mapping,
+                known_labels=known_labels,
+            )
+            if not matched_rule or dst_name is None:
+                continue
+            records.append(
+                {
+                    "source_index": index,
+                    "label": dst_name,
+                    "group": group,
+                    "is_expanded": True,
+                    "axis": str(axis or "").strip().lower(),
+                }
+            )
+
+    return records
+
+
+def build_label_expansion_split_key(
+    source_path: str | Path,
+    axis: str,
+    destination_label: Hashable,
+) -> str:
+    """Return a stable key for one preplanned expanded sample."""
+
+    return "::".join(
+        [
+            str(Path(source_path).resolve()),
+            str(axis or "").strip().lower(),
+            str(destination_label).strip().lower(),
+        ]
+    )
 
 
 def _build_group_entries(

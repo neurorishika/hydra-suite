@@ -64,3 +64,60 @@ def test_annotate_discovered_entry_writes_registry(
     assert m["scoring_mode"] == "atomic"
     assert m["species"] == "ant"
     assert m["classification_label"] == "apriltag"
+
+
+def test_import_cnn_identity_candidate_copies_external_multihead_bundle(
+    tmp_path, monkeypatch, tiny_flat_subset, tiny_flat_headtail
+):
+    import shutil
+
+    from hydra_suite.trackerkit.gui.dialogs.cnn_identity_import_dialog import (
+        import_cnn_identity_candidate,
+    )
+    from hydra_suite.training import model_publish
+
+    models_root = tmp_path / "models"
+    external_root = tmp_path / "external"
+    external_root.mkdir()
+    factor_a = external_root / "color.pth"
+    factor_b = external_root / "heading.pth"
+    shutil.copy2(str(tiny_flat_subset), str(factor_a))
+    shutil.copy2(str(tiny_flat_headtail), str(factor_b))
+    manifest = model_publish.write_classifier_multihead_manifest(
+        external_root / "bundle.multihead.json",
+        factor_entries=[
+            {"factor": "side", "path": factor_a, "class_names": ["left", "right"]},
+            {
+                "factor": "heading",
+                "path": factor_b,
+                "class_names": ["up", "down", "left", "right", "unknown"],
+            },
+        ],
+        input_size=(64, 64),
+        monochrome=False,
+    )
+
+    monkeypatch.setattr(model_publish, "get_models_root", lambda: models_root)
+    monkeypatch.setattr(
+        model_publish,
+        "_registry_path",
+        lambda: models_root / "model_registry.json",
+    )
+
+    rel_path = import_cnn_identity_candidate(
+        model_path=str(manifest),
+        species="ant",
+        classification_label="colortag",
+        scoring_mode="per_head_average",
+    )
+
+    stored_manifest = models_root / rel_path
+    assert stored_manifest.exists()
+    factor_prefix = stored_manifest.name.removesuffix(".multihead.json")
+    copied_factor_paths = sorted(stored_manifest.parent.glob(f"{factor_prefix}_*.pth"))
+    assert len(copied_factor_paths) == 2
+    entries = dict(model_publish.iter_registry_entries())
+    meta = entries[rel_path]
+    assert meta["usage_role"] == "cnn_identity"
+    assert meta["scoring_mode"] == "per_head_average"
+    assert meta["factor_names"] == ["side", "heading"]

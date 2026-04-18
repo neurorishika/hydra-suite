@@ -55,8 +55,9 @@ class _CollapsibleSection(QWidget):
         self._toggle_btn.setCheckable(True)
         self._toggle_btn.setChecked(False)
         self._toggle_btn.setFlat(True)
+        self._toggle_btn.setProperty("detectkitVariant", "quiet")
         self._toggle_btn.setStyleSheet(
-            "QPushButton { text-align: left; font-weight: bold; padding: 4px; }"
+            "QPushButton { text-align: left; font-weight: 600; padding: 6px 8px; }"
         )
         self._toggle_btn.clicked.connect(self._on_toggle)
         layout.addWidget(self._toggle_btn)
@@ -107,6 +108,7 @@ class ToolsPanel(QWidget):
         self._proj = None
         self._class_checkboxes: list[QCheckBox] = []
         self.setFixedWidth(_PANEL_WIDTH)
+        self.setProperty("detectkitRole", "panelShell")
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -115,8 +117,19 @@ class ToolsPanel(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
-        outer.setSpacing(6)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(10)
+
+        header = QLabel("Workspace Tools")
+        header.setProperty("detectkitRole", "sectionTitle")
+        outer.addWidget(header)
+
+        intro = QLabel(
+            "Track dataset readiness, inspect recent metrics, and control preview overlays from a single workspace rail."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("detectkitRole", "sectionHint")
+        outer.addWidget(intro)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -167,6 +180,7 @@ class ToolsPanel(QWidget):
         v.addWidget(self._metrics_view)
 
         self._analysis_section.set_content(content)
+        self._analysis_section.toggle()
         return self._analysis_section
 
     def _build_overlay_group(self) -> QGroupBox:
@@ -221,6 +235,8 @@ class ToolsPanel(QWidget):
         nav_row = QHBoxLayout()
         self._btn_prev = QPushButton("◀ Prev")
         self._btn_next = QPushButton("Next ▶")
+        self._btn_prev.setProperty("detectkitVariant", "secondary")
+        self._btn_next.setProperty("detectkitVariant", "secondary")
         self._btn_prev.clicked.connect(self.prev_requested)
         self._btn_next.clicked.connect(self.next_requested)
         nav_row.addWidget(self._btn_prev)
@@ -234,6 +250,7 @@ class ToolsPanel(QWidget):
         self._btn_train = QPushButton("Train…")
         self._btn_evaluate = QPushButton("Evaluate…")
         self._btn_history = QPushButton("History…")
+        self._btn_history.setProperty("detectkitVariant", "secondary")
         self._btn_train.clicked.connect(self.train_requested)
         self._btn_evaluate.clicked.connect(self.evaluate_requested)
         self._btn_history.clicked.connect(self.history_requested)
@@ -265,14 +282,20 @@ class ToolsPanel(QWidget):
 
         sources = self._proj.sources or []
 
+        self._overview_progress.setRange(0, max(1, len(sources)))
+        self._overview_progress.setValue(len(sources))
+
         for src in sources:
-            row_lbl = QLabel(f"  {src.name or src.path}: —")
+            descriptor = src.name or src.path
+            if getattr(src, "imported", False) and getattr(src, "source_kind", ""):
+                descriptor = f"{descriptor} - imported {src.source_kind}"
+            row_lbl = QLabel(descriptor)
             row_lbl.setWordWrap(True)
+            row_lbl.setProperty("detectkitRole", "compactInfo")
             self._overview_sources_layout.addWidget(row_lbl)
 
         n_src = len(sources)
-        self._overview_progress.setFormat(f"{n_src} source(s) configured")
-        self._overview_progress.setValue(min(100, n_src * 10))
+        self._overview_progress.setFormat(f"{n_src} source(s) connected")
 
     def set_image_counter(self, current: int, total: int) -> None:
         """Update the navigation counter label."""
@@ -289,6 +312,7 @@ class ToolsPanel(QWidget):
     def update_model_metrics(self, metrics: dict) -> None:
         """Display model metrics in the Analysis section."""
         if not metrics:
+            self._metrics_view.setPlainText("No model metrics available yet.")
             return
         lines = [f"{k}: {v}" for k, v in metrics.items()]
         self._metrics_view.setPlainText("\n".join(lines))

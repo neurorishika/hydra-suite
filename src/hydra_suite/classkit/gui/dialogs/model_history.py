@@ -1,5 +1,6 @@
 """ModelHistoryDialog — browse, rename, delete, and load trained models."""
 
+import json
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -462,6 +463,8 @@ class ModelHistoryDialog(QDialog):
         cls, artifact_paths: list, dest_dir: Path, base_stem: str
     ) -> tuple[list[str], list[str]]:
         """Copy artifacts into the export directory and report successes/failures."""
+        from hydra_suite.training.model_publish import _copy_classifier_sidecar
+
         copied: list[str] = []
         failed: list[str] = []
         total_artifacts = len(artifact_paths)
@@ -479,6 +482,8 @@ class ModelHistoryDialog(QDialog):
             try:
                 shutil.copy2(str(src_path), str(dst))
                 copied.append(dst.name)
+                if _copy_classifier_sidecar(src_path, dst):
+                    copied.append(dst.with_suffix(".v2meta.json").name)
             except Exception as exc:
                 failed.append(f"{src_path.name}: {exc}")
 
@@ -542,24 +547,105 @@ class ModelHistoryDialog(QDialog):
         copied, failed = self._copy_artifacts_to_dir(
             artifact_paths, dest_dir, base_stem
         )
+        copied_artifact_paths = [
+            dest_dir / name for name in copied if not str(name).endswith(".v2meta.json")
+        ]
+        training_settings = ((entry.get("meta") or {}).get("training_settings")) or {}
+        mode = str(entry.get("mode") or "")
+        fallback_input_size: tuple[int, int] | None = None
+        if "yolo" in mode:
+            fallback_input_size = (640, 640)
+        elif (
+            "custom" in mode
+            and training_settings.get("custom_backbone") != "tinyclassifier"
+        ):
+            size = int(training_settings.get("custom_input_size", 224) or 224)
+            fallback_input_size = (size, size)
+        fallback_monochrome = bool(training_settings.get("monochrome", False))
+
+        if copied_artifact_paths and "yolo" in mode:
+            try:
+                from hydra_suite.training.model_publish import (
+                    classifier_metadata_for_artifact,
+                )
+
+                for artifact_path in copied_artifact_paths:
+                    if artifact_path.suffix.lower() != ".pt":
+                        continue
+                    sidecar_path = artifact_path.with_suffix(".v2meta.json")
+                    if sidecar_path.exists():
+                        continue
+                    meta = classifier_metadata_for_artifact(
+                        artifact_path,
+                        fallback_input_size=fallback_input_size,
+                        fallback_monochrome=fallback_monochrome,
+                    )
+                    sidecar_path.write_text(
+                        json.dumps(meta, indent=2), encoding="utf-8"
+                    )
+                    copied.append(sidecar_path.name)
+            except Exception as exc:
+                failed.append(f"sidecar metadata: {exc}")
+
         if (
-            copied
-            and len(copied) > 1
+            copied_artifact_paths
+            and len(copied_artifact_paths) > 1
             and str(entry.get("mode", "")).startswith("multihead")
         ):
             try:
                 from hydra_suite.classkit.model_bundle import (
                     write_model_bundle_manifest,
                 )
+                from hydra_suite.training.model_publish import (
+                    classifier_metadata_for_artifact,
+                    write_classifier_multihead_manifest,
+                )
 
                 manifest_name = f"{base_stem}.bundle.json"
                 write_model_bundle_manifest(
                     dest_dir / manifest_name,
                     mode=str(entry.get("mode") or ""),
-                    artifact_paths=[dest_dir / name for name in copied],
+                    artifact_paths=copied_artifact_paths,
                     class_names=list(entry.get("class_names") or []),
                 )
                 copied = copied + [manifest_name]
+
+                factor_entries = []
+                bundle_input_size: tuple[int, int] | None = None
+                bundle_monochrome = fallback_monochrome
+                for idx, artifact_path in enumerate(copied_artifact_paths):
+                    meta = classifier_metadata_for_artifact(
+                        artifact_path,
+                        fallback_input_size=fallback_input_size,
+                        fallback_monochrome=fallback_monochrome,
+                    )
+                    input_size_list = meta.get("input_size") or [224, 224]
+                    if bundle_input_size is None:
+                        bundle_input_size = (
+                            int(input_size_list[0]),
+                            int(input_size_list[1]),
+                        )
+                    bundle_monochrome = bool(meta.get("monochrome", bundle_monochrome))
+                    factor_name = str(
+                        (meta.get("factor_names") or [f"factor_{idx + 1}"])[0]
+                    )
+                    factor_entries.append(
+                        {
+                            "factor": factor_name,
+                            "path": artifact_path,
+                            "class_names": list(
+                                (meta.get("class_names_per_factor") or [[]])[0]
+                            ),
+                        }
+                    )
+                trackerkit_manifest = f"{base_stem}.multihead.json"
+                write_classifier_multihead_manifest(
+                    dest_dir / trackerkit_manifest,
+                    factor_entries=factor_entries,
+                    input_size=bundle_input_size or fallback_input_size or (224, 224),
+                    monochrome=bundle_monochrome,
+                )
+                copied = copied + [trackerkit_manifest]
             except Exception as exc:
                 failed.append(f"bundle manifest: {exc}")
         self._show_export_result(dest_dir, copied, failed)

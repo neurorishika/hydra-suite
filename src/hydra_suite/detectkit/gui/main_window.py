@@ -11,6 +11,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QStatusBar,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -39,36 +41,290 @@ from .utils import find_label_for_image, parse_obb_label, source_class_id_map
 
 logger = logging.getLogger(__name__)
 
-_DATASET_PANEL_MIN_WIDTH = 220
-_DATASET_PANEL_MAX_WIDTH = 360
+_DATASET_PANEL_MIN_WIDTH = 360
+_DATASET_PANEL_MAX_WIDTH = 420
 _CANVAS_MIN_WIDTH = 480
-_WORKSPACE_MIN_HEIGHT = 700
-_WORKSPACE_MIN_WIDTH = _DATASET_PANEL_MIN_WIDTH + _CANVAS_MIN_WIDTH + 280 + 24
+_TOOLS_PANEL_WIDTH = 280
+_WORKSPACE_MIN_HEIGHT = 760
+_WORKSPACE_MIN_WIDTH = 1320
 
 _DARK_STYLESHEET = """
-QMainWindow { background-color: #1e1e1e; }
-QWidget { background-color: #1e1e1e; color: #ddd; }
-QMenuBar { background-color: #252526; color: #ddd; }
-QMenuBar::item:selected { background-color: #094771; }
-QMenu { background-color: #252526; color: #ddd; }
-QMenu::item:selected { background-color: #094771; }
-QPushButton { background-color: #0e639c; color: white; border: none;
-              padding: 6px 14px; border-radius: 4px; }
-QPushButton:hover { background-color: #1177bb; }
-QPushButton:disabled { background-color: #444; color: #888; }
-QListWidget { background-color: #252526; border: 1px solid #333; color: #ddd; }
-QListWidget::item:selected { background-color: #094771; }
-QSplitter::handle { background-color: #333; width: 2px; }
-QStatusBar { background-color: #007acc; color: white; }
-QScrollArea { border: none; }
-QGroupBox { border: 1px solid #444; border-radius: 4px;
-            margin-top: 8px; padding-top: 12px; color: #ddd; }
-QGroupBox::title { padding: 0 4px; }
-QToolBar { background-color: #252526; border-bottom: 1px solid #333; spacing: 4px; }
-QToolBar QToolButton { color: #ddd; padding: 4px 8px; }
-QToolBar QToolButton:hover { background-color: #094771; border-radius: 3px; }
-QComboBox { background-color: #3c3c3c; border: 1px solid #555; color: #ddd;
-            padding: 2px 6px; border-radius: 3px; }
+QMainWindow {
+    background-color: #1e1e1e;
+}
+QWidget {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    font-family: "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 11px;
+}
+QWidget[detectkitRole="panelShell"] {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 8px;
+}
+QWidget[detectkitRole="canvasShell"] {
+    background-color: #202224;
+    border: 1px solid #3e3e42;
+    border-radius: 8px;
+}
+QWidget[detectkitRole="sectionCard"] {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 6px;
+}
+QLabel[detectkitRole="sectionTitle"] {
+    color: #9cdcfe;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+}
+QLabel[detectkitRole="sectionHint"] {
+    color: #9f9f9f;
+    font-size: 11px;
+}
+QLabel[detectkitRole="compactInfo"] {
+    color: #cfcfcf;
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+QMenuBar {
+    background-color: #252526;
+    color: #cccccc;
+    border-bottom: 1px solid #3e3e42;
+    padding: 4px;
+}
+QMenuBar::item {
+    padding: 6px 12px;
+    background-color: transparent;
+}
+QMenuBar::item:selected {
+    background-color: #2a2d2e;
+}
+QMenu {
+    background-color: #252526;
+    color: #cccccc;
+    border: 1px solid #3e3e42;
+}
+QMenu::item {
+    padding: 8px 24px;
+}
+QMenu::item:selected {
+    background-color: #094771;
+}
+QPushButton {
+    background-color: #0e639c;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #1177bb;
+}
+QPushButton:pressed {
+    background-color: #0d5a8f;
+}
+QPushButton:disabled {
+    background-color: #3e3e42;
+    color: #888888;
+}
+QPushButton[detectkitVariant="secondary"] {
+    background-color: #3e3e42;
+    color: #e0e0e0;
+}
+QPushButton[detectkitVariant="secondary"]:hover {
+    background-color: #555558;
+}
+QPushButton[detectkitVariant="quiet"] {
+    background-color: transparent;
+    border: 1px solid #3e3e42;
+    color: #cccccc;
+}
+QPushButton[detectkitVariant="quiet"]:hover {
+    background-color: #2a2d2e;
+    border-color: #0e639c;
+}
+QGroupBox {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding: 8px;
+    font-weight: 600;
+    color: #cccccc;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    padding: 1px 6px;
+    background-color: #1e1e1e;
+    color: #9cdcfe;
+    border-radius: 3px;
+}
+QListWidget,
+QTextEdit,
+QPlainTextEdit {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 4px;
+    color: #e0e0e0;
+}
+QListWidget::item {
+    padding: 8px 10px;
+    border-radius: 4px;
+    margin: 1px 0px;
+}
+QListWidget::item:selected {
+    background-color: #094771;
+    color: #ffffff;
+}
+QListWidget::item:hover:!selected {
+    background-color: #2a2d2e;
+}
+QComboBox,
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox {
+    background-color: #3c3c3c;
+    border: 1px solid #3e3e42;
+    color: #e0e0e0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    min-height: 22px;
+}
+QComboBox:hover,
+QLineEdit:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QTextEdit:hover,
+QPlainTextEdit:hover,
+QListWidget:hover {
+    border-color: #0e639c;
+}
+QComboBox:focus,
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus,
+QListWidget:focus {
+    border-color: #007acc;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #3e3e42;
+    background-color: #4a4a4a;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+QComboBox QAbstractItemView {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    selection-background-color: #094771;
+    selection-color: #ffffff;
+    color: #e0e0e0;
+}
+QCheckBox {
+    color: #d6d6d6;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #3e3e42;
+    background-color: #3c3c3c;
+    border-radius: 3px;
+}
+QCheckBox::indicator:checked {
+    background-color: #0e639c;
+    border-color: #007acc;
+}
+QProgressBar {
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    text-align: center;
+    background-color: #1f1f1f;
+    color: #ffffff;
+    min-height: 18px;
+}
+QProgressBar::chunk {
+    background-color: #0e639c;
+    border-radius: 3px;
+}
+QSlider::groove:horizontal {
+    border: 1px solid #3e3e42;
+    height: 4px;
+    background: #2a2d2e;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #0e639c;
+    border: 1px solid #0e639c;
+    width: 14px;
+    margin: -6px 0;
+    border-radius: 7px;
+}
+QSplitter::handle {
+    background-color: #3e3e42;
+    width: 6px;
+}
+QToolBar {
+    background-color: #252526;
+    border-bottom: 1px solid #3e3e42;
+    spacing: 8px;
+    padding: 6px;
+}
+QToolBar QToolButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 12px;
+    color: #cccccc;
+}
+QToolBar QToolButton:hover {
+    background-color: #2a2d2e;
+}
+QToolBar QToolButton:pressed {
+    background-color: #094771;
+}
+QStatusBar {
+    background-color: #007acc;
+    color: #ffffff;
+    border-top: 1px solid #0098ff;
+    font-weight: 500;
+}
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+QScrollBar:vertical {
+    background-color: #252526;
+    width: 10px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background-color: #5a5a5a;
+    border-radius: 5px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #007acc;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+    height: 0px;
+}
 """
 
 
@@ -124,6 +380,7 @@ class DetectKitMainWindow(QMainWindow):
     def _build_toolbar(self) -> QToolBar:
         tb = QToolBar("Main Toolbar")
         tb.setMovable(False)
+        tb.setObjectName("detectkitToolbar")
 
         act_new = QAction("New", self)
         act_new.triggered.connect(self.new_project)
@@ -231,30 +488,59 @@ class DetectKitMainWindow(QMainWindow):
 
     def _build_workspace_page(self) -> None:
         page = QWidget()
+        page.setObjectName("detectkitWorkspace")
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(4)
         splitter.setChildrenCollapsible(False)
         self.splitter = splitter
 
+        self._dataset_panel.setProperty("detectkitRole", "panelShell")
         self._dataset_panel.setMinimumWidth(_DATASET_PANEL_MIN_WIDTH)
         self._dataset_panel.setMaximumWidth(_DATASET_PANEL_MAX_WIDTH)
-        splitter.addWidget(self._dataset_panel)
+        splitter.addWidget(self._dataset_panel)  # index 0
+
+        canvas_shell = QWidget()
+        canvas_shell.setProperty("detectkitRole", "canvasShell")
+        canvas_layout = QVBoxLayout(canvas_shell)
+        canvas_layout.setContentsMargins(10, 10, 10, 10)
+        canvas_layout.setSpacing(8)
+
+        canvas_title = QLabel("Annotation Preview")
+        canvas_title.setProperty("detectkitRole", "sectionTitle")
+        canvas_layout.addWidget(canvas_title)
+
+        canvas_hint = QLabel(
+            "Review imported labels, compare model overlays, and inspect oriented boxes before training."
+        )
+        canvas_hint.setWordWrap(True)
+        canvas_hint.setProperty("detectkitRole", "sectionHint")
+        canvas_layout.addWidget(canvas_hint)
 
         self._canvas.setMinimumWidth(_CANVAS_MIN_WIDTH)
-        splitter.addWidget(self._canvas)
+        canvas_layout.addWidget(self._canvas, 1)
+        canvas_shell.setMinimumWidth(_CANVAS_MIN_WIDTH)
+        splitter.addWidget(canvas_shell)  # index 1
+        self._right_tabs = canvas_shell
 
+        self._tools_panel.setProperty("detectkitRole", "panelShell")
+        self._tools_panel.setFixedWidth(_TOOLS_PANEL_WIDTH)
+        splitter.addWidget(self._tools_panel)  # index 2
+
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, False)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_DATASET_PANEL_MIN_WIDTH, _CANVAS_MIN_WIDTH + 200])
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes(
+            [_DATASET_PANEL_MIN_WIDTH, _CANVAS_MIN_WIDTH + 220, _TOOLS_PANEL_WIDTH]
+        )
 
-        layout.addWidget(splitter)
-
-        self._tools_panel.setFixedWidth(280)
-        layout.addWidget(self._tools_panel)
+        layout.addWidget(splitter, 1)
 
         self._stack.addWidget(page)  # index 1
 

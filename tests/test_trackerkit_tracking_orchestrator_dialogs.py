@@ -295,6 +295,95 @@ def test_open_parameter_helper_detection_prompt_uses_main_window_parent(
     )
 
 
+def test_setup_video_file_adds_recent_video_to_main_window_store(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    recent_paths: list[str] = []
+
+    class FakeLineEdit:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def setText(self, value: str) -> None:
+            self.value = value
+
+    class FakeCheckBox:
+        def __init__(self) -> None:
+            self.checked = False
+
+        def setChecked(self, value: bool) -> None:
+            self.checked = value
+
+    class FakeButton:
+        def __init__(self) -> None:
+            self.enabled = False
+
+        def setEnabled(self, value: bool) -> None:
+            self.enabled = value
+
+    class FakeSpinBox:
+        def __init__(self) -> None:
+            self.value = None
+
+        def setValue(self, value: int) -> None:
+            self.value = value
+
+    class FakeLabel:
+        def __init__(self) -> None:
+            self.text = ""
+            self.style = ""
+
+        def setText(self, value: str) -> None:
+            self.text = value
+
+        def setStyleSheet(self, value: str) -> None:
+            self.style = value
+
+    panels = SimpleNamespace(
+        setup=SimpleNamespace(
+            file_line=FakeLineEdit(),
+            csv_line=FakeLineEdit(),
+            btn_detect_fps=FakeButton(),
+            spin_start_frame=FakeSpinBox(),
+            spin_end_frame=FakeSpinBox(),
+            config_status_label=FakeLabel(),
+        ),
+        postprocess=SimpleNamespace(
+            video_out_line=FakeLineEdit(),
+            check_video_output=FakeCheckBox(),
+        ),
+    )
+    main_window = SimpleNamespace(
+        current_video_path=None,
+        current_detection_cache_path="stale-detections.npz",
+        current_individual_properties_cache_path="stale-properties.npz",
+        roi_selection_active=False,
+        btn_test_detection=FakeButton(),
+        video_total_frames=240,
+        _recents_store=SimpleNamespace(add=recent_paths.append),
+        _init_video_player=lambda path: captured.setdefault("video_path", path),
+        setWindowTitle=lambda title: captured.setdefault("window_title", title),
+        _apply_ui_state=lambda state: captured.setdefault("ui_state", state),
+        _show_workspace=lambda: captured.setdefault("workspace_shown", True),
+    )
+    orchestrator = ConfigOrchestrator(
+        main_window=main_window,
+        config=object(),
+        panels=panels,
+    )
+
+    monkeypatch.setattr(config_module.os.path, "isfile", lambda _path: False)
+
+    orchestrator._setup_video_file("/tmp/example.mp4")
+
+    assert recent_paths == ["/tmp/example.mp4"]
+    assert main_window.current_detection_cache_path is None
+    assert main_window.current_individual_properties_cache_path is None
+    assert captured["video_path"] == "/tmp/example.mp4"
+    assert captured["window_title"] == "HYDRA - example.mp4"
+    assert captured["ui_state"] == "idle"
+    assert captured["workspace_shown"] is True
+
+
 def test_start_tracking_on_video_restores_csv_and_worker_imports(
     monkeypatch,
     tmp_path: Path,

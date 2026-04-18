@@ -10,11 +10,9 @@ by the YOLO detector and the crops worker) and ``predict_labels`` /
 from __future__ import annotations
 
 import logging
-from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -54,6 +52,13 @@ _LABEL_ALIASES: Dict[str, str] = {
     "head_unknown": "unknown",
 }
 
+_HEADTAIL_HEADING_OFFSETS: Dict[str, float] = {
+    "right": 0.0,
+    "left": np.pi,
+    "up": -np.pi / 2.0,
+    "down": np.pi / 2.0,
+}
+
 
 def normalize_headtail_label(raw: str) -> str:
     """Return the canonical head-tail label for ``raw``.
@@ -88,20 +93,36 @@ def validate_headtail_labels(labels: list[str]) -> list[str]:
             "head-tail model labels must be a non-empty subset of "
             f"{{up, down, left, right, unknown}}; offending labels: {offending}"
         )
+    if len(set(normalized)) != len(normalized):
+        raise HeadTailFormatError(
+            "head-tail model labels must be unique after alias normalization"
+        )
     return normalized
+
+
+def heading_for_direction(axis_theta: float, direction: str) -> Optional[float]:
+    """Map a canonical head-tail label to a directed global heading.
+
+    ``axis_theta`` is the global direction of the canonical crop's positive
+    x-axis, which corresponds to the crop's right-hand side. The label offsets
+    therefore match ``apply_headtail_rotation`` semantics: ``right`` is no
+    rotation, ``left`` is 180 degrees, ``up`` is 90 degrees clockwise, and
+    ``down`` is 90 degrees counter-clockwise in image coordinates.
+    """
+    canonical = _LABEL_ALIASES.get(str(direction or "").strip().lower())
+    if canonical not in _HEADTAIL_HEADING_OFFSETS:
+        return None
+    return float(
+        (float(axis_theta) + _HEADTAIL_HEADING_OFFSETS[canonical]) % (2.0 * np.pi)
+    )
 
 
 class HeadTailAnalyzer:
     """Classifier-agnostic head-tail direction analyzer.
 
-    Primary path: wraps ``ClassifierBackend`` for v2 classifier artifacts
-    (TinyClassifier, TorchvisionClassifier, YOLO flat).  Enforces:
+    Wraps ``ClassifierBackend`` for v2 classifier artifacts and enforces:
     - flat model (not multi-head) — raises ``HeadTailFormatError``
     - labels subset of {up, down, left, right, unknown} after alias normalization
-
-    Legacy path: accepts pre-loaded model components via ``from_components``
-    (consumed by ``YOLOOBBDetector._load_headtail_model`` YOLO fallback and
-    existing tests that monkey-patch internal state).
 
     Consumers use ``analyze_crops(frames, per_frame_obb_corners)`` for the
     full frame-based pipeline.  New callers may use ``predict_labels(crops)``
@@ -113,6 +134,7 @@ class HeadTailAnalyzer:
         model_path: str = "",
         device: str = "cpu",
         conf_threshold: float = 0.5,
+        batch_size: int = 64,
         reference_aspect_ratio: float = 2.0,
         canonical_margin: float = 1.3,
         predict_device: Optional[str] = None,
@@ -130,6 +152,7 @@ class HeadTailAnalyzer:
                 of the canonical head-tail set.
         """
         self._conf_threshold = float(conf_threshold)
+        self._batch_size = max(1, int(batch_size))
         self._ref_ar = max(1.0, reference_aspect_ratio)
         self._padding_fraction = max(0.0, canonical_margin - 1.0)
         self._canonical_margin = float(canonical_margin)
@@ -143,7 +166,6 @@ class HeadTailAnalyzer:
             self._device = str(device) if device else "cpu"
             self._compute_runtime = self._device
 
-        # These fields exist for backward compat with legacy path (from_components)
         self._backend: str = "none"
         self._model = None
         self._class_names: Optional[List[str]] = None
@@ -153,44 +175,6 @@ class HeadTailAnalyzer:
 
         if model_path:
             self._load_model(model_path)
-
-    # ------------------------------------------------------------------
-    # Class methods / static factory
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def from_components(
-        cls,
-        model,
-        backend: str,
-        class_names: Optional[List[str]],
-        input_size: Optional[Tuple[int, int]],
-        device: str = "cpu",
-        conf_threshold: float = 0.5,
-        reference_aspect_ratio: float = 2.0,
-        canonical_margin: float = 1.3,
-        predict_device: Optional[str] = None,
-    ) -> "HeadTailAnalyzer":
-        """Create from a pre-loaded model, skipping file-based loading.
-
-        Used by ``YOLOOBBDetector._load_headtail_model`` for YOLO classify
-        models that go through the engine's own runtime loader.
-        """
-        obj = cls.__new__(cls)
-        obj._device = str(device) if device else "cpu"
-        obj._compute_runtime = obj._device
-        obj._conf_threshold = float(conf_threshold)
-        obj._ref_ar = max(1.0, reference_aspect_ratio)
-        obj._padding_fraction = max(0.0, canonical_margin - 1.0)
-        obj._canonical_margin = float(canonical_margin)
-        obj._predict_device = predict_device
-        obj._model = model
-        obj._backend = str(backend)
-        obj._class_names = class_names
-        obj._input_size = input_size
-        obj._backend_obj = None
-        obj._canonical_labels = tuple(class_names) if class_names else ()
-        return obj
 
     # ------------------------------------------------------------------
     # v2 class methods
@@ -220,7 +204,7 @@ class HeadTailAnalyzer:
 
     @property
     def backend(self) -> str:
-        """Name of the active inference backend ('tiny', 'classkit_tiny', 'backend_v2', 'yolo', or 'none')."""
+        """Name of the active inference backend ('backend_v2' or 'none')."""
         return self._backend
 
     @property
@@ -235,7 +219,7 @@ class HeadTailAnalyzer:
 
     @property
     def model(self):
-        """The underlying loaded model object (legacy path), or None for v2 path."""
+        """Retained for compatibility; v2-backed analyzers expose no raw model."""
         return self._model
 
     def is_loaded(self) -> bool:
@@ -247,12 +231,7 @@ class HeadTailAnalyzer:
     # ------------------------------------------------------------------
 
     def _load_model(self, model_path_str: str) -> None:
-        """Load classifier artifact, preferring v2 ClassifierBackend path.
-
-        Raises:
-            ClassifierFormatError: if the file exists but cannot be loaded by
-                any supported path (v2, legacy tiny, or YOLO classify).
-        """
+        """Load a v2 classifier artifact through the shared backend."""
         from hydra_suite.core.identity.classification.backend import ClassifierBackend
         from hydra_suite.core.identity.classification.errors import (
             ClassifierFormatError,
@@ -267,217 +246,32 @@ class HeadTailAnalyzer:
                 f"HeadTailAnalyzer: path does not exist: {path!r}"
             )
 
-        # Attempt v2 ClassifierBackend path first.
-        # For .pth/.pt files, we peek at schema_version to avoid feeding
-        # legacy raw state_dicts into ClassifierBackend (which requires v2).
-        skip_v2 = False
-        if path_obj.suffix.lower() in {".pth", ".pt"}:
-            skip_v2 = self._is_legacy_checkpoint(path)
-
-        if not skip_v2:
-            try:
-                backend_obj = ClassifierBackend(
-                    path, compute_runtime=self._compute_runtime
+        try:
+            backend_obj = ClassifierBackend(path, compute_runtime=self._compute_runtime)
+            meta = backend_obj.metadata
+            if meta.is_multihead:
+                raise HeadTailFormatError(
+                    f"head-tail requires a flat classifier, got multi-head with "
+                    f"factors={meta.factor_names!r}"
                 )
-                meta = backend_obj.metadata
-                if meta.is_multihead:
-                    raise HeadTailFormatError(
-                        f"head-tail requires a flat classifier, got multi-head with "
-                        f"factors={meta.factor_names!r}"
-                    )
-                raw_labels = meta.class_names_per_factor[0]
-                # raises HeadTailFormatError if labels not in canonical set
-                normalized = validate_headtail_labels(raw_labels)
-                self._backend_obj = backend_obj
-                self._backend = "backend_v2"
-                self._class_names = normalized
-                self._input_size = meta.input_size
-                self._canonical_labels = tuple(normalized)
-                logger.info(
-                    "HeadTailAnalyzer: loaded v2 classifier (%s) from %s",
-                    meta.arch,
-                    path_obj.name,
-                )
-                return
-            except HeadTailFormatError:
-                # Propagate head-tail validation errors — these are hard failures.
-                raise
-            except ClassifierFormatError:
-                # Not a v2 artifact — fall through to legacy tiny loader.
-                pass
-            except Exception as exc:
-                logger.debug("HeadTailAnalyzer: v2 path failed for %s: %s", path, exc)
-
-        # Legacy tiny / classkit_tiny path for old single-output .pth files
-        tiny_result = self._try_load_tiny(path)
-        if tiny_result is not None:
-            model, class_names, input_size = tiny_result
-            self._input_size = input_size
-            if class_names is not None:
-                self._class_names = self._validate_class_names(class_names)
-                self._backend = "classkit_tiny"
-                self._canonical_labels = tuple(self._class_names)
-            else:
-                self._backend = "tiny"
-                self._canonical_labels = ()
-            self._model = model
+            raw_labels = meta.class_names_per_factor[0]
+            # raises HeadTailFormatError if labels not in canonical set
+            normalized = validate_headtail_labels(raw_labels)
+            self._backend_obj = backend_obj
+            self._backend = "backend_v2"
+            self._class_names = normalized
+            self._input_size = meta.input_size
+            self._canonical_labels = tuple(normalized)
             logger.info(
-                "HeadTailAnalyzer: loaded legacy %s model from %s",
-                self._backend,
+                "HeadTailAnalyzer: loaded classifier (%s) from %s",
+                meta.arch,
                 path_obj.name,
             )
             return
-
-        # Try YOLO classify model via ultralytics
-        try:
-            from ultralytics import YOLO
-
-            model = YOLO(path, task="classify")
-            model_names = getattr(model, "names", None)
-            if model_names is None:
-                model_names = getattr(getattr(model, "model", None), "names", None)
-            self._class_names = self._validate_class_names(model_names)
-            self._backend = "yolo"
-            self._model = model
-            self._canonical_labels = (
-                tuple(self._class_names) if self._class_names else ()
-            )
-            logger.info(
-                "HeadTailAnalyzer: loaded YOLO classify model from %s",
-                path_obj.name,
-            )
-            return
-        except Exception as exc:
-            logger.debug(
-                "HeadTailAnalyzer: YOLO classify path failed for %s: %s", path, exc
-            )
-
-        # All loading paths failed — surface as a hard error so callers and the
-        # tracking worker error signal receive a structured exception rather than
-        # a silent no-op.
-        raise ClassifierFormatError(
-            f"Cannot load {path!r} as a v2 classifier, legacy tiny checkpoint, "
-            "or YOLO classify model."
-        )
-
-    @staticmethod
-    def _is_legacy_checkpoint(path: str) -> bool:
-        """Return True if path looks like a legacy (pre-v2) checkpoint.
-
-        We peek at the file without loading weights to avoid the overhead of
-        loading a full checkpoint only to reject it.
-        """
-        import torch
-
-        try:
-            ckpt = torch.load(path, map_location="cpu", weights_only=False)
         except Exception:
-            return False
-        if not isinstance(ckpt, dict):
-            return True  # raw state_dict or unknown format
-        return ckpt.get("schema_version") != 2
-
-    def _try_load_tiny(self, model_path_str: str):
-        import torch
-
-        model_path = Path(model_path_str).expanduser().resolve()
-        if not model_path.exists():
-            return None
-        if model_path.suffix.lower() not in {".pth", ".pt"}:
-            return None
-
-        try:
-            checkpoint = torch.load(
-                str(model_path), map_location="cpu", weights_only=False
-            )
-        except Exception:
-            return None
-
-        state_dict = None
-        input_size = (128, 64)
-        class_names = None
-
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            state_dict = checkpoint.get("model_state_dict")
-            maybe_size = checkpoint.get("input_size")
-            if isinstance(maybe_size, (list, tuple)) and len(maybe_size) == 2:
-                input_size = (int(maybe_size[0]), int(maybe_size[1]))
-            raw_names = checkpoint.get("class_names")
-            if isinstance(raw_names, (list, tuple)) and raw_names:
-                class_names = [str(n) for n in raw_names]
-        elif isinstance(checkpoint, (dict, OrderedDict)):
-            state_dict = checkpoint
-        else:
-            return None
-
-        if not isinstance(state_dict, (dict, OrderedDict)):
-            return None
-        keys = list(state_dict.keys())
-        if not keys or not any(str(k).startswith("features.") for k in keys):
-            return None
-
-        linear_keys = sorted(
-            [k for k in keys if k.startswith("classifier.") and k.endswith(".weight")],
-            key=lambda k: int(k.split(".")[1]),
-        )
-        if not linear_keys:
-            return None
-        n_out = int(state_dict[linear_keys[-1]].shape[0])
-
-        if n_out == 1:
-            model = self._build_tiny_classifier(input_size=input_size)
-            model.load_state_dict(state_dict, strict=True)
-        else:
-            try:
-                from hydra_suite.training.tiny_model import rebuild_from_checkpoint
-
-                model = rebuild_from_checkpoint({"model_state_dict": state_dict})
-            except Exception as exc:
-                logger.warning("Failed to load ClassKit tiny head-tail: %s", exc)
-                return None
-
-        import torch
-
-        device = torch.device(self._device)
-        model.to(device)
-        model.eval()
-        return model, class_names, input_size
-
-    @staticmethod
-    def _build_tiny_classifier(input_size=(128, 64)):
-        import torch.nn as nn
-
-        class _TinyHeadClassifier(nn.Module):
-            def __init__(self, input_size=(128, 64)):
-                super().__init__()
-                self.input_size = tuple(input_size)
-                self.features = nn.Sequential(
-                    nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
-                    nn.BatchNorm2d(16),
-                    nn.ReLU(inplace=True),
-                    nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
-                    nn.BatchNorm2d(32),
-                    nn.ReLU(inplace=True),
-                    nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-                    nn.BatchNorm2d(64),
-                    nn.ReLU(inplace=True),
-                    nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
-                    nn.BatchNorm2d(64),
-                    nn.ReLU(inplace=True),
-                    nn.AdaptiveAvgPool2d(1),
-                )
-                self.classifier = nn.Sequential(
-                    nn.Flatten(),
-                    nn.Dropout(0.2),
-                    nn.Linear(64, 1),
-                )
-
-            def forward(self, x):
-                """Run the feature extractor then the classifier head; returns a (B,1) logit tensor."""
-                x = self.features(x)
-                return self.classifier(x)
-
-        return _TinyHeadClassifier(input_size=input_size)
+            if "backend_obj" in locals() and backend_obj is not None:
+                backend_obj.close()
+            raise
 
     # ------------------------------------------------------------------
     # v2 API: predict_labels and analyze_detections
@@ -487,17 +281,18 @@ class HeadTailAnalyzer:
         """Return ``(canonical_label, confidence)`` per crop.
 
         Labels below ``conf_threshold`` are collapsed to ``"unknown"`` with
-        their original confidence.  Works on both the v2 ClassifierBackend
-        path and the legacy paths.
+        their original confidence.
         """
         if not crops:
             return []
 
-        if self._backend_obj is not None:
-            # v2 ClassifierBackend path
-            raw = self._backend_obj.predict_batch(crops)
-            out: List[Tuple[str, float]] = []
-            for per_factor in raw:
+        cls_results = self._predict(crops)
+        if cls_results is None or len(cls_results) == 0:
+            return [("unknown", 0.0)] * len(crops)
+
+        out: List[Tuple[str, float]] = []
+        for per_factor in cls_results[: len(crops)]:
+            try:
                 probs = per_factor[0]
                 best_idx = int(np.argmax(probs))
                 best_conf = float(probs[best_idx])
@@ -508,58 +303,8 @@ class HeadTailAnalyzer:
                 if best_conf < self._conf_threshold:
                     label = "unknown"
                 out.append((label, best_conf))
-            return out
-
-        # Legacy path: delegate to _predict and map results
-        cls_results = self._predict(crops)
-        if cls_results is None or len(cls_results) == 0:
-            return [("unknown", 0.0)] * len(crops)
-
-        out = []
-        if self._backend == "tiny":
-            probs = np.asarray(cls_results, dtype=np.float32).reshape(-1)
-            for j in range(min(len(crops), len(probs))):
-                p_right = float(probs[j])
-                conf = max(p_right, 1.0 - p_right)
-                label = "right" if p_right >= 0.5 else "left"
-                if conf < self._conf_threshold:
-                    label = "unknown"
-                out.append((label, conf))
-        elif self._backend == "classkit_tiny":
-            for j in range(min(len(crops), len(cls_results))):
-                try:
-                    direction, conf = cls_results[j]
-                except Exception:
-                    out.append(("unknown", 0.0))
-                    continue
-                label = (
-                    direction if direction in HEADTAIL_CANONICAL_LABELS else "unknown"
-                )
-                if float(conf) < self._conf_threshold:
-                    label = "unknown"
-                out.append((label, float(conf)))
-        else:
-            # YOLO or unknown
-            for j in range(min(len(crops), len(cls_results))):
-                try:
-                    result = cls_results[j]
-                    if result is None:
-                        out.append(("unknown", 0.0))
-                        continue
-                    probs_obj = getattr(result, "probs", None)
-                    if probs_obj is None:
-                        out.append(("unknown", 0.0))
-                        continue
-                    top1 = int(getattr(probs_obj, "top1", -1))
-                    top1_conf = float(getattr(probs_obj, "top1conf", 0.0))
-                    label_str = self._label_from_top1(top1)
-                    if top1 < 0 or top1_conf < self._conf_threshold:
-                        out.append(("unknown", top1_conf))
-                    else:
-                        canonical = _LABEL_ALIASES.get(label_str, "unknown")
-                        out.append((canonical, top1_conf))
-                except Exception:
-                    out.append(("unknown", 0.0))
+            except Exception:
+                out.append(("unknown", 0.0))
         while len(out) < len(crops):
             out.append(("unknown", 0.0))
         return out
@@ -573,13 +318,10 @@ class HeadTailAnalyzer:
         labels = self.predict_labels(crops)
         results: List[Tuple[float, float, bool]] = []
         for (label, conf), axis in zip(labels, obb_major_axes):
-            if label == "unknown":
+            heading = heading_for_direction(axis, label)
+            if heading is None:
                 results.append((float(axis), conf, False))
                 continue
-            if label in ("up", "left"):
-                heading = axis
-            else:  # down, right
-                heading = axis + np.pi
             results.append((float(heading), conf, True))
         return results
 
@@ -665,18 +407,10 @@ class HeadTailAnalyzer:
         results: List[List[Tuple[float, float, int]]],
     ) -> None:
         """Scatter classification results back into the per-frame results grid."""
-        if self._backend == "backend_v2":
-            self._scatter_backend_v2(cls_results, all_meta, results)
-        elif self._backend == "tiny":
-            self._scatter_tiny(cls_results, all_meta, results)
-        elif self._backend == "classkit_tiny":
-            self._scatter_classkit_tiny(cls_results, all_meta, results)
-        else:
-            self._scatter_yolo(cls_results, all_meta, results)
+        self._scatter_backend_v2(cls_results, all_meta, results)
 
     def _scatter_backend_v2(self, cls_results, all_meta, results) -> None:
         """Scatter v2 ClassifierBackend results (list of per_factor prob arrays)."""
-        TWO_PI = 2.0 * np.pi
         for j in range(min(len(all_meta), len(cls_results))):
             fi, di, axis_theta, _ = all_meta[j]
             try:
@@ -693,64 +427,11 @@ class HeadTailAnalyzer:
             if best_conf < self._conf_threshold or label == "unknown":
                 results[fi][di] = (float("nan"), best_conf, 0)
                 continue
-            if label in ("up", "left"):
-                theta = axis_theta
-            else:  # down, right
-                theta = axis_theta + np.pi
-            results[fi][di] = (float(theta % TWO_PI), best_conf, 1)
-
-    def _scatter_tiny(self, cls_results, all_meta, results) -> None:
-        TWO_PI = 2.0 * np.pi
-        probs = np.asarray(cls_results, dtype=np.float32).reshape(-1)
-        for j in range(min(len(all_meta), len(probs))):
-            fi, di, axis_theta, _ = all_meta[j]
-            p_right = float(probs[j])
-            conf = max(p_right, 1.0 - p_right)
-            if conf < self._conf_threshold:
-                results[fi][di] = (float("nan"), float(conf), 0)
+            theta = heading_for_direction(axis_theta, label)
+            if theta is None:
+                results[fi][di] = (float("nan"), best_conf, 0)
                 continue
-            theta = axis_theta if p_right >= 0.5 else (axis_theta + np.pi)
-            results[fi][di] = (float(theta % TWO_PI), float(conf), 1)
-
-    def _scatter_classkit_tiny(self, cls_results, all_meta, results) -> None:
-        TWO_PI = 2.0 * np.pi
-        for j in range(min(len(all_meta), len(cls_results))):
-            fi, di, axis_theta, _ = all_meta[j]
-            try:
-                direction, conf = cls_results[j]
-            except Exception:
-                continue
-            if direction not in {"left", "right"} or float(conf) < self._conf_threshold:
-                results[fi][di] = (float("nan"), float(conf), 0)
-                continue
-            theta = axis_theta if direction == "right" else (axis_theta + np.pi)
-            results[fi][di] = (float(theta % TWO_PI), float(conf), 1)
-
-    def _scatter_yolo(self, cls_results, all_meta, results) -> None:
-        TWO_PI = 2.0 * np.pi
-        for j in range(min(len(all_meta), len(cls_results))):
-            fi, di, axis_theta, _ = all_meta[j]
-            try:
-                result = cls_results[j]
-                if result is None:
-                    continue
-                probs_obj = getattr(result, "probs", None)
-                if probs_obj is None:
-                    continue
-                top1 = int(getattr(probs_obj, "top1", -1))
-                top1_conf = float(getattr(probs_obj, "top1conf", 0.0))
-                if top1 < 0 or top1_conf < self._conf_threshold:
-                    results[fi][di] = (float("nan"), top1_conf, 0)
-                    continue
-                label = self._label_from_top1(top1)
-                direction = self._class_to_direction(label, cls_idx=top1)
-                if direction is None:
-                    results[fi][di] = (float("nan"), top1_conf, 0)
-                    continue
-                theta = axis_theta if direction == "right" else (axis_theta + np.pi)
-                results[fi][di] = (float(theta % TWO_PI), top1_conf, 1)
-            except Exception:
-                continue
+            results[fi][di] = (float(theta), best_conf, 1)
 
     def close(self) -> None:
         """Release the loaded model and reset the backend to 'none'."""
@@ -761,87 +442,24 @@ class HeadTailAnalyzer:
             self._backend_obj = None
 
     # ------------------------------------------------------------------
-    # Inference (routes to v2 backend or legacy model)
+    # Inference
     # ------------------------------------------------------------------
 
     def _predict(self, source_crops: List[np.ndarray]):
-        """Run inference on source crops. Routes by backend type."""
-        if self._backend_obj is not None:
-            # v2 path: use ClassifierBackend.predict_batch
+        """Run inference on source crops through the shared classifier backend."""
+        if self._backend_obj is None or not source_crops:
+            return []
+        if self._batch_size >= len(source_crops):
             return self._backend_obj.predict_batch(source_crops)
 
-        if self._model is None or not source_crops:
-            return []
-
-        if self._backend == "tiny":
-            import torch
-
-            batch = self._crops_to_tensor(source_crops, self._input_size)
-            device = torch.device(self._device)
-            batch = batch.to(device)
-            with torch.inference_mode():
-                logits = self._model(batch)
-                probs = torch.sigmoid(logits).squeeze(1).detach().cpu().numpy()
-            return probs
-
-        if self._backend == "classkit_tiny":
-            import torch
-            import torch.nn.functional as F
-
-            batch = self._crops_to_tensor(source_crops, self._input_size)
-            device = torch.device(self._device)
-            batch = batch.to(device)
-            with torch.inference_mode():
-                logits = self._model(batch)
-                softmax = F.softmax(logits, dim=1)
-                top1_conf, top1_idx = softmax.max(dim=1)
-                top1_conf = top1_conf.detach().cpu().numpy()
-                top1_idx = top1_idx.detach().cpu().numpy()
-
-            classified = []
-            for cls_idx, conf in zip(top1_idx, top1_conf):
-                label = self._label_from_top1(int(cls_idx))
-                direction = self._class_to_direction(label, cls_idx=int(cls_idx))
-                classified.append((direction, float(conf)))
-            return classified
-
-        # YOLO backend
-        try:
-            kwargs = dict(source=source_crops, conf=0.0, verbose=False)
-            if self._predict_device is not None:
-                kwargs["device"] = self._predict_device
-            return self._model.predict(**kwargs)
-        except Exception:
-            outputs = []
-            for crop in source_crops:
-                try:
-                    kw = dict(source=crop, conf=0.0, verbose=False)
-                    if self._predict_device is not None:
-                        kw["device"] = self._predict_device
-                    one = self._model.predict(**kw)
-                    outputs.append(one[0] if one else None)
-                except Exception:
-                    outputs.append(None)
-            return outputs
-
-    @staticmethod
-    def _crops_to_tensor(source_crops, target_hw=None):
-        import torch
-
-        tensors = []
-        for crop in source_crops:
-            c = np.asarray(crop)
-            if c.ndim == 2:
-                c = np.stack([c, c, c], axis=-1)
-            if c.ndim == 3 and c.shape[2] == 3:
-                c = c[:, :, ::-1].copy()  # BGR -> RGB
-            if target_hw is not None:
-                w, h = int(target_hw[0]), int(target_hw[1])
-                if c.shape[1] != w or c.shape[0] != h:
-                    c = cv2.resize(c, (w, h), interpolation=cv2.INTER_LINEAR)
-            t = torch.from_numpy(c).permute(2, 0, 1).float() / 255.0
-            tensors.append(t)
-        return torch.stack(tensors, dim=0)
+        out = []
+        for start in range(0, len(source_crops), self._batch_size):
+            out.extend(
+                self._backend_obj.predict_batch(
+                    source_crops[start : start + self._batch_size]
+                )
+            )
+        return out
 
     # ------------------------------------------------------------------
     # Canonical crop extraction
@@ -878,38 +496,6 @@ class HeadTailAnalyzer:
     # Label helpers
     # ------------------------------------------------------------------
 
-    def _label_from_top1(self, cls_idx: int) -> str:
-        names = self._class_names
-        if names is None:
-            return ""
-        if isinstance(names, dict):
-            return str(names.get(int(cls_idx), "")).strip().lower()
-        if isinstance(names, (list, tuple)) and 0 <= int(cls_idx) < len(names):
-            return str(names[int(cls_idx)]).strip().lower()
-        return ""
-
-    def _class_to_direction(self, label: str, cls_idx=None) -> Optional[str]:
-        text = _LABEL_ALIASES.get(
-            str(label or "").strip().lower().replace("-", "_").replace(" ", "_")
-        )
-        if text == "left":
-            return "left"
-        if text == "right":
-            return "right"
-        if text in {"up", "down", "unknown"}:
-            return None
-        # Fallback for unnamed binary classifiers
-        names = self._class_names
-        if names is not None:
-            ordered = (
-                [str(v) for v in names]
-                if isinstance(names, (list, tuple))
-                else [str(v) for _, v in sorted(names.items())]
-            )
-            if len(ordered) == 2 and cls_idx is not None:
-                return "right" if int(cls_idx) == 1 else "left"
-        return None
-
     @staticmethod
     def _validate_class_names(
         class_names, *, strict: bool = False, source: str = "model"
@@ -944,24 +530,27 @@ class HeadTailAnalyzer:
                 if strict:
                     raise ValueError(
                         f"Unsupported head-tail class label {raw!r} in {source}. "
-                        "Expected exactly left/right or up/down/left/right/unknown."
+                        "Expected a non-empty subset of "
+                        "up/down/left/right/unknown."
                     )
                 return ordered  # can't normalize; return raw
             normalized.append(token)
 
         if strict:
             normalized_set = frozenset(normalized)
+            if not normalized_set:
+                raise ValueError(
+                    f"Unsupported head-tail class schema in {source}: {ordered}. "
+                    "Expected a non-empty subset of up/down/left/right/unknown."
+                )
             if len(normalized_set) != len(normalized):
                 raise ValueError(
                     f"Duplicate or aliased head-tail labels in {source}: {ordered}."
                 )
-            if normalized_set not in (
-                _HEADTAIL_DIRECTIONAL_CLASS_SET,
-                HEADTAIL_CANONICAL_LABELS,
-            ):
+            if not normalized_set.issubset(HEADTAIL_CANONICAL_LABELS):
                 raise ValueError(
                     f"Unsupported head-tail class schema in {source}: {ordered}. "
-                    "Expected exactly left/right or up/down/left/right/unknown."
+                    "Expected a non-empty subset of up/down/left/right/unknown."
                 )
 
         return normalized

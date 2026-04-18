@@ -16,7 +16,11 @@ from .contracts import (
 )
 from .dataset_builders import merge_obb_sources, prepare_role_dataset
 from .dataset_inspector import inspect_obb_or_detect_dataset
-from .model_publish import publish_trained_model
+from .model_publish import (
+    classifier_metadata_for_artifact,
+    publish_trained_model,
+    write_classifier_multihead_manifest,
+)
 from .registry import (
     create_run_record,
     dataset_fingerprint,
@@ -25,6 +29,120 @@ from .registry import (
 )
 from .runner import run_training
 from .validation import validate_obb_dataset
+
+_MULTIHEAD_CLASSIFIER_ROLES = {
+    TrainingRole.CLASSIFY_MULTIHEAD_YOLO,
+    TrainingRole.CLASSIFY_MULTIHEAD_TINY,
+    TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM,
+}
+
+
+def _result_artifact_paths(result: dict) -> list[str]:
+    artifact_paths = result.get("artifact_paths")
+    if isinstance(artifact_paths, list):
+        return [str(path) for path in artifact_paths if str(path).strip()]
+    artifact_path = str(result.get("artifact_path", "") or "").strip()
+    return [artifact_path] if artifact_path else []
+
+
+def _publish_training_artifacts(
+    *,
+    spec: TrainingRunSpec,
+    artifact_paths: list[str],
+    publish_metadata: dict[str, object],
+    run_id: str,
+    dataset_fingerprint_value: str,
+) -> tuple[str, str]:
+    if not artifact_paths:
+        return "", ""
+
+    training_params = publish_metadata.get("training_params")
+    base_kwargs = {
+        "role": spec.role,
+        "size": str(publish_metadata.get("size", "") or "unknown"),
+        "species": str(publish_metadata.get("species", "") or "species"),
+        "model_info": str(
+            publish_metadata.get("model_info", "") or f"{spec.role.value}_{run_id}"
+        ),
+        "trained_from_run_id": run_id,
+        "dataset_fingerprint": dataset_fingerprint_value,
+        "base_model": spec.base_model,
+        "training_params": (
+            dict(training_params) if isinstance(training_params, dict) else None
+        ),
+    }
+
+    if len(artifact_paths) == 1 or spec.role not in _MULTIHEAD_CLASSIFIER_ROLES:
+        classifier_meta = None
+        try:
+            classifier_meta = classifier_metadata_for_artifact(artifact_paths[0])
+        except Exception:
+            classifier_meta = None
+        return publish_trained_model(
+            artifact_path=artifact_paths[0],
+            classifier_v2_meta=classifier_meta,
+            **base_kwargs,
+        )
+
+    configured_factor_names = publish_metadata.get("factor_names")
+    factor_names = (
+        [str(name) for name in configured_factor_names]
+        if isinstance(configured_factor_names, list)
+        else []
+    )
+    scheme_name = str(publish_metadata.get("scheme_name", "") or "classkit")
+    published_key = ""
+    published_factor_paths: list[Path] = []
+    factor_entries: list[dict[str, object]] = []
+    used_factor_names: set[str] = set()
+    bundle_input_size: tuple[int, int] | None = None
+    bundle_monochrome = False
+
+    for index, artifact_path in enumerate(artifact_paths):
+        classifier_meta = classifier_metadata_for_artifact(artifact_path)
+        candidate_name = ""
+        if index < len(factor_names):
+            candidate_name = factor_names[index]
+        elif classifier_meta.get("factor_names"):
+            candidate_name = str(classifier_meta["factor_names"][0])
+        factor_name = candidate_name.strip() or f"factor_{index + 1}"
+        if factor_name in used_factor_names:
+            factor_name = f"factor_{index + 1}"
+        used_factor_names.add(factor_name)
+
+        key, published_path = publish_trained_model(
+            artifact_path=artifact_path,
+            scheme_name=scheme_name,
+            factor_index=index,
+            factor_name=factor_name,
+            classifier_v2_meta=classifier_meta,
+            **base_kwargs,
+        )
+        if not published_key:
+            published_key = key
+        published_factor_paths.append(Path(published_path))
+
+        input_size = classifier_meta.get("input_size") or [224, 224]
+        if bundle_input_size is None:
+            bundle_input_size = (int(input_size[0]), int(input_size[1]))
+        bundle_monochrome = bool(classifier_meta.get("monochrome", bundle_monochrome))
+        class_names_per_factor = classifier_meta.get("class_names_per_factor") or [[]]
+        factor_entries.append(
+            {
+                "factor": factor_name,
+                "path": Path(published_path),
+                "class_names": list(class_names_per_factor[0]),
+            }
+        )
+
+    manifest_path = published_factor_paths[0].with_suffix(".multihead.json")
+    write_classifier_multihead_manifest(
+        manifest_path,
+        factor_entries=factor_entries,
+        input_size=bundle_input_size or (224, 224),
+        monochrome=bundle_monochrome,
+    )
+    return published_key, str(manifest_path)
 
 
 @dataclass(slots=True)
@@ -150,7 +268,7 @@ class TrainingOrchestrator:
         spec: TrainingRunSpec,
         *,
         parent_run_id: str = "",
-        publish_metadata: dict[str, str] | None = None,
+        publish_metadata: dict[str, object] | None = None,
         log_cb: Callable[[str], None] | None = None,
         progress_cb: Callable[[int, int], None] | None = None,
         should_cancel: Callable[[], bool] | None = None,
@@ -177,6 +295,7 @@ class TrainingOrchestrator:
             should_cancel=should_cancel,
         )
         result["run_id"] = run_id
+        artifact_paths = _result_artifact_paths(result)
 
         if not result.get("success", False):
             finalize_run_record(
@@ -188,11 +307,7 @@ class TrainingOrchestrator:
                     if result.get("metrics_path")
                     else []
                 ),
-                artifact_paths=(
-                    [result.get("artifact_path", "")]
-                    if result.get("artifact_path")
-                    else []
-                ),
+                artifact_paths=artifact_paths,
                 error_message=(
                     "canceled"
                     if result.get("canceled")
@@ -203,20 +318,13 @@ class TrainingOrchestrator:
 
         published_key = ""
         published_path = ""
-        if spec.publish_policy.auto_import and result.get("artifact_path"):
-            meta = publish_metadata or {}
-            published_key, published_path = publish_trained_model(
-                role=spec.role,
-                artifact_path=result["artifact_path"],
-                size=str(meta.get("size", "") or "unknown"),
-                species=str(meta.get("species", "") or "species"),
-                model_info=str(
-                    meta.get("model_info", "") or f"{spec.role.value}_{run_id}"
-                ),
-                trained_from_run_id=run_id,
-                dataset_fingerprint=ds_fp,
-                base_model=spec.base_model,
-                training_params=meta.get("training_params"),
+        if spec.publish_policy.auto_import and artifact_paths:
+            published_key, published_path = _publish_training_artifacts(
+                spec=spec,
+                artifact_paths=artifact_paths,
+                publish_metadata=publish_metadata or {},
+                run_id=run_id,
+                dataset_fingerprint_value=ds_fp,
             )
 
         finalize_run_record(
@@ -226,9 +334,7 @@ class TrainingOrchestrator:
             metrics_paths=(
                 [result.get("metrics_path", "")] if result.get("metrics_path") else []
             ),
-            artifact_paths=(
-                [result.get("artifact_path", "")] if result.get("artifact_path") else []
-            ),
+            artifact_paths=artifact_paths,
             published_model_path=published_path,
             published_registry_entry=published_key,
         )

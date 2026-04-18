@@ -36,3 +36,18 @@ def test_headtail_dialog_rejects_non_headtail_labels(torchvision_flat_identity):
         "subset" in summary["reason"].lower()
         or "head-tail" in summary["reason"].lower()
     )
+
+
+def test_headtail_dialog_rejects_legacy_flat_checkpoint(
+    legacy_torchvision_flat_headtail,
+):
+    from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
+        describe_headtail_candidate,
+    )
+
+    summary = describe_headtail_candidate(str(legacy_torchvision_flat_headtail))
+    assert summary["valid"] is False
+    assert (
+        "re-export" in summary["reason"].lower()
+        or "schema_version" in summary["reason"].lower()
+    )

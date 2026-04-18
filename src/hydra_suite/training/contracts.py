@@ -64,10 +64,11 @@ class TinyHeadTailParams:
     weight_decay: float = 1e-2
     input_width: int = 128
     input_height: int = 64
+    tiny_preset: str = "medium"
     # Architecture params
     hidden_layers: int = 1
-    hidden_dim: int = 64
-    dropout: float = 0.2
+    hidden_dim: int = 96
+    dropout: float = 0.1
     # Early stopping
     patience: int = 10
     # Class-imbalance handling for tiny classifiers.
@@ -104,9 +105,10 @@ class CustomCNNParams:
     class_rebalance_mode: str = "none"  # none, weighted_loss, weighted_sampler, both
     class_rebalance_power: float = 1.0
     # TinyClassifier-specific (ignored for torchvision backbones)
+    tiny_preset: str = "medium"
     hidden_layers: int = 1
-    hidden_dim: int = 64
-    dropout: float = 0.2
+    hidden_dim: int = 96
+    dropout: float = 0.1
     input_width: int = 128
     input_height: int = 64
 

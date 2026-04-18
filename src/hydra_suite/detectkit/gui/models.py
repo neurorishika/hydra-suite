@@ -30,10 +30,20 @@ class OBBSource:
     path: str = ""
     name: str = ""
     validated: bool = False
+    original_path: str = ""
+    source_kind: str = "detectkit"
+    imported: bool = False
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
-        return {"path": self.path, "name": self.name, "validated": self.validated}
+        return {
+            "path": self.path,
+            "name": self.name,
+            "validated": self.validated,
+            "original_path": self.original_path,
+            "source_kind": self.source_kind,
+            "imported": self.imported,
+        }
 
     @staticmethod
     def from_dict(d: dict) -> OBBSource:
@@ -42,6 +52,9 @@ class OBBSource:
             path=str(d.get("path", "")),
             name=str(d.get("name", "")),
             validated=bool(d.get("validated", False)),
+            original_path=str(d.get("original_path", "")),
+            source_kind=str(d.get("source_kind", "detectkit") or "detectkit"),
+            imported=bool(d.get("imported", False)),
         )
 
 

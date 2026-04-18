@@ -332,6 +332,23 @@ def test_labeled_eval_arrays_prefers_active_evaluation_subset(
     assert scope_text == "Val split"
 
 
+def test_labeled_eval_arrays_include_labels_outside_current_scheme(
+    qapp, tmp_path: Path
+) -> None:
+    window = MainWindow()
+    image_paths = [tmp_path / f"img_{idx}.png" for idx in range(3)]
+    window.image_paths = [str(path) for path in image_paths]
+    window.image_labels = ["left", "unknown", "up"]
+    window.classes = ["left", "right"]
+
+    idx_arr, y_true, scope_text = window._labeled_eval_arrays()
+
+    assert window._evaluation_class_names() == ["left", "right", "unknown", "up"]
+    assert idx_arr.tolist() == [0, 1, 2]
+    assert y_true.tolist() == [0, 2, 3]
+    assert scope_text == "All labeled project images"
+
+
 def test_export_dataset_includes_labels_outside_current_scheme(
     qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1083,6 +1100,7 @@ def test_training_settings_persist_in_project_config(qapp, tmp_path: Path) -> No
     window._last_training_settings = {
         "mode": "flat_custom",
         "custom_input_size": 192,
+        "tiny_preset": "large",
         "tiny_width": 160,
         "tiny_height": 96,
         "device": "cpu",
@@ -1097,6 +1115,7 @@ def test_training_settings_persist_in_project_config(qapp, tmp_path: Path) -> No
     restored._apply_project_config(config)
 
     assert restored._last_training_settings["mode"] == "flat_custom"
+    assert restored._last_training_settings["tiny_preset"] == "large"
     assert restored._last_training_settings["tiny_width"] == 160
 
 
@@ -1164,6 +1183,28 @@ def test_make_training_spec_uses_selected_initial_model_path(
 
     assert custom_spec.base_model == ""
     assert custom_spec.resume_from == str(custom_start)
+
+
+def test_make_training_spec_propagates_tiny_preset(qapp, tmp_path: Path) -> None:
+    window = MainWindow()
+
+    tiny_spec = window._make_training_spec(
+        {
+            "tiny_preset": "large",
+            "tiny_dim": 128,
+            "tiny_dropout": 0.05,
+        },
+        window._training_role_for_mode("flat_custom"),
+        "flat_custom",
+        False,
+        tmp_path / "export_custom",
+    )
+
+    assert tiny_spec.tiny_params.tiny_preset == "large"
+    assert tiny_spec.custom_params is not None
+    assert tiny_spec.custom_params.tiny_preset == "large"
+    assert tiny_spec.custom_params.hidden_dim == 128
+    assert tiny_spec.custom_params.dropout == pytest.approx(0.05)
 
 
 def test_make_training_spec_maps_color_augmentations(qapp, tmp_path: Path) -> None:

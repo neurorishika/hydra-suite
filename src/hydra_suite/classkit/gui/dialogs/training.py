@@ -34,7 +34,14 @@ from hydra_suite.classkit.config.custom_backbones import (
     get_custom_backbone_choices,
     register_user_timm_backbones,
 )
-from hydra_suite.classkit.core.export.splits import build_training_dataset_splits
+from hydra_suite.classkit.core.export.splits import (
+    build_label_expansion_records,
+    build_training_dataset_splits,
+)
+from hydra_suite.training.tiny_model import (
+    describe_tiny_size_preset,
+    get_tiny_size_preset_choices,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .timm_backbone_browser import TimmBackboneBrowserDialog
@@ -42,6 +49,9 @@ from .timm_backbone_browser import TimmBackboneBrowserDialog
 
 class ClassKitTrainingDialog(QDialog):
     """Training dialog for ClassKit: flat or multi-head, tiny CNN or YOLO-classify."""
+
+    _AUTO_SIZE_SCALE_MIN = 0.25
+    _AUTO_SIZE_SCALE_MAX = 4.0
 
     def __init__(
         self,
@@ -90,7 +100,7 @@ class ClassKitTrainingDialog(QDialog):
             numeric = float(value)
         except (TypeError, ValueError):
             return 224
-        rounded = int(round(numeric / 32.0) * 32)
+        rounded = int(((numeric / 32.0) + 0.5) // 1 * 32)
         return max(32, min(512, rounded))
 
     @staticmethod
@@ -250,6 +260,27 @@ class ClassKitTrainingDialog(QDialog):
         self._tiny_in_custom_height_spin.setValue(tiny_height)
         self._custom_input_size_spin.setValue(custom_input_size)
 
+    @classmethod
+    def _scale_auto_input_sizes(cls, sizes: dict, factor: object) -> dict:
+        try:
+            scale = float(factor)
+        except (TypeError, ValueError):
+            scale = 1.0
+        scale = max(cls._AUTO_SIZE_SCALE_MIN, min(cls._AUTO_SIZE_SCALE_MAX, scale))
+
+        scaled = dict(sizes)
+        scaled["tiny_width"] = cls._nearest_computer_friendly_size(
+            float(sizes["tiny_width"]) * scale
+        )
+        scaled["tiny_height"] = cls._nearest_computer_friendly_size(
+            float(sizes["tiny_height"]) * scale
+        )
+        scaled["custom_input_size"] = cls._nearest_computer_friendly_size(
+            float(sizes["custom_input_size"]) * scale
+        )
+        scaled["applied_rescale_factor"] = scale
+        return scaled
+
     def _auto_set_sizes_from_images(self) -> None:
         dimensions = self._sample_image_dimensions()
         if not dimensions:
@@ -269,13 +300,16 @@ class ClassKitTrainingDialog(QDialog):
             )
             return
 
-        self._apply_auto_input_sizes(sizes)
+        factor = self._auto_size_scale_spin.value()
+        scaled_sizes = self._scale_auto_input_sizes(sizes, factor)
+        self._apply_auto_input_sizes(scaled_sizes)
         self.append_log(
             "Auto-sized inputs from "
             f"{sizes['sample_count']:,} image(s): "
-            f"Tiny {sizes['tiny_width']}x{sizes['tiny_height']}, "
-            f"TIMM {sizes['custom_input_size']} square, "
-            f"aspect ratio {sizes['aspect_ratio']:.2f}."
+            f"Tiny {scaled_sizes['tiny_width']}x{scaled_sizes['tiny_height']}, "
+            f"TIMM {scaled_sizes['custom_input_size']} square, "
+            f"aspect ratio {sizes['aspect_ratio']:.2f}, "
+            f"rescale x{scaled_sizes['applied_rescale_factor']:.2f}."
         )
 
     def _apply_initial_settings(self) -> None:
@@ -284,6 +318,7 @@ class ClassKitTrainingDialog(QDialog):
             self._on_mode_changed()
             self._on_rebalance_mode_changed()
             self._on_custom_backbone_changed()
+            self._refresh_tiny_preset_summary()
             self._refresh_data_summary()
             return
 
@@ -307,6 +342,17 @@ class ClassKitTrainingDialog(QDialog):
         self._set_combo_value(
             self._custom_fine_tune_method_combo,
             settings.get("custom_fine_tune_method"),
+        )
+        self._set_spin_value(
+            self._auto_size_scale_spin, settings, "auto_size_scale_factor"
+        )
+        self._set_combo_value(
+            self.tiny_size_combo,
+            settings.get("tiny_preset", "medium"),
+        )
+        self._set_combo_value(
+            self._tiny_in_custom_size_combo,
+            settings.get("tiny_preset", "medium"),
         )
         self._set_combo_value(
             self.split_strategy_combo, settings.get("split_strategy", "stratified")
@@ -361,7 +407,34 @@ class ClassKitTrainingDialog(QDialog):
         self._on_mode_changed()
         self._on_rebalance_mode_changed()
         self._on_custom_backbone_changed()
+        self._refresh_tiny_preset_summary()
         self._refresh_data_summary()
+
+    @staticmethod
+    def _populate_tiny_size_combo(combo: QComboBox) -> None:
+        combo.clear()
+        for key, label in get_tiny_size_preset_choices():
+            combo.addItem(label, key)
+
+    def _refresh_tiny_preset_summary(self) -> None:
+        self._tiny_size_summary_label.setText(
+            describe_tiny_size_preset(self.tiny_size_combo.currentData())
+        )
+        self._tiny_in_custom_size_summary_label.setText(
+            describe_tiny_size_preset(self._tiny_in_custom_size_combo.currentData())
+        )
+
+    def _sync_tiny_preset_controls(self, source: QComboBox) -> None:
+        preset = str(source.currentData() or "medium")
+        for combo in (self.tiny_size_combo, self._tiny_in_custom_size_combo):
+            if combo is source:
+                continue
+            if str(combo.currentData() or "") == preset:
+                continue
+            combo.blockSignals(True)
+            self._set_combo_value(combo, preset)
+            combo.blockSignals(False)
+        self._refresh_tiny_preset_summary()
 
     def _resolve_class_choices(
         self, class_choices: Optional[List[str]] = None
@@ -508,6 +581,21 @@ class ClassKitTrainingDialog(QDialog):
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.addWidget(self._auto_size_btn)
+
+        self._auto_size_scale_label = QLabel("Rescale:")
+        self._auto_size_scale_spin = QDoubleSpinBox()
+        self._auto_size_scale_spin.setDecimals(2)
+        self._auto_size_scale_spin.setRange(
+            self._AUTO_SIZE_SCALE_MIN, self._AUTO_SIZE_SCALE_MAX
+        )
+        self._auto_size_scale_spin.setSingleStep(0.25)
+        self._auto_size_scale_spin.setValue(1.0)
+        self._auto_size_scale_spin.setSuffix("x")
+        self._auto_size_scale_spin.setToolTip(
+            "Scale the auto-detected sizes before applying them to the Tiny and custom backbone inputs."
+        )
+        button_row.addWidget(self._auto_size_scale_label)
+        button_row.addWidget(self._auto_size_scale_spin)
         button_row.addStretch()
 
         row_layout.addWidget(QLabel("<b>Input Size Helper</b>"))
@@ -898,6 +986,15 @@ class ClassKitTrainingDialog(QDialog):
         tiny_layout = QVBoxLayout(self.tiny_tab)
         tiny_form = QFormLayout()
 
+        self.tiny_size_combo = QComboBox()
+        self._populate_tiny_size_combo(self.tiny_size_combo)
+        tiny_form.addRow("<b>Tiny Size:</b>", self.tiny_size_combo)
+
+        self._tiny_size_summary_label = QLabel()
+        self._tiny_size_summary_label.setWordWrap(True)
+        self._tiny_size_summary_label.setStyleSheet("color: #666;")
+        tiny_form.addRow("", self._tiny_size_summary_label)
+
         self.tiny_layers_spin = QSpinBox()
         self.tiny_layers_spin.setRange(1, 10)
         self.tiny_layers_spin.setValue(1)
@@ -905,13 +1002,13 @@ class ClassKitTrainingDialog(QDialog):
 
         self.tiny_dim_spin = QSpinBox()
         self.tiny_dim_spin.setRange(16, 1024)
-        self.tiny_dim_spin.setValue(64)
+        self.tiny_dim_spin.setValue(96)
         self.tiny_dim_spin.setSingleStep(16)
         tiny_form.addRow("<b>Hidden Dim:</b>", self.tiny_dim_spin)
 
         self.tiny_dropout_spin = QDoubleSpinBox()
         self.tiny_dropout_spin.setRange(0.0, 0.9)
-        self.tiny_dropout_spin.setValue(0.2)
+        self.tiny_dropout_spin.setValue(0.1)
         self.tiny_dropout_spin.setSingleStep(0.05)
         tiny_form.addRow("<b>Dropout:</b>", self.tiny_dropout_spin)
 
@@ -950,6 +1047,10 @@ class ClassKitTrainingDialog(QDialog):
         self.tiny_label_smoothing_spin.setToolTip(
             "Cross-entropy label smoothing for Tiny CNN training (0.0 = disabled)."
         )
+        self.tiny_size_combo.setToolTip(
+            "Backbone capacity preset for the tiny classifier.\n"
+            "Tiny-S is fastest, Tiny-M is the default balance, Tiny-L is the strongest lightweight option."
+        )
 
         tiny_layout.addLayout(tiny_form)
         tiny_layout.addStretch()
@@ -987,6 +1088,18 @@ class ClassKitTrainingDialog(QDialog):
             self._tiny_in_custom_width_label, self._tiny_in_custom_width_spin
         )
 
+        self._tiny_in_custom_size_label = QLabel("Tiny size")
+        self._tiny_in_custom_size_combo = QComboBox()
+        self._populate_tiny_size_combo(self._tiny_in_custom_size_combo)
+        custom_form.addRow(
+            self._tiny_in_custom_size_label, self._tiny_in_custom_size_combo
+        )
+
+        self._tiny_in_custom_size_summary_label = QLabel()
+        self._tiny_in_custom_size_summary_label.setWordWrap(True)
+        self._tiny_in_custom_size_summary_label.setStyleSheet("color: #666;")
+        custom_form.addRow("", self._tiny_in_custom_size_summary_label)
+
         self._tiny_in_custom_height_label = QLabel("Input height")
         self._tiny_in_custom_height_spin = QSpinBox()
         self._tiny_in_custom_height_spin.setRange(32, 512)
@@ -1006,7 +1119,7 @@ class ClassKitTrainingDialog(QDialog):
         self._tiny_in_custom_dim_label = QLabel("Hidden dim")
         self._tiny_in_custom_dim_spin = QSpinBox()
         self._tiny_in_custom_dim_spin.setRange(16, 512)
-        self._tiny_in_custom_dim_spin.setValue(64)
+        self._tiny_in_custom_dim_spin.setValue(96)
         custom_form.addRow(
             self._tiny_in_custom_dim_label, self._tiny_in_custom_dim_spin
         )
@@ -1015,7 +1128,7 @@ class ClassKitTrainingDialog(QDialog):
         self._tiny_in_custom_dropout_spin = QDoubleSpinBox()
         self._tiny_in_custom_dropout_spin.setRange(0.0, 0.9)
         self._tiny_in_custom_dropout_spin.setSingleStep(0.05)
-        self._tiny_in_custom_dropout_spin.setValue(0.2)
+        self._tiny_in_custom_dropout_spin.setValue(0.1)
         custom_form.addRow(
             self._tiny_in_custom_dropout_label, self._tiny_in_custom_dropout_spin
         )
@@ -1135,6 +1248,14 @@ class ClassKitTrainingDialog(QDialog):
 
         self._custom_backbone_combo.activated.connect(self._on_custom_backbone_changed)
         self._custom_add_timm_btn.clicked.connect(self._on_add_timm_backbones)
+        self.tiny_size_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_tiny_preset_controls(self.tiny_size_combo)
+        )
+        self._tiny_in_custom_size_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_tiny_preset_controls(
+                self._tiny_in_custom_size_combo
+            )
+        )
         self._custom_fine_tune_method_combo.currentIndexChanged.connect(
             self._on_custom_backbone_changed
         )
@@ -1142,6 +1263,7 @@ class ClassKitTrainingDialog(QDialog):
             self._on_custom_backbone_changed
         )
         self._on_custom_backbone_changed()
+        self._refresh_tiny_preset_summary()
 
     def _reload_custom_backbone_choices(self, selected: object = None) -> None:
         current = str(selected or self._custom_backbone_combo.currentData() or "")
@@ -1435,6 +1557,9 @@ class ClassKitTrainingDialog(QDialog):
         method = str(self._custom_fine_tune_method_combo.currentData() or "head_only")
 
         for w in (
+            self._tiny_in_custom_size_label,
+            self._tiny_in_custom_size_combo,
+            self._tiny_in_custom_size_summary_label,
             self._tiny_in_custom_width_label,
             self._tiny_in_custom_width_spin,
             self._tiny_in_custom_height_label,
@@ -1520,50 +1645,50 @@ class ClassKitTrainingDialog(QDialog):
 
         return label_expansion
 
-    def _count_expanded_train_samples(
-        self, label_names: List[str], splits: List[str], label_expansion: dict
-    ) -> int:
-        if not label_expansion:
-            return 0
+    def _planned_training_records_with_splits(self) -> tuple[List[dict], bool]:
+        if not self._labeled_label_names:
+            return [], False
 
-        known_names = {str(name).strip() for name in self._class_choices}
-        known_names_ci = {name.lower() for name in known_names}
-        expanded = 0
-        for label_name, split in zip(label_names, splits):
-            if split != "train":
-                continue
-            src_name = str(label_name).strip()
-            src_name_ci = src_name.lower()
-            for mapping in label_expansion.values():
-                dst_name = mapping.get(src_name)
-                if dst_name is None:
-                    for key, value in mapping.items():
-                        if str(key).strip().lower() == src_name_ci:
-                            dst_name = value
-                            break
-                if dst_name is None:
-                    continue
-                if str(dst_name).strip().lower() in known_names_ci:
-                    expanded += 1
-        return expanded
+        records = build_label_expansion_records(
+            self._labeled_label_names,
+            label_expansion=self._current_label_expansion_settings(),
+            groups=(self._group_keys or None),
+            known_labels=self._class_choices,
+        )
+        planned_groups = (
+            [record.get("group") for record in records] if self._group_keys else None
+        )
+        splits, used_group_fallback = build_training_dataset_splits(
+            [str(record["label"]) for record in records],
+            strategy=self._current_split_strategy(),
+            val_fraction=self.val_fraction_spin.value(),
+            test_fraction=self.test_fraction_spin.value(),
+            groups=planned_groups,
+        )
+        planned_records = []
+        for record, split in zip(records, splits):
+            planned_record = dict(record)
+            planned_record["split"] = str(split or "train")
+            planned_records.append(planned_record)
+        return planned_records, bool(used_group_fallback)
 
     def _current_data_summary(self) -> dict:
         if self._labeled_label_names:
-            splits, used_group_fallback = build_training_dataset_splits(
-                self._labeled_label_names,
-                strategy=self._current_split_strategy(),
-                val_fraction=self.val_fraction_spin.value(),
-                test_fraction=self.test_fraction_spin.value(),
-                groups=(self._group_keys or None),
+            planned_records, used_group_fallback = (
+                self._planned_training_records_with_splits()
             )
             self._used_split_group_fallback = bool(used_group_fallback)
-            train_count = sum(1 for split in splits if split == "train")
-            val_count = sum(1 for split in splits if split == "val")
-            test_count = sum(1 for split in splits if split == "test")
-            expansion_count = self._count_expanded_train_samples(
-                self._labeled_label_names,
-                splits,
-                self._current_label_expansion_settings(),
+            train_count = sum(
+                1 for record in planned_records if record.get("split") == "train"
+            )
+            val_count = sum(
+                1 for record in planned_records if record.get("split") == "val"
+            )
+            test_count = sum(
+                1 for record in planned_records if record.get("split") == "test"
+            )
+            expansion_count = sum(
+                1 for record in planned_records if bool(record.get("is_expanded"))
             )
             return {
                 "exact": True,
@@ -1572,7 +1697,7 @@ class ClassKitTrainingDialog(QDialog):
                 "val": val_count,
                 "test": test_count,
                 "expansion": expansion_count,
-                "exported": len(self._labeled_label_names) + expansion_count,
+                "exported": len(planned_records),
                 "used_group_fallback": bool(used_group_fallback),
             }
 
@@ -1620,7 +1745,7 @@ class ClassKitTrainingDialog(QDialog):
         if summary["expansion"] > 0:
             lines.append(
                 (
-                    f"Label-switching expansion adds {summary['expansion']:,} mirrored train copies, "
+                    f"Label-switching expansion adds {summary['expansion']:,} mirrored copies before splitting, "
                     f"so {summary['exported']:,} files are exported in total."
                 )
             )
@@ -1659,34 +1784,25 @@ class ClassKitTrainingDialog(QDialog):
         return "\n".join(lines)
 
     def _preview_records_with_splits(self) -> List[dict]:
-        preview_pairs = [
-            (path, label)
-            for path, label in zip(self._image_paths, self._labeled_label_names)
-            if str(label).strip()
-        ]
-        if not preview_pairs:
+        planned_records, _used_group_fallback = (
+            self._planned_training_records_with_splits()
+        )
+        if not planned_records or not self._image_paths:
             return []
 
-        labels = [label for _, label in preview_pairs]
-        try:
-            splits, _used_group_fallback = build_training_dataset_splits(
-                labels,
-                strategy=self._current_split_strategy(),
-                val_fraction=self.val_fraction_spin.value(),
-                test_fraction=self.test_fraction_spin.value(),
-                groups=(self._group_keys or None),
-            )
-        except Exception:
-            splits = ["train"] * len(preview_pairs)
-
         records = []
-        for (path, label), split in zip(preview_pairs, splits):
+        for record in planned_records:
+            source_index = int(record["source_index"])
+            if source_index < 0 or source_index >= len(self._image_paths):
+                continue
+            path = self._image_paths[source_index]
             if Path(path).exists():
                 records.append(
                     {
                         "path": Path(path),
-                        "label": label,
-                        "split": str(split or "train"),
+                        "label": str(record["label"]),
+                        "split": str(record.get("split") or "train"),
+                        "expanded": bool(record.get("is_expanded")),
                     }
                 )
         return records
@@ -1697,14 +1813,19 @@ class ClassKitTrainingDialog(QDialog):
             return records
 
         selected = []
-        seen_paths = set()
+        seen_records = set()
         for split_name in ("val", "train"):
             for record in records:
-                record_key = str(record["path"])
-                if record["split"] != split_name or record_key in seen_paths:
+                record_key = (
+                    str(record["path"]),
+                    str(record["label"]),
+                    str(record["split"]),
+                    bool(record.get("expanded")),
+                )
+                if record["split"] != split_name or record_key in seen_records:
                     continue
                 selected.append(record)
-                seen_paths.add(record_key)
+                seen_records.add(record_key)
                 break
             if len(selected) >= max_items:
                 return selected[:max_items]
@@ -1720,13 +1841,28 @@ class ClassKitTrainingDialog(QDialog):
             added = False
             for label in sorted(buckets):
                 bucket = buckets[label]
-                while bucket and str(bucket[0]["path"]) in seen_paths:
+                while bucket:
+                    bucket_key = (
+                        str(bucket[0]["path"]),
+                        str(bucket[0]["label"]),
+                        str(bucket[0]["split"]),
+                        bool(bucket[0].get("expanded")),
+                    )
+                    if bucket_key not in seen_records:
+                        break
                     bucket.pop(0)
                 if not bucket:
                     continue
                 record = bucket.pop(0)
                 selected.append(record)
-                seen_paths.add(str(record["path"]))
+                seen_records.add(
+                    (
+                        str(record["path"]),
+                        str(record["label"]),
+                        str(record["split"]),
+                        bool(record.get("expanded")),
+                    )
+                )
                 added = True
                 if len(selected) >= max_items:
                     break
@@ -1911,6 +2047,11 @@ class ClassKitTrainingDialog(QDialog):
             "val_fraction": self.val_fraction_spin.value(),
             "test_fraction": self.test_fraction_spin.value(),
             "patience": self.patience_spin.value(),
+            "tiny_preset": (
+                self._tiny_in_custom_size_combo.currentData()
+                if custom_is_tiny
+                else self.tiny_size_combo.currentData()
+            ),
             "tiny_layers": (
                 self._tiny_in_custom_layers_spin.value()
                 if custom_is_tiny
@@ -1945,6 +2086,7 @@ class ClassKitTrainingDialog(QDialog):
             "custom_backbone_lr_scale": self._custom_backbone_lr_spin.value(),
             "custom_layerwise_lr_decay": self._custom_layerwise_decay_spin.value(),
             "custom_gradual_unfreeze_interval": self._custom_gradual_unfreeze_interval_spin.value(),
+            "auto_size_scale_factor": self._auto_size_scale_spin.value(),
             "custom_input_size": self._custom_input_size_spin.value(),
             "flipud": flipud_value,
             "fliplr": fliplr_value,

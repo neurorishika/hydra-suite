@@ -1737,11 +1737,20 @@ class DetectionPanel(QWidget):
             "yolo_obb_direct_model_path": self._main_window._get_selected_yolo_model_path(),
             "yolo_detect_model_path": self._main_window._get_selected_yolo_detect_model_path(),
             "yolo_crop_obb_model_path": self._main_window._get_selected_yolo_crop_obb_model_path(),
+            "headtail_enabled": (
+                ip.g_headtail.isChecked() if ip is not None else False
+            ),
+            "configured_headtail_model_path": (
+                ip._get_configured_yolo_headtail_model_path() if ip is not None else ""
+            ),
             "yolo_headtail_model_path": (
                 ip._get_selected_yolo_headtail_model_path() if ip is not None else ""
             ),
             "pose_overrides_headtail": (
                 ip.chk_pose_overrides_headtail.isChecked() if ip is not None else False
+            ),
+            "headtail_batch_size": (
+                ip.spin_headtail_batch.value() if ip is not None else 64
             ),
             "yolo_seq_crop_pad_ratio": self.spin_yolo_seq_crop_pad.value(),
             "yolo_seq_min_crop_size_px": self.spin_yolo_seq_min_crop_px.value(),
@@ -1752,6 +1761,9 @@ class DetectionPanel(QWidget):
             "yolo_seq_detect_conf_threshold": self.spin_yolo_seq_detect_conf.value(),
             "yolo_headtail_conf_threshold": (
                 ip.spin_yolo_headtail_conf.value() if ip is not None else 0.25
+            ),
+            "yolo_headtail_detect_conf_threshold": (
+                ip.spin_yolo_headtail_detect_conf.value() if ip is not None else 0.25
             ),
             "yolo_confidence": self.spin_yolo_confidence.value(),
             "yolo_iou": self.spin_yolo_iou.value(),

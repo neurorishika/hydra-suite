@@ -22,6 +22,11 @@ from hydra_suite.detectkit.gui.project import default_project_parent_dir
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.widgets.dialogs import BaseDialog
 
+_BTN_NEUTRAL = (
+    "QPushButton { background-color:#3e3e42; color:#e0e0e0; padding:4px 12px; border-radius:4px; }"
+    "QPushButton:hover { background-color:#555558; }"
+)
+
 
 class NewProjectDialog(BaseDialog):
     """Collect DetectKit project name, location, and initial class names."""
@@ -39,7 +44,7 @@ class NewProjectDialog(BaseDialog):
             "Choose where the project lives and define the object classes DetectKit should start with."
         )
         intro.setWordWrap(True)
-        intro.setStyleSheet("color: #aaaaaa;")
+        intro.setStyleSheet("color: #ffffff;")
         layout.addWidget(header)
         layout.addWidget(intro)
 
@@ -62,6 +67,7 @@ class NewProjectDialog(BaseDialog):
         self.location_edit.textChanged.connect(self._update_project_preview)
         self.location_edit.textChanged.connect(self._validate)
         browse_btn = QPushButton("Browse...")
+        browse_btn.setStyleSheet(_BTN_NEUTRAL)
         browse_btn.clicked.connect(self._browse_location)
         location_row.addWidget(self.location_edit, 1)
         location_row.addWidget(browse_btn)
@@ -92,7 +98,7 @@ class NewProjectDialog(BaseDialog):
             "Add one class per line. The first class becomes the default active label for the project."
         )
         classes_help.setWordWrap(True)
-        classes_help.setStyleSheet("color: #aaaaaa;")
+        classes_help.setStyleSheet("color: #cfcfcf;")
         setup_layout.addWidget(classes_help)
         setup_layout.addWidget(self.class_names_edit)
         layout.addWidget(setup_group)
@@ -103,7 +109,7 @@ class NewProjectDialog(BaseDialog):
         help_label.setWordWrap(True)
         help_label.setStyleSheet(
             "padding: 10px; background-color: #252526; border-radius: 6px; "
-            "border-left: 3px solid #0e639c; color: #aaaaaa;"
+            "border-left: 3px solid #0e639c; color: #ffffff; line-height: 1.5;"
         )
         layout.addWidget(help_label)
 

@@ -51,3 +51,40 @@ def test_enumerate_filters_to_headtail_roots(tmp_path, monkeypatch):
     # the caller (panel) applies further validation via ClassifierBackend metadata.
     assert "classification/orientation/ht.pth" in paths
     assert "tiny-classify/scheme/t.pth" in paths
+
+
+def test_enumerate_skips_factor_artifacts_when_manifest_exists(tmp_path, monkeypatch):
+    import json
+
+    from hydra_suite.training import model_publish
+
+    models_root = tmp_path / "models"
+    bundle_root = models_root / "custom-classify" / "multihead" / "scheme"
+    bundle_root.mkdir(parents=True)
+    (bundle_root / "factor_a.pth").write_bytes(b"a")
+    (bundle_root / "factor_b.pth").write_bytes(b"b")
+    (bundle_root / "bundle.multihead.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "classifier_multihead_bundle",
+                "factor_names": ["a", "b"],
+                "factor_models": [
+                    {"factor": "a", "path": "factor_a.pth", "class_names": ["x"]},
+                    {"factor": "b", "path": "factor_b.pth", "class_names": ["y"]},
+                ],
+                "input_size": [64, 64],
+                "monochrome": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_publish, "get_models_root", lambda: models_root)
+
+    entries = list(
+        model_publish.enumerate_classifier_artifacts(roles=("cnn_identity",))
+    )
+    paths = {entry["path"] for entry in entries}
+    assert "custom-classify/multihead/scheme/bundle.multihead.json" in paths
+    assert "custom-classify/multihead/scheme/factor_a.pth" not in paths
+    assert "custom-classify/multihead/scheme/factor_b.pth" not in paths

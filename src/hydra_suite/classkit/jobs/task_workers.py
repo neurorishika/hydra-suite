@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
-from ..core.export.splits import build_dataset_splits
+from ..core.export.splits import build_dataset_splits, build_label_expansion_split_key
 
 
 class TaskSignals(QObject):
@@ -617,6 +617,7 @@ class ExportWorker(QRunnable):
         label_expansion: Optional[Dict[str, Dict[str, str]]] = None,
         force_monochrome: bool = False,
         preset_splits_by_path: Optional[Dict[str, str]] = None,
+        preset_expanded_splits_by_key: Optional[Dict[str, str]] = None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -636,6 +637,10 @@ class ExportWorker(QRunnable):
         self.preset_splits_by_path = {
             str(Path(path).resolve()): str(split)
             for path, split in (preset_splits_by_path or {}).items()
+        }
+        self.preset_expanded_splits_by_key = {
+            str(key): str(split)
+            for key, split in (preset_expanded_splits_by_key or {}).items()
         }
         self.signals = TaskSignals()
 
@@ -696,7 +701,13 @@ class ExportWorker(QRunnable):
                 )
         else:
             splits = self._build_splits(labels)
-        class_names = {label: self._class_name(label) for label in set(labels)}
+        class_names = {
+            int(label): str(name)
+            for label, name in (self.class_names or {}).items()
+            if int(label) >= 0
+        }
+        for label in set(labels):
+            class_names.setdefault(int(label), self._class_name(int(label)))
         return image_paths, labels, splits, class_names
 
     @staticmethod
@@ -752,7 +763,7 @@ class ExportWorker(QRunnable):
             code = flip_code.get(axis)
             if code is None:
                 continue
-            axis_paths, axis_labels, skipped = self._expand_label_axis(
+            axis_paths, axis_labels, axis_splits, skipped = self._expand_label_axis(
                 axis,
                 mapping,
                 code,
@@ -768,7 +779,7 @@ class ExportWorker(QRunnable):
             )
             extra_paths.extend(axis_paths)
             extra_labels.extend(axis_labels)
-            extra_splits.extend(["train"] * len(axis_paths))
+            extra_splits.extend(axis_splits)
             n_skipped_unknown_dst += skipped
             n_exp += len(axis_paths)
 
@@ -839,12 +850,11 @@ class ExportWorker(QRunnable):
         """Expand one configured axis and return new samples plus skipped count."""
         extra_paths: List[Path] = []
         extra_labels: List[int] = []
+        extra_splits: List[str] = []
         n_skipped_unknown_dst = 0
         n_exp = start_index
 
         for img_path, label_int, split in zip(image_paths, labels, splits):
-            if split != "train":
-                continue
             matched_rule, dst_int = self._resolve_expanded_label(
                 mapping,
                 class_names.get(label_int, ""),
@@ -853,23 +863,33 @@ class ExportWorker(QRunnable):
             )
             if not matched_rule:
                 continue
+            if dst_int is None:
+                n_skipped_unknown_dst += 1
+                continue
+            dst_name = class_names.get(dst_int, "")
+            planned_split = None
+            if self.preset_expanded_splits_by_key:
+                planned_split = self.preset_expanded_splits_by_key.get(
+                    build_label_expansion_split_key(img_path, axis, dst_name)
+                )
+            if planned_split is None and split != "train":
+                continue
+
             img = cv2_module.imread(str(img_path), cv2_module.IMREAD_COLOR)
             if img is None:
                 raise FileNotFoundError(
                     f"Failed to read image for label expansion: {img_path}"
                 )
-            if dst_int is None:
-                n_skipped_unknown_dst += 1
-                continue
             flipped = cv2_module.flip(img, code)
             stem = f"expn_{axis}_{n_exp}_{img_path.stem}"
             out_p = exp_dir / (stem + img_path.suffix)
             cv2_module.imwrite(str(out_p), flipped)
             extra_paths.append(out_p)
             extra_labels.append(dst_int)
+            extra_splits.append(str(planned_split or "train"))
             n_exp += 1
 
-        return extra_paths, extra_labels, n_skipped_unknown_dst
+        return extra_paths, extra_labels, extra_splits, n_skipped_unknown_dst
 
     def _export_imagefolder(
         self,
@@ -999,7 +1019,15 @@ class ExportWorker(QRunnable):
             self._prepare_export_workspace()
             image_paths, labels, splits, class_names = self._collect_valid_labels()
 
-            # Log per-class per-split statistics
+            image_paths, labels, splits = self._apply_label_expansion(
+                image_paths, labels, splits, class_names
+            )
+            image_paths, labels, splits = self._apply_monochrome_mode(
+                image_paths, labels, splits
+            )
+
+            # Log per-class per-split statistics after deterministic expansion so
+            # the displayed split counts match the exported dataset.
             from collections import Counter
 
             split_class_counts: dict = {}
@@ -1018,12 +1046,6 @@ class ExportWorker(QRunnable):
                     -1, f"Split {split_name}: {total} images ({breakdown})"
                 )
 
-            image_paths, labels, splits = self._apply_label_expansion(
-                image_paths, labels, splits, class_names
-            )
-            image_paths, labels, splits = self._apply_monochrome_mode(
-                image_paths, labels, splits
-            )
             self.signals.progress.emit(
                 -1, f"Exporting {len(image_paths)} images to {self.output_path}"
             )

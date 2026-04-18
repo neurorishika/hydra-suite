@@ -87,6 +87,27 @@ def test_backend_tiny_flat_predict_batch_shape(tiny_flat_headtail):
     backend.close()
 
 
+def test_backend_tiny_preprocess_matches_training_path(tiny_flat_headtail):
+    """Tiny backend preprocessing matches the tiny training/inference path."""
+    import cv2
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    crop = np.zeros((24, 40, 3), dtype=np.uint8)
+    crop[..., 0] = 25
+    crop[..., 1] = 125
+    crop[..., 2] = 240
+
+    backend = ClassifierBackend(str(tiny_flat_headtail), compute_runtime="cpu")
+    processed = backend._preprocess([crop])[0]
+
+    rgb = cv2.resize(crop, (64, 64), interpolation=cv2.INTER_LINEAR)[:, :, ::-1]
+    expected = rgb.astype(np.float32).transpose(2, 0, 1) / 255.0
+
+    assert np.allclose(processed, expected, atol=1e-6)
+    backend.close()
+
+
 def test_backend_non_square_input_size_roundtrip(tiny_flat_nonsquare):
     """[H, W] serialization in checkpoint is preserved as (H, W) in memory."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
@@ -137,6 +158,37 @@ def test_backend_yolo_flat_predict_batch_shape(yolo_flat_headtail):
     backend.close()
 
 
+def test_backend_yolo_flat_sidecar_metadata(tmp_path, yolo_flat_headtail):
+    pytest.importorskip("ultralytics")
+    import json
+    import shutil
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    model_path = tmp_path / "artifact.pt"
+    shutil.copy2(str(yolo_flat_headtail), str(model_path))
+    model_path.with_suffix(".v2meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "arch": "yolo",
+                "factor_names": ["flat"],
+                "class_names_per_factor": [["up", "down", "left", "right", "unknown"]],
+                "input_size": [640, 640],
+                "monochrome": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    backend = ClassifierBackend(str(model_path), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.input_size == (640, 640)
+    assert meta.monochrome is True
+    assert meta.class_names_per_factor == [["up", "down", "left", "right", "unknown"]]
+    backend.close()
+
+
 def test_backend_torchvision_flat_metadata_and_inference(torchvision_flat_identity):
     """ClassifierBackend loads a torchvision flat v2 checkpoint and returns per-factor probs."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
@@ -155,6 +207,17 @@ def test_backend_torchvision_flat_metadata_and_inference(torchvision_flat_identi
         assert len(per_crop) == 1
         assert per_crop[0].shape == (3,)
     backend.close()
+
+
+def test_backend_parses_legacy_flat_torchvision_metadata(
+    legacy_torchvision_flat_headtail,
+):
+    """ClassifierBackend rejects pre-v2 flat torchvision checkpoints."""
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
+
+    with pytest.raises(ClassifierFormatError):
+        ClassifierBackend(str(legacy_torchvision_flat_headtail), compute_runtime="cpu")
 
 
 def test_backend_tiny_multi_metadata_and_inference(tiny_multi_identity):
@@ -200,6 +263,161 @@ def test_backend_yolo_multihead_bundle(yolo_multihead_bundle):
     backend.close()
 
 
+def test_backend_generic_classifier_multihead_bundle(
+    tmp_path, tiny_flat_subset, tiny_flat_headtail
+):
+    import shutil
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.training.model_publish import write_classifier_multihead_manifest
+
+    factor_a = tmp_path / "color.pth"
+    factor_b = tmp_path / "heading.pth"
+    shutil.copy2(str(tiny_flat_subset), str(factor_a))
+    shutil.copy2(str(tiny_flat_headtail), str(factor_b))
+
+    manifest = write_classifier_multihead_manifest(
+        tmp_path / "bundle.multihead.json",
+        factor_entries=[
+            {"factor": "side", "path": factor_a, "class_names": ["left", "right"]},
+            {
+                "factor": "heading",
+                "path": factor_b,
+                "class_names": ["up", "down", "left", "right", "unknown"],
+            },
+        ],
+        input_size=(64, 64),
+        monochrome=False,
+    )
+
+    backend = ClassifierBackend(str(manifest), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.arch == "classifier_multihead"
+    assert meta.factor_names == ["side", "heading"]
+    assert meta.class_names_per_factor == [
+        ["left", "right"],
+        ["up", "down", "left", "right", "unknown"],
+    ]
+
+    out = backend.predict_batch([np.zeros((48, 48, 3), dtype=np.uint8)])
+    assert len(out) == 1
+    assert len(out[0]) == 2
+    assert out[0][0].shape == (2,)
+    assert out[0][1].shape == (5,)
+    backend.close()
+
+
+def test_backend_generic_multihead_bundle_preserves_onnx_runtime(
+    tmp_path, tiny_flat_subset, tiny_flat_headtail, monkeypatch
+):
+    import shutil
+
+    import hydra_suite.core.identity.classification.backend as backend_module
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.training.model_publish import write_classifier_multihead_manifest
+
+    factor_a = tmp_path / "color.pth"
+    factor_b = tmp_path / "heading.pth"
+    shutil.copy2(str(tiny_flat_subset), str(factor_a))
+    shutil.copy2(str(tiny_flat_headtail), str(factor_b))
+
+    manifest = write_classifier_multihead_manifest(
+        tmp_path / "bundle.multihead.json",
+        factor_entries=[
+            {"factor": "side", "path": factor_a, "class_names": ["left", "right"]},
+            {
+                "factor": "heading",
+                "path": factor_b,
+                "class_names": ["up", "down", "left", "right", "unknown"],
+            },
+        ],
+        input_size=(64, 64),
+        monochrome=False,
+    )
+
+    class FakeFactorBackend:
+        def __init__(self, probs):
+            self._probs = np.array(probs, dtype=np.float32)
+
+        def predict_batch(self, crops):
+            return [[self._probs.copy()] for _ in crops]
+
+        def close(self):
+            return None
+
+    observed: dict[str, object] = {}
+
+    def _fake_load(path: str, runtime: str):
+        observed["path"] = path
+        observed["runtime"] = runtime
+        return [
+            FakeFactorBackend([0.4, 0.6]),
+            FakeFactorBackend([0.1, 0.2, 0.3, 0.15, 0.25]),
+        ]
+
+    def _fail_load_onnx(self):
+        raise AssertionError("generic multi-head bundles should not load ONNX directly")
+
+    monkeypatch.setattr(
+        backend_module._ClassifierMultiheadBundleLoader,
+        "load",
+        staticmethod(_fake_load),
+    )
+    monkeypatch.setattr(ClassifierBackend, "_load_onnx", _fail_load_onnx)
+
+    backend = ClassifierBackend(str(manifest), compute_runtime="onnx_cpu")
+    out = backend.predict_batch([np.zeros((48, 48, 3), dtype=np.uint8)])
+
+    assert observed["path"] == str(manifest)
+    assert observed["runtime"] == "onnx_cpu"
+    assert len(out) == 1
+    assert len(out[0]) == 2
+    assert out[0][0].shape == (2,)
+    assert out[0][1].shape == (5,)
+    backend.close()
+
+
+def test_backend_yolo_multihead_bundle_preserves_export_runtime(
+    yolo_multihead_bundle, monkeypatch
+):
+    import hydra_suite.core.identity.classification.backend as backend_module
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    class FakeFactorBackend:
+        def __init__(self, probs):
+            self._probs = np.array(probs, dtype=np.float32)
+
+        def predict_batch(self, crops):
+            return [[self._probs.copy()] for _ in crops]
+
+        def close(self):
+            return None
+
+    observed: dict[str, object] = {}
+
+    def _fake_load(path: str, runtime: str):
+        observed["path"] = path
+        observed["runtime"] = runtime
+        return [FakeFactorBackend([0.3, 0.3, 0.4]), FakeFactorBackend([0.6, 0.4])]
+
+    monkeypatch.setattr(
+        backend_module._ClassifierMultiheadBundleLoader,
+        "load",
+        staticmethod(_fake_load),
+    )
+
+    backend = ClassifierBackend(
+        str(yolo_multihead_bundle), compute_runtime="onnx_coreml"
+    )
+    out = backend.predict_batch([np.zeros((64, 64, 3), dtype=np.uint8)])
+
+    assert observed["path"] == str(yolo_multihead_bundle)
+    assert observed["runtime"] == "onnx_coreml"
+    assert len(out) == 1
+    assert len(out[0]) == 2
+    backend.close()
+
+
 def test_backend_tiny_onnx_lazy_derive(tiny_flat_headtail):
     """onnx_cpu runtime derives and caches a .onnx peer next to the source .pth."""
     pytest.importorskip("onnxruntime")
@@ -226,21 +444,29 @@ def test_backend_tiny_onnx_lazy_derive(tiny_flat_headtail):
     backend2.close()
 
 
-def test_backend_monochrome_uses_averaged_imagenet_stats(tiny_flat_monochrome):
-    """Monochrome checkpoints use averaged ImageNet mean/std in preprocessing."""
-    from hydra_suite.core.identity.classification.backend import (
-        _IMAGENET_MEAN,
-        _IMAGENET_STD,
-        ClassifierBackend,
-    )
+def test_backend_tiny_monochrome_preprocess_matches_training_path(
+    tiny_flat_monochrome,
+):
+    """Tiny monochrome checkpoints grayscale inputs without ImageNet normalization."""
+    import cv2
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(str(tiny_flat_monochrome))
     assert backend.metadata.monochrome is True
 
-    mean, std = backend._normalization_stats()
-    # All three channels equal the mean of the ImageNet stats
-    expected_mean = float(_IMAGENET_MEAN.mean())
-    expected_std = float(_IMAGENET_STD.mean())
-    assert np.allclose(mean.flatten(), [expected_mean] * 3)
-    assert np.allclose(std.flatten(), [expected_std] * 3)
+    crop = np.zeros((28, 20, 3), dtype=np.uint8)
+    crop[..., 0] = 10
+    crop[..., 1] = 140
+    crop[..., 2] = 250
+    processed = backend._preprocess([crop])[0]
+
+    rgb = cv2.resize(crop, (64, 64), interpolation=cv2.INTER_LINEAR)[:, :, ::-1]
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    expected = (
+        cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB).astype(np.float32).transpose(2, 0, 1)
+        / 255.0
+    )
+
+    assert np.allclose(processed, expected, atol=1e-6)
     backend.close()

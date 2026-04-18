@@ -106,7 +106,9 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
             "device": "cpu",
             "compute_runtime": "cpu",
             "custom_backbone": "resnet18",
+            "auto_size_scale_factor": 1.25,
             "custom_input_size": 192,
+            "tiny_preset": "large",
             "tiny_width": 160,
             "tiny_height": 96,
             "epochs": 30,
@@ -128,6 +130,7 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
 
     assert dialog.mode_combo.currentData() == "flat_custom"
     assert dialog._custom_backbone_combo.currentData() == "resnet18"
+    assert dialog._auto_size_scale_spin.value() == pytest.approx(1.25)
     assert dialog._custom_input_size_spin.value() == 192
     assert dialog._custom_fine_tune_method_combo.currentData() == "layerwise_lr_decay"
     assert dialog._custom_layerwise_decay_spin.value() == pytest.approx(0.6)
@@ -136,6 +139,8 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
     assert dialog.brightness_spin.value() == pytest.approx(0.2)
     assert dialog.contrast_spin.value() == pytest.approx(0.15)
     assert dialog.monochrome_check.isChecked() is True
+    assert dialog.tiny_size_combo.currentData() == "large"
+    assert dialog._tiny_in_custom_size_combo.currentData() == "large"
     assert dialog.tiny_width_spin.value() == 160
     assert dialog.tiny_height_spin.value() == 96
     assert dialog.epochs_spin.value() == 30
@@ -145,6 +150,30 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
     assert dialog.patience_spin.value() == 7
     assert dialog.split_strategy_combo.currentData() == "random"
     assert dialog.get_settings()["initial_model_path"] == "/tmp/previous_model.pth"
+
+
+def test_training_dialog_tiny_preset_is_mirrored_between_modes(qapp) -> None:
+    dialog = ClassKitTrainingDialog(n_labeled=8, class_choices=["a", "b"])
+
+    dialog.tiny_size_combo.setCurrentIndex(dialog.tiny_size_combo.findData("large"))
+
+    assert dialog._tiny_in_custom_size_combo.currentData() == "large"
+    assert "Tiny-L" in dialog._tiny_size_summary_label.text()
+    assert dialog.get_settings()["tiny_preset"] == "large"
+
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("flat_custom"))
+    dialog._custom_backbone_combo.setCurrentIndex(
+        dialog._custom_backbone_combo.findData("tinyclassifier")
+    )
+
+    dialog._tiny_in_custom_size_combo.setCurrentIndex(
+        dialog._tiny_in_custom_size_combo.findData("small")
+    )
+
+    settings = dialog.get_settings()
+
+    assert dialog.tiny_size_combo.currentData() == "small"
+    assert settings["tiny_preset"] == "small"
 
 
 def test_training_dialog_custom_mode_uses_general_hyperparams(qapp) -> None:
@@ -168,6 +197,23 @@ def test_training_dialog_custom_mode_uses_general_hyperparams(qapp) -> None:
     assert settings["batch"] == 24
     assert settings["lr"] == pytest.approx(0.003)
     assert settings["patience"] == 6
+
+
+def test_training_dialog_auto_size_helper_applies_rescale_factor(qapp) -> None:
+    dialog = ClassKitTrainingDialog(n_labeled=8, class_choices=["a", "b"])
+    dialog._image_paths = [Path("image_a.png")]
+    dialog._auto_size_btn.setEnabled(True)
+    dialog._auto_size_scale_spin.setValue(1.5)
+    dialog._sample_image_dimensions = lambda: [(100.0, 50.0)]
+
+    dialog._auto_set_sizes_from_images()
+
+    assert dialog.tiny_width_spin.value() == 160
+    assert dialog.tiny_height_spin.value() == 64
+    assert dialog._tiny_in_custom_width_spin.value() == 160
+    assert dialog._tiny_in_custom_height_spin.value() == 64
+    assert dialog._custom_input_size_spin.value() == 160
+    assert dialog.get_settings()["auto_size_scale_factor"] == pytest.approx(1.5)
 
 
 def test_training_dialog_split_strategy_can_be_switched_to_random(qapp) -> None:
@@ -216,9 +262,9 @@ def test_training_dialog_data_summary_reflects_stratified_split_and_expansion(
 
     summary = dialog.current_data_summary_text()
 
-    assert "8 train / 2 val / 0 test" in summary
-    assert "adds 5 mirrored train copies" in summary
-    assert "15 files are exported" in summary
+    assert "13 train / 3 val / 0 test" in summary
+    assert "adds 6 mirrored copies before splitting" in summary
+    assert "16 files are exported" in summary
 
 
 def test_training_dialog_grouped_preview_includes_test_split(qapp) -> None:

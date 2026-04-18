@@ -32,8 +32,8 @@ def test_custom_cnn_params_defaults():
     assert p.class_rebalance_mode == "none"
     assert p.class_rebalance_power == 1.0
     assert p.hidden_layers == 1
-    assert p.hidden_dim == 64
-    assert p.dropout == 0.2
+    assert p.hidden_dim == 96
+    assert p.dropout == 0.1
     assert p.input_width == 128
     assert p.input_height == 64
 
@@ -93,6 +93,8 @@ def test_custom_backbone_registry_persists(monkeypatch, tmp_path):
     assert loaded == ["timm/resnet50.a1_in1k", "timm/convnext_tiny.fb_in1k"]
     choices = get_custom_backbone_choices()
     assert "tinyclassifier" in choices
+    assert "mobilenet_v3_small" in choices
+    assert "shufflenet_v2_x1_0" in choices
     assert "timm/resnet50.a1_in1k" in choices
 
 
@@ -125,10 +127,34 @@ def test_build_torchvision_classifier_efficientnet():
     assert out.shape == (1, 3)
 
 
+def test_build_torchvision_classifier_mobilenet():
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    model = build_torchvision_classifier(
+        "mobilenet_v3_small", num_classes=3, trainable_layers=0
+    )
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.zeros(1, 3, 224, 224))
+    assert out.shape == (1, 3)
+
+
 def test_build_torchvision_classifier_resnet():
     from hydra_suite.training.torchvision_model import build_torchvision_classifier
 
     model = build_torchvision_classifier("resnet18", num_classes=4, trainable_layers=0)
+    model.eval()
+    with torch.no_grad():
+        out = model(torch.zeros(1, 3, 224, 224))
+    assert out.shape == (1, 4)
+
+
+def test_build_torchvision_classifier_shufflenet():
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    model = build_torchvision_classifier(
+        "shufflenet_v2_x1_0", num_classes=4, trainable_layers=0
+    )
     model.eval()
     with torch.no_grad():
         out = model(torch.zeros(1, 3, 224, 224))
@@ -169,6 +195,19 @@ def test_get_layer_groups_resnet_count():
     assert len(groups) == 4
 
 
+def test_get_layer_groups_mobilenet_count():
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        get_layer_groups,
+    )
+
+    model = build_torchvision_classifier(
+        "mobilenet_v3_small", num_classes=2, trainable_layers=0
+    )
+    groups = get_layer_groups(model, "mobilenet_v3_small")
+    assert len(groups) == len(model.features)
+
+
 def test_get_layer_groups_efficientnet_count():
     from hydra_suite.training.torchvision_model import (
         build_torchvision_classifier,
@@ -181,6 +220,19 @@ def test_get_layer_groups_efficientnet_count():
     groups = get_layer_groups(model, "efficientnet_b0")
     # EfficientNet-B0 features Sequential has 9 blocks (indices 0–8)
     assert len(groups) == 9
+
+
+def test_get_layer_groups_shufflenet_count():
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        get_layer_groups,
+    )
+
+    model = build_torchvision_classifier(
+        "shufflenet_v2_x1_0", num_classes=2, trainable_layers=0
+    )
+    groups = get_layer_groups(model, "shufflenet_v2_x1_0")
+    assert len(groups) == 4
 
 
 def test_get_layer_groups_vit_count():
@@ -342,6 +394,8 @@ def test_torchvision_backbones_list_contains_expected():
     from hydra_suite.training.torchvision_model import TORCHVISION_BACKBONES
 
     assert "convnext_tiny" in TORCHVISION_BACKBONES
+    assert "mobilenet_v3_small" in TORCHVISION_BACKBONES
+    assert "shufflenet_v2_x1_0" in TORCHVISION_BACKBONES
     assert "tinyclassifier" in TORCHVISION_BACKBONES
     assert "vit_b_16" in TORCHVISION_BACKBONES
 
@@ -373,11 +427,12 @@ def test_build_torchvision_classifier_tinyclassifier():
 
     params = (
         CustomCNNParams()
-    )  # defaults: hidden_layers=1, hidden_dim=64, dropout=0.2, input_width=128, input_height=64
+    )  # defaults: hidden_layers=1, hidden_dim=96, dropout=0.1, input_width=128, input_height=64
     model = build_torchvision_classifier(
         "tinyclassifier",
         num_classes=3,
         trainable_layers=0,
+        tiny_preset=params.tiny_preset,
         hidden_layers=params.hidden_layers,
         hidden_dim=params.hidden_dim,
         dropout=params.dropout,
@@ -388,6 +443,20 @@ def test_build_torchvision_classifier_tinyclassifier():
     x = torch.randn(2, 3, params.input_height, params.input_width)
     out = model(x)
     assert out.shape == (2, 3)
+
+
+def test_build_torchvision_classifier_tinyclassifier_large_preset():
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    model = build_torchvision_classifier(
+        "tinyclassifier",
+        num_classes=2,
+        trainable_layers=0,
+        tiny_preset="large",
+    )
+
+    assert getattr(model, "tiny_preset", None) == "large"
+    assert tuple(getattr(model, "feature_channels", ())) == (32, 64, 128, 224)
 
 
 # ---------------------------------------------------------------------------

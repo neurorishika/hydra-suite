@@ -17,6 +17,41 @@ def _build_tiny_state(n_classes: int = 3):
     return model
 
 
+def _build_legacy_tiny_state(n_classes: int = 3):
+    import torch.nn as nn
+
+    class LegacyTinyClassifier(nn.Module):
+        def __init__(self, n_classes: int):
+            super().__init__()
+            self.features = nn.Sequential(
+                nn.Conv2d(3, 16, 3, stride=2, padding=1),
+                nn.BatchNorm2d(16),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(16, 32, 3, stride=2, padding=1),
+                nn.BatchNorm2d(32),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(32, 64, 3, stride=2, padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(64, 64, 3, stride=2, padding=1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d(1),
+            )
+            self.classifier = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(64, 16),
+                nn.ReLU(inplace=True),
+                nn.Dropout(0.0),
+                nn.Linear(16, n_classes),
+            )
+
+        def forward(self, x):
+            return self.classifier(self.features(x))
+
+    return LegacyTinyClassifier(n_classes=n_classes)
+
+
 def test_tiny_checkpoint_v2_flat_schema(tmp_path):
     """_save_tiny_checkpoint writes schema_version=2 and required v2 fields."""
     pytest.importorskip("cv2")
@@ -49,6 +84,12 @@ def test_tiny_checkpoint_v2_flat_schema(tmp_path):
     assert ckpt["class_names"] == ["a", "b", "c"]
     assert ckpt["monochrome"] is True
     assert ckpt["num_classes"] == 3
+    assert ckpt["tiny_arch_version"] == 2
+    assert ckpt["feature_channels"] == [24, 48, 96, 160]
+    assert ckpt["stage_depths"] == [1, 1, 2, 1]
+    assert ckpt["stage_strides"] == [1, 2, 2, 2]
+    assert ckpt["use_squeeze_excite"] is True
+    assert ckpt["dual_pool"] is True
 
 
 def test_tiny_checkpoint_v2_consumable_by_backend(tmp_path):
@@ -77,6 +118,42 @@ def test_tiny_checkpoint_v2_consumable_by_backend(tmp_path):
     assert meta.class_names_per_factor == [["left", "right", "unknown"]]
     assert meta.factor_names == ["flat"]
     assert meta.input_size == (64, 64)
+    backend.close()
+
+
+def test_legacy_tiny_checkpoint_still_loads_via_backend(tmp_path):
+    """Legacy tiny checkpoints remain readable after the stronger tiny upgrade."""
+    pytest.importorskip("torch")
+    import torch
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    model = _build_legacy_tiny_state(3)
+    out_path = tmp_path / "legacy_tiny.pth"
+    torch.save(
+        {
+            "schema_version": 2,
+            "arch": "tinyclassifier",
+            "input_size": [64, 64],
+            "factor_names": ["flat"],
+            "class_names_per_factor": [["left", "right", "unknown"]],
+            "class_names": ["left", "right", "unknown"],
+            "num_classes": 3,
+            "monochrome": False,
+            "hidden_layers": 1,
+            "hidden_dim": 16,
+            "dropout": 0.0,
+            "best_val_acc": None,
+            "history": {},
+            "model_state_dict": model.state_dict(),
+        },
+        str(out_path),
+    )
+
+    backend = ClassifierBackend(str(out_path))
+    meta = backend.metadata
+    assert meta.arch == "tinyclassifier"
+    assert meta.class_names_per_factor == [["left", "right", "unknown"]]
     backend.close()
 
 
@@ -110,6 +187,7 @@ def test_torchvision_checkpoint_v2_flat_schema(tmp_path):
 
     ckpt = torch.load(str(out_path), map_location="cpu", weights_only=False)
     assert ckpt["schema_version"] == 2
+    assert ckpt["tiny_preset"] == "medium"
     assert ckpt["input_size"] == [128, 96]
     assert ckpt["factor_names"] == ["flat"]
     assert ckpt["class_names_per_factor"] == [["a", "b", "c", "d"]]

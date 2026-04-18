@@ -412,5 +412,77 @@ def test_registry_and_publish_lineage(tmp_path: Path, monkeypatch):
     model_reg = json.loads(
         (tmp_path / "models" / "model_registry.json").read_text(encoding="utf-8")
     )
-    assert key in model_reg
-    assert model_reg[key]["trained_from_run_id"] == run_id
+    assert model_reg["schema_version"] == 2
+    assert key in model_reg["entries"]
+    assert model_reg["entries"][key]["trained_from_run_id"] == run_id
+
+
+def test_orchestrator_auto_publish_multihead_classifier_writes_bundle_manifest(
+    tmp_path: Path,
+    monkeypatch,
+    tiny_flat_subset: Path,
+    tiny_flat_headtail: Path,
+):
+    import shutil
+
+    import hydra_suite.training.model_publish as pub
+    import hydra_suite.training.registry as reg
+    import hydra_suite.training.service as service_module
+
+    monkeypatch.setattr(reg, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(pub, "_project_root", lambda: tmp_path)
+
+    ds_dir = tmp_path / "ds"
+    ds_dir.mkdir(parents=True)
+    (ds_dir / "dataset.yaml").write_text(
+        "train: images/train\nval: images/val\n",
+        encoding="utf-8",
+    )
+
+    artifact_a = tmp_path / "artifacts" / "color.pth"
+    artifact_b = tmp_path / "artifacts" / "heading.pth"
+    artifact_a.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(tiny_flat_subset), str(artifact_a))
+    shutil.copy2(str(tiny_flat_headtail), str(artifact_b))
+
+    def _fake_run_training(spec, run_dir, **kwargs):
+        return {
+            "success": True,
+            "command": ["train"],
+            "artifact_paths": [str(artifact_a), str(artifact_b)],
+        }
+
+    monkeypatch.setattr(service_module, "run_training", _fake_run_training)
+
+    spec = TrainingRunSpec(
+        role=TrainingRole.CLASSIFY_MULTIHEAD_TINY,
+        source_datasets=[SourceDataset(path=str(ds_dir))],
+        derived_dataset_dir=str(ds_dir),
+        base_model="tinyclassifier",
+        hyperparams=TrainingHyperParams(),
+        device="cpu",
+    )
+    result = TrainingOrchestrator(tmp_path / "workspace").run_role_training(
+        spec,
+        publish_metadata={
+            "size": "tiny",
+            "species": "ant",
+            "model_info": "bundle",
+            "scheme_name": "headtail_scheme",
+            "factor_names": ["side", "heading"],
+        },
+    )
+
+    published_path = Path(result["published_model_path"])
+    assert published_path.name.endswith(".multihead.json")
+    assert published_path.exists()
+
+    manifest = json.loads(published_path.read_text(encoding="utf-8"))
+    assert manifest["factor_names"] == ["side", "heading"]
+    assert len(manifest["factor_models"]) == 2
+
+    run_registry = load_registry()
+    assert run_registry["runs"]
+    run_record = run_registry["runs"][0]
+    assert len(run_record["artifact_paths"]) == 2
+    assert run_record["published_model_path"] == str(published_path)

@@ -20,6 +20,8 @@ import torchvision.models as tvm
 
 TORCHVISION_BACKBONES: list[str] = [
     "tinyclassifier",
+    "mobilenet_v3_small",
+    "shufflenet_v2_x1_0",
     "convnext_tiny",
     "convnext_small",
     "efficientnet_b0",
@@ -31,6 +33,8 @@ TORCHVISION_BACKBONES: list[str] = [
 # Human-readable labels for the GUI
 BACKBONE_DISPLAY_NAMES: dict[str, str] = {
     "tinyclassifier": "TinyClassifier",
+    "mobilenet_v3_small": "MobileNet-V3-Small",
+    "shufflenet_v2_x1_0": "ShuffleNet-V2 x1.0",
     "convnext_tiny": "ConvNeXt-Tiny",
     "convnext_small": "ConvNeXt-Small",
     "efficientnet_b0": "EfficientNet-B0",
@@ -91,6 +95,8 @@ def _load_pretrained(backbone: str) -> nn.Module:
         return timm.create_model(model_name, pretrained=True)
 
     weights_map = {
+        "mobilenet_v3_small": tvm.MobileNet_V3_Small_Weights.IMAGENET1K_V1,
+        "shufflenet_v2_x1_0": tvm.ShuffleNet_V2_X1_0_Weights.IMAGENET1K_V1,
         "convnext_tiny": tvm.ConvNeXt_Tiny_Weights.IMAGENET1K_V1,
         "convnext_small": tvm.ConvNeXt_Small_Weights.IMAGENET1K_V1,
         "efficientnet_b0": tvm.EfficientNet_B0_Weights.IMAGENET1K_V1,
@@ -115,9 +121,15 @@ def _replace_head(model: nn.Module, backbone: str, num_classes: int) -> nn.Modul
     if backbone.startswith("convnext"):
         in_features = model.classifier[-1].in_features
         model.classifier[-1] = nn.Linear(in_features, num_classes)
+    elif backbone.startswith("mobilenet"):
+        in_features = model.classifier[-1].in_features
+        model.classifier[-1] = nn.Linear(in_features, num_classes)
     elif backbone.startswith("efficientnet"):
         in_features = model.classifier[-1].in_features
         model.classifier[-1] = nn.Linear(in_features, num_classes)
+    elif backbone.startswith("shufflenet"):
+        in_features = model.fc.in_features
+        model.fc = nn.Linear(in_features, num_classes)
     elif backbone.startswith("resnet"):
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, num_classes)
@@ -166,8 +178,12 @@ def get_layer_groups(model: nn.Module, backbone: str) -> list[nn.Module]:
         # stage blocks so that trainable_layers=N unfreezes the last N stages,
         # skipping the lightweight transition layers.
         return [model.features[i] for i in [1, 3, 5, 7]]
+    elif backbone.startswith("mobilenet"):
+        return list(model.features)
     elif backbone.startswith("resnet"):
         return [model.layer1, model.layer2, model.layer3, model.layer4]
+    elif backbone.startswith("shufflenet"):
+        return [model.stage2, model.stage3, model.stage4, model.conv5]
     elif backbone.startswith("efficientnet"):
         # features is a Sequential; expose as individual blocks
         return list(model.features)
@@ -188,7 +204,9 @@ def _get_head_module(model: nn.Module, backbone: str) -> nn.Module | None:
 
     if backbone.startswith("convnext") or backbone.startswith("efficientnet"):
         return model.classifier
-    if backbone.startswith("resnet"):
+    if backbone.startswith("mobilenet"):
+        return model.classifier
+    if backbone.startswith("resnet") or backbone.startswith("shufflenet"):
         return model.fc
     if backbone == "vit_b_16":
         return model.heads
@@ -229,9 +247,10 @@ def build_torchvision_classifier(
     num_classes: int,
     trainable_layers: int,
     *,
+    tiny_preset: str = "medium",
     hidden_layers: int = 1,
-    hidden_dim: int = 64,
-    dropout: float = 0.2,
+    hidden_dim: int = 96,
+    dropout: float = 0.1,
     input_width: int = 128,
     input_height: int = 64,
 ) -> nn.Module:
@@ -265,6 +284,7 @@ def build_torchvision_classifier(
         TinyClassifier = _build_tiny_classifier_class()
         return TinyClassifier(
             n_classes=num_classes,
+            tiny_preset=tiny_preset,
             hidden_layers=hidden_layers,
             hidden_dim=hidden_dim,
             dropout=dropout,
@@ -333,6 +353,10 @@ def save_torchvision_checkpoint(
         "trainable_layers": trainable_layers,
         "backbone_lr_scale": backbone_lr_scale,
     }
+    if backbone == "tinyclassifier":
+        from hydra_suite.training.tiny_model import tiny_model_checkpoint_metadata
+
+        ckpt.update(tiny_model_checkpoint_metadata(model))
     if not is_multihead:
         ckpt["class_names"] = list(class_names_per_factor[0])
     if isinstance(extra_meta, dict) and extra_meta:

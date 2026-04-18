@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListView,
@@ -50,49 +51,98 @@ class DatasetPanel(QWidget):
         self._project: DetectKitProject | None = None
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-        # --- Source combo + manage button ---
+        header = QLabel("Dataset Browser")
+        header.setProperty("detectkitRole", "sectionTitle")
+        layout.addWidget(header)
+
+        intro = QLabel(
+            "Manage source datasets, browse images, and round-trip annotations through X-AnyLabeling."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("detectkitRole", "sectionHint")
+        layout.addWidget(intro)
+
+        sources_group = QGroupBox("Sources")
+        sources_layout = QVBoxLayout(sources_group)
+        sources_layout.setSpacing(8)
+
         src_row = QHBoxLayout()
         src_row.addWidget(QLabel("Source:"))
         self.source_combo = QComboBox()
         self.source_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToContents
         )
+        self.source_combo.setMinimumContentsLength(18)
         self.source_combo.currentIndexChanged.connect(self._on_source_combo_changed)
         src_row.addWidget(self.source_combo, 1)
-        layout.addLayout(src_row)
+        sources_layout.addLayout(src_row)
 
         self.btn_manage_sources = QPushButton("Manage Sources…")
+        self.btn_manage_sources.setProperty("detectkitVariant", "secondary")
         self.btn_manage_sources.clicked.connect(self.manage_sources_requested)
-        layout.addWidget(self.btn_manage_sources)
+        sources_layout.addWidget(self.btn_manage_sources)
 
-        # --- Image list ---
-        layout.addWidget(QLabel("Images"))
+        self._source_summary = QLabel("No sources connected yet.")
+        self._source_summary.setWordWrap(True)
+        self._source_summary.setProperty("detectkitRole", "sectionHint")
+        sources_layout.addWidget(self._source_summary)
+
+        layout.addWidget(sources_group)
+
+        images_group = QGroupBox("Images")
+        images_layout = QVBoxLayout(images_group)
+        images_layout.setSpacing(8)
+
+        self._image_summary = QLabel("Select a source to browse its images.")
+        self._image_summary.setWordWrap(True)
+        self._image_summary.setProperty("detectkitRole", "sectionHint")
+        images_layout.addWidget(self._image_summary)
+
         self.image_list = QListWidget()
+        self.image_list.setAlternatingRowColors(True)
+        self.image_list.setUniformItemSizes(True)
         self.image_list.currentRowChanged.connect(self._on_image_changed)
-        layout.addWidget(self.image_list)
+        images_layout.addWidget(self.image_list)
 
-        # --- X-AnyLabeling section ---
-        layout.addWidget(QLabel("X-AnyLabeling"))
+        layout.addWidget(images_group, 1)
+
+        xany_group = QGroupBox("External Annotation")
+        xany_layout = QVBoxLayout(xany_group)
+        xany_layout.setSpacing(8)
+
+        self._xal_hint = QLabel(
+            "Open the current source in X-AnyLabeling, then refresh the source to pull edited labels back into DetectKit."
+        )
+        self._xal_hint.setWordWrap(True)
+        self._xal_hint.setProperty("detectkitRole", "sectionHint")
+        xany_layout.addWidget(self._xal_hint)
+
         env_row = QHBoxLayout()
         self.combo_xal_env = QComboBox()
         self.combo_xal_env.setToolTip("Conda environment with X-AnyLabeling installed.")
         self.btn_refresh_envs = QPushButton("⟳")
+        self.btn_refresh_envs.setProperty("detectkitVariant", "quiet")
         self.btn_refresh_envs.setFixedWidth(30)
         self.btn_refresh_envs.setToolTip("Rescan conda environments")
         self.btn_refresh_envs.clicked.connect(self._refresh_xal_envs)
         env_row.addWidget(self.combo_xal_env, 1)
         env_row.addWidget(self.btn_refresh_envs)
-        layout.addLayout(env_row)
+        xany_layout.addLayout(env_row)
 
         xal_btn_row = QHBoxLayout()
         self.btn_xanylabeling = QPushButton("Open in X-AnyLabeling")
         self.btn_xanylabeling.clicked.connect(self._open_xanylabeling)
         self.btn_refresh = QPushButton("Refresh Labels")
+        self.btn_refresh.setProperty("detectkitVariant", "secondary")
         self.btn_refresh.clicked.connect(self._refresh_labels)
         xal_btn_row.addWidget(self.btn_xanylabeling)
         xal_btn_row.addWidget(self.btn_refresh)
-        layout.addLayout(xal_btn_row)
+        xany_layout.addLayout(xal_btn_row)
+
+        layout.addWidget(xany_group)
 
         self._refresh_xal_envs()
 
@@ -120,6 +170,15 @@ class DatasetPanel(QWidget):
             display = src.name if src.name else src.path
             self.source_combo.addItem(display, userData=src.path)
         self.source_combo.blockSignals(False)
+        source_count = len(proj.sources)
+        if source_count == 0:
+            self.image_list.clear()
+            self._source_summary.setText("No sources connected yet.")
+            self._image_summary.setText("Select a source to browse its images.")
+            return
+        self._source_summary.setText(
+            f"{source_count} source(s) available for browsing and export."
+        )
         if self.source_combo.count() > 0:
             self._on_source_combo_changed(self.source_combo.currentIndex())
 
@@ -198,10 +257,16 @@ class DatasetPanel(QWidget):
                 if envs:
                     self.combo_xal_env.addItems(envs)
                     self.btn_xanylabeling.setEnabled(True)
+                    self._xal_hint.setText(
+                        "Open the selected source in X-AnyLabeling, then refresh labels when you return to DetectKit."
+                    )
                     logger.info("Found %d X-AnyLabeling conda env(s)", len(envs))
                 else:
                     self.combo_xal_env.addItem("No X-AnyLabeling envs found")
                     self.btn_xanylabeling.setEnabled(False)
+                    self._xal_hint.setText(
+                        "No X-AnyLabeling environment was detected. Create one to enable external annotation round-trips."
+                    )
                     logger.warning(
                         "No conda envs starting with 'x-anylabeling-' found. "
                         "Create one: conda create -n x-anylabeling-cpu python=3.10 "
@@ -210,12 +275,21 @@ class DatasetPanel(QWidget):
             else:
                 self.combo_xal_env.addItem("Conda not available")
                 self.btn_xanylabeling.setEnabled(False)
+                self._xal_hint.setText(
+                    "Conda is not available in this environment, so X-AnyLabeling launch is disabled."
+                )
         except FileNotFoundError:
             self.combo_xal_env.addItem("Conda not installed")
             self.btn_xanylabeling.setEnabled(False)
+            self._xal_hint.setText(
+                "Conda is not installed, so X-AnyLabeling launch is disabled."
+            )
         except Exception as exc:
             self.combo_xal_env.addItem("Error detecting envs")
             self.btn_xanylabeling.setEnabled(False)
+            self._xal_hint.setText(
+                "DetectKit could not scan conda environments for X-AnyLabeling."
+            )
             logger.warning("Failed to scan conda envs: %s", exc)
 
     def _validate_source(self, path: str) -> None:
@@ -256,9 +330,11 @@ class DatasetPanel(QWidget):
         """Populate image list when source combo selection changes."""
         self.image_list.clear()
         if index < 0:
+            self._image_summary.setText("Select a source to browse its images.")
             return
         source_path = self.source_combo.itemData(index)
         if not source_path:
+            self._image_summary.setText("Select a source to browse its images.")
             return
         images = list_images_in_source(source_path)
         self.image_list.blockSignals(True)
@@ -267,12 +343,28 @@ class DatasetPanel(QWidget):
             img_item.setData(Qt.UserRole, str(img))
             self.image_list.addItem(img_item)
         self.image_list.blockSignals(False)
+        source_name = self.source_combo.currentText().strip() or "Selected source"
+        image_count = len(images)
+        self._image_summary.setText(
+            f"{source_name}: {image_count} image(s) available for review."
+        )
+        if self._main_window is not None and hasattr(self._main_window, "_tools_panel"):
+            self._main_window._tools_panel.set_image_counter(
+                1 if image_count else 0,
+                image_count,
+            )
         if self.image_list.count() > 0:
             self.image_list.setCurrentRow(0)
 
     def _on_image_changed(self, row: int) -> None:
         """Show selected image in canvas."""
         if row < 0 or self._main_window is None:
+            if self._main_window is not None and hasattr(
+                self._main_window, "_tools_panel"
+            ):
+                self._main_window._tools_panel.set_image_counter(
+                    0, self.image_list.count()
+                )
             return
         img_item = self.image_list.item(row)
         if img_item is None:
@@ -281,6 +373,11 @@ class DatasetPanel(QWidget):
         if source_path is None:
             return
         image_path = img_item.data(Qt.UserRole)
+        if hasattr(self._main_window, "_tools_panel"):
+            self._main_window._tools_panel.set_image_counter(
+                row + 1,
+                self.image_list.count(),
+            )
         self._main_window.show_image(source_path, str(image_path))
 
     def _open_xanylabeling(self) -> None:

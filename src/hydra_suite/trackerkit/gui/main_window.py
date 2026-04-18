@@ -2105,13 +2105,6 @@ class MainWindow(QMainWindow):
             repository_dir=repository_dir,
         )
 
-    @staticmethod
-    def _infer_yolo_headtail_model_type(model_path):
-        """Infer the head-tail model family from its stored path."""
-        from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
-
-        return ConfigOrchestrator._infer_yolo_headtail_model_type(model_path)
-
     def _populate_pose_model_combo(self, combo, backend, preferred_model_path=None):
         """Populate the pose model combo for the given backend."""
         self._config_orch._populate_pose_model_combo(
@@ -2184,11 +2177,6 @@ class MainWindow(QMainWindow):
             model_path,
         )
 
-    def _on_headtail_model_type_changed(self, _index: object = None) -> None:
-        """Refresh the head-tail model combo when the user switches YOLO ↔ tiny."""
-        if hasattr(self, "_identity_panel"):
-            self._identity_panel._refresh_yolo_headtail_model_combo()
-
     def _update_obb_mode_warning(self) -> None:
         """Show a performance hint when device/mode is a suboptimal combination."""
         if hasattr(self, "_session_orch"):
@@ -2238,26 +2226,7 @@ class MainWindow(QMainWindow):
         combo = self._identity_panel.combo_yolo_headtail_model
         rel_path = combo.itemData(index, Qt.UserRole)
         if rel_path == "__add_new__":
-            ht_type = getattr(
-                self._identity_panel, "combo_yolo_headtail_model_type", None
-            )
-            subdir = ht_type.currentText() if ht_type else "YOLO"
-            repo_dir = os.path.join(
-                get_yolo_model_repository_directory(
-                    task_family="classify", usage_role="headtail"
-                ),
-                subdir,
-            )
-            os.makedirs(repo_dir, exist_ok=True)
-            self._handle_add_new_yolo_model(
-                combo=combo,
-                refresh_callback=self._identity_panel._refresh_yolo_headtail_model_combo,
-                selection_callback=self._set_yolo_headtail_model_selection,
-                task_family="classify",
-                usage_role="headtail",
-                dialog_title="Add Head-Tail Classifier",
-                repository_dir=repo_dir,
-            )
+            self._handle_add_new_headtail_model()
             return
         if rel_path and self._headtail_is_discovered_entry(rel_path):
             self._annotate_discovered_headtail_model(rel_path)
@@ -2275,14 +2244,76 @@ class MainWindow(QMainWindow):
             for key, meta in iter_registry_entries()
         )
 
+    def _handle_add_new_headtail_model(self) -> None:
+        """Import a head-tail classifier through the dedicated validation dialog."""
+        from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
+
+        from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
+            HeadTailImportDialog,
+            describe_headtail_candidate,
+            import_headtail_candidate,
+        )
+
+        combo = self._identity_panel.combo_yolo_headtail_model
+        prev_data = combo.currentData(Qt.UserRole)
+        src_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Add Head-Tail Classifier",
+            get_yolo_model_repository_directory(
+                task_family="classify", usage_role="headtail"
+            ),
+            "Head-Tail Classifier Files (*.pth *.pt *.multihead.json);;All Files (*)",
+        )
+        if not src_path:
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            return
+
+        try:
+            summary = describe_headtail_candidate(src_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Cannot read head-tail model:\n{exc}"
+            )
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            return
+
+        dlg = HeadTailImportDialog(summary, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            self._identity_panel._refresh_yolo_headtail_model_combo()
+            return
+
+        try:
+            rel_path = import_headtail_candidate(
+                model_path=src_path,
+                species=dlg.species(),
+                description=dlg.description(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Could not import model:\n{exc}"
+            )
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            return
+
+        self._identity_panel._refresh_yolo_headtail_model_combo()
+        idx = combo.findData(rel_path)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        self._sync_individual_analysis_mode_ui()
+
     def _annotate_discovered_headtail_model(self, rel_path: str) -> None:
         """Open the head-tail import dialog for a discovered classkit-published model."""
         from PySide6.QtWidgets import QDialog, QMessageBox
 
         from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
             HeadTailImportDialog,
-            annotate_discovered_headtail_entry,
             describe_headtail_candidate,
+            import_headtail_candidate,
         )
 
         abs_path = os.path.join(get_models_root_directory(), rel_path)
@@ -2298,8 +2329,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             self._identity_panel._refresh_yolo_headtail_model_combo()
             return
-        annotate_discovered_headtail_entry(
-            rel_path=rel_path,
+        rel_path = import_headtail_candidate(
+            model_path=abs_path,
             species=dlg.species(),
             description=dlg.description(),
         )

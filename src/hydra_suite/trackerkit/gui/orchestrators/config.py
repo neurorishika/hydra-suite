@@ -36,6 +36,7 @@ from hydra_suite.trackerkit.benchmarking import (
     lookup_cached_recommendation,
 )
 from hydra_suite.trackerkit.gui.model_utils import (
+    _normalize_usage_role,
     _sanitize_model_token,
     get_pose_models_directory,
     get_yolo_model_metadata,
@@ -311,12 +312,6 @@ class ConfigOrchestrator:
             default=yolo_direct_model,
         )
         yolo_headtail_model = get_cfg("yolo_headtail_model_path", default="")
-        yolo_headtail_model_type = str(
-            get_cfg(
-                "yolo_headtail_model_type",
-                default=self._mw._infer_yolo_headtail_model_type(yolo_headtail_model),
-            )
-        ).strip()
 
         from hydra_suite.trackerkit.gui.main_window import resolve_model_path
 
@@ -365,15 +360,6 @@ class ConfigOrchestrator:
             preferred_model_path=yolo_crop_obb_model
         )
         self._mw._set_yolo_crop_obb_model_selection(resolved_yolo_crop_obb)
-        headtail_type_idx = (
-            self._panels.identity.combo_yolo_headtail_model_type.findText(
-                "tiny" if yolo_headtail_model_type.lower() == "tiny" else "YOLO"
-            )
-        )
-        if headtail_type_idx >= 0:
-            self._panels.identity.combo_yolo_headtail_model_type.setCurrentIndex(
-                headtail_type_idx
-            )
         self._panels.identity._refresh_yolo_headtail_model_combo(
             preferred_model_path=yolo_headtail_model
         )
@@ -412,6 +398,19 @@ class ConfigOrchestrator:
         )
         self._panels.identity.spin_yolo_headtail_conf.setValue(
             float(get_cfg("yolo_headtail_conf_threshold", default=0.50))
+        )
+        self._panels.identity.spin_yolo_headtail_detect_conf.setValue(
+            float(get_cfg("yolo_headtail_detect_conf_threshold", default=0.25))
+        )
+        self._panels.identity.spin_headtail_batch.setValue(
+            int(
+                get_cfg(
+                    "headtail_batch_size",
+                    default=int(
+                        self._mw.advanced_config.get("headtail_batch_size", 64)
+                    ),
+                )
+            )
         )
         self._panels.detection.spin_reference_aspect_ratio.setValue(
             float(get_cfg("reference_aspect_ratio", default=2.0))
@@ -1482,7 +1481,6 @@ class ConfigOrchestrator:
                     yolo_headtail_path
                 ),
                 "enable_headtail_orientation": self._panels.identity.g_headtail.isChecked(),
-                "yolo_headtail_model_type": self._panels.identity.combo_yolo_headtail_model_type.currentText(),
                 "pose_overrides_headtail": self._panels.identity.chk_pose_overrides_headtail.isChecked(),
                 "yolo_seq_crop_pad_ratio": self._panels.detection.spin_yolo_seq_crop_pad.value(),
                 "yolo_seq_min_crop_size_px": self._panels.detection.spin_yolo_seq_min_crop_px.value(),
@@ -1492,6 +1490,8 @@ class ConfigOrchestrator:
                 "yolo_seq_stage2_pow2_pad": self._panels.detection.chk_yolo_seq_stage2_pow2_pad.isChecked(),
                 "yolo_seq_detect_conf_threshold": self._panels.detection.spin_yolo_seq_detect_conf.value(),
                 "yolo_headtail_conf_threshold": self._panels.identity.spin_yolo_headtail_conf.value(),
+                "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
+                "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
                 "headtail_runtime": self._mw._selected_headtail_runtime(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
@@ -2058,6 +2058,8 @@ class ConfigOrchestrator:
             "YOLO_SEQ_STAGE2_POW2_PAD": self._panels.detection.chk_yolo_seq_stage2_pow2_pad.isChecked(),
             "YOLO_SEQ_DETECT_CONF_THRESHOLD": self._panels.detection.spin_yolo_seq_detect_conf.value(),
             "YOLO_HEADTAIL_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_conf.value(),
+            "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
+            "HEADTAIL_BATCH_SIZE": self._panels.identity.spin_headtail_batch.value(),
             "HEADTAIL_COMPUTE_RUNTIME": headtail_runtime,
             "YOLO_CONFIDENCE_THRESHOLD": self._panels.detection.spin_yolo_confidence.value(),
             "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
@@ -2575,6 +2577,8 @@ class ConfigOrchestrator:
             "cuda_memory_fraction": 0.7,  # 70% of VRAM for CUDA (NVIDIA GPUs)
             "tensorrt_build_workspace_gb": 4.0,  # TensorRT builder workspace limit in GB
             "tensorrt_build_batch_size": None,  # Optional fixed TensorRT build batch override
+            "yolo_headtail_detect_conf_threshold": 0.25,  # Minimum detection confidence before head-tail inference runs; lower-confidence detections remain unknown
+            "headtail_batch_size": 64,  # Canonical crop batch size for head-tail classifier inference
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
             "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
             "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review
@@ -2690,7 +2694,7 @@ class ConfigOrchestrator:
 
         # Enable controls
         self._mw._apply_ui_state("idle")
-        if hasattr(self, "_recents_store"):
+        if hasattr(self._mw, "_recents_store"):
             self._mw._recents_store.add(fp)
         self._mw._show_workspace()
 
@@ -3580,6 +3584,10 @@ class ConfigOrchestrator:
                 _set_combo_data(
                     self._panels.identity.combo_headtail_runtime, headtail.runtime
                 )
+            if hasattr(self._panels.identity, "spin_headtail_batch"):
+                self._panels.identity.spin_headtail_batch.setValue(
+                    int(headtail.batch_size)
+                )
 
         pose = recommendations.get(f"pose_{self._mw._current_pose_backend_key()}")
         if pose is not None:
@@ -3682,7 +3690,8 @@ class ConfigOrchestrator:
         if not isinstance(metadata, dict):
             return True
         meta_task = str(metadata.get("task_family", "")).strip().lower()
-        meta_role = str(metadata.get("usage_role", "")).strip().lower()
+        meta_role = _normalize_usage_role(metadata.get("usage_role", ""))
+        usage_role = _normalize_usage_role(usage_role)
         if not meta_task and not meta_role:
             return True
         if task_family and meta_task and meta_task != task_family:
@@ -3945,15 +3954,6 @@ class ConfigOrchestrator:
         register_yolo_model(rel_path, metadata)
         logger.info(f"Imported model to repository: {dest_path}")
         return rel_path
-
-    @staticmethod
-    def _infer_yolo_headtail_model_type(model_path):
-        """Infer the head-tail model family from its stored path."""
-        normalized = str(make_model_path_relative(model_path or "")).replace("\\", "/")
-        normalized_lower = f"/{normalized.lower().strip('/')}" if normalized else ""
-        if "/tiny/" in normalized_lower:
-            return "tiny"
-        return "YOLO"
 
     def _populate_pose_model_combo(self, combo, backend, preferred_model_path=None):
         """Populate the pose model combo for the given backend."""

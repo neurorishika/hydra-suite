@@ -499,6 +499,8 @@ def _save_tiny_checkpoint(
     """
     import torch as _torch
 
+    from hydra_suite.training.tiny_model import tiny_model_checkpoint_metadata
+
     h, w = int(input_size[0]), int(input_size[1])
     ckpt_dict = {
         "schema_version": 2,
@@ -516,6 +518,7 @@ def _save_tiny_checkpoint(
         "history": history if history is not None else [],
         "model_state_dict": model.state_dict(),
     }
+    ckpt_dict.update(tiny_model_checkpoint_metadata(model))
     _torch.save(ckpt_dict, str(save_path))
 
 
@@ -1150,6 +1153,7 @@ def _train_custom_classify(
                 weight_decay=float(params.weight_decay),
                 input_width=int(params.input_width),
                 input_height=int(params.input_height),
+                tiny_preset=str(params.tiny_preset or "medium"),
                 hidden_layers=int(params.hidden_layers),
                 hidden_dim=int(params.hidden_dim),
                 dropout=float(params.dropout),
@@ -1337,6 +1341,7 @@ def _train_custom_classify(
         params.backbone,
         len(class_names),
         -1,
+        tiny_preset=str(getattr(params, "tiny_preset", "medium") or "medium"),
         hidden_layers=params.hidden_layers,
         hidden_dim=params.hidden_dim,
         dropout=params.dropout,

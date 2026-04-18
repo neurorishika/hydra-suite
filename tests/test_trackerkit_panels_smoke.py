@@ -142,7 +142,6 @@ def test_identity_panel_wired_in_main_window(main_window):
     assert isinstance(main_window._identity_panel, IdentityPanel)
     assert hasattr(main_window._identity_panel, "g_headtail")
     assert hasattr(main_window._identity_panel, "combo_yolo_headtail_model")
-    assert hasattr(main_window._identity_panel, "combo_yolo_headtail_model_type")
     assert hasattr(main_window._identity_panel, "btn_remove_yolo_headtail_model")
     assert hasattr(main_window._identity_panel, "btn_remove_pose_model")
 

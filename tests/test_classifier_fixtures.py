@@ -161,6 +161,35 @@ def torchvision_flat_identity(fixtures_dir: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def legacy_torchvision_flat_headtail(fixtures_dir: Path) -> Path:
+    """Legacy flat torchvision checkpoint without schema_version metadata."""
+    import torch
+
+    path = fixtures_dir / "legacy_torchvision_flat_headtail.pth"
+    if path.exists():
+        return path
+
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    model = build_torchvision_classifier("resnet18", num_classes=4, trainable_layers=-1)
+    ckpt: dict[str, Any] = {
+        "arch": "resnet18",
+        "class_names": ["left", "right", "unknown", "up"],
+        "factor_names": [],
+        "input_size": (96, 80),
+        "num_classes": 4,
+        "monochrome": False,
+        "model_state_dict": model.state_dict(),
+        "trainable_layers": -1,
+        "backbone_lr_scale": 1.0,
+        "history": {},
+        "best_val_acc": None,
+    }
+    torch.save(ckpt, str(path))
+    return path
+
+
+@pytest.fixture(scope="session")
 def tiny_multi_identity(fixtures_dir: Path) -> Path:
     """TinyClassifier-backed multi-head v2 checkpoint: 3×2 output (color × shape)."""
     path = fixtures_dir / "tiny_multi_identity.pth"

@@ -11,6 +11,7 @@ pytest.importorskip("PySide6")
 
 from hydra_suite.classkit.core.export.splits import (
     build_dataset_splits,
+    build_label_expansion_split_key,
     build_training_dataset_splits,
 )
 from hydra_suite.classkit.jobs.task_workers import ExportWorker
@@ -36,10 +37,8 @@ def test_label_expansion_auto_creates_temp_dir(tmp_path: Path) -> None:
 
     errors = _run_worker_and_collect_error(worker)
 
-    # Should fail because img_0.jpg doesn't exist, but NOT because of
-    # a missing canonical guard (which was removed).
-    assert errors
-    assert "Label expansion requires canonical training space" not in errors[0]
+    assert worker.temp_dir is not None
+    assert errors == []
 
 
 def test_export_worker_no_labeled_samples(
@@ -268,6 +267,41 @@ def test_export_worker_force_monochrome_materializes_grayscale_copies(
     assert converted_splits == splits
     assert np.array_equal(converted[..., 0], converted[..., 1])
     assert np.array_equal(converted[..., 1], converted[..., 2])
+
+
+def test_export_worker_label_expansion_respects_preset_expanded_split_keys(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("cv2")
+
+    image_path = tmp_path / "sample.png"
+    Image.new("RGB", (12, 10), color=(200, 80, 20)).save(image_path)
+
+    worker = ExportWorker(
+        image_paths=[image_path],
+        labels=[0],
+        output_path=tmp_path / "out.csv",
+        format="csv",
+        class_names={0: "left", 1: "right"},
+        label_expansion={"fliplr": {"left": "right"}},
+        preset_splits_by_path={str(image_path.resolve()): "train"},
+        preset_expanded_splits_by_key={
+            build_label_expansion_split_key(image_path, "fliplr", "right"): "val"
+        },
+    )
+
+    worker._prepare_export_workspace()
+    image_paths, labels, splits, class_names = worker._collect_valid_labels()
+    expanded_paths, expanded_labels, expanded_splits = worker._apply_label_expansion(
+        image_paths,
+        labels,
+        splits,
+        class_names,
+    )
+
+    assert expanded_labels == [0, 1]
+    assert expanded_splits == ["train", "val"]
+    assert len(expanded_paths) == 2
 
 
 def test_export_worker_ultralytics_allows_empty_validation_split(

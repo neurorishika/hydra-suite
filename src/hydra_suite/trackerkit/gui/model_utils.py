@@ -43,7 +43,7 @@ def get_yolo_model_repository_directory(
 ) -> object:
     """Return repository directory for a YOLO model role."""
     tf = str(task_family or "").strip().lower()
-    ur = str(usage_role or "").strip().lower()
+    ur = _normalize_usage_role(usage_role)
     models_root = get_models_root_directory()
 
     if ur == "seq_detect" or tf == "detect":
@@ -174,6 +174,14 @@ def _sanitize_model_token(text: object) -> object:
     return cleaned.strip("_")
 
 
+def _normalize_usage_role(value: object) -> str:
+    """Normalize legacy and current usage-role spellings to a single token."""
+    normalized = _sanitize_model_token(value).lower()
+    if normalized == "head_tail":
+        return "headtail"
+    return normalized
+
+
 def _normalize_yolo_model_metadata(metadata: object) -> object:
     """Normalize legacy model metadata to species + model_info schema."""
     if not isinstance(metadata, dict):
@@ -189,7 +197,7 @@ def _normalize_yolo_model_metadata(metadata: object) -> object:
         normalized["model_info"] = model_info
 
     task_family = _sanitize_model_token(normalized.get("task_family", "")).lower()
-    usage_role = _sanitize_model_token(normalized.get("usage_role", "")).lower()
+    usage_role = _normalize_usage_role(normalized.get("usage_role", ""))
     if task_family:
         normalized["task_family"] = task_family
     else:
@@ -201,6 +209,47 @@ def _normalize_yolo_model_metadata(metadata: object) -> object:
     return normalized
 
 
+def _extract_registry_entries(data: object) -> dict[str, dict]:
+    if (
+        isinstance(data, dict)
+        and data.get("schema_version") == 2
+        and isinstance(data.get("entries"), dict)
+    ):
+        source = data["entries"]
+    elif isinstance(data, dict):
+        source = data
+    else:
+        return {}
+    return {
+        str(key): _normalize_yolo_model_metadata(value)
+        for key, value in source.items()
+        if isinstance(value, dict)
+    }
+
+
+def _infer_task_family_for_model(rel_path: str, metadata: dict) -> str:
+    task_family = _sanitize_model_token(metadata.get("task_family", "")).lower()
+    if task_family:
+        return str(task_family)
+    usage_role = _normalize_usage_role(metadata.get("usage_role", ""))
+    if usage_role in {"obb_direct", "seq_crop_obb"}:
+        return "obb"
+    if usage_role == "seq_detect":
+        return "detect"
+    if usage_role in {"headtail", "cnn_identity", "colortag"}:
+        return "classify"
+    rel_lower = str(rel_path or "").replace("\\", "/").lower()
+    if rel_lower.startswith("pose/"):
+        return "pose"
+    if rel_lower.startswith("detection/"):
+        return "detect"
+    if rel_lower.startswith("classification/"):
+        return "classify"
+    if rel_lower.startswith("obb/"):
+        return "obb"
+    return ""
+
+
 def load_yolo_model_registry() -> object:
     """Load YOLO model metadata registry (path -> metadata)."""
     registry_path = get_yolo_model_registry_path()
@@ -209,9 +258,7 @@ def load_yolo_model_registry() -> object:
     try:
         with open(registry_path, "r") as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            return {}
-        return {str(k): _normalize_yolo_model_metadata(v) for k, v in data.items()}
+        return _extract_registry_entries(data)
     except Exception as e:
         logger.warning(f"Failed to load YOLO model registry: {e}")
         return {}
@@ -221,8 +268,9 @@ def save_yolo_model_registry(registry: object) -> object:
     """Persist YOLO model metadata registry JSON."""
     registry_path = get_yolo_model_registry_path()
     try:
+        entries = _extract_registry_entries(registry)
         with open(registry_path, "w") as f:
-            json.dump(registry, f, indent=2)
+            json.dump({"schema_version": 2, "entries": entries}, f, indent=2)
     except Exception as e:
         logger.warning(f"Failed to save YOLO model registry: {e}")
 
@@ -238,7 +286,11 @@ def register_yolo_model(model_path: object, metadata: object) -> object:
     """Register/overwrite metadata entry for a model path."""
     rel_path = make_model_path_relative(model_path)
     registry = load_yolo_model_registry()
-    registry[rel_path] = _normalize_yolo_model_metadata(metadata)
+    normalized = _normalize_yolo_model_metadata(metadata)
+    inferred_task_family = _infer_task_family_for_model(str(rel_path), normalized)
+    if inferred_task_family and not normalized.get("task_family"):
+        normalized["task_family"] = inferred_task_family
+    registry[rel_path] = normalized
     save_yolo_model_registry(registry)
 
 

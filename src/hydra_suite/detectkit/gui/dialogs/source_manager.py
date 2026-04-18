@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import (
@@ -18,6 +19,9 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.widgets.dialogs import BaseDialog
+
+from ..source_import import inspect_detectkit_source, materialize_detectkit_source
+from .source_validation import confirm_detectkit_source_addition
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -72,7 +76,9 @@ class SourceManagerDialog(BaseDialog):
     def _refresh_list(self) -> None:
         self._source_list.clear()
         for src in self._project.sources:
-            display = src.name if src.name else src.path
+            display = src.name if src.name else (src.original_path or src.path)
+            if src.imported and src.source_kind:
+                display = f"{display} [{src.source_kind}]"
             self._source_list.addItem(display)
 
     def _add_source(self) -> None:
@@ -81,18 +87,53 @@ class SourceManagerDialog(BaseDialog):
         )
         if not directory:
             return
+        selected_path = str(Path(directory).expanduser().resolve())
         from ..models import OBBSource
 
         # Avoid duplicates
-        existing_paths = {s.path for s in self._project.sources}
-        if directory in existing_paths:
+        existing_paths = {
+            candidate
+            for src in self._project.sources
+            for candidate in (src.path, src.original_path)
+            if candidate
+        }
+        if selected_path in existing_paths:
             QMessageBox.information(self, "Add Source", "Source already added.")
             return
 
-        import os
+        try:
+            inspection = inspect_detectkit_source(selected_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Add Source", str(exc))
+            return
 
-        name = os.path.basename(directory)
-        self._project.sources.append(OBBSource(path=directory, name=name))
+        if not confirm_detectkit_source_addition(self, selected_path, inspection):
+            return
+
+        try:
+            materialized = materialize_detectkit_source(
+                selected_path,
+                self._project.project_dir,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Add Source", str(exc))
+            return
+
+        canonical_path = str(materialized.canonical_path)
+        original_path = str(materialized.source_root)
+        if canonical_path in existing_paths or original_path in existing_paths:
+            QMessageBox.information(self, "Add Source", "Source already added.")
+            return
+
+        self._project.sources.append(
+            OBBSource(
+                path=canonical_path,
+                name=materialized.display_name,
+                original_path=original_path,
+                source_kind=materialized.source_kind,
+                imported=materialized.imported,
+            )
+        )
         self._refresh_list()
 
     def _remove_selected(self) -> None:

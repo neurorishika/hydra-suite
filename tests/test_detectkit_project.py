@@ -68,11 +68,20 @@ def test_project_defaults():
 
 
 def test_obb_source_roundtrip():
-    src = OBBSource(path="/data/obb_ds", name="my_dataset")
+    src = OBBSource(
+        path="/data/obb_ds",
+        name="my_dataset",
+        original_path="/mnt/original/obb_ds",
+        source_kind="yolo_detect",
+        imported=True,
+    )
     d = src.to_dict()
     restored = OBBSource.from_dict(d)
     assert restored.path == "/data/obb_ds"
     assert restored.name == "my_dataset"
+    assert restored.original_path == "/mnt/original/obb_ds"
+    assert restored.source_kind == "yolo_detect"
+    assert restored.imported is True
 
 
 def test_default_project_parent_dir_uses_hydra_projects_root(

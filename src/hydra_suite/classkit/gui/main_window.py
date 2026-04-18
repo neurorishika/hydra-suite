@@ -5547,9 +5547,10 @@ class MainWindow(QMainWindow):
                 batch=settings.get("batch", 32),
                 lr=settings.get("lr", 0.001),
                 patience=settings.get("patience", 10),
+                tiny_preset=settings.get("tiny_preset", "medium"),
                 hidden_layers=settings.get("tiny_layers", 1),
-                hidden_dim=settings.get("tiny_dim", 64),
-                dropout=settings.get("tiny_dropout", 0.2),
+                hidden_dim=settings.get("tiny_dim", 96),
+                dropout=settings.get("tiny_dropout", 0.1),
                 input_width=settings.get("tiny_width", 128),
                 input_height=settings.get("tiny_height", 64),
                 class_rebalance_mode=settings.get("tiny_rebalance_mode", "none"),
@@ -5585,6 +5586,12 @@ class MainWindow(QMainWindow):
                     lr=settings.get("lr", 1e-3),
                     patience=settings.get("patience", 10),
                     weight_decay=1e-2,
+                    tiny_preset=settings.get("tiny_preset", "medium"),
+                    hidden_layers=settings.get("tiny_layers", 1),
+                    hidden_dim=settings.get("tiny_dim", 96),
+                    dropout=settings.get("tiny_dropout", 0.1),
+                    input_width=settings.get("tiny_width", 128),
+                    input_height=settings.get("tiny_height", 64),
                     label_smoothing=settings.get("tiny_label_smoothing", 0.0),
                     class_rebalance_mode=settings.get("tiny_rebalance_mode", "none"),
                     class_rebalance_power=settings.get("tiny_rebalance_power", 1.0),
@@ -5761,16 +5768,36 @@ class MainWindow(QMainWindow):
             "multihead_custom": "classify_multihead_custom",
         }
         from ...training.contracts import TrainingRole
-        from ...training.model_publish import publish_trained_model
+        from ...training.model_publish import (
+            classifier_metadata_for_artifact,
+            publish_trained_model,
+            write_classifier_multihead_manifest,
+        )
+
+        fallback_input_size: tuple[int, int] | None = None
+        if "yolo" in mode:
+            fallback_input_size = (640, 640)
+        elif settings.get("custom_backbone") != "tinyclassifier" and "custom" in mode:
+            size = int(settings.get("custom_input_size", 224) or 224)
+            fallback_input_size = (size, size)
+        fallback_monochrome = bool(settings.get("monochrome", False))
 
         role_val = role_map.get(mode, "classify_flat_custom")
         role = TrainingRole(role_val)
         published_paths: list[Path] = []
+        published_factor_entries: list[dict[str, object]] = []
+        bundle_input_size: tuple[int, int] | None = None
+        bundle_monochrome = fallback_monochrome
         for fi, result in enumerate(results):
             artifact = result.get("artifact_path", "")
             if not artifact:
                 continue
             try:
+                classifier_v2_meta = classifier_metadata_for_artifact(
+                    artifact,
+                    fallback_input_size=fallback_input_size,
+                    fallback_monochrome=fallback_monochrome,
+                )
                 _published_key, published_path = publish_trained_model(
                     role=role,
                     artifact_path=artifact,
@@ -5787,8 +5814,39 @@ class MainWindow(QMainWindow):
                     factor_name=(
                         scheme.factors[fi].name if (multi_head and scheme) else None
                     ),
+                    classifier_v2_meta=classifier_v2_meta,
                 )
                 published_paths.append(Path(published_path))
+                input_size_list = classifier_v2_meta.get("input_size") or [224, 224]
+                if bundle_input_size is None:
+                    bundle_input_size = (
+                        int(input_size_list[0]),
+                        int(input_size_list[1]),
+                    )
+                bundle_monochrome = bool(
+                    classifier_v2_meta.get("monochrome", bundle_monochrome)
+                )
+                factor_name = (
+                    scheme.factors[fi].name
+                    if (multi_head and scheme and fi < len(scheme.factors))
+                    else str(
+                        (
+                            classifier_v2_meta.get("factor_names")
+                            or [f"factor_{fi + 1}"]
+                        )[0]
+                    )
+                )
+                published_factor_entries.append(
+                    {
+                        "factor": factor_name,
+                        "path": Path(published_path),
+                        "class_names": list(
+                            (classifier_v2_meta.get("class_names_per_factor") or [[]])[
+                                0
+                            ]
+                        ),
+                    }
+                )
                 from pathlib import Path as _Path
 
                 dialog.append_log(f"Published: {_Path(artifact).name}")
@@ -5823,6 +5881,17 @@ class MainWindow(QMainWindow):
                     class_names=list(self.classes or []),
                 )
                 dialog.append_log(f"Published bundle manifest: {manifest_path.name}")
+
+                trackerkit_manifest = published_paths[0].with_suffix(".multihead.json")
+                write_classifier_multihead_manifest(
+                    trackerkit_manifest,
+                    factor_entries=published_factor_entries,
+                    input_size=bundle_input_size or fallback_input_size or (224, 224),
+                    monochrome=bundle_monochrome,
+                )
+                dialog.append_log(
+                    f"Published TrackerKit manifest: {trackerkit_manifest.name}"
+                )
             except Exception as exc:
                 dialog.append_log(f"Publish manifest warning: {exc}")
 
@@ -5880,7 +5949,11 @@ class MainWindow(QMainWindow):
         """Build the immutable context used across export, train, and inference."""
         from pathlib import Path
 
-        from ..core.export.splits import build_training_dataset_splits
+        from ..core.export.splits import (
+            build_label_expansion_records,
+            build_label_expansion_split_key,
+            build_training_dataset_splits,
+        )
 
         settings = dict(settings or dialog.get_settings())
         self._last_training_settings = dict(settings)
@@ -5895,17 +5968,40 @@ class MainWindow(QMainWindow):
             labeled_pairs
         )
         group_keys = self._training_group_keys_for_paths(images)
-        source_splits, used_group_fallback = build_training_dataset_splits(
+        label_expansion = settings.get("label_expansion") or {}
+        planned_records = build_label_expansion_records(
             labels_str,
+            label_expansion=label_expansion,
+            groups=(group_keys or None),
+            known_labels=list(class_names_int.values()),
+        )
+        planned_labels = [str(record["label"]) for record in planned_records]
+        planned_groups = (
+            [record.get("group") for record in planned_records] if group_keys else None
+        )
+        planned_splits, used_group_fallback = build_training_dataset_splits(
+            planned_labels,
             strategy=settings.get("split_strategy", "stratified"),
             val_fraction=float(settings.get("val_fraction", 0.2)),
             test_fraction=float(settings.get("test_fraction", 0.0)),
-            groups=group_keys,
+            groups=planned_groups,
         )
-        source_split_by_path = {
-            self._resolved_path_key(path): split
-            for path, split in zip(images, source_splits)
-        }
+        source_splits: list[str] = []
+        source_split_by_path: dict[str, str] = {}
+        expanded_split_by_key: dict[str, str] = {}
+        for record, split in zip(planned_records, planned_splits):
+            source_path = images[int(record["source_index"])]
+            if bool(record.get("is_expanded")):
+                expanded_key = build_label_expansion_split_key(
+                    source_path,
+                    str(record.get("axis") or ""),
+                    str(record["label"]),
+                )
+                expanded_split_by_key[expanded_key] = str(split)
+                continue
+            source_splits.append(str(split))
+            source_split_by_path[self._resolved_path_key(source_path)] = str(split)
+
         evaluation_split_name = ""
         if "test" in source_splits:
             evaluation_split_name = "test"
@@ -5930,6 +6026,7 @@ class MainWindow(QMainWindow):
             "group_keys": group_keys,
             "source_splits": source_splits,
             "source_split_by_path": source_split_by_path,
+            "expanded_split_by_key": expanded_split_by_key,
             "used_group_fallback": bool(used_group_fallback),
             "evaluation_split_name": evaluation_split_name,
             "evaluation_paths": evaluation_paths,
@@ -6125,6 +6222,9 @@ class MainWindow(QMainWindow):
                             test_fraction=self.test_fraction,
                             label_expansion=exp_label_expansion,
                             preset_splits_by_path=context["source_split_by_path"],
+                            preset_expanded_splits_by_key=context.get(
+                                "expanded_split_by_key"
+                            ),
                         )
                         sub_worker.run()
 
@@ -6144,6 +6244,7 @@ class MainWindow(QMainWindow):
             test_fraction=context["settings"].get("test_fraction", 0.0),
             force_monochrome=bool(context["settings"].get("monochrome", False)),
             preset_splits_by_path=context["source_split_by_path"],
+            preset_expanded_splits_by_key=context.get("expanded_split_by_key"),
             scheme=scheme,
             labels_str=context["labels_str"],
         )
@@ -6166,6 +6267,7 @@ class MainWindow(QMainWindow):
             force_monochrome=bool(context["settings"].get("monochrome", False)),
             label_expansion=context["settings"].get("label_expansion") or {},
             preset_splits_by_path=context["source_split_by_path"],
+            preset_expanded_splits_by_key=context.get("expanded_split_by_key"),
         )
 
     def _start_training_from_dialog(self, dialog, labeled_pairs, scheme) -> None:
@@ -7626,7 +7728,8 @@ class MainWindow(QMainWindow):
         if len(labeled_indices) < 2:
             return None, None, scope_text
 
-        class_to_id = {c: i for i, c in enumerate(self.classes)}
+        eval_class_names = self._evaluation_class_names()
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
         y_true = np.array(
             [class_to_id.get(self.image_labels[i], -1) for i in labeled_indices]
         )
@@ -7635,18 +7738,40 @@ class MainWindow(QMainWindow):
             return None, None, scope_text
         return np.array(labeled_indices)[valid], y_true[valid], scope_text
 
-    def _aligned_eval_probs(self, idx_arr, probs_rows):
+    def _evaluation_class_names(self) -> list[str]:
+        """Return the effective class order for metrics and probability alignment."""
+
+        ordered: list[str] = []
+
+        def _add(value) -> None:
+            text = str(value).strip()
+            if text and text not in ordered:
+                ordered.append(text)
+
+        for value in self.classes:
+            _add(value)
+        for value in self._model_class_names or []:
+            _add(value)
+        for value in self.image_labels:
+            if value:
+                _add(value)
+
+        return ordered
+
+    def _aligned_eval_probs(self, idx_arr, probs_rows, class_names=None):
         """Align model probability columns to the project's class order."""
         import numpy as np
+
+        eval_class_names = list(class_names or self._evaluation_class_names())
 
         if self._model_class_names:
             name_to_col = {
                 str(name): i for i, name in enumerate(self._model_class_names)
             }
             probs_subset = np.zeros(
-                (len(idx_arr), len(self.classes)), dtype=probs_rows.dtype
+                (len(idx_arr), len(eval_class_names)), dtype=probs_rows.dtype
             )
-            for target_col, class_name in enumerate(self.classes):
+            for target_col, class_name in enumerate(eval_class_names):
                 source_col = name_to_col.get(str(class_name))
                 if (
                     source_col is not None
@@ -7655,9 +7780,9 @@ class MainWindow(QMainWindow):
                     probs_subset[:, target_col] = probs_rows[:, int(source_col)]
             return probs_subset
 
-        usable_cols = min(probs_rows.shape[1], len(self.classes))
+        usable_cols = min(probs_rows.shape[1], len(eval_class_names))
         probs_subset = np.zeros(
-            (len(idx_arr), len(self.classes)), dtype=probs_rows.dtype
+            (len(idx_arr), len(eval_class_names)), dtype=probs_rows.dtype
         )
         if usable_cols > 0:
             probs_subset[:, :usable_cols] = probs_rows[:, :usable_cols]
@@ -7743,10 +7868,19 @@ class MainWindow(QMainWindow):
             if idx_arr is None or y_true is None:
                 return
 
+            eval_class_names = self._evaluation_class_names()
             probs_rows = np.asarray(self._model_probs[idx_arr])
-            probs_subset = self._aligned_eval_probs(idx_arr, probs_rows)
+            probs_subset = self._aligned_eval_probs(
+                idx_arr,
+                probs_rows,
+                class_names=eval_class_names,
+            )
             y_pred = probs_subset.argmax(axis=1)
-            metrics = compute_metrics(y_pred, y_true, class_names=self.classes)
+            metrics = compute_metrics(
+                y_pred,
+                y_true,
+                class_names=eval_class_names,
+            )
             self._update_metrics_display(
                 metrics,
                 evaluation_scope=scope_text,

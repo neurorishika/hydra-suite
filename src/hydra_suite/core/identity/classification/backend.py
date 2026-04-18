@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+_GENERIC_MULTIHEAD_BUNDLE_KIND = "classifier_multihead_bundle"
 
 
 @dataclass(frozen=True)
@@ -159,19 +160,46 @@ class _YoloFlatLoader:
     """Loader for flat ultralytics YOLO-classify .pt checkpoints."""
 
     @staticmethod
-    def parse_metadata(path: str) -> ClassifierMetadata:
-        from ultralytics import YOLO
+    def _load_sidecar(path: str) -> dict[str, Any] | None:
+        sidecar_path = Path(path).with_suffix(".v2meta.json")
+        if not sidecar_path.exists():
+            return None
+        try:
+            data = __import__("json").loads(sidecar_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ClassifierFormatError(
+                f"{path!r}: cannot read YOLO sidecar {sidecar_path.name}: {exc}"
+            ) from exc
+        if not isinstance(data, dict) or data.get("schema_version") != 2:
+            raise ClassifierFormatError(
+                f"{path!r}: YOLO sidecar must be a schema_version=2 dict"
+            )
+        return data
 
-        yolo = YOLO(path)
-        names = getattr(yolo, "names", None) or {}
-        class_names = [str(names[i]) for i in sorted(names.keys())]
+    @staticmethod
+    def parse_metadata(path: str) -> ClassifierMetadata:
+        sidecar = _YoloFlatLoader._load_sidecar(path) or {}
+        factor_names = sidecar.get("factor_names") or ["flat"]
+        class_names_per_factor = sidecar.get("class_names_per_factor")
+        if not class_names_per_factor:
+            from ultralytics import YOLO
+
+            yolo = YOLO(path)
+            names = getattr(yolo, "names", None) or {}
+            class_names = [str(names[i]) for i in sorted(names.keys())]
+            class_names_per_factor = [class_names]
+        if len(factor_names) != 1 or len(class_names_per_factor) != 1:
+            raise ClassifierFormatError(
+                f"{path!r}: flat YOLO sidecar must describe exactly one factor; "
+                f"use a .multihead.json bundle for multi-factor exports"
+            )
         return ClassifierMetadata(
-            arch="yolo",
-            input_size=(224, 224),
+            arch=str(sidecar.get("arch") or "yolo"),
+            input_size=_normalize_input_size(sidecar.get("input_size", [224, 224])),
             is_multihead=False,
-            factor_names=["flat"],
-            class_names_per_factor=[class_names],
-            monochrome=False,
+            factor_names=[str(factor_names[0])],
+            class_names_per_factor=[[str(name) for name in class_names_per_factor[0]]],
+            monochrome=bool(sidecar.get("monochrome", False)),
             source_path=path,
         )
 
@@ -212,8 +240,8 @@ class _TorchvisionLoader:
         return model
 
 
-class _YoloMultiheadBundleLoader:
-    """Loader for a .multihead.json manifest describing N per-factor YOLO models."""
+class _ClassifierMultiheadBundleLoader:
+    """Loader for a .multihead.json manifest describing N flat factor models."""
 
     @staticmethod
     def parse_metadata(path: str) -> "ClassifierMetadata":
@@ -228,7 +256,11 @@ class _YoloMultiheadBundleLoader:
             ) from exc
         if data.get("schema_version") != 2:
             raise ClassifierFormatError(f"{path!r}: manifest schema_version must be 2")
-        if data.get("kind") != "yolo_multihead_bundle":
+        manifest_kind = str(data.get("kind") or "")
+        if manifest_kind not in (
+            "yolo_multihead_bundle",
+            _GENERIC_MULTIHEAD_BUNDLE_KIND,
+        ):
             raise ClassifierFormatError(
                 f"{path!r}: unexpected manifest kind {data.get('kind')!r}"
             )
@@ -259,7 +291,11 @@ class _YoloMultiheadBundleLoader:
             class_names_per_factor.append([str(n) for n in names])
 
         return ClassifierMetadata(
-            arch="yolo_multihead",
+            arch=(
+                "yolo_multihead"
+                if manifest_kind == "yolo_multihead_bundle"
+                else "classifier_multihead"
+            ),
             input_size=_normalize_input_size(data.get("input_size")),
             is_multihead=True,
             factor_names=[str(n) for n in factor_names],
@@ -270,18 +306,27 @@ class _YoloMultiheadBundleLoader:
 
     @staticmethod
     def load(path: str, device: str):
-        """Load each per-factor YOLO model; returns a list of ultralytics YOLO objects."""
+        """Load each referenced factor model as a flat ClassifierBackend."""
         import json
 
-        from ultralytics import YOLO
+        from hydra_suite.core.identity.classification.errors import (
+            ClassifierFormatError,
+        )
 
         manifest_path = Path(path)
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         base = manifest_path.parent
         models = []
         for entry in data["factor_models"]:
-            pt_path = (base / entry["path"]).resolve()
-            models.append(YOLO(str(pt_path)))
+            factor_path = (base / entry["path"]).resolve()
+            factor_backend = ClassifierBackend(str(factor_path), compute_runtime=device)
+            if factor_backend.metadata.is_multihead:
+                factor_backend.close()
+                raise ClassifierFormatError(
+                    f"{path!r}: factor model {factor_path.name!r} must be flat, "
+                    "not multi-head"
+                )
+            models.append(factor_backend)
         return models
 
 
@@ -289,7 +334,12 @@ def _peek_ckpt_arch(path: str) -> str:
     """Read the ``arch`` field from a .pth checkpoint without instantiating weights."""
     import torch
 
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    except Exception as exc:
+        raise ClassifierFormatError(
+            f"{path!r}: cannot read classifier checkpoint"
+        ) from exc
     if not isinstance(ckpt, dict) or "arch" not in ckpt:
         raise ClassifierFormatError(
             f"{path!r}: cannot determine arch; expected v2 checkpoint dict"
@@ -302,7 +352,7 @@ def _select_loader(path: str):
     p = Path(path)
     name_lower = p.name.lower()
     if name_lower.endswith(".multihead.json"):
-        return _YoloMultiheadBundleLoader
+        return _ClassifierMultiheadBundleLoader
     suffix = p.suffix.lower()
     if suffix == ".pth":
         arch = _peek_ckpt_arch(path)
@@ -354,15 +404,22 @@ class ClassifierBackend:
         rt = self._compute_runtime
         return rt.startswith("onnx_") or rt == "tensorrt"
 
+    def _uses_factor_backends(self) -> bool:
+        return self._metadata.arch in ("yolo_multihead", "classifier_multihead")
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
         try:
-            if self._uses_onnx() and self._metadata.arch != "yolo_multihead":
+            if self._uses_onnx() and not self._uses_factor_backends():
                 self._load_onnx()
             else:
-                device = _torch_device(self._compute_runtime)
-                self._model = self._loader.load(self._model_path, device)
+                loader_target = (
+                    self._compute_runtime
+                    if self._uses_factor_backends()
+                    else _torch_device(self._compute_runtime)
+                )
+                self._model = self._loader.load(self._model_path, loader_target)
         except ClassifierError:
             raise
         except Exception as exc:
@@ -411,7 +468,15 @@ class ClassifierBackend:
         providers = derive_onnx_execution_providers(self._compute_runtime)
         self._model = ort.InferenceSession(str(peer), providers=providers)
 
+    def _uses_imagenet_normalization(self) -> bool:
+        """Return True when the checkpoint expects ImageNet mean/std normalization."""
+        return self._metadata.arch != "tinyclassifier"
+
     def _normalization_stats(self) -> tuple[np.ndarray, np.ndarray]:
+        if not self._uses_imagenet_normalization():
+            mean = np.zeros(3, dtype=np.float32)
+            std = np.ones(3, dtype=np.float32)
+            return mean.reshape(1, 1, 1, 3), std.reshape(1, 1, 1, 3)
         if self._metadata.monochrome:
             mean = np.full(3, float(_IMAGENET_MEAN.mean()), dtype=np.float32)
             std = np.full(3, float(_IMAGENET_STD.mean()), dtype=np.float32)
@@ -433,7 +498,11 @@ class ClassifierBackend:
                 batch[i] = 0.0
                 continue
             resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
-            batch[i] = resized[:, :, ::-1].astype(np.float32) * (1.0 / 255.0)
+            rgb = resized[:, :, ::-1]
+            if self._metadata.monochrome:
+                gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+                rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+            batch[i] = rgb.astype(np.float32) * (1.0 / 255.0)
         mean, std = self._normalization_stats()
         batch = (batch - mean) / std
         return batch.transpose(0, 3, 1, 2).astype(np.float32)
@@ -453,15 +522,17 @@ class ClassifierBackend:
         return np.log(np.clip(probs, 1e-9, 1.0))
 
     def _forward_yolo_multi(self, crops: list[np.ndarray]) -> np.ndarray:
-        """Run each per-factor YOLO model and return per-factor stacked log-probs.
+        """Run each flat factor backend and return per-factor stacked log-probs.
 
         Returns an ``(N, sum(C_k))`` array shaped like a flat multi-head logit
         tensor so the existing ``predict_batch`` split logic applies.
         """
         per_factor_logits: list[np.ndarray] = []
-        for yolo in self._model:  # self._model is a list of YOLO objects
-            results = yolo(crops, verbose=False)
-            probs = np.array([r.probs.data.cpu().numpy() for r in results])
+        for factor_backend in self._model:
+            factor_probs = factor_backend.predict_batch(crops)
+            probs = np.array(
+                [per_crop[0] for per_crop in factor_probs], dtype=np.float32
+            )
             per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
         return np.concatenate(per_factor_logits, axis=-1)
 
@@ -484,12 +555,12 @@ class ClassifierBackend:
             return []
         self._ensure_loaded()
         try:
-            if self._uses_onnx() and self._metadata.arch != "yolo_multihead":
+            if self._uses_onnx() and not self._uses_factor_backends():
                 batch_np = self._preprocess(crops)
                 logits = self._forward_onnx(batch_np)
             elif self._metadata.arch == "yolo":
                 logits = self._forward_yolo(crops)
-            elif self._metadata.arch == "yolo_multihead":
+            elif self._uses_factor_backends():
                 logits = self._forward_yolo_multi(crops)
             else:
                 batch_np = self._preprocess(crops)
@@ -523,5 +594,10 @@ class ClassifierBackend:
 
     def close(self) -> None:
         """Release model weights; subsequent predict_batch will reload."""
+        if isinstance(self._model, list):
+            for factor_backend in self._model:
+                close = getattr(factor_backend, "close", None)
+                if callable(close):
+                    close()
         self._model = None
         self._loaded = False

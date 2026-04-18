@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -329,19 +327,6 @@ class IdentityPanel(QWidget):
         fl_headtail = QFormLayout()
         fl_headtail.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
-        # Head-tail orientation classifier
-        self.combo_yolo_headtail_model_type = QComboBox()
-        self.combo_yolo_headtail_model_type.addItems(["YOLO", "tiny"])
-        self.combo_yolo_headtail_model_type.setFixedHeight(30)
-        self.combo_yolo_headtail_model_type.setToolTip(
-            "Architecture family of the head-tail classifier.\n"
-            "YOLO → models/classification/orientation/YOLO/\n"
-            "tiny → models/classification/orientation/tiny/"
-        )
-        self.combo_yolo_headtail_model_type.currentIndexChanged.connect(
-            self._main_window._on_headtail_model_type_changed
-        )
-
         self.combo_yolo_headtail_model = QComboBox()
         # Note: combo_yolo_headtail_model will be populated post-construction
         self.combo_yolo_headtail_model.activated.connect(
@@ -371,7 +356,6 @@ class IdentityPanel(QWidget):
         _headtail_row = QHBoxLayout(self.headtail_model_row_widget)
         _headtail_row.setContentsMargins(0, 0, 0, 0)
         _headtail_row.setSpacing(4)
-        _headtail_row.addWidget(self.combo_yolo_headtail_model_type, 0)
         _headtail_row.addWidget(self.combo_yolo_headtail_model, 1)
         _headtail_row.addWidget(self.btn_remove_yolo_headtail_model, 0)
         fl_headtail.addRow("Head-tail model", self.headtail_model_row_widget)
@@ -385,7 +369,23 @@ class IdentityPanel(QWidget):
             "Minimum classifier confidence for a head-tail assignment to be accepted (0–1).\n"
             "Lower = more assignments accepted; higher = fewer but more reliable."
         )
-        fl_headtail.addRow("Head-tail min confidence", self.spin_yolo_headtail_conf)
+        fl_headtail.addRow(
+            "Head-tail min classifier confidence", self.spin_yolo_headtail_conf
+        )
+
+        self.spin_yolo_headtail_detect_conf = QDoubleSpinBox()
+        self.spin_yolo_headtail_detect_conf.setRange(0.0, 1.0)
+        self.spin_yolo_headtail_detect_conf.setSingleStep(0.01)
+        self.spin_yolo_headtail_detect_conf.setValue(0.25)
+        self.spin_yolo_headtail_detect_conf.setFixedHeight(30)
+        self.spin_yolo_headtail_detect_conf.setToolTip(
+            "Minimum detector confidence required before a detection is passed to head-tail inference (0–1).\n"
+            "Detections below this threshold are not re-run and remain unknown."
+        )
+        fl_headtail.addRow(
+            "Head-tail min detection confidence",
+            self.spin_yolo_headtail_detect_conf,
+        )
 
         self.combo_headtail_runtime = QComboBox()
         self.combo_headtail_runtime.setFixedHeight(30)
@@ -404,6 +404,21 @@ class IdentityPanel(QWidget):
         if _cpu_idx >= 0:
             self.combo_headtail_runtime.setCurrentIndex(_cpu_idx)
         fl_headtail.addRow("Runtime:", self.combo_headtail_runtime)
+
+        self.spin_headtail_batch = QSpinBox()
+        self.spin_headtail_batch.setRange(1, 256)
+        self.spin_headtail_batch.setValue(
+            int(self._main_window.advanced_config.get("headtail_batch_size", 64))
+        )
+        self.spin_headtail_batch.setFixedHeight(30)
+        self.spin_headtail_batch.setToolTip(
+            "Maximum number of canonical crops per head-tail inference call.\n"
+            "Non-realtime tracking batches crops across detections and frames, then chunks them by this size."
+        )
+        fl_headtail.addRow("Batch size", self.spin_headtail_batch)
+        self.spin_headtail_batch.valueChanged.connect(
+            self._sync_realtime_individual_batch_ui
+        )
 
         self.chk_pose_overrides_headtail = QCheckBox(
             "Pose orientation overrides head-tail"
@@ -865,31 +880,27 @@ class IdentityPanel(QWidget):
             self._populate_model_combo()
 
         def _populate_model_combo(self):
-            """Populate combo from model_registry.json (usage_role == 'cnn_identity')."""
-            from hydra_suite.trackerkit.gui.main_window import (
-                get_yolo_model_registry_path,
+            """Populate combo from the v2 classifier registry and discovered artifacts."""
+            from hydra_suite.training.model_publish import (
+                enumerate_classifier_artifacts,
             )
 
-            registry_path = get_yolo_model_registry_path()
-            try:
-                with open(registry_path) as f:
-                    registry = json.load(f)
-            except (FileNotFoundError, ValueError):
-                registry = {}
+            panel = self._main_window._identity_panel
+            registry = panel._cnn_registry_by_path()
+            discovered = list(enumerate_classifier_artifacts(roles=("cnn_identity",)))
             self.combo_model.blockSignals(True)
             current = self.combo_model.currentData()
             self.combo_model.clear()
             self.combo_model.addItem("\u2014 select model \u2014", "")
             for rel_path, meta in registry.items():
-                if meta.get("usage_role") != "cnn_identity":
+                self.combo_model.addItem(
+                    panel._format_cnn_identity_display(meta), rel_path
+                )
+            seen = set(registry)
+            for entry in discovered:
+                if entry["path"] in seen:
                     continue
-                arch = meta.get("arch", "?")
-                label = meta.get("classification_label", "")
-                n_cls = meta.get("num_classes", "?")
-                display = f"{arch} | {n_cls} cls"
-                if label:
-                    display += f" | {label}"
-                self.combo_model.addItem(display, rel_path)
+                self.combo_model.addItem(f"[classkit] {entry['path']}", entry["path"])
             self.combo_model.addItem("\uff0b Add New Model\u2026", "__add_new__")
             idx = self.combo_model.findData(current)
             if idx >= 0:
@@ -900,7 +911,18 @@ class IdentityPanel(QWidget):
         def _on_model_selected(self, index: int):
             rel_path = self.combo_model.itemData(index)
             if rel_path == "__add_new__":
-                self._main_window._handle_add_new_cnn_identity_model()
+                self._main_window._identity_panel._handle_add_new_cnn_identity_model()
+                self._populate_model_combo()
+                return
+            if (
+                rel_path
+                and not self._main_window._identity_panel._registry_has_cnn_entry(
+                    rel_path
+                )
+            ):
+                self._main_window._identity_panel._annotate_discovered_cnn_model(
+                    rel_path
+                )
                 self._populate_model_combo()
                 return
             self._sync_model_ui()
@@ -918,43 +940,25 @@ class IdentityPanel(QWidget):
             self._main_window._identity_panel._refresh_cnn_classifier_model_rows()
 
         def _update_verification_labels(self, rel_path: str):
-            from hydra_suite.trackerkit.gui.main_window import (
-                get_yolo_model_registry_path,
-            )
-
-            try:
-                with open(get_yolo_model_registry_path()) as f:
-                    registry = json.load(f)
-            except Exception:
-                return
-            meta = registry.get(rel_path or "", {})
+            meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
             self.lbl_arch.setText(str(meta.get("arch", "\u2014")))
-            self.lbl_num_classes.setText(str(meta.get("num_classes", "\u2014")))
-            class_names = meta.get("class_names", [])
-            preview = ", ".join(class_names[:12])
-            if len(class_names) > 12:
-                preview += f", \u2026 ({len(class_names)} total)"
-            self.lbl_class_names.setText(preview or "\u2014")
+            self.lbl_num_classes.setText(
+                str(self._main_window._identity_panel._classifier_num_classes(meta))
+            )
+            self.lbl_class_names.setText(
+                self._main_window._identity_panel._classifier_class_preview(meta)
+            )
             self.lbl_input_size.setText(str(meta.get("input_size", "\u2014")))
             self.lbl_label.setText(str(meta.get("classification_label", "\u2014")))
 
         def to_config(self):
             """Return config dict or None if no model selected."""
-            from hydra_suite.trackerkit.gui.main_window import (
-                get_models_root_directory,
-                get_yolo_model_registry_path,
-            )
+            from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
 
             rel_path = self.combo_model.currentData()
             if not rel_path or rel_path == "__add_new__":
                 return None
-            registry_path = get_yolo_model_registry_path()
-            try:
-                with open(registry_path) as f:
-                    registry = json.load(f)
-            except Exception:
-                registry = {}
-            meta = registry.get(rel_path, {})
+            meta = self._main_window._identity_panel._cnn_registry_entry(rel_path)
             models_root = get_models_root_directory()
             abs_path = os.path.join(models_root, rel_path)
             label = str(meta.get("classification_label", "") or "cnn_identity")
@@ -964,24 +968,25 @@ class IdentityPanel(QWidget):
                 "confidence": self.spin_confidence.value(),
                 "window": self.spin_window.value(),
                 "batch_size": self.spin_batch.value(),
+                "scoring_mode": str(meta.get("scoring_mode", "atomic")),
                 "rel_path": rel_path,
             }
 
         def load_from_config(self, cfg: dict):
             """Populate from a config dict entry."""
-            from hydra_suite.trackerkit.gui.main_window import (
-                get_models_root_directory,
-                get_yolo_model_registry_path,
-            )
+            from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
 
             rel_path = cfg.get("rel_path", "")
             if not rel_path:
                 abs_path = cfg.get("model_path", "")
                 models_root = get_models_root_directory()
                 try:
-                    with open(get_yolo_model_registry_path()) as f:
-                        registry = json.load(f)
-                    for rp, meta in registry.items():
+                    for (
+                        rp,
+                        meta,
+                    ) in (
+                        self._main_window._identity_panel._cnn_registry_by_path().items()
+                    ):
                         if os.path.normpath(
                             os.path.join(models_root, rp)
                         ) == os.path.normpath(abs_path):
@@ -1063,7 +1068,7 @@ class IdentityPanel(QWidget):
         self._main_window._sync_individual_analysis_mode_ui()
 
     def _sync_realtime_individual_batch_ui(self) -> None:
-        """Reflect realtime per-animal batch policy in pose/CNN controls."""
+        """Reflect realtime per-animal batch policy in pose/head-tail/CNN controls."""
         max_animals = 1
         realtime_enabled = False
         if hasattr(self._main_window, "_setup_panel"):
@@ -1083,7 +1088,19 @@ class IdentityPanel(QWidget):
         if clamped_pose_batch != self.spin_pose_batch.value():
             self.spin_pose_batch.setValue(clamped_pose_batch)
 
-        effective_batches = [self.spin_pose_batch.value()]
+        self.spin_headtail_batch.setMaximum(max_animals if realtime_enabled else 256)
+        clamped_headtail_batch = clamp_realtime_individual_batch_size(
+            self.spin_headtail_batch.value(),
+            max_animals=max_animals,
+            realtime_enabled=realtime_enabled,
+        )
+        if clamped_headtail_batch != self.spin_headtail_batch.value():
+            self.spin_headtail_batch.setValue(clamped_headtail_batch)
+
+        effective_batches = [
+            self.spin_pose_batch.value(),
+            self.spin_headtail_batch.value(),
+        ]
         for row in self._cnn_classifier_rows():
             row.set_realtime_batch_cap(max_animals, realtime_enabled)
             effective_batches.append(row.spin_batch.value())
@@ -1096,11 +1113,21 @@ class IdentityPanel(QWidget):
             )
             message = (
                 f"Realtime individual inference is capped to {max_animals} animal(s) per frame. "
-                "Pose and CNN batch controls are clamped to avoid oversized per-frame batches."
+                "Pose, head-tail, and CNN batch controls are clamped to avoid oversized per-frame batches."
             )
             if warn_waste:
                 message += " Reduce larger saved values when switching back to non-realtime if you want to avoid partially empty exported batches."
             messages.append(message)
+
+        headtail_recommendation = (
+            self._main_window._current_headtail_benchmark_recommendation()
+        )
+        if headtail_recommendation is not None:
+            messages.append(
+                "Benchmark recommendation: "
+                f"head-tail batch {headtail_recommendation.batch_size} on "
+                f"{headtail_recommendation.runtime_label}."
+            )
 
         pose_recommendation = self._main_window._current_pose_benchmark_recommendation()
         if pose_recommendation is not None:
@@ -1136,16 +1163,9 @@ class IdentityPanel(QWidget):
 
     def _refresh_cnn_identity_model_combo(self) -> None:
         """Populate the CNN identity combo from the registry and ClassKit publish roots."""
-        from hydra_suite.training.model_publish import (
-            enumerate_classifier_artifacts,
-            iter_registry_entries,
-        )
+        from hydra_suite.training.model_publish import enumerate_classifier_artifacts
 
-        registry_by_path = {
-            key: meta
-            for key, meta in iter_registry_entries()
-            if meta.get("usage_role") == "cnn_identity"
-        }
+        registry_by_path = self._cnn_registry_by_path()
         discovered = list(enumerate_classifier_artifacts(roles=("cnn_identity",)))
 
         self.combo_cnn_identity_model.blockSignals(True)
@@ -1155,16 +1175,9 @@ class IdentityPanel(QWidget):
 
         # First the registered (annotated) entries
         for rel_path, meta in registry_by_path.items():
-            arch = meta.get("arch", "?")
-            factors = meta.get("factor_names") or ["flat"]
-            k = len(factors)
-            species = meta.get("species", "")
-            label = meta.get("classification_label", "")
-            tag = " [multi-head]" if k > 1 else ""
-            display = f"{arch}{tag} | {species}"
-            if label:
-                display += f" | {label}"
-            self.combo_cnn_identity_model.addItem(display, rel_path)
+            self.combo_cnn_identity_model.addItem(
+                self._format_cnn_identity_display(meta), rel_path
+            )
 
         # Then discovered-but-not-yet-annotated artifacts
         seen = set(registry_by_path)
@@ -1209,19 +1222,14 @@ class IdentityPanel(QWidget):
         self._update_cnn_identity_verification_panel(rel_path)
 
     def _registry_has_cnn_entry(self, rel_path: str) -> bool:
-        from hydra_suite.training.model_publish import iter_registry_entries
-
-        return any(
-            key == rel_path and meta.get("usage_role") == "cnn_identity"
-            for key, meta in iter_registry_entries()
-        )
+        return rel_path in self._cnn_registry_by_path()
 
     def _annotate_discovered_cnn_model(self, rel_path: str) -> None:
         """Open the import dialog for a discovered classkit-published model."""
         from hydra_suite.trackerkit.gui.dialogs.cnn_identity_import_dialog import (
             CNNIdentityImportDialog,
-            annotate_discovered_cnn_entry,
             describe_cnn_identity_candidate,
+            import_cnn_identity_candidate,
         )
         from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
 
@@ -1236,8 +1244,8 @@ class IdentityPanel(QWidget):
         if dlg.exec() != QDialog.Accepted:
             self._refresh_cnn_identity_model_combo()
             return
-        annotate_discovered_cnn_entry(
-            rel_path=rel_path,
+        rel_path = import_cnn_identity_candidate(
+            model_path=abs_path,
             species=dlg.species(),
             classification_label=dlg.classification_label(),
             scoring_mode=dlg.scoring_mode(),
@@ -1250,71 +1258,36 @@ class IdentityPanel(QWidget):
 
     def _update_cnn_identity_verification_panel(self, rel_path: str) -> None:
         """Populate the read-only verification labels from the registry entry."""
-        from hydra_suite.trackerkit.gui.main_window import get_yolo_model_registry_path
-
-        registry_path = get_yolo_model_registry_path()
-        try:
-            with open(registry_path) as f:
-                registry = json.load(f)
-        except Exception:
-            return
-        meta = registry.get(rel_path or "", {})
+        meta = self._cnn_registry_entry(rel_path)
         self.lbl_cnn_arch.setText(str(meta.get("arch", "\u2014")))
-        self.lbl_cnn_num_classes.setText(str(meta.get("num_classes", "\u2014")))
-        class_names = meta.get("class_names", [])
-        preview = ", ".join(class_names[:12])
-        if len(class_names) > 12:
-            preview += f", \u2026 ({len(class_names)} total)"
-        self.lbl_cnn_class_names.setText(preview or "\u2014")
+        self.lbl_cnn_num_classes.setText(str(self._classifier_num_classes(meta)))
+        self.lbl_cnn_class_names.setText(self._classifier_class_preview(meta))
         raw_size = meta.get("input_size", "\u2014")
         self.lbl_cnn_input_size.setText(str(raw_size))
         self.lbl_cnn_label.setText(str(meta.get("classification_label", "\u2014")))
 
     def _handle_add_new_cnn_identity_model(self) -> None:
-        """Import a ClassKit-trained .pth or YOLO .pt model for CNN identity."""
-        from hydra_suite.trackerkit.gui.main_window import (
-            get_models_root_directory,
-            get_yolo_model_registry_path,
+        """Import a ClassKit-trained classifier for CNN identity."""
+        from hydra_suite.trackerkit.gui.dialogs.cnn_identity_import_dialog import (
+            CNNIdentityImportDialog,
+            describe_cnn_identity_candidate,
+            import_cnn_identity_candidate,
         )
+        from hydra_suite.trackerkit.gui.main_window import get_models_root_directory
 
         prev_data = self.combo_cnn_identity_model.currentData()
         src_path, _ = QFileDialog.getOpenFileName(
             self,
             "Import ClassKit Model for CNN Identity",
             os.path.join(get_models_root_directory(), "classification", "identity"),
-            "ClassKit Model Files (*.pth *.pt);;All Files (*)",
+            "ClassKit Model Files (*.pth *.pt *.multihead.json);;All Files (*)",
         )
         if not src_path:
             idx = self.combo_cnn_identity_model.findData(prev_data)
             self.combo_cnn_identity_model.setCurrentIndex(max(idx, 0))
             return
-        meta: dict = {}
         try:
-            if src_path.endswith(".pth"):
-                import torch
-
-                ckpt = torch.load(src_path, map_location="cpu", weights_only=False)
-                meta["arch"] = ckpt.get("arch", "tinyclassifier")
-                meta["class_names"] = ckpt.get("class_names", [])
-                meta["factor_names"] = ckpt.get("factor_names", [])
-                raw_size = ckpt.get("input_size", (224, 224))
-                meta["input_size"] = (
-                    list(raw_size)
-                    if isinstance(raw_size, (list, tuple))
-                    else [raw_size, raw_size]
-                )
-                meta["num_classes"] = ckpt.get("num_classes", len(meta["class_names"]))
-            else:
-                from ultralytics import YOLO as _YOLO
-
-                yolo = _YOLO(src_path)
-                names = yolo.names
-                meta["arch"] = "yolo"
-                meta["class_names"] = [names[i] for i in sorted(names.keys())]
-                meta["factor_names"] = []
-                meta["input_size"] = [224, 224]
-                meta["num_classes"] = len(meta["class_names"])
-                del yolo
+            summary = describe_cnn_identity_candidate(src_path)
         except Exception as exc:
             QMessageBox.critical(
                 self,
@@ -1324,51 +1297,94 @@ class IdentityPanel(QWidget):
             idx = self.combo_cnn_identity_model.findData(prev_data)
             self.combo_cnn_identity_model.setCurrentIndex(max(idx, 0))
             return
-        from hydra_suite.trackerkit.gui.dialogs import CNNIdentityImportDialog
-
-        dlg = CNNIdentityImportDialog(meta, parent=self)
+        dlg = CNNIdentityImportDialog(summary, parent=self)
         if dlg.exec() != QDialog.Accepted:
             idx = self.combo_cnn_identity_model.findData(prev_data)
             self.combo_cnn_identity_model.setCurrentIndex(max(idx, 0))
             return
-        species = dlg.species()
-        classification_label = dlg.classification_label()
-        dest_dir = os.path.join(
-            get_models_root_directory(), "classification", "identity"
-        )
-        os.makedirs(dest_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        ext = Path(src_path).suffix
-        label_part = f"_{classification_label}" if classification_label else ""
-        filename = f"{timestamp}_{meta['arch']}_{species}{label_part}{ext}"
-        dest_path = os.path.join(dest_dir, filename)
-        shutil.copy2(src_path, dest_path)
-        rel_path = os.path.relpath(dest_path, get_models_root_directory())
-        registry_path = get_yolo_model_registry_path()
         try:
-            with open(registry_path) as f:
-                registry = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            registry = {}
-        registry[rel_path] = {
-            "arch": meta["arch"],
-            "num_classes": meta["num_classes"],
-            "class_names": meta["class_names"],
-            "factor_names": meta["factor_names"],
-            "input_size": meta["input_size"],
-            "species": species,
-            "classification_label": classification_label,
-            "added_at": datetime.now().isoformat(),
-            "task_family": "classify",
-            "usage_role": "cnn_identity",
-        }
-        with open(registry_path, "w") as f:
-            json.dump(registry, f, indent=2)
+            rel_path = import_cnn_identity_candidate(
+                model_path=src_path,
+                species=dlg.species(),
+                classification_label=dlg.classification_label(),
+                scoring_mode=dlg.scoring_mode(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Could not import model:\n{exc}"
+            )
+            idx = self.combo_cnn_identity_model.findData(prev_data)
+            self.combo_cnn_identity_model.setCurrentIndex(max(idx, 0))
+            return
         self._refresh_cnn_identity_model_combo()
         idx = self.combo_cnn_identity_model.findData(rel_path)
         if idx >= 0:
             self.combo_cnn_identity_model.setCurrentIndex(idx)
             self._update_cnn_identity_verification_panel(rel_path)
+
+    def _cnn_registry_by_path(self) -> dict[str, dict]:
+        from hydra_suite.training.model_publish import iter_registry_entries
+
+        return {
+            key: meta
+            for key, meta in iter_registry_entries()
+            if meta.get("usage_role") == "cnn_identity"
+        }
+
+    def _cnn_registry_entry(self, rel_path: str) -> dict:
+        if not rel_path:
+            return {}
+        return dict(self._cnn_registry_by_path().get(rel_path, {}))
+
+    @staticmethod
+    def _classifier_num_classes(meta: dict) -> object:
+        if not meta:
+            return "—"
+        if meta.get("num_classes") is not None:
+            return meta.get("num_classes")
+        class_names = meta.get("class_names") or []
+        if class_names:
+            return len(class_names)
+        return (
+            sum(len(names) for names in (meta.get("class_names_per_factor") or []))
+            or "—"
+        )
+
+    @staticmethod
+    def _classifier_class_preview(meta: dict) -> str:
+        if not meta:
+            return "—"
+        class_names = meta.get("class_names") or []
+        if class_names:
+            preview = ", ".join(class_names[:12])
+            if len(class_names) > 12:
+                preview += f", … ({len(class_names)} total)"
+            return preview or "—"
+        factors = meta.get("factor_names") or []
+        per_factor = meta.get("class_names_per_factor") or []
+        if len(factors) != len(per_factor) or not factors:
+            return "—"
+        parts = []
+        for factor, names in zip(factors, per_factor):
+            sample = ", ".join(list(names)[:4])
+            if len(names) > 4:
+                sample += f", … ({len(names)} total)"
+            parts.append(f"{factor}: {sample}")
+        return " | ".join(parts) or "—"
+
+    def _format_cnn_identity_display(self, meta: dict) -> str:
+        arch = str(meta.get("arch", "?"))
+        factors = meta.get("factor_names") or ["flat"]
+        species = str(meta.get("species", ""))
+        label = str(meta.get("classification_label", ""))
+        num_classes = self._classifier_num_classes(meta)
+        tag = " [multi-head]" if len(factors) > 1 else ""
+        display = f"{arch}{tag} | {num_classes} cls"
+        if species:
+            display += f" | {species}"
+        if label:
+            display += f" | {label}"
+        return display
 
     def _sync_identity_method_ui(self):
         """Show the active identity configuration only when enabled."""
@@ -1397,6 +1413,9 @@ class IdentityPanel(QWidget):
         self.headtail_content.setVisible(headtail_enabled)
         self.headtail_content.setEnabled(headtail_enabled)
         self.spin_yolo_headtail_conf.setEnabled(headtail_enabled and configured_model)
+        self.spin_yolo_headtail_detect_conf.setEnabled(
+            headtail_enabled and configured_model
+        )
         self.chk_pose_overrides_headtail.setEnabled(headtail_enabled)
 
     def _refresh_pose_direction_keypoint_lists(self):
@@ -1476,18 +1495,16 @@ class IdentityPanel(QWidget):
             self.combo_pose_sleap_env.setCurrentText(preferred)
 
     def _refresh_yolo_headtail_model_combo(self, preferred_model_path: object = None):
-        """Refresh the head-tail model combo for the current type (YOLO or tiny)."""
+        """Refresh the head-tail model combo across all classifier families."""
         from hydra_suite.trackerkit.gui.main_window import (
             get_yolo_model_repository_directory,
         )
 
-        ht_type = getattr(self, "combo_yolo_headtail_model_type", None)
-        subdir = ht_type.currentText() if ht_type else "YOLO"
-        repo_dir = os.path.join(
-            get_yolo_model_repository_directory(
-                task_family="classify", usage_role="headtail"
-            ),
-            subdir,
+        requested_path = (
+            preferred_model_path or self.combo_yolo_headtail_model.currentData()
+        )
+        repo_dir = get_yolo_model_repository_directory(
+            task_family="classify", usage_role="headtail"
         )
         os.makedirs(repo_dir, exist_ok=True)
         self._main_window._populate_yolo_model_combo(
@@ -1498,6 +1515,7 @@ class IdentityPanel(QWidget):
             task_family="classify",
             usage_role="headtail",
             repository_dir=repo_dir,
+            recursive=True,
         )
 
         # Append [classkit] discovered head-tail artifacts not already in the combo.
@@ -1523,10 +1541,17 @@ class IdentityPanel(QWidget):
         for i in range(self.combo_yolo_headtail_model.count()):
             existing_data.add(self.combo_yolo_headtail_model.itemData(i))
 
+        for rel_path in sorted(registry_paths):
+            if rel_path in existing_data:
+                continue
+            self.combo_yolo_headtail_model.addItem(
+                self._main_window._format_yolo_model_label(rel_path),
+                rel_path,
+            )
+            existing_data.add(rel_path)
+
         for entry in enumerate_classifier_artifacts(roles=("head_tail",)):
             if entry["path"] in existing_data:
-                continue
-            if entry["path"] in registry_paths:
                 continue
             try:
                 summary = describe_headtail_candidate(entry["abs_path"])
@@ -1536,6 +1561,12 @@ class IdentityPanel(QWidget):
                 continue
             display = f"[classkit] {entry['path']}"
             self.combo_yolo_headtail_model.addItem(display, entry["path"])
+            existing_data.add(entry["path"])
+
+        if requested_path:
+            selected_index = self.combo_yolo_headtail_model.findData(requested_path)
+            if selected_index >= 0:
+                self.combo_yolo_headtail_model.setCurrentIndex(selected_index)
 
         self._sync_headtail_model_remove_button()
         self._update_legacy_registry_banner()

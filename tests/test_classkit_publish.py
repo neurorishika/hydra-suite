@@ -1,4 +1,5 @@
 # tests/test_classkit_publish.py
+from pathlib import Path
 from unittest.mock import patch
 
 from hydra_suite.training.contracts import TrainingRole
@@ -92,6 +93,122 @@ def test_publish_trained_model_includes_scheme_metadata(tmp_path):
     assert entry["scheme_name"] == "color_tags_2factor"
     assert entry["factor_index"] is None
     assert entry["factor_name"] is None
+
+
+def test_publish_trained_model_inlines_classifier_schema_from_checkpoint(tmp_path):
+    """Classifier publishes inline the v2 schema fields that TrackerKit reads."""
+    import json
+    from unittest.mock import patch
+
+    from hydra_suite.training.model_publish import publish_trained_model
+    from hydra_suite.training.runner import _save_tiny_checkpoint
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    model = TinyClassifier(n_classes=3, hidden_layers=1, hidden_dim=16, dropout=0.0)
+    artifact = tmp_path / "best.pth"
+    _save_tiny_checkpoint(
+        model=model,
+        save_path=str(artifact),
+        class_names=["left", "right", "unknown"],
+        input_size=(64, 64),
+        monochrome=False,
+        hidden_layers=1,
+        hidden_dim=16,
+        dropout=0.0,
+        best_val_acc=None,
+        history={},
+    )
+
+    registry_path = tmp_path / "model_registry.json"
+    with (
+        patch(
+            "hydra_suite.training.model_publish.get_models_root",
+            return_value=tmp_path,
+        ),
+        patch(
+            "hydra_suite.training.model_publish._registry_path",
+            return_value=registry_path,
+        ),
+    ):
+        key, _stored = publish_trained_model(
+            role=TrainingRole.CLASSIFY_FLAT_TINY,
+            artifact_path=str(artifact),
+            size="tiny",
+            species="ant",
+            model_info="heading",
+            trained_from_run_id="run_001",
+            dataset_fingerprint="abc123",
+            base_model="",
+        )
+
+    registry = json.loads(registry_path.read_text())
+    entry = registry["entries"][key]
+    assert entry["schema_version"] == 2
+    assert entry["arch"] == "tinyclassifier"
+    assert entry["factor_names"] == ["flat"]
+    assert entry["class_names_per_factor"] == [["left", "right", "unknown"]]
+    assert entry["input_size"] == [64, 64]
+
+
+def test_publish_trained_model_copies_yolo_sidecar(tmp_path):
+    """YOLO classifier publishes carry their v2 sidecar and inline schema."""
+    import json
+    from unittest.mock import patch
+
+    from hydra_suite.training.model_publish import publish_trained_model
+
+    artifact = tmp_path / "best.pt"
+    artifact.write_bytes(b"fake")
+    artifact.with_suffix(".v2meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "arch": "yolo",
+                "factor_names": ["flat"],
+                "class_names_per_factor": [["up", "down", "left", "right", "unknown"]],
+                "input_size": [640, 640],
+                "monochrome": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry_path = tmp_path / "model_registry.json"
+    with (
+        patch(
+            "hydra_suite.training.model_publish.get_models_root",
+            return_value=tmp_path,
+        ),
+        patch(
+            "hydra_suite.training.model_publish._registry_path",
+            return_value=registry_path,
+        ),
+    ):
+        key, stored = publish_trained_model(
+            role=TrainingRole.CLASSIFY_FLAT_YOLO,
+            artifact_path=str(artifact),
+            size="n",
+            species="ant",
+            model_info="headtail",
+            trained_from_run_id="run_001",
+            dataset_fingerprint="abc123",
+            base_model="yolov8n-cls.pt",
+        )
+
+    stored_sidecar = Path(stored).with_suffix(".v2meta.json")
+    assert stored_sidecar.exists()
+    stored_meta = json.loads(stored_sidecar.read_text())
+    assert stored_meta["input_size"] == [640, 640]
+    assert stored_meta["monochrome"] is True
+
+    registry = json.loads(registry_path.read_text())
+    entry = registry["entries"][key]
+    assert entry["v2_sidecar"] == stored_sidecar.name
+    assert entry["input_size"] == [640, 640]
+    assert entry["class_names_per_factor"] == [
+        ["up", "down", "left", "right", "unknown"]
+    ]
 
 
 def test_task_usage_for_classify_roles():

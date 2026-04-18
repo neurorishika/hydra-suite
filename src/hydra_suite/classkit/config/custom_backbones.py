@@ -10,6 +10,8 @@ from hydra_suite.training.torchvision_model import BACKBONE_DISPLAY_NAMES
 
 DEFAULT_CUSTOM_BACKBONES: list[str] = [
     "tinyclassifier",
+    "mobilenet_v3_small",
+    "shufflenet_v2_x1_0",
     "resnet18",
     "efficientnet_b0",
     "convnext_tiny",
