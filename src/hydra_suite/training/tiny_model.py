@@ -122,15 +122,30 @@ def export_tiny_to_onnx(
     input_h, input_w = ckpt.get("input_size", [64, 128])
     dummy = torch.zeros(1, 3, int(input_h), int(input_w))
     model.eval()
-    torch.onnx.export(
-        model,
-        dummy,
-        str(onnx_path),
-        input_names=["images"],
-        output_names=["logits"],
-        dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
-        opset_version=12,
-    )
+    # Prefer legacy TorchScript-based exporter (dynamo=False) which does not
+    # require the optional onnxscript package. Fall back to positional call for
+    # older PyTorch versions that do not accept the dynamo keyword argument.
+    try:
+        torch.onnx.export(
+            model,
+            dummy,
+            str(onnx_path),
+            dynamo=False,
+            input_names=["images"],
+            output_names=["logits"],
+            dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
+            opset_version=12,
+        )
+    except TypeError:
+        torch.onnx.export(
+            model,
+            dummy,
+            str(onnx_path),
+            input_names=["images"],
+            output_names=["logits"],
+            dynamic_axes={"images": {0: "batch"}, "logits": {0: "batch"}},
+            opset_version=12,
+        )
     return onnx_path
 
 

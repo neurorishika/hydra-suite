@@ -350,12 +350,19 @@ class ClassifierBackend:
     def metadata(self) -> ClassifierMetadata:
         return self._metadata
 
+    def _uses_onnx(self) -> bool:
+        rt = self._compute_runtime
+        return rt.startswith("onnx_") or rt == "tensorrt"
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
-        device = _torch_device(self._compute_runtime)
         try:
-            self._model = self._loader.load(self._model_path, device)
+            if self._uses_onnx() and self._metadata.arch != "yolo_multihead":
+                self._load_onnx()
+            else:
+                device = _torch_device(self._compute_runtime)
+                self._model = self._loader.load(self._model_path, device)
         except ClassifierError:
             raise
         except Exception as exc:
@@ -363,6 +370,46 @@ class ClassifierBackend:
                 f"failed to load classifier {self._model_path!r}: {exc}"
             ) from exc
         self._loaded = True
+
+    def _derive_onnx_peer(self) -> Path:
+        """Return (creating if necessary) the ONNX peer path for this artifact."""
+        src = Path(self._model_path)
+        peer = src.with_suffix(".onnx")
+        if peer.exists():
+            return peer
+        h, w = self._metadata.input_size
+        if self._metadata.arch == "yolo":
+            from ultralytics import YOLO
+
+            YOLO(str(src)).export(format="onnx", imgsz=max(h, w))
+            return peer
+        if self._metadata.arch == "tinyclassifier":
+            from hydra_suite.training.tiny_model import (
+                export_tiny_to_onnx,
+                load_tiny_classifier,
+            )
+
+            model, _ = load_tiny_classifier(str(src), device="cpu")
+            export_tiny_to_onnx(model, {"input_size": [h, w]}, str(peer))
+            return peer
+        # torchvision arch
+        from hydra_suite.training.torchvision_model import (
+            export_torchvision_to_onnx,
+            load_torchvision_classifier,
+        )
+
+        model, ckpt = load_torchvision_classifier(str(src), device="cpu")
+        export_torchvision_to_onnx(model, ckpt, str(peer))
+        return peer
+
+    def _load_onnx(self) -> None:
+        import onnxruntime as ort
+
+        from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+
+        peer = self._derive_onnx_peer()
+        providers = derive_onnx_execution_providers(self._compute_runtime)
+        self._model = ort.InferenceSession(str(peer), providers=providers)
 
     def _normalization_stats(self) -> tuple[np.ndarray, np.ndarray]:
         if self._metadata.monochrome:
@@ -418,6 +465,10 @@ class ClassifierBackend:
             per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
         return np.concatenate(per_factor_logits, axis=-1)
 
+    def _forward_onnx(self, batch_np: np.ndarray) -> np.ndarray:
+        input_name = self._model.get_inputs()[0].name
+        return self._model.run(None, {input_name: batch_np.astype(np.float32)})[0]
+
     @staticmethod
     def _softmax(logits: np.ndarray) -> np.ndarray:
         shifted = logits - logits.max(axis=-1, keepdims=True)
@@ -433,7 +484,10 @@ class ClassifierBackend:
             return []
         self._ensure_loaded()
         try:
-            if self._metadata.arch == "yolo":
+            if self._uses_onnx() and self._metadata.arch != "yolo_multihead":
+                batch_np = self._preprocess(crops)
+                logits = self._forward_onnx(batch_np)
+            elif self._metadata.arch == "yolo":
                 logits = self._forward_yolo(crops)
             elif self._metadata.arch == "yolo_multihead":
                 logits = self._forward_yolo_multi(crops)

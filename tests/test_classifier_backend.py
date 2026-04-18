@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -196,3 +198,29 @@ def test_backend_yolo_multihead_bundle(yolo_multihead_bundle):
         assert per_crop[0].shape == (3,)
         assert per_crop[1].shape == (2,)
     backend.close()
+
+
+def test_backend_tiny_onnx_lazy_derive(tiny_flat_headtail):
+    """onnx_cpu runtime derives and caches a .onnx peer next to the source .pth."""
+    pytest.importorskip("onnxruntime")
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    src = Path(str(tiny_flat_headtail))
+    onnx_peer = src.with_suffix(".onnx")
+    if onnx_peer.exists():
+        onnx_peer.unlink()
+
+    backend = ClassifierBackend(str(src), compute_runtime="onnx_cpu")
+    crops = [np.zeros((32, 32, 3), dtype=np.uint8)]
+    out = backend.predict_batch(crops)
+    assert len(out) == 1 and len(out[0]) == 1
+    assert out[0][0].shape == (5,)
+    assert onnx_peer.exists(), "ONNX peer was not materialised"
+    backend.close()
+
+    # Second construction should reuse the cached peer without re-exporting.
+    mtime = onnx_peer.stat().st_mtime
+    backend2 = ClassifierBackend(str(src), compute_runtime="onnx_cpu")
+    backend2.predict_batch(crops)
+    assert onnx_peer.stat().st_mtime == mtime
+    backend2.close()
