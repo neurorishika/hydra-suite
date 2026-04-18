@@ -184,6 +184,10 @@ def _pipeline_supports_runtime(pipeline: str, runtime: str) -> bool:
     if rt == "rocm":
         return bool(ROCM_AVAILABLE)
 
+    # head_tail shares the identical capability table as cnn_identity.
+    if p == "head_tail":
+        return _pipeline_supports_runtime("cnn_identity", runtime)
+
     # SLEAP has its own ONNX/TRT availability logic.
     if p == "sleap_pose":
         if rt in {"onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
