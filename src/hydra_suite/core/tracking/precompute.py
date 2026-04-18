@@ -1123,8 +1123,14 @@ class CNNPrecomputePhase(PrecomputePhase):
             chunk_det_ids = frame_det_ids[chunk_start:chunk_end]
             preds = self._backend.predict_batch(chunk_crops)
             for pred, det_id in zip(preds, chunk_det_ids):
-                pred.det_index = int(det_id)
-                frame_preds.append(pred)
+                frame_preds.append(
+                    ClassPrediction(
+                        det_index=int(det_id),
+                        factor_names=pred.factor_names,
+                        class_names=pred.class_names,
+                        confidences=pred.confidences,
+                    )
+                )
 
         self._cache.save(frame_idx, frame_preds)
         if self._frame_result_callback is not None:
@@ -1174,8 +1180,13 @@ class CNNPrecomputePhase(PrecomputePhase):
         for pred, frame_idx, det_id in zip(
             preds, self._pending_frame_idx, self._pending_det_ids
         ):
-            pred.det_index = det_id
-            frame_preds.setdefault(frame_idx, []).append(pred)
+            fixed_pred = ClassPrediction(
+                det_index=int(det_id),
+                factor_names=pred.factor_names,
+                class_names=pred.class_names,
+                confidences=pred.confidences,
+            )
+            frame_preds.setdefault(frame_idx, []).append(fixed_pred)
         for fid, fps in frame_preds.items():
             self._cache.save(fid, fps)
             if self._frame_result_callback is not None:

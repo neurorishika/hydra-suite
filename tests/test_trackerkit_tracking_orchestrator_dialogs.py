@@ -788,7 +788,14 @@ def test_build_pose_augmented_dataframe_includes_detected_only_rich_exports(
     cnn_cache = CNNIdentityCache(detected_cnn_path)
     cnn_cache.save(
         1,
-        [ClassPrediction(class_name="worker", confidence=0.84, det_index=0)],
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("worker",),
+                confidences=(0.84,),
+            )
+        ],
     )
     cnn_cache.flush()
 

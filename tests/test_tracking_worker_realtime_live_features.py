@@ -334,9 +334,10 @@ class _FakeUnifiedPrecompute:
                     frame_idx,
                     [
                         ClassPrediction(
-                            class_name="alpha",
-                            confidence=0.99,
                             det_index=0,
+                            factor_names=("flat",),
+                            class_names=("alpha",),
+                            confidences=(0.99,),
                         )
                     ],
                 )
@@ -401,7 +402,14 @@ class _ArtifactWritingUnifiedPrecompute:
             "det_indices": [0],
             "hammings": [0],
         }
-        cnn_preds = [ClassPrediction(class_name="alpha", confidence=0.99, det_index=0)]
+        cnn_preds = [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("alpha",),
+                confidences=(0.99,),
+            )
+        ]
         self.pose_frames[int(frame_idx)] = (det_ids, pose_keypoints)
         self.tag_frames[int(frame_idx)] = tag_payload
         self.cnn_frames[int(frame_idx)] = cnn_preds
@@ -829,7 +837,14 @@ def test_tracking_worker_realtime_ignores_existing_analysis_caches(
     cnn_cache = CNNIdentityCache(str(cnn_cache_path))
     cnn_cache.save(
         0,
-        [ClassPrediction(class_name="stale", confidence=0.5, det_index=0)],
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("stale",),
+                confidences=(0.5,),
+            )
+        ],
     )
     cnn_cache.flush()
 

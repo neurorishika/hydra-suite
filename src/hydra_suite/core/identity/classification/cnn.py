@@ -35,13 +35,41 @@ class CNNIdentityConfig:
     window: int = 10
 
 
-@dataclass
+@dataclass(frozen=True)
 class ClassPrediction:
-    """Per-detection CNN classification result for one frame."""
+    """Single detection's classifier output.
 
-    class_name: str | None  # None if below confidence threshold
-    confidence: float
-    det_index: int  # which detection slot in the frame
+    For flat models ``factor_names`` has length 1 and the ``class_name`` /
+    ``confidence`` properties give the scalar view. For multi-head models
+    each tuple index is a distinct factor.
+    """
+
+    det_index: int
+    factor_names: tuple[str, ...]
+    class_names: tuple[str | None, ...]
+    confidences: tuple[float, ...]
+
+    @property
+    def is_unknown(self) -> tuple[bool, ...]:
+        return tuple(name == "unknown" for name in self.class_names)
+
+    @property
+    def class_name(self) -> str | None:
+        if len(self.factor_names) != 1:
+            raise ValueError(
+                "ClassPrediction.class_name is only defined for flat (K=1) "
+                "predictions; use class_names tuple for multi-factor"
+            )
+        return self.class_names[0]
+
+    @property
+    def confidence(self) -> float:
+        if len(self.factor_names) != 1:
+            raise ValueError(
+                "ClassPrediction.confidence is only defined for flat (K=1) "
+                "predictions; use confidences tuple for multi-factor"
+            )
+        return self.confidences[0]
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +108,18 @@ class CNNIdentityCache:
             det_arr = np.array([p.det_index for p in predictions], dtype=np.int32)
             cls_arr = np.array(
                 [
-                    p.class_name if p.class_name is not None else _SENTINEL_NONE
+                    (
+                        p.class_names[0]
+                        if p.class_names[0] is not None
+                        else _SENTINEL_NONE
+                    )
                     for p in predictions
                 ],
                 dtype=object,
             )
-            conf_arr = np.array([p.confidence for p in predictions], dtype=np.float32)
+            conf_arr = np.array(
+                [p.confidences[0] for p in predictions], dtype=np.float32
+            )
             self._data[f"f{frame_idx}_det"] = det_arr
             self._data[f"f{frame_idx}_cls"] = cls_arr
             self._data[f"f{frame_idx}_conf"] = conf_arr
@@ -111,9 +145,10 @@ class CNNIdentityCache:
             class_name = None if raw_cls == _SENTINEL_NONE else raw_cls
             results.append(
                 ClassPrediction(
-                    class_name=class_name,
-                    confidence=float(conf_arr[i]),
                     det_index=int(det_arr[i]),
+                    factor_names=("flat",),
+                    class_names=(class_name,),
+                    confidences=(float(conf_arr[i]),),
                 )
             )
         return results
@@ -367,9 +402,10 @@ class CNNIdentityBackend:
                 class_name = None
             results.append(
                 ClassPrediction(
-                    class_name=class_name,
-                    confidence=best_conf,
                     det_index=i,
+                    factor_names=("flat",),
+                    class_names=(class_name,),
+                    confidences=(best_conf,),
                 )
             )
         return results

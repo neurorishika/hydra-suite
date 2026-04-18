@@ -555,8 +555,18 @@ def test_cnn_phase_process_frame_batches_crops(tmp_path):
     ) as MockBackend:
         mock_backend = MockBackend.return_value
         mock_backend.predict_batch.return_value = [
-            ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0),
-            ClassPrediction(class_name="tag_0", confidence=0.85, det_index=1),
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            ),
+            ClassPrediction(
+                det_index=1,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.85,),
+            ),
         ]
 
         phase = CNNPrecomputePhase(
@@ -590,7 +600,12 @@ def test_cnn_phase_finalize_flushes_partial_batch(tmp_path):
     ) as MockBackend:
         mock_backend = MockBackend.return_value
         mock_backend.predict_batch.return_value = [
-            ClassPrediction(class_name="tag_1", confidence=0.8, det_index=0)
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_1",),
+                confidences=(0.8,),
+            )
         ]
 
         phase = CNNPrecomputePhase(
@@ -624,8 +639,18 @@ def test_cnn_phase_realtime_callback_flushes_per_frame(tmp_path):
     ) as MockBackend:
         mock_backend = MockBackend.return_value
         mock_backend.predict_batch.return_value = [
-            ClassPrediction(class_name="tag_0", confidence=0.9, det_index=-1),
-            ClassPrediction(class_name="tag_1", confidence=0.85, det_index=-1),
+            ClassPrediction(
+                det_index=-1,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            ),
+            ClassPrediction(
+                det_index=-1,
+                factor_names=("flat",),
+                class_names=("tag_1",),
+                confidences=(0.85,),
+            ),
         ]
 
         phase = CNNPrecomputePhase(

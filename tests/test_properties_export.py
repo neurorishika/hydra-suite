@@ -293,8 +293,18 @@ def test_augment_trajectories_with_detected_cnn_cache_merges_by_detection(tmp_pa
     cache.save(
         5,
         [
-            ClassPrediction(class_name="alpha", confidence=0.83, det_index=0),
-            ClassPrediction(class_name=None, confidence=0.1, det_index=2),
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("alpha",),
+                confidences=(0.83,),
+            ),
+            ClassPrediction(
+                det_index=2,
+                factor_names=("flat",),
+                class_names=(None,),
+                confidences=(0.1,),
+            ),
         ],
     )
     cache.flush()

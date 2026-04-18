@@ -156,9 +156,10 @@ class LiveCNNIdentityStore:
     ) -> None:
         copied = [
             ClassPrediction(
-                class_name=pred.class_name,
-                confidence=float(pred.confidence),
                 det_index=int(pred.det_index),
+                factor_names=pred.factor_names,
+                class_names=pred.class_names,
+                confidences=tuple(float(c) for c in pred.confidences),
             )
             for pred in predictions
         ]

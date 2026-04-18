@@ -39,17 +39,28 @@ def test_cnn_identity_config_custom():
 def test_class_prediction_fields():
     from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    p = ClassPrediction(class_name="tag_3", confidence=0.92, det_index=0)
-    assert p.class_name == "tag_3"
-    assert p.confidence == pytest.approx(0.92)
-    assert p.det_index == 0
+    p = ClassPrediction(
+        det_index=2,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.9,),
+    )
+    assert p.class_name == "antA"
+    assert p.confidence == 0.9
+    assert p.det_index == 2
 
 
 def test_class_prediction_none_class_name():
     from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    p = ClassPrediction(class_name=None, confidence=0.3, det_index=2)
+    p = ClassPrediction(
+        det_index=1,
+        factor_names=("flat",),
+        class_names=(None,),
+        confidences=(0.4,),
+    )
     assert p.class_name is None
+    assert p.confidence == 0.4
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +77,15 @@ def test_cnn_identity_cache_roundtrip(tmp_path):
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
     preds = [
-        ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0),
-        ClassPrediction(class_name=None, confidence=0.3, det_index=1),
+        ClassPrediction(
+            det_index=0,
+            factor_names=("flat",),
+            class_names=("tag_0",),
+            confidences=(0.9,),
+        ),
+        ClassPrediction(
+            det_index=1, factor_names=("flat",), class_names=(None,), confidences=(0.3,)
+        ),
     ]
     cache.save(5, preds)
     cache.flush()  # required before loading from a fresh instance
@@ -90,7 +108,17 @@ def test_cnn_identity_cache_exists(tmp_path):
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
     assert not cache.exists()
-    cache.save(0, [ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0)])
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            )
+        ],
+    )
     cache.flush()
     assert cache.exists()
 
@@ -115,7 +143,17 @@ def test_cnn_identity_cache_missing_frame_returns_empty(tmp_path):
 
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
-    cache.save(0, [ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0)])
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            )
+        ],
+    )
     loaded = cache.load(99)  # frame 99 not saved
     assert loaded == []
 
@@ -388,3 +426,62 @@ def test_hungarian_cnn_no_adjustment_when_track_identity_none():
         mismatch_penalty=50.0,
     )
     assert adjusted == pytest.approx(50.0)
+
+
+# ---------------------------------------------------------------------------
+# ClassPrediction multi-factor tests
+# ---------------------------------------------------------------------------
+
+
+def test_class_prediction_multi_factor_shape():
+    """ClassPrediction exposes factor_names, class_names, confidences as tuples."""
+    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+
+    p = ClassPrediction(
+        det_index=0,
+        factor_names=("color", "shape"),
+        class_names=("red", None),
+        confidences=(0.9, 0.4),
+    )
+    assert p.factor_names == ("color", "shape")
+    assert p.class_names == ("red", None)
+    assert p.confidences == (0.9, 0.4)
+    assert p.is_unknown == (False, False)
+
+
+def test_class_prediction_flat_convenience_accessors():
+    """Flat (K=1) predictions expose class_name / confidence shortcuts."""
+    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+
+    p = ClassPrediction(
+        det_index=3,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.75,),
+    )
+    assert p.class_name == "antA"
+    assert p.confidence == 0.75
+
+    q = ClassPrediction(
+        det_index=3,
+        factor_names=("flat",),
+        class_names=(None,),
+        confidences=(0.2,),
+    )
+    assert q.class_name is None
+    assert q.confidence == 0.2
+
+
+def test_class_prediction_flat_accessors_error_on_multi_factor():
+    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+
+    p = ClassPrediction(
+        det_index=0,
+        factor_names=("a", "b"),
+        class_names=("x", "y"),
+        confidences=(0.5, 0.5),
+    )
+    with pytest.raises(ValueError):
+        _ = p.class_name
+    with pytest.raises(ValueError):
+        _ = p.confidence
