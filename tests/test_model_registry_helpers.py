@@ -1,4 +1,4 @@
-"""Tests for registry compatibility helpers: accept both flat-root and v2-root formats."""
+"""Tests for registry v2-root format: flat-root is no longer supported."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 
 def test_iter_registry_entries_flat_root(tmp_path, monkeypatch):
-    """iter_registry_entries yields (key, metadata) pairs from flat-root format."""
+    """Phase 7: flat-root registries yield nothing (no longer accepted)."""
     from hydra_suite.training import model_publish
 
     reg_path = tmp_path / "model_registry.json"
@@ -26,8 +26,7 @@ def test_iter_registry_entries_flat_root(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(model_publish, "_registry_path", lambda: reg_path)
     entries = dict(model_publish.iter_registry_entries())
-    assert len(entries) == 2
-    assert entries["classification/identity/a.pth"]["arch"] == "tinyclassifier"
+    assert entries == {}
 
 
 def test_iter_registry_entries_v2_root(tmp_path, monkeypatch):
@@ -55,17 +54,31 @@ def test_iter_registry_entries_v2_root(tmp_path, monkeypatch):
     assert entries["classification/identity/a.pth"]["arch"] == "resnet18"
 
 
-def test_save_registry_preserves_format_during_phase_1(tmp_path, monkeypatch):
-    """save_model_registry writes flat-root format during phases 1–6."""
+def test_save_registry_writes_v2_root(tmp_path, monkeypatch):
+    """save_model_registry writes the v2 root format ({schema_version, entries})."""
     from hydra_suite.training import model_publish
 
     reg_path = tmp_path / "model_registry.json"
     monkeypatch.setattr(model_publish, "_registry_path", lambda: reg_path)
 
     model_publish.save_model_registry({"a.pth": {"arch": "x"}})
-    data = json.loads(reg_path.read_text())
-    # Phase 1 still writes the current flat-root dict format
-    assert data == {"a.pth": {"arch": "x"}}
+    import json as _json
+
+    data = _json.loads(reg_path.read_text())
+    assert data["schema_version"] == 2
+    assert data["entries"] == {"a.pth": {"arch": "x"}}
+
+
+def test_load_registry_rejects_flat_root_after_flip(tmp_path, monkeypatch):
+    """Phase 7: flat-root registries are no longer accepted on load."""
+    from hydra_suite.training import model_publish
+
+    reg_path = tmp_path / "model_registry.json"
+    reg_path.write_text('{"a.pth": {"arch": "x"}}')
+    monkeypatch.setattr(model_publish, "_registry_path", lambda: reg_path)
+
+    entries = list(model_publish.iter_registry_entries())
+    assert entries == []
 
 
 def test_load_registry_empty_on_missing_file(tmp_path, monkeypatch):

@@ -170,29 +170,30 @@ def enumerate_classifier_artifacts(
 
 
 def iter_registry_entries() -> "Iterable[tuple[str, dict[str, Any]]]":
-    """Yield ``(key, metadata)`` pairs from the registry, accepting both the
-    current flat-root format and the future v2 root format.
+    """Yield ``(key, metadata)`` pairs from the v2-rooted registry.
 
-    During phases 1–6 the registry is still written in flat-root format;
-    this helper lets UI code read either layout transparently. Phase 7
-    removes flat-root support.
+    Flat-root registries from the Phase 1-6 rollout are no longer accepted.
+    The legacy entries appear in the GUI banner and must be re-imported.
     """
     data = load_model_registry()
     if not data:
         return
-    if data.get("schema_version") == 2 and isinstance(data.get("entries"), dict):
-        for key, meta in data["entries"].items():
-            if isinstance(meta, dict):
-                yield str(key), meta
+    if data.get("schema_version") != 2 or not isinstance(data.get("entries"), dict):
         return
-    for key, meta in data.items():
+    for key, meta in data["entries"].items():
         if isinstance(meta, dict):
             yield str(key), meta
 
 
 def save_model_registry(registry: dict[str, Any]) -> None:
-    """Persist the published-model registry dict to disk as pretty-printed JSON."""
-    _registry_path().write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    """Persist the published-model registry dict to disk in the v2 root shape."""
+    # Callers may pass either the bare entries dict or a v2-shaped dict.
+    if "schema_version" in registry and "entries" in registry:
+        payload = dict(registry)
+        payload["schema_version"] = 2
+    else:
+        payload = {"schema_version": 2, "entries": dict(registry)}
+    _registry_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _registry_key_for_model(model_path: Path) -> str:
@@ -307,7 +308,10 @@ def publish_trained_model(
         metadata["v2_sidecar"] = sidecar.name
 
     reg = load_model_registry()
-    reg[key] = metadata
+    if reg.get("schema_version") == 2 and isinstance(reg.get("entries"), dict):
+        reg["entries"][key] = metadata
+    else:
+        reg = {"schema_version": 2, "entries": {key: metadata}}
     save_model_registry(reg)
 
     return key, str(dst)

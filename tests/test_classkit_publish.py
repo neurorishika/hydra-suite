@@ -87,7 +87,8 @@ def test_publish_trained_model_includes_scheme_metadata(tmp_path):
         )
 
     registry = json.loads(registry_path.read_text())
-    entry = registry[key]
+    assert registry["schema_version"] == 2
+    entry = registry["entries"][key]
     assert entry["scheme_name"] == "color_tags_2factor"
     assert entry["factor_index"] is None
     assert entry["factor_name"] is None
