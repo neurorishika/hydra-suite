@@ -96,3 +96,40 @@ def test_backend_non_square_input_size_roundtrip(tiny_flat_nonsquare):
     out = backend.predict_batch(crops)
     assert out[0][0].shape == (3,)
     backend.close()
+
+
+def test_backend_parses_yolo_flat_metadata(yolo_flat_headtail):
+    """YOLO classify .pt exposes 5-class flat metadata via backend."""
+    pytest.importorskip("ultralytics")
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    backend = ClassifierBackend(str(yolo_flat_headtail), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.arch == "yolo"
+    assert meta.is_multihead is False
+    assert meta.factor_names == ["flat"]
+    assert len(meta.class_names_per_factor[0]) == 5
+    assert set(meta.class_names_per_factor[0]) == {
+        "up",
+        "down",
+        "left",
+        "right",
+        "unknown",
+    }
+    backend.close()
+
+
+def test_backend_yolo_flat_predict_batch_shape(yolo_flat_headtail):
+    pytest.importorskip("ultralytics")
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    backend = ClassifierBackend(str(yolo_flat_headtail), compute_runtime="cpu")
+    crops = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(2)]
+    out = backend.predict_batch(crops)
+    assert len(out) == 2
+    for per_crop in out:
+        assert len(per_crop) == 1
+        probs = per_crop[0]
+        assert probs.shape == (5,)
+        assert abs(probs.sum() - 1.0) < 1e-3
+    backend.close()

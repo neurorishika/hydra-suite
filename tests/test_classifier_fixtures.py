@@ -105,3 +105,28 @@ def tiny_flat_nonsquare(fixtures_dir: Path) -> Path:
     }
     torch.save(ckpt, str(path))
     return path
+
+
+@pytest.fixture(scope="session")
+def yolo_flat_headtail(fixtures_dir: Path) -> Path:
+    """YOLO classify flat model mapping 5 head-tail classes.
+
+    Uses the smallest available ultralytics model. The classifier head is
+    replaced with a 5-output Linear layer so that inference genuinely emits
+    5-class probability vectors — we skip actual training since only the
+    shape/metadata contracts are under test.
+    """
+    path = fixtures_dir / "yolo_flat_headtail.pt"
+    if path.exists():
+        return path
+    pytest.importorskip("ultralytics")
+    import torch
+    from ultralytics import YOLO
+
+    model = YOLO("yolov8n-cls.pt")  # pretrained download on first run
+    # Replace the final Linear layer so inference outputs 5 classes, not 1000
+    old_linear = model.model.model[9].linear
+    model.model.model[9].linear = torch.nn.Linear(old_linear.in_features, 5)
+    model.model.names = {0: "up", 1: "down", 2: "left", 3: "right", 4: "unknown"}
+    model.save(str(path))
+    return path
