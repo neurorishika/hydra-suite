@@ -92,6 +92,83 @@ def load_model_registry() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+_CNN_IDENTITY_ROOTS = (
+    "classification/identity",
+    "tiny-classify",
+    "custom-classify",
+    "YOLO-classify",
+)
+
+_HEAD_TAIL_ROOTS = (
+    "classification/orientation",
+    "tiny-classify",
+    "custom-classify",
+    "YOLO-classify",
+)
+
+_CLASSIFIER_EXTS = (".pth", ".pt", ".multihead.json")
+
+
+def enumerate_classifier_artifacts(
+    *,
+    roles: tuple[str, ...],
+) -> "Iterable[dict[str, Any]]":
+    """Yield descriptors for every classifier artifact under any of the
+    discovery roots associated with ``roles``.
+
+    Each descriptor has keys:
+        ``path`` (str, relative to models root, posix-style)
+        ``abs_path`` (str)
+        ``root`` (str, which top-level root it was discovered under)
+        ``is_managed`` (bool — True when the file lives under a ClassKit
+            publish root rather than the TrackerKit canonical
+            ``classification/{identity,orientation}``)
+
+    Callers validate per-role suitability via ``ClassifierBackend.metadata``.
+    """
+    models_root = get_models_root()
+    seen: set[str] = set()
+    role_roots: list[str] = []
+    for role in roles:
+        if role == "cnn_identity":
+            role_roots.extend(_CNN_IDENTITY_ROOTS)
+        elif role == "head_tail":
+            role_roots.extend(_HEAD_TAIL_ROOTS)
+    for root_rel in role_roots:
+        root_abs = models_root / root_rel
+        if not root_abs.exists():
+            continue
+        for path in root_abs.rglob("*"):
+            if not path.is_file():
+                continue
+            name_lower = path.name.lower()
+            if not any(name_lower.endswith(ext) for ext in _CLASSIFIER_EXTS):
+                continue
+            # For multi-head bundles, only yield the manifest — not the per-factor .pt files.
+            if path.suffix.lower() == ".pt" and any(
+                p.name.lower().endswith(".multihead.json")
+                for p in path.parent.parent.glob("*.multihead.json")
+            ):
+                continue
+            try:
+                rel = path.relative_to(models_root).as_posix()
+            except ValueError:
+                continue
+            if rel in seen:
+                continue
+            seen.add(rel)
+            is_managed = root_rel not in (
+                "classification/identity",
+                "classification/orientation",
+            )
+            yield {
+                "path": rel,
+                "abs_path": str(path),
+                "root": root_rel,
+                "is_managed": is_managed,
+            }
+
+
 def iter_registry_entries() -> "Iterable[tuple[str, dict[str, Any]]]":
     """Yield ``(key, metadata)`` pairs from the registry, accepting both the
     current flat-root format and the future v2 root format.
