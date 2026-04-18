@@ -3574,6 +3574,12 @@ class ConfigOrchestrator:
         headtail = recommendations.get("headtail")
         if headtail is not None:
             _set_combo_data(self._panels.setup.combo_headtail_runtime, headtail.runtime)
+            if hasattr(self._panels, "identity") and hasattr(
+                self._panels.identity, "combo_headtail_runtime"
+            ):
+                _set_combo_data(
+                    self._panels.identity.combo_headtail_runtime, headtail.runtime
+                )
 
         pose = recommendations.get(f"pose_{self._mw._current_pose_backend_key()}")
         if pose is not None:

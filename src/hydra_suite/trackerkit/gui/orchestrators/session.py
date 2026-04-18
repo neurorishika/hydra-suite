@@ -1002,6 +1002,12 @@ class SessionOrchestrator:
             self._mw._setup_panel.combo_headtail_runtime.setToolTip(
                 HEADTAIL_RUNTIME_TOOLTIP
             )
+        if hasattr(self._mw, "_identity_panel") and hasattr(
+            self._mw._identity_panel, "combo_headtail_runtime"
+        ):
+            self._mw._identity_panel.combo_headtail_runtime.setToolTip(
+                HEADTAIL_RUNTIME_TOOLTIP
+            )
         if hasattr(self._mw._setup_panel, "combo_cnn_runtime"):
             self._mw._setup_panel.combo_cnn_runtime.setToolTip(CNN_RUNTIME_TOOLTIP)
         if hasattr(self._mw._setup_panel, "combo_pose_runtime_flavor"):
@@ -1011,7 +1017,7 @@ class SessionOrchestrator:
 
     def _headtail_runtime_options(self):
         """Return (label, value) pairs for the head-tail runtime combo."""
-        allowed = supported_runtimes_for_pipeline("headtail")
+        allowed = supported_runtimes_for_pipeline("head_tail")
         if not allowed:
             allowed = ["cpu"]
         recommended = None
@@ -1028,12 +1034,7 @@ class SessionOrchestrator:
         ]
 
     def _populate_headtail_runtime_options(self, preferred=None):
-        """Populate the head-tail runtime combo with native runtime options."""
-        if not hasattr(self._mw, "_setup_panel") or not hasattr(
-            self._mw._setup_panel, "combo_headtail_runtime"
-        ):
-            return
-        combo = self._mw._setup_panel.combo_headtail_runtime
+        """Populate the head-tail runtime combo(s) with native runtime options."""
         selected = (
             str(
                 preferred
@@ -1047,16 +1048,47 @@ class SessionOrchestrator:
         values = [value for _label, value in options]
         if selected not in values:
             selected = values[0] if values else "cpu"
-        combo.blockSignals(True)
-        combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.blockSignals(False)
+
+        # Populate identity panel combo (primary location).
+        if hasattr(self._mw, "_identity_panel") and hasattr(
+            self._mw._identity_panel, "combo_headtail_runtime"
+        ):
+            combo = self._mw._identity_panel.combo_headtail_runtime
+            combo.blockSignals(True)
+            combo.clear()
+            for label, value in options:
+                combo.addItem(label, value)
+            idx = combo.findData(selected)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+
+        # Also populate setup panel combo (performance section, secondary).
+        if hasattr(self._mw, "_setup_panel") and hasattr(
+            self._mw._setup_panel, "combo_headtail_runtime"
+        ):
+            combo = self._mw._setup_panel.combo_headtail_runtime
+            combo.blockSignals(True)
+            combo.clear()
+            for label, value in options:
+                combo.addItem(label, value)
+            idx = combo.findData(selected)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     def _selected_headtail_runtime(self) -> str:
-        """Return the currently selected head-tail runtime key."""
+        """Return the currently selected head-tail runtime key.
+
+        Prefers the identity panel combo (co-located with the head-tail
+        model and confidence settings).  Falls back to the setup panel
+        performance combo for backward compatibility, then to the main
+        compute runtime.
+        """
+        if hasattr(self._mw, "_identity_panel") and hasattr(
+            self._mw._identity_panel, "combo_headtail_runtime"
+        ):
+            data = self._mw._identity_panel.combo_headtail_runtime.currentData()
+            if data:
+                return str(data).strip().lower()
         if hasattr(self._mw, "_setup_panel") and hasattr(
             self._mw._setup_panel, "combo_headtail_runtime"
         ):

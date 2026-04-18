@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.runtime.compute_runtime import supported_runtimes_for_pipeline
 from hydra_suite.trackerkit.config.schemas import TrackerConfig
 from hydra_suite.utils.batch_policy import (
     clamp_realtime_individual_batch_size,
@@ -376,6 +377,24 @@ class IdentityPanel(QWidget):
             "Lower = more assignments accepted; higher = fewer but more reliable."
         )
         fl_headtail.addRow("Head-tail min confidence", self.spin_yolo_headtail_conf)
+
+        self.combo_headtail_runtime = QComboBox()
+        self.combo_headtail_runtime.setFixedHeight(30)
+        self.combo_headtail_runtime.setToolTip(
+            "Compute runtime for the head-tail orientation classifier.\n"
+            "cpu — always available.\n"
+            "mps / cuda / rocm — native GPU acceleration.\n"
+            "onnx_* / tensorrt — exported artifacts (auto-derived on first use)."
+        )
+        _ht_runtimes = supported_runtimes_for_pipeline("head_tail")
+        if not _ht_runtimes:
+            _ht_runtimes = ["cpu"]
+        for _rt in _ht_runtimes:
+            self.combo_headtail_runtime.addItem(_rt, _rt)
+        _cpu_idx = self.combo_headtail_runtime.findData("cpu")
+        if _cpu_idx >= 0:
+            self.combo_headtail_runtime.setCurrentIndex(_cpu_idx)
+        fl_headtail.addRow("Runtime:", self.combo_headtail_runtime)
 
         self.chk_pose_overrides_headtail = QCheckBox(
             "Pose orientation overrides head-tail"
@@ -1342,6 +1361,11 @@ class IdentityPanel(QWidget):
         )
         self.pose_runtime_content.setVisible(pose_enabled)
         self.pose_runtime_content.setEnabled(pose_enabled)
+
+    def _get_headtail_compute_runtime(self) -> str:
+        """Return the currently selected head-tail compute runtime key."""
+        rt = self.combo_headtail_runtime.currentData()
+        return str(rt) if rt else "cpu"
 
     def _sync_headtail_analysis_ui(self):
         """Show head-tail controls only when the section is enabled."""
