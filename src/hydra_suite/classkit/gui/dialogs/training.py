@@ -550,11 +550,24 @@ class ClassKitTrainingDialog(QDialog):
         self._sample_preview_scroll.setWidget(self._sample_preview_container)
         sample_preview_layout.addWidget(self._sample_preview_scroll)
 
-        layout_gen = QVBoxLayout(self.general_tab)
+        scroll_content = QWidget()
+        layout_gen = QVBoxLayout(scroll_content)
+        layout_gen.setContentsMargins(0, 0, 0, 0)
         layout_gen.addLayout(form)
         layout_gen.addWidget(self._data_summary_group)
         layout_gen.addWidget(self._sample_preview_group)
         layout_gen.addStretch()
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(scroll_content)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        outer_layout = QVBoxLayout(self.general_tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll_area)
         return self.general_tab
 
     def _build_auto_size_row(self, layout) -> None:
@@ -683,6 +696,7 @@ class ClassKitTrainingDialog(QDialog):
             lambda: self._initial_model_path_edit.clear()
         )
 
+        self._initial_model_row = row
         form.addRow(self._initial_model_row_label, row)
 
     def _compatible_initial_model_suffixes(self) -> tuple[str, ...]:
@@ -1501,10 +1515,17 @@ class ClassKitTrainingDialog(QDialog):
         mode = self.mode_combo.currentData() or ""
         is_yolo = "yolo" in mode
         is_custom = "custom" in mode
+        is_multihead = mode.startswith("multihead")
 
         self.base_model_combo.setVisible(is_yolo)
         if hasattr(self, "_base_model_row_label"):
             self._base_model_row_label.setVisible(is_yolo)
+
+        if hasattr(self, "_initial_model_row"):
+            self._initial_model_row.setVisible(not is_multihead)
+            self._initial_model_row_label.setVisible(not is_multihead)
+            if is_multihead:
+                self._initial_model_path_edit.clear()
 
         expected_suffix = ".pt" if is_yolo else ".pth"
         expected_label = (

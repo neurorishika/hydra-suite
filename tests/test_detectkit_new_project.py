@@ -188,3 +188,6 @@ def test_detectkit_main_window_side_panels_keep_readable_minimum_widths(qapp):
     assert window.splitter.isCollapsible(2) is False
 
     window.close()
+    assert window.splitter.isCollapsible(2) is False
+
+    window.close()

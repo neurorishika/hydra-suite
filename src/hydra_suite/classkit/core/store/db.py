@@ -370,6 +370,34 @@ class ClassKitDB:
                 """)
             conn.commit()
 
+    def clear_labels_not_in_set(self, valid_labels: set) -> int:
+        """Null out labels whose value is not in *valid_labels*.
+
+        Returns the number of rows affected.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT label FROM images WHERE label IS NOT NULL")
+            stale = [row[0] for row in c.fetchall() if row[0] not in valid_labels]
+            if not stale:
+                return 0
+            placeholders = ",".join("?" * len(stale))
+            c.execute(
+                f"""
+                UPDATE images
+                SET label = NULL,
+                    confidence = NULL,
+                    label_source = NULL,
+                    verified = 0,
+                    verified_at = NULL,
+                    auto_label_metadata_json = NULL
+                WHERE label IN ({placeholders})
+                """,
+                stale,
+            )
+            conn.commit()
+            return c.rowcount
+
     def get_all_labels(self) -> List[Optional[str]]:
         """Return the label for every image, ordered by insertion ID.
 

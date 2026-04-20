@@ -568,11 +568,10 @@ def main() -> int:
             export_info = _export_dataset(dataset_dir, context, settings)
             result["export"] = export_info
             spec = _make_spec(settings, dataset_dir)
-            _logs = logs
             train_result = run_training(
                 spec,
                 train_dir,
-                log_cb=lambda msg, _logs=_logs: _logs.append(str(msg)),
+                log_cb=lambda msg, _logs=logs: _logs.append(str(msg)),
             )
             result.update(
                 {
