@@ -2917,6 +2917,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.sync_directed_orient_posthoc_ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;sync_directed_orient_posthoc_ui
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4606,6 +4615,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.sync_directed_orient_posthoc_ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;sync_directed_orient_posthoc_ui
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5059,7 +5077,11 @@
 
     <div class="doc doc-contents ">
 
-        <p>Handle head/tail classification model combo-box changes, opening the add-model dialog when the sentinel item is selected.</p>
+        <p>Handle head/tail classification model combo-box changes.</p>
+<p>Handles three cases:
+1. <code>__add_new__</code> sentinel — opens the add-model file dialog.
+2. Discovered (unannotated) classkit entry — opens the annotation dialog.
+3. Normal registered entry — syncs analysis mode UI.</p>
 
     </div>
 
@@ -5868,7 +5890,11 @@
 
     <div class="doc doc-contents ">
 
-        <p>Handle head/tail classification model combo-box changes, opening the add-model dialog when the sentinel item is selected.</p>
+        <p>Handle head/tail classification model combo-box changes.</p>
+<p>Handles three cases:
+1. <code>__add_new__</code> sentinel — opens the add-model file dialog.
+2. Discovered (unannotated) classkit entry — opens the annotation dialog.
+3. Normal registered entry — syncs analysis mode UI.</p>
 
     </div>
 
@@ -7590,6 +7616,29 @@
     <div class="doc doc-contents ">
 
         <p>Update panel widgets to reflect a new config object.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.sync_directed_orient_posthoc_ui" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">sync_directed_orient_posthoc_ui</span><span class="p">(</span><span class="n">posthoc_active</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.sync_directed_orient_posthoc_ui" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Toggle between online-consistency controls and the post-hoc note.</p>
+<p>Called whenever the head-tail / pose model configuration changes so the
+Direction Updates section stays consistent with the active pipeline.</p>
+<p>Args:
+    posthoc_active: True when a head-tail or pose model is configured,
+        meaning online flip hysteresis is bypassed in favour of the
+        global DP step at post-processing time.</p>
 
     </div>
 

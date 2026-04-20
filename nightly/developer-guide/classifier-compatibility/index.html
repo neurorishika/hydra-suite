@@ -10,13 +10,9 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/developer-guide/runtime-integration/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/developer-guide/classifier-compatibility/">
       
       
-        <link rel="prev" href="../gpu-backends/">
-      
-      
-        <link rel="next" href="../dependency-cuda-updates/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -24,7 +20,7 @@
     
     
       
-        <title>Runtime Integration - HYDRA Suite Docs</title>
+        <title>Classifier compatibility - HYDRA Suite Docs</title>
       
     
     
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#runtime-integration-guide" class="md-skip">
+        <a href="#classifier-compatibility" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Runtime Integration
+              Classifier compatibility
             
           </span>
         </div>
@@ -276,12 +272,10 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../architecture/" class="md-tabs__link">
           
   
@@ -961,30 +955,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -995,7 +986,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Developer Guide
@@ -1132,30 +1123,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Runtime Integration
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1164,176 +1135,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#design-goal" class="md-nav__link">
-    <span class="md-ellipsis">
-      Design Goal
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#source-of-truth" class="md-nav__link">
-    <span class="md-ellipsis">
-      Source of Truth
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#canonical-runtime-values" class="md-nav__link">
-    <span class="md-ellipsis">
-      Canonical Runtime Values
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#integration-checklist-required" class="md-nav__link">
-    <span class="md-ellipsis">
-      Integration Checklist (Required)
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Integration Checklist (Required)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-define-a-pipeline-key" class="md-nav__link">
-    <span class="md-ellipsis">
-      1) Define a pipeline key
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-add-capability-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      2) Add capability rules
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-add-runtime-translation" class="md-nav__link">
-    <span class="md-ellipsis">
-      3) Add runtime translation
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-wire-ui-intersection-gating" class="md-nav__link">
-    <span class="md-ellipsis">
-      4) Wire UI intersection gating
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-implement-runtime-lifecycle" class="md-nav__link">
-    <span class="md-ellipsis">
-      5) Implement runtime lifecycle
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-export-artifacts-automatically" class="md-nav__link">
-    <span class="md-ellipsis">
-      6) Export artifacts automatically
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#7-keep-cache-keys-runtime-correct" class="md-nav__link">
-    <span class="md-ellipsis">
-      7) Keep cache keys runtime-correct
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#8-lock-controls-during-compute" class="md-nav__link">
-    <span class="md-ellipsis">
-      8) Lock controls during compute
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#9-add-tests-minimum-bar" class="md-nav__link">
-    <span class="md-ellipsis">
-      9) Add tests (minimum bar)
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#end-to-end-acceptance-criteria" class="md-nav__link">
-    <span class="md-ellipsis">
-      End-to-End Acceptance Criteria
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#common-anti-patterns-do-not-add" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common Anti-Patterns (Do Not Add)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-docs" class="md-nav__link">
-    <span class="md-ellipsis">
-      Related Docs
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1884,150 +1685,36 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#design-goal" class="md-nav__link">
+  <a href="#artifacts" class="md-nav__link">
     <span class="md-ellipsis">
-      Design Goal
+      Artifacts
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#source-of-truth" class="md-nav__link">
+  <a href="#registry" class="md-nav__link">
     <span class="md-ellipsis">
-      Source of Truth
+      Registry
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#canonical-runtime-values" class="md-nav__link">
+  <a href="#consumers" class="md-nav__link">
     <span class="md-ellipsis">
-      Canonical Runtime Values
+      Consumers
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#integration-checklist-required" class="md-nav__link">
+  <a href="#compute-runtimes" class="md-nav__link">
     <span class="md-ellipsis">
-      Integration Checklist (Required)
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Integration Checklist (Required)">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-define-a-pipeline-key" class="md-nav__link">
-    <span class="md-ellipsis">
-      1) Define a pipeline key
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-add-capability-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      2) Add capability rules
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-add-runtime-translation" class="md-nav__link">
-    <span class="md-ellipsis">
-      3) Add runtime translation
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#4-wire-ui-intersection-gating" class="md-nav__link">
-    <span class="md-ellipsis">
-      4) Wire UI intersection gating
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-implement-runtime-lifecycle" class="md-nav__link">
-    <span class="md-ellipsis">
-      5) Implement runtime lifecycle
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#6-export-artifacts-automatically" class="md-nav__link">
-    <span class="md-ellipsis">
-      6) Export artifacts automatically
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#7-keep-cache-keys-runtime-correct" class="md-nav__link">
-    <span class="md-ellipsis">
-      7) Keep cache keys runtime-correct
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#8-lock-controls-during-compute" class="md-nav__link">
-    <span class="md-ellipsis">
-      8) Lock controls during compute
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#9-add-tests-minimum-bar" class="md-nav__link">
-    <span class="md-ellipsis">
-      9) Add tests (minimum bar)
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#end-to-end-acceptance-criteria" class="md-nav__link">
-    <span class="md-ellipsis">
-      End-to-End Acceptance Criteria
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#common-anti-patterns-do-not-add" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common Anti-Patterns (Do Not Add)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-docs" class="md-nav__link">
-    <span class="md-ellipsis">
-      Related Docs
+      Compute runtimes
     </span>
   </a>
   
@@ -2048,7 +1735,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/runtime-integration.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/classifier-compatibility.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2056,145 +1743,91 @@
   
 
 
-<h1 id="runtime-integration-guide">Runtime Integration Guide<a class="headerlink" href="#runtime-integration-guide" title="Permanent link">&para;</a></h1>
-<p>This guide defines the runtime contract for end-to-end integration of:</p>
+<h1 id="classifier-compatibility">Classifier compatibility<a class="headerlink" href="#classifier-compatibility" title="Permanent link">&para;</a></h1>
+<p>This page documents the contract between ClassKit-trained classifier
+artifacts and TrackerKit's head-tail and CNN-identity consumers.</p>
+<h2 id="artifacts">Artifacts<a class="headerlink" href="#artifacts" title="Permanent link">&para;</a></h2>
+<p>All ClassKit-trained classifier checkpoints carry <code>schema_version: 2</code> and
+these fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Flat</th>
+<th>Multi-head</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schema_version</code></td>
+<td>int (== 2)</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>arch</code></td>
+<td>str</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>input_size</code></td>
+<td><code>[H, W]</code> (2-int sequence)</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>factor_names</code></td>
+<td>list[str]</td>
+<td><code>["flat"]</code></td>
+<td>length K</td>
+</tr>
+<tr>
+<td><code>class_names_per_factor</code></td>
+<td>list[list[str]]</td>
+<td><code>[[...]]</code></td>
+<td>length K</td>
+</tr>
+<tr>
+<td><code>class_names</code></td>
+<td>list[str]</td>
+<td>yes (== <code>class_names_per_factor[0]</code>)</td>
+<td>absent</td>
+</tr>
+<tr>
+<td><code>monochrome</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>Multi-head YOLO bundles are instead described by a sidecar
+<code>*.multihead.json</code> manifest; see the spec.</p>
+<h2 id="registry">Registry<a class="headerlink" href="#registry" title="Permanent link">&para;</a></h2>
+<p>The registry is stored at <code>{models_root}/model_registry.json</code> in the v2
+root shape:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;classification/identity/....pth&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Use <code>model_publish.iter_registry_entries</code> to read; never parse the JSON
+directly from UI code.</p>
+<h2 id="consumers">Consumers<a class="headerlink" href="#consumers" title="Permanent link">&para;</a></h2>
 <ul>
-<li>New detection models</li>
-<li>New pose models</li>
-<li>New identity/individual-analysis methods (classifiers, embeddings, contrastive features, tag readers)</li>
+<li>Head-tail accepts flat classifiers whose labels normalize to a non-empty
+  subset of <code>{up, down, left, right, unknown}</code>. Any backbone.</li>
+<li>CNN identity accepts flat and multi-head artifacts. Multi-head imports
+  require a <code>scoring_mode</code> (<code>"atomic"</code> or <code>"per_head_average"</code>).</li>
 </ul>
-<h2 id="design-goal">Design Goal<a class="headerlink" href="#design-goal" title="Permanent link">&para;</a></h2>
-<p>All compute-heavy methods must be controlled by one canonical runtime setting:</p>
-<ul>
-<li><code>compute_runtime</code></li>
-</ul>
-<p>No feature should require users to configure a separate runtime selector.</p>
-<h2 id="source-of-truth">Source of Truth<a class="headerlink" href="#source-of-truth" title="Permanent link">&para;</a></h2>
-<p>Runtime support and translation logic are centralized in:</p>
-<ul>
-<li><code>src/hydra_suite/core/runtime/compute_runtime.py</code></li>
-<li><code>src/hydra_suite/utils/gpu_utils.py</code></li>
-</ul>
-<p>Core public helpers:</p>
-<ul>
-<li><code>CANONICAL_RUNTIMES</code></li>
-<li><code>allowed_runtimes_for_pipelines(...)</code></li>
-<li><code>infer_compute_runtime_from_legacy(...)</code></li>
-<li><code>derive_detection_runtime_settings(...)</code></li>
-<li><code>derive_pose_runtime_settings(...)</code></li>
-</ul>
-<h2 id="canonical-runtime-values">Canonical Runtime Values<a class="headerlink" href="#canonical-runtime-values" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>cpu</code></li>
-<li><code>mps</code></li>
-<li><code>cuda</code></li>
-<li><code>rocm</code></li>
-<li><code>onnx_coreml</code></li>
-<li><code>onnx_cpu</code></li>
-<li><code>onnx_cuda</code></li>
-<li><code>onnx_rocm</code></li>
-<li><code>tensorrt</code></li>
-</ul>
-<h2 id="integration-checklist-required">Integration Checklist (Required)<a class="headerlink" href="#integration-checklist-required" title="Permanent link">&para;</a></h2>
-<h3 id="1-define-a-pipeline-key">1) Define a pipeline key<a class="headerlink" href="#1-define-a-pipeline-key" title="Permanent link">&para;</a></h3>
-<p>Add a stable pipeline name and use it in runtime gating.</p>
-<p>Current examples:</p>
-<ul>
-<li><code>yolo_obb_detection</code></li>
-<li><code>yolo_pose</code></li>
-<li><code>sleap_pose</code></li>
-<li><code>cnn_identity</code></li>
-<li><code>head_tail</code></li>
-</ul>
-<p>For future additions, use names like:</p>
-<ul>
-<li><code>appearance_embedding</code></li>
-<li><code>contrastive_embedding</code></li>
-<li><code>apriltag_classifier</code></li>
-<li><code>colortag_classifier</code></li>
-</ul>
-<h3 id="2-add-capability-rules">2) Add capability rules<a class="headerlink" href="#2-add-capability-rules" title="Permanent link">&para;</a></h3>
-<p>Update <code>_pipeline_supports_runtime(...)</code> in <code>compute_runtime.py</code> so the new pipeline explicitly defines supported runtimes.</p>
-<p>Rules must be strict:</p>
-<ul>
-<li>If unsupported, return <code>False</code>.</li>
-<li>Do not silently remap unsupported runtime to a different backend.</li>
-</ul>
-<h3 id="3-add-runtime-translation">3) Add runtime translation<a class="headerlink" href="#3-add-runtime-translation" title="Permanent link">&para;</a></h3>
-<p>If the pipeline consumes legacy backend knobs, add mapping from <code>compute_runtime</code> to backend settings.</p>
-<p>Examples already used:</p>
-<ul>
-<li>Detection: <code>yolo_device</code>, <code>enable_onnx_runtime</code>, <code>enable_tensorrt</code></li>
-<li>Pose: <code>pose_runtime_flavor</code>, <code>pose_sleap_device</code></li>
-</ul>
-<h3 id="4-wire-ui-intersection-gating">4) Wire UI intersection gating<a class="headerlink" href="#4-wire-ui-intersection-gating" title="Permanent link">&para;</a></h3>
-<p>Ensure the UI includes the new pipeline in the runtime context set.</p>
-<p>TrackerKit pattern:</p>
-<ul>
-<li>Gather enabled pipeline set.</li>
-<li>Call <code>allowed_runtimes_for_pipelines(...)</code>.</li>
-<li>Populate runtime dropdown from the intersection.</li>
-</ul>
-<p>PoseKit uses the same pattern for active prediction backend scope.</p>
-<h3 id="5-implement-runtime-lifecycle">5) Implement runtime lifecycle<a class="headerlink" href="#5-implement-runtime-lifecycle" title="Permanent link">&para;</a></h3>
-<p>If the integration has long-lived resources (service/subprocess/session), lifecycle must be run-scoped:</p>
-<ul>
-<li>Initialize once per run.</li>
-<li>Warmup once.</li>
-<li>Close on complete/error/cancel.</li>
-</ul>
-<p>Use existing runtime manager/service patterns where possible.</p>
-<h3 id="6-export-artifacts-automatically">6) Export artifacts automatically<a class="headerlink" href="#6-export-artifacts-automatically" title="Permanent link">&para;</a></h3>
-<p>If ONNX/TensorRT export is needed:</p>
-<ul>
-<li>Generate artifacts automatically.</li>
-<li>Store artifacts adjacent to model paths.</li>
-<li>Save runtime metadata signature for freshness checks.</li>
-<li>Never require a manual export path for normal operation.</li>
-</ul>
-<h3 id="7-keep-cache-keys-runtime-correct">7) Keep cache keys runtime-correct<a class="headerlink" href="#7-keep-cache-keys-runtime-correct" title="Permanent link">&para;</a></h3>
-<p>Any cached output that depends on runtime/model/export shape must include those inputs in cache identity.</p>
-<p>For new features:</p>
-<ul>
-<li>Include model fingerprint and runtime flavor in cache signatures.</li>
-<li>Include feature-specific shaping params (for example max instances, embedding dimension, preprocessing mode).</li>
-</ul>
-<h3 id="8-lock-controls-during-compute">8) Lock controls during compute<a class="headerlink" href="#8-lock-controls-during-compute" title="Permanent link">&para;</a></h3>
-<p>UI controls that could invalidate active runtime sessions must be disabled while jobs are running.</p>
-<p>This prevents mid-run backend switches and thread crashes.</p>
-<h3 id="9-add-tests-minimum-bar">9) Add tests (minimum bar)<a class="headerlink" href="#9-add-tests-minimum-bar" title="Permanent link">&para;</a></h3>
-<p>Add/extend tests for:</p>
-<ul>
-<li>Capability matrix and intersection gating.</li>
-<li>Runtime translation determinism from <code>compute_runtime</code>.</li>
-<li>Migration from legacy config values.</li>
-<li>Lifecycle correctness (startup/teardown on success and failure).</li>
-<li>Artifact auto-export + freshness behavior.</li>
-<li>Failure fallback behavior with explicit logging.</li>
-</ul>
-<h2 id="end-to-end-acceptance-criteria">End-to-End Acceptance Criteria<a class="headerlink" href="#end-to-end-acceptance-criteria" title="Permanent link">&para;</a></h2>
-<p>A new model/method integration is complete only when:</p>
-<ol>
-<li>It appears in runtime gating with explicit support rules.</li>
-<li>It runs from canonical <code>compute_runtime</code> without extra runtime selectors.</li>
-<li>Its ONNX/TensorRT artifacts are auto-managed (if applicable).</li>
-<li>Caches remain valid and runtime/model-aware.</li>
-<li>TrackerKit and PoseKit behavior is consistent where the feature exists.</li>
-</ol>
-<h2 id="common-anti-patterns-do-not-add">Common Anti-Patterns (Do Not Add)<a class="headerlink" href="#common-anti-patterns-do-not-add" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Hidden runtime remapping (<code>onnx_*</code> requested, CPU used without notice).</li>
-<li>Feature-specific runtime dropdowns when global runtime is available.</li>
-<li>Manual exported-model-path requirements for standard workflows.</li>
-<li>Runtime checks scattered across GUI/business logic without shared resolver usage.</li>
-</ul>
-<h2 id="related-docs">Related Docs<a class="headerlink" href="#related-docs" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="../gpu-backends/">GPU Backends</a></li>
-<li><a href="../extending-detection/">Extending Detection</a></li>
-<li><a href="../extending-identity/">Extending Identity</a></li>
-<li><a href="../../user-guide/compute-runtimes/">Compute Runtimes (User Guide)</a></li>
-</ul>
+<h2 id="compute-runtimes">Compute runtimes<a class="headerlink" href="#compute-runtimes" title="Permanent link">&para;</a></h2>
+<p>Both consumers use <code>compute_runtime</code> dispatch via <code>ClassifierBackend</code>.
+<code>_pipeline_supports_runtime</code> returns the same capability set for
+<code>cnn_identity</code> and <code>head_tail</code>.</p>
 
 
 
