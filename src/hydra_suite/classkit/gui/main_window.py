@@ -5132,6 +5132,7 @@ class MainWindow(QMainWindow):
 
         new_scheme = dlg.get_scheme_dict()
         flat_classes = dlg.flat_classes
+        cleared_labels = 0
 
         # Persist to project
         if self.project_path:
@@ -5153,11 +5154,24 @@ class MainWindow(QMainWindow):
                 with open(scheme_path, "w") as _f:
                     _json.dump(new_scheme, _f, indent=2)
 
+                from ..config.schemas import LabelingScheme
+
+                cleared_labels = self._prune_invalid_project_labels(
+                    LabelingScheme.from_dict(new_scheme)
+                )
+
         self.classes = flat_classes
         self.rebuild_label_buttons()
         self.setup_label_shortcuts()
+        if cleared_labels:
+            self.update_explorer_plot()
         self.update_context_panel()
-        self.status.showMessage(f"Classes updated ({len(self.classes)})")
+        if cleared_labels:
+            self.status.showMessage(
+                f"Classes updated ({len(self.classes)}); cleared {cleared_labels} stale labels"
+            )
+        else:
+            self.status.showMessage(f"Classes updated ({len(self.classes)})")
 
     # ── shortcut editor ──────────────────────────────────────────────────
 
@@ -5491,6 +5505,29 @@ class MainWindow(QMainWindow):
                 exc_info=True,
             )
         return None
+
+    def _prune_invalid_project_labels(self, scheme=None, db=None) -> int:
+        """Clear stored labels that no longer exist in the active scheme."""
+        if not self.db_path:
+            return 0
+
+        scheme = scheme or self._resolve_training_scheme()
+        if scheme is None:
+            return 0
+
+        valid_labels = scheme.valid_encoded_labels()
+        if not valid_labels:
+            return 0
+
+        if db is None:
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+
+        cleared = db.clear_labels_not_in_set(valid_labels)
+        if cleared:
+            self._reload_label_state_from_db(db)
+        return cleared
 
     def _make_training_spec(self, settings, role, mode, is_yolo, dataset_dir):
         """Build a TrainingRunSpec from dialog settings."""
@@ -5904,6 +5941,12 @@ class MainWindow(QMainWindow):
                 "Compute embeddings before training.",
             )
             return None
+
+        cleared_labels = self._prune_invalid_project_labels()
+        if cleared_labels:
+            self.status.showMessage(
+                f"Cleared {cleared_labels} labels that are no longer part of the active scheme."
+            )
 
         labeled_pairs = [
             (p, l) for p, l in zip(self.image_paths, self.image_labels) if l
@@ -7933,7 +7976,12 @@ class MainWindow(QMainWindow):
             ax1.set_facecolor("#252526")
             cm = metrics.confusion_matrix.astype(float)
             row_sums = cm.sum(axis=1, keepdims=True)
-            cm_norm = np.where(row_sums > 0, cm / row_sums, 0.0)
+            cm_norm = np.divide(
+                cm,
+                row_sums,
+                out=np.zeros_like(cm, dtype=float),
+                where=row_sums > 0,
+            )
             img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
             ax1.set_title(
                 "Confusion Matrix (row-normalised)", color="#ddd", fontsize=10

@@ -76,6 +76,7 @@ def build_test_params(
 
     if role in ("seq_detect", "seq_crop_obb"):
         params["YOLO_OBB_MODE"] = "sequential"
+        params["YOLO_DETECT_MODEL_PATH"] = detect_model_path or model_path
     else:
         params["YOLO_OBB_MODE"] = "direct"
         params["YOLO_OBB_DIRECT_MODEL_PATH"] = model_path
@@ -88,9 +89,6 @@ def build_test_params(
         params["YOLO_SEQ_ENFORCE_SQUARE_CROP"] = enforce_square
         if detect_model_path:
             params["YOLO_MODEL_PATH"] = detect_model_path
-
-    if role == "seq_detect" and detect_model_path:
-        params["YOLO_CROP_OBB_MODEL_PATH"] = detect_model_path
 
     return params
 

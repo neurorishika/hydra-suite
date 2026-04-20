@@ -32,6 +32,7 @@ QTextEdit,
 QListWidget,
 QTableWidget {{
     background-color: #252526;
+    alternate-background-color: #2d2d30;
     border: 1px solid #3e3e42;
     border-radius: 4px;
     padding: 4px;
@@ -184,6 +185,10 @@ QRadioButton::indicator:hover {{
 QListWidget::item,
 QTableWidget::item {{
     padding: 4px 8px;
+}}
+QListWidget::item:alternate,
+QTableWidget::item:alternate {{
+    background-color: #2d2d30;
 }}
 QListWidget::item:selected,
 QTableWidget::item:selected {{

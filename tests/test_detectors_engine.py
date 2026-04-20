@@ -254,6 +254,61 @@ def test_tensorrt_engine_path_is_batch_specific(tmp_path: Path, monkeypatch) -> 
     assert b4 == 4
 
 
+def test_tensorrt_fatal_builder_failure_disables_session_retries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_engine_module()
+    mod.YOLOOBBDetector._SESSION_TENSORRT_DISABLED_CONTEXTS.clear()
+
+    class FakeYOLO:
+        init_calls = 0
+        export_calls = 0
+
+        def __init__(self, path, task=None):
+            FakeYOLO.init_calls += 1
+            self.path = path
+            self.task = task
+
+        def to(self, _device):
+            return self
+
+        def export(self, **_kwargs):
+            FakeYOLO.export_calls += 1
+            raise RuntimeError(
+                "pybind11::init(): factory function returned nullptr (CUDA initialization failure with error: 35)"
+            )
+
+    monkeypatch.setitem(
+        sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO)
+    )
+
+    model_path = tmp_path / "best.pt"
+    model_path.write_bytes(b"model")
+
+    det1 = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det1.params = {"TENSORRT_MAX_BATCH_SIZE": 1, "INFERENCE_MODEL_ID": "id-A"}
+    det1.device = "cuda:0"
+    det1.use_tensorrt = False
+    det1.tensorrt_model_path = None
+    det1.tensorrt_batch_size = 1
+    det1._try_load_tensorrt_model(str(model_path))
+
+    det2 = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det2.params = {"TENSORRT_MAX_BATCH_SIZE": 4, "INFERENCE_MODEL_ID": "id-A"}
+    det2.device = "cuda:0"
+    det2.use_tensorrt = False
+    det2.tensorrt_model_path = None
+    det2.tensorrt_batch_size = 1
+    det2._try_load_tensorrt_model(str(model_path))
+
+    assert FakeYOLO.export_calls == 1
+    assert FakeYOLO.init_calls == 1
+    assert det1.use_tensorrt is False
+    assert det2.use_tensorrt is False
+    assert "factory function returned nullptr" in det2.tensorrt_failure_reason
+
+
 def test_onnx_artifact_path_is_batch_specific_and_model_adjacent(
     tmp_path: Path,
     monkeypatch,

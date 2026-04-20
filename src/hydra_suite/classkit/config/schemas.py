@@ -1,6 +1,7 @@
 """Typed dataclass schemas for ClassKit project, model, and active-learning configuration."""
 
 from dataclasses import dataclass, field
+from itertools import product
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -90,6 +91,15 @@ class LabelingScheme:
                 f"Expected {len(self.factors)} parts in composite label, got {len(parts)}"
             )
         return parts
+
+    def valid_encoded_labels(self) -> set[str]:
+        """Return every persisted label value allowed by this scheme."""
+        if not self.factors:
+            return set()
+        return {
+            self.encode_label(list(values))
+            for values in product(*(factor.labels for factor in self.factors))
+        }
 
     def to_dict(self) -> dict:
         return {

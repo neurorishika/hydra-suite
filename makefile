@@ -12,6 +12,14 @@ UV_PIP = uv pip
 UV_PIP_PYTHON = $(if $(CONDA_PREFIX),--python "$(CONDA_PREFIX)/bin/python",)
 PRE_COMMIT = $(if $(CONDA_PREFIX),env LD_LIBRARY_PATH="$(CONDA_PREFIX)/targets/x86_64-linux/lib:$(CONDA_PREFIX)/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" "$(CONDA_PREFIX)/bin/pre-commit",pre-commit)
 
+define reset_onnxruntime_packages
+	@"$(PYTHON_BIN)" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
+endef
+
+define reset_tensorrt_packages
+	@"$(PYTHON_BIN)" -m pip uninstall -y tensorrt tensorrt-cu12 tensorrt-cu12-bindings tensorrt-cu12-libs tensorrt-cu13 tensorrt-cu13-bindings tensorrt-cu13-libs >/dev/null 2>&1 || true
+endef
+
 # =============================================================================
 # ENVIRONMENT SETUP
 # =============================================================================
@@ -66,15 +74,19 @@ install-cuda:
 		echo "ERROR: CUDA_MAJOR must be 12 or 13"; \
 		exit 1; \
 	fi
+	$(call reset_onnxruntime_packages)
+	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt
 	@$(MAKE) configure-cuda-ort
 
 install-mps:
 	@echo "Installing Apple Silicon (MPS) packages..."
+	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
 
 install-rocm:
 	@echo "Installing AMD GPU (ROCm) packages..."
+	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-rocm.txt
 
 # =============================================================================
@@ -94,6 +106,8 @@ env-update-cuda:
 		echo "ERROR: CUDA_MAJOR must be 12 or 13"; \
 		exit 1; \
 	fi
+	$(call reset_onnxruntime_packages)
+	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
 	@if [ -n "$$CONDA_PREFIX" ]; then \
 		$(MAKE) configure-cuda-ort; \
@@ -104,11 +118,13 @@ env-update-cuda:
 env-update-mps:
 	@echo "Updating Apple Silicon (MPS) environment..."
 	mamba env update -f environment-mps.yml --prune
+	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt --upgrade
 
 env-update-rocm:
 	@echo "Updating AMD GPU (ROCm) environment..."
 	mamba env update -f environment-rocm.yml --prune
+	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-rocm.txt --upgrade
 
 # Remove environments

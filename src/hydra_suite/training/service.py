@@ -28,7 +28,11 @@ from .registry import (
     new_run_id,
 )
 from .runner import run_training
-from .validation import validate_obb_dataset
+from .validation import (
+    format_validation_report,
+    validate_obb_dataset,
+    validate_role_dataset,
+)
 
 _MULTIHEAD_CLASSIFIER_ROLES = {
     TrainingRole.CLASSIFY_MULTIHEAD_YOLO,
@@ -252,7 +256,7 @@ class TrainingOrchestrator:
         """Derive a role-specific dataset (detect, crop-OBB, classify) from a merged OBB dataset."""
         out_root = self.workspace_root / "derived" / role.value
         out_root.mkdir(parents=True, exist_ok=True)
-        return prepare_role_dataset(
+        result = prepare_role_dataset(
             role=role,
             merged_obb_dataset_dir=merged_obb_dataset_dir,
             role_output_root=out_root,
@@ -262,6 +266,15 @@ class TrainingOrchestrator:
             min_crop_size_px=min_crop_size_px,
             enforce_square=enforce_square,
         )
+        report = validate_role_dataset(result.dataset_dir, role)
+        result.stats = dict(result.stats)
+        result.stats["validation"] = report.to_dict()
+        if not report.valid:
+            raise RuntimeError(
+                f"Derived dataset for role '{role.value}' is not valid for Ultralytics training.\n"
+                f"{format_validation_report(report)}"
+            )
+        return result
 
     def run_role_training(
         self,

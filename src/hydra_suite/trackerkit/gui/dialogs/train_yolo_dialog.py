@@ -971,9 +971,15 @@ class TrainYoloDialog(BaseDialog):
 
         # Format reports for both crop OBB and direct roles.
         crop_report, crop_warnings = format_size_analysis(
-            stats, training_imgsz=crop_imgsz
+            stats,
+            training_imgsz=crop_imgsz,
+            pipeline_mode="crop",
         )
-        _, direct_warnings = format_size_analysis(stats, training_imgsz=direct_imgsz)
+        _, direct_warnings = format_size_analysis(
+            stats,
+            training_imgsz=direct_imgsz,
+            pipeline_mode="full_image",
+        )
 
         sections = []
         sections.append("=" * 50)

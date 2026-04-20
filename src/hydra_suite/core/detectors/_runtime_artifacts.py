@@ -19,6 +19,7 @@ class RuntimeArtifactMixin:
     """Mixin supplying ONNX/TensorRT artifact caching and export helpers."""
 
     _SESSION_ONNX_CPU_FALLBACK_ARTIFACTS: set[str] = set()
+    _SESSION_TENSORRT_DISABLED_CONTEXTS: dict[str, str] = {}
 
     def _is_realtime_workflow(self) -> bool:
         """Return whether the active tracking workflow is realtime."""
@@ -337,6 +338,40 @@ class RuntimeArtifactMixin:
         except Exception:
             pass
 
+    def _tensorrt_session_context_key(self) -> str:
+        context = self._get_tensorrt_build_context()
+        return "|".join(
+            [
+                str(self.device),
+                str(context.get("gpu_name", "unknown")),
+                str(context.get("cuda_version", "unknown")),
+            ]
+        )
+
+    @classmethod
+    def _is_fatal_tensorrt_environment_error(cls, error_msg: str) -> bool:
+        text = str(error_msg or "").strip().lower()
+        if not text:
+            return False
+        fatal_markers = (
+            "cuda initialization failure",
+            "createinferbuilder",
+            "factory function returned nullptr",
+            "pybind11::init()",
+            "libnvinfer_builder_resource",
+        )
+        return any(marker in text for marker in fatal_markers)
+
+    def _get_disabled_tensorrt_reason(self) -> str:
+        return self._SESSION_TENSORRT_DISABLED_CONTEXTS.get(
+            self._tensorrt_session_context_key(), ""
+        )
+
+    def _disable_tensorrt_for_session(self, error_msg: str) -> None:
+        self._SESSION_TENSORRT_DISABLED_CONTEXTS[
+            self._tensorrt_session_context_key()
+        ] = str(error_msg or "TensorRT is unavailable in this session.").strip()
+
     def _artifact_is_fresh(self, artifact_path: Path, signature: str) -> bool:
         if not artifact_path.exists():
             return False
@@ -369,6 +404,7 @@ class RuntimeArtifactMixin:
 
     def _try_load_onnx_model(self, model_path_str):
         """Try to load or export ONNX model for CPU runtime."""
+        self.onnx_failure_reason = ""
         try:
             from ultralytics import YOLO
 
@@ -520,6 +556,7 @@ class RuntimeArtifactMixin:
             self.onnx_batch_size = int(onnx_batch_size)
             logger.info(f"ONNX model ready: {onnx_path}")
         except Exception as e:
+            self.onnx_failure_reason = str(e)
             logger.warning(f"ONNX runtime optimization failed: {e}")
             self.use_onnx = False
 
@@ -529,7 +566,19 @@ class RuntimeArtifactMixin:
 
     def _try_load_tensorrt_model(self, model_path_str):
         """Try to load or export TensorRT model for faster inference."""
+        self.tensorrt_failure_reason = ""
         try:
+            disabled_reason = self._get_disabled_tensorrt_reason()
+            if disabled_reason:
+                self.tensorrt_failure_reason = disabled_reason
+                logger.warning(
+                    "TensorRT is disabled for this session on %s; skipping engine build. Previous failure: %s",
+                    self.device,
+                    disabled_reason,
+                )
+                self.use_tensorrt = False
+                return
+
             from ultralytics import YOLO
 
             requested_batch_size = self._runtime_build_batch_size_override(
@@ -673,7 +722,15 @@ class RuntimeArtifactMixin:
 
         except Exception as e:
             error_msg = str(e)
+            self.tensorrt_failure_reason = error_msg
             logger.warning(f"TensorRT optimization failed: {error_msg}")
+
+            if self._is_fatal_tensorrt_environment_error(error_msg):
+                self._disable_tensorrt_for_session(error_msg)
+                logger.warning(
+                    "Disabling TensorRT for the rest of this session on %s after a fatal builder initialization error.",
+                    self.device,
+                )
 
             # Provide helpful suggestions based on error type
             build_batch_size = self._resolve_tensorrt_build_batch_size(
@@ -748,8 +805,6 @@ class RuntimeArtifactMixin:
             return model_path_str
 
         try:
-            from ultralytics import YOLO
-
             from hydra_suite.utils.gpu_utils import (
                 ONNXRUNTIME_AVAILABLE,
                 TENSORRT_AVAILABLE,
@@ -762,6 +817,10 @@ class RuntimeArtifactMixin:
 
             # Make stage artifact names unambiguous when direct/crop/detect models differ.
             task_tag = str(task or "task").strip().lower().replace(" ", "_")
+
+            disabled_tensorrt_reason = self._get_disabled_tensorrt_reason()
+
+            from ultralytics import YOLO
 
             # Prefer ONNX when requested, matching primary OBB runtime preference.
             if enable_onnx_runtime and ONNXRUNTIME_AVAILABLE:
@@ -816,6 +875,13 @@ class RuntimeArtifactMixin:
                     return str(onnx_path)
 
             if enable_tensorrt and TENSORRT_AVAILABLE:
+                if disabled_tensorrt_reason:
+                    logger.warning(
+                        "Skipping TensorRT runtime artifact build for %s model because TensorRT is disabled for this session: %s",
+                        task,
+                        disabled_tensorrt_reason,
+                    )
+                    return model_path_str
                 requested_batch_size = (
                     self.params.get("TENSORRT_MAX_BATCH_SIZE", 1)
                     if self._is_detection_runtime_task(task)
@@ -860,6 +926,8 @@ class RuntimeArtifactMixin:
                 if engine_path.exists():
                     return str(engine_path)
         except Exception as exc:
+            if self._is_fatal_tensorrt_environment_error(str(exc)):
+                self._disable_tensorrt_for_session(str(exc))
             logger.warning(
                 "Aux runtime artifact preparation failed for %s model (%s). Using source checkpoint.",
                 task,

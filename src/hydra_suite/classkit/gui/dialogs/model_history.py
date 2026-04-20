@@ -75,7 +75,8 @@ class ModelHistoryDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet(
             "QTableWidget { background-color: #252526; color: #ffffff; "
-            "gridline-color: #3a3a3a; border: none; }"
+            "alternate-background-color: #2d2d30; gridline-color: #3a3a3a; border: none; }"
+            "QTableWidget::item { padding: 4px 8px; }"
             "QTableWidget::item:selected { background-color: #094771; }"
             "QHeaderView::section { background-color: #2d2d2d; color: #ffffff; "
             "padding: 4px; border: none; border-right: 1px solid #3a3a3a; }"

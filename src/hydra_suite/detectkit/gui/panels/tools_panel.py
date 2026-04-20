@@ -307,6 +307,8 @@ class ToolsPanel(QWidget):
         self._model_combo.clear()
         for path in model_paths:
             self._model_combo.addItem(path)
+        if model_paths and self._model_combo.currentIndex() < 0:
+            self._model_combo.setCurrentIndex(0)
         self._model_combo.blockSignals(False)
 
     def update_model_metrics(self, metrics: dict) -> None:

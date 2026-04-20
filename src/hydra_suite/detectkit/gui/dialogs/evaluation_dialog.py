@@ -137,10 +137,14 @@ class EvaluationDialog(BaseDialog):
         )
 
         report_seq, warnings_seq = format_size_analysis(
-            stats, training_imgsz=self._project.imgsz_seq_crop_obb
+            stats,
+            training_imgsz=self._project.imgsz_seq_crop_obb,
+            pipeline_mode="crop",
         )
         report_direct, warnings_direct = format_size_analysis(
-            stats, training_imgsz=self._project.imgsz_obb_direct
+            stats,
+            training_imgsz=self._project.imgsz_obb_direct,
+            pipeline_mode="full_image",
         )
 
         lines = [
@@ -185,6 +189,51 @@ class EvaluationDialog(BaseDialog):
         dataset_dir = sources[0].path if sources else ""
 
         try:
+            from ..project import (
+                detectkit_latest_model_path_for_role,
+                detectkit_training_history_entry_for_model_path,
+            )
+        except ImportError:
+            detectkit_latest_model_path_for_role = None
+            detectkit_training_history_entry_for_model_path = None
+
+        entry = (
+            detectkit_training_history_entry_for_model_path(self._project, model_path)
+            if detectkit_training_history_entry_for_model_path is not None
+            else None
+        )
+        role = (
+            str((entry or {}).get("role") or "obb_direct").strip().lower()
+            or "obb_direct"
+        )
+        if role == "seq_detect":
+            QMessageBox.information(
+                self,
+                "Quick Test",
+                "The selected model is a sequence-detect stage-1 checkpoint. Quick Test supports OBB direct models and sequence crop OBB checkpoints with a paired detect model.",
+            )
+            return
+
+        imgsz = {
+            "obb_direct": int(self._project.imgsz_obb_direct),
+            "seq_crop_obb": int(self._project.imgsz_seq_crop_obb),
+        }.get(role, int(self._project.imgsz_obb_direct))
+        detect_model_path = ""
+        if role == "seq_crop_obb":
+            detect_model_path = (
+                detectkit_latest_model_path_for_role(self._project, "seq_detect")
+                if detectkit_latest_model_path_for_role is not None
+                else ""
+            )
+            if not detect_model_path:
+                QMessageBox.information(
+                    self,
+                    "Quick Test",
+                    "The selected sequence crop OBB model needs a paired sequence-detect checkpoint before quick testing.",
+                )
+                return
+
+        try:
             from hydra_suite.trackerkit.gui.dialogs.model_test_dialog import (
                 ModelTestDialog,
             )
@@ -196,8 +245,14 @@ class EvaluationDialog(BaseDialog):
 
         dlg = ModelTestDialog(
             model_path=model_path,
+            role=role,
             dataset_dir=dataset_dir,
             device=self._project.device or "cpu",
+            imgsz=imgsz,
+            crop_pad_ratio=self._project.crop_pad_ratio,
+            min_crop_size_px=self._project.min_crop_size_px,
+            enforce_square=self._project.enforce_square,
+            detect_model_path=detect_model_path,
             parent=self,
         )
         dlg.open()

@@ -126,6 +126,7 @@ class DetectKitProject:
     last_source_index: int = 0
     last_image_index: int = 0
     active_model_path: str = ""
+    training_history: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def class_name(self) -> str:

@@ -311,6 +311,87 @@ def test_export_dataset_writes_active_learning_metadata(tmp_path: Path):
     assert "obb_corners_px" not in ann
 
 
+def test_measurements_to_detections_scales_back_raw_obb_corners() -> None:
+    import hydra_suite.data.dataset_generation as dg
+
+    detections = dg._measurements_to_detections(
+        [np.array([25.0, 25.0, 0.0], dtype=np.float32)],
+        [(100.0, 1.0)],
+        0.5,
+        obb_corners=[
+            np.array(
+                [[20.0, 20.0], [30.0, 20.0], [30.0, 30.0], [20.0, 30.0]],
+                dtype=np.float32,
+            )
+        ],
+    )
+
+    match = detections[(50.0, 50.0)]
+    assert match["corners"] is not None
+    assert np.allclose(
+        match["corners"],
+        np.array(
+            [[40.0, 40.0], [60.0, 40.0], [60.0, 60.0], [40.0, 60.0]],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_write_frame_annotations_prefers_matched_detector_corners(tmp_path: Path):
+    import hydra_suite.data.dataset_generation as dg
+
+    images_dir = tmp_path / "images"
+    labels_dir = tmp_path / "labels"
+    images_dir.mkdir()
+    labels_dir.mkdir()
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    df = pd.DataFrame(
+        [
+            {
+                "FrameID": 0,
+                "X": 50.0,
+                "Y": 50.0,
+                "Theta": 0.0,
+                "TrackID": 3,
+                "State": "tracked",
+            }
+        ]
+    )
+    matched_corners = np.array(
+        [[45.0, 25.0], [75.0, 45.0], [55.0, 75.0], [25.0, 55.0]],
+        dtype=np.float32,
+    )
+    yolo_detections = {
+        (50.0, 50.0): {
+            "width": 40.0,
+            "height": 20.0,
+            "theta": 1.0,
+            "corners": matched_corners,
+        }
+    }
+
+    _image_filename, label_filename, annotations = dg._write_frame_annotations(
+        0,
+        frame,
+        df,
+        yolo_detections,
+        {"REFERENCE_BODY_SIZE": 10.0},
+        images_dir,
+        labels_dir,
+        100,
+        100,
+        1.0,
+    )
+
+    text = (labels_dir / label_filename).read_text(encoding="utf-8")
+    assert (
+        text
+        == "0 0.450000 0.250000 0.750000 0.450000 0.550000 0.750000 0.250000 0.550000\n"
+    )
+    assert annotations[0]["dimension_source"] == "yolo_match"
+
+
 def test_score_frame_zero_count():
     """Test scoring when no objects detected."""
     params = {

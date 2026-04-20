@@ -33,6 +33,8 @@ _FAKE_RUNS = [
         "status": "completed",
         "started_at": "2026-04-01T10:00:00",
         "spec": {"base_model": "yolo26s-obb.pt", "hyperparams": {"epochs": 50}},
+        "artifact_paths": ["/some/source_model.pt"],
+        "project_model_path": "/some/model.pt",
         "published_model_path": "/some/model.pt",
     },
     {
@@ -41,6 +43,7 @@ _FAKE_RUNS = [
         "status": "failed",
         "started_at": "2026-04-02T10:00:00",
         "spec": {"base_model": "yolo26s.pt", "hyperparams": {"epochs": 30}},
+        "artifact_paths": [],
         "published_model_path": "",
     },
 ]
@@ -75,14 +78,25 @@ def test_history_dialog_has_close_accept_buttons(qapp, tmp_path, monkeypatch):
     assert close_btn is not None
 
 
-def test_history_dialog_populates_run_list(qapp, tmp_path, monkeypatch):
+def test_history_dialog_populates_table(qapp, tmp_path, monkeypatch):
     import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
 
     monkeypatch.setattr(hd, "_load_runs", lambda proj: _FAKE_RUNS)
     from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
 
     dlg = HistoryDialog(_make_proj(tmp_path))
-    assert dlg._run_list.count() == 2
+    assert dlg.table.rowCount() == 2
+
+
+def test_history_dialog_uses_classkit_style_table(qapp, tmp_path, monkeypatch):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+
+    monkeypatch.setattr(hd, "_load_runs", lambda proj: _FAKE_RUNS)
+    from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
+
+    dlg = HistoryDialog(_make_proj(tmp_path))
+    assert dlg.table.alternatingRowColors() is True
+    assert "alternate-background-color: #2d2d30" in dlg.table.styleSheet()
 
 
 def test_history_dialog_empty_when_no_runs(qapp, tmp_path, monkeypatch):
@@ -92,7 +106,7 @@ def test_history_dialog_empty_when_no_runs(qapp, tmp_path, monkeypatch):
     from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
 
     dlg = HistoryDialog(_make_proj(tmp_path))
-    assert dlg._run_list.count() == 0
+    assert dlg.table.rowCount() == 0
 
 
 def test_history_dialog_load_for_inference_sets_active_model(
@@ -105,16 +119,27 @@ def test_history_dialog_load_for_inference_sets_active_model(
 
     proj = _make_proj(tmp_path)
     dlg = HistoryDialog(proj)
-    dlg._run_list.setCurrentRow(0)
+    dlg.table.selectRow(0)
     dlg._load_for_inference()
     assert proj.active_model_path == "/some/model.pt"
 
 
-def test_history_dialog_has_detail_view(qapp, tmp_path, monkeypatch):
+def test_history_dialog_has_detail_label(qapp, tmp_path, monkeypatch):
     import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
 
     monkeypatch.setattr(hd, "_load_runs", lambda proj: _FAKE_RUNS)
     from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
 
     dlg = HistoryDialog(_make_proj(tmp_path))
-    assert hasattr(dlg, "_detail_view")
+    assert hasattr(dlg, "detail_label")
+    assert "run_001" in dlg.detail_label.text()
+
+
+def test_history_dialog_has_export_button(qapp, tmp_path, monkeypatch):
+    import hydra_suite.detectkit.gui.dialogs.history_dialog as hd
+
+    monkeypatch.setattr(hd, "_load_runs", lambda proj: _FAKE_RUNS)
+    from hydra_suite.detectkit.gui.dialogs.history_dialog import HistoryDialog
+
+    dlg = HistoryDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "_btn_export")

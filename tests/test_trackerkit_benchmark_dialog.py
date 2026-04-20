@@ -189,6 +189,8 @@ def test_tracker_benchmark_dialog_uses_bright_text_on_dark_cards(
 
     assert "QFrame#BenchmarkTargetCard {" in stylesheet
     assert "background-color: #252526;" in stylesheet
+    assert "QTableWidget#BenchmarkResultsTable::item:alternate {" in stylesheet
+    assert "alternate-background-color: #2d2d30;" in stylesheet
     assert f"color: {HYDRA_DIALOG_TEXT_COLOR};" in stylesheet
 
 

@@ -4,6 +4,7 @@ import gc
 import json
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,7 @@ classkit_model_dir = pytest.importorskip(
 classkit_scheme_path = pytest.importorskip(
     "hydra_suite.classkit.gui.project"
 ).classkit_scheme_path
+ClassKitDB = pytest.importorskip("hydra_suite.classkit.core.store.db").ClassKitDB
 main_window_module = pytest.importorskip("hydra_suite.classkit.gui.main_window")
 MainWindow = main_window_module.MainWindow
 
@@ -275,6 +277,134 @@ def test_non_first_source_schema_mismatch_can_import_images_only(
     request = window._resolve_ingest_request(source_root)
 
     assert request == {"source_root": source_root, "import_labels": False}
+
+
+def test_open_class_editor_clears_labels_removed_from_new_scheme(
+    qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    db = ClassKitDB(project_dir / "classkit.db")
+
+    image_a = project_dir / "a.jpg"
+    image_b = project_dir / "b.jpg"
+    image_a.write_bytes(b"a")
+    image_b.write_bytes(b"b")
+    db.add_images([image_a, image_b])
+    db.update_labels_batch(
+        {
+            str(image_a.resolve()): "red|left",
+            str(image_b.resolve()): "blue|right",
+        }
+    )
+
+    class FakeDialog:
+        Accepted = 1
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.flat_classes = ["red"]
+
+        def exec(self) -> int:
+            return self.Accepted
+
+        def get_scheme_dict(self) -> dict:
+            return {
+                "name": "directional",
+                "description": "updated",
+                "factors": [
+                    {"name": "color", "labels": ["red"], "shortcut_keys": []},
+                    {
+                        "name": "side",
+                        "labels": ["left", "right"],
+                        "shortcut_keys": [],
+                    },
+                ],
+                "training_modes": ["flat_custom", "multihead_custom"],
+            }
+
+    monkeypatch.setattr(
+        "hydra_suite.classkit.gui.dialogs.ClassEditorDialog",
+        FakeDialog,
+    )
+
+    window = MainWindow()
+    window.project_path = project_dir
+    window.db_path = db.db_path
+    window.image_paths = [image_a.resolve(), image_b.resolve()]
+    window.image_labels = db.get_all_labels()
+
+    monkeypatch.setattr(window, "rebuild_label_buttons", lambda: None)
+    monkeypatch.setattr(window, "setup_label_shortcuts", lambda: None)
+    monkeypatch.setattr(window, "update_context_panel", lambda: None)
+    monkeypatch.setattr(window, "update_explorer_plot", lambda *args, **kwargs: None)
+
+    window.open_class_editor()
+
+    assert db.get_all_labels() == ["red|left", None]
+    assert window.image_labels == ["red|left", None]
+    assert window.classes == ["red"]
+
+
+def test_validate_training_pairs_prunes_labels_removed_from_active_scheme(
+    qapp, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    db = ClassKitDB(project_dir / "classkit.db")
+
+    image_paths = []
+    for index, label in enumerate(
+        ["left", "right", "left", "right", "legacy"],
+        start=1,
+    ):
+        image_path = project_dir / f"img_{index}.jpg"
+        image_path.write_bytes(label.encode("utf-8"))
+        image_paths.append(image_path)
+    db.add_images(image_paths)
+    db.update_labels_batch(
+        {
+            str(path.resolve()): label
+            for path, label in zip(
+                image_paths,
+                ["left", "right", "left", "right", "legacy"],
+            )
+        }
+    )
+
+    scheme_path = classkit_scheme_path(project_dir)
+    scheme_path.parent.mkdir(parents=True, exist_ok=True)
+    scheme_path.write_text(
+        json.dumps(
+            {
+                "name": "direction",
+                "description": "only active labels",
+                "factors": [
+                    {
+                        "name": "direction",
+                        "labels": ["left", "right"],
+                        "shortcut_keys": [],
+                    }
+                ],
+                "training_modes": ["flat_custom", "flat_yolo"],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    window = MainWindow()
+    window.project_path = project_dir
+    window.db_path = db.db_path
+    window.image_paths = [path.resolve() for path in image_paths]
+    window.image_labels = db.get_all_labels()
+    window.embeddings = np.zeros((len(image_paths), 4), dtype=np.float32)
+
+    labeled_pairs = window._validate_training_pairs()
+
+    assert labeled_pairs is not None
+    assert [label for _, label in labeled_pairs] == ["left", "right", "left", "right"]
+    assert db.get_all_labels() == ["left", "right", "left", "right", None]
+    assert window.image_labels == ["left", "right", "left", "right", None]
 
 
 def test_make_training_spec_propagates_custom_finetune_settings(
@@ -1778,6 +1908,48 @@ def test_metrics_display_includes_heldout_validation_summary(qapp) -> None:
 
     assert "0.875" in window.metrics_validation_label.text()
     assert "0.875" in window.metrics_view.toPlainText()
+
+
+def test_metrics_display_avoids_divide_warning_for_empty_confusion_rows(qapp) -> None:
+    metrics_module = pytest.importorskip("hydra_suite.classkit.core.train.metrics")
+
+    window = MainWindow()
+    metrics = metrics_module.EvalMetrics(
+        accuracy=1.0,
+        macro_precision=0.5,
+        macro_recall=0.5,
+        macro_f1=0.5,
+        weighted_f1=1.0,
+        per_class=[
+            metrics_module.ClassMetrics(
+                class_id=0,
+                class_name="class_1",
+                precision=1.0,
+                recall=1.0,
+                f1=1.0,
+                support=2,
+            ),
+            metrics_module.ClassMetrics(
+                class_id=1,
+                class_name="class_2",
+                precision=0.0,
+                recall=0.0,
+                f1=0.0,
+                support=0,
+            ),
+        ],
+        confusion_matrix=np.array([[2, 0], [0, 0]], dtype=int),
+        num_samples=2,
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", RuntimeWarning)
+        window._update_metrics_display(metrics, activate_metrics_tab=False)
+
+    assert not any(
+        "invalid value encountered in divide" in str(warning.message)
+        for warning in caught
+    )
 
 
 def test_load_project_data_clears_stale_model_state_before_restore(

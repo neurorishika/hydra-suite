@@ -5,7 +5,7 @@ This page documents the conda environment files and Makefile targets used in the
 ## Environment files
 
 | File | Env name | Platform | What conda provides |
-|------|----------|----------|-------------------|
+| ---- | -------- | -------- | ----------------- |
 | `environment.yml` | `hydra` | All | Python, NumPy, SciPy, PySide6, Qt6, OpenCV, Numba |
 | `environment-mps.yml` | `hydra-mps` | macOS M1-M4 | Same as CPU |
 | `environment-cuda.yml` | `hydra-cuda` | Linux/Windows (NVIDIA) | Same + CUDA 12 runtime libs (cublas, cudnn, curand, cufft) |
@@ -16,16 +16,18 @@ The conda environments provide **system libraries only** (Qt, OpenGL, CUDA runti
 ## Requirements files
 
 | File | Inherits | Adds (beyond pyproject.toml) |
-|------|----------|------------------------------|
+| ---- | -------- | ---------------------------- |
 | `requirements.txt` | `-e .` | `torch`, `torchvision` (CPU) |
 | `requirements-mps.txt` | `-e .` | `torch`, `torchvision`, `torchaudio`, `onnxruntime` |
-| `requirements-cuda.txt` | `-e .` | `torch`, `torchvision`, `torchaudio`, `tensorrt`, `onnxruntime-gpu` |
+| `requirements-cuda.txt` | `-e .` | `torch`, `torchvision`, `torchaudio`, `onnxruntime-gpu` |
 | `requirements-cuda12.txt` | `-r requirements-cuda.txt` | `--extra-index-url .../cu128`, `tensorrt-cu12-*`, `cupy-cuda12x` |
 | `requirements-cuda13.txt` | `-r requirements-cuda.txt` | `--extra-index-url .../cu130`, `tensorrt-cu13-*`, `cupy-cuda13x` |
 | `requirements-rocm.txt` | `-e .` | `torch` (ROCm), `cupy-rocm-6-0`, `onnxruntime` |
 | `requirements-dev.txt` | (standalone) | pytest, black, flake8, mypy, build, twine, etc. |
 
 All requirements files include `-e .` which installs the package in editable mode, pulling base dependencies from `pyproject.toml`. This means dependencies are declared once — in `pyproject.toml` — and requirements files only add what `pyproject.toml` cannot express (torch index URLs, GPU-specific wheels).
+
+For runtime-specific GPU installs, prefer the Makefile targets over direct `pip install -e .[extra]`. The CUDA install targets reset conflicting `onnxruntime` and TensorRT wheel families before reinstalling the correct variant for the selected platform, which avoids mixed-provider installs and broken CUDA backend selection.
 
 ## ONNX Runtime and CUDA compatibility
 
@@ -35,6 +37,8 @@ All requirements files include `-e .` which installs the package in editable mod
 - **conda path:** `environment-cuda.yml` installs CUDA 12 runtime libs via conda packages, including `libcurand`. `make install-cuda` writes `LD_LIBRARY_PATH` activation hooks.
 
 Both approaches work on CUDA 13 systems — CUDA 12 user-space libs coexist with a CUDA 13 driver.
+
+TensorRT follows the same rule: install exactly one CUDA wheel family. `requirements-cuda12.txt` installs the CUDA 12 TensorRT wheels, and `requirements-cuda13.txt` installs the CUDA 13 family. Mixing both families in one env can leave `import tensorrt` working while builder initialization fails at runtime.
 
 ## Makefile targets
 

@@ -19,7 +19,11 @@ from hydra_suite.training.dataset_builders import (
     derive_detect_dataset_from_obb,
     merge_obb_sources,
 )
-from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
+from hydra_suite.training.dataset_inspector import (
+    OBBSizeStats,
+    format_size_analysis,
+    inspect_obb_or_detect_dataset,
+)
 from hydra_suite.training.model_publish import publish_trained_model
 from hydra_suite.training.registry import (
     create_run_record,
@@ -155,6 +159,57 @@ def test_inspector_txt_list_honors_custom_labels_root(tmp_path: Path):
     assert (
         Path(item.label_path).resolve() == (root / "ann" / "train" / "a.txt").resolve()
     )
+
+
+def test_format_size_analysis_crop_mode_warns_on_crop_upscaling() -> None:
+    stats = OBBSizeStats(
+        n_objects=3,
+        n_images=1,
+        obj_widths=[100.0, 110.0, 90.0],
+        obj_heights=[98.0, 108.0, 92.0],
+        crop_sizes=[150.0, 160.0, 140.0],
+        img_widths=[4512],
+        img_heights=[4512],
+        obj_image_longest_dims=[4512.0, 4512.0, 4512.0],
+    )
+
+    report, warnings = format_size_analysis(
+        stats,
+        training_imgsz=640,
+        pipeline_mode="crop",
+    )
+
+    assert "100% of crops will be upscaled" in report
+    assert any("heavily upscaled" in warning for warning in warnings)
+    assert any("Median crop" in warning for warning in warnings)
+
+
+def test_format_size_analysis_full_image_mode_uses_resized_object_scale() -> None:
+    stats = OBBSizeStats(
+        n_objects=3,
+        n_images=1,
+        obj_widths=[100.0, 110.0, 90.0],
+        obj_heights=[98.0, 108.0, 92.0],
+        crop_sizes=[150.0, 160.0, 140.0],
+        img_widths=[4512],
+        img_heights=[4512],
+        obj_image_longest_dims=[4512.0, 4512.0, 4512.0],
+    )
+
+    report, warnings = format_size_analysis(
+        stats,
+        training_imgsz=640,
+        pipeline_mode="full_image",
+    )
+
+    assert "At full-image training imgsz=640:" in report
+    assert "object largest dimension after resize" in report
+    assert "of crops will be upscaled" not in report
+    assert all(
+        "crops are smaller than imgsz=640" not in warning for warning in warnings
+    )
+    assert any("under 16px" in warning for warning in warnings)
+    assert any("Median object shrinks" in warning for warning in warnings)
 
 
 def test_merge_obb_sources_dedup_and_counts(tmp_path: Path):
@@ -316,10 +371,16 @@ def test_merge_obb_sources_filters_and_remaps_source_superset_classes(tmp_path: 
 
 
 def test_runner_command_per_role(tmp_path: Path):
+    ds_dir = tmp_path / "ds"
+    ds_dir.mkdir(parents=True)
+    (ds_dir / "dataset.yaml").write_text(
+        "train: images/train\nval: images/val\n",
+        encoding="utf-8",
+    )
     spec = TrainingRunSpec(
         role=TrainingRole.SEQ_DETECT,
         source_datasets=[SourceDataset(path="/tmp/src")],
-        derived_dataset_dir=str(tmp_path / "ds"),
+        derived_dataset_dir=str(ds_dir),
         base_model="yolo26s.pt",
         hyperparams=TrainingHyperParams(
             epochs=10, imgsz=640, batch=8, lr0=0.01, patience=5, workers=2
@@ -330,7 +391,24 @@ def test_runner_command_per_role(tmp_path: Path):
     joined = " ".join(cmd)
     assert "detect" in joined
     assert "train" in joined
-    assert "data=" in joined
+    assert f"data={str((ds_dir / 'dataset.yaml').resolve())}" in joined
+
+
+def test_runner_command_falls_back_to_directory_without_dataset_yaml(tmp_path: Path):
+    ds_dir = tmp_path / "ds"
+    ds_dir.mkdir(parents=True)
+    spec = TrainingRunSpec(
+        role=TrainingRole.SEQ_DETECT,
+        source_datasets=[SourceDataset(path="/tmp/src")],
+        derived_dataset_dir=str(ds_dir),
+        base_model="yolo26s.pt",
+        hyperparams=TrainingHyperParams(),
+        device="cpu",
+    )
+
+    cmd = build_ultralytics_command(spec, tmp_path / "runs" / "abc")
+
+    assert f"data={str(ds_dir)}" in " ".join(cmd)
 
 
 def test_runner_fallback_uses_ultralytics_module(tmp_path: Path, monkeypatch):

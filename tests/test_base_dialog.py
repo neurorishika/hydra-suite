@@ -102,6 +102,8 @@ def test_base_dialog_uses_trackerkit_aligned_shared_theme(qapp):
     assert "background-color: #4a4a4a;" in HYDRA_DIALOG_STYLE
     assert "color: #9cdcfe;" in HYDRA_DIALOG_STYLE
     assert f"color: {HYDRA_DIALOG_TEXT_COLOR};" in HYDRA_DIALOG_STYLE
+    assert "alternate-background-color: #2d2d30;" in HYDRA_DIALOG_STYLE
+    assert "QTableWidget::item:alternate {" in HYDRA_DIALOG_STYLE
     assert "QLabel:disabled" not in HYDRA_DIALOG_STYLE
     assert "QGroupBox:disabled" not in HYDRA_DIALOG_STYLE
     assert "QCheckBox:disabled" not in HYDRA_DIALOG_STYLE

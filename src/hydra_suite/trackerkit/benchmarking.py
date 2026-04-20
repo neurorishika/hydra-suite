@@ -1042,6 +1042,25 @@ def _make_detector_runtime_stub(runtime: str, model_path: str, *, batch_size: in
     return detector
 
 
+def _ensure_detector_runtime_materialized(detector: Any, runtime: str) -> None:
+    """Ensure detector initialization honored the requested accelerated runtime."""
+    rt = _normalize_runtime(runtime)
+    if rt == "tensorrt" and not bool(getattr(detector, "use_tensorrt", False)):
+        reason = str(
+            getattr(detector, "tensorrt_failure_reason", "")
+            or "TensorRT backend was requested, but detector fell back to standard inference."
+        ).strip()
+        raise RuntimeError(reason)
+    if rt in {"onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"} and not bool(
+        getattr(detector, "use_onnx", False)
+    ):
+        reason = str(
+            getattr(detector, "onnx_failure_reason", "")
+            or "ONNX runtime was requested, but detector fell back to standard inference."
+        ).strip()
+        raise RuntimeError(reason)
+
+
 def bench_obb(
     model_path: str,
     runtime: str,
@@ -1074,6 +1093,7 @@ def bench_obb(
             max_targets=max_targets,
         )
         detector = YOLOOBBDetector(params)
+        _ensure_detector_runtime_materialized(detector, runtime)
         frames = [make_synthetic_frame(*frame_size) for _ in range(batch_size)]
         for _ in range(warmup):
             if batch_size == 1:
@@ -1157,6 +1177,7 @@ def bench_sequential(
             }
         )
         detector = YOLOOBBDetector(params)
+        _ensure_detector_runtime_materialized(detector, runtime)
         frames = [make_synthetic_frame(*frame_size) for _ in range(batch_size)]
         for _ in range(warmup):
             if batch_size == 1:

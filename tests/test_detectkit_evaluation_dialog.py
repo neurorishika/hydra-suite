@@ -95,3 +95,54 @@ def test_evaluation_dialog_quick_test_no_model_shows_message(
     )
     dlg._quick_test()
     assert shown, "Expected an informative message when no model is active"
+
+
+def test_evaluation_dialog_quick_test_passes_role_specific_settings(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs.evaluation_dialog import EvaluationDialog
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    model_path = tmp_path / "models" / "best.pt"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"weights")
+
+    proj = _make_proj(tmp_path)
+    proj.active_model_path = str(model_path)
+    proj.imgsz_obb_direct = 896
+    proj.crop_pad_ratio = 0.2
+    proj.min_crop_size_px = 96
+    proj.enforce_square = False
+    proj.sources = [OBBSource(path=str(tmp_path / "dataset"), name="dataset")]
+    proj.training_history = [
+        {
+            "run_id": "run_1",
+            "role": "obb_direct",
+            "project_model_path": str(model_path),
+        }
+    ]
+    dlg = EvaluationDialog(proj)
+
+    captured: dict[str, object] = {}
+
+    class FakeDialog:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def open(self):
+            captured["opened"] = True
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.model_test_dialog.ModelTestDialog",
+        FakeDialog,
+    )
+
+    dlg._quick_test()
+
+    assert captured["role"] == "obb_direct"
+    assert captured["imgsz"] == 896
+    assert captured["dataset_dir"] == str(tmp_path / "dataset")
+    assert captured["crop_pad_ratio"] == 0.2
+    assert captured["min_crop_size_px"] == 96
+    assert captured["enforce_square"] is False
+    assert captured["opened"] is True

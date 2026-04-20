@@ -164,3 +164,79 @@ def test_format_validation_report_includes_paths_and_status() -> None:
     assert "Validation: FAIL" in text
     assert "missing_label" in text
     assert "/tmp/example.txt" in text
+
+
+def test_validate_ultralytics_dataset_detect_flags_invalid_detect_lines(
+    tmp_path: Path,
+) -> None:
+    validation, _contracts, inspector = _load_validation_modules()
+
+    train_img = tmp_path / "images" / "train" / "train.jpg"
+    val_img = tmp_path / "images" / "val" / "val.jpg"
+    train_img.parent.mkdir(parents=True, exist_ok=True)
+    val_img.parent.mkdir(parents=True, exist_ok=True)
+    train_img.write_bytes(b"train")
+    val_img.write_bytes(b"val")
+
+    train_lbl = tmp_path / "labels" / "train" / "train.txt"
+    val_lbl = tmp_path / "labels" / "val" / "val.txt"
+    _write_label(train_lbl, "0 0.5 0.5 0.3 0.2")
+    _write_label(val_lbl, "0 0.5 0.5 0.3 0.2 0.1")
+
+    inspection = inspector.DatasetInspection(
+        root_dir=str(tmp_path),
+        splits={
+            "train": [
+                inspector.DatasetItem(
+                    image_path=str(train_img),
+                    label_path=str(train_lbl),
+                    split="train",
+                )
+            ],
+            "val": [
+                inspector.DatasetItem(
+                    image_path=str(val_img),
+                    label_path=str(val_lbl),
+                    split="val",
+                )
+            ],
+        },
+    )
+
+    report = validation.validate_ultralytics_dataset(
+        inspection,
+        label_mode="detect",
+    )
+
+    assert report.valid is False
+    assert any(issue.code == "invalid_detect_format" for issue in report.issues)
+
+
+def test_validate_role_dataset_detect_accepts_expected_ultralytics_layout(
+    tmp_path: Path,
+) -> None:
+    validation, contracts, _inspector = _load_validation_modules()
+
+    (tmp_path / "images" / "train").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "images" / "val").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "labels" / "train").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "labels" / "val").mkdir(parents=True, exist_ok=True)
+
+    train_img = tmp_path / "images" / "train" / "a.jpg"
+    val_img = tmp_path / "images" / "val" / "b.jpg"
+    train_img.write_bytes(b"a")
+    val_img.write_bytes(b"b")
+    _write_label(tmp_path / "labels" / "train" / "a.txt", "0 0.5 0.5 0.3 0.2")
+    _write_label(tmp_path / "labels" / "val" / "b.txt", "0 0.4 0.4 0.2 0.2")
+    (tmp_path / "dataset.yaml").write_text(
+        "train: images/train\nval: images/val\nnames:\n  0: ant\n",
+        encoding="utf-8",
+    )
+
+    report = validation.validate_role_dataset(
+        tmp_path,
+        contracts.TrainingRole.SEQ_DETECT,
+    )
+
+    assert report.valid is True
+    assert report.stats["label_mode"] == "detect"

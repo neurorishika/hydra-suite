@@ -358,7 +358,17 @@ def _measurements_to_detections(meas, shapes, resize_factor, obb_corners=None):
         cy_det *= scale_back
         w_det *= scale_back
         h_det *= scale_back
-        yolo_detections[(cx_det, cy_det)] = (w_det, h_det, angle_rad)
+        corners_det = None
+        if obb_corners is not None and det_idx < len(obb_corners):
+            corners_det = np.asarray(obb_corners[det_idx], dtype=np.float32).copy()
+            corners_det[:, 0] *= scale_back
+            corners_det[:, 1] *= scale_back
+        yolo_detections[(cx_det, cy_det)] = {
+            "width": w_det,
+            "height": h_det,
+            "theta": angle_rad,
+            "corners": corners_det,
+        }
     return yolo_detections
 
 
@@ -432,25 +442,45 @@ def _detect_batch(detector, batch_frames, batch_frame_ids, valid_batch_indices, 
 
 
 def _match_yolo_detection(cx, cy, yolo_detections, frame_id):
-    """Find closest YOLO detection and return (w, h, source) or (None, None, source)."""
+    """Find closest YOLO detection and return matched geometry details."""
     if not yolo_detections:
-        return None, None, "reference_size"
+        return None, None, None, "reference_size"
 
     min_dist = float("inf")
     matched_detection = None
-    for (cx_det, cy_det), (w_det, h_det, theta_det) in yolo_detections.items():
+    for (cx_det, cy_det), detection in yolo_detections.items():
         dist = np.sqrt((cx - cx_det) ** 2 + (cy - cy_det) ** 2)
         if dist < min_dist:
             min_dist = dist
-            matched_detection = (w_det, h_det, theta_det)
+            matched_detection = detection
 
     if min_dist < 50 and matched_detection is not None:
-        w, h, _ = matched_detection
+        if isinstance(matched_detection, dict):
+            w = matched_detection.get("width")
+            h = matched_detection.get("height")
+            corners = matched_detection.get("corners")
+        else:
+            w, h, _theta = matched_detection
+            corners = None
         logger.debug(
             f"Frame {frame_id}: Matched tracking to YOLO detection (dist={min_dist:.1f})"
         )
-        return w, h, "yolo_match"
-    return None, None, "reference_size"
+        return w, h, corners, "yolo_match"
+    return None, None, None, "reference_size"
+
+
+def _format_obb_corners(corners, frame_width, frame_height):
+    """Format raw pixel-space OBB corners as a YOLO OBB annotation line."""
+    corners_arr = np.asarray(corners, dtype=np.float32).reshape(4, 2).copy()
+    corners_arr[:, 0] = np.clip(corners_arr[:, 0] / frame_width, 0.0, 1.0)
+    corners_arr[:, 1] = np.clip(corners_arr[:, 1] / frame_height, 0.0, 1.0)
+
+    return (
+        f"0 {corners_arr[0, 0]:.6f} {corners_arr[0, 1]:.6f} "
+        f"{corners_arr[1, 0]:.6f} {corners_arr[1, 1]:.6f} "
+        f"{corners_arr[2, 0]:.6f} {corners_arr[2, 1]:.6f} "
+        f"{corners_arr[3, 0]:.6f} {corners_arr[3, 1]:.6f}\n"
+    )
 
 
 def _compute_obb_corners(cx, cy, w, h, theta, frame_width, frame_height):
@@ -528,7 +558,7 @@ def _write_frame_annotations(
             cy = detection["Y"] * scale_back
             theta = detection["Theta"]
 
-            w, h, dimension_source = _match_yolo_detection(
+            w, h, matched_corners, dimension_source = _match_yolo_detection(
                 cx, cy, yolo_detections, frame_id
             )
             if w is None or h is None:
@@ -537,9 +567,16 @@ def _write_frame_annotations(
                 h = ref_size * 0.8
                 logger.debug(f"Frame {frame_id}: Using reference size approximation")
 
-            obb_line = _compute_obb_corners(
-                cx, cy, w, h, theta, frame_width, frame_height
-            )
+            if matched_corners is not None:
+                obb_line = _format_obb_corners(
+                    matched_corners,
+                    frame_width,
+                    frame_height,
+                )
+            else:
+                obb_line = _compute_obb_corners(
+                    cx, cy, w, h, theta, frame_width, frame_height
+                )
             f.write(obb_line)
 
             track_id = -1

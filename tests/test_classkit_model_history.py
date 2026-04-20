@@ -1,6 +1,32 @@
 from __future__ import annotations
 
+import os
+import sys
+
+import pytest
 import torch
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+QApplication = QtWidgets.QApplication
+
+
+@pytest.fixture()
+def qapp():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    return app
+
+
+def test_model_history_dialog_sets_high_contrast_alternating_rows(qapp, tmp_path):
+    from hydra_suite.classkit.gui.dialogs.model_history import ModelHistoryDialog
+
+    dialog = ModelHistoryDialog([], project_path=tmp_path)
+
+    assert dialog.table.alternatingRowColors() is True
+    assert "alternate-background-color: #2d2d30" in dialog.table.styleSheet()
 
 
 def test_model_history_export_upgrades_legacy_flat_checkpoint_to_v2(

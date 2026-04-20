@@ -405,8 +405,12 @@ QLabel#BenchmarkStatusText {
     font-weight: 500;
 }
 QTableWidget#BenchmarkResultsTable {
+    background-color: #252526;
     gridline-color: #3e3e42;
     alternate-background-color: #2d2d30;
+}
+QTableWidget#BenchmarkResultsTable::item:alternate {
+    background-color: #2d2d30;
 }
 QTableWidget#BenchmarkResultsTable::item {
     padding: 6px 8px;

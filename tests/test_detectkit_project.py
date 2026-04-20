@@ -10,10 +10,15 @@ from hydra_suite.detectkit.gui.project import (
     create_project,
     default_project_parent_dir,
     detectkit_artifact_paths,
+    detectkit_model_path_is_previewable,
+    detectkit_models_dir,
+    detectkit_project_model_paths,
+    detectkit_project_preview_model_paths,
     legacy_project_file_path,
     open_project,
     project_exists,
     project_file_path,
+    record_training_results,
 )
 
 
@@ -101,6 +106,7 @@ def test_create_project_uses_bundle_layout(tmp_path: Path) -> None:
     assert (tmp_path / "state").is_dir()
     assert (tmp_path / "artifacts").is_dir()
     assert (tmp_path / "history").is_dir()
+    assert detectkit_models_dir(tmp_path).is_dir()
     assert artifact_paths["training_runs"].is_dir()
     assert artifact_paths["evaluation"].is_dir()
     assert artifact_paths["exports"].is_dir()
@@ -169,3 +175,116 @@ def test_open_project_recovers_from_malformed_manifest_using_legacy_file(
     assert loaded.class_names == ["ant"]
     assert project_file_path(tmp_path).exists()
     assert (tmp_path / "history" / "legacy_detectkit_project.json").exists()
+
+
+def test_record_training_results_exports_models_and_logs_to_project(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", class_names=["ant"])
+    run_dir = tmp_path / "workspace_run"
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True)
+    artifact_path = weights_dir / "best.pt"
+    artifact_path.write_bytes(b"weights")
+    metrics_path = run_dir / "results.csv"
+    metrics_path.write_text("epoch,metric\n1,0.9\n", encoding="utf-8")
+
+    persisted = record_training_results(
+        project,
+        [
+            {
+                "run_id": "20260420-120000_obb_direct_deadbeef",
+                "role": "obb_direct",
+                "success": True,
+                "artifact_path": str(artifact_path),
+                "metrics_path": str(metrics_path),
+                "training_log": "epoch 1\nmetric 0.9",
+            }
+        ],
+    )
+
+    assert len(persisted) == 1
+    entry = persisted[0]
+    assert Path(entry["project_model_path"]).exists()
+    assert Path(entry["project_model_path"]).parent == project.project_dir / "models"
+    assert Path(entry["project_log_path"]).exists()
+    assert Path(entry["project_metrics_paths"][0]).exists()
+    assert detectkit_project_model_paths(project) == [entry["project_model_path"]]
+
+
+def test_detectkit_project_model_paths_prefers_active_model(tmp_path: Path) -> None:
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    model_a = tmp_path / "models" / "a.pt"
+    model_b = tmp_path / "models" / "b.pt"
+    model_a.parent.mkdir(parents=True)
+    model_a.write_bytes(b"a")
+    model_b.write_bytes(b"b")
+    project.active_model_path = str(model_b)
+    project.training_history = [
+        {"run_id": "run_1", "project_model_path": str(model_a)},
+        {"run_id": "run_2", "project_model_path": str(model_b)},
+    ]
+
+    assert detectkit_project_model_paths(project) == [str(model_b), str(model_a)]
+
+
+def test_detectkit_project_preview_model_paths_filters_non_preview_roles(
+    tmp_path: Path,
+) -> None:
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    model_obb = tmp_path / "models" / "obb.pt"
+    model_seq = tmp_path / "models" / "seq.pt"
+    model_obb.parent.mkdir(parents=True)
+    model_obb.write_bytes(b"obb")
+    model_seq.write_bytes(b"seq")
+    project.training_history = [
+        {
+            "run_id": "run_1",
+            "role": "obb_direct",
+            "project_model_path": str(model_obb),
+        },
+        {
+            "run_id": "run_2",
+            "role": "seq_detect",
+            "project_model_path": str(model_seq),
+        },
+    ]
+
+    assert detectkit_project_preview_model_paths(project) == [str(model_obb)]
+    assert detectkit_model_path_is_previewable(project, str(model_obb)) is True
+    assert detectkit_model_path_is_previewable(project, str(model_seq)) is False
+
+
+def test_record_training_results_prefers_previewable_active_model(
+    tmp_path: Path,
+) -> None:
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.auto_select = True
+
+    obb_artifact = tmp_path / "runs" / "obb" / "weights" / "best.pt"
+    seq_artifact = tmp_path / "runs" / "seq" / "weights" / "best.pt"
+    obb_artifact.parent.mkdir(parents=True)
+    seq_artifact.parent.mkdir(parents=True)
+    obb_artifact.write_bytes(b"obb")
+    seq_artifact.write_bytes(b"seq")
+
+    record_training_results(
+        project,
+        [
+            {
+                "run_id": "run_obb",
+                "role": "obb_direct",
+                "success": True,
+                "artifact_path": str(obb_artifact),
+            },
+            {
+                "run_id": "run_seq",
+                "role": "seq_detect",
+                "success": True,
+                "artifact_path": str(seq_artifact),
+            },
+        ],
+    )
+
+    assert project.active_model_path
+    assert detectkit_model_path_is_previewable(project, project.active_model_path)

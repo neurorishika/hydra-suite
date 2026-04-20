@@ -30,9 +30,12 @@ from .canvas import OBBCanvas
 from .models import DetectKitProject
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
+from .prediction_preview import predict_preview_detections
 from .project import (
     create_project,
     default_project_parent_dir,
+    detectkit_model_path_is_previewable,
+    detectkit_project_preview_model_paths,
     open_project,
     project_exists,
     save_project,
@@ -339,6 +342,9 @@ class DetectKitMainWindow(QMainWindow):
 
         self.config = DetectKitConfig()
         self._project: Optional[DetectKitProject] = None
+        self._current_source_path = ""
+        self._current_image_path = ""
+        self._last_prediction_request: tuple[str, str, float] | None = None
 
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
@@ -650,9 +656,19 @@ class DetectKitMainWindow(QMainWindow):
     def _load_project(self, proj: DetectKitProject) -> None:
         """Activate proj: wire panels, show toolbar, switch to workspace."""
         self._project = proj
+        self._current_source_path = ""
+        self._current_image_path = ""
+        self._last_prediction_request = None
+
+        preview_paths = detectkit_project_preview_model_paths(proj)
+        if preview_paths and not detectkit_model_path_is_previewable(
+            proj, proj.active_model_path
+        ):
+            proj.active_model_path = preview_paths[0]
 
         self._dataset_panel.set_project(proj, self)
         self._tools_panel.set_project(proj)
+        self._tools_panel.refresh_model_selector(preview_paths)
 
         self._toolbar.setVisible(True)
         self._stack.setCurrentIndex(1)
@@ -712,31 +728,84 @@ class DetectKitMainWindow(QMainWindow):
         dlg = HistoryDialog(self._project, parent=self)
         result = dlg.exec()
         if result == dlg.DialogCode.Accepted:
-            model_paths = (
-                [self._project.active_model_path]
-                if self._project.active_model_path
-                else []
+            self._tools_panel.refresh_model_selector(
+                detectkit_project_preview_model_paths(self._project)
             )
-            self._tools_panel.refresh_model_selector(model_paths)
+            self._refresh_prediction_overlay(force=True)
 
     def _on_training_completed(self, results: list) -> None:
-        model_paths = [
-            r.get("published_model_path", "")
-            for r in results
-            if r.get("published_model_path")
-        ]
-        self._tools_panel.refresh_model_selector(model_paths)
+        if self._project is None:
+            return
+        self._tools_panel.refresh_model_selector(
+            detectkit_project_preview_model_paths(self._project)
+        )
+        self._refresh_prediction_overlay(force=True)
         self._save_current_project()
 
     def _export_stub(self) -> None:
-        QMessageBox.information(
-            self, "Export", "Export is not yet implemented in this release."
-        )
+        self._open_history_dialog()
 
     def _on_overlay_changed(self) -> None:
         settings = self._tools_panel.get_overlay_settings()
+        if self._project is not None:
+            self._project.active_model_path = settings.active_model_path
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
+        self._refresh_prediction_overlay()
+
+    def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
+        if self._project is None or not self._current_image_path:
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            return
+
+        settings = self._tools_panel.get_overlay_settings()
+        model_path = str(settings.active_model_path or "").strip()
+        request = (
+            self._current_image_path,
+            model_path,
+            round(float(settings.confidence_threshold), 4),
+        )
+
+        if not model_path:
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            return
+
+        if not detectkit_model_path_is_previewable(self._project, model_path):
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                "Selected model does not support direct preview overlays.",
+                4000,
+            )
+            return
+
+        if not force and request == self._last_prediction_request:
+            return
+
+        try:
+            detections = predict_preview_detections(
+                self._current_image_path,
+                model_path,
+                device_preference=self._project.device or "auto",
+                confidence_threshold=settings.confidence_threshold,
+            )
+        except Exception as exc:
+            logger.warning("DetectKit preview inference failed", exc_info=True)
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                f"Prediction preview failed: {exc}",
+                5000,
+            )
+            return
+
+        self._canvas.set_pred_detections(
+            detections,
+            class_names=self._project.class_names,
+        )
+        self._last_prediction_request = request
 
     # ------------------------------------------------------------------
     # Image display
@@ -744,6 +813,9 @@ class DetectKitMainWindow(QMainWindow):
 
     def show_image(self, source_path: str, image_path: str) -> None:
         """Load an image and overlay GT labels."""
+        self._current_source_path = str(source_path or "")
+        self._current_image_path = str(image_path or "")
+        self._last_prediction_request = None
         self._canvas.clear_gt_detections()
         self._canvas.clear_pred_detections()
         ok = self._canvas.load_image(image_path)
@@ -774,6 +846,7 @@ class DetectKitMainWindow(QMainWindow):
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
                 self._canvas.set_gt_detections(dets, class_names=class_names)
 
+        self._refresh_prediction_overlay(force=True)
         self._canvas.fit_in_view()
 
     # ------------------------------------------------------------------

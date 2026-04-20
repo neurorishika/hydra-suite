@@ -98,16 +98,27 @@ def _ultralytics_task_for_role(role: TrainingRole) -> str:
     raise RuntimeError(f"Role {role.value} does not map to ultralytics CLI task")
 
 
+def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
+    """Resolve the `data=` argument expected by Ultralytics for a training run."""
+    dataset_ref = Path(spec.derived_dataset_dir).expanduser()
+    if task in {"detect", "obb"} and dataset_ref.is_dir():
+        yaml_path = dataset_ref / "dataset.yaml"
+        if yaml_path.exists():
+            return str(yaml_path.resolve())
+    return str(spec.derived_dataset_dir)
+
+
 def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> list[str]:
     """Build deterministic Ultralytics train command for a role."""
 
     task = _ultralytics_task_for_role(spec.role)
     run_dir = Path(run_dir).expanduser().resolve()
+    data_arg = _resolve_ultralytics_data_arg(spec, task)
 
     args = [
         task,
         "train",
-        f"data={spec.derived_dataset_dir}",
+        f"data={data_arg}",
         f"model={spec.base_model}",
         f"epochs={int(spec.hyperparams.epochs)}",
         f"imgsz={int(spec.hyperparams.imgsz)}",
