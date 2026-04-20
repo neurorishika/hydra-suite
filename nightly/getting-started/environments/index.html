@@ -1993,7 +1993,7 @@
 <tr>
 <td><code>requirements-cuda.txt</code></td>
 <td><code>-e .</code></td>
-<td><code>torch</code>, <code>torchvision</code>, <code>torchaudio</code>, <code>tensorrt</code>, <code>onnxruntime-gpu</code></td>
+<td><code>torch</code>, <code>torchvision</code>, <code>torchaudio</code>, <code>onnxruntime-gpu</code></td>
 </tr>
 <tr>
 <td><code>requirements-cuda12.txt</code></td>
@@ -2018,6 +2018,7 @@
 </tbody>
 </table>
 <p>All requirements files include <code>-e .</code> which installs the package in editable mode, pulling base dependencies from <code>pyproject.toml</code>. This means dependencies are declared once — in <code>pyproject.toml</code> — and requirements files only add what <code>pyproject.toml</code> cannot express (torch index URLs, GPU-specific wheels).</p>
+<p>For runtime-specific GPU installs, prefer the Makefile targets over direct <code>pip install -e .[extra]</code>. The CUDA install targets reset conflicting <code>onnxruntime</code> and TensorRT wheel families before reinstalling the correct variant for the selected platform, which avoids mixed-provider installs and broken CUDA backend selection.</p>
 <h2 id="onnx-runtime-and-cuda-compatibility">ONNX Runtime and CUDA compatibility<a class="headerlink" href="#onnx-runtime-and-cuda-compatibility" title="Permanent link">&para;</a></h2>
 <p><code>onnxruntime-gpu==1.24.1</code> links against CUDA 12 user-space libraries (<code>libcublasLt.so.12</code>, <code>libcudart.so.12</code>, <code>libcurand.so.10</code>). This is handled differently by each install path:</p>
 <ul>
@@ -2025,6 +2026,7 @@
 <li><strong>conda path:</strong> <code>environment-cuda.yml</code> installs CUDA 12 runtime libs via conda packages, including <code>libcurand</code>. <code>make install-cuda</code> writes <code>LD_LIBRARY_PATH</code> activation hooks.</li>
 </ul>
 <p>Both approaches work on CUDA 13 systems — CUDA 12 user-space libs coexist with a CUDA 13 driver.</p>
+<p>TensorRT follows the same rule: install exactly one CUDA wheel family. <code>requirements-cuda12.txt</code> installs the CUDA 12 TensorRT wheels, and <code>requirements-cuda13.txt</code> installs the CUDA 13 family. Mixing both families in one env can leave <code>import tensorrt</code> working while builder initialization fails at runtime.</p>
 <h2 id="makefile-targets">Makefile targets<a class="headerlink" href="#makefile-targets" title="Permanent link">&para;</a></h2>
 <h3 id="setup-creates-conda-environment">Setup (creates conda environment)<a class="headerlink" href="#setup-creates-conda-environment" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span>setup<span class="w">            </span><span class="c1"># CPU</span>
