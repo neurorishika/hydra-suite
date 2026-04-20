@@ -188,6 +188,20 @@ class ClassKitTrainingDialog(QDialog):
     def _normalize_path_text(value: object) -> str:
         return str(value or "").strip()
 
+    def _ensure_device_choice(self, value: object) -> None:
+        device = str(value or "").strip().lower()
+        if not device or self.device_combo.findData(device) >= 0:
+            return
+
+        labels = {
+            "cpu": "CPU",
+            "cuda": "CUDA GPU",
+            "rocm": "ROCm GPU",
+            "mps": "Apple Silicon (MPS)",
+        }
+        if device in labels:
+            self.device_combo.addItem(labels[device], device)
+
     def _normalize_recent_model_paths(
         self, values: Optional[List[str]] = None
     ) -> List[str]:
@@ -322,6 +336,7 @@ class ClassKitTrainingDialog(QDialog):
             self._refresh_data_summary()
             return
 
+        self._ensure_device_choice(settings.get("device"))
         self._set_combo_value(
             self.mode_combo, self._normalize_mode_key(settings.get("mode"))
         )
@@ -466,14 +481,155 @@ class ClassKitTrainingDialog(QDialog):
             return "multihead_custom"
         return mode
 
+    def _fallback_mode_keys(self) -> list[str]:
+        factor_count = len(getattr(self._scheme, "factors", []) or [])
+        if factor_count > 1:
+            return [
+                "flat_custom",
+                "flat_yolo",
+                "multihead_yolo",
+                "multihead_custom",
+            ]
+        return ["flat_custom", "flat_yolo"]
+
+    def _resolved_mode_keys(self) -> list[str]:
+        if self._scheme is None:
+            return ["flat_custom", "flat_yolo"]
+
+        normalized_modes = [
+            self._normalize_mode_key(mode)
+            for mode in getattr(self._scheme, "training_modes", []) or []
+        ]
+        if not normalized_modes:
+            normalized_modes = self._fallback_mode_keys()
+
+        ordered: list[str] = []
+        seen = set()
+        for key in [
+            "flat_custom",
+            "flat_yolo",
+            "multihead_yolo",
+            "multihead_custom",
+        ]:
+            if key in normalized_modes and key not in seen:
+                ordered.append(key)
+                seen.add(key)
+        return ordered
+
+    @staticmethod
+    def _mode_parts(mode: object) -> tuple[str, str]:
+        normalized = str(mode or "").strip()
+        structure = "multihead" if normalized.startswith("multihead") else "flat"
+        family = "yolo" if "yolo" in normalized else "custom"
+        return structure, family
+
+    def _resolved_mode_structures(self) -> list[str]:
+        structures: list[str] = []
+        seen = set()
+        for key in self._resolved_mode_keys():
+            structure, _family = self._mode_parts(key)
+            if structure not in seen:
+                structures.append(structure)
+                seen.add(structure)
+        return structures
+
+    def _resolved_mode_families(self, structure: object) -> list[str]:
+        normalized_structure = str(structure or "").strip()
+        families: list[str] = []
+        seen = set()
+        for family in ["custom", "yolo"]:
+            mode_key = f"{normalized_structure}_{family}"
+            if mode_key in self._resolved_mode_keys() and family not in seen:
+                families.append(family)
+                seen.add(family)
+        return families
+
+    def _populate_mode_family_combo(self, structure: object, preferred: object) -> None:
+        current_family = str(preferred or "").strip()
+        family_labels = {
+            "custom": "Custom CNN",
+            "yolo": "YOLO-classify",
+        }
+        available_families = self._resolved_mode_families(structure)
+        selected_family = (
+            current_family if current_family in available_families else ""
+        ) or (available_families[0] if available_families else "")
+
+        self.mode_family_combo.blockSignals(True)
+        self.mode_family_combo.clear()
+        for family in available_families:
+            self.mode_family_combo.addItem(family_labels[family], family)
+        self._set_combo_value(self.mode_family_combo, selected_family)
+        self.mode_family_combo.blockSignals(False)
+
+    def _sync_mode_controls_from_mode(self, mode: object = None) -> None:
+        normalized_mode = self._normalize_mode_key(
+            mode or self.mode_combo.currentData()
+        )
+        preferred_structure, preferred_family = self._mode_parts(normalized_mode)
+        structure_labels = {
+            "flat": "Flat labels",
+            "multihead": "Multi-head per factor",
+        }
+        structures = self._resolved_mode_structures()
+        selected_structure = (
+            preferred_structure if preferred_structure in structures else ""
+        ) or (structures[0] if structures else "")
+
+        self.mode_structure_combo.blockSignals(True)
+        self.mode_structure_combo.clear()
+        for structure in structures:
+            self.mode_structure_combo.addItem(structure_labels[structure], structure)
+        self._set_combo_value(self.mode_structure_combo, selected_structure)
+        self.mode_structure_combo.blockSignals(False)
+
+        self._populate_mode_family_combo(selected_structure, preferred_family)
+
+    def _sync_mode_combo_from_controls(self) -> None:
+        structure = str(self.mode_structure_combo.currentData() or "").strip()
+        family = str(self.mode_family_combo.currentData() or "").strip()
+        if not structure or not family:
+            return
+
+        target_mode = f"{structure}_{family}"
+        index = self.mode_combo.findData(target_mode)
+        if index < 0:
+            return
+        if self.mode_combo.currentIndex() != index:
+            self.mode_combo.setCurrentIndex(index)
+
+    def _on_mode_structure_changed(self) -> None:
+        structure = self.mode_structure_combo.currentData()
+        preferred_family = self.mode_family_combo.currentData()
+        self._populate_mode_family_combo(structure, preferred_family)
+        self._sync_mode_combo_from_controls()
+
+    def _on_internal_mode_changed(self) -> None:
+        self._sync_mode_controls_from_mode()
+        self._on_mode_changed()
+
     def _build_general_tab(self):
         """Build the General settings tab and return its widget."""
         self.general_tab = QWidget()
         form = QFormLayout()
         form.setSpacing(8)
+
         self.mode_combo = QComboBox()
         self._populate_modes()
-        form.addRow("<b>Training Mode:</b>", self.mode_combo)
+        self.mode_combo.setVisible(False)
+
+        self.mode_structure_combo = QComboBox()
+        self.mode_structure_combo.setToolTip(
+            "Choose whether to train one classifier over flat labels or one classifier per scheme factor."
+        )
+        form.addRow("<b>Label Layout:</b>", self.mode_structure_combo)
+
+        self.mode_family_combo = QComboBox()
+        self.mode_family_combo.setToolTip(
+            "Choose the training backend for the selected label layout."
+        )
+        form.addRow("<b>Model Family:</b>", self.mode_family_combo)
+        self._sync_mode_controls_from_mode()
 
         self.device_combo = QComboBox()
         self.device_combo.addItem("CPU", "cpu")
@@ -628,22 +784,13 @@ class ClassKitTrainingDialog(QDialog):
             _runtimes = supported_runtimes_for_pipeline("tiny_classify")
             for _rt in _runtimes:
                 self.compute_runtime_combo.addItem(runtime_label(_rt), _rt)
-
-            _train_dev = str(self.device_combo.currentData() or "cpu").strip().lower()
-            if _train_dev == "mps":
-                _preferred_rt = "onnx_coreml" if "onnx_coreml" in _runtimes else "mps"
-            elif _train_dev == "rocm":
-                _preferred_rt = "onnx_rocm" if "onnx_rocm" in _runtimes else "rocm"
-            elif _train_dev == "cuda":
-                _preferred_rt = "onnx_cuda" if "onnx_cuda" in _runtimes else "cuda"
-            else:
-                _preferred_rt = "cpu"
-
-            _idx = self.compute_runtime_combo.findData(_preferred_rt)
-            if _idx >= 0:
-                self.compute_runtime_combo.setCurrentIndex(_idx)
         except Exception:
             self.compute_runtime_combo.addItem("CPU", "cpu")
+
+        self._select_preferred_compute_runtime()
+        self.device_combo.currentIndexChanged.connect(
+            lambda _index: self._select_preferred_compute_runtime()
+        )
 
         self.compute_runtime_combo.setToolTip(
             "Runtime used for Tiny CNN inference in ClassKit (and MAT integration).\n"
@@ -651,6 +798,25 @@ class ClassKitTrainingDialog(QDialog):
             "On Apple Silicon, ONNX (CoreML) uses ONNX Runtime's CoreMLExecutionProvider."
         )
         form.addRow("<b>Inference Runtime:</b>", self.compute_runtime_combo)
+
+    def _preferred_compute_runtime(self) -> str:
+        runtimes = [
+            str(self.compute_runtime_combo.itemData(index) or "")
+            for index in range(self.compute_runtime_combo.count())
+        ]
+        train_device = str(self.device_combo.currentData() or "cpu").strip().lower()
+        if train_device == "mps":
+            return "onnx_coreml" if "onnx_coreml" in runtimes else "mps"
+        if train_device == "rocm":
+            return "onnx_rocm" if "onnx_rocm" in runtimes else "rocm"
+        if train_device == "cuda":
+            return "onnx_cuda" if "onnx_cuda" in runtimes else "cuda"
+        return "cpu"
+
+    def _select_preferred_compute_runtime(self) -> None:
+        index = self.compute_runtime_combo.findData(self._preferred_compute_runtime())
+        if index >= 0:
+            self.compute_runtime_combo.setCurrentIndex(index)
 
     def _build_base_model_combo(self, form):
         """Build the YOLO base model combo box."""
@@ -1438,11 +1604,17 @@ class ClassKitTrainingDialog(QDialog):
         self._build_action_row(layout)
 
         self.cancel_btn.clicked.connect(self._on_cancel)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self.mode_structure_combo.currentIndexChanged.connect(
+            lambda _index: self._on_mode_structure_changed()
+        )
+        self.mode_family_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_mode_combo_from_controls()
+        )
+        self.mode_combo.currentIndexChanged.connect(self._on_internal_mode_changed)
         self.tiny_rebalance_combo.currentIndexChanged.connect(
             self._on_rebalance_mode_changed
         )
-        self._on_mode_changed()
+        self._on_internal_mode_changed()
         self._on_rebalance_mode_changed()
 
         self._exp_group.toggled.connect(
@@ -1486,30 +1658,14 @@ class ClassKitTrainingDialog(QDialog):
 
     def _populate_modes(self):
         self.mode_combo.clear()
-        if self._scheme is None:
-            self.mode_combo.addItem("Flat - Custom CNN", "flat_custom")
-            self.mode_combo.addItem("Flat - YOLO-classify", "flat_yolo")
-            return
         labels = {
             "flat_yolo": "Flat - YOLO-classify",
             "flat_custom": "Flat - Custom CNN",
             "multihead_yolo": "Multi-head - YOLO-classify (one model per factor)",
             "multihead_custom": "Multi-head - Custom CNN (one model per factor)",
         }
-        seen = set()
-        for key in [
-            "flat_custom",
-            "flat_yolo",
-            "multihead_yolo",
-            "multihead_custom",
-        ]:
-            normalized_modes = {
-                self._normalize_mode_key(mode)
-                for mode in getattr(self._scheme, "training_modes", [])
-            }
-            if key in normalized_modes and key not in seen:
-                self.mode_combo.addItem(labels[key], key)
-                seen.add(key)
+        for key in self._resolved_mode_keys():
+            self.mode_combo.addItem(labels[key], key)
 
     def _on_mode_changed(self):
         mode = self.mode_combo.currentData() or ""

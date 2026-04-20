@@ -403,6 +403,11 @@ class IdentityPanel(QWidget):
         _cpu_idx = self.combo_headtail_runtime.findData("cpu")
         if _cpu_idx >= 0:
             self.combo_headtail_runtime.setCurrentIndex(_cpu_idx)
+        self.combo_headtail_runtime.currentIndexChanged.connect(
+            lambda _index: self._main_window._sync_headtail_runtime_selection(
+                self.combo_headtail_runtime
+            )
+        )
         fl_headtail.addRow("Runtime:", self.combo_headtail_runtime)
 
         self.spin_headtail_batch = QSpinBox()

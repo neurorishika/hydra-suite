@@ -81,7 +81,29 @@ def _strip_timm_prefix(backbone: str) -> str:
     return str(backbone).split("/", 1)[1] if is_timm_backbone(backbone) else backbone
 
 
-def _load_pretrained(backbone: str) -> nn.Module:
+def _normalize_timm_img_size(input_size: Any) -> int | tuple[int, int] | None:
+    """Return a TIMM-compatible img_size value or None when not specified."""
+    if input_size is None:
+        return None
+    if isinstance(input_size, int):
+        return int(input_size) if int(input_size) > 0 else None
+    if isinstance(input_size, (list, tuple)) and len(input_size) == 2:
+        try:
+            height = int(input_size[0])
+            width = int(input_size[1])
+        except (TypeError, ValueError):
+            return None
+        if height <= 0 or width <= 0:
+            return None
+        return height if height == width else (height, width)
+    return None
+
+
+def _load_pretrained(
+    backbone: str,
+    *,
+    input_size: Any = None,
+) -> nn.Module:
     """Load a pretrained torchvision model by backbone key."""
     if is_timm_backbone(backbone):
         try:
@@ -92,6 +114,12 @@ def _load_pretrained(backbone: str) -> nn.Module:
             ) from exc
 
         model_name = _strip_timm_prefix(backbone)
+        img_size = _normalize_timm_img_size(input_size)
+        if img_size is not None:
+            try:
+                return timm.create_model(model_name, pretrained=True, img_size=img_size)
+            except TypeError:
+                pass
         return timm.create_model(model_name, pretrained=True)
 
     weights_map = {
@@ -253,6 +281,7 @@ def build_torchvision_classifier(
     dropout: float = 0.1,
     input_width: int = 128,
     input_height: int = 64,
+    input_size: int | tuple[int, int] | None = None,
 ) -> nn.Module:
     """Build a pretrained torchvision classifier with a new head.
 
@@ -289,7 +318,7 @@ def build_torchvision_classifier(
             hidden_dim=hidden_dim,
             dropout=dropout,
         )
-    model = _load_pretrained(backbone)
+    model = _load_pretrained(backbone, input_size=input_size)
     model = _replace_head(model, backbone, num_classes)
     freeze_backbone(model, backbone, trainable_layers)
     return model
@@ -383,7 +412,12 @@ def load_torchvision_classifier(
     num_classes = ckpt["num_classes"]
     # Reconstruct with trainable_layers=-1 (all), then load state — freezing
     # state is irrelevant after loading weights for inference.
-    model = build_torchvision_classifier(arch, num_classes, trainable_layers=-1)
+    model = build_torchvision_classifier(
+        arch,
+        num_classes,
+        trainable_layers=-1,
+        input_size=ckpt.get("input_size"),
+    )
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()

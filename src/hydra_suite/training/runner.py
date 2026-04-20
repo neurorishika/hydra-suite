@@ -1358,6 +1358,7 @@ def _train_custom_classify(
         dropout=params.dropout,
         input_width=params.input_width,
         input_height=params.input_height,
+        input_size=params.input_size,
     )
     _n_params = sum(p.numel() for p in model.parameters())
     _n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)

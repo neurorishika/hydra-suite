@@ -857,6 +857,42 @@ def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
     window.close()
 
 
+def test_headtail_runtime_selectors_stay_synchronized(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+    window = _make_main_window(monkeypatch)
+    monkeypatch.setattr(
+        session_module,
+        "supported_runtimes_for_pipeline",
+        lambda pipeline: (
+            ["cpu", "onnx_coreml", "onnx_cpu"] if pipeline == "head_tail" else ["cpu"]
+        ),
+    )
+
+    window._identity_panel.g_identity.setChecked(True)
+    window._identity_panel.g_headtail.setChecked(True)
+    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
+    window._populate_headtail_runtime_options(preferred="cpu")
+
+    identity_combo = window._identity_panel.combo_headtail_runtime
+    setup_combo = window._setup_panel.combo_headtail_runtime
+
+    identity_idx = identity_combo.findData("onnx_coreml")
+    setup_idx = setup_combo.findData("onnx_cpu")
+    assert identity_idx >= 0
+    assert setup_idx >= 0
+
+    identity_combo.setCurrentIndex(identity_idx)
+    assert setup_combo.currentData() == "onnx_coreml"
+
+    setup_combo.setCurrentIndex(setup_idx)
+    assert identity_combo.currentData() == "onnx_cpu"
+    window.close()
+
+
 def test_pose_video_overlay_customization_controls_remain_visible(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

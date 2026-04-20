@@ -621,6 +621,107 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
     assert captured["ui_state"] == "preview"
 
 
+def test_start_preview_on_video_downgrades_auxiliary_runtimes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeSignal:
+        def connect(self, _callback) -> None:
+            return None
+
+    class FakeProgress:
+        def setVisible(self, _visible: bool) -> None:
+            return None
+
+        def setValue(self, _value: int) -> None:
+            return None
+
+        def setText(self, _text: str) -> None:
+            return None
+
+    class FakeTrackingWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            self.frame_signal = FakeSignal()
+            self.finished_signal = FakeSignal()
+            self.progress_signal = FakeSignal()
+            self.stats_signal = FakeSignal()
+            self.warning_signal = FakeSignal()
+            self.pose_exported_model_resolved_signal = FakeSignal()
+
+        def set_parameters(self, params) -> None:
+            captured["params"] = dict(params)
+
+        def start(self) -> None:
+            return None
+
+        def isRunning(self) -> bool:
+            return False
+
+    video_path = tmp_path / "video.mp4"
+    cache_path = tmp_path / "preview_cache.npz"
+    video_path.write_bytes(b"video")
+    cache_path.write_bytes(b"cache")
+
+    panels = SimpleNamespace(
+        setup=SimpleNamespace(file_line=SimpleNamespace(text=lambda: str(video_path)))
+    )
+
+    main_window = SimpleNamespace(
+        tracking_worker=None,
+        _stop_all_requested=False,
+        _pending_finish_after_interp=False,
+        is_playing=False,
+        _tracking_first_frame=False,
+        csv_writer_thread=None,
+        progress_bar=FakeProgress(),
+        progress_label=FakeProgress(),
+        get_parameters_dict=lambda: {
+            "COMPUTE_RUNTIME": "tensorrt",
+            "HEADTAIL_COMPUTE_RUNTIME": "onnx_coreml",
+            "CNN_COMPUTE_RUNTIME": "onnx_cuda",
+            "POSE_MODEL_TYPE": "yolo",
+        },
+        _preview_safe_runtime=lambda runtime: {
+            "onnx_cpu": "cpu",
+            "onnx_coreml": "mps",
+            "onnx_cuda": "cuda",
+            "onnx_rocm": "rocm",
+            "tensorrt": "cuda",
+        }.get(runtime, runtime),
+        _find_or_plan_optimizer_cache_path=lambda *_args, **_kwargs: (
+            str(cache_path),
+            True,
+        ),
+        _prepare_tracking_display=lambda: None,
+        _apply_ui_state=lambda _state: None,
+        _stop_playback=lambda: None,
+    )
+
+    orchestrator = TrackingOrchestrator(
+        main_window=main_window,
+        config=object(),
+        panels=panels,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_validate_yolo_model_requirements",
+        lambda params, mode_label="": True,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.core.tracking.TrackingWorker",
+        FakeTrackingWorker,
+    )
+
+    orchestrator.start_preview_on_video(str(video_path))
+
+    assert captured["params"]["COMPUTE_RUNTIME"] == "cuda"
+    assert captured["params"]["HEADTAIL_COMPUTE_RUNTIME"] == "mps"
+    assert captured["params"]["CNN_COMPUTE_RUNTIME"] == "cuda"
+    assert captured["params"]["POSE_RUNTIME_FLAVOR"] == "cuda"
+
+
 def test_generate_final_media_export_uses_main_window_export_state() -> None:
     orchestrator, _main_window = _make_orchestrator()
     calls = {"video_export_state": 0}

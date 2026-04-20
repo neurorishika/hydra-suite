@@ -9,6 +9,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from hydra_suite.classkit.config.schemas import Factor, LabelingScheme
+
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 QtGui = pytest.importorskip("PySide6.QtGui")
 QApplication = QtWidgets.QApplication
@@ -129,6 +131,8 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
     )
 
     assert dialog.mode_combo.currentData() == "flat_custom"
+    assert dialog.mode_structure_combo.currentData() == "flat"
+    assert dialog.mode_family_combo.currentData() == "custom"
     assert dialog._custom_backbone_combo.currentData() == "resnet18"
     assert dialog._auto_size_scale_spin.value() == pytest.approx(1.25)
     assert dialog._custom_input_size_spin.value() == 192
@@ -161,7 +165,9 @@ def test_training_dialog_tiny_preset_is_mirrored_between_modes(qapp) -> None:
     assert "Tiny-L" in dialog._tiny_size_summary_label.text()
     assert dialog.get_settings()["tiny_preset"] == "large"
 
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("flat_custom"))
+    dialog.mode_family_combo.setCurrentIndex(
+        dialog.mode_family_combo.findData("custom")
+    )
     dialog._custom_backbone_combo.setCurrentIndex(
         dialog._custom_backbone_combo.findData("tinyclassifier")
     )
@@ -454,8 +460,104 @@ def test_training_dialog_exposes_custom_and_yolo_modes_only(qapp) -> None:
     dialog = ClassKitTrainingDialog(n_labeled=8, class_choices=["a", "b"])
 
     modes = [dialog.mode_combo.itemData(i) for i in range(dialog.mode_combo.count())]
+    structures = [
+        dialog.mode_structure_combo.itemData(i)
+        for i in range(dialog.mode_structure_combo.count())
+    ]
+    families = [
+        dialog.mode_family_combo.itemData(i)
+        for i in range(dialog.mode_family_combo.count())
+    ]
 
     assert modes == ["flat_custom", "flat_yolo"]
+    assert structures == ["flat"]
+    assert families == ["custom", "yolo"]
+
+
+def test_training_dialog_exposes_multihead_modes_for_multifactor_scheme(qapp) -> None:
+    dialog = ClassKitTrainingDialog(
+        scheme=LabelingScheme(
+            name="tags",
+            factors=[
+                Factor(name="tag_1", labels=["red", "blue"]),
+                Factor(name="tag_2", labels=["left", "right"]),
+            ],
+            training_modes=[
+                "flat_tiny",
+                "flat_yolo",
+                "multihead_yolo",
+                "multihead_tiny",
+            ],
+        ),
+        n_labeled=8,
+        class_choices=["red|left", "blue|right"],
+    )
+
+    modes = [dialog.mode_combo.itemData(i) for i in range(dialog.mode_combo.count())]
+    structures = [
+        dialog.mode_structure_combo.itemData(i)
+        for i in range(dialog.mode_structure_combo.count())
+    ]
+
+    assert modes == [
+        "flat_custom",
+        "flat_yolo",
+        "multihead_yolo",
+        "multihead_custom",
+    ]
+    assert structures == ["flat", "multihead"]
+
+
+def test_training_dialog_falls_back_to_multihead_modes_for_legacy_scheme(qapp) -> None:
+    dialog = ClassKitTrainingDialog(
+        scheme=LabelingScheme(
+            name="legacy_tags",
+            factors=[
+                Factor(name="tag_1", labels=["red", "blue"]),
+                Factor(name="tag_2", labels=["left", "right"]),
+            ],
+            training_modes=[],
+        ),
+        n_labeled=8,
+        class_choices=["red|left", "blue|right"],
+    )
+
+    modes = [dialog.mode_combo.itemData(i) for i in range(dialog.mode_combo.count())]
+
+    assert modes == [
+        "flat_custom",
+        "flat_yolo",
+        "multihead_yolo",
+        "multihead_custom",
+    ]
+
+
+def test_training_dialog_split_mode_controls_sync_internal_mode(qapp) -> None:
+    dialog = ClassKitTrainingDialog(
+        scheme=LabelingScheme(
+            name="tags",
+            factors=[
+                Factor(name="tag_1", labels=["red", "blue"]),
+                Factor(name="tag_2", labels=["left", "right"]),
+            ],
+            training_modes=[
+                "flat_custom",
+                "flat_yolo",
+                "multihead_yolo",
+                "multihead_custom",
+            ],
+        ),
+        n_labeled=8,
+        class_choices=["red|left", "blue|right"],
+    )
+
+    dialog.mode_structure_combo.setCurrentIndex(
+        dialog.mode_structure_combo.findData("multihead")
+    )
+    dialog.mode_family_combo.setCurrentIndex(dialog.mode_family_combo.findData("yolo"))
+
+    assert dialog.mode_combo.currentData() == "multihead_yolo"
+    assert dialog.get_settings()["mode"] == "multihead_yolo"
 
 
 def test_training_dialog_custom_tab_uses_scroll_area(qapp) -> None:
@@ -488,8 +590,13 @@ def test_training_dialog_filters_recent_model_choices_by_mode(qapp) -> None:
         ],
     )
 
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("flat_custom"))
+    dialog.mode_structure_combo.setCurrentIndex(
+        dialog.mode_structure_combo.findData("flat")
+    )
+    dialog.mode_family_combo.setCurrentIndex(
+        dialog.mode_family_combo.findData("custom")
+    )
     assert dialog._compatible_recent_model_paths() == [recent_custom]
 
-    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("flat_yolo"))
+    dialog.mode_family_combo.setCurrentIndex(dialog.mode_family_combo.findData("yolo"))
     assert dialog._compatible_recent_model_paths() == [recent_yolo]

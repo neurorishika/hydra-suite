@@ -6,6 +6,7 @@ Identifies challenging frames and exports them for annotation.
 import json
 import logging
 from collections import defaultdict
+from itertools import combinations
 from pathlib import Path
 
 import cv2
@@ -32,6 +33,12 @@ class FrameQualityScorer:
         self.use_assignment_cost = params.get("METRIC_HIGH_ASSIGNMENT_COST", True)
         self.use_track_loss = params.get("METRIC_TRACK_LOSS", True)
         self.use_uncertainty = params.get("METRIC_HIGH_UNCERTAINTY", False)
+        self.use_fragmented_detections = params.get(
+            "METRIC_FRAGMENTED_DETECTIONS", True
+        )
+        self.reference_body_size = max(
+            float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0
+        )
 
     def _score_confidence(self, detection_data, metrics):
         """Score based on low detection confidence. Returns weighted score."""
@@ -79,19 +86,35 @@ class FrameQualityScorer:
 
     def _score_assignment_cost(self, tracking_data, metrics):
         """Score based on high assignment cost. Returns weighted score."""
-        if not (self.use_assignment_cost and "assignment_costs" in tracking_data):
+        if not self.use_assignment_cost:
             return 0.0
-        costs = tracking_data["assignment_costs"]
-        if not costs:
+        costs = tracking_data.get("assignment_costs") or []
+        if costs:
+            avg_cost = np.mean(costs)
+            cost_score = min(avg_cost / 50.0, 1.0)
+            metrics["high_assignment_cost"] = {
+                "avg": avg_cost,
+                "max": max(costs),
+                "score": cost_score,
+                "source": "assignment_cost",
+            }
+            return cost_score * 0.15
+
+        confidences = tracking_data.get("assignment_confidences") or []
+        valid_confidences = [
+            float(confidence) for confidence in confidences if np.isfinite(confidence)
+        ]
+        if not valid_confidences:
             return 0.0
-        avg_cost = np.mean(costs)
-        cost_score = min(avg_cost / 50.0, 1.0)
+
+        avg_confidence = np.mean(valid_confidences)
+        difficulty_score = 1.0 - float(np.clip(avg_confidence, 0.0, 1.0))
         metrics["high_assignment_cost"] = {
-            "avg": avg_cost,
-            "max": max(costs),
-            "score": cost_score,
+            "avg_confidence": avg_confidence,
+            "score": difficulty_score,
+            "source": "assignment_confidence",
         }
-        return cost_score * 0.15
+        return difficulty_score * 0.15
 
     def _score_track_loss(self, tracking_data, metrics):
         """Score based on track losses. Returns weighted score."""
@@ -115,6 +138,110 @@ class FrameQualityScorer:
         unc_score = min(avg_uncertainty / 50.0, 1.0)
         metrics["high_uncertainty"] = {"avg": avg_uncertainty, "score": unc_score}
         return unc_score * 0.05
+
+    def _score_fragmented_detections(self, detection_data, metrics):
+        """Score frames with suspiciously duplicated or fragmented detections."""
+        if not self.use_fragmented_detections:
+            return 0.0
+
+        measurements = detection_data.get("measurements") or []
+        if len(measurements) < 2:
+            return 0.0
+
+        shapes = detection_data.get("shapes") or []
+        obb_corners = detection_data.get("obb_corners") or []
+
+        geometries = []
+        major_axes = []
+        for det_idx, measurement in enumerate(measurements):
+            if measurement is None or len(measurement) < 3:
+                continue
+
+            cx = float(measurement[0])
+            cy = float(measurement[1])
+            theta = float(measurement[2])
+
+            corners = None
+            if det_idx < len(obb_corners) and obb_corners[det_idx] is not None:
+                corners_candidate = np.asarray(obb_corners[det_idx], dtype=np.float32)
+                if corners_candidate.size >= 8:
+                    corners = corners_candidate.reshape(4, 2)
+
+            if corners is not None:
+                width = float(np.linalg.norm(corners[1] - corners[0]))
+                height = float(np.linalg.norm(corners[2] - corners[1]))
+            elif det_idx < len(shapes) and len(shapes[det_idx]) >= 2:
+                area = max(float(shapes[det_idx][0]), 1.0)
+                aspect_ratio = float(shapes[det_idx][1])
+                width, height = _dims_from_shape(area, aspect_ratio)
+                corners = _detection_corners_from_dims(cx, cy, width, height, theta)
+            else:
+                width = self.reference_body_size * 2.2
+                height = self.reference_body_size * 0.8
+                corners = _detection_corners_from_dims(cx, cy, width, height, theta)
+
+            major_axis = max(width, height)
+            major_axes.append(major_axis)
+            geometries.append(
+                {
+                    "index": det_idx,
+                    "center": np.array([cx, cy], dtype=np.float32),
+                    "corners": corners,
+                    "major_axis": major_axis,
+                }
+            )
+
+        if len(geometries) < 2:
+            return 0.0
+
+        typical_major_axis = float(
+            np.median(major_axes) if major_axes else self.reference_body_size * 2.2
+        )
+        typical_major_axis = max(typical_major_axis, 1.0)
+
+        suspicious_pairs = []
+        best_pair = None
+        best_pair_score = 0.0
+
+        for left, right in combinations(geometries, 2):
+            center_distance = float(np.linalg.norm(left["center"] - right["center"]))
+            proximity_threshold = max(typical_major_axis * 0.65, 1.0)
+            proximity_score = _clamp01(1.0 - (center_distance / proximity_threshold))
+
+            overlap_score = _polygon_overlap_ratio(
+                left["corners"],
+                right["corners"],
+            )
+            pair_major_axis = (left["major_axis"] + right["major_axis"]) / 2.0
+            smallness_score = _clamp01(1.0 - (pair_major_axis / typical_major_axis))
+
+            pair_score = _clamp01(
+                0.5 * proximity_score + 0.3 * overlap_score + 0.2 * smallness_score
+            )
+            if pair_score >= 0.45:
+                suspicious_pairs.append(pair_score)
+            if pair_score > best_pair_score:
+                best_pair_score = pair_score
+                best_pair = {
+                    "pair": [left["index"], right["index"]],
+                    "distance": center_distance,
+                    "overlap": overlap_score,
+                    "smallness": smallness_score,
+                }
+
+        if best_pair is None or best_pair_score <= 0.0:
+            return 0.0
+
+        fragmentation_score = _clamp01(
+            best_pair_score + min(0.1 * max(len(suspicious_pairs) - 1, 0), 0.2)
+        )
+        metrics["fragmented_detections"] = {
+            **best_pair,
+            "score": fragmentation_score,
+            "suspicious_pairs": len(suspicious_pairs),
+            "typical_major_axis": typical_major_axis,
+        }
+        return fragmentation_score * 0.3
 
     def score_frame(
         self: object,
@@ -147,6 +274,7 @@ class FrameQualityScorer:
         score = (
             self._score_confidence(detection_data, metrics)
             + self._score_count_mismatch(detection_data, metrics)
+            + self._score_fragmented_detections(detection_data, metrics)
             + self._score_assignment_cost(tracking_data, metrics)
             + self._score_track_loss(tracking_data, metrics)
             + self._score_uncertainty(tracking_data, metrics)
@@ -230,6 +358,59 @@ class FrameQualityScorer:
             )
 
         return selected
+
+
+def _clamp01(value):
+    """Clamp a scalar to the inclusive range [0, 1]."""
+    return float(max(0.0, min(1.0, value)))
+
+
+def _detection_corners_from_dims(cx, cy, width, height, theta):
+    """Return pixel-space oriented-box corners for a detection."""
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    half_width = width / 2.0
+    half_height = height / 2.0
+    corners_local = np.array(
+        [
+            [-half_width, -half_height],
+            [half_width, -half_height],
+            [half_width, half_height],
+            [-half_width, half_height],
+        ],
+        dtype=np.float32,
+    )
+    rotation = np.array(
+        [[cos_theta, -sin_theta], [sin_theta, cos_theta]],
+        dtype=np.float32,
+    )
+    return corners_local @ rotation.T + np.array([cx, cy], dtype=np.float32)
+
+
+def _polygon_overlap_ratio(corners_a, corners_b):
+    """Return overlap area divided by the smaller polygon area."""
+    if corners_a is None or corners_b is None:
+        return 0.0
+
+    poly_a = np.asarray(corners_a, dtype=np.float32).reshape(-1, 1, 2)
+    poly_b = np.asarray(corners_b, dtype=np.float32).reshape(-1, 1, 2)
+    if len(poly_a) < 3 or len(poly_b) < 3:
+        return 0.0
+
+    area_a = abs(float(cv2.contourArea(poly_a)))
+    area_b = abs(float(cv2.contourArea(poly_b)))
+    if area_a <= 0.0 or area_b <= 0.0:
+        return 0.0
+
+    try:
+        intersection_area, _ = cv2.intersectConvexConvex(poly_a, poly_b)
+    except cv2.error:
+        return 0.0
+
+    if intersection_area <= 0.0:
+        return 0.0
+
+    return _clamp01(float(intersection_area) / max(min(area_a, area_b), 1e-6))
 
 
 def _make_dataset_dir(output_dir, dataset_name):

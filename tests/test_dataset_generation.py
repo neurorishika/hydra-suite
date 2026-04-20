@@ -23,6 +23,7 @@ class TestFrameQualityScorer:
             "METRIC_HIGH_ASSIGNMENT_COST": True,
             "METRIC_TRACK_LOSS": True,
             "METRIC_HIGH_UNCERTAINTY": False,
+            "METRIC_FRAGMENTED_DETECTIONS": True,
         }
 
         scorer = FrameQualityScorer(params)
@@ -503,3 +504,98 @@ def test_low_confidence_uses_frame_average_not_minimum():
     score = scorer.score_frame(frame_id=0, detection_data=detection_data)
 
     assert score == 0.0
+
+
+def _ellipse_shape(width: float, height: float) -> tuple[float, float]:
+    area = np.pi * (width / 2.0) * (height / 2.0)
+    aspect_ratio = width / max(height, 1e-6)
+    return area, aspect_ratio
+
+
+def test_score_frame_uses_assignment_confidence_when_costs_missing():
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "METRIC_LOW_CONFIDENCE": False,
+        "METRIC_COUNT_MISMATCH": False,
+        "METRIC_HIGH_ASSIGNMENT_COST": True,
+        "METRIC_TRACK_LOSS": False,
+    }
+
+    scorer = FrameQualityScorer(params)
+    score = scorer.score_frame(
+        frame_id=0,
+        tracking_data={"assignment_confidences": [0.15, 0.25, 0.35]},
+    )
+
+    assert score > 0.0
+    assert (
+        scorer.frame_scores[0]["metrics"]["high_assignment_cost"]["source"]
+        == "assignment_confidence"
+    )
+
+
+def test_score_frame_prioritizes_split_detections_over_clean_overcount():
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "METRIC_LOW_CONFIDENCE": False,
+        "METRIC_COUNT_MISMATCH": True,
+        "METRIC_FRAGMENTED_DETECTIONS": True,
+        "METRIC_HIGH_ASSIGNMENT_COST": False,
+        "METRIC_TRACK_LOSS": False,
+    }
+
+    scorer = FrameQualityScorer(params)
+
+    normal_shape = _ellipse_shape(20.0, 8.0)
+    split_shape = _ellipse_shape(8.0, 4.0)
+
+    split_score = scorer.score_frame(
+        frame_id=0,
+        detection_data={
+            "confidences": [0.9] * 5,
+            "count": 5,
+            "measurements": [
+                np.array([20.0, 20.0, 0.0], dtype=np.float32),
+                np.array([80.0, 20.0, 0.0], dtype=np.float32),
+                np.array([20.0, 80.0, 0.0], dtype=np.float32),
+                np.array([48.0, 48.0, 0.0], dtype=np.float32),
+                np.array([54.0, 50.0, 0.0], dtype=np.float32),
+            ],
+            "shapes": [
+                normal_shape,
+                normal_shape,
+                normal_shape,
+                split_shape,
+                split_shape,
+            ],
+            "obb_corners": [],
+        },
+    )
+
+    clean_overcount_score = scorer.score_frame(
+        frame_id=1,
+        detection_data={
+            "confidences": [0.9] * 5,
+            "count": 5,
+            "measurements": [
+                np.array([20.0, 20.0, 0.0], dtype=np.float32),
+                np.array([80.0, 20.0, 0.0], dtype=np.float32),
+                np.array([20.0, 80.0, 0.0], dtype=np.float32),
+                np.array([80.0, 80.0, 0.0], dtype=np.float32),
+                np.array([50.0, 50.0, 0.0], dtype=np.float32),
+            ],
+            "shapes": [
+                normal_shape,
+                normal_shape,
+                normal_shape,
+                normal_shape,
+                normal_shape,
+            ],
+            "obb_corners": [],
+        },
+    )
+
+    assert split_score > clean_overcount_score
+    assert "fragmented_detections" in scorer.frame_scores[0]["metrics"]

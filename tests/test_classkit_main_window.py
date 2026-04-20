@@ -101,6 +101,58 @@ def test_labeling_options_only_visible_in_labeling_mode(qapp) -> None:
     assert window.labeling_options_group.isHidden() is True
 
 
+def test_setup_label_shortcuts_ignores_legacy_mode_bindings(qapp) -> None:
+    window = MainWindow()
+    window.classes = []
+    window._custom_shortcuts = {
+        "Explore mode": "E",
+        "Labeling mode": "L",
+        "Review mode": "V",
+        "Predictions mode": "P",
+        "Approve review label": "A",
+    }
+
+    window.setup_label_shortcuts()
+
+    sequences = {shortcut.key().toString() for shortcut in window._label_shortcuts}
+
+    assert "A" in sequences
+    assert "E" not in sequences
+    assert "L" not in sequences
+    assert "V" not in sequences
+    assert "P" not in sequences
+
+
+def test_project_config_sanitizes_removed_mode_shortcuts(qapp) -> None:
+    window = MainWindow()
+
+    window._apply_project_config(
+        {
+            "custom_shortcuts": {
+                "Explore mode": "E",
+                "Labeling mode": "L",
+                "Approve review label": "A",
+                "Next unlabeled": "N",
+            }
+        }
+    )
+
+    assert window._custom_shortcuts == {
+        "Approve review label": "A",
+        "Next unlabeled": "N",
+    }
+
+
+def test_shortcut_help_omits_mode_shortcut_row(qapp) -> None:
+    window = MainWindow()
+
+    window._refresh_shortcut_help()
+
+    help_text = window.shortcut_help.text()
+    assert "set mode" not in help_text
+    assert "approve or reject selected machine label" in help_text
+
+
 def test_model_projection_buttons_hidden_until_model_loaded(qapp) -> None:
     window = MainWindow()
 
@@ -460,6 +512,37 @@ def test_labeled_eval_arrays_prefers_active_evaluation_subset(
     assert idx_arr.tolist() == [1, 2]
     assert y_true.tolist() == [0, 1]
     assert scope_text == "Val split"
+
+
+def test_set_active_evaluation_from_meta_restores_split_memberships(
+    qapp, tmp_path: Path
+) -> None:
+    window = MainWindow()
+    train_path = tmp_path / "train.png"
+    val_path = tmp_path / "val.png"
+    test_path = tmp_path / "test.png"
+
+    window._set_active_evaluation_from_meta(
+        {
+            "evaluation": {
+                "split_name": "test",
+                "paths": [str(test_path)],
+                "split_paths": {
+                    "train": [str(train_path)],
+                    "val": [str(val_path)],
+                    "test": [str(test_path)],
+                },
+            }
+        }
+    )
+
+    assert window._active_evaluation_split_name == "test"
+    assert window._active_evaluation_paths == {str(test_path.resolve())}
+    assert window._split_membership_paths == {
+        "train": {str(train_path.resolve())},
+        "val": {str(val_path.resolve())},
+        "test": {str(test_path.resolve())},
+    }
 
 
 def test_labeled_eval_arrays_include_labels_outside_current_scheme(
@@ -1137,6 +1220,81 @@ def test_preview_panel_shows_prediction_details(qapp, tmp_path: Path) -> None:
         ]
     )
     assert f"background-color:{expected_color}" in preview_html
+
+
+def test_preview_panel_shows_multihead_prediction_details(qapp, tmp_path: Path) -> None:
+    window = MainWindow()
+    image_path = tmp_path / "prediction_preview_multihead.png"
+    image_path.write_bytes(b"image-bytes")
+
+    window.image_paths = [image_path]
+    window.image_labels = ["blue|right"]
+    window.cluster_assignments = np.array([2], dtype=np.int32)
+    window.classes = ["blue", "red"]
+    window._set_model_prediction_state(
+        np.array([[0.15, 0.85, 0.20, 0.80]], dtype=np.float32),
+        ["blue", "red", "left", "right"],
+        active_model_mode="custom_cnn_multihead",
+        prediction_heads=[
+            {"factor": "color", "class_names": ["blue", "red"]},
+            {"factor": "side", "class_names": ["left", "right"]},
+        ],
+    )
+
+    window.load_preview_for_index(0)
+
+    preview_html = window.preview_info.text()
+    selection_html = window.selection_info.text()
+    assert "Composite Prediction:" in preview_html
+    assert "red|right" in preview_html
+    assert "color:" in preview_html
+    assert "side:" in preview_html
+    assert "85.0%" in preview_html
+    assert "80.0%" in preview_html
+    assert "Composite Prediction:" in selection_html
+
+
+def test_prediction_mode_uses_composite_multihead_labels(qapp) -> None:
+    from hydra_suite.classkit.gui.widgets.color_utils import build_category_color_map
+
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/a.png"), Path("/tmp/b.png")]
+    window.image_labels = [None, None]
+    window.classes = ["blue", "red"]
+    window.cluster_assignments = np.array([0, 1], dtype=np.int32)
+    window.umap_coords = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    window._set_model_prediction_state(
+        np.array(
+            [
+                [0.10, 0.90, 0.80, 0.20],
+                [0.70, 0.30, 0.25, 0.75],
+            ],
+            dtype=np.float32,
+        ),
+        ["blue", "red", "left", "right"],
+        active_model_mode="custom_cnn_multihead",
+        prediction_heads=[
+            {"factor": "color", "class_names": ["blue", "red"]},
+            {"factor": "side", "class_names": ["left", "right"]},
+        ],
+    )
+
+    assert window._prediction_labels_for_plot() == ["red|left", "blue|right"]
+
+    window.set_explorer_mode("predictions")
+    window.update_explorer_plot(force_fit=True)
+
+    expected_map = build_category_color_map(
+        ["blue", "red", "unknown", "red|left", "blue|right"],
+        category_order=["blue", "red", "unknown", "red|left", "blue|right"],
+    )
+    point_colors = [item.brush().color().name() for item in window.explorer.points]
+
+    assert point_colors[0] == expected_map["red|left"].name()
+    assert point_colors[1] == expected_map["blue|right"].name()
+    assert "By factor:" in window.explorer.points[0].toolTip()
+    assert "color: red" in window.explorer.points[0].toolTip()
+    assert "side: left" in window.explorer.points[0].toolTip()
 
 
 def test_prediction_mode_uses_schema_map_colors(qapp) -> None:
@@ -1908,6 +2066,110 @@ def test_metrics_display_includes_heldout_validation_summary(qapp) -> None:
 
     assert "0.875" in window.metrics_validation_label.text()
     assert "0.875" in window.metrics_view.toPlainText()
+
+
+def test_validation_summary_uses_multihead_factor_names(qapp) -> None:
+    window = MainWindow()
+
+    summary = window._validation_summary_from_results(
+        [{"best_val_acc": 0.91}, {"best_val_acc": 0.84}],
+        factor_names=["color", "side"],
+    )
+
+    assert summary is not None
+    assert "color=0.910" in summary["text"]
+    assert "side=0.840" in summary["text"]
+    assert "mean=0.875" in summary["text"]
+
+
+def test_metrics_display_includes_multihead_exact_match_and_factor_accuracy(
+    qapp,
+) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/a.png"), Path("/tmp/b.png"), Path("/tmp/c.png")]
+    window.image_labels = ["blue|left", "red|right", "blue|right"]
+    window.classes = ["blue", "red"]
+    window._set_model_prediction_state(
+        np.array(
+            [
+                [0.90, 0.10, 0.85, 0.15],
+                [0.20, 0.80, 0.10, 0.90],
+                [0.85, 0.15, 0.70, 0.30],
+            ],
+            dtype=np.float32,
+        ),
+        ["blue", "red", "left", "right"],
+        active_model_mode="custom_cnn_multihead",
+        prediction_heads=[
+            {"factor": "color", "class_names": ["blue", "red"]},
+            {"factor": "side", "class_names": ["left", "right"]},
+        ],
+    )
+
+    window._evaluate_model_on_labeled(activate_metrics_tab=False)
+
+    metrics_text = window.metrics_view.toPlainText()
+    assert "Multi-head summary" in metrics_text
+    assert "Exact-match accuracy: 0.667" in metrics_text
+    assert "color: acc=1.000" in metrics_text
+    assert "side: acc=0.667" in metrics_text
+
+
+def test_metrics_display_includes_train_val_and_test_split_reports(
+    qapp, tmp_path: Path
+) -> None:
+    metrics_module = pytest.importorskip("hydra_suite.classkit.core.train.metrics")
+
+    window = MainWindow()
+    image_paths = [tmp_path / f"img_{idx}.png" for idx in range(6)]
+    window.image_paths = [str(path) for path in image_paths]
+    window.image_labels = [
+        "class_1",
+        "class_1",
+        "class_2",
+        "class_2",
+        "class_1",
+        "class_2",
+    ]
+    window.classes = ["class_1", "class_2"]
+    window._model_class_names = ["class_1", "class_2"]
+    window._model_probs = np.array(
+        [
+            [0.9, 0.1],
+            [0.8, 0.2],
+            [0.2, 0.8],
+            [0.6, 0.4],
+            [0.7, 0.3],
+            [0.3, 0.7],
+        ]
+    )
+    window._set_active_evaluation_selection(
+        [str(image_paths[4]), str(image_paths[5])],
+        "test",
+        split_paths={
+            "train": [str(image_paths[0]), str(image_paths[2])],
+            "val": [str(image_paths[1]), str(image_paths[3])],
+            "test": [str(image_paths[4]), str(image_paths[5])],
+        },
+    )
+    metrics = metrics_module.compute_metrics(
+        np.array([0, 1]),
+        np.array([0, 1]),
+        class_names=["class_1", "class_2"],
+    )
+
+    window._update_metrics_display(
+        metrics,
+        evaluation_scope="Test split",
+        activate_metrics_tab=False,
+    )
+
+    report = window.metrics_view.toPlainText()
+    assert "Split Summary" in report
+    assert "Train    acc=" in report
+    assert "Val      acc=" in report
+    assert "Test     acc=" in report
+    assert report.count("Classification Metrics") >= 4
 
 
 def test_metrics_display_avoids_divide_warning_for_empty_confusion_rows(qapp) -> None:

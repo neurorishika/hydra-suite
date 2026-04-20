@@ -27,10 +27,6 @@ class ShortcutEditorDialog(QDialog):
     """Edit keyboard shortcut assignments for non-label global actions."""
 
     DEFAULT_SHORTCUTS = [
-        ("Explore mode", "E"),
-        ("Labeling mode", "L"),
-        ("Predictions mode", "P"),
-        ("Review mode", "V"),
         ("Approve review label", _PLUS_KEY),
         ("Reject review label", _MINUS_KEY),
         ("Sample next candidates", "Space"),
@@ -52,7 +48,7 @@ class ShortcutEditorDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        hdr = QLabel("<b>Global Navigation Shortcuts</b>")
+        hdr = QLabel("<b>Global Labeling Shortcuts</b>")
         layout.addWidget(hdr)
 
         info = QLabel(

@@ -1098,6 +1098,35 @@ class SessionOrchestrator:
                 return str(data).strip().lower()
         return self._selected_compute_runtime()
 
+    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
+        """Mirror head-tail runtime changes across the duplicated UI selectors."""
+        if source_combo is not None:
+            data = source_combo.currentData()
+            selected = (
+                str(data).strip().lower() if data else self._selected_compute_runtime()
+            )
+        else:
+            selected = self._selected_headtail_runtime()
+
+        for combo in (
+            getattr(
+                getattr(self._mw, "_identity_panel", None),
+                "combo_headtail_runtime",
+                None,
+            ),
+            getattr(
+                getattr(self._mw, "_setup_panel", None), "combo_headtail_runtime", None
+            ),
+        ):
+            if combo is None or combo is source_combo:
+                continue
+            index = combo.findData(selected)
+            if index < 0 or combo.currentIndex() == index:
+                continue
+            combo.blockSignals(True)
+            combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+
     def _cnn_runtime_options(self):
         """Return (label, value) pairs for the CNN runtime combo."""
         allowed = allowed_runtimes_for_pipelines([])

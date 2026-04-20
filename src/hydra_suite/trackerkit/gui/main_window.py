@@ -1418,6 +1418,11 @@ class MainWindow(QMainWindow):
             return self._session_orch._selected_headtail_runtime()
         return self._selected_compute_runtime()
 
+    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
+        """Keep duplicated head-tail runtime selectors synchronized."""
+        if hasattr(self, "_session_orch"):
+            self._session_orch._sync_headtail_runtime_selection(source_combo)
+
     def _cnn_runtime_options(self):
         """Return (label, value) pairs for the CNN runtime combo."""
         if hasattr(self, "_session_orch"):

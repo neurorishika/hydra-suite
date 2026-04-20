@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -26,6 +27,30 @@ def _make_proj(tmp_path):
     proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
     proj.sources = [OBBSource(path=str(tmp_path / "ds1"), name="ds1")]
     return proj
+
+
+def _write_detectkit_source_dataset(root: Path) -> Path:
+    images_dir = root / "images" / "train"
+    labels_dir = root / "labels" / "train"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir.mkdir(parents=True, exist_ok=True)
+
+    image_path = images_dir / "sample.png"
+    image_path.write_bytes(
+        bytes.fromhex(
+            "89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE"
+            "0000000C49444154789C63F8FFFF3F0005FE02FE0EA257A90000000049454E44AE426082"
+        )
+    )
+    (labels_dir / "sample.txt").write_text(
+        "0 0.10 0.10 0.40 0.10 0.40 0.40 0.10 0.40\n",
+        encoding="utf-8",
+    )
+    (root / "dataset.yaml").write_text(
+        "train: images/train\nval: images/train\nnames:\n  0: ant\n",
+        encoding="utf-8",
+    )
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +189,14 @@ def test_training_dialog_has_dataset_fit_card(qapp, tmp_path):
     dlg = TrainingDialog(_make_proj(tmp_path))
     assert hasattr(dlg, "dataset_fit_view")
     assert hasattr(dlg, "btn_refresh_dataset_fit")
+
+
+def test_training_dialog_has_source_preview_group(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "source_preview_group")
+    assert hasattr(dlg, "source_preview_cards_layout")
 
 
 def test_training_dialog_start_always_enabled(qapp, tmp_path):
@@ -350,6 +383,36 @@ def test_training_dialog_has_per_role_model_combos(qapp, tmp_path):
     assert dlg.combo_model_obb_direct.currentText() == "yolo26m-obb.pt"
     assert dlg.combo_model_seq_detect.currentText() == "yolo26n.pt"
     assert dlg.combo_model_seq_crop_obb.currentText() == "yolo26n-obb.pt"
+
+
+def test_training_dialog_recipe_hides_irrelevant_advanced_controls(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("direct_obb"))
+
+    assert dlg.spin_imgsz_obb_direct.isHidden() is False
+    assert dlg.spin_imgsz_seq_detect.isHidden() is True
+    assert dlg.spin_imgsz_seq_crop_obb.isHidden() is True
+    assert dlg.combo_model_obb_direct.isHidden() is False
+    assert dlg.combo_model_seq_detect.isHidden() is True
+    assert dlg.combo_model_seq_crop_obb.isHidden() is True
+    assert dlg.crop_settings_widget.isHidden() is True
+
+
+def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "preview_source")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="preview_source")]
+
+    dlg = TrainingDialog(proj)
+
+    records = dlg._source_preview_records()
+    assert records
+    assert dlg.source_preview_status.text().startswith("Showing ")
 
 
 # ---------------------------------------------------------------------------

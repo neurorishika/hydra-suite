@@ -171,6 +171,92 @@ def test_build_torchvision_classifier_vit():
     assert out.shape == (1, 6)
 
 
+def test_build_torchvision_classifier_timm_uses_requested_input_size(monkeypatch):
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    calls: list[dict[str, object]] = []
+
+    class FakeTimmModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.head = torch.nn.Linear(4, 1)
+
+        def reset_classifier(self, num_classes: int) -> None:
+            self.head = torch.nn.Linear(4, num_classes)
+
+    fake_timm = ModuleType("timm")
+
+    def create_model(model_name: str, pretrained: bool = True, **kwargs):
+        calls.append({"model_name": model_name, "pretrained": pretrained, **kwargs})
+        return FakeTimmModel()
+
+    fake_timm.create_model = create_model
+    monkeypatch.setitem(sys.modules, "timm", fake_timm)
+
+    model = build_torchvision_classifier(
+        "timm/eva02_base_patch14_224.mim_in22k",
+        num_classes=3,
+        trainable_layers=0,
+        input_size=128,
+    )
+
+    assert calls == [
+        {
+            "model_name": "eva02_base_patch14_224.mim_in22k",
+            "pretrained": True,
+            "img_size": 128,
+        }
+    ]
+    assert model.head.out_features == 3
+
+
+def test_build_torchvision_classifier_timm_falls_back_when_img_size_unsupported(
+    monkeypatch,
+):
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    calls: list[dict[str, object]] = []
+
+    class FakeTimmModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.head = torch.nn.Linear(4, 1)
+
+        def reset_classifier(self, num_classes: int) -> None:
+            self.head = torch.nn.Linear(4, num_classes)
+
+    fake_timm = ModuleType("timm")
+
+    def create_model(model_name: str, pretrained: bool = True, **kwargs):
+        calls.append({"model_name": model_name, "pretrained": pretrained, **kwargs})
+        if "img_size" in kwargs:
+            raise TypeError("img_size unsupported")
+        return FakeTimmModel()
+
+    fake_timm.create_model = create_model
+    monkeypatch.setitem(sys.modules, "timm", fake_timm)
+
+    model = build_torchvision_classifier(
+        "timm/convnext_tiny.fb_in1k",
+        num_classes=2,
+        trainable_layers=0,
+        input_size=128,
+    )
+
+    assert calls == [
+        {
+            "model_name": "convnext_tiny.fb_in1k",
+            "pretrained": True,
+            "img_size": 128,
+        },
+        {
+            "model_name": "convnext_tiny.fb_in1k",
+            "pretrained": True,
+        },
+    ]
+    assert model.head.out_features == 2
+
+
 def test_get_layer_groups_convnext_count():
     from hydra_suite.training.torchvision_model import (
         build_torchvision_classifier,
@@ -349,6 +435,72 @@ def test_load_torchvision_classifier_roundtrip(tmp_path):
     assert torch.allclose(orig_out, loaded_out, atol=1e-5)
     assert ckpt["arch"] == "resnet18"
     assert ckpt["class_names"] == ["x", "y", "z"]
+
+
+def test_load_torchvision_classifier_uses_saved_timm_input_size(
+    monkeypatch, tmp_path: Path
+):
+    from hydra_suite.training import torchvision_model
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.loaded_state = None
+            self.loaded_device = None
+            self.in_eval = False
+
+        def load_state_dict(self, state_dict):
+            self.loaded_state = state_dict
+
+        def to(self, device):
+            self.loaded_device = device
+            return self
+
+        def eval(self):
+            self.in_eval = True
+            return self
+
+    recorded: dict[str, object] = {}
+
+    def fake_build(backbone, num_classes, trainable_layers, **kwargs):
+        recorded.update(
+            {
+                "backbone": backbone,
+                "num_classes": num_classes,
+                "trainable_layers": trainable_layers,
+                "input_size": kwargs.get("input_size"),
+            }
+        )
+        return FakeModel()
+
+    monkeypatch.setattr(torchvision_model, "build_torchvision_classifier", fake_build)
+
+    ckpt_path = tmp_path / "timm_model.pth"
+    torch.save(
+        {
+            "arch": "timm/eva02_base_patch14_224.mim_in22k",
+            "num_classes": 3,
+            "input_size": [128, 128],
+            "model_state_dict": {},
+        },
+        ckpt_path,
+    )
+
+    model, ckpt = torchvision_model.load_torchvision_classifier(
+        str(ckpt_path), device="cpu"
+    )
+
+    assert recorded == {
+        "backbone": "timm/eva02_base_patch14_224.mim_in22k",
+        "num_classes": 3,
+        "trainable_layers": -1,
+        "input_size": [128, 128],
+    }
+    assert isinstance(model, FakeModel)
+    assert model.loaded_state == {}
+    assert model.loaded_device == "cpu"
+    assert model.in_eval is True
+    assert ckpt["input_size"] == [128, 128]
 
 
 def test_export_torchvision_to_onnx_smoke(tmp_path):
@@ -666,6 +818,12 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
         best_ckpt_path.write_bytes(b"stub")
         return 1.0, {"train_loss": [0.1], "val_acc": [1.0]}
 
+    build_kwargs: dict[str, object] = {}
+
+    def _fake_build_torchvision_classifier(*args, **kwargs):
+        build_kwargs.update(kwargs)
+        return torch.nn.Linear(4, 2)
+
     monkeypatch.setattr("torchvision.datasets.ImageFolder", FakeImageFolder)
     monkeypatch.setattr(
         runner, "_build_class_to_idx", lambda _path: {"ant": 0, "bee": 1}
@@ -673,7 +831,7 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
     monkeypatch.setattr(
         torchvision_model,
         "build_torchvision_classifier",
-        lambda *args, **kwargs: torch.nn.Linear(4, 2),
+        _fake_build_torchvision_classifier,
     )
     monkeypatch.setattr(
         torchvision_model, "freeze_backbone", lambda *args, **kwargs: None
@@ -706,6 +864,7 @@ def test_train_custom_classify_remaps_validation_targets_to_shared_class_indices
 
     assert result["success"] is True
     assert Path(result["artifact_path"]).exists()
+    assert build_kwargs["input_size"] == 64
 
 
 def test_load_compatible_checkpoint_weights_skips_mismatched_head(tmp_path: Path):

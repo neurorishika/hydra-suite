@@ -6,7 +6,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -305,9 +306,9 @@ QTabBar::tab:selected {
         layout.addWidget(title)
 
         body = QLabel(
-            "Pick the roles you want, verify the training plan, then run with a"
-            " live view of progress and outputs. Advanced settings stay available"
-            " without overwhelming the main workflow."
+            "Pick a training recipe, verify the plan, then run with a live view"
+            " of progress and outputs. Advanced settings stay available without"
+            " crowding the first screen."
         )
         body.setObjectName("detectkitTrainingBody")
         body.setWordWrap(True)
@@ -348,11 +349,7 @@ QTabBar::tab:selected {
         top_row.addLayout(right_column, 1)
         layout.addLayout(top_row)
 
-        middle_row = QHBoxLayout()
-        middle_row.setSpacing(12)
-        middle_row.addWidget(self._build_config_group(), 2)
-        middle_row.addWidget(self._build_publish_group(), 1)
-        layout.addLayout(middle_row)
+        layout.addWidget(self._build_source_preview_group())
 
         layout.addWidget(self._build_run_group())
         layout.addStretch(1)
@@ -363,6 +360,12 @@ QTabBar::tab:selected {
         layout = QVBoxLayout(page)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+        top_row.addWidget(self._build_config_group(), 2)
+        top_row.addWidget(self._build_publish_group(), 1)
+        layout.addLayout(top_row)
 
         layout.addWidget(self._build_hyperparams_group())
 
@@ -458,8 +461,8 @@ QTabBar::tab:selected {
         self.dataset_fit_status.setWordWrap(True)
         layout.addWidget(self.dataset_fit_status)
 
-        self.btn_refresh_dataset_fit = QPushButton("Refresh Dataset Fit")
-        self.btn_refresh_dataset_fit.clicked.connect(self._refresh_dataset_fit)
+        self.btn_refresh_dataset_fit = QPushButton("Refresh Overview Data")
+        self.btn_refresh_dataset_fit.clicked.connect(self._refresh_overview_data_cards)
         layout.addWidget(self.btn_refresh_dataset_fit)
 
         self.dataset_fit_view = QTextEdit()
@@ -470,6 +473,42 @@ QTabBar::tab:selected {
         )
         layout.addWidget(self.dataset_fit_view)
         return frame
+
+    def _build_source_preview_group(self) -> QGroupBox:
+        self.source_preview_group = QGroupBox("Source Samples")
+        layout = QVBoxLayout(self.source_preview_group)
+        layout.setSpacing(10)
+
+        self.source_preview_note = self._build_section_note(
+            "Representative frames from the configured DetectKit sources. Use this to sanity-check what the training dialog is about to build from."
+        )
+        layout.addWidget(self.source_preview_note)
+
+        self.source_preview_status = QLabel(
+            "Previewing the first labeled samples discovered in each source dataset."
+        )
+        self.source_preview_status.setObjectName("detectkitTrainingSummaryBody")
+        self.source_preview_status.setWordWrap(True)
+        layout.addWidget(self.source_preview_status)
+
+        self.source_preview_scroll = QScrollArea()
+        self.source_preview_scroll.setWidgetResizable(True)
+        self.source_preview_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.source_preview_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.source_preview_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.source_preview_scroll.setMinimumHeight(220)
+
+        self.source_preview_container = QWidget()
+        self.source_preview_cards_layout = QHBoxLayout(self.source_preview_container)
+        self.source_preview_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.source_preview_cards_layout.setSpacing(8)
+        self.source_preview_scroll.setWidget(self.source_preview_container)
+        layout.addWidget(self.source_preview_scroll)
+        return self.source_preview_group
 
     def _build_recipe_group(self) -> QGroupBox:
         gb = QGroupBox("Training Recipe")
@@ -696,13 +735,13 @@ QTabBar::tab:selected {
     # --- 2. Config ---
 
     def _build_config_group(self) -> QGroupBox:
-        gb = QGroupBox("Dataset And Workspace")
+        gb = QGroupBox("Dataset, Runtime, And Workspace")
         form = QFormLayout(gb)
         form.setSpacing(10)
         form.addRow(
             "",
             self._build_section_note(
-                "Configure dataset merge behavior, class labels, and where training artifacts should be written."
+                "Lower-frequency project settings live here so the overview can stay focused on recipe choice and dataset sanity checks."
             ),
         )
 
@@ -760,7 +799,10 @@ QTabBar::tab:selected {
         h_crop.addWidget(QLabel("min px"))
         h_crop.addWidget(self.spin_crop_min_px)
         h_crop.addWidget(self.chk_crop_square)
-        form.addRow("Sequence crop settings", h_crop)
+        self.crop_settings_label = QLabel("Sequence crop settings")
+        self.crop_settings_widget = QWidget()
+        self.crop_settings_widget.setLayout(h_crop)
+        form.addRow(self.crop_settings_label, self.crop_settings_widget)
 
         # Device
         self.combo_device = QComboBox()
@@ -843,13 +885,15 @@ QTabBar::tab:selected {
         self.spin_imgsz_obb_direct = QSpinBox()
         self.spin_imgsz_obb_direct.setRange(64, 2048)
         self.spin_imgsz_obb_direct.setValue(640)
-        g.addWidget(QLabel("imgsz (obb_direct)"), 3, 0)
+        self.label_imgsz_obb_direct = QLabel("imgsz (obb_direct)")
+        g.addWidget(self.label_imgsz_obb_direct, 3, 0)
         g.addWidget(self.spin_imgsz_obb_direct, 3, 1)
 
         self.spin_imgsz_seq_detect = QSpinBox()
         self.spin_imgsz_seq_detect.setRange(64, 2048)
         self.spin_imgsz_seq_detect.setValue(640)
-        g.addWidget(QLabel("imgsz (seq_detect)"), 3, 2)
+        self.label_imgsz_seq_detect = QLabel("imgsz (seq_detect)")
+        g.addWidget(self.label_imgsz_seq_detect, 3, 2)
         g.addWidget(self.spin_imgsz_seq_detect, 3, 3)
 
         self.spin_imgsz_seq_crop_obb = QSpinBox()
@@ -858,7 +902,8 @@ QTabBar::tab:selected {
         self.spin_imgsz_seq_crop_obb.setToolTip(
             "Must match YOLO_SEQ_STAGE2_IMGSZ used during inference (default 160)."
         )
-        g.addWidget(QLabel("imgsz (seq_crop_obb)"), 3, 4)
+        self.label_imgsz_seq_crop_obb = QLabel("imgsz (seq_crop_obb)")
+        g.addWidget(self.label_imgsz_seq_crop_obb, 3, 4)
         g.addWidget(self.spin_imgsz_seq_crop_obb, 3, 5)
 
         return gb
@@ -872,7 +917,7 @@ QTabBar::tab:selected {
         form.addRow(
             "",
             self._build_section_note(
-                "Each role can start from a different YOLO checkpoint. Editable fields let you point to custom weights."
+                "Only checkpoints for the active stages are shown. Editable fields still let you point to custom weights."
             ),
         )
 
@@ -888,7 +933,8 @@ QTabBar::tab:selected {
             ]
         )
         self.combo_model_obb_direct.setCurrentText("yolo26s-obb.pt")
-        form.addRow("obb_direct", self.combo_model_obb_direct)
+        self.label_model_obb_direct = QLabel("obb_direct")
+        form.addRow(self.label_model_obb_direct, self.combo_model_obb_direct)
 
         self.combo_model_seq_detect = QComboBox()
         self.combo_model_seq_detect.setEditable(True)
@@ -896,7 +942,8 @@ QTabBar::tab:selected {
             ["yolo26n.pt", "yolo26s.pt", "yolo26m.pt", "yolo26l.pt", "yolo26x.pt"]
         )
         self.combo_model_seq_detect.setCurrentText("yolo26s.pt")
-        form.addRow("seq_detect", self.combo_model_seq_detect)
+        self.label_model_seq_detect = QLabel("seq_detect")
+        form.addRow(self.label_model_seq_detect, self.combo_model_seq_detect)
 
         self.combo_model_seq_crop_obb = QComboBox()
         self.combo_model_seq_crop_obb.setEditable(True)
@@ -904,7 +951,8 @@ QTabBar::tab:selected {
             ["yolo26n-obb.pt", "yolo26s-obb.pt", "yolo26m-obb.pt"]
         )
         self.combo_model_seq_crop_obb.setCurrentText("yolo26s-obb.pt")
-        form.addRow("seq_crop_obb", self.combo_model_seq_crop_obb)
+        self.label_model_seq_crop_obb = QLabel("seq_crop_obb")
+        form.addRow(self.label_model_seq_crop_obb, self.combo_model_seq_crop_obb)
 
         return gb
 
@@ -1133,7 +1181,7 @@ QTabBar::tab:selected {
         self._sync_recipe_from_roles()
         self._set_run_status("Ready to prepare datasets for the selected roles.")
         self._refresh_summary()
-        self._refresh_dataset_fit()
+        self._refresh_overview_data_cards()
 
     def _write_to_project(self) -> None:
         proj = self._project
@@ -1258,6 +1306,44 @@ QTabBar::tab:selected {
                 "Manual stage selection is enabled. DetectKit will train exactly the stages checked below."
             )
             self.recipe_roles_hint.setVisible(True)
+        self._update_advanced_role_controls()
+
+    def _update_advanced_role_controls(self) -> None:
+        selected_roles = set(self._selected_role_keys())
+        show_direct = "obb_direct" in selected_roles
+        show_seq_detect = "seq_detect" in selected_roles
+        show_seq_crop_obb = "seq_crop_obb" in selected_roles
+        show_sequence_settings = bool(selected_roles & {"seq_detect", "seq_crop_obb"})
+
+        for label, field, visible in (
+            (self.label_imgsz_obb_direct, self.spin_imgsz_obb_direct, show_direct),
+            (self.label_imgsz_seq_detect, self.spin_imgsz_seq_detect, show_seq_detect),
+            (
+                self.label_imgsz_seq_crop_obb,
+                self.spin_imgsz_seq_crop_obb,
+                show_seq_crop_obb,
+            ),
+            (self.label_model_obb_direct, self.combo_model_obb_direct, show_direct),
+            (
+                self.label_model_seq_detect,
+                self.combo_model_seq_detect,
+                show_seq_detect,
+            ),
+            (
+                self.label_model_seq_crop_obb,
+                self.combo_model_seq_crop_obb,
+                show_seq_crop_obb,
+            ),
+        ):
+            label.setVisible(visible)
+            field.setVisible(visible)
+
+        self.crop_settings_label.setVisible(show_sequence_settings)
+        self.crop_settings_widget.setVisible(show_sequence_settings)
+
+    def _refresh_overview_data_cards(self) -> None:
+        self._refresh_dataset_fit()
+        self._refresh_source_preview()
 
     def _sync_recipe_from_roles(self) -> None:
         recipe_key = self._recipe_for_roles()
@@ -1385,6 +1471,8 @@ QTabBar::tab:selected {
         merged = DatasetInspection(root_dir="overview")
         valid_items = 0
         for source_path in source_paths:
+            if not Path(source_path).exists():
+                continue
             try:
                 inspection = inspect_obb_or_detect_dataset(source_path)
             except Exception as exc:
@@ -1479,6 +1567,154 @@ QTabBar::tab:selected {
         self._dataset_fit_cache_key = cache_key
         self._dataset_fit_cache_text = text
         self._dataset_fit_dirty = False
+
+    def _source_preview_records(
+        self, max_items: int = 6
+    ) -> list[dict[str, str | Path]]:
+        try:
+            from hydra_suite.training.dataset_inspector import (
+                inspect_obb_or_detect_dataset,
+            )
+        except ImportError:
+            return []
+
+        buckets: dict[str, list[dict[str, str | Path]]] = {}
+        for src in self._project.sources:
+            source_path = str(src.path).strip()
+            if not source_path or not Path(source_path).exists():
+                continue
+            try:
+                inspection = inspect_obb_or_detect_dataset(source_path)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to inspect DetectKit source samples %s: %s",
+                    source_path,
+                    exc,
+                )
+                continue
+
+            source_name = src.name.strip() or Path(source_path).name
+            records: list[dict[str, str | Path]] = []
+            for split_name in ("train", "val", "test", "all"):
+                for item in inspection.splits.get(split_name, []):
+                    image_path = Path(item.image_path)
+                    if not image_path.exists():
+                        continue
+                    records.append(
+                        {
+                            "path": image_path,
+                            "source": source_name,
+                            "split": split_name if split_name != "all" else "dataset",
+                        }
+                    )
+            if records:
+                buckets[source_name] = records
+
+        selected: list[dict[str, str | Path]] = []
+        while len(selected) < max_items:
+            added = False
+            for source_name in sorted(buckets):
+                bucket = buckets[source_name]
+                if not bucket:
+                    continue
+                selected.append(bucket.pop(0))
+                added = True
+                if len(selected) >= max_items:
+                    break
+            if not added:
+                break
+        return selected[:max_items]
+
+    @staticmethod
+    def _source_preview_pixmap(path: Path) -> QPixmap:
+        return QPixmap(str(path))
+
+    def _build_source_preview_card(self, record: dict[str, str | Path]) -> QWidget:
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setFixedWidth(168)
+        card.setStyleSheet(
+            "QFrame { background:#1e1e1e; border:1px solid #3e3e42; border-radius:6px; }"
+        )
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        image_path = Path(str(record["path"]))
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        image_label.setFixedSize(150, 112)
+        image_label.setStyleSheet(
+            "background:#111111; border:1px solid #3e3e42; border-radius:4px; color:#cfcfcf;"
+        )
+        pixmap = self._source_preview_pixmap(image_path)
+        if pixmap.isNull():
+            image_label.setText("Preview\nunavailable")
+        else:
+            image_label.setPixmap(
+                pixmap.scaled(
+                    146,
+                    108,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        layout.addWidget(image_label)
+
+        caption = QLabel(
+            f"{record['source']}\n{str(record['split']).title()} split\n{image_path.name}"
+        )
+        caption.setTextFormat(Qt.TextFormat.PlainText)
+        caption.setWordWrap(True)
+        caption.setStyleSheet("color:#ffffff; font-size:11px;")
+        caption.setToolTip(f"Source: {record['source']}\nPath: {image_path}")
+        layout.addWidget(caption)
+        return card
+
+    def _refresh_source_preview(self) -> None:
+        if not hasattr(self, "source_preview_cards_layout"):
+            return
+
+        while self.source_preview_cards_layout.count():
+            item = self.source_preview_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        records = self._source_preview_records()
+        if not self._project.sources:
+            self.source_preview_status.setText(
+                "No sources configured yet. Add one or more DetectKit datasets to preview sample frames here."
+            )
+            empty_label = QLabel(
+                "No source datasets are connected to this project yet."
+            )
+            empty_label.setWordWrap(True)
+            empty_label.setStyleSheet("color:#cfcfcf; font-size:11px;")
+            self.source_preview_cards_layout.addWidget(empty_label)
+            return
+
+        if not records:
+            self.source_preview_status.setText(
+                "Source datasets are configured, but DetectKit could not discover previewable image-label pairs yet."
+            )
+            empty_label = QLabel(
+                "Preview unavailable. Check that each source has a valid images/labels layout or dataset.yaml."
+            )
+            empty_label.setWordWrap(True)
+            empty_label.setStyleSheet("color:#cfcfcf; font-size:11px;")
+            self.source_preview_cards_layout.addWidget(empty_label)
+            return
+
+        self.source_preview_status.setText(
+            f"Showing {len(records)} representative labeled sample(s) from {len(self._project.sources)} source dataset(s)."
+        )
+        for record in records:
+            self.source_preview_cards_layout.addWidget(
+                self._build_source_preview_card(record)
+            )
+        self.source_preview_cards_layout.addStretch()
 
     def _build_device_options(self) -> list[str]:
         try:

@@ -47,6 +47,24 @@ def test_review_shortcut_defaults_use_plus_and_minus(qapp) -> None:
     assert shortcuts["Reject review label"] == QKeySequence(Qt.Key.Key_Minus).toString()
 
 
+def test_shortcut_editor_excludes_mode_shortcuts(qapp) -> None:
+    dialog = ShortcutEditorDialog()
+    shortcuts = dialog.get_shortcuts()
+
+    assert set(shortcuts) == {
+        "Approve review label",
+        "Reject review label",
+        "Sample next candidates",
+        "Previous unlabeled",
+        "Next unlabeled",
+        "Undo last label (Ctrl+Z)",
+    }
+    assert "Explore mode" not in shortcuts
+    assert "Labeling mode" not in shortcuts
+    assert "Review mode" not in shortcuts
+    assert "Predictions mode" not in shortcuts
+
+
 def test_shortcut_editor_uses_shared_dialog_theme(qapp) -> None:
     dialog = ShortcutEditorDialog()
     info_labels = [

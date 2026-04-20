@@ -3259,6 +3259,12 @@ class TrackingOrchestrator:
                 safe_rt, backend_family=params.get("POSE_MODEL_TYPE", "yolo")
             )
             params["POSE_RUNTIME_FLAVOR"] = safe_pose["pose_runtime_flavor"]
+        params["HEADTAIL_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
+            params.get("HEADTAIL_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+        )
+        params["CNN_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
+            params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+        )
 
         # Preview mode runs live (realtime) detection — no cache lookup or build.
         self._mw.tracking_worker = TrackingWorker(

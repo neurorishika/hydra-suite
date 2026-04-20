@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self._yolo_model_path = None  # Path to loaded YOLO classification model
         self._model_probs = None  # (N, C) per-image class probabilities
         self._model_class_names = None  # class names from (YOLO/tiny) model
+        self._model_prediction_heads = None  # ordered multi-head slices + factor names
         self.umap_model_coords = None  # UMAP computed in model logits space
         self.pca_model_coords = None  # PCA computed in model logits/probability space
         self._show_model_umap = False  # Explorer toggle: embedding vs model UMAP
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
         self._heldout_validation_summary = None  # training-time held-out metric
         self._active_evaluation_paths = None
         self._active_evaluation_split_name = ""
+        self._split_membership_paths = {}
         self._current_knn_neighbors = []
         self._stepper = None
         self._custom_shortcuts: dict = {}  # action_name → key sequence string
@@ -1354,7 +1356,7 @@ class MainWindow(QMainWindow):
 
         saved_shortcuts = config.get("custom_shortcuts", {})
         if isinstance(saved_shortcuts, dict):
-            self._custom_shortcuts = saved_shortcuts
+            self._custom_shortcuts = self._sanitize_custom_shortcuts(saved_shortcuts)
 
         self.clahe_clip = float(config.get("clahe_clip", 2.0))
         self.clahe_grid = tuple(config.get("clahe_grid", [8, 8]))
@@ -1460,6 +1462,7 @@ class MainWindow(QMainWindow):
             if self.cluster_assignments is not None
             else 0
         )
+        scheme = self._resolve_training_scheme()
 
         classes_preview = ", ".join(escape(name) for name in self.classes[:4])
         if len(self.classes) > 4:
@@ -1496,6 +1499,14 @@ class MainWindow(QMainWindow):
             ("Mode", self._mode_display_name(self.explorer_mode)),
             ("Candidates", candidate_text),
         ]
+        if scheme is not None and len(getattr(scheme, "factors", []) or []) > 1:
+            info_rows.insert(
+                5,
+                (
+                    "Scheme",
+                    f"{len(scheme.factors)} factors / {scheme.total_classes:,} composites",
+                ),
+            )
 
         info_html = "<div style='line-height:1.3;'>"
         info_html += f"<div style='color:#ffffff; font-size:14px; font-weight:600;'>{escape(self.project_path.name)}</div>"
@@ -1526,7 +1537,7 @@ class MainWindow(QMainWindow):
         elif len(self.candidate_indices) == 0:
             next_step = "Labeling -> Sample next candidates"
         else:
-            next_step = "Labeling -> Enter Labeling Mode (L)"
+            next_step = "Labeling -> Enter Labeling Mode"
 
         info_html += (
             "<div style='margin-top:8px; padding-top:8px; border-top:1px solid #2f2f2f;'>"
@@ -1631,19 +1642,39 @@ class MainWindow(QMainWindow):
         self,
         paths: list[str] | None,
         split_name: str = "",
+        split_paths: dict[str, list[str]] | None = None,
     ) -> None:
         normalized = [self._resolved_path_key(path) for path in (paths or []) if path]
         self._active_evaluation_paths = set(normalized) if normalized else None
         self._active_evaluation_split_name = str(split_name or "").strip()
+        normalized_split_paths: dict[str, set[str]] = {}
+        for raw_name, raw_paths in (split_paths or {}).items():
+            split_key = str(raw_name or "").strip().lower()
+            if not split_key:
+                continue
+            split_members = {
+                self._resolved_path_key(path) for path in (raw_paths or []) if path
+            }
+            if split_members:
+                normalized_split_paths[split_key] = split_members
+        self._split_membership_paths = normalized_split_paths
 
     def _set_active_evaluation_from_meta(self, meta) -> None:
         evaluation = meta.get("evaluation") if isinstance(meta, dict) else None
         if not isinstance(evaluation, dict):
             self._set_active_evaluation_selection(None)
             return
+        split_paths = evaluation.get("split_paths")
+        if not isinstance(split_paths, dict):
+            split_name = str(evaluation.get("split_name") or "").strip().lower()
+            split_values = evaluation.get("paths") or []
+            split_paths = (
+                {split_name: split_values} if split_name and split_values else {}
+            )
         self._set_active_evaluation_selection(
             evaluation.get("paths") or [],
             str(evaluation.get("split_name") or "").strip(),
+            split_paths=split_paths,
         )
 
     def _cached_model_evaluation_info(self, path: Path):
@@ -2254,6 +2285,7 @@ class MainWindow(QMainWindow):
         self._invalidate_embedding_downstream_state(persist_candidates=True)
         self._model_probs = None
         self._model_class_names = None
+        self._model_prediction_heads = None
         self.umap_model_coords = None
         self.pca_model_coords = None
         self._al_candidates = None
@@ -2757,7 +2789,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 recent_model = None
             if isinstance(recent_model, dict):
-                summary = self._validation_summary_from_value(
+                recent_meta = recent_model.get("meta") or {}
+                summary = self._validation_summary_from_results(
+                    recent_meta.get("factor_validation"),
+                    factor_names=recent_meta.get("factor_names"),
+                ) or self._validation_summary_from_value(
                     recent_model.get("best_val_acc"),
                     prefix="Saved held-out validation accuracy",
                 )
@@ -2765,10 +2801,12 @@ class MainWindow(QMainWindow):
         if cached_preds.get("evaluation"):
             self._set_active_evaluation_from_meta(cached_preds)
         self._set_heldout_validation_summary(summary)
-        self._model_probs = cached_preds["probs"]
-        self._model_class_names = cached_preds["class_names"]
-        self._active_model_mode = cached_preds.get("active_model_mode", "yolo")
-        self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
+        self._set_model_prediction_state(
+            cached_preds["probs"],
+            cached_preds["class_names"],
+            active_model_mode=cached_preds.get("active_model_mode", "yolo"),
+            prediction_heads=cached_preds.get("prediction_heads"),
+        )
         self._set_model_projection_buttons_enabled(True)
         self._update_al_status()
         cached_mumap = db.get_most_recent_umap_cache(kind="model")
@@ -2968,16 +3006,12 @@ class MainWindow(QMainWindow):
     def _install_global_navigation_shortcuts(
         self, active: dict, defaults: dict
     ) -> None:
-        """Install mode and navigation shortcuts shared across labeling modes."""
+        """Install non-label global shortcuts shared across ClassKit workflows."""
 
         def _key(action: str) -> QKeySequence:
             return QKeySequence(active.get(action, defaults.get(action, "")))
 
         shortcut_actions = [
-            ("Explore mode", lambda: self.set_explorer_mode("explore")),
-            ("Labeling mode", lambda: self.set_explorer_mode("labeling")),
-            ("Review mode", self.enter_review_mode),
-            ("Predictions mode", lambda: self.set_explorer_mode("predictions")),
             ("Approve review label", self.approve_selected_review_label),
             ("Reject review label", self.reject_selected_review_label),
             ("Sample next candidates", self.on_sample_next_triggered),
@@ -2988,14 +3022,29 @@ class MainWindow(QMainWindow):
         for action_name, callback in shortcut_actions:
             self._register_label_shortcut(_key(action_name), callback)
 
+    def _sanitize_custom_shortcuts(self, shortcuts: dict | None) -> dict[str, str]:
+        """Keep only supported custom shortcut bindings and normalize values."""
+        if not isinstance(shortcuts, dict):
+            return {}
+
+        from .dialogs import ShortcutEditorDialog
+
+        allowed_actions = {name for name, _ in ShortcutEditorDialog.DEFAULT_SHORTCUTS}
+        sanitized: dict[str, str] = {}
+        for action_name, sequence in shortcuts.items():
+            if action_name not in allowed_actions or sequence in (None, ""):
+                continue
+            sanitized[str(action_name)] = str(sequence)
+        return sanitized
+
     def setup_label_shortcuts(self):
-        """Create keyboard shortcuts for labeling and mode switching."""
+        """Create keyboard shortcuts for labeling and non-mode global actions."""
         self._clear_label_shortcuts()
 
         from .dialogs import ShortcutEditorDialog
 
         defaults = dict(ShortcutEditorDialog.DEFAULT_SHORTCUTS)
-        active = {**defaults, **self._custom_shortcuts}
+        active = {**defaults, **self._sanitize_custom_shortcuts(self._custom_shortcuts)}
         scheme_shortcuts = self._load_scheme_shortcuts()
         self._install_label_assignment_shortcuts(scheme_shortcuts)
         self._install_global_navigation_shortcuts(active, defaults)
@@ -3551,6 +3600,237 @@ class MainWindow(QMainWindow):
             "predictions": "Predictions",
         }.get(str(mode), str(mode))
 
+    @staticmethod
+    def _normalize_prediction_heads(prediction_heads) -> list[dict[str, object]]:
+        """Normalize persisted or runtime multi-head prediction metadata."""
+        normalized: list[dict[str, object]] = []
+        offset = 0
+        for raw_head in prediction_heads or []:
+            if not isinstance(raw_head, dict):
+                continue
+            class_names = [
+                str(name).strip()
+                for name in (raw_head.get("class_names") or [])
+                if str(name).strip()
+            ]
+            if not class_names:
+                continue
+            try:
+                start = int(raw_head.get("start", offset))
+            except Exception:
+                start = offset
+            try:
+                end = int(raw_head.get("end", start + len(class_names)))
+            except Exception:
+                end = start + len(class_names)
+            if end <= start or (end - start) != len(class_names):
+                end = start + len(class_names)
+            factor_name = str(
+                raw_head.get("factor")
+                or raw_head.get("factor_name")
+                or f"factor_{len(normalized) + 1}"
+            ).strip()
+            normalized.append(
+                {
+                    "factor": factor_name,
+                    "class_names": class_names,
+                    "start": start,
+                    "end": end,
+                }
+            )
+            offset = end
+        return normalized
+
+    def _derive_prediction_heads_from_scheme(
+        self,
+        class_names: list[str] | None = None,
+        *,
+        active_model_mode: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Infer multi-head slices from the active project scheme when metadata is absent."""
+        mode = str(active_model_mode or self._active_model_mode or "").strip()
+        if "multihead" not in mode:
+            return []
+
+        scheme = self._resolve_training_scheme()
+        factors = getattr(scheme, "factors", []) or []
+        if len(factors) <= 1:
+            return []
+
+        ordered_names = [
+            str(name).strip() for name in (class_names or []) if str(name).strip()
+        ]
+        heads: list[dict[str, object]] = []
+        offset = 0
+        for index, factor in enumerate(factors):
+            label_count = len(getattr(factor, "labels", []) or [])
+            if label_count <= 0:
+                continue
+            end = offset + label_count
+            if ordered_names and end > len(ordered_names):
+                return []
+            factor_class_names = (
+                ordered_names[offset:end]
+                if ordered_names
+                else [
+                    str(name).strip()
+                    for name in (getattr(factor, "labels", []) or [])
+                    if str(name).strip()
+                ]
+            )
+            heads.append(
+                {
+                    "factor": str(getattr(factor, "name", "") or f"factor_{index + 1}"),
+                    "class_names": factor_class_names,
+                    "start": offset,
+                    "end": offset + len(factor_class_names),
+                }
+            )
+            offset += len(factor_class_names)
+
+        if ordered_names and offset != len(ordered_names):
+            return []
+        return heads
+
+    def _current_prediction_heads(self) -> list[dict[str, object]]:
+        """Return ordered multi-head prediction metadata for the active model output."""
+        probs = np.asarray(self._model_probs) if self._model_probs is not None else None
+        normalized = self._normalize_prediction_heads(self._model_prediction_heads)
+        if (
+            normalized
+            and probs is not None
+            and probs.ndim == 2
+            and int(normalized[-1]["end"]) <= probs.shape[1]
+        ):
+            self._model_prediction_heads = normalized
+            return normalized
+
+        derived = self._derive_prediction_heads_from_scheme(
+            list(self._model_class_names or []),
+            active_model_mode=self._active_model_mode,
+        )
+        self._model_prediction_heads = derived or None
+        return derived
+
+    def _prediction_confidences_from_probs(
+        self,
+        probs,
+        *,
+        prediction_heads=None,
+        class_names: list[str] | None = None,
+        active_model_mode: str | None = None,
+    ):
+        """Return one scalar confidence per image, preserving multi-head uncertainty."""
+        probs_arr = np.asarray(probs)
+        if probs_arr.ndim != 2 or probs_arr.size == 0:
+            return np.asarray([], dtype=float)
+
+        heads = self._normalize_prediction_heads(prediction_heads)
+        if not heads:
+            heads = self._derive_prediction_heads_from_scheme(
+                list(class_names or []),
+                active_model_mode=active_model_mode,
+            )
+
+        if len(heads) > 1:
+            per_head_confidences = []
+            for head in heads:
+                start = int(head["start"])
+                end = int(head["end"])
+                if start < 0 or end > probs_arr.shape[1] or end <= start:
+                    continue
+                head_slice = np.nan_to_num(
+                    probs_arr[:, start:end],
+                    nan=-np.inf,
+                    neginf=-np.inf,
+                    posinf=np.inf,
+                )
+                if head_slice.size == 0:
+                    continue
+                per_head_confidences.append(head_slice.max(axis=1))
+            if per_head_confidences:
+                return np.min(np.stack(per_head_confidences, axis=1), axis=1).astype(
+                    float
+                )
+
+        return (
+            np.nan_to_num(
+                probs_arr,
+                nan=-np.inf,
+                neginf=-np.inf,
+                posinf=np.inf,
+            )
+            .max(axis=1)
+            .astype(float)
+        )
+
+    def _set_model_prediction_state(
+        self,
+        probs,
+        class_names: list,
+        *,
+        active_model_mode: str,
+        prediction_heads=None,
+    ) -> None:
+        """Apply model outputs and normalize any multi-head metadata for UI consumers."""
+        self._model_probs = probs
+        self._model_class_names = list(class_names or [])
+        self._active_model_mode = str(active_model_mode or "")
+        normalized_heads = self._normalize_prediction_heads(prediction_heads)
+        if not normalized_heads:
+            normalized_heads = self._derive_prediction_heads_from_scheme(
+                self._model_class_names,
+                active_model_mode=self._active_model_mode,
+            )
+        self._model_prediction_heads = normalized_heads or None
+        self.image_confidences = list(
+            self._prediction_confidences_from_probs(
+                probs,
+                prediction_heads=self._model_prediction_heads,
+                class_names=self._model_class_names,
+                active_model_mode=self._active_model_mode,
+            )
+        )
+
+    @staticmethod
+    def _prediction_label_from_head_slice(
+        row: np.ndarray,
+        class_names: list[str],
+        start: int,
+    ) -> tuple[str, float, np.ndarray]:
+        finite_row = np.nan_to_num(row, nan=-np.inf, neginf=-np.inf, posinf=np.inf)
+        pred_local = int(np.argmax(finite_row))
+        label = (
+            str(class_names[pred_local])
+            if 0 <= pred_local < len(class_names)
+            else f"pred_{start + pred_local}"
+        )
+        return label, float(row[pred_local]), finite_row
+
+    def _prediction_extra_categories(
+        self,
+        color_values: list[str] | None = None,
+        summary: dict | None = None,
+        current_label: str | None = None,
+    ) -> list[str]:
+        """Return extra categories that should receive stable colors in prediction UIs."""
+        extras = []
+        if color_values:
+            extras.extend(
+                str(value).strip() for value in color_values if str(value).strip()
+            )
+        if current_label:
+            extras.append(str(current_label).strip())
+        if isinstance(summary, dict):
+            extras.append(str(summary.get("predicted_label") or "").strip())
+            for item in summary.get("top_predictions") or []:
+                extras.append(str(item.get("label") or "").strip())
+            for head in summary.get("head_predictions") or []:
+                extras.append(str(head.get("predicted_label") or "").strip())
+                for item in head.get("top_predictions") or []:
+                    extras.append(str(item.get("label") or "").strip())
+        return [value for value in extras if value]
+
     def _prediction_labels_for_plot(self) -> list:
         """Return per-image predicted class labels for prediction-colored explorer mode."""
         if self._model_probs is None:
@@ -3563,6 +3843,29 @@ class MainWindow(QMainWindow):
         num_images = len(self.image_paths)
         out = [None] * num_images
         eval_n = min(num_images, probs.shape[0])
+        heads = self._current_prediction_heads()
+
+        if len(heads) > 1:
+            for i in range(eval_n):
+                head_labels: list[str] = []
+                for head in heads:
+                    start = int(head["start"])
+                    end = int(head["end"])
+                    if start < 0 or end > probs.shape[1] or end <= start:
+                        continue
+                    head_row = np.asarray(probs[i, start:end], dtype=float).reshape(-1)
+                    if head_row.size == 0:
+                        continue
+                    label, _confidence, _finite = (
+                        self._prediction_label_from_head_slice(
+                            head_row,
+                            list(head.get("class_names") or []),
+                            start,
+                        )
+                    )
+                    head_labels.append(label)
+                out[i] = "|".join(head_labels) if head_labels else None
+            return out
 
         names = list(self._model_class_names or [])
         for i in range(eval_n):
@@ -3601,6 +3904,65 @@ class MainWindow(QMainWindow):
         if row.size == 0:
             return None
 
+        heads = self._current_prediction_heads()
+        if len(heads) > 1:
+            head_predictions = []
+            composite_labels: list[str] = []
+            composite_confidences: list[float] = []
+            for head in heads:
+                start = int(head["start"])
+                end = int(head["end"])
+                if start < 0 or end > row.size or end <= start:
+                    continue
+                head_row = np.asarray(row[start:end], dtype=float).reshape(-1)
+                if head_row.size == 0:
+                    continue
+                class_names = list(head.get("class_names") or [])
+                label, confidence, finite_row = self._prediction_label_from_head_slice(
+                    head_row,
+                    class_names,
+                    start,
+                )
+                top_count = max(1, min(int(top_k), finite_row.size))
+                top_indices = np.argsort(finite_row)[::-1][:top_count]
+                top_predictions = [
+                    {
+                        "index": start + int(class_index),
+                        "label": (
+                            str(class_names[int(class_index)])
+                            if 0 <= int(class_index) < len(class_names)
+                            else f"pred_{start + int(class_index)}"
+                        ),
+                        "confidence": float(head_row[int(class_index)]),
+                    }
+                    for class_index in top_indices
+                ]
+                head_predictions.append(
+                    {
+                        "factor": str(
+                            head.get("factor") or f"factor_{len(head_predictions) + 1}"
+                        ),
+                        "predicted_label": label,
+                        "confidence": confidence,
+                        "top_predictions": top_predictions,
+                    }
+                )
+                composite_labels.append(label)
+                composite_confidences.append(confidence)
+
+            if not head_predictions:
+                return None
+
+            return {
+                "predicted_index": None,
+                "predicted_label": "|".join(composite_labels),
+                "confidence": (
+                    min(composite_confidences) if composite_confidences else None
+                ),
+                "top_predictions": [],
+                "head_predictions": head_predictions,
+            }
+
         finite_row = np.nan_to_num(row, nan=-np.inf, neginf=-np.inf, posinf=np.inf)
         pred_idx = int(np.argmax(finite_row))
         class_names = list(self._model_class_names or [])
@@ -3638,7 +4000,13 @@ class MainWindow(QMainWindow):
             lines = [
                 f"Prediction: {summary['predicted_label']} ({self._format_prediction_confidence(summary['confidence'])})"
             ]
-            if summary["top_predictions"]:
+            if summary.get("head_predictions"):
+                lines.append("By factor:")
+                for head in summary["head_predictions"]:
+                    lines.append(
+                        f"  {head['factor']}: {head['predicted_label']} ({self._format_prediction_confidence(head['confidence'])})"
+                    )
+            elif summary["top_predictions"]:
                 lines.append("Top predictions:")
                 for item in summary["top_predictions"]:
                     lines.append(
@@ -3654,8 +4022,31 @@ class MainWindow(QMainWindow):
             return "<b>Prediction:</b> unavailable"
 
         class_color_map = self._schema_category_color_map(
-            extra_categories=list(self._model_class_names or [])
+            extra_categories=self._prediction_extra_categories(summary=summary)
         )
+
+        if summary.get("head_predictions"):
+            head_html = []
+            for head in summary["head_predictions"]:
+                top_predictions = head.get("top_predictions") or []
+                alternatives = "<br>".join(
+                    f"&nbsp;&nbsp;{rank}. {self._label_tag_html(item['label'], class_color_map=class_color_map)} "
+                    f"({self._format_prediction_confidence(item['confidence'])})"
+                    for rank, item in enumerate(top_predictions, start=1)
+                )
+                if alternatives:
+                    alternatives = f"<br><span style='color:#9e9e9e;'>Top-{len(top_predictions)}</span><br>{alternatives}"
+                head_html.append(
+                    f"<br><b>{escape(str(head['factor']))}:</b> "
+                    f"{self._label_tag_html(head['predicted_label'], class_color_map=class_color_map)} "
+                    f"({self._format_prediction_confidence(head['confidence'])})"
+                    f"{alternatives}"
+                )
+            return (
+                f"<b>Composite Prediction:</b> {self._label_tag_html(summary['predicted_label'], class_color_map=class_color_map)} "
+                f"({self._format_prediction_confidence(summary['confidence'])})"
+                f"{''.join(head_html)}"
+            )
 
         top_html = "<br>".join(
             f"&nbsp;&nbsp;{rank}. {self._label_tag_html(item['label'], class_color_map=class_color_map)} "
@@ -4126,9 +4517,13 @@ class MainWindow(QMainWindow):
             self.cluster_assignments
         ):
             cluster_id = self.cluster_assignments[index]
+        prediction_summary = self._prediction_summary_for_index(index, top_k=3)
         prediction_html = self._prediction_details_html(index, top_k=3)
         class_color_map = self._schema_category_color_map(
-            extra_categories=list(self._model_class_names or [])
+            extra_categories=self._prediction_extra_categories(
+                summary=prediction_summary,
+                current_label=current_label if current_label else None,
+            )
         )
         current_label_html = self._label_tag_html(
             current_label if current_label else None,
@@ -4505,11 +4900,17 @@ class MainWindow(QMainWindow):
             candidate_indices = self._review_candidate_indices
         else:
             color_values = self._prediction_labels_for_plot()
+            prediction_categories = [
+                str(value).strip() for value in color_values if str(value).strip()
+            ]
+            extra_categories = self._prediction_extra_categories(
+                color_values=prediction_categories
+            )
             category_order = self._schema_category_order(
-                extra_categories=list(self._model_class_names or [])
+                extra_categories=extra_categories
             )
             category_colors = self._schema_category_color_map(
-                extra_categories=list(self._model_class_names or [])
+                extra_categories=extra_categories
             )
             point_tooltips = self._prediction_tooltips_for_plot(top_k=3)
             candidate_indices = []
@@ -5183,7 +5584,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() != ShortcutEditorDialog.Accepted:
             return
 
-        self._custom_shortcuts = dlg.get_shortcuts()
+        self._custom_shortcuts = self._sanitize_custom_shortcuts(dlg.get_shortcuts())
         self.setup_label_shortcuts()
         self._refresh_shortcut_help()
 
@@ -5277,7 +5678,7 @@ class MainWindow(QMainWindow):
         from .dialogs import ShortcutEditorDialog
 
         defaults = dict(ShortcutEditorDialog.DEFAULT_SHORTCUTS)
-        active = {**defaults, **self._custom_shortcuts}
+        active = {**defaults, **self._sanitize_custom_shortcuts(self._custom_shortcuts)}
 
         label_instr = "1–9 (fallback)"
         if self._stepper is not None:
@@ -5301,7 +5702,6 @@ class MainWindow(QMainWindow):
         lines = [
             "<div style='line-height:1.5; color:#bcbcbc;'>",
             "<b>Controls:</b><br>",
-            f"• <b>{active.get('Explore mode', 'E')}</b> / <b>{active.get('Labeling mode', 'L')}</b> / <b>{active.get('Review mode', 'V')}</b> / <b>{active.get('Predictions mode', 'P')}</b>: set mode<br>",
             f"• <b>{label_instr}</b>: assign class<br>",
             "• <b>0</b>: mark as unknown<br>",
             f"• <b>{active.get('Approve review label', '+')}</b> / <b>{active.get('Reject review label', '-')}</b>: approve or reject selected machine label<br>",
@@ -5644,6 +6044,7 @@ class MainWindow(QMainWindow):
         *,
         evaluation_paths=None,
         evaluation_split_name: str = "",
+        split_paths: dict[str, list[str]] | None = None,
     ):
         """Persist training results to the project model cache DB."""
         if not self.db_path or not results:
@@ -5661,12 +6062,37 @@ class MainWindow(QMainWindow):
                 return
             all_classes = sorted(set(labels_str))
             acc_values = []
+            factor_names = []
+            if str(mode).startswith("multihead"):
+                scheme = self._resolve_training_scheme()
+                factor_names = [
+                    str(getattr(factor, "name", "") or f"factor_{index + 1}")
+                    for index, factor in enumerate(getattr(scheme, "factors", []) or [])
+                ]
+            factor_validation = []
             for r in results:
                 value = r.get("best_val_acc")
                 if value is None:
                     continue
                 try:
                     acc_values.append(float(value))
+                except Exception:
+                    continue
+            for index, result in enumerate(results):
+                value = result.get("best_val_acc") if isinstance(result, dict) else None
+                if value is None:
+                    continue
+                try:
+                    factor_validation.append(
+                        {
+                            "factor_name": (
+                                factor_names[index]
+                                if index < len(factor_names)
+                                else f"factor_{index + 1}"
+                            ),
+                            "best_val_acc": float(value),
+                        }
+                    )
                 except Exception:
                     continue
             best_acc = max(acc_values) if acc_values else None
@@ -5678,6 +6104,8 @@ class MainWindow(QMainWindow):
                 num_classes=len(all_classes),
                 meta={
                     "training_settings": dict(self._last_training_settings or {}),
+                    "factor_names": factor_names,
+                    "factor_validation": factor_validation,
                     "evaluation": {
                         "split_name": str(evaluation_split_name or ""),
                         "paths": [
@@ -5685,6 +6113,15 @@ class MainWindow(QMainWindow):
                             for path in (evaluation_paths or [])
                             if path
                         ],
+                        "split_paths": {
+                            str(name): [
+                                self._resolved_path_key(path)
+                                for path in (paths or [])
+                                if path
+                            ]
+                            for name, paths in (split_paths or {}).items()
+                            if str(name).strip()
+                        },
                     },
                 },
             )
@@ -6055,11 +6492,25 @@ class MainWindow(QMainWindow):
             for path, split in zip(images, source_splits)
             if split == evaluation_split_name
         ]
+        split_paths = {
+            split_name: [
+                self._resolved_path_key(path)
+                for path, split in zip(images, source_splits)
+                if split == split_name
+            ]
+            for split_name in ("train", "val", "test")
+        }
         return {
             "settings": settings,
             "mode": mode,
             "is_yolo": "yolo" in mode,
             "multi_head": mode.startswith("multihead"),
+            "factor_names": [
+                str(getattr(factor, "name", "") or f"factor_{index + 1}")
+                for index, factor in enumerate(
+                    getattr(self._resolve_training_scheme(), "factors", []) or []
+                )
+            ],
             "role": self._training_role_for_mode(mode),
             "run_dir": run_dir,
             "images": images,
@@ -6073,6 +6524,7 @@ class MainWindow(QMainWindow):
             "used_group_fallback": bool(used_group_fallback),
             "evaluation_split_name": evaluation_split_name,
             "evaluation_paths": evaluation_paths,
+            "split_paths": split_paths,
         }
 
     def _validate_training_start_model(self, settings: dict) -> bool:
@@ -6163,11 +6615,15 @@ class MainWindow(QMainWindow):
     def _on_training_success(self, dialog, context, results: list) -> None:
         """Handle successful training completion before post-training inference."""
         self._set_heldout_validation_summary(
-            self._validation_summary_from_results(results)
+            self._validation_summary_from_results(
+                results,
+                factor_names=context.get("factor_names"),
+            )
         )
         self._set_active_evaluation_selection(
             context.get("evaluation_paths"),
             context.get("evaluation_split_name", ""),
+            split_paths=context.get("split_paths"),
         )
         dialog._train_results = results
         dialog.publish_btn.setEnabled(True)
@@ -6181,6 +6637,7 @@ class MainWindow(QMainWindow):
             context["labels_str"],
             evaluation_paths=context.get("evaluation_paths"),
             evaluation_split_name=context.get("evaluation_split_name", ""),
+            split_paths=context.get("split_paths"),
         )
         self._run_post_training_inference(
             results,
@@ -7247,13 +7704,21 @@ class MainWindow(QMainWindow):
 
     # ================== Model Inference & Evaluation ==================
 
-    def _persist_prediction_cache(self, probs, class_names: list, mode: str) -> None:
+    def _persist_prediction_cache(
+        self,
+        probs,
+        class_names: list,
+        mode: str,
+        *,
+        prediction_heads=None,
+    ) -> None:
         """Save inference probs + class names to the project DB prediction cache."""
         if not self.db_path or probs is None:
             return
         try:
             from ..core.store.db import ClassKitDB
 
+            normalized_heads = self._normalize_prediction_heads(prediction_heads)
             ClassKitDB(self.db_path).save_prediction_cache(
                 probs=probs,
                 class_names=class_names or [],
@@ -7262,7 +7727,13 @@ class MainWindow(QMainWindow):
                     "evaluation": {
                         "split_name": self._active_evaluation_split_name,
                         "paths": sorted(self._active_evaluation_paths or []),
-                    }
+                        "split_paths": {
+                            name: sorted(paths)
+                            for name, paths in self._split_membership_paths.items()
+                            if paths
+                        },
+                    },
+                    "prediction_heads": normalized_heads,
                 },
             )
         except Exception:
@@ -7273,6 +7744,7 @@ class MainWindow(QMainWindow):
         model_path: Path,
         on_success=None,
         force_monochrome: bool = False,
+        apply_result: bool = True,
     ):
         """Run YOLO inference on all images in background and update confidences."""
         if not self.image_paths:
@@ -7292,8 +7764,15 @@ class MainWindow(QMainWindow):
         )
 
         def _inference_success(result):
-            self._model_probs = result["probs"]
-            self._model_class_names = result["class_names"]
+            if not apply_result:
+                if on_success:
+                    on_success(result)
+                return
+            self._set_model_prediction_state(
+                result["probs"],
+                result["class_names"],
+                active_model_mode="yolo",
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -7302,7 +7781,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
@@ -7352,8 +7830,11 @@ class MainWindow(QMainWindow):
         )
 
         def _tiny_success(result):
-            self._model_probs = result["probs"]
-            self._model_class_names = result["class_names"]
+            self._set_model_prediction_state(
+                result["probs"],
+                result["class_names"],
+                active_model_mode="tiny",
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -7362,7 +7843,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
@@ -7413,8 +7893,11 @@ class MainWindow(QMainWindow):
         )
 
         def _torchvision_success(result):
-            self._model_probs = result["probs"]
-            self._model_class_names = result["class_names"]
+            self._set_model_prediction_state(
+                result["probs"],
+                result["class_names"],
+                active_model_mode="custom_cnn",
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -7423,7 +7906,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
@@ -7431,7 +7913,6 @@ class MainWindow(QMainWindow):
                 f"Custom CNN done: {len(self.image_paths):,} images, "
                 f"{len(self._model_class_names)} classes"
             )
-            self._active_model_mode = "custom_cnn"
             self._persist_prediction_cache(
                 self._model_probs, self._model_class_names, "custom_cnn"
             )
@@ -7467,15 +7948,42 @@ class MainWindow(QMainWindow):
         if not valid_paths:
             return
 
-        collected: list[tuple[np.ndarray, list[str]]] = []
+        scheme = self._resolve_training_scheme()
+        scheme_factors = getattr(scheme, "factors", []) or []
+        collected: list[dict[str, object]] = []
         total_heads = len(valid_paths)
 
         def _finish() -> None:
-            all_probs = np.concatenate([probs for probs, _ in collected], axis=1)
-            all_names = [name for _, names in collected for name in names]
+            all_probs = np.concatenate(
+                [np.asarray(entry["probs"]) for entry in collected], axis=1
+            )
+            all_names = [
+                name
+                for entry in collected
+                for name in list(entry.get("class_names") or [])
+            ]
+            prediction_heads = []
+            offset = 0
+            for entry_index, entry in enumerate(collected):
+                head_names = list(entry.get("class_names") or [])
+                prediction_heads.append(
+                    {
+                        "factor": str(
+                            entry.get("factor") or f"factor_{entry_index + 1}"
+                        ),
+                        "class_names": head_names,
+                        "start": offset,
+                        "end": offset + len(head_names),
+                    }
+                )
+                offset += len(head_names)
             merged = {"probs": all_probs, "class_names": all_names}
-            self._model_probs = all_probs
-            self._model_class_names = all_names
+            self._set_model_prediction_state(
+                all_probs,
+                all_names,
+                active_model_mode="custom_cnn_multihead",
+                prediction_heads=prediction_heads,
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -7484,18 +7992,17 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(all_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
             self.status.showMessage(
                 f"Multi-head Custom CNN inference done: {len(all_names)} combined classes"
             )
-            self._active_model_mode = "custom_cnn_multihead"
             self._persist_prediction_cache(
                 all_probs,
                 all_names,
                 "custom_cnn_multihead",
+                prediction_heads=prediction_heads,
             )
             if on_success:
                 on_success(merged)
@@ -7520,6 +8027,15 @@ class MainWindow(QMainWindow):
             force_monochrome = (
                 bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
             )
+            factor_name = (
+                str((ckpt.get("factor_names") or [""])[0]).strip()
+                if isinstance(ckpt, dict)
+                else ""
+            )
+            if not factor_name and index < len(scheme_factors):
+                factor_name = str(getattr(scheme_factors[index], "name", "")).strip()
+            if not factor_name:
+                factor_name = f"factor_{index + 1}"
             compute_runtime = self._resolve_classifier_compute_runtime(model_path)
 
             if arch == "tinyclassifier":
@@ -7553,7 +8069,13 @@ class MainWindow(QMainWindow):
                 )
 
             def _head_success(result, next_index=index + 1):
-                collected.append((result["probs"], result["class_names"]))
+                collected.append(
+                    {
+                        "probs": result["probs"],
+                        "class_names": result["class_names"],
+                        "factor": factor_name,
+                    }
+                )
                 _run_head(next_index)
 
             worker.signals.success.connect(_head_success)
@@ -7597,19 +8119,56 @@ class MainWindow(QMainWindow):
         if not model_paths or not self.image_paths:
             return
 
-        collected: list = []  # list of (probs ndarray, class_names list) per head
+        scheme = self._resolve_training_scheme()
+        scheme_factors = getattr(scheme, "factors", []) or []
+        collected: list[dict[str, object] | None] = [None] * len(model_paths)
         remaining: list = [len(model_paths)]
 
-        def _head_done(result):
-            collected.append((result["probs"], result["class_names"]))
+        def _head_done(head_index: int, result):
+            factor_name = (
+                str(getattr(scheme_factors[head_index], "name", "")).strip()
+                if head_index < len(scheme_factors)
+                else f"factor_{head_index + 1}"
+            )
+            collected[head_index] = {
+                "probs": result["probs"],
+                "class_names": result["class_names"],
+                "factor": factor_name,
+            }
             remaining[0] -= 1
             if remaining[0] == 0:
                 # Merge all heads column-wise
-                all_probs = np.concatenate([p for p, _ in collected], axis=1)
-                all_names = [n for _, names in collected for n in names]
+                ordered = [entry for entry in collected if entry is not None]
+                all_probs = np.concatenate(
+                    [np.asarray(entry["probs"]) for entry in ordered], axis=1
+                )
+                all_names = [
+                    name
+                    for entry in ordered
+                    for name in list(entry.get("class_names") or [])
+                ]
+                prediction_heads = []
+                offset = 0
+                for entry_index, entry in enumerate(ordered):
+                    head_names = list(entry.get("class_names") or [])
+                    prediction_heads.append(
+                        {
+                            "factor": str(
+                                entry.get("factor") or f"factor_{entry_index + 1}"
+                            ),
+                            "class_names": head_names,
+                            "start": offset,
+                            "end": offset + len(head_names),
+                        }
+                    )
+                    offset += len(head_names)
                 merged = {"probs": all_probs, "class_names": all_names}
-                self._model_probs = all_probs
-                self._model_class_names = all_names
+                self._set_model_prediction_state(
+                    all_probs,
+                    all_names,
+                    active_model_mode="yolo_multihead",
+                    prediction_heads=prediction_heads,
+                )
                 self.umap_model_coords = None
                 self.pca_model_coords = None
                 self._show_model_umap = False
@@ -7618,24 +8177,29 @@ class MainWindow(QMainWindow):
                 self.btn_umap_model.setChecked(False)
                 if hasattr(self, "btn_pca_model"):
                     self.btn_pca_model.setChecked(False)
-                self.image_confidences = list(all_probs.max(axis=1).astype(float))
                 self._set_model_projection_buttons_enabled(True)
                 self._update_al_status()
                 self.update_explorer_plot()
                 self.status.showMessage(
                     f"Multi-head inference done: {len(all_names)} combined classes"
                 )
-                self._persist_prediction_cache(all_probs, all_names, "yolo_multihead")
+                self._persist_prediction_cache(
+                    all_probs,
+                    all_names,
+                    "yolo_multihead",
+                    prediction_heads=prediction_heads,
+                )
                 if on_success:
                     on_success(merged)
 
-        for mp in model_paths:
+        for head_index, mp in enumerate(model_paths):
             self._run_yolo_inference(
                 mp,
-                on_success=_head_done,
+                on_success=lambda result, idx=head_index: _head_done(idx, result),
                 force_monochrome=(
                     force_monochrome or self._resolve_yolo_force_monochrome(mp)
                 ),
+                apply_result=False,
             )
 
     def _open_model_history(self):
@@ -7667,7 +8231,11 @@ class MainWindow(QMainWindow):
 
         self._set_active_evaluation_from_meta(entry.get("meta"))
         self._set_heldout_validation_summary(
-            self._validation_summary_from_value(
+            self._validation_summary_from_results(
+                (entry.get("meta") or {}).get("factor_validation"),
+                factor_names=(entry.get("meta") or {}).get("factor_names"),
+            )
+            or self._validation_summary_from_value(
                 entry.get("best_val_acc") if isinstance(entry, dict) else None,
                 prefix="Saved held-out validation accuracy",
             )
@@ -7781,6 +8349,196 @@ class MainWindow(QMainWindow):
             return None, None, scope_text
         return np.array(labeled_indices)[valid], y_true[valid], scope_text
 
+    def _labeled_eval_arrays_for_paths(self, paths, scope_text: str):
+        """Return labeled indices, labels, and scope for one explicit split."""
+        import numpy as np
+
+        target_paths = {self._resolved_path_key(path) for path in (paths or []) if path}
+        if not target_paths:
+            return None, None, scope_text
+
+        labeled_indices = [
+            index
+            for index, (path, lbl) in enumerate(
+                zip(self.image_paths, self.image_labels)
+            )
+            if lbl and self._resolved_path_key(path) in target_paths
+        ]
+        if len(labeled_indices) < 2:
+            return None, None, scope_text
+
+        eval_class_names = self._evaluation_class_names()
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
+        y_true = np.array(
+            [class_to_id.get(self.image_labels[i], -1) for i in labeled_indices]
+        )
+        valid = y_true >= 0
+        if valid.sum() < 2:
+            return None, None, scope_text
+        return np.array(labeled_indices)[valid], y_true[valid], scope_text
+
+    def _available_split_metric_specs(self) -> list[tuple[str, list[str], str]]:
+        """Return train/val/test split definitions available for evaluation."""
+        specs: list[tuple[str, list[str], str]] = []
+        for split_name in ("train", "val", "test"):
+            split_paths = self._split_membership_paths.get(split_name)
+            if split_paths:
+                specs.append(
+                    (split_name, sorted(split_paths), f"{split_name.title()} split")
+                )
+        return specs
+
+    def _compute_metrics_for_split_paths(self, paths, *, scope_text: str):
+        """Compute metrics for one split path set using current predictions."""
+        if self._model_probs is None:
+            return None
+
+        idx_arr, y_true, _scope_text = self._labeled_eval_arrays_for_paths(
+            paths,
+            scope_text,
+        )
+        if idx_arr is None or y_true is None:
+            return None
+
+        metrics, extra_report = self._compute_prediction_metrics_for_indices(idx_arr)
+        if metrics is None:
+            return None
+        return {"metrics": metrics, "extra_report": extra_report}
+
+    def _decode_prediction_label_parts(self, label: str, head_count: int) -> list[str]:
+        """Decode a composite label into per-factor values for multi-head evaluation."""
+        scheme = self._resolve_training_scheme()
+        if scheme is not None:
+            try:
+                parts = [str(value) for value in scheme.decode_label(str(label))]
+                if len(parts) == head_count:
+                    return parts
+            except Exception:
+                pass
+
+        parts = [
+            str(value).strip() for value in str(label).split("|") if str(value).strip()
+        ]
+        return parts if len(parts) == head_count else []
+
+    def _compute_prediction_metrics_for_indices(self, idx_arr):
+        """Compute evaluation metrics for the current prediction matrix on one image subset."""
+        import numpy as np
+
+        from ..core.train.metrics import compute_metrics
+
+        if self._model_probs is None or idx_arr is None or len(idx_arr) < 2:
+            return None, ""
+
+        idx_arr = np.asarray(idx_arr, dtype=int)
+        heads = self._current_prediction_heads()
+        true_labels = [str(self.image_labels[int(index)]).strip() for index in idx_arr]
+
+        if len(heads) > 1:
+            summaries = [
+                self._prediction_summary_for_index(int(index), top_k=1)
+                for index in idx_arr
+            ]
+            if any(summary is None for summary in summaries):
+                return None, ""
+
+            pred_labels = [
+                str(summary.get("predicted_label") or "") for summary in summaries
+            ]
+            composite_names: list[str] = []
+            for value in [*true_labels, *pred_labels]:
+                if value and value not in composite_names:
+                    composite_names.append(value)
+            class_to_id = {name: index for index, name in enumerate(composite_names)}
+            y_true = np.asarray(
+                [class_to_id[label] for label in true_labels], dtype=int
+            )
+            y_pred = np.asarray(
+                [class_to_id[label] for label in pred_labels], dtype=int
+            )
+            metrics = compute_metrics(
+                y_pred,
+                y_true,
+                class_names=composite_names,
+            )
+
+            report_lines = [
+                "Multi-head summary",
+                "=" * 60,
+                f"Exact-match accuracy: {metrics.accuracy:.3f}  n={len(idx_arr)}",
+            ]
+            for factor_index, head in enumerate(heads):
+                factor_true: list[str] = []
+                factor_pred: list[str] = []
+                for true_label, summary in zip(true_labels, summaries):
+                    decoded = self._decode_prediction_label_parts(
+                        true_label,
+                        len(heads),
+                    )
+                    head_predictions = summary.get("head_predictions") or []
+                    if not decoded or factor_index >= len(head_predictions):
+                        continue
+                    factor_true.append(str(decoded[factor_index]))
+                    factor_pred.append(
+                        str(head_predictions[factor_index].get("predicted_label") or "")
+                    )
+                if not factor_true or len(factor_true) != len(factor_pred):
+                    continue
+                factor_accuracy = sum(
+                    int(true_value == pred_value)
+                    for true_value, pred_value in zip(factor_true, factor_pred)
+                ) / float(len(factor_true))
+                report_lines.append(
+                    f"{head['factor']}: acc={factor_accuracy:.3f}  n={len(factor_true)}"
+                )
+            return metrics, "\n".join(report_lines)
+
+        eval_class_names = self._evaluation_class_names()
+        probs_rows = np.asarray(self._model_probs[idx_arr])
+        probs_subset = self._aligned_eval_probs(
+            idx_arr,
+            probs_rows,
+            class_names=eval_class_names,
+        )
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
+        y_true = np.asarray(
+            [
+                class_to_id.get(str(self.image_labels[int(index)]), -1)
+                for index in idx_arr
+            ],
+            dtype=int,
+        )
+        valid = y_true >= 0
+        if valid.sum() < 2:
+            return None, ""
+        y_pred = probs_subset[valid].argmax(axis=1)
+        metrics = compute_metrics(
+            y_pred,
+            y_true[valid],
+            class_names=eval_class_names,
+        )
+        return metrics, ""
+
+    def _build_split_metrics_bundle(self):
+        """Compute metrics for all available dataset splits."""
+        bundle = []
+        for split_name, split_paths, scope_text in self._available_split_metric_specs():
+            split_result = self._compute_metrics_for_split_paths(
+                split_paths,
+                scope_text=scope_text,
+            )
+            if split_result is None:
+                continue
+            bundle.append(
+                {
+                    "split_name": split_name,
+                    "scope_text": scope_text,
+                    "metrics": split_result["metrics"],
+                    "extra_report": split_result.get("extra_report") or "",
+                }
+            )
+        return bundle
+
     def _evaluation_class_names(self) -> list[str]:
         """Return the effective class order for metrics and probability alignment."""
 
@@ -7832,7 +8590,10 @@ class MainWindow(QMainWindow):
         return probs_subset
 
     @staticmethod
-    def _validation_summary_from_results(results: list[dict] | None):
+    def _validation_summary_from_results(
+        results: list[dict] | None,
+        factor_names: list[str] | None = None,
+    ):
         """Build a held-out validation summary from training results."""
         values = []
         for index, result in enumerate(results or []):
@@ -7840,7 +8601,16 @@ class MainWindow(QMainWindow):
             if raw is None:
                 continue
             try:
-                values.append((index, float(raw)))
+                factor_label = str(
+                    (result.get("factor") if isinstance(result, dict) else None)
+                    or (result.get("factor_name") if isinstance(result, dict) else None)
+                    or (
+                        factor_names[index]
+                        if factor_names and index < len(factor_names)
+                        else f"f{index + 1}"
+                    )
+                ).strip()
+                values.append((factor_label, float(raw)))
             except Exception:
                 continue
         if not values:
@@ -7852,8 +8622,8 @@ class MainWindow(QMainWindow):
                 "short_text": f"Held-out val acc: {value:.3f}",
             }
 
-        mean_value = sum(value for _index, value in values) / len(values)
-        per_factor = ", ".join(f"f{index}={value:.3f}" for index, value in values)
+        mean_value = sum(value for _label, value in values) / len(values)
+        per_factor = ", ".join(f"{label}={value:.3f}" for label, value in values)
         return {
             "text": (
                 "Held-out validation accuracy by factor (best epoch per head): "
@@ -7903,30 +8673,19 @@ class MainWindow(QMainWindow):
         if self._model_probs is None:
             return
         try:
-            import numpy as np
-
-            from ..core.train.metrics import compute_metrics
-
             idx_arr, y_true, scope_text = self._labeled_eval_arrays()
             if idx_arr is None or y_true is None:
                 return
 
-            eval_class_names = self._evaluation_class_names()
-            probs_rows = np.asarray(self._model_probs[idx_arr])
-            probs_subset = self._aligned_eval_probs(
-                idx_arr,
-                probs_rows,
-                class_names=eval_class_names,
+            metrics, extra_report = self._compute_prediction_metrics_for_indices(
+                idx_arr
             )
-            y_pred = probs_subset.argmax(axis=1)
-            metrics = compute_metrics(
-                y_pred,
-                y_true,
-                class_names=eval_class_names,
-            )
+            if metrics is None:
+                return
             self._update_metrics_display(
                 metrics,
                 evaluation_scope=scope_text,
+                additional_report=extra_report,
                 activate_metrics_tab=activate_metrics_tab,
             )
         except Exception as e:
@@ -7937,21 +8696,45 @@ class MainWindow(QMainWindow):
         metrics,
         *,
         evaluation_scope: str = "All labeled project images",
+        additional_report: str = "",
         activate_metrics_tab: bool = True,
     ):
         """Update Metrics tab: text report + matplotlib confusion matrix / per-class bars."""
         from ..core.train.metrics import format_metrics_report
 
-        report = (
-            f"Evaluation subset: {evaluation_scope}\n\n{format_metrics_report(metrics)}"
-        )
+        split_metrics = self._build_split_metrics_bundle()
+        report_sections = []
         heldout_text = (
             self._heldout_validation_summary.get("text")
             if isinstance(self._heldout_validation_summary, dict)
             else ""
         )
         if heldout_text:
-            report = f"{heldout_text}\n\n{report}"
+            report_sections.append(heldout_text)
+        if split_metrics:
+            summary_lines = ["Split Summary", "=" * 60]
+            for item in split_metrics:
+                split_label = str(item["split_name"]).title()
+                split_metric = item["metrics"]
+                summary_lines.append(
+                    f"{split_label:<8} acc={split_metric.accuracy:.3f}  macro_f1={split_metric.macro_f1:.3f}  weighted_f1={split_metric.weighted_f1:.3f}  n={split_metric.num_samples}"
+                )
+            report_sections.append("\n".join(summary_lines))
+            for item in split_metrics:
+                split_extra = str(item.get("extra_report") or "").strip()
+                split_report = format_metrics_report(item["metrics"])
+                if split_extra:
+                    split_report = f"{split_extra}\n\n{split_report}"
+                report_sections.append(
+                    f"Evaluation subset: {item['scope_text']}\n\n{split_report}"
+                )
+        main_report = format_metrics_report(metrics)
+        if additional_report:
+            main_report = f"{additional_report}\n\n{main_report}"
+        report_sections.append(
+            f"Evaluation subset: {evaluation_scope}\n\n{main_report}"
+        )
+        report = "\n\n".join(section for section in report_sections if section)
         self.metrics_view.setPlainText(report)
         if activate_metrics_tab:
             self.tabs.setCurrentWidget(self.metrics_page)
@@ -8086,6 +8869,7 @@ class MainWindow(QMainWindow):
     def _clear_metrics_display(self) -> None:
         """Reset the Metrics tab to its empty project state."""
         self._set_heldout_validation_summary(None)
+        self._split_membership_paths = {}
         if hasattr(self, "metrics_view"):
             self.metrics_view.clear()
         if hasattr(self, "metrics_figure_label"):

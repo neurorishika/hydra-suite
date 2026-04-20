@@ -951,6 +951,9 @@ class ConfigOrchestrator:
         self._panels.dataset.chk_metric_count_mismatch.setChecked(
             get_cfg("metric_count_mismatch", default=True)
         )
+        self._panels.dataset.chk_metric_fragmented_detections.setChecked(
+            get_cfg("metric_fragmented_detections", default=True)
+        )
         self._panels.dataset.chk_metric_high_assignment_cost.setChecked(
             get_cfg("metric_high_assignment_cost", default=True)
         )
@@ -1696,6 +1699,7 @@ class ConfigOrchestrator:
                 "dataset_probabilistic_sampling": self._panels.dataset.chk_dataset_probabilistic.isChecked(),
                 "metric_low_confidence": self._panels.dataset.chk_metric_low_confidence.isChecked(),
                 "metric_count_mismatch": self._panels.dataset.chk_metric_count_mismatch.isChecked(),
+                "metric_fragmented_detections": self._panels.dataset.chk_metric_fragmented_detections.isChecked(),
                 "metric_high_assignment_cost": self._panels.dataset.chk_metric_high_assignment_cost.isChecked(),
                 "metric_track_loss": self._panels.dataset.chk_metric_track_loss.isChecked(),
                 "metric_high_uncertainty": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),
@@ -2222,6 +2226,7 @@ class ConfigOrchestrator:
             "DATASET_PROBABILISTIC_SAMPLING": self._panels.dataset.chk_dataset_probabilistic.isChecked(),
             "METRIC_LOW_CONFIDENCE": self._panels.dataset.chk_metric_low_confidence.isChecked(),
             "METRIC_COUNT_MISMATCH": self._panels.dataset.chk_metric_count_mismatch.isChecked(),
+            "METRIC_FRAGMENTED_DETECTIONS": self._panels.dataset.chk_metric_fragmented_detections.isChecked(),
             "METRIC_HIGH_ASSIGNMENT_COST": self._panels.dataset.chk_metric_high_assignment_cost.isChecked(),
             "METRIC_TRACK_LOSS": self._panels.dataset.chk_metric_track_loss.isChecked(),
             "METRIC_HIGH_UNCERTAINTY": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),

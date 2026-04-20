@@ -177,6 +177,7 @@
   "dataset_probabilistic_sampling": true,
   "metric_low_confidence": true,
   "metric_count_mismatch": true,
+  "metric_fragmented_detections": true,
   "metric_high_assignment_cost": true,
   "metric_track_loss": true,
   "metric_high_uncertainty": true,
