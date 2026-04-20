@@ -34,6 +34,7 @@ class MergeWorker(BaseWorker):
         max_gap,
         tag_cache_path=None,
         heading_flip_max_burst=5,
+        directed_heading_posthoc=False,
         enable_profiling=False,
         profile_export_path=None,
     ):
@@ -47,6 +48,7 @@ class MergeWorker(BaseWorker):
         self.max_gap = max_gap
         self.tag_cache_path = tag_cache_path
         self.heading_flip_max_burst = heading_flip_max_burst
+        self.directed_heading_posthoc = directed_heading_posthoc
         self.enable_profiling = enable_profiling
         self.profile_export_path = profile_export_path
         self._stop_requested = False
@@ -185,6 +187,7 @@ class MergeWorker(BaseWorker):
                         method=self.interp_method,
                         max_gap=self.max_gap,
                         heading_flip_max_burst=self.heading_flip_max_burst,
+                        directed_heading_posthoc=self.directed_heading_posthoc,
                     )
             profiler.phase_end("post_interpolate")
 

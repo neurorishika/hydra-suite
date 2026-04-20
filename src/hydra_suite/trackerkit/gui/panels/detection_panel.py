@@ -1390,6 +1390,25 @@ class DetectionPanel(QWidget):
         """Handle zoom slider change."""
         zoom_val = value / 100.0
         self._main_window.label_zoom_val.setText(f"{zoom_val:.2f}x")
+
+        # If tracking is active, re-render from the last received frame so that
+        # zoom does not flash a stale detection-test or preview image.
+        tracking_worker = getattr(self._main_window, "tracking_worker", None)
+        if tracking_worker is not None and tracking_worker.isRunning():
+            last_rgb = getattr(self._main_window, "_last_tracking_frame_rgb", None)
+            if last_rgb is not None:
+                from PySide6.QtCore import Qt
+                from PySide6.QtGui import QImage, QPixmap
+
+                z = max(value / 100.0, 0.1)
+                h, w, _ = last_rgb.shape
+                qimg = QImage(last_rgb.data, w, h, w * 3, QImage.Format_RGB888)
+                scaled = qimg.scaled(
+                    int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                self._main_window._set_video_pixmap(QPixmap.fromImage(scaled))
+            return
+
         if self._main_window.detection_test_result is not None:
             self._redisplay_detection_test()
         elif getattr(self._main_window, "roi_base_frame", None) is not None and getattr(
@@ -1540,7 +1559,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window.video_label.setPixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap)
 
     def _redisplay_detection_test(self):
         """Redisplay the stored detection test result with current zoom."""
@@ -1563,7 +1582,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window.video_label.setPixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap)
 
     # =========================================================================
     # PREVIEW DETECTION TEST (moved from MainWindow)
@@ -1841,7 +1860,7 @@ class DetectionPanel(QWidget):
             qimg = qimg.scaled(
                 scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
-        self._main_window.video_label.setPixmap(QPixmap.fromImage(qimg))
+        self._main_window._set_video_pixmap(QPixmap.fromImage(qimg))
         self._main_window._fit_image_to_screen()
         logger.info("Detection test completed on preview frame")
 

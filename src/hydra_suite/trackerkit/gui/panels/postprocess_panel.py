@@ -423,15 +423,27 @@ class PostProcessPanel(QWidget):
         self.lbl_merge_overlap_multiplier = QLabel(
             "Merge agreement distance (body lengths)"
         )
+        # Heading-flip burst row — hidden when post-hoc global consistency is active.
+        self.heading_flip_burst_row_widget = self._build_field_grid(
+            [(self.lbl_heading_flip_max_burst, self.spin_heading_flip_max_burst)],
+            columns=1,
+        )
+        f_interpolation_merge.addRow(self.heading_flip_burst_row_widget)
+        # Post-hoc note shown in place of the burst row.
+        self.lbl_heading_flip_posthoc_note = self._main_window._create_help_label(
+            "Global heading consistency (minimum-flips DP) is applied per track — "
+            "the burst-flip threshold is not used."
+        )
+        self.lbl_heading_flip_posthoc_note.setVisible(False)
+        f_interpolation_merge.addRow(self.lbl_heading_flip_posthoc_note)
         self.merge_threshold_row_widget = self._build_field_grid(
             [
-                (self.lbl_heading_flip_max_burst, self.spin_heading_flip_max_burst),
                 (
                     self.lbl_merge_overlap_multiplier,
                     self.spin_merge_overlap_multiplier,
                 ),
             ],
-            columns=2,
+            columns=1,
         )
         f_interpolation_merge.addRow(self.merge_threshold_row_widget)
 
@@ -886,6 +898,17 @@ class PostProcessPanel(QWidget):
         """Enable/disable trajectory cleaning controls based on checkbox."""
         enabled = self.enable_postprocessing.isChecked()
         self._set_cleaning_section_state(enabled)
+
+    def sync_heading_flip_posthoc_ui(self, posthoc_active: bool) -> None:
+        """Toggle the heading-flip burst control vs. the post-hoc note.
+
+        Args:
+            posthoc_active: True when head-tail or pose model is configured so
+                global DP consistency is applied instead of burst correction.
+        """
+        self.heading_flip_burst_row_widget.setVisible(not posthoc_active)
+        self.heading_flip_burst_row_widget.setEnabled(not posthoc_active)
+        self.lbl_heading_flip_posthoc_note.setVisible(posthoc_active)
 
     def _on_video_output_toggled(self, checked):
         """Enable/disable video output controls."""

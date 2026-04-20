@@ -611,6 +611,24 @@ class TrackingPanel(QWidget):
             "Directed-flip persistence (frames)", self.spin_directed_orient_flip_persist
         )
 
+        # Group the three online consistency controls so they can be shown/hidden
+        # together when the post-hoc mode is toggled on/off.
+        self._directed_orient_online_widgets = [
+            self.chk_directed_orient_smoothing,
+            self.spin_directed_orient_flip_conf,
+            self.spin_directed_orient_flip_persist,
+        ]
+
+        # Note shown in place of the online controls when post-hoc mode is active.
+        self.lbl_directed_orient_posthoc_note = self._main_window._create_help_label(
+            "Post-hoc global heading consistency is active (head-tail or pose model "
+            "detected). Online flip checks are disabled — heading ambiguities are "
+            "resolved globally per track in post-processing using a minimum-flips "
+            "dynamic-programming algorithm."
+        )
+        self.lbl_directed_orient_posthoc_note.setVisible(False)
+        vl_misc.addWidget(self.lbl_directed_orient_posthoc_note)
+
         vl_misc.addLayout(f_misc)
         g_misc.setContentLayout(vl_misc)
         vbox.addWidget(g_misc)
@@ -879,3 +897,19 @@ class TrackingPanel(QWidget):
         enabled = self.chk_enable_confidence_density_map.isChecked()
         self.g_density.setVisible(enabled)
         self.g_density.setEnabled(enabled)
+
+    def sync_directed_orient_posthoc_ui(self, posthoc_active: bool) -> None:
+        """Toggle between online-consistency controls and the post-hoc note.
+
+        Called whenever the head-tail / pose model configuration changes so the
+        Direction Updates section stays consistent with the active pipeline.
+
+        Args:
+            posthoc_active: True when a head-tail or pose model is configured,
+                meaning online flip hysteresis is bypassed in favour of the
+                global DP step at post-processing time.
+        """
+        for w in self._directed_orient_online_widgets:
+            w.setVisible(not posthoc_active)
+            w.setEnabled(not posthoc_active)
+        self.lbl_directed_orient_posthoc_note.setVisible(posthoc_active)

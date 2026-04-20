@@ -623,13 +623,16 @@ class TrackingOrchestrator:
         # Store tracking frame size for fit-to-screen calculation
         self._mw._tracking_frame_size = (w, h)
 
+        # Cache last frame so zoom changes can re-render from the current frame
+        self._mw._last_tracking_frame_rgb = rgb
+
         qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888)
 
         # ROI masking is now done in tracking worker - no need to duplicate here
         scaled = qimg.scaled(
             int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self._mw.video_label.setPixmap(QPixmap.fromImage(scaled))
+        self._mw._set_video_pixmap(QPixmap.fromImage(scaled))
 
         # Auto-fit to screen on first frame of tracking
         if self._mw._tracking_first_frame:
@@ -846,6 +849,9 @@ class TrackingOrchestrator:
             max_gap,
             tag_cache_path=_tag_cache_path,
             heading_flip_max_burst=heading_flip_max_burst,
+            directed_heading_posthoc=bool(
+                current_params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+            ),
             enable_profiling=_enable_profiling,
             profile_export_path=_merge_profile_path,
         )
@@ -2144,11 +2150,15 @@ class TrackingOrchestrator:
                 heading_flip_max_burst = (
                     self._panels.postprocess.spin_heading_flip_max_burst.value()
                 )
+                current_params = self._mw.get_parameters_dict()
                 processed_trajectories = interpolate_trajectories(
                     processed_trajectories,
                     method=interp_method,
                     max_gap=max_gap,
                     heading_flip_max_burst=heading_flip_max_burst,
+                    directed_heading_posthoc=bool(
+                        current_params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+                    ),
                 )
 
             resize_factor = self._panels.setup.spin_resize.value()
@@ -3250,61 +3260,15 @@ class TrackingOrchestrator:
             )
             params["POSE_RUNTIME_FLAVOR"] = safe_pose["pose_runtime_flavor"]
 
-        # Reuse an existing detection cache when one covers the current frame
-        # range — this ensures preview uses the same detections as the autotune
-        # preview instead of re-running live YOLO inference, which can produce
-        # slightly different detection sets and cause visible jumps.
-        start_frame = params.get("START_FRAME", 0)
-        end_frame = params.get("END_FRAME", 0)
-        cache_path, cache_valid = self._mw._find_or_plan_optimizer_cache_path(
-            video_path, params, start_frame, end_frame
-        )
-
-        if not cache_valid:
-            res = QMessageBox.question(
-                self._mw,
-                "Build Detection Cache",
-                "No detection cache found for this frame range.\n\n"
-                "Build one now for a consistent preview?\n"
-                "(Detection-only scan — no CSV output, no config save.)",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if res == QMessageBox.Yes:
-                from hydra_suite.core.tracking.optimizer_workers import (
-                    DetectionCacheBuilderWorker,
-                )
-
-                self._mw._pending_preview_video_path = video_path
-                self._mw._cache_builder_worker = DetectionCacheBuilderWorker(
-                    video_path,
-                    cache_path,
-                    params,
-                    start_frame,
-                    end_frame,
-                )
-                self._mw._cache_builder_worker.progress_signal.connect(
-                    self.on_progress_update
-                )
-                self._mw._cache_builder_worker.finished_signal.connect(
-                    self._mw._on_preview_cache_built
-                )
-                self._mw.progress_bar.setVisible(True)
-                self._mw.progress_label.setVisible(True)
-                self._mw.progress_bar.setValue(0)
-                self._mw.progress_label.setText(
-                    "Building detection cache for preview..."
-                )
-                self._mw._cache_builder_worker.start()
-                return  # Will resume via _on_preview_cache_built
-
+        # Preview mode runs live (realtime) detection — no cache lookup or build.
         self._mw.tracking_worker = TrackingWorker(
             video_path,
             csv_writer_thread=None,
             video_output_path=None,
             backward_mode=False,
-            detection_cache_path=cache_path if cache_valid else None,
+            detection_cache_path=None,
             preview_mode=True,
-            use_cached_detections=cache_valid,
+            use_cached_detections=False,
         )
         self._mw.tracking_worker.set_parameters(params)
         self._mw.tracking_worker.frame_signal.connect(self.on_new_frame)

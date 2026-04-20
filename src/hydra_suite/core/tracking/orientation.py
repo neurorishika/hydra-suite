@@ -112,7 +112,8 @@ def smooth_orientation(
         speed: Track speed estimate.
         p: Parameter dict (needs VELOCITY_THRESHOLD, MAX_ORIENT_DELTA_STOPPED,
            INSTANT_FLIP_ORIENTATION, DIRECTED_ORIENT_SMOOTHING,
-           DIRECTED_ORIENT_FLIP_CONFIDENCE, DIRECTED_ORIENT_FLIP_PERSISTENCE).
+           DIRECTED_ORIENT_FLIP_CONFIDENCE, DIRECTED_ORIENT_FLIP_PERSISTENCE,
+           DIRECTED_ORIENT_POSTHOC_CONSISTENCY).
         orientation_last: List of last committed theta per track (mutated).
         position_deques: Per-track deques of (x, y, frame) positions.
         directed_heading: Whether this heading comes from a directed source.
@@ -120,9 +121,19 @@ def smooth_orientation(
         heading_flip_counters: Per-track flip hysteresis counters (mutated).
 
     Returns:
-        Smoothed theta in radians.
+        Smoothed theta in radians.  When DIRECTED_ORIENT_POSTHOC_CONSISTENCY is
+        True and directed_heading is True, the raw theta is returned unchanged so
+        that global heading consistency can be resolved in post-processing.
     """
     old = orientation_last[r]
+
+    if directed_heading and p.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False):
+        # Post-hoc mode: accept the raw directed heading without any online flip
+        # check.  Global heading consistency will be resolved per-track in the
+        # post-processing step instead.
+        if old is None and heading_flip_counters is not None:
+            heading_flip_counters[r] = 0
+        return theta
 
     if directed_heading and p.get("DIRECTED_ORIENT_SMOOTHING", True):
         return _smooth_directed_heading(

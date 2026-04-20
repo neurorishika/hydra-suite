@@ -1656,13 +1656,16 @@ class TrackingWorker(QThread):
             compute_filter_settings_hash(p),
             compute_extractor_hash(p),
         )
-        self.detected_properties_cache_path = str(
-            self._build_detected_properties_cache_path(
-                detected_props_id, start_frame, end_frame
+        if not self.preview_mode:
+            self.detected_properties_cache_path = str(
+                self._build_detected_properties_cache_path(
+                    detected_props_id, start_frame, end_frame
+                )
             )
-        )
-        detected_props_cache = DetectedPropertiesCache(
-            self.detected_properties_cache_path, mode="w"
+        detected_props_cache = (
+            None
+            if self.preview_mode
+            else DetectedPropertiesCache(self.detected_properties_cache_path, mode="w")
         )
 
         # === 2. FRAME PROCESSING LOOP ===

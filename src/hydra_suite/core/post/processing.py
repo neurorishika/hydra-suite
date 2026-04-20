@@ -2289,6 +2289,7 @@ def interpolate_trajectories(
     method: object = "linear",
     max_gap: object = 10,
     heading_flip_max_burst: int = 5,
+    directed_heading_posthoc: bool = False,
 ) -> object:
     """
     Interpolate missing values in trajectories using various methods.
@@ -2299,6 +2300,12 @@ def interpolate_trajectories(
         max_gap: Maximum gap size to interpolate (frames). Larger gaps are left as NaN.
         heading_flip_max_burst: Maximum length of an isolated heading-flip burst to
             correct in post-processing.  Longer segments are assumed genuine.
+            Ignored when *directed_heading_posthoc* is True.
+        directed_heading_posthoc: When True (head-tail or pose model was used),
+            apply global heading consistency via dynamic programming instead of
+            the local burst-based flip correction.  This resolves the minimum
+            number of per-frame flips needed to make the entire track
+            consistently directed.
 
     Returns:
         DataFrame with interpolated values
@@ -2352,9 +2359,14 @@ def interpolate_trajectories(
         if not has_missing_frames and not has_value_gaps:
             # Still fix heading flips even without gaps
             if "Theta" in traj_data.columns:
-                traj_data["Theta"] = _fix_heading_flips(
-                    traj_data["Theta"].values, max_burst=heading_flip_max_burst
-                )
+                if directed_heading_posthoc:
+                    traj_data["Theta"] = _fix_heading_globally(
+                        traj_data["Theta"].values
+                    )
+                else:
+                    traj_data["Theta"] = _fix_heading_flips(
+                        traj_data["Theta"].values, max_burst=heading_flip_max_burst
+                    )
             interpolated_parts.append(traj_data)
             continue
 
@@ -2380,12 +2392,14 @@ def interpolate_trajectories(
                 max_gap=max_gap,
             )
 
-        # Fix isolated 180-degree heading flips before interpolation.
-        # Must happen before _interpolate_angle so that sin/cos interpolation
-        # doesn't smooth across an artificial discontinuity.
-        traj_data["Theta"] = _fix_heading_flips(
-            traj_data["Theta"].values, max_burst=heading_flip_max_burst
-        )
+        # Fix heading ambiguities before interpolation so that sin/cos
+        # interpolation doesn't smooth across an artificial discontinuity.
+        if directed_heading_posthoc:
+            traj_data["Theta"] = _fix_heading_globally(traj_data["Theta"].values)
+        else:
+            traj_data["Theta"] = _fix_heading_flips(
+                traj_data["Theta"].values, max_burst=heading_flip_max_burst
+            )
 
         traj_data["Theta"] = _interpolate_angle(
             traj_data["FrameID"].values,
@@ -2950,6 +2964,91 @@ def _fix_heading_flips(theta: np.ndarray, max_burst: int = 5) -> np.ndarray:
 
         if not changed:
             break
+
+    return result
+
+
+def _fix_heading_globally(theta: np.ndarray) -> np.ndarray:
+    """Globally correct 180-degree heading ambiguities using dynamic programming.
+
+    For each frame the heading can be kept as-is (state 0) or flipped by π
+    (state 1).  Dynamic programming finds the assignment that minimises the
+    total circular angular variation across the entire track — equivalent to
+    the minimum number of flips needed to make the trajectory consistently
+    directed.
+
+    This is appropriate when a head-tail or pose model provides directed
+    headings, because those models independently assign a direction to every
+    frame and therefore produce isolated 180° errors that are better resolved
+    globally than frame-by-frame with a hysteresis filter.
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        Heading values in radians.  May contain NaN for missing frames.
+
+    Returns
+    -------
+    np.ndarray
+        Corrected heading array (copy).
+    """
+    two_pi = 2.0 * np.pi
+    result = theta.copy()
+    n = len(result)
+
+    valid_idx = [i for i in range(n) if not np.isnan(result[i])]
+    if len(valid_idx) < 2:
+        return result
+
+    INF = float("inf")
+
+    # dp[s] = minimum total angular variation to reach the current valid frame
+    # in state s (s=0: original, s=1: flipped by pi).
+    dp = [0.0, 0.0]
+    # parent[j][s] = state chosen at the previous valid frame that leads to the
+    # optimal cost dp[s] at valid frame j.
+    parent = [[None, None] for _ in range(len(valid_idx))]
+
+    for vi in range(1, len(valid_idx)):
+        prev_i = valid_idx[vi - 1]
+        curr_i = valid_idx[vi]
+        prev_orig = result[prev_i]
+        curr_orig = result[curr_i]
+        prev_flip = (prev_orig + np.pi) % two_pi
+        curr_flip = (curr_orig + np.pi) % two_pi
+
+        new_dp = [INF, INF]
+        new_parent = [None, None]
+
+        # Effective headings for each (prev_state, curr_state) pair:
+        # prev_state x curr_state → angular cost
+        for curr_s, curr_val in enumerate((curr_orig, curr_flip)):
+            best_cost = INF
+            best_prev_s = 0
+            for prev_s, prev_val in enumerate((prev_orig, prev_flip)):
+                diff = abs(curr_val - prev_val)
+                if diff > np.pi:
+                    diff = two_pi - diff
+                cost = dp[prev_s] + diff
+                if cost < best_cost:
+                    best_cost = cost
+                    best_prev_s = prev_s
+            new_dp[curr_s] = best_cost
+            new_parent[curr_s] = best_prev_s
+
+        dp = new_dp
+        parent[vi] = new_parent
+
+    # Back-track to find the optimal state sequence.
+    states = [None] * len(valid_idx)
+    states[-1] = 0 if dp[0] <= dp[1] else 1
+    for vi in range(len(valid_idx) - 1, 0, -1):
+        states[vi - 1] = parent[vi][states[vi]]
+
+    # Apply flips.
+    for vi, i in enumerate(valid_idx):
+        if states[vi] == 1:
+            result[i] = (result[i] + np.pi) % two_pi
 
     return result
 

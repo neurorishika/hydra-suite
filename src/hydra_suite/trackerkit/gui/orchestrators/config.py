@@ -2146,6 +2146,12 @@ class ConfigOrchestrator:
             "DIRECTED_ORIENT_SMOOTHING": self._panels.tracking.chk_directed_orient_smoothing.isChecked(),
             "DIRECTED_ORIENT_FLIP_CONFIDENCE": self._panels.tracking.spin_directed_orient_flip_conf.value(),
             "DIRECTED_ORIENT_FLIP_PERSISTENCE": self._panels.tracking.spin_directed_orient_flip_persist.value(),
+            # Post-hoc mode: when a directed heading source (head-tail or pose
+            # model) is active, skip the online flip-hysteresis check and instead
+            # resolve all heading ambiguities globally in post-processing.
+            "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": bool(
+                str(yolo_headtail_path or "").strip() or pose_extractor_enabled
+            ),
             "LOST_THRESHOLD_FRAMES": lost_threshold_frames,
             "W_POSITION": self._panels.tracking.spin_Wp.value(),
             "W_ORIENTATION": self._panels.tracking.spin_Wo.value(),

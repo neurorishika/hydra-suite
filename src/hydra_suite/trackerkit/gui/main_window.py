@@ -530,13 +530,15 @@ class MainWindow(QMainWindow):
 
         # Video Area
         self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setStyleSheet("background-color: #121212; border: none;")
         self.scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_label = QLabel("")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.video_label.setMinimumSize(320, 240)
         self.scroll.setWidget(self.video_label)
         self._show_video_logo_placeholder()
 
@@ -2473,8 +2475,27 @@ class MainWindow(QMainWindow):
             self._session_orch._show_video_logo_placeholder()
             return
         # Fallback during early init before orchestrators exist
+        self._set_video_message("HYDRA\n\nLoad a video to begin...")
+
+    def _set_video_pixmap(self, pixmap: QPixmap):
+        """Display a pixmap and resize the video label to match it."""
+        self.video_label.setText("")
+        self.video_label.setPixmap(pixmap)
+        if pixmap is not None and not pixmap.isNull():
+            self.video_label.resize(pixmap.width(), pixmap.height())
+
+    def _set_video_message(
+        self, text: str, minimum_width: int = 320, minimum_height: int = 240
+    ):
+        """Display centered text in the video area with a stable minimum size."""
         self.video_label.setPixmap(QPixmap())
-        self.video_label.setText("HYDRA\n\nLoad a video to begin...")
+        self.video_label.setText(text)
+        width_hint = self.video_label.sizeHint().width()
+        height_hint = self.video_label.sizeHint().height()
+        self.video_label.resize(
+            max(minimum_width, width_hint),
+            max(minimum_height, height_hint),
+        )
 
     def _is_visualization_enabled(self) -> bool:
         # Preview should always render frames regardless of visualization-free toggle
