@@ -174,7 +174,7 @@ def test_marker_size_control_updates_explorer(qapp) -> None:
     assert window.explorer.marker_size_multiplier == pytest.approx(1.7)
 
 
-def test_review_buttons_live_in_left_review_panel(qapp) -> None:
+def test_review_buttons_live_in_preview_panel(qapp) -> None:
     window = MainWindow()
 
     def is_descendant(widget, ancestor) -> bool:
@@ -185,14 +185,14 @@ def test_review_buttons_live_in_left_review_panel(qapp) -> None:
             current = current.parentWidget()
         return False
 
-    assert is_descendant(window.review_selected_btn, window.context_panel) is True
-    assert is_descendant(window.review_reject_btn, window.context_panel) is True
+    assert is_descendant(window.review_selected_btn, window.preview_panel) is True
+    assert is_descendant(window.review_reject_btn, window.preview_panel) is True
     assert (
         is_descendant(window.review_clear_unverified_btn, window.context_panel) is True
     )
 
-    assert is_descendant(window.review_selected_btn, window.preview_panel) is False
-    assert is_descendant(window.review_reject_btn, window.preview_panel) is False
+    assert is_descendant(window.review_selected_btn, window.context_panel) is False
+    assert is_descendant(window.review_reject_btn, window.context_panel) is False
     assert (
         is_descendant(window.review_clear_unverified_btn, window.preview_panel) is False
     )
@@ -1254,6 +1254,72 @@ def test_preview_panel_shows_multihead_prediction_details(qapp, tmp_path: Path) 
     assert "Composite Prediction:" in selection_html
 
 
+def test_apply_model_predictions_as_review_labels_uses_multihead_composite_labels(
+    qapp, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    db = ClassKitDB(project_dir / "classkit.db")
+
+    image_path = project_dir / "review_target.png"
+    image_path.write_bytes(b"image-bytes")
+    db.add_images([image_path.resolve()])
+
+    scheme_path = classkit_scheme_path(project_dir)
+    scheme_path.parent.mkdir(parents=True, exist_ok=True)
+    scheme_path.write_text(
+        json.dumps(
+            {
+                "name": "directional",
+                "description": "test scheme",
+                "factors": [
+                    {"name": "color", "labels": ["blue", "red"]},
+                    {"name": "side", "labels": ["left", "right"]},
+                ],
+                "training_modes": ["multihead_custom"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    window = MainWindow()
+    window.project_path = project_dir
+    window.db_path = db.db_path
+    window.image_paths = [image_path.resolve()]
+    window.image_confidences = [None]
+    window._reload_label_state_from_db(db)
+    window._set_model_prediction_state(
+        np.array([[0.15, 0.85, 0.20, 0.80]], dtype=np.float32),
+        ["blue", "red", "left", "right"],
+        active_model_mode="custom_cnn_multihead",
+        prediction_heads=[
+            {"factor": "color", "class_names": ["blue", "red"]},
+            {"factor": "side", "class_names": ["left", "right"]},
+        ],
+    )
+
+    window.apply_model_predictions_as_review_labels(
+        indices=[0],
+        scope_label="Selected point",
+    )
+
+    status = db.get_label_review_status_by_path()[str(image_path.resolve())]
+    assert status["label"] == "red|right"
+    assert status["label_source"] == "auto_model"
+    assert status["verified"] is False
+    assert status["confidence"] == pytest.approx(0.8)
+    assert status["auto_label_metadata"]["predicted_label"] == "red|right"
+    prediction_heads = status["auto_label_metadata"]["prediction_heads"]
+    assert [head["factor"] for head in prediction_heads] == ["color", "side"]
+    assert [head["predicted_label"] for head in prediction_heads] == [
+        "red",
+        "right",
+    ]
+    assert [head["confidence"] for head in prediction_heads] == pytest.approx(
+        [0.85, 0.8]
+    )
+
+
 def test_prediction_mode_uses_composite_multihead_labels(qapp) -> None:
     from hydra_suite.classkit.gui.widgets.color_utils import build_category_color_map
 
@@ -2170,6 +2236,48 @@ def test_metrics_display_includes_train_val_and_test_split_reports(
     assert "Val      acc=" in report
     assert "Test     acc=" in report
     assert report.count("Classification Metrics") >= 4
+
+
+def test_metrics_plot_panels_follow_split_order_without_duplicate_active_split(
+    qapp,
+) -> None:
+    metrics_module = pytest.importorskip("hydra_suite.classkit.core.train.metrics")
+
+    window = MainWindow()
+    metrics = metrics_module.compute_metrics(
+        np.array([0, 1]),
+        np.array([0, 1]),
+        class_names=["class_1", "class_2"],
+    )
+    split_metrics = [
+        {
+            "split_name": "train",
+            "scope_text": "Train split",
+            "metrics": metrics,
+        },
+        {
+            "split_name": "val",
+            "scope_text": "Val split",
+            "metrics": metrics,
+        },
+        {
+            "split_name": "test",
+            "scope_text": "Test split",
+            "metrics": metrics,
+        },
+    ]
+
+    panels = window._build_metrics_plot_panels(
+        metrics,
+        evaluation_scope="Test split",
+        split_metrics=split_metrics,
+    )
+
+    assert [panel["title"] for panel in panels] == [
+        "Train split",
+        "Val split",
+        "Test split",
+    ]
 
 
 def test_metrics_display_avoids_divide_warning_for_empty_confusion_rows(qapp) -> None:

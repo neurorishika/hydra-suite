@@ -71,6 +71,8 @@ def test_parser_defaults_to_realtime_mode() -> None:
 
     assert args.tracking_realtime_mode is True
     assert args.headtail_runtime is None
+    assert args.read_mode == "direct"
+    assert args.prefetch_buffer_size == 2
 
 
 def test_normalize_raw_detector_output_accepts_single_and_batched_shapes() -> None:

@@ -1339,6 +1339,7 @@ def test_detect_objects_realtime_prefilters_headtail_candidates(monkeypatch) -> 
     det.params = {
         "YOLO_OBB_MODE": "direct",
         "YOLO_CONFIDENCE_THRESHOLD": 0.5,
+        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": 0.8,
         "YOLO_IOU_THRESHOLD": 0.7,
         "MAX_TARGETS": 4,
         "TRACKING_REALTIME_MODE": True,
@@ -1357,10 +1358,10 @@ def test_detect_objects_realtime_prefilters_headtail_candidates(monkeypatch) -> 
     monkeypatch.setattr(
         det,
         "_run_direct_raw_detection",
-        lambda frame, target_classes, raw_conf_floor, max_det: (
+        lambda frame, target_classes, raw_conf_floor, max_det, profiler=None: (
             [np.array([1.0, 1.0, 0.0], dtype=np.float32)] * 3,
             [100.0, 90.0, 80.0],
-            [(100.0, 2.0)] * 3,
+            [(100.0, 2.0), (90.0, 2.0), (80.0, 2.0)],
             [0.4, 0.9, 0.2],
             corners,
             None,
@@ -1449,28 +1450,12 @@ def test_headtail_candidate_selection_applies_detection_conf_threshold(
         "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": 0.8,
     }
 
-    def _fake_filter(
-        meas,
-        sizes,
-        shapes,
-        confidences,
-        obb_corners_list,
-        roi_mask=None,
-        detection_ids=None,
-        heading_hints=None,
-        heading_confidences=None,
-        directed_mask=None,
-    ):
-        return (
-            list(meas),
-            list(sizes),
-            list(shapes),
-            list(confidences),
-            list(obb_corners_list),
-            list(detection_ids),
+    def _unexpected_filter(*_args, **_kwargs):
+        raise AssertionError(
+            "head-tail candidate selection should not run full filter_raw_detections"
         )
 
-    monkeypatch.setattr(det, "filter_raw_detections", _fake_filter)
+    monkeypatch.setattr(det, "filter_raw_detections", _unexpected_filter)
 
     corners = [
         np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], dtype=np.float32),

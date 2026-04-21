@@ -739,16 +739,6 @@ class MainWindow(QMainWindow):
         review_actions = QHBoxLayout()
         review_actions.setSpacing(8)
 
-        self.review_selected_btn = QPushButton("Approve")
-        self.review_selected_btn.clicked.connect(self.approve_selected_review_label)
-        self.review_selected_btn.setEnabled(False)
-        review_actions.addWidget(self.review_selected_btn)
-
-        self.review_reject_btn = QPushButton("Reject")
-        self.review_reject_btn.clicked.connect(self.reject_selected_review_label)
-        self.review_reject_btn.setEnabled(False)
-        review_actions.addWidget(self.review_reject_btn)
-
         self.review_clear_unverified_btn = QPushButton("Clear All Unverified")
         self.review_clear_unverified_btn.clicked.connect(
             self.clear_all_unverified_machine_labels
@@ -1154,6 +1144,28 @@ class MainWindow(QMainWindow):
             "padding: 10px; background-color: #252526; border-radius: 6px;"
         )
         preview_layout.addWidget(self.preview_info)
+
+        preview_review_actions = QHBoxLayout()
+        preview_review_actions.setSpacing(8)
+
+        self.review_selected_btn = QPushButton("Approve")
+        self.review_selected_btn.clicked.connect(self.approve_selected_review_label)
+        self.review_selected_btn.setEnabled(False)
+        preview_review_actions.addWidget(self.review_selected_btn)
+
+        self.review_reject_btn = QPushButton("Reject")
+        self.review_reject_btn.clicked.connect(self.reject_selected_review_label)
+        self.review_reject_btn.setEnabled(False)
+        preview_review_actions.addWidget(self.review_reject_btn)
+
+        preview_layout.addLayout(preview_review_actions)
+
+        self.preview_review_hint = QLabel(
+            "Use Approve / Reject here to expand labels while reviewing model predictions."
+        )
+        self.preview_review_hint.setWordWrap(True)
+        self.preview_review_hint.setStyleSheet("color:#9a9a9a; font-size:11px;")
+        preview_layout.addWidget(self.preview_review_hint)
 
         self.splitter.addWidget(self.context_panel)
         self.splitter.addWidget(self.center_tabs)
@@ -3988,6 +4000,87 @@ class MainWindow(QMainWindow):
             "predicted_label": _label_for(pred_idx),
             "confidence": float(row[pred_idx]),
             "top_predictions": top_predictions,
+        }
+
+    def _is_review_prediction_label_valid(
+        self,
+        predicted_label: str,
+        *,
+        summary: dict | None = None,
+    ) -> bool:
+        """Return whether a predicted label can be written into the current project."""
+        normalized_label = str(predicted_label or "").strip()
+        if not normalized_label:
+            return False
+
+        scheme = self._resolve_training_scheme()
+        if scheme is not None:
+            try:
+                valid_labels = {
+                    str(value).strip()
+                    for value in scheme.valid_encoded_labels()
+                    if str(value).strip()
+                }
+                if valid_labels:
+                    return normalized_label in valid_labels
+            except Exception:
+                pass
+
+        if summary and summary.get("head_predictions"):
+            return True
+
+        return normalized_label in {
+            str(value).strip() for value in self.classes if str(value).strip()
+        }
+
+    def _review_prediction_for_index(self, index: int) -> dict | None:
+        """Return the structured label/confidence payload used for machine review."""
+        summary = self._prediction_summary_for_index(index, top_k=1)
+        if summary is None:
+            return None
+
+        predicted_label = str(summary.get("predicted_label") or "").strip()
+        if not self._is_review_prediction_label_valid(
+            predicted_label,
+            summary=summary,
+        ):
+            return None
+
+        raw_confidence = summary.get("confidence")
+        try:
+            confidence = float(raw_confidence) if raw_confidence is not None else 0.0
+        except Exception:
+            confidence = 0.0
+
+        metadata = {
+            "active_model_mode": self._active_model_mode,
+            "predicted_label": predicted_label,
+        }
+        predicted_index = summary.get("predicted_index")
+        if predicted_index is not None:
+            metadata["predicted_index"] = int(predicted_index)
+
+        head_predictions = []
+        for head in summary.get("head_predictions") or []:
+            head_payload = {
+                "factor": str(head.get("factor") or "").strip(),
+                "predicted_label": str(head.get("predicted_label") or "").strip(),
+            }
+            head_confidence = head.get("confidence")
+            try:
+                if head_confidence is not None:
+                    head_payload["confidence"] = float(head_confidence)
+            except Exception:
+                pass
+            head_predictions.append(head_payload)
+        if head_predictions:
+            metadata["prediction_heads"] = head_predictions
+
+        return {
+            "label": predicted_label,
+            "confidence": confidence,
+            "metadata": metadata,
+            "summary": summary,
         }
 
     def _prediction_tooltips_for_plot(self, *, top_k: int = 3) -> list[str | None]:
@@ -8539,6 +8632,47 @@ class MainWindow(QMainWindow):
             )
         return bundle
 
+    def _build_metrics_plot_panels(
+        self, metrics, *, evaluation_scope: str, split_metrics
+    ):
+        """Return ordered plot panels for the Metrics tab figure area."""
+        panels = []
+        seen_scopes: set[str] = set()
+        evaluation_scope_key = str(evaluation_scope or "").strip().casefold()
+        split_items = list(split_metrics or [])
+        has_matching_split = any(
+            str(item.get("scope_text") or "").strip().casefold() == evaluation_scope_key
+            for item in split_items
+        )
+
+        if metrics is not None and (not split_items or not has_matching_split):
+            panels.append(
+                {
+                    "title": str(evaluation_scope or "Evaluation subset").strip()
+                    or "Evaluation subset",
+                    "metrics": metrics,
+                }
+            )
+            if evaluation_scope_key:
+                seen_scopes.add(evaluation_scope_key)
+
+        for item in split_items:
+            scope_text = str(
+                item.get("scope_text") or item.get("split_name") or ""
+            ).strip()
+            if not scope_text:
+                continue
+            scope_key = scope_text.casefold()
+            if scope_key in seen_scopes:
+                continue
+            panel_metrics = item.get("metrics")
+            if panel_metrics is None:
+                continue
+            panels.append({"title": scope_text, "metrics": panel_metrics})
+            seen_scopes.add(scope_key)
+
+        return panels
+
     def _evaluation_class_names(self) -> list[str]:
         """Return the effective class order for metrics and probability alignment."""
 
@@ -8736,6 +8870,11 @@ class MainWindow(QMainWindow):
         )
         report = "\n\n".join(section for section in report_sections if section)
         self.metrics_view.setPlainText(report)
+        plot_panels = self._build_metrics_plot_panels(
+            metrics,
+            evaluation_scope=evaluation_scope,
+            split_metrics=split_metrics,
+        )
         if activate_metrics_tab:
             self.tabs.setCurrentWidget(self.metrics_page)
 
@@ -8750,107 +8889,131 @@ class MainWindow(QMainWindow):
             from matplotlib.figure import Figure
             from PySide6.QtGui import QImage, QPixmap
 
-            n_classes = len(metrics.per_class)
-            fig = Figure(figsize=(12, 4.5), facecolor="#1e1e1e")
-            names = [c.class_name for c in metrics.per_class]
+            if not plot_panels:
+                self.metrics_figure_label.setText(
+                    "(Train a model to see visualizations)"
+                )
+                return
 
-            # ── Left: confusion matrix ──
-            ax1 = fig.add_subplot(1, 2, 1)
-            ax1.set_facecolor("#252526")
-            cm = metrics.confusion_matrix.astype(float)
-            row_sums = cm.sum(axis=1, keepdims=True)
-            cm_norm = np.divide(
-                cm,
-                row_sums,
-                out=np.zeros_like(cm, dtype=float),
-                where=row_sums > 0,
+            fig = Figure(
+                figsize=(12, max(4.5, 4.2 * len(plot_panels))),
+                facecolor="#1e1e1e",
             )
-            img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
-            ax1.set_title(
-                "Confusion Matrix (row-normalised)", color="#ddd", fontsize=10
-            )
-            ax1.set_xlabel("Predicted", color="#aaa", fontsize=9)
-            ax1.set_ylabel("True", color="#aaa", fontsize=9)
-            ax1.set_xticks(range(n_classes))
-            ax1.set_yticks(range(n_classes))
-            ax1.set_xticklabels(
-                names, rotation=45, ha="right", color="#ccc", fontsize=8
-            )
-            ax1.set_yticklabels(names, color="#ccc", fontsize=8)
-            for i in range(n_classes):
-                for j in range(n_classes):
-                    ax1.text(
-                        j,
-                        i,
-                        f"{cm[i, j]:.0f}",
-                        ha="center",
-                        va="center",
-                        fontsize=9,
-                        color="white" if cm_norm[i, j] > 0.5 else "#999",
-                    )
-            ax1.tick_params(colors="#aaa")
-            cbar = fig.colorbar(img, ax=ax1)
-            cbar.ax.tick_params(colors="#aaa")
+            axes = fig.subplots(len(plot_panels), 2, squeeze=False)
 
-            # ── Right: per-class P/R/F1 bars ──
-            ax2 = fig.add_subplot(1, 2, 2)
-            ax2.set_facecolor("#252526")
-            x = np.arange(n_classes)
-            w = 0.25
-            ax2.bar(
-                x - w,
-                [c.precision for c in metrics.per_class],
-                w,
-                label="Precision",
-                color="#4e9de0",
-            )
-            ax2.bar(
-                x,
-                [c.recall for c in metrics.per_class],
-                w,
-                label="Recall",
-                color="#5dbea3",
-            )
-            ax2.bar(
-                x + w, [c.f1 for c in metrics.per_class], w, label="F1", color="#e07b4e"
-            )
-            ax2.axhline(
-                metrics.accuracy,
-                color="#ffff66",
-                linewidth=1.2,
-                linestyle="--",
-                alpha=0.8,
-            )
-            ax2.set_title(
-                "Per-class Precision / Recall / F1", color="#ddd", fontsize=10
-            )
-            ax2.set_xticks(x)
-            ax2.set_xticklabels(
-                names, rotation=45, ha="right", color="#ccc", fontsize=8
-            )
-            ax2.set_ylim(0, 1.08)
-            ax2.tick_params(colors="#aaa")
-            ax2.spines[:].set_color("#555")
-            legend = ax2.legend(
-                loc="upper right", fontsize=8, facecolor="#252526", labelcolor="#ddd"
-            )
-            legend.get_frame().set_edgecolor("#555")
+            for row_index, panel in enumerate(plot_panels):
+                panel_metrics = panel["metrics"]
+                panel_title = str(panel.get("title") or "Evaluation subset")
+                n_classes = len(panel_metrics.per_class)
+                names = [c.class_name for c in panel_metrics.per_class]
 
-            fig.text(
-                0.5,
-                0.01,
-                f"Eval subset: {evaluation_scope}  |  Accuracy: {metrics.accuracy:.3f}  |  Macro F1: {metrics.macro_f1:.3f}  |  "
-                f"Weighted F1: {metrics.weighted_f1:.3f}  |  n={metrics.num_samples}"
-                + (
-                    f"  |  {self._heldout_validation_short_text()}"
-                    if self._heldout_validation_short_text()
-                    else ""
-                ),
-                ha="center",
-                color="#aaa",
-                fontsize=9,
-            )
-            fig.tight_layout(rect=[0, 0.05, 1, 1])
+                ax1 = axes[row_index][0]
+                ax1.set_facecolor("#252526")
+                cm = panel_metrics.confusion_matrix.astype(float)
+                row_sums = cm.sum(axis=1, keepdims=True)
+                cm_norm = np.divide(
+                    cm,
+                    row_sums,
+                    out=np.zeros_like(cm, dtype=float),
+                    where=row_sums > 0,
+                )
+                img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
+                ax1.set_title(
+                    f"{panel_title}: Confusion Matrix",
+                    color="#ddd",
+                    fontsize=10,
+                )
+                ax1.set_xlabel("Predicted", color="#aaa", fontsize=9)
+                ax1.set_ylabel("True", color="#aaa", fontsize=9)
+                ax1.set_xticks(range(n_classes))
+                ax1.set_yticks(range(n_classes))
+                ax1.set_xticklabels(
+                    names, rotation=45, ha="right", color="#ccc", fontsize=8
+                )
+                ax1.set_yticklabels(names, color="#ccc", fontsize=8)
+                for i in range(n_classes):
+                    for j in range(n_classes):
+                        ax1.text(
+                            j,
+                            i,
+                            f"{cm[i, j]:.0f}",
+                            ha="center",
+                            va="center",
+                            fontsize=9,
+                            color="white" if cm_norm[i, j] > 0.5 else "#999",
+                        )
+                ax1.tick_params(colors="#aaa")
+                cbar = fig.colorbar(img, ax=ax1)
+                cbar.ax.tick_params(colors="#aaa")
+
+                ax2 = axes[row_index][1]
+                ax2.set_facecolor("#252526")
+                x = np.arange(n_classes)
+                w = 0.25
+                ax2.bar(
+                    x - w,
+                    [c.precision for c in panel_metrics.per_class],
+                    w,
+                    label="Precision",
+                    color="#4e9de0",
+                )
+                ax2.bar(
+                    x,
+                    [c.recall for c in panel_metrics.per_class],
+                    w,
+                    label="Recall",
+                    color="#5dbea3",
+                )
+                ax2.bar(
+                    x + w,
+                    [c.f1 for c in panel_metrics.per_class],
+                    w,
+                    label="F1",
+                    color="#e07b4e",
+                )
+                ax2.axhline(
+                    panel_metrics.accuracy,
+                    color="#ffff66",
+                    linewidth=1.2,
+                    linestyle="--",
+                    alpha=0.8,
+                )
+                ax2.set_title(
+                    f"{panel_title}: Per-class Precision / Recall / F1",
+                    color="#ddd",
+                    fontsize=10,
+                )
+                ax2.set_xticks(x)
+                ax2.set_xticklabels(
+                    names, rotation=45, ha="right", color="#ccc", fontsize=8
+                )
+                ax2.set_ylim(0, 1.08)
+                ax2.set_xlabel(
+                    f"Accuracy: {panel_metrics.accuracy:.3f}  |  Macro F1: {panel_metrics.macro_f1:.3f}  |  Weighted F1: {panel_metrics.weighted_f1:.3f}  |  n={panel_metrics.num_samples}",
+                    color="#aaa",
+                    fontsize=8,
+                )
+                ax2.tick_params(colors="#aaa")
+                ax2.spines[:].set_color("#555")
+                legend = ax2.legend(
+                    loc="upper right",
+                    fontsize=8,
+                    facecolor="#252526",
+                    labelcolor="#ddd",
+                )
+                legend.get_frame().set_edgecolor("#555")
+
+            heldout_short_text = self._heldout_validation_short_text()
+            if heldout_short_text:
+                fig.suptitle(
+                    heldout_short_text,
+                    color="#aaa",
+                    fontsize=10,
+                    y=0.995,
+                )
+                fig.tight_layout(rect=[0, 0, 1, 0.98])
+            else:
+                fig.tight_layout()
 
             canvas = FigureCanvasAgg(fig)
             canvas.draw()
@@ -9891,23 +10054,19 @@ class MainWindow(QMainWindow):
                 skipped_verified += 1
                 continue
 
-            pred_idx = int(np.argmax(self._model_probs[index]))
-            if pred_idx >= len(self._model_class_names):
-                skipped_unknown += 1
-                continue
-            predicted_label = str(self._model_class_names[pred_idx])
-            if predicted_label not in self.classes:
+            prediction_payload = self._review_prediction_for_index(index)
+            if prediction_payload is None:
                 skipped_unknown += 1
                 continue
 
-            confidence = float(np.max(self._model_probs[index]))
+            predicted_label = str(prediction_payload["label"])
+            confidence = float(prediction_payload["confidence"])
             updates[str(path)] = (predicted_label, confidence)
             prediction_metadata = {
                 "provider": model_provider,
-                "active_model_mode": self._active_model_mode,
-                "predicted_index": pred_idx,
                 "scope": scope_label,
             }
+            prediction_metadata.update(prediction_payload.get("metadata") or {})
             if model_metadata:
                 prediction_metadata.update(model_metadata)
             metadata_by_path[str(path)] = prediction_metadata

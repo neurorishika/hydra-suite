@@ -20,6 +20,7 @@ import cv2
 from hydra_suite.core.detectors import YOLOOBBDetector
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.runtime.compute_runtime import CANONICAL_RUNTIMES, _normalize_runtime
+from hydra_suite.utils.frame_prefetcher import FramePrefetcher
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -125,6 +126,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-json",
         default="",
         help="Optional path to write the final summary as JSON.",
+    )
+    parser.add_argument(
+        "--read-mode",
+        choices=["direct", "prefetch"],
+        default="direct",
+        help="Frame read strategy to benchmark.",
+    )
+    parser.add_argument(
+        "--prefetch-buffer-size",
+        type=int,
+        default=2,
+        help="Buffer size when --read-mode=prefetch.",
     )
     return parser
 
@@ -255,6 +268,20 @@ def _read_next_sampled_frame(
     return True, frame
 
 
+def _read_next_prefetched_frame(
+    prefetcher: FramePrefetcher,
+    stride: int,
+) -> tuple[bool, Any]:
+    ok, frame = prefetcher.read()
+    if not ok:
+        return False, None
+    for _ in range(max(0, stride - 1)):
+        skip_ok, _skip_frame = prefetcher.read()
+        if not skip_ok:
+            break
+    return True, frame
+
+
 def _resize_frame(frame, resize_factor: float):
     if resize_factor >= 0.999:
         return frame
@@ -327,6 +354,8 @@ def benchmark_video(
     stride: int,
     warmup_frames: int,
     measure_frames: int,
+    read_mode: str = "direct",
+    prefetch_buffer_size: int = 2,
 ) -> dict[str, Any]:
     video = Path(video_path).expanduser().resolve()
     if not video.exists():
@@ -341,6 +370,14 @@ def benchmark_video(
 
     detector = YOLOOBBDetector(params)
     profiler = TrackingProfiler(enabled=True)
+    prefetcher = None
+
+    if str(read_mode).strip().lower() == "prefetch":
+        prefetcher = FramePrefetcher(
+            capture,
+            buffer_size=max(1, int(prefetch_buffer_size)),
+        )
+        prefetcher.start()
 
     read_ms: list[float] = []
     resize_ms: list[float] = []
@@ -348,6 +385,8 @@ def benchmark_video(
     filter_ms: list[float] = []
     worker_detection_ms: list[float] = []
     yolo_phase_ms: list[float] = []
+    yolo_model_execute_ms: list[float] = []
+    yolo_extract_raw_ms: list[float] = []
     headtail_crop_ms: list[float] = []
     headtail_inference_ms: list[float] = []
     detections_per_frame: list[float] = []
@@ -363,7 +402,10 @@ def benchmark_video(
     try:
         while processed_samples < total_needed:
             read_started = time.perf_counter()
-            ok, frame = _read_next_sampled_frame(capture, stride)
+            if prefetcher is not None:
+                ok, frame = _read_next_prefetched_frame(prefetcher, stride)
+            else:
+                ok, frame = _read_next_sampled_frame(capture, stride)
             read_elapsed_ms = (time.perf_counter() - read_started) * 1000.0
             if not ok:
                 break
@@ -432,6 +474,12 @@ def benchmark_video(
             batch_yolo_phase_ms = _phase_delta(
                 profiler, phase_before, "yolo_obb_inference"
             )
+            batch_yolo_model_execute_ms = _phase_delta(
+                profiler, phase_before, "yolo_obb_model_execute"
+            )
+            batch_yolo_extract_raw_ms = _phase_delta(
+                profiler, phase_before, "yolo_obb_extract_raw"
+            )
             batch_headtail_crop_ms = _phase_delta(
                 profiler, phase_before, "headtail_crop"
             )
@@ -444,6 +492,12 @@ def benchmark_video(
                 per_frame_detect_ms = detect_elapsed_ms / float(len(batch_buffer))
                 per_frame_filter_ms = filter_elapsed_ms / float(len(batch_buffer))
                 per_frame_yolo_ms = batch_yolo_phase_ms / float(len(batch_buffer))
+                per_frame_yolo_model_ms = batch_yolo_model_execute_ms / float(
+                    len(batch_buffer)
+                )
+                per_frame_yolo_extract_ms = batch_yolo_extract_raw_ms / float(
+                    len(batch_buffer)
+                )
                 per_frame_headtail_crop_ms = batch_headtail_crop_ms / float(
                     len(batch_buffer)
                 )
@@ -461,6 +515,8 @@ def benchmark_video(
                         per_frame_detect_ms + per_frame_filter_ms
                     )
                     yolo_phase_ms.append(per_frame_yolo_ms)
+                    yolo_model_execute_ms.append(per_frame_yolo_model_ms)
+                    yolo_extract_raw_ms.append(per_frame_yolo_extract_ms)
                     headtail_crop_ms.append(per_frame_headtail_crop_ms)
                     headtail_inference_ms.append(per_frame_headtail_inference_ms)
                     detections_per_frame.append(
@@ -475,6 +531,8 @@ def benchmark_video(
             if measured_frames >= int(measure_frames):
                 break
     finally:
+        if prefetcher is not None:
+            prefetcher.stop()
         capture.release()
         closer = getattr(detector, "close", None)
         if callable(closer):
@@ -486,6 +544,8 @@ def benchmark_video(
         "measured_frames": measured_frames,
         "batch_size": max(1, int(batch_size)),
         "resize_factor": float(resize_factor),
+        "read_mode": str(read_mode).strip().lower(),
+        "prefetch_buffer_size": max(1, int(prefetch_buffer_size)),
         "params": params,
         "metrics": {
             "frame_read": summarize_series(read_ms),
@@ -494,6 +554,8 @@ def benchmark_video(
             "filter_raw_detections": summarize_series(filter_ms),
             "worker_style_detection_total": summarize_series(worker_detection_ms),
             "yolo_obb_inference_phase": summarize_series(yolo_phase_ms),
+            "yolo_obb_model_execute_phase": summarize_series(yolo_model_execute_ms),
+            "yolo_obb_extract_raw_phase": summarize_series(yolo_extract_raw_ms),
             "headtail_crop_phase": summarize_series(headtail_crop_ms),
             "headtail_inference_phase": summarize_series(headtail_inference_ms),
             "detections_per_frame": summarize_series(detections_per_frame),
@@ -509,6 +571,8 @@ def format_summary(summary: dict[str, Any]) -> str:
         "filter_raw_detections",
         "worker_style_detection_total",
         "yolo_obb_inference_phase",
+        "yolo_obb_model_execute_phase",
+        "yolo_obb_extract_raw_phase",
         "headtail_crop_phase",
         "headtail_inference_phase",
         "detections_per_frame",
@@ -518,6 +582,7 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"measured_frames: {summary['measured_frames']}",
         f"batch_size: {summary['batch_size']}",
         f"resize_factor: {summary['resize_factor']:.4f}",
+        f"read_mode: {summary.get('read_mode', 'direct')}",
     ]
     metrics = summary.get("metrics", {})
     for metric_name in metric_order:
@@ -562,6 +627,8 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         stride=args.stride,
         warmup_frames=args.warmup_frames,
         measure_frames=args.measure_frames,
+        read_mode=args.read_mode,
+        prefetch_buffer_size=args.prefetch_buffer_size,
     )
     return summary
 

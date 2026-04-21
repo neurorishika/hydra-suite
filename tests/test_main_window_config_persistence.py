@@ -1165,6 +1165,72 @@ def test_realtime_sequential_mode_keeps_crop_batch_setting_visible(
     window.close()
 
 
+def test_realtime_direct_mode_exposes_micro_batch_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.combo_detection_method.setCurrentIndex(1)
+    window._setup_panel.chk_realtime_mode.setChecked(True)
+
+    assert (
+        window._detection_panel.chk_enable_realtime_yolo_micro_batching.isEnabled()
+        is True
+    )
+    assert (
+        window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is False
+    )
+
+    window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
+    window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(4)
+    window._detection_panel._sync_batch_policy_controls()
+
+    assert (
+        window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is True
+    )
+    assert (
+        "queues up to 4 frame(s)"
+        in window._detection_panel.lbl_batch_policy_notice.text()
+    )
+    window.close()
+
+
+def test_realtime_micro_batch_roundtrip_persists(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.combo_detection_method.setCurrentIndex(1)
+    window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
+    window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(3)
+
+    config_path = tmp_path / "realtime_micro_batch_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_cfg["enable_realtime_yolo_micro_batching"] is True
+    assert saved_cfg["realtime_yolo_micro_batch_size"] == 3
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert (
+        reloaded_window._detection_panel.chk_enable_realtime_yolo_micro_batching.isChecked()
+        is True
+    )
+    assert (
+        reloaded_window._detection_panel.spin_realtime_yolo_micro_batch_size.value()
+        == 3
+    )
+    reloaded_window.close()
+
+
 def test_sequential_crop_batch_roundtrip_persists(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

@@ -246,6 +246,143 @@ class TrackingWorker(QThread):
             ),
         )
 
+    @staticmethod
+    def _visualization_emit_stride(params: dict) -> int:
+        """Return the GUI visualization stride for this run."""
+        advanced = params.get("ADVANCED_CONFIG", {}) or {}
+        default_stride = 1
+        if bool(params.get("TRACKING_REALTIME_MODE", False)):
+            default_stride = int(advanced.get("realtime_visualization_emit_stride", 1))
+        else:
+            default_stride = int(advanced.get("visualization_emit_stride", 1))
+        return max(1, default_stride)
+
+    @classmethod
+    def _should_emit_visualization_frame(cls, frame_count: int, params: dict) -> bool:
+        stride = cls._visualization_emit_stride(params)
+        return int(frame_count) % stride == 0
+
+    def _actual_frame_index_for_count(
+        self,
+        frame_count: int,
+        start_frame: int,
+        end_frame: int,
+    ) -> int:
+        if self.backward_mode:
+            return int(end_frame) - (int(frame_count) - 1)
+        return int(start_frame) + (int(frame_count) - 1)
+
+    @staticmethod
+    def _realtime_yolo_micro_batch_size(params: dict) -> int:
+        if not bool(params.get("TRACKING_REALTIME_MODE", False)):
+            return 1
+        if str(params.get("DETECTION_METHOD", "")).strip().lower() != "yolo_obb":
+            return 1
+        if str(params.get("YOLO_OBB_MODE", "direct")).strip().lower() != "direct":
+            return 1
+        if not bool(params.get("ENABLE_REALTIME_YOLO_MICRO_BATCHING", False)):
+            return 1
+        raw_value = params.get("REALTIME_YOLO_MICRO_BATCH_SIZE", 1)
+        try:
+            return max(1, int(raw_value))
+        except (TypeError, ValueError):
+            return 1
+
+    def _prepare_tracking_frame_entry(
+        self,
+        frame,
+        frame_count: int,
+        start_frame: int,
+        end_frame: int,
+        params: dict,
+        individual_generator,
+        roi_fill_color,
+        cache_key=None,
+        cached_mask=None,
+        profiler=None,
+    ):
+        actual_frame_index = self._actual_frame_index_for_count(
+            frame_count,
+            start_frame,
+            end_frame,
+        )
+        if self.backward_mode:
+            if actual_frame_index < start_frame:
+                return None, cache_key, cached_mask, roi_fill_color, False
+        elif actual_frame_index > end_frame:
+            return None, cache_key, cached_mask, roi_fill_color, False
+
+        resize_f = params["RESIZE_FACTOR"]
+        detection_method = params.get("DETECTION_METHOD", "background_subtraction")
+
+        preprocessing_started = time.perf_counter()
+        if frame is not None:
+            if individual_generator:
+                original_frame = frame if resize_f >= 1.0 else frame.copy()
+            else:
+                original_frame = None
+        else:
+            original_frame = None
+        if profiler is not None:
+            profiler.add_sample(
+                "preprocessing",
+                time.perf_counter() - preprocessing_started,
+            )
+
+        if frame is not None and resize_f < 1.0:
+            resize_started = time.perf_counter()
+            frame = self._resize_tracking_frame(frame, resize_f, detection_method)
+            if profiler is not None:
+                profiler.add_sample(
+                    "frame_resize",
+                    time.perf_counter() - resize_started,
+                )
+
+        roi_prepare_started = time.perf_counter()
+        roi_mask_current = None
+        roi_mask_changed = False
+        roi_mask = params.get("ROI_MASK", None)
+        if roi_mask is not None and frame is not None:
+            target_w, target_h = frame.shape[1], frame.shape[0]
+            (
+                roi_mask_current,
+                cache_key,
+                roi_mask_changed,
+            ) = self._resolve_resized_roi_mask(
+                roi_mask,
+                target_w,
+                target_h,
+                cache_key=cache_key,
+                cached_mask=cached_mask,
+            )
+            cached_mask = roi_mask_current
+            if roi_fill_color is None:
+                mask_inv = roi_mask_current == 0
+                outside_pixels = frame[mask_inv]
+                if len(outside_pixels) > 0:
+                    roi_fill_color = np.mean(outside_pixels, axis=0).astype(np.uint8)
+                else:
+                    roi_fill_color = np.array([0, 0, 0], dtype=np.uint8)
+        if profiler is not None:
+            profiler.add_sample(
+                "roi_prepare",
+                time.perf_counter() - roi_prepare_started,
+            )
+
+        return (
+            {
+                "frame": frame,
+                "original_frame": original_frame,
+                "frame_count": int(frame_count),
+                "actual_frame_index": int(actual_frame_index),
+                "ROI_mask_current": roi_mask_current,
+            },
+            cache_key,
+            cached_mask,
+            roi_fill_color,
+            roi_mask_changed,
+        )
+
     def stop(self: object) -> object:
         """Request cooperative stop for current processing loop."""
         self._stop_requested = True
@@ -1816,104 +1953,200 @@ class TrackingWorker(QThread):
         _roi_mask_resized = None
 
         profiler.phase_start("tracking_loop")
-        for frame, _ in frame_iterator:
+        frame_iterator = iter(frame_iterator)
+        pending_yolo_entries = deque()
+        pending_yolo_results = deque()
+        frame_source_exhausted = False
+        pending_frame_count = 0
+
+        while True:
 
             params = self.get_current_params()
-            self.frame_count += 1
-
-            # Calculate actual frame index (0-based) accounting for start_frame offset
-            # In backward mode, go from end_frame backward to start_frame
-            if self.backward_mode:
-                actual_frame_index = end_frame - (self.frame_count - 1)
-            else:
-                actual_frame_index = start_frame + (self.frame_count - 1)
-
-            # Check if we've reached the boundary
-            if self.backward_mode:
-                if actual_frame_index < start_frame:
-                    logger.info(
-                        f"Reached start frame {start_frame}, stopping backward tracking"
-                    )
-                    break
-            else:
-                if actual_frame_index > end_frame:
-                    logger.info(f"Reached end frame {end_frame}, stopping tracking")
-                    break
-
-            # --- Preprocessing & Detection ---
-            resize_f = params["RESIZE_FACTOR"]
             detection_method = params.get("DETECTION_METHOD", "background_subtraction")
+            resize_f = params["RESIZE_FACTOR"]
+            realtime_yolo_micro_batch_size = self._realtime_yolo_micro_batch_size(
+                params
+            )
+            use_realtime_yolo_micro_batch = bool(
+                not use_cached_detections and realtime_yolo_micro_batch_size > 1
+            )
+            micro_batch_detection_wall = None
 
-            # Skip preprocessing if no frame (cached detection mode)
-            preprocessing_started = time.perf_counter()
-            if frame is not None:
-                # Keep original frame for individual dataset generation (high resolution).
-                # When resize_f >= 1.0 the frame won't be replaced below, so a
-                # copy is unnecessary — the same buffer can be re-used read-only.
-                if individual_generator:
-                    original_frame = frame if resize_f >= 1.0 else frame.copy()
+            if use_realtime_yolo_micro_batch:
+                if not pending_yolo_results:
+                    while (
+                        len(pending_yolo_entries) < realtime_yolo_micro_batch_size
+                        and not frame_source_exhausted
+                        and not self._stop_requested
+                    ):
+                        try:
+                            next_frame, _ = next(frame_iterator)
+                        except StopIteration:
+                            frame_source_exhausted = True
+                            break
+
+                        pending_frame_count += 1
+                        (
+                            current_entry,
+                            _roi_mask_cache_key,
+                            _roi_mask_resized,
+                            roi_fill_color,
+                            roi_mask_changed,
+                        ) = self._prepare_tracking_frame_entry(
+                            next_frame,
+                            pending_frame_count,
+                            start_frame,
+                            end_frame,
+                            params,
+                            individual_generator,
+                            roi_fill_color,
+                            cache_key=_roi_mask_cache_key,
+                            cached_mask=_roi_mask_resized,
+                            profiler=profiler,
+                        )
+                        if current_entry is None:
+                            frame_source_exhausted = True
+                            break
+                        if roi_mask_changed:
+                            _roi_contours_cache = None
+                        pending_yolo_entries.append(current_entry)
+
+                    if pending_yolo_entries:
+                        batch_started = time.perf_counter()
+                        batch_results = list(
+                            detector.detect_objects_batched(
+                                [entry["frame"] for entry in pending_yolo_entries],
+                                pending_yolo_entries[0]["actual_frame_index"],
+                                return_raw=True,
+                                profiler=profiler,
+                            )
+                        )
+                        per_entry_detection_wall = (
+                            time.perf_counter() - batch_started
+                        ) / max(1, len(pending_yolo_entries))
+                        for entry in pending_yolo_entries:
+                            entry["micro_batch_detection_wall"] = (
+                                per_entry_detection_wall
+                            )
+                        for result in batch_results:
+                            pending_yolo_results.append(result)
+                        while len(pending_yolo_results) < len(pending_yolo_entries):
+                            pending_yolo_results.append(
+                                ([], [], [], [], [], [], [], [], None)
+                            )
+
+                if not pending_yolo_entries:
+                    if frame_source_exhausted:
+                        break
+                    continue
+
+                current_entry = pending_yolo_entries.popleft()
+                current_result = (
+                    pending_yolo_results.popleft()
+                    if pending_yolo_results
+                    else ([], [], [], [], [], [], [], [], None)
+                )
+                self.frame_count = int(current_entry["frame_count"])
+                frame = current_entry["frame"]
+                original_frame = current_entry["original_frame"]
+                actual_frame_index = int(current_entry["actual_frame_index"])
+                ROI_mask_current = current_entry["ROI_mask_current"]
+                micro_batch_detection_wall = float(
+                    current_entry.get("micro_batch_detection_wall", 0.0)
+                )
+            else:
+                try:
+                    frame, _ = next(frame_iterator)
+                except StopIteration:
+                    break
+
+                self.frame_count += 1
+                actual_frame_index = self._actual_frame_index_for_count(
+                    self.frame_count,
+                    start_frame,
+                    end_frame,
+                )
+
+                if self.backward_mode:
+                    if actual_frame_index < start_frame:
+                        logger.info(
+                            f"Reached start frame {start_frame}, stopping backward tracking"
+                        )
+                        break
+                else:
+                    if actual_frame_index > end_frame:
+                        logger.info(f"Reached end frame {end_frame}, stopping tracking")
+                        break
+
+                preprocessing_started = time.perf_counter()
+                if frame is not None:
+                    if individual_generator:
+                        original_frame = frame if resize_f >= 1.0 else frame.copy()
+                    else:
+                        original_frame = None
                 else:
                     original_frame = None
-
-            else:
-                original_frame = None
-            profiler.add_sample(
-                "preprocessing",
-                time.perf_counter() - preprocessing_started,
-            )
-
-            if frame is not None and resize_f < 1.0:
-                resize_started = time.perf_counter()
-                frame = self._resize_tracking_frame(frame, resize_f, detection_method)
                 profiler.add_sample(
-                    "frame_resize", time.perf_counter() - resize_started
+                    "preprocessing",
+                    time.perf_counter() - preprocessing_started,
                 )
 
-            # Prepare ROI masks once for both detection and visualization
-            ROI_mask = params.get("ROI_MASK", None)
-            ROI_mask_current = None
+                if frame is not None and resize_f < 1.0:
+                    resize_started = time.perf_counter()
+                    frame = self._resize_tracking_frame(
+                        frame,
+                        resize_f,
+                        detection_method,
+                    )
+                    profiler.add_sample(
+                        "frame_resize", time.perf_counter() - resize_started
+                    )
 
-            roi_prepare_started = time.perf_counter()
-            if ROI_mask is not None:
-                if frame is not None:
-                    target_w, target_h = frame.shape[1], frame.shape[0]
-                else:
-                    base_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    base_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    target_w = max(1, int(base_w * resize_f))
-                    target_h = max(1, int(base_h * resize_f))
+                ROI_mask = params.get("ROI_MASK", None)
+                ROI_mask_current = None
 
-                (
-                    ROI_mask_current,
-                    _roi_mask_cache_key,
-                    roi_mask_changed,
-                ) = self._resolve_resized_roi_mask(
-                    ROI_mask,
-                    target_w,
-                    target_h,
-                    cache_key=_roi_mask_cache_key,
-                    cached_mask=_roi_mask_resized,
-                )
-                _roi_mask_resized = ROI_mask_current
-                if roi_mask_changed:
-                    _roi_contours_cache = None
-
-                # Calculate fill color on first frame if not yet done
-                if frame is not None and roi_fill_color is None:
-                    mask_inv = ROI_mask_current == 0
-                    outside_pixels = frame[mask_inv]
-                    if len(outside_pixels) > 0:
-                        roi_fill_color = np.mean(outside_pixels, axis=0).astype(
-                            np.uint8
-                        )
+                roi_prepare_started = time.perf_counter()
+                if ROI_mask is not None:
+                    if frame is not None:
+                        target_w, target_h = frame.shape[1], frame.shape[0]
                     else:
-                        roi_fill_color = np.array([0, 0, 0], dtype=np.uint8)
-            profiler.add_sample(
-                "roi_prepare",
-                time.perf_counter() - roi_prepare_started,
-            )
+                        base_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        base_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        target_w = max(1, int(base_w * resize_f))
+                        target_h = max(1, int(base_h * resize_f))
 
-            profiler.tick("detection")
+                    (
+                        ROI_mask_current,
+                        _roi_mask_cache_key,
+                        roi_mask_changed,
+                    ) = self._resolve_resized_roi_mask(
+                        ROI_mask,
+                        target_w,
+                        target_h,
+                        cache_key=_roi_mask_cache_key,
+                        cached_mask=_roi_mask_resized,
+                    )
+                    _roi_mask_resized = ROI_mask_current
+                    if roi_mask_changed:
+                        _roi_contours_cache = None
+
+                    if frame is not None and roi_fill_color is None:
+                        mask_inv = ROI_mask_current == 0
+                        outside_pixels = frame[mask_inv]
+                        if len(outside_pixels) > 0:
+                            roi_fill_color = np.mean(outside_pixels, axis=0).astype(
+                                np.uint8
+                            )
+                        else:
+                            roi_fill_color = np.array([0, 0, 0], dtype=np.uint8)
+                profiler.add_sample(
+                    "roi_prepare",
+                    time.perf_counter() - roi_prepare_started,
+                )
+
+            detection_sample_started = time.perf_counter()
+            if micro_batch_detection_wall is None:
+                profiler.tick("detection")
 
             # Initialize detection-related variables (in case no detection occurs)
             detection_ids = []
@@ -2065,23 +2298,37 @@ class TrackingWorker(QThread):
                 # Note: no frame.copy() needed — Ultralytics letterboxing already
                 # copies/transforms the input internally.
 
-                (
-                    raw_meas,
-                    raw_sizes,
-                    raw_shapes,
-                    yolo_results,
-                    raw_confidences,
-                    raw_obb_corners,
-                    raw_heading_hints,
-                    raw_heading_confidences,
-                    raw_directed_mask,
-                    raw_canonical_affines,
-                ) = detector.detect_objects(
-                    frame,
-                    self.frame_count,
-                    return_raw=True,
-                    profiler=profiler,
-                )
+                if micro_batch_detection_wall is not None:
+                    yolo_results = None
+                    (
+                        raw_meas,
+                        raw_sizes,
+                        raw_shapes,
+                        raw_confidences,
+                        raw_obb_corners,
+                        raw_heading_hints,
+                        raw_heading_confidences,
+                        raw_directed_mask,
+                        raw_canonical_affines,
+                    ) = current_result
+                else:
+                    (
+                        raw_meas,
+                        raw_sizes,
+                        raw_shapes,
+                        yolo_results,
+                        raw_confidences,
+                        raw_obb_corners,
+                        raw_heading_hints,
+                        raw_heading_confidences,
+                        raw_directed_mask,
+                        raw_canonical_affines,
+                    ) = detector.detect_objects(
+                        frame,
+                        self.frame_count,
+                        return_raw=True,
+                        profiler=profiler,
+                    )
 
                 raw_detection_ids = [
                     actual_frame_index * 10000 + i for i in range(len(raw_meas))
@@ -2146,7 +2393,14 @@ class TrackingWorker(QThread):
                 )
                 cached_frame_indices.add(actual_frame_index)
 
-            profiler.tock("detection")
+            if micro_batch_detection_wall is not None:
+                profiler.add_sample(
+                    "detection",
+                    micro_batch_detection_wall
+                    + (time.perf_counter() - detection_sample_started),
+                )
+            else:
+                profiler.tock("detection")
 
             if (
                 live_feature_precompute is not None
@@ -2312,7 +2566,18 @@ class TrackingWorker(QThread):
                 logger.info(f"Tracking initialized with {len(meas)} detections.")
 
             # === VISUALIZATION (Skip in cached detection mode) ===
-            if not skip_visualization and frame is not None:
+            emit_visualization_frame = self._should_emit_visualization_frame(
+                self.frame_count,
+                params,
+            )
+            needs_overlay = (
+                not skip_visualization
+                and frame is not None
+                and (emit_visualization_frame or self.video_writer is not None)
+            )
+
+            # === VISUALIZATION (Skip in cached detection mode) ===
+            if needs_overlay:
                 overlay = frame.copy()
 
                 # Apply ROI visualization - draw cyan boundary for all detection methods
@@ -3178,25 +3443,28 @@ class TrackingWorker(QThread):
                     self.video_writer.write(overlay)
                 profiler.tock("video_write")
 
-                profiler.tick("gui_emit")
-                # For YOLO with ROI, draw boundary overlay before emitting
-                if (
-                    detection_method != "background_subtraction"
-                    and ROI_mask_current is not None
-                ):
-                    # Reuse cached ROI contours (computed once above).
-                    if _roi_contours_cache is None:
-                        _roi_contours_cache, _ = cv2.findContours(
-                            ROI_mask_current, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                        )
-                    if _roi_contours_cache:
-                        # Draw cyan boundary
-                        cv2.drawContours(
-                            overlay, _roi_contours_cache, -1, (0, 255, 255), 2
-                        )
+                if emit_visualization_frame:
+                    profiler.tick("gui_emit")
+                    # For YOLO with ROI, draw boundary overlay before emitting
+                    if (
+                        detection_method != "background_subtraction"
+                        and ROI_mask_current is not None
+                    ):
+                        # Reuse cached ROI contours (computed once above).
+                        if _roi_contours_cache is None:
+                            _roi_contours_cache, _ = cv2.findContours(
+                                ROI_mask_current,
+                                cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE,
+                            )
+                        if _roi_contours_cache:
+                            # Draw cyan boundary
+                            cv2.drawContours(
+                                overlay, _roi_contours_cache, -1, (0, 255, 255), 2
+                            )
 
-                self.emit_frame(overlay)
-                profiler.tock("gui_emit")
+                    self.emit_frame(overlay)
+                    profiler.tock("gui_emit")
 
             # === Real-time Stats (Always emit, even in viz-free mode) ===
             current_time = time.time()

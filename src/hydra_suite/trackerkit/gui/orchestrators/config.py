@@ -502,6 +502,12 @@ class ConfigOrchestrator:
         self._panels.detection.spin_yolo_batch_size.setValue(
             get_cfg("yolo_manual_batch_size", default=16)
         )
+        self._panels.detection.chk_enable_realtime_yolo_micro_batching.setChecked(
+            bool(get_cfg("enable_realtime_yolo_micro_batching", default=False))
+        )
+        self._panels.detection.spin_realtime_yolo_micro_batch_size.setValue(
+            int(get_cfg("realtime_yolo_micro_batch_size", default=2))
+        )
         # Re-apply runtime-derived constraints (e.g., TensorRT => manual batch mode).
         self._mw._on_runtime_context_changed()
 
@@ -1556,6 +1562,8 @@ class ConfigOrchestrator:
                     else "manual"
                 ),
                 "yolo_manual_batch_size": self._panels.detection.spin_yolo_batch_size.value(),
+                "enable_realtime_yolo_micro_batching": self._panels.detection.chk_enable_realtime_yolo_micro_batching.isChecked(),
+                "realtime_yolo_micro_batch_size": self._panels.detection.spin_realtime_yolo_micro_batch_size.value(),
                 # === CORE TRACKING ===
                 "max_targets": self._panels.setup.spin_max_targets.value(),
                 "max_assignment_distance_multiplier": self._panels.tracking.spin_max_dist.value(),
@@ -1955,6 +1963,12 @@ class ConfigOrchestrator:
         advanced_config["yolo_manual_batch_size"] = (
             self._panels.detection.spin_yolo_batch_size.value()
         )
+        advanced_config["enable_realtime_yolo_micro_batching"] = (
+            self._panels.detection.chk_enable_realtime_yolo_micro_batching.isChecked()
+        )
+        advanced_config["realtime_yolo_micro_batch_size"] = (
+            self._panels.detection.spin_realtime_yolo_micro_batch_size.value()
+        )
         advanced_config["yolo_seq_individual_batch_size"] = (
             self._panels.detection.spin_yolo_seq_individual_batch_size.value()
         )
@@ -2076,6 +2090,8 @@ class ConfigOrchestrator:
             "ENABLE_TENSORRT": runtime_detection["enable_tensorrt"],
             "ENABLE_ONNX_RUNTIME": runtime_detection["enable_onnx_runtime"],
             "TENSORRT_MAX_BATCH_SIZE": trt_batch_size,
+            "ENABLE_REALTIME_YOLO_MICRO_BATCHING": self._panels.detection.chk_enable_realtime_yolo_micro_batching.isChecked(),
+            "REALTIME_YOLO_MICRO_BATCH_SIZE": self._panels.detection.spin_realtime_yolo_micro_batch_size.value(),
             "TENSORRT_BUILD_WORKSPACE_GB": float(
                 advanced_config.get("tensorrt_build_workspace_gb", 4.0)
             ),
@@ -2590,6 +2606,10 @@ class ConfigOrchestrator:
             "tensorrt_build_batch_size": None,  # Optional fixed TensorRT build batch override
             "yolo_headtail_detect_conf_threshold": 0.25,  # Minimum detection confidence before head-tail inference runs; lower-confidence detections remain unknown
             "headtail_batch_size": 64,  # Canonical crop batch size for head-tail classifier inference
+            "enable_realtime_yolo_micro_batching": False,  # Allow direct realtime OBB to batch a small FIFO of frames at the cost of added latency
+            "realtime_yolo_micro_batch_size": 2,  # Maximum direct realtime OBB frame micro-batch size when enabled
+            "realtime_visualization_emit_stride": 1,  # Emit GUI overlays every Nth frame during realtime tracking while preserving full-speed tracking/video output
+            "visualization_emit_stride": 1,  # Optional GUI overlay decimation for non-realtime runs
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
             "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
             "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review

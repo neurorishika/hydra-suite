@@ -5,6 +5,7 @@ acceleration and head-tail orientation classification.
 """
 
 import logging
+import time
 from pathlib import Path
 
 import cv2
@@ -528,44 +529,76 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         *,
         roi_mask=None,
     ):
-        """Return raw detection indices that survive current detector filtering."""
+        """Return raw detection indices worth sending through head-tail.
+
+        Realtime tracking already runs the full detector filter once later in the
+        worker after raw detections are returned. This selector intentionally uses
+        only the cheap vectorized gates (confidence, size, aspect ratio, ROI, and
+        head-tail confidence floor) so we do not repeat OBB NMS/IOU suppression
+        just to choose head-tail candidates.
+        """
         if not raw_meas:
             return []
-        (
-            _meas,
-            _sizes,
-            _shapes,
-            _confidences,
-            _obb_corners,
-            candidate_ids,
-        ) = self.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confidences,
-            raw_obb_corners,
-            roi_mask=roi_mask,
-            detection_ids=list(range(len(raw_meas))),
-        )
-        selected_ids = [int(idx) for idx in candidate_ids]
+        conf_threshold = float(self.params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
         detect_conf_threshold = float(
             self.params.get(
                 "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD",
                 self.params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25),
             )
         )
-        if detect_conf_threshold <= 0.0:
-            return selected_ids
+        meas_arr = np.ascontiguousarray(np.asarray(raw_meas, dtype=np.float32))
+        sizes_arr = np.ascontiguousarray(np.asarray(raw_sizes, dtype=np.float32))
+        shapes_arr = np.ascontiguousarray(np.asarray(raw_shapes, dtype=np.float32))
+        conf_arr = np.ascontiguousarray(np.asarray(raw_confidences, dtype=np.float32))
 
-        gated_ids = []
-        for idx, confidence in zip(selected_ids, _confidences):
-            try:
-                confidence_value = float(confidence)
-            except (TypeError, ValueError):
-                continue
-            if confidence_value >= detect_conf_threshold:
-                gated_ids.append(idx)
-        return gated_ids
+        n = min(len(meas_arr), len(sizes_arr), len(shapes_arr), len(conf_arr))
+        if raw_obb_corners:
+            n = min(n, len(raw_obb_corners))
+        if n <= 0:
+            return []
+
+        meas_arr = meas_arr[:n]
+        sizes_arr = sizes_arr[:n]
+        shapes_arr = shapes_arr[:n]
+        conf_arr = conf_arr[:n]
+
+        keep_mask = conf_arr >= conf_threshold
+
+        if self.params.get("ENABLE_SIZE_FILTERING", False):
+            min_size = float(self.params.get("MIN_OBJECT_SIZE", 0))
+            max_size = float(self.params.get("MAX_OBJECT_SIZE", float("inf")))
+            ellipse_area_arr = shapes_arr[:, 0] if shapes_arr.ndim == 2 else sizes_arr
+            keep_mask &= (ellipse_area_arr >= min_size) & (ellipse_area_arr <= max_size)
+
+        if self._advanced_config_value("enable_aspect_ratio_filtering", False):
+            ref_ar = float(self._advanced_config_value("reference_aspect_ratio", 2.0))
+            min_ar_mult = float(
+                self._advanced_config_value("min_aspect_ratio_multiplier", 0.5)
+            )
+            max_ar_mult = float(
+                self._advanced_config_value("max_aspect_ratio_multiplier", 2.0)
+            )
+            min_ar = ref_ar * min_ar_mult
+            max_ar = ref_ar * max_ar_mult
+            ar_arr = (
+                shapes_arr[:, 1] if shapes_arr.ndim == 2 else np.ones(len(sizes_arr))
+            )
+            keep_mask &= (ar_arr >= min_ar) & (ar_arr <= max_ar)
+
+        if roi_mask is not None and len(meas_arr) > 0:
+            h, w = roi_mask.shape[:2]
+            cx = meas_arr[:, 0].astype(np.int32)
+            cy = meas_arr[:, 1].astype(np.int32)
+            in_bounds = (cx >= 0) & (cx < w) & (cy >= 0) & (cy < h)
+            cx_safe = np.clip(cx, 0, max(0, w - 1))
+            cy_safe = np.clip(cy, 0, max(0, h - 1))
+            in_roi = roi_mask[cy_safe, cx_safe] > 0
+            keep_mask &= in_bounds & in_roi
+
+        if detect_conf_threshold > 0.0:
+            keep_mask &= conf_arr >= detect_conf_threshold
+
+        return [int(idx) for idx in np.flatnonzero(keep_mask)]
 
     def _compute_headtail_hints_for_indices(
         self,
@@ -736,10 +769,18 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         raw_conf_floor,
         max_det,
         return_class_ids: bool = False,
+        profiler=None,
     ):
+        model_started = time.perf_counter()
         results = self._predict_obb_results(
             frame, target_classes, raw_conf_floor, max_det
         )
+        if profiler is not None:
+            profiler.add_phase_time(
+                "yolo_obb_model_execute",
+                time.perf_counter() - model_started,
+                work_units=1,
+            )
         if len(results) == 0:
             if return_class_ids:
                 return [], [], [], [], [], [], None
@@ -749,6 +790,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             if return_class_ids:
                 return [], [], [], [], [], [], result0
             return [], [], [], [], [], result0
+        extract_started = time.perf_counter()
         if return_class_ids:
             (
                 raw_meas,
@@ -758,6 +800,12 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 raw_obb_corners,
                 raw_class_ids,
             ) = self._extract_raw_detections(result0.obb, return_class_ids=True)
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_extract_raw",
+                    time.perf_counter() - extract_started,
+                    work_units=1,
+                )
             return (
                 raw_meas,
                 raw_sizes,
@@ -1273,6 +1321,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                     target_classes=target_classes,
                     raw_conf_floor=raw_conf_floor,
                     max_det=max_det,
+                    profiler=profiler,
                 )
         except Exception as e:
             logger.error(f"YOLO inference failed on frame {frame_count}: {e}")
@@ -1882,6 +1931,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             profiler.phase_start("yolo_obb_inference")
 
         if fixed_batch_size is not None:
+            execute_started = time.perf_counter()
             results_batch = self._run_fixed_batch_obb_inference(
                 frames,
                 actual_frame_count,
@@ -1891,11 +1941,24 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 raw_conf_floor,
                 max_det,
             )
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_model_execute",
+                    time.perf_counter() - execute_started,
+                    work_units=actual_frame_count,
+                )
         else:
             # Standard PyTorch inference - no chunking needed
+            execute_started = time.perf_counter()
             results_batch = self._run_standard_obb_batch_inference(
                 frames, start_frame_idx, target_classes, raw_conf_floor, max_det
             )
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_model_execute",
+                    time.perf_counter() - execute_started,
+                    work_units=actual_frame_count,
+                )
             if results_batch is None:
                 return [([], [], [], [], []) for _ in frames]
 
@@ -1907,7 +1970,14 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         # ===================================================================
 
         # Phase 1 — extract raw detections from each frame's OBB result
+        extract_started = time.perf_counter()
         per_frame_raw = self._extract_per_frame_raw(results_batch, actual_frame_count)
+        if profiler is not None:
+            profiler.add_phase_time(
+                "yolo_obb_extract_raw",
+                time.perf_counter() - extract_started,
+                work_units=actual_frame_count,
+            )
 
         # Phase 2 — cross-frame head-tail classification (single GPU call
         # batching canonical crops from ALL frames together).

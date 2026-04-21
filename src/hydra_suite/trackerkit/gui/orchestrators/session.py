@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 HEADTAIL_RUNTIME_TOOLTIP = (
     "Head-tail runtime for oriented crop classification.\n"
     "Visible only when head-tail analysis is enabled.\n"
-    "Exported ONNX/TensorRT runtimes are shown when available."
+    "Exported ONNX/TensorRT runtimes are shown when available.\n"
+    "When a .pth classifier requests an exported accelerator runtime but the matching ONNX provider is unavailable, HYDRA falls back to the native device runtime for that platform."
 )
 
 CNN_RUNTIME_TOOLTIP = (

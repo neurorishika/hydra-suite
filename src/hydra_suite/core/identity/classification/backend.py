@@ -377,6 +377,50 @@ def _torch_device(compute_runtime: str) -> str:
     return "cpu"
 
 
+def _provider_key(provider: object) -> str:
+    if isinstance(provider, tuple) and provider:
+        return str(provider[0])
+    return str(provider)
+
+
+def _requested_onnx_accelerator_providers(compute_runtime: str) -> list[str]:
+    from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+
+    providers = derive_onnx_execution_providers(
+        compute_runtime,
+        include_cpu_fallback=False,
+    )
+    return [_provider_key(provider) for provider in providers]
+
+
+def _available_onnx_provider_names() -> set[str]:
+    try:
+        import onnxruntime as ort
+
+        return {str(name) for name in (ort.get_available_providers() or [])}
+    except Exception:
+        return set()
+
+
+def _native_accelerator_available(compute_runtime: str) -> bool:
+    device = _torch_device(compute_runtime)
+    if device == "cuda":
+        try:
+            import torch
+
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+    if device == "mps":
+        try:
+            import torch
+
+            return bool(torch.backends.mps.is_available())
+        except Exception:
+            return False
+    return False
+
+
 class ClassifierBackend:
     """Wraps model loading, preprocessing, and inference for a classifier
     artifact. Consumers apply their own semantics on the returned per-factor
@@ -395,6 +439,7 @@ class ClassifierBackend:
         self._metadata = self._loader.parse_metadata(path)
         self._model = None
         self._loaded = False
+        self._active_execution_backend = "unloaded"
 
     @property
     def metadata(self) -> ClassifierMetadata:
@@ -407,12 +452,40 @@ class ClassifierBackend:
     def _uses_factor_backends(self) -> bool:
         return self._metadata.arch in ("yolo_multihead", "classifier_multihead")
 
+    def _should_fallback_to_native_runtime(self) -> bool:
+        if not self._uses_onnx() or self._uses_factor_backends():
+            return False
+        if Path(self._model_path).suffix.lower() != ".pth":
+            return False
+
+        requested = _requested_onnx_accelerator_providers(self._compute_runtime)
+        if not requested:
+            return False
+
+        available = _available_onnx_provider_names()
+        if any(provider in available for provider in requested):
+            return False
+
+        return _native_accelerator_available(self._compute_runtime)
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
         try:
             if self._uses_onnx() and not self._uses_factor_backends():
-                self._load_onnx()
+                if self._should_fallback_to_native_runtime():
+                    native_device = _torch_device(self._compute_runtime)
+                    logger.warning(
+                        "ClassifierBackend: requested ONNX runtime %s for %s but matching ONNX providers are unavailable; falling back to native %s execution",
+                        self._compute_runtime,
+                        self._model_path,
+                        native_device,
+                    )
+                    self._model = self._loader.load(self._model_path, native_device)
+                    self._active_execution_backend = "native"
+                else:
+                    self._load_onnx()
+                    self._active_execution_backend = "onnx"
             else:
                 loader_target = (
                     self._compute_runtime
@@ -420,6 +493,7 @@ class ClassifierBackend:
                     else _torch_device(self._compute_runtime)
                 )
                 self._model = self._loader.load(self._model_path, loader_target)
+                self._active_execution_backend = "native"
         except ClassifierError:
             raise
         except Exception as exc:
@@ -555,7 +629,7 @@ class ClassifierBackend:
             return []
         self._ensure_loaded()
         try:
-            if self._uses_onnx() and not self._uses_factor_backends():
+            if self._active_execution_backend == "onnx":
                 batch_np = self._preprocess(crops)
                 logits = self._forward_onnx(batch_np)
             elif self._metadata.arch == "yolo":
@@ -601,3 +675,4 @@ class ClassifierBackend:
                     close()
         self._model = None
         self._loaded = False
+        self._active_execution_backend = "unloaded"

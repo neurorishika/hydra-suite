@@ -882,12 +882,54 @@ class DetectionPanel(QWidget):
             "font-size: 10px; font-weight: 600; color: #bdbdbd;"
         )
 
+        self.chk_enable_realtime_yolo_micro_batching = QCheckBox(
+            "Realtime frame micro-batching"
+        )
+        self.chk_enable_realtime_yolo_micro_batching.setChecked(
+            bool(
+                self._main_window.advanced_config.get(
+                    "enable_realtime_yolo_micro_batching", False
+                )
+            )
+        )
+        self.chk_enable_realtime_yolo_micro_batching.setToolTip(
+            "Batch a small FIFO of consecutive realtime frames into one direct OBB inference call.\n"
+            "This can improve detector throughput, but adds detector latency of up to N-1 frames.\n"
+            "Only applies to direct YOLO OBB realtime tracking."
+        )
+        self.chk_enable_realtime_yolo_micro_batching.stateChanged.connect(
+            self._sync_batch_policy_controls
+        )
+
+        self.spin_realtime_yolo_micro_batch_size = QSpinBox()
+        self.spin_realtime_yolo_micro_batch_size.setRange(2, 16)
+        self.spin_realtime_yolo_micro_batch_size.setValue(
+            int(
+                self._main_window.advanced_config.get(
+                    "realtime_yolo_micro_batch_size", 2
+                )
+            )
+        )
+        self.spin_realtime_yolo_micro_batch_size.setFixedHeight(30)
+        self.spin_realtime_yolo_micro_batch_size.setToolTip(
+            "Maximum number of consecutive realtime frames to queue for one direct OBB inference call.\n"
+            "Higher = better throughput potential, but more latency."
+        )
+        self.spin_realtime_yolo_micro_batch_size.valueChanged.connect(
+            self._sync_batch_policy_controls
+        )
+        self.lbl_realtime_yolo_micro_batch_size = QLabel("Realtime batch")
+        self.lbl_realtime_yolo_micro_batch_size.setStyleSheet(
+            "font-size: 10px; font-weight: 600; color: #bdbdbd;"
+        )
+
         accel_toggle_grid = QGridLayout()
         accel_toggle_grid.setContentsMargins(0, 0, 0, 0)
         accel_toggle_grid.setHorizontalSpacing(12)
         accel_toggle_grid.setVerticalSpacing(6)
         accel_toggle_grid.addWidget(self.chk_enable_yolo_batching, 0, 0)
         accel_toggle_grid.addWidget(self.chk_enable_tensorrt, 0, 1)
+        accel_toggle_grid.addWidget(self.chk_enable_realtime_yolo_micro_batching, 1, 0)
         accel_toggle_grid.setColumnStretch(0, 1)
         accel_toggle_grid.setColumnStretch(1, 1)
         vl_gpu.addLayout(accel_toggle_grid)
@@ -899,12 +941,15 @@ class DetectionPanel(QWidget):
         accel_controls_grid.addWidget(self.lbl_yolo_batch_mode, 0, 0)
         accel_controls_grid.addWidget(self.lbl_yolo_batch_size, 0, 1)
         accel_controls_grid.addWidget(self.lbl_tensorrt_batch, 0, 2)
+        accel_controls_grid.addWidget(self.lbl_realtime_yolo_micro_batch_size, 0, 3)
         accel_controls_grid.addWidget(self.combo_yolo_batch_mode, 1, 0)
         accel_controls_grid.addWidget(self.spin_yolo_batch_size, 1, 1)
         accel_controls_grid.addWidget(self.spin_tensorrt_batch, 1, 2)
+        accel_controls_grid.addWidget(self.spin_realtime_yolo_micro_batch_size, 1, 3)
         accel_controls_grid.setColumnStretch(0, 1)
         accel_controls_grid.setColumnStretch(1, 1)
         accel_controls_grid.setColumnStretch(2, 1)
+        accel_controls_grid.setColumnStretch(3, 1)
         vl_gpu.addLayout(accel_controls_grid)
 
         self.lbl_batch_policy_notice = QLabel("")
@@ -927,6 +972,8 @@ class DetectionPanel(QWidget):
         self.lbl_yolo_batch_mode.setVisible(initial_batching_enabled)
         self.spin_yolo_batch_size.setVisible(initial_batching_enabled)
         self.lbl_yolo_batch_size.setVisible(initial_batching_enabled)
+        self.spin_realtime_yolo_micro_batch_size.setVisible(True)
+        self.lbl_realtime_yolo_micro_batch_size.setVisible(True)
         self.combo_yolo_batch_mode.setEnabled(initial_batching_enabled)
         self.spin_yolo_batch_size.setEnabled(False)  # Auto mode by default
         self._sync_batch_policy_controls()
@@ -1271,6 +1318,31 @@ class DetectionPanel(QWidget):
                 )(),
             )
         fixed_runtime = self._main_window._runtime_requires_fixed_yolo_batch()
+        if not hasattr(self, "chk_enable_yolo_batching"):
+            return
+        sequential = self.combo_yolo_obb_mode.currentIndex() == 1
+        realtime_micro_batch_checkbox = getattr(
+            self,
+            "chk_enable_realtime_yolo_micro_batching",
+            None,
+        )
+        realtime_micro_batch_spin = getattr(
+            self,
+            "spin_realtime_yolo_micro_batch_size",
+            None,
+        )
+        realtime_micro_batch_label = getattr(
+            self,
+            "lbl_realtime_yolo_micro_batch_size",
+            None,
+        )
+        realtime_micro_batch_enabled = (
+            bool(
+                realtime_micro_batch_checkbox is not None
+                and realtime_micro_batch_checkbox.isChecked()
+            )
+            and not sequential
+        )
 
         if fixed_runtime and self.combo_yolo_batch_mode.currentIndex() != 1:
             self.combo_yolo_batch_mode.blockSignals(True)
@@ -1294,6 +1366,24 @@ class DetectionPanel(QWidget):
         self.lbl_yolo_batch_size.setVisible(batching_enabled)
         self.spin_tensorrt_batch.setVisible(tensorrt_enabled)
         self.lbl_tensorrt_batch.setVisible(tensorrt_enabled)
+        if realtime_micro_batch_checkbox is not None:
+            realtime_micro_batch_checkbox.setEnabled(not sequential)
+        if realtime_micro_batch_spin is not None:
+            realtime_micro_batch_spin.setEnabled(
+                not sequential
+                and bool(
+                    realtime_micro_batch_checkbox is not None
+                    and realtime_micro_batch_checkbox.isChecked()
+                )
+            )
+        if realtime_micro_batch_label is not None:
+            realtime_micro_batch_label.setEnabled(
+                not sequential
+                and bool(
+                    realtime_micro_batch_checkbox is not None
+                    and realtime_micro_batch_checkbox.isChecked()
+                )
+            )
 
         if realtime_enabled:
             self.chk_enable_yolo_batching.setEnabled(False)
@@ -1301,9 +1391,14 @@ class DetectionPanel(QWidget):
             self.spin_yolo_batch_size.setEnabled(False)
             self.spin_tensorrt_batch.setEnabled(False)
             self.lbl_tensorrt_batch.setEnabled(tensorrt_enabled)
-            sequential = self.combo_yolo_obb_mode.currentIndex() == 1
             if sequential:
                 message = "Realtime tracking fixes the frame batch to 1. Sequential stage-2 crop batching still uses the Stage-2 crop batch setting."
+            elif realtime_micro_batch_enabled:
+                message = (
+                    "Realtime micro-batching queues up to "
+                    f"{realtime_micro_batch_spin.value()} frame(s) for one direct OBB call. "
+                    "This can improve throughput, but adds detector latency of up to N-1 frames."
+                )
             else:
                 message = "Realtime tracking processes detection one frame at a time. Frame-level YOLO and ONNX/TensorRT batch settings are ignored during realtime runs."
             self.lbl_batch_policy_notice.setText(message)
@@ -1317,6 +1412,24 @@ class DetectionPanel(QWidget):
         )
         self.spin_tensorrt_batch.setEnabled(tensorrt_enabled)
         self.lbl_tensorrt_batch.setEnabled(tensorrt_enabled)
+        if realtime_micro_batch_checkbox is not None:
+            realtime_micro_batch_checkbox.setEnabled(not sequential)
+        if realtime_micro_batch_spin is not None:
+            realtime_micro_batch_spin.setEnabled(
+                not sequential
+                and bool(
+                    realtime_micro_batch_checkbox is not None
+                    and realtime_micro_batch_checkbox.isChecked()
+                )
+            )
+        if realtime_micro_batch_label is not None:
+            realtime_micro_batch_label.setEnabled(
+                not sequential
+                and bool(
+                    realtime_micro_batch_checkbox is not None
+                    and realtime_micro_batch_checkbox.isChecked()
+                )
+            )
 
         recommendation = self._main_window._current_detection_benchmark_recommendation()
         recommendation_text = ""
@@ -2009,6 +2122,7 @@ class DetectionPanel(QWidget):
                 bool(ip._get_selected_yolo_headtail_model_path().strip())
             )
         self._main_window._update_obb_mode_warning()
+        self._sync_batch_policy_controls()
 
     # =========================================================================
     # YOLO MODEL CHANGED (moved from MainWindow)

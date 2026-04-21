@@ -444,6 +444,52 @@ def test_backend_tiny_onnx_lazy_derive(tiny_flat_headtail):
     backend2.close()
 
 
+def test_backend_falls_back_to_native_torch_when_onnx_accelerator_missing(
+    tiny_flat_headtail, monkeypatch
+):
+    import hydra_suite.core.identity.classification.backend as backend_module
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    observed: dict[str, object] = {}
+
+    class FakeModel:
+        def __call__(self, batch):
+            import torch
+
+            return torch.zeros((batch.shape[0], 5), dtype=torch.float32)
+
+    def _fake_load(path: str, device: str):
+        observed["path"] = path
+        observed["device"] = device
+        return FakeModel()
+
+    def _fail_load_onnx(self):
+        raise AssertionError("backend should fall back before creating an ONNX session")
+
+    monkeypatch.setattr(
+        backend_module,
+        "_available_onnx_provider_names",
+        lambda: {"CPUExecutionProvider"},
+    )
+    monkeypatch.setattr(
+        backend_module,
+        "_native_accelerator_available",
+        lambda runtime: runtime == "tensorrt",
+    )
+    monkeypatch.setattr(backend_module._TinyLoader, "load", staticmethod(_fake_load))
+    monkeypatch.setattr(ClassifierBackend, "_load_onnx", _fail_load_onnx)
+
+    backend = ClassifierBackend(str(tiny_flat_headtail), compute_runtime="tensorrt")
+    out = backend.predict_batch([np.zeros((32, 32, 3), dtype=np.uint8)])
+
+    assert observed["path"] == str(tiny_flat_headtail)
+    assert observed["device"] == "cuda"
+    assert len(out) == 1
+    assert len(out[0]) == 1
+    assert out[0][0].shape == (5,)
+    backend.close()
+
+
 def test_backend_tiny_monochrome_preprocess_matches_training_path(
     tiny_flat_monochrome,
 ):

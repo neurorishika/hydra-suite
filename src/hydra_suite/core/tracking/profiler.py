@@ -83,6 +83,8 @@ PHASE_ORDER = [
     "batched_detection",
     # Sub-phases within batched_detection (engine-level)
     "yolo_obb_inference",
+    "yolo_obb_model_execute",
+    "yolo_obb_extract_raw",
     "sequential_obb_crop",
     "sequential_obb_inference",
     "headtail_crop",

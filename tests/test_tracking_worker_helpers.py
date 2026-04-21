@@ -452,6 +452,55 @@ def test_resize_tracking_frame_uses_area_for_non_yolo_downscale() -> None:
     assert resize_calls == [((0, 0), 0.25, 0.25, mod.cv2.INTER_AREA)]
 
 
+def test_should_emit_visualization_frame_respects_realtime_stride() -> None:
+    mod = _load_worker_module()
+
+    params = {
+        "TRACKING_REALTIME_MODE": True,
+        "ADVANCED_CONFIG": {"realtime_visualization_emit_stride": 3},
+    }
+
+    assert mod.TrackingWorker._should_emit_visualization_frame(3, params) is True
+    assert mod.TrackingWorker._should_emit_visualization_frame(4, params) is False
+
+
+def test_should_emit_visualization_frame_defaults_to_every_frame() -> None:
+    mod = _load_worker_module()
+
+    assert mod.TrackingWorker._should_emit_visualization_frame(1, {}) is True
+    assert mod.TrackingWorker._should_emit_visualization_frame(2, {}) is True
+
+
+def test_realtime_yolo_micro_batch_size_requires_direct_realtime_opt_in() -> None:
+    mod = _load_worker_module()
+
+    assert mod.TrackingWorker._realtime_yolo_micro_batch_size({}) == 1
+    assert (
+        mod.TrackingWorker._realtime_yolo_micro_batch_size(
+            {
+                "TRACKING_REALTIME_MODE": True,
+                "DETECTION_METHOD": "yolo_obb",
+                "YOLO_OBB_MODE": "direct",
+                "ENABLE_REALTIME_YOLO_MICRO_BATCHING": True,
+                "REALTIME_YOLO_MICRO_BATCH_SIZE": 4,
+            }
+        )
+        == 4
+    )
+    assert (
+        mod.TrackingWorker._realtime_yolo_micro_batch_size(
+            {
+                "TRACKING_REALTIME_MODE": True,
+                "DETECTION_METHOD": "yolo_obb",
+                "YOLO_OBB_MODE": "sequential",
+                "ENABLE_REALTIME_YOLO_MICRO_BATCHING": True,
+                "REALTIME_YOLO_MICRO_BATCH_SIZE": 4,
+            }
+        )
+        == 1
+    )
+
+
 def test_backward_orientation_flip_applies_only_to_motion_based_theta() -> None:
     pf = load_src_module(
         "hydra_suite/core/identity/geometry.py",
