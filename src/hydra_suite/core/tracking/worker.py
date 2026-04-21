@@ -170,6 +170,82 @@ class TrackingWorker(QThread):
         p = self.get_current_params() if params is None else params
         return bool(p.get("EXPORT_CONFIDENCE_DENSITY_VIDEO", True))
 
+    @staticmethod
+    def _resolve_resized_roi_mask(
+        roi_mask,
+        target_w: int,
+        target_h: int,
+        cache_key=None,
+        cached_mask=None,
+    ):
+        """Return a ROI mask resized for the current frame geometry.
+
+        ROI geometry is static for a given run unless the user updates the ROI or
+        the effective frame size changes. Cache the resized mask so the tracking
+        loop does not repeatedly resample the same binary mask every frame.
+        """
+        if roi_mask is None:
+            return None, None, False
+
+        resolved_target_w = max(1, int(target_w))
+        resolved_target_h = max(1, int(target_h))
+        resolved_key = (id(roi_mask), resolved_target_w, resolved_target_h)
+        if cache_key == resolved_key and cached_mask is not None:
+            return cached_mask, cache_key, False
+
+        if (
+            roi_mask.shape[1] != resolved_target_w
+            or roi_mask.shape[0] != resolved_target_h
+        ):
+            resized_mask = cv2.resize(
+                roi_mask,
+                (resolved_target_w, resolved_target_h),
+                cv2.INTER_NEAREST,
+            )
+        else:
+            resized_mask = roi_mask
+        return resized_mask, resolved_key, True
+
+    @staticmethod
+    def _tracking_frame_resize_interpolation(
+        detection_method: str,
+        resize_factor: float,
+    ) -> int:
+        """Choose the live tracking resize interpolation policy.
+
+        Realtime YOLO tracking downscales very large frames before the model does
+        its own preprocessing and letterboxing. ``INTER_LINEAR`` is materially
+        faster than ``INTER_AREA`` for this path and provides sufficient quality
+        for detector input preparation.
+        """
+        if (
+            str(detection_method or "").strip().lower() == "yolo_obb"
+            and float(resize_factor) < 1.0
+        ):
+            return cv2.INTER_LINEAR
+        return cv2.INTER_AREA
+
+    @classmethod
+    def _resize_tracking_frame(
+        cls,
+        frame,
+        resize_factor: float,
+        detection_method: str,
+    ):
+        """Resize one tracking frame using the live tracking interpolation policy."""
+        if frame is None or float(resize_factor) >= 1.0:
+            return frame
+        return cv2.resize(
+            frame,
+            (0, 0),
+            fx=float(resize_factor),
+            fy=float(resize_factor),
+            interpolation=cls._tracking_frame_resize_interpolation(
+                detection_method,
+                resize_factor,
+            ),
+        )
+
     def stop(self: object) -> object:
         """Request cooperative stop for current processing loop."""
         self._stop_requested = True
@@ -1736,6 +1812,8 @@ class TrackingWorker(QThread):
 
         # Pre-compute ROI contours once (the mask is static for the entire run).
         _roi_contours_cache = None
+        _roi_mask_cache_key = None
+        _roi_mask_resized = None
 
         profiler.phase_start("tracking_loop")
         for frame, _ in frame_iterator:
@@ -1763,10 +1841,11 @@ class TrackingWorker(QThread):
                     break
 
             # --- Preprocessing & Detection ---
-            profiler.tick("preprocessing")
             resize_f = params["RESIZE_FACTOR"]
+            detection_method = params.get("DETECTION_METHOD", "background_subtraction")
 
             # Skip preprocessing if no frame (cached detection mode)
+            preprocessing_started = time.perf_counter()
             if frame is not None:
                 # Keep original frame for individual dataset generation (high resolution).
                 # When resize_f >= 1.0 the frame won't be replaced below, so a
@@ -1776,25 +1855,25 @@ class TrackingWorker(QThread):
                 else:
                     original_frame = None
 
-                if resize_f < 1.0:
-                    frame = cv2.resize(
-                        frame,
-                        (0, 0),
-                        fx=resize_f,
-                        fy=resize_f,
-                        interpolation=cv2.INTER_AREA,
-                    )
             else:
                 original_frame = None
+            profiler.add_sample(
+                "preprocessing",
+                time.perf_counter() - preprocessing_started,
+            )
 
-            profiler.tock("preprocessing")
-
-            detection_method = params.get("DETECTION_METHOD", "background_subtraction")
+            if frame is not None and resize_f < 1.0:
+                resize_started = time.perf_counter()
+                frame = self._resize_tracking_frame(frame, resize_f, detection_method)
+                profiler.add_sample(
+                    "frame_resize", time.perf_counter() - resize_started
+                )
 
             # Prepare ROI masks once for both detection and visualization
             ROI_mask = params.get("ROI_MASK", None)
             ROI_mask_current = None
 
+            roi_prepare_started = time.perf_counter()
             if ROI_mask is not None:
                 if frame is not None:
                     target_w, target_h = frame.shape[1], frame.shape[0]
@@ -1804,12 +1883,20 @@ class TrackingWorker(QThread):
                     target_w = max(1, int(base_w * resize_f))
                     target_h = max(1, int(base_h * resize_f))
 
-                if ROI_mask.shape[1] != target_w or ROI_mask.shape[0] != target_h:
-                    ROI_mask_current = cv2.resize(
-                        ROI_mask, (target_w, target_h), cv2.INTER_NEAREST
-                    )
-                else:
-                    ROI_mask_current = ROI_mask
+                (
+                    ROI_mask_current,
+                    _roi_mask_cache_key,
+                    roi_mask_changed,
+                ) = self._resolve_resized_roi_mask(
+                    ROI_mask,
+                    target_w,
+                    target_h,
+                    cache_key=_roi_mask_cache_key,
+                    cached_mask=_roi_mask_resized,
+                )
+                _roi_mask_resized = ROI_mask_current
+                if roi_mask_changed:
+                    _roi_contours_cache = None
 
                 # Calculate fill color on first frame if not yet done
                 if frame is not None and roi_fill_color is None:
@@ -1821,6 +1908,10 @@ class TrackingWorker(QThread):
                         )
                     else:
                         roi_fill_color = np.array([0, 0, 0], dtype=np.uint8)
+            profiler.add_sample(
+                "roi_prepare",
+                time.perf_counter() - roi_prepare_started,
+            )
 
             profiler.tick("detection")
 

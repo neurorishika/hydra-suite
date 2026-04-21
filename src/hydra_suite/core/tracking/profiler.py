@@ -49,6 +49,8 @@ CATEGORY_ORDER = [
     # Per-frame tracking loop categories
     "frame_read",
     "preprocessing",
+    "frame_resize",
+    "roi_prepare",
     "detection",
     "live_filter",
     "live_crop_extraction",

@@ -365,6 +365,93 @@ def test_confidence_density_video_export_defaults_true_and_respects_flag() -> No
     assert worker._confidence_density_video_export_enabled() is False
 
 
+def test_resolve_resized_roi_mask_reuses_cached_resize() -> None:
+    mod = _load_worker_module()
+    worker = mod.TrackingWorker("dummy.mp4")
+    roi_mask = np.ones((8, 12), dtype=np.uint8)
+    resize_calls = []
+
+    def _resize(mask, dsize, interpolation=0, fx=1.0, fy=1.0):
+        resize_calls.append((mask.shape, dsize, interpolation))
+        return np.full((dsize[1], dsize[0]), 255, dtype=np.uint8)
+
+    mod.cv2.resize = _resize
+
+    mask_1, cache_key, changed_1 = worker._resolve_resized_roi_mask(
+        roi_mask,
+        6,
+        4,
+    )
+    mask_2, cache_key_2, changed_2 = worker._resolve_resized_roi_mask(
+        roi_mask,
+        6,
+        4,
+        cache_key=cache_key,
+        cached_mask=mask_1,
+    )
+
+    assert changed_1 is True
+    assert changed_2 is False
+    assert cache_key_2 == cache_key
+    assert len(resize_calls) == 1
+    assert mask_2 is mask_1
+
+
+def test_resolve_resized_roi_mask_returns_original_when_shape_matches() -> None:
+    mod = _load_worker_module()
+    worker = mod.TrackingWorker("dummy.mp4")
+    roi_mask = np.ones((5, 7), dtype=np.uint8)
+
+    def _fail_resize(*_args, **_kwargs):
+        raise AssertionError("resize should not be called when ROI shape matches")
+
+    mod.cv2.resize = _fail_resize
+
+    resolved, cache_key, changed = worker._resolve_resized_roi_mask(
+        roi_mask,
+        7,
+        5,
+    )
+
+    assert changed is True
+    assert cache_key == (id(roi_mask), 7, 5)
+    assert resolved is roi_mask
+
+
+def test_resize_tracking_frame_uses_linear_for_yolo_downscale() -> None:
+    mod = _load_worker_module()
+    worker = mod.TrackingWorker("dummy.mp4")
+    frame = np.ones((8, 8, 3), dtype=np.uint8)
+    resize_calls = []
+
+    def _resize(src, dsize, fx=1.0, fy=1.0, interpolation=0):
+        resize_calls.append((dsize, fx, fy, interpolation))
+        return src
+
+    mod.cv2.resize = _resize
+
+    worker._resize_tracking_frame(frame, 0.25, "yolo_obb")
+
+    assert resize_calls == [((0, 0), 0.25, 0.25, mod.cv2.INTER_LINEAR)]
+
+
+def test_resize_tracking_frame_uses_area_for_non_yolo_downscale() -> None:
+    mod = _load_worker_module()
+    worker = mod.TrackingWorker("dummy.mp4")
+    frame = np.ones((8, 8, 3), dtype=np.uint8)
+    resize_calls = []
+
+    def _resize(src, dsize, fx=1.0, fy=1.0, interpolation=0):
+        resize_calls.append((dsize, fx, fy, interpolation))
+        return src
+
+    mod.cv2.resize = _resize
+
+    worker._resize_tracking_frame(frame, 0.25, "background_subtraction")
+
+    assert resize_calls == [((0, 0), 0.25, 0.25, mod.cv2.INTER_AREA)]
+
+
 def test_backward_orientation_flip_applies_only_to_motion_based_theta() -> None:
     pf = load_src_module(
         "hydra_suite/core/identity/geometry.py",
