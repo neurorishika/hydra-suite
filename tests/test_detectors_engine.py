@@ -49,6 +49,13 @@ def _load_engine_module():
     )
     sys.modules["hydra_suite.core.detectors._runtime_artifacts"] = art_mod
 
+    direct_runtime_mod = load_src_module(
+        "hydra_suite/core/detectors/_direct_obb_runtime.py",
+        "hydra_suite.core.detectors._direct_obb_runtime",
+        stubs=stubs,
+    )
+    sys.modules["hydra_suite.core.detectors._direct_obb_runtime"] = direct_runtime_mod
+
     bg_mod = load_src_module(
         "hydra_suite/core/detectors/bg_detector.py",
         "hydra_suite.core.detectors.bg_detector",
@@ -1109,6 +1116,86 @@ def test_sequential_stage2_obb_chunks_by_individual_batch_size() -> None:
 
     assert calls == [3, 3]
     assert len(results) == 5
+
+
+def test_predict_obb_results_uses_direct_executor_when_available() -> None:
+    mod = _load_engine_module()
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {}
+    det.device = "cuda:0"
+    det.use_onnx = True
+    det.onnx_imgsz = 640
+
+    sentinel = object()
+    calls = []
+
+    class _DirectExecutor:
+        def predict(self, frames, *, conf_thres, classes, max_det):
+            calls.append(
+                {
+                    "count": len(frames),
+                    "conf": conf_thres,
+                    "classes": classes,
+                    "max_det": max_det,
+                }
+            )
+            return [sentinel for _ in frames]
+
+    det._direct_obb_executor = _DirectExecutor()
+
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    results = det._predict_obb_results(
+        [frame, frame],
+        target_classes=[1],
+        raw_conf_floor=0.2,
+        max_det=5,
+    )
+
+    assert results == [sentinel, sentinel]
+    assert calls == [{"count": 2, "conf": 0.2, "classes": [1], "max_det": 5}]
+
+
+def test_try_load_onnx_model_enables_direct_cuda_executor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    mod = _load_engine_module()
+    model_path = tmp_path / "detector.onnx"
+    model_path.write_bytes(b"fake-onnx")
+
+    class FakeYOLO:
+        def __init__(self, path, task=None):
+            self.path = path
+            self.task = task
+            self.names = {0: "ant"}
+
+    fake_ultra = types.SimpleNamespace(YOLO=FakeYOLO)
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultra)
+
+    created = {}
+
+    def _fake_factory(**kwargs):
+        created.update(kwargs)
+        return object()
+
+    fake_direct_module = types.SimpleNamespace(create_direct_obb_executor=_fake_factory)
+    monkeypatch.setitem(
+        sys.modules,
+        "hydra_suite.core.detectors._direct_obb_runtime",
+        fake_direct_module,
+    )
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {}
+    det.device = "cuda:0"
+    det.use_onnx = False
+    det._direct_obb_executor = None
+
+    det._try_load_onnx_model(str(model_path))
+
+    assert det.use_onnx is True
+    assert det._direct_obb_executor is not None
+    assert created["runtime"] == "onnx"
+    assert created["artifact_path"] == str(model_path.resolve())
 
 
 def test_headtail_hint_uses_batched_classify_call() -> None:

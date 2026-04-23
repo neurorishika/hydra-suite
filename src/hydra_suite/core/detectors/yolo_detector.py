@@ -371,6 +371,27 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         self, source, target_classes, raw_conf_floor, max_det, imgsz=None
     ):
         """Run OBB model prediction with backend-specific constraints."""
+        direct_executor = getattr(self, "_direct_obb_executor", None)
+        if direct_executor is not None:
+            direct_source = source if isinstance(source, list) else [source]
+            try:
+                direct_results = direct_executor.predict(
+                    direct_source,
+                    conf_thres=raw_conf_floor,
+                    classes=target_classes,
+                    max_det=max_det,
+                )
+                if not isinstance(source, list):
+                    return direct_results[:1]
+                return direct_results
+            except Exception as exc:
+                logger.warning(
+                    "Direct OBB runtime execution failed for %s; falling back to Ultralytics wrapper: %s",
+                    getattr(self, "device", "unknown"),
+                    exc,
+                )
+                self._direct_obb_executor = None
+
         fixed_batch = self._runtime_fixed_batch_size()
         # obb_predict_device is None when the model was placed via .to(device).
         # Always fall back to self.device so the explicit device= argument is always
