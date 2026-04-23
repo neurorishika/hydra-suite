@@ -27,6 +27,7 @@ from hydra_suite.detectkit.config.schemas import DetectKitConfig
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .canvas import OBBCanvas
+from .evaluation import open_quick_test_dialog
 from .models import DetectKitProject
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
@@ -373,10 +374,11 @@ class DetectKitMainWindow(QMainWindow):
         # Connect ToolsPanel signals
         self._dataset_panel.manage_sources_requested.connect(self._open_source_manager)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
+        self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
         self._tools_panel.prev_requested.connect(self._dataset_panel.navigate_prev)
         self._tools_panel.next_requested.connect(self._dataset_panel.navigate_next)
         self._tools_panel.train_requested.connect(self._open_training_dialog)
-        self._tools_panel.evaluate_requested.connect(self._open_evaluation_dialog)
+        self._tools_panel.evaluate_requested.connect(self._evaluate_active_model)
         self._tools_panel.history_requested.connect(self._open_history_dialog)
 
     # ------------------------------------------------------------------
@@ -422,8 +424,12 @@ class DetectKitMainWindow(QMainWindow):
         act_train.triggered.connect(self._open_training_dialog)
         tb.addAction(act_train)
 
+        act_run_inference = QAction("Run Inference", self)
+        act_run_inference.triggered.connect(self._run_inference_overlay)
+        tb.addAction(act_run_inference)
+
         act_evaluate = QAction("Evaluate", self)
-        act_evaluate.triggered.connect(self._open_evaluation_dialog)
+        act_evaluate.triggered.connect(self._evaluate_active_model)
         tb.addAction(act_evaluate)
 
         act_history = QAction("History", self)
@@ -713,12 +719,13 @@ class DetectKitMainWindow(QMainWindow):
         dlg.exec()
 
     def _open_evaluation_dialog(self) -> None:
+        """Backward-compatible alias for the active-model evaluation flow."""
+        self._evaluate_active_model()
+
+    def _evaluate_active_model(self) -> None:
         if self._project is None:
             return
-        from .dialogs.evaluation_dialog import EvaluationDialog
-
-        dlg = EvaluationDialog(self._project, parent=self)
-        dlg.exec()
+        open_quick_test_dialog(self._project, parent=self)
 
     def _open_history_dialog(self) -> None:
         if self._project is None:
@@ -751,7 +758,57 @@ class DetectKitMainWindow(QMainWindow):
             self._project.active_model_path = settings.active_model_path
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
-        self._refresh_prediction_overlay()
+
+        request = self._prediction_request(settings)
+        if request is None:
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            return
+
+        if self._project is not None and not detectkit_model_path_is_previewable(
+            self._project,
+            request[1],
+        ):
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                "Selected model does not support direct preview overlays.",
+                4000,
+            )
+            return
+
+        if (
+            self._last_prediction_request is not None
+            and request != self._last_prediction_request
+        ):
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                "Inference settings changed. Click Run Inference to refresh overlay predictions.",
+                4000,
+            )
+
+    def _prediction_request(self, settings=None) -> tuple[str, str, float] | None:
+        """Return the current prediction request tuple, or None if not runnable."""
+        if self._project is None or not self._current_image_path:
+            return None
+
+        if settings is None:
+            settings = self._tools_panel.get_overlay_settings()
+
+        model_path = str(settings.active_model_path or "").strip()
+        if not model_path:
+            return None
+
+        return (
+            self._current_image_path,
+            model_path,
+            round(float(settings.confidence_threshold), 4),
+        )
+
+    def _run_inference_overlay(self) -> None:
+        """Run preview inference for the current image using the selected overlay settings."""
+        self._refresh_prediction_overlay(force=True)
 
     def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
         if self._project is None or not self._current_image_path:
@@ -760,17 +817,13 @@ class DetectKitMainWindow(QMainWindow):
             return
 
         settings = self._tools_panel.get_overlay_settings()
-        model_path = str(settings.active_model_path or "").strip()
-        request = (
-            self._current_image_path,
-            model_path,
-            round(float(settings.confidence_threshold), 4),
-        )
-
-        if not model_path:
+        request = self._prediction_request(settings)
+        if request is None:
             self._canvas.clear_pred_detections()
             self._last_prediction_request = None
             return
+
+        model_path = request[1]
 
         if not detectkit_model_path_is_previewable(self._project, model_path):
             self._canvas.clear_pred_detections()
@@ -846,7 +899,14 @@ class DetectKitMainWindow(QMainWindow):
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
                 self._canvas.set_gt_detections(dets, class_names=class_names)
 
-        self._refresh_prediction_overlay(force=True)
+        if (
+            self._project is not None
+            and str(self._project.active_model_path or "").strip()
+        ):
+            self.statusBar().showMessage(
+                "Image loaded. Click Run Inference to refresh overlay predictions.",
+                3000,
+            )
         self._canvas.fit_in_view()
 
     # ------------------------------------------------------------------

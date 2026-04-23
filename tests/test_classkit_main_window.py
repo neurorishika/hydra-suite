@@ -30,6 +30,13 @@ classkit_scheme_path = pytest.importorskip(
 ClassKitDB = pytest.importorskip("hydra_suite.classkit.core.store.db").ClassKitDB
 main_window_module = pytest.importorskip("hydra_suite.classkit.gui.main_window")
 MainWindow = main_window_module.MainWindow
+ReviewRelabelDialog = pytest.importorskip(
+    "hydra_suite.classkit.gui.dialogs.review_relabel"
+).ReviewRelabelDialog
+LabelingScheme = pytest.importorskip(
+    "hydra_suite.classkit.config.schemas"
+).LabelingScheme
+Factor = pytest.importorskip("hydra_suite.classkit.config.schemas").Factor
 
 
 @pytest.fixture()
@@ -101,6 +108,79 @@ def test_labeling_options_only_visible_in_labeling_mode(qapp) -> None:
     assert window.labeling_options_group.isHidden() is True
 
 
+def test_active_learning_panel_disabled_without_loaded_predictions(qapp) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/a.png")]
+    window.image_labels = [None]
+
+    window._update_al_status()
+
+    assert window.al_group.isEnabled() is False
+    assert window.al_disabled_label.isHidden() is False
+    assert window.btn_start_labeling.isEnabled() is False
+
+
+def test_random_sampling_populates_shared_candidate_table(qapp) -> None:
+    window = MainWindow()
+    window.image_paths = [
+        Path("/tmp/img_0.png"),
+        Path("/tmp/img_1.png"),
+        Path("/tmp/img_2.png"),
+    ]
+    window.image_labels = [None, None, None]
+    window.cluster_assignments = np.array([0, 0, 1], dtype=np.int32)
+    window.umap_coords = np.array(
+        [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]], dtype=np.float32
+    )
+    window.sample_spin.setValue(1)
+
+    window.sample_candidates_for_labeling()
+
+    assert window._prepared_candidate_source == "random"
+    assert window._prepared_candidate_indices == [0, 2]
+    assert window.candidate_indices == []
+    assert window.candidate_table.rowCount() == 2
+    assert window.candidate_table.isHidden() is False
+    assert window.btn_start_labeling.isEnabled() is True
+    assert window.candidate_table.item(0, 0).text() == "Random"
+
+
+def test_common_start_labeling_activates_prepared_random_batch(qapp) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/img_0.png"), Path("/tmp/img_1.png")]
+    window.image_labels = [None, None]
+    window._prepared_candidate_source = "random"
+    window._prepared_candidate_indices = [0, 1]
+    window._refresh_prepared_candidate_table()
+
+    window._start_prepared_labeling_batch()
+
+    assert window.candidate_indices == [0, 1]
+    assert window._prepared_candidate_source == "current"
+    assert window.btn_start_labeling.isEnabled() is False
+
+
+def test_active_learning_batch_populates_shared_candidate_table(qapp) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/img_0.png"), Path("/tmp/img_1.png")]
+    window.image_labels = [None, "zebra"]
+    window._model_class_names = ["ant", "zebra"]
+    window._model_probs = np.array([[0.8, 0.2], [0.3, 0.7]], dtype=np.float32)
+
+    window._on_al_batch_success(
+        {
+            "selected_indices": np.array([0, 1], dtype=np.int32),
+            "breakdown": {"uncertain": [0], "diverse": [1]},
+        }
+    )
+
+    assert window._prepared_candidate_source == "active"
+    assert window.candidate_table.rowCount() == 2
+    assert window.btn_start_labeling.isEnabled() is True
+    assert "uncertain" in window.candidate_table.item(0, 3).text()
+    assert window.candidate_table.item(0, 0).text() == "Active Learning"
+
+
 def test_setup_label_shortcuts_ignores_legacy_mode_bindings(qapp) -> None:
     window = MainWindow()
     window.classes = []
@@ -163,6 +243,184 @@ def test_model_projection_buttons_hidden_until_model_loaded(qapp) -> None:
 
     assert window.btn_umap_model.isHidden() is False
     assert window.btn_pca_model.isHidden() is False
+
+
+def test_review_candidate_indices_sorted_by_confidence_desc(qapp) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/a.jpg"), Path("/tmp/b.jpg"), Path("/tmp/c.jpg")]
+    window._image_review_status = {
+        str(window.image_paths[0]): {
+            "label": "alpha",
+            "verified": False,
+            "confidence": 0.4,
+        },
+        str(window.image_paths[1]): {
+            "label": "beta",
+            "verified": False,
+            "confidence": 0.9,
+        },
+        str(window.image_paths[2]): {
+            "label": "gamma",
+            "verified": False,
+            "confidence": None,
+        },
+    }
+
+    window._refresh_review_candidate_indices()
+
+    assert window._review_candidate_indices == [1, 0, 2]
+
+
+def test_restore_review_history_marks_label_unverified(
+    qapp, tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    image_path = project_dir / "img.jpg"
+    image_path.write_bytes(b"img")
+
+    db = ClassKitDB(project_dir / "classkit.db")
+    db.add_images([image_path])
+    db.update_labels_with_confidence_batch(
+        {str(image_path.resolve()): ("bee", 0.91)},
+        label_source="loaded_model",
+        verified=False,
+    )
+    db.mark_labels_verified([image_path])
+
+    window = MainWindow()
+    window.project_path = project_dir
+    window.db_path = db.db_path
+    window.image_paths = [image_path.resolve()]
+    window.image_confidences = [0.91]
+    window._reload_label_state_from_db(db)
+
+    preview_calls: list[int] = []
+    explorer_calls: list[int] = []
+    monkeypatch.setattr(
+        window,
+        "request_preview_for_index",
+        lambda index, source=None: preview_calls.append(index),
+    )
+    monkeypatch.setattr(
+        window,
+        "request_update_explorer_selection",
+        lambda index: explorer_calls.append(index),
+    )
+    monkeypatch.setattr(window, "update_context_panel", lambda: None)
+    monkeypatch.setattr(window, "update_explorer_plot", lambda *args, **kwargs: None)
+
+    restored = window._restore_review_label_from_history(0)
+
+    assert restored is True
+    assert window._review_status_for_index(0).get("verified") is False
+    assert window._review_candidate_indices == [0]
+    assert (
+        db.get_label_review_status_by_path()[str(image_path.resolve())]["verified"]
+        is False
+    )
+    assert preview_calls == [0]
+    assert explorer_calls == [0]
+
+
+def test_reject_selected_review_label_applies_dialog_choice(
+    qapp, tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    image_path = project_dir / "img.jpg"
+    image_path.write_bytes(b"img")
+
+    scheme_path = classkit_scheme_path(project_dir)
+    scheme_path.parent.mkdir(parents=True, exist_ok=True)
+    scheme_path.write_text(
+        json.dumps(
+            {
+                "name": "directional",
+                "description": "two-factor",
+                "factors": [
+                    {"name": "color", "labels": ["red", "blue"], "shortcut_keys": []},
+                    {"name": "side", "labels": ["left", "right"], "shortcut_keys": []},
+                ],
+                "training_modes": ["multihead_custom"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    db = ClassKitDB(project_dir / "classkit.db")
+    db.add_images([image_path])
+    db.update_labels_with_confidence_batch(
+        {str(image_path.resolve()): ("red|left", 0.8)},
+        label_source="loaded_model",
+        verified=False,
+    )
+
+    class FakeReviewRelabelDialog:
+        Accepted = 1
+
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+        def exec(self) -> int:
+            return self.Accepted
+
+        def selected_label(self) -> str:
+            return "blue|right"
+
+    monkeypatch.setattr(
+        "hydra_suite.classkit.gui.dialogs.ReviewRelabelDialog",
+        FakeReviewRelabelDialog,
+    )
+
+    window = MainWindow()
+    window.project_path = project_dir
+    window.db_path = db.db_path
+    window.image_paths = [image_path.resolve()]
+    window.image_confidences = [0.8]
+    window._reload_label_state_from_db(db)
+    window.selected_point_index = 0
+    window.explorer_mode = "review"
+
+    monkeypatch.setattr(window, "update_explorer_plot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(window, "update_context_panel", lambda: None)
+    monkeypatch.setattr(window, "load_preview_for_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window, "request_preview_for_index", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        window, "request_update_explorer_selection", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "information", lambda *args, **kwargs: None
+    )
+
+    window.reject_selected_review_label()
+
+    status = db.get_label_review_status_by_path()[str(image_path.resolve())]
+    assert status["label"] == "blue|right"
+    assert status["verified"] is True
+    assert status["label_source"] == "human"
+
+
+def test_review_relabel_dialog_multihead_encodes_selected_factors(qapp) -> None:
+    scheme = LabelingScheme(
+        name="directional",
+        factors=[
+            Factor(name="color", labels=["red", "blue"]),
+            Factor(name="side", labels=["left", "right"]),
+        ],
+        training_modes=["multihead_custom"],
+    )
+
+    dialog = ReviewRelabelDialog(
+        classes=["red", "blue"],
+        scheme=scheme,
+        initial_label="blue|right",
+    )
+
+    assert dialog.selected_label() == "blue|right"
 
 
 def test_marker_size_control_updates_explorer(qapp) -> None:

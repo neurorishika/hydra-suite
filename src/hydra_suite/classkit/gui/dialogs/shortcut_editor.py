@@ -19,8 +19,8 @@ from hydra_suite.widgets.dialogs import (
     HYDRA_DIALOG_STYLE,
 )
 
-_PLUS_KEY = QKeySequence(Qt.Key.Key_Plus).toString()
-_MINUS_KEY = QKeySequence(Qt.Key.Key_Minus).toString()
+_PLUS_KEY = QKeySequence(Qt.Key.Key_Y).toString()
+_MINUS_KEY = QKeySequence(Qt.Key.Key_N).toString()
 
 
 class ShortcutEditorDialog(QDialog):

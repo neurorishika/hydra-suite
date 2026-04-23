@@ -97,6 +97,7 @@ class ToolsPanel(QWidget):
     """Fixed-width right panel with Dataset Overview, Analysis, Overlay, Navigation."""
 
     overlay_settings_changed = Signal()
+    run_inference_requested = Signal()
     prev_requested = Signal()
     next_requested = Signal()
     train_requested = Signal()
@@ -198,6 +199,13 @@ class ToolsPanel(QWidget):
         self._chk_show_pred.stateChanged.connect(self._emit_overlay_changed)
         v.addWidget(self._chk_show_pred)
 
+        overlay_hint = QLabel(
+            "Choose a model and threshold, then run inference on the current image when you want to refresh predictions."
+        )
+        overlay_hint.setWordWrap(True)
+        overlay_hint.setProperty("detectkitRole", "sectionHint")
+        v.addWidget(overlay_hint)
+
         v.addWidget(QLabel("Model:"))
         self._model_combo = QComboBox()
         self._model_combo.setSizePolicy(
@@ -226,6 +234,16 @@ class ToolsPanel(QWidget):
         self._class_checkboxes_layout.setSpacing(2)
         v.addWidget(self._class_checkboxes_widget)
 
+        overlay_actions = QHBoxLayout()
+        self._btn_run_inference = QPushButton("Run Inference")
+        self._btn_overlay_evaluate = QPushButton("Evaluate...")
+        self._btn_overlay_evaluate.setProperty("detectkitVariant", "secondary")
+        self._btn_run_inference.clicked.connect(self.run_inference_requested)
+        self._btn_overlay_evaluate.clicked.connect(self.evaluate_requested)
+        overlay_actions.addWidget(self._btn_run_inference)
+        overlay_actions.addWidget(self._btn_overlay_evaluate)
+        v.addLayout(overlay_actions)
+
         return box
 
     def _build_navigation_group(self) -> QGroupBox:
@@ -248,14 +266,11 @@ class ToolsPanel(QWidget):
         v.addWidget(self._counter_label)
 
         self._btn_train = QPushButton("Train…")
-        self._btn_evaluate = QPushButton("Evaluate…")
         self._btn_history = QPushButton("History…")
         self._btn_history.setProperty("detectkitVariant", "secondary")
         self._btn_train.clicked.connect(self.train_requested)
-        self._btn_evaluate.clicked.connect(self.evaluate_requested)
         self._btn_history.clicked.connect(self.history_requested)
         v.addWidget(self._btn_train)
-        v.addWidget(self._btn_evaluate)
         v.addWidget(self._btn_history)
 
         return box

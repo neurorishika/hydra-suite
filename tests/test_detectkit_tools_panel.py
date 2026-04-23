@@ -63,11 +63,20 @@ def test_tools_panel_signals(qapp):
 
     panel = ToolsPanel()
     assert hasattr(panel, "overlay_settings_changed")
+    assert hasattr(panel, "run_inference_requested")
     assert hasattr(panel, "prev_requested")
     assert hasattr(panel, "next_requested")
     assert hasattr(panel, "train_requested")
     assert hasattr(panel, "evaluate_requested")
     assert hasattr(panel, "history_requested")
+
+
+def test_tools_panel_has_overlay_action_buttons(qapp):
+    from hydra_suite.detectkit.gui.panels.tools_panel import ToolsPanel
+
+    panel = ToolsPanel()
+    assert hasattr(panel, "_btn_run_inference")
+    assert hasattr(panel, "_btn_overlay_evaluate")
 
 
 def test_tools_panel_set_project(qapp, tmp_path):

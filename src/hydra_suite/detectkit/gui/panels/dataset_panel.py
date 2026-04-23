@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QTextEdit,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
+from ..evaluation import build_dataset_analysis_report
 from ..utils import (
     ensure_detectkit_source_structure,
     list_images_in_source,
@@ -144,6 +146,31 @@ class DatasetPanel(QWidget):
 
         layout.addWidget(xany_group)
 
+        analysis_group = QGroupBox("Dataset Analysis")
+        analysis_layout = QVBoxLayout(analysis_group)
+        analysis_layout.setSpacing(8)
+
+        analysis_hint = QLabel(
+            "Inspect all connected sources together to catch class-mapping or crop-size issues before training."
+        )
+        analysis_hint.setWordWrap(True)
+        analysis_hint.setProperty("detectkitRole", "sectionHint")
+        analysis_layout.addWidget(analysis_hint)
+
+        self.btn_analyze_dataset = QPushButton("Analyze Dataset")
+        self.btn_analyze_dataset.clicked.connect(self._run_dataset_analysis)
+        analysis_layout.addWidget(self.btn_analyze_dataset)
+
+        self._analysis_view = QTextEdit()
+        self._analysis_view.setReadOnly(True)
+        self._analysis_view.setPlaceholderText(
+            "Run dataset analysis to inspect merged source statistics and warnings."
+        )
+        self._analysis_view.setMinimumHeight(180)
+        analysis_layout.addWidget(self._analysis_view)
+
+        layout.addWidget(analysis_group)
+
         self._refresh_xal_envs()
 
     # ------------------------------------------------------------------
@@ -175,6 +202,7 @@ class DatasetPanel(QWidget):
             self.image_list.clear()
             self._source_summary.setText("No sources connected yet.")
             self._image_summary.setText("Select a source to browse its images.")
+            self._analysis_view.clear()
             return
         self._source_summary.setText(
             f"{source_count} source(s) available for browsing and export."
@@ -321,6 +349,17 @@ class DatasetPanel(QWidget):
                 logger.debug("xlabel conversion not applicable for %s: %s", path, msg)
         except Exception:
             logger.debug("xlabel conversion failed for %s", path, exc_info=True)
+
+    def _run_dataset_analysis(self) -> None:
+        """Analyze all configured sources and display the merged report."""
+        if self._project is None:
+            self._analysis_view.setPlainText("No dataset sources configured.")
+            return
+
+        report, warnings = build_dataset_analysis_report(self._project)
+        self._analysis_view.setPlainText(report)
+        if warnings:
+            QMessageBox.warning(self, "Dataset Analysis Warnings", "\n".join(warnings))
 
     # ------------------------------------------------------------------
     # Slots

@@ -13,6 +13,7 @@ import numpy as np
 from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer, Slot
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -21,11 +22,10 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -36,6 +36,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -89,10 +91,12 @@ class MainWindow(QMainWindow):
         self.hover_locked = False
         self._label_shortcuts = []
         self.label_history = []
+        self.review_history = []
         self.last_assigned_stack = []
         self.last_umap_params = {"n_neighbors": 15, "min_dist": 0.1}
         self.last_preview_index = None
         self._history_icon_cache = {}
+        self._review_history_icon_cache = {}
         self._history_thumb_load_budget = 2
         self._command_busy = False
         self._command_block_until = 0.0
@@ -113,6 +117,9 @@ class MainWindow(QMainWindow):
         self._show_model_umap = False  # Explorer toggle: embedding vs model UMAP
         self._show_model_pca = False  # Explorer toggle: embedding vs model PCA
         self._al_candidates = None  # np.ndarray of selected AL batch indices
+        self._prepared_candidate_indices = []
+        self._prepared_candidate_source = None
+        self._prepared_candidate_reason_map = {}
         self._active_model_mode = None  # "yolo", "yolo_multihead", "tiny", "custom_cnn", "custom_cnn_multihead", or None
         self._heldout_validation_summary = None  # training-time held-out metric
         self._active_evaluation_paths = None
@@ -142,6 +149,13 @@ class MainWindow(QMainWindow):
         self._history_refresh_timer.setSingleShot(True)
         self._history_refresh_timer.setInterval(40)
         self._history_refresh_timer.timeout.connect(self.refresh_label_history_strip)
+
+        self._review_history_refresh_timer = QTimer(self)
+        self._review_history_refresh_timer.setSingleShot(True)
+        self._review_history_refresh_timer.setInterval(40)
+        self._review_history_refresh_timer.timeout.connect(
+            self.refresh_review_history_strip
+        )
 
         self._plot_refresh_pending = False
         self._plot_refresh_force_fit = False
@@ -662,6 +676,13 @@ class MainWindow(QMainWindow):
 
         self.context_layout.addWidget(group_info)
 
+        # ── Mode hint banner ───────────────────────────────────────
+        self.mode_hint_label = QLabel()
+        self.mode_hint_label.setWordWrap(True)
+        self.mode_hint_label.setVisible(False)
+        self.mode_hint_label.setTextFormat(Qt.RichText)
+        self.context_layout.addWidget(self.mode_hint_label)
+
         # ── Group 2: Selection & Neighbors ────────────────────────────
         group_selection = QGroupBox("Selection & Neighbors")
         layout_selection = QVBoxLayout(group_selection)
@@ -694,12 +715,24 @@ class MainWindow(QMainWindow):
         self.context_layout.addWidget(group_selection)
 
         # ── Group 3: Labeling ─────────────────────────────────────────
-        group_labeling = QGroupBox("Labeling")
-        layout_labeling = QVBoxLayout(group_labeling)
+        self.group_labeling = QGroupBox("Assign Labels")
+        self.group_labeling.setVisible(False)
+        layout_labeling = QVBoxLayout(self.group_labeling)
+        layout_labeling.setSpacing(8)
+
+        # Brief how-to hint
+        self.labeling_hint_label = QLabel(
+            "📌 Select a point on the map, then click its class or press the shortcut key."
+        )
+        self.labeling_hint_label.setWordWrap(True)
+        self.labeling_hint_label.setStyleSheet(
+            "color: #9ec8e0; font-size: 11px; padding: 4px 0 2px 0;"
+        )
+        layout_labeling.addWidget(self.labeling_hint_label)
 
         # Search / Filter classes
         self.class_search = QLineEdit()
-        self.class_search.setPlaceholderText("Filter classes...")
+        self.class_search.setPlaceholderText("🔍  Filter classes...")
         self.class_search.textChanged.connect(self.filter_label_buttons)
         layout_labeling.addWidget(self.class_search)
 
@@ -709,18 +742,31 @@ class MainWindow(QMainWindow):
         layout_labeling.addWidget(self.label_buttons_container)
 
         nav_row = QHBoxLayout()
-        self.prev_btn = QPushButton("← Prev")
+        nav_row.setSpacing(6)
+        self.prev_btn = QPushButton("←  Prev unlabeled")
+        self.prev_btn.setToolTip("Go to previous unlabeled image in the candidate set")
         self.prev_btn.clicked.connect(self.on_prev_image)
-        self.next_btn = QPushButton("Next →")
+        self.next_btn = QPushButton("Next unlabeled  →")
+        self.next_btn.setToolTip("Go to next unlabeled image in the candidate set")
         self.next_btn.clicked.connect(self.on_next_image)
         nav_row.addWidget(self.prev_btn)
         nav_row.addWidget(self.next_btn)
         layout_labeling.addLayout(nav_row)
 
-        self.context_layout.addWidget(group_labeling)
+        # Shortcut reference inside labeling group
+        self.shortcut_help = QLabel()
+        self.shortcut_help.setWordWrap(True)
+        self.shortcut_help.setStyleSheet(
+            "font-size: 11px; color: #777; padding: 4px 2px 0 2px; border-top: 1px solid #333; margin-top: 4px;"
+        )
+        layout_labeling.addWidget(self.shortcut_help)
+        self._refresh_shortcut_help()
 
-        group_review = QGroupBox("Review Queue")
-        layout_review = QVBoxLayout(group_review)
+        self.context_layout.addWidget(self.group_labeling)
+
+        self.group_review = QGroupBox("Review Queue")
+        self.group_review.setVisible(False)
+        layout_review = QVBoxLayout(self.group_review)
 
         self.review_info = QLabel("No machine review items yet.")
         self.review_info.setWordWrap(True)
@@ -748,7 +794,7 @@ class MainWindow(QMainWindow):
 
         layout_review.addLayout(review_actions)
 
-        self.context_layout.addWidget(group_review)
+        self.context_layout.addWidget(self.group_review)
 
         # ── Actions ───────────────────────────────────────────────────
         edit_row = QHBoxLayout()
@@ -762,12 +808,6 @@ class MainWindow(QMainWindow):
         btn_edit_shortcuts.setStyleSheet("background: #3a3a1a; padding: 5px;")
         edit_row.addWidget(btn_edit_shortcuts)
         self.context_layout.addLayout(edit_row)
-
-        self.shortcut_help = QLabel()
-        self.shortcut_help.setWordWrap(True)
-        self.shortcut_help.setStyleSheet("font-size: 11px; color: #888; padding: 4px;")
-        self.context_layout.addWidget(self.shortcut_help)
-        self._refresh_shortcut_help()
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -891,14 +931,27 @@ class MainWindow(QMainWindow):
         labeling_options_layout.setSpacing(8)
 
         self.labeling_options_hint = QLabel(
-            "Sample and manage the current labeling candidate set."
+            "Build a random or active-learning candidate set, review it, then start labeling."
         )
         self.labeling_options_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
         labeling_options_layout.addWidget(self.labeling_options_hint)
 
+        labeling_mode_row = QHBoxLayout()
+        labeling_mode_row.setSpacing(12)
+
+        self.random_group = QGroupBox("Random Labeling")
+        random_group_layout = QVBoxLayout(self.random_group)
+        random_group_layout.setContentsMargins(10, 10, 10, 10)
+        random_group_layout.setSpacing(8)
+
+        random_hint = QLabel(
+            "Sample a lightweight batch from each cluster before starting labeling."
+        )
+        random_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        random_group_layout.addWidget(random_hint)
+
         self.label_controls_row = QHBoxLayout()
         self.label_controls_row.setSpacing(12)
-
         self.label_controls_row.addWidget(QLabel("<b>Set:</b>"))
         self.sample_spin = QSpinBox()
         self.sample_spin.setRange(1, 100)
@@ -913,29 +966,34 @@ class MainWindow(QMainWindow):
         self.btn_sample_next.clicked.connect(self.on_sample_next_triggered)
         self.label_controls_row.addWidget(self.btn_sample_next)
 
-        self.btn_clear_candidates = QPushButton("Clear Candidates")
-        self.btn_clear_candidates.setStyleSheet(
-            "background: #3e3e42; padding: 6px 12px;"
-        )
-        self.btn_clear_candidates.clicked.connect(self.on_clear_candidates_triggered)
-        self.label_controls_row.addWidget(self.btn_clear_candidates)
-
         self.label_controls_row.addStretch(1)
-        labeling_options_layout.addLayout(self.label_controls_row)
-
-        explorer_layout.addWidget(self.labeling_options_group)
+        random_group_layout.addLayout(self.label_controls_row)
+        labeling_mode_row.addWidget(self.random_group, 1)
 
         # ── Inline Active Learning panel ────────────────────────────────
 
-        al_group = QGroupBox("Active Learning")
-        al_group.setStyleSheet("""
+        self.al_group = QGroupBox("Active Learning")
+        self.al_group.setStyleSheet("""
             QGroupBox { color: #777; border: 1px solid #3e3e42; border-radius: 4px;
                         margin-top: 8px; font-size: 11px; padding-top: 2px; }
             QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
         """)
-        al_group_layout = QVBoxLayout(al_group)
-        al_group_layout.setContentsMargins(8, 4, 8, 6)
-        al_group_layout.setSpacing(4)
+        al_group_layout = QVBoxLayout(self.al_group)
+        al_group_layout.setContentsMargins(10, 10, 10, 10)
+        al_group_layout.setSpacing(8)
+
+        self.al_hint_label = QLabel(
+            "Use model predictions to build a higher-value labeling batch."
+        )
+        self.al_hint_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        al_group_layout.addWidget(self.al_hint_label)
+
+        self.al_disabled_label = QLabel(
+            "Load a trained model to enable active-learning batch building."
+        )
+        self.al_disabled_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.al_disabled_label.hide()
+        al_group_layout.addWidget(self.al_disabled_label)
 
         al_ctrl_row = QHBoxLayout()
         al_ctrl_row.setSpacing(8)
@@ -971,46 +1029,85 @@ class MainWindow(QMainWindow):
         )
         al_ctrl_row.addWidget(self.al_candidates_badge)
 
-        self.al_start_btn = QPushButton("▶  Label")
-        self.al_start_btn.setStyleSheet(
-            "background: #28a745; color: white; font-weight: bold; padding: 4px 12px;"
-        )
-        self.al_start_btn.setEnabled(False)
-        self.al_start_btn.setToolTip(
-            "Switch to Labeling mode with AL candidates as the active set"
-        )
-        self.al_start_btn.clicked.connect(self._start_labeling_al_batch)
-        al_ctrl_row.addWidget(self.al_start_btn)
-
-        self.al_highlight_btn = QPushButton("◆ Highlight")
-        self.al_highlight_btn.setStyleSheet("background: #3e3e42; padding: 4px 10px;")
-        self.al_highlight_btn.setEnabled(False)
-        self.al_highlight_btn.setToolTip(
-            "Show AL candidates highlighted on the UMAP without entering Labeling mode"
-        )
-        self.al_highlight_btn.clicked.connect(self._highlight_al_batch_on_map)
-        al_ctrl_row.addWidget(self.al_highlight_btn)
-
         al_group_layout.addLayout(al_ctrl_row)
 
-        # Candidate list — hidden until a batch is built
-        self.al_candidate_list = QListWidget()
-        self.al_candidate_list.setFixedHeight(100)
-        self.al_candidate_list.setStyleSheet(
-            "background: #1a1a1a; color: #ccc; font-size: 11px; font-family: monospace;"
-        )
-        self.al_candidate_list.setAlternatingRowColors(True)
-        self.al_candidate_list.itemDoubleClicked.connect(self._al_candidate_goto)
-        self.al_candidate_list.hide()
-        al_group_layout.addWidget(self.al_candidate_list)
+        labeling_mode_row.addWidget(self.al_group, 1)
+        labeling_options_layout.addLayout(labeling_mode_row)
 
-        explorer_layout.addWidget(al_group)
+        self.prepared_candidates_group = QGroupBox("Prepared Candidate Set")
+        prepared_layout = QVBoxLayout(self.prepared_candidates_group)
+        prepared_layout.setContentsMargins(10, 10, 10, 10)
+        prepared_layout.setSpacing(8)
+
+        self.prepared_candidates_summary = QLabel(
+            "No candidate set prepared yet. Build one from Random Labeling or Active Learning."
+        )
+        self.prepared_candidates_summary.setStyleSheet(
+            "color: #aaaaaa; font-size: 11px;"
+        )
+        prepared_layout.addWidget(self.prepared_candidates_summary)
+
+        self.candidate_table = QTableWidget(0, 4)
+        self.candidate_table.setHorizontalHeaderLabels(
+            ["Source", "Index", "File", "Details"]
+        )
+        self.candidate_table.verticalHeader().setVisible(False)
+        self.candidate_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.candidate_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.candidate_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.candidate_table.setAlternatingRowColors(True)
+        self.candidate_table.setShowGrid(False)
+        self.candidate_table.setMinimumHeight(140)
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeToContents
+        )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeToContents
+        )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Stretch
+        )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.Stretch
+        )
+        self.candidate_table.setStyleSheet(
+            "QTableWidget { background:#1a1a1a; color:#d0d0d0; font-size:11px; }"
+        )
+        self.candidate_table.itemDoubleClicked.connect(self._prepared_candidate_goto)
+        self.candidate_table.hide()
+        prepared_layout.addWidget(self.candidate_table)
+
+        prepared_actions = QHBoxLayout()
+        prepared_actions.setSpacing(12)
+
+        self.btn_start_labeling = QPushButton("▶  Start Labeling")
+        self.btn_start_labeling.setStyleSheet(
+            "background: #28a745; color: white; font-weight: bold; padding: 6px 12px;"
+        )
+        self.btn_start_labeling.setEnabled(False)
+        self.btn_start_labeling.clicked.connect(self._start_prepared_labeling_batch)
+        prepared_actions.addWidget(self.btn_start_labeling)
+
+        self.btn_clear_candidates = QPushButton("Clear Candidates")
+        self.btn_clear_candidates.setStyleSheet(
+            "background: #3e3e42; padding: 6px 12px;"
+        )
+        self.btn_clear_candidates.clicked.connect(self.on_clear_candidates_triggered)
+        prepared_actions.addWidget(self.btn_clear_candidates)
+        prepared_actions.addStretch(1)
+        prepared_layout.addLayout(prepared_actions)
+
+        labeling_options_layout.addWidget(self.prepared_candidates_group)
+
+        explorer_layout.addWidget(self.labeling_options_group)
         # ──────────────────────────────────────────────────────────────────
 
         self.history_title = QLabel("<b>Recent Labels (click to undo + relabel)</b>")
+        self.history_title.setVisible(False)
         explorer_layout.addWidget(self.history_title)
 
         self.history_scroll = QScrollArea()
+        self.history_scroll.setVisible(False)
         self.history_scroll.setWidgetResizable(True)
         self.history_scroll.setFixedHeight(140)
         self.history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -1055,6 +1152,64 @@ class MainWindow(QMainWindow):
         self.history_scroll.setWidget(self.history_scroll_content)
         explorer_layout.addWidget(self.history_scroll)
 
+        # ──────────────────────────────────────────────────────────────────
+        # Recently-reviewed strip (visible only in review mode)
+        # ──────────────────────────────────────────────────────────────────
+
+        self.review_history_title = QLabel(
+            "<b>Recently Reviewed (click to revisit)</b>"
+        )
+        self.review_history_title.setVisible(False)
+        explorer_layout.addWidget(self.review_history_title)
+
+        self.review_history_scroll = QScrollArea()
+        self.review_history_scroll.setVisible(False)
+        self.review_history_scroll.setWidgetResizable(True)
+        self.review_history_scroll.setFixedHeight(140)
+        self.review_history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.review_history_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.review_history_scroll_content = QWidget()
+        self.review_history_scroll_layout = QHBoxLayout(
+            self.review_history_scroll_content
+        )
+        self.review_history_scroll_layout.setContentsMargins(8, 8, 8, 8)
+        self.review_history_scroll_layout.setSpacing(8)
+        self._review_history_slots = []
+        for _ in range(24):
+            card = QFrame()
+            card.setFixedSize(110, 110)
+            card.setToolTip("")
+            card.setStyleSheet(
+                "padding: 4px; border: 1px solid #3e3e42; border-radius: 6px;"
+            )
+            card.setProperty("review_history_index", None)
+            card.installEventFilter(self)
+
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(4, 4, 4, 4)
+            card_layout.setSpacing(4)
+
+            thumb = QLabel()
+            thumb.setFixedSize(72, 72)
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+            caption = QLabel("")
+            caption.setAlignment(Qt.AlignCenter)
+            caption.setWordWrap(True)
+            caption.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+            card_layout.addWidget(thumb, 0, Qt.AlignCenter)
+            card_layout.addWidget(caption, 0, Qt.AlignCenter)
+            card.hide()
+
+            self._review_history_slots.append((card, thumb, caption))
+            self.review_history_scroll_layout.addWidget(card)
+
+        self.review_history_scroll_layout.addStretch(1)
+        self.review_history_scroll.setWidget(self.review_history_scroll_content)
+        explorer_layout.addWidget(self.review_history_scroll)
+
         self.tabs.addTab(self.explorer_page, "Explorer")
 
         # Tab 2: Metrics
@@ -1072,27 +1227,24 @@ class MainWindow(QMainWindow):
         )
         metrics_layout.addWidget(self.metrics_validation_label)
 
+        # Split-tabbed metrics display (train / val / test / all tabs)
+        self.metrics_split_tabs = QTabWidget()
+        self.metrics_split_tabs.setTabPosition(QTabWidget.North)
+        self.metrics_split_tabs.setStyleSheet(
+            "QTabBar::tab { min-width: 70px; padding: 4px 10px; }"
+        )
+        _placeholder = QLabel("Train a model to see evaluation metrics here.")
+        _placeholder.setAlignment(Qt.AlignCenter)
+        _placeholder.setStyleSheet("color: #555; font-size: 13px; background: #111;")
+        self.metrics_split_tabs.addTab(_placeholder, "—")
+        metrics_layout.addWidget(self.metrics_split_tabs, 1)
+
+        # Legacy hidden widgets kept for API / test compatibility
         self.metrics_view = QTextEdit()
         self.metrics_view.setReadOnly(True)
-        self.metrics_view.setMaximumHeight(180)
-        self.metrics_view.setPlaceholderText(
-            "Train a model to see evaluation metrics here."
-        )
-        self.metrics_view.setStyleSheet(
-            "font-family: 'SF Mono', 'Roboto Mono', monospace; font-size: 12px; background: #111;"
-        )
-        metrics_layout.addWidget(self.metrics_view)
-
-        # Matplotlib figure area (confusion matrix + per-class bars)
-        self.metrics_figure_label = QLabel("(Train a model to see visualizations)")
-        self.metrics_figure_label.setAlignment(Qt.AlignCenter)
-        self.metrics_figure_label.setStyleSheet(
-            "background: #111; color: #555; border-radius: 4px; padding: 20px;"
-        )
-        metrics_figure_scroll = QScrollArea()
-        metrics_figure_scroll.setWidgetResizable(True)
-        metrics_figure_scroll.setWidget(self.metrics_figure_label)
-        metrics_layout.addWidget(metrics_figure_scroll, 1)
+        self.metrics_view.setVisible(False)
+        self.metrics_figure_label = QLabel()
+        self.metrics_figure_label.setVisible(False)
 
         self.tabs.addTab(self.metrics_page, "Metrics")
 
@@ -1387,6 +1539,7 @@ class MainWindow(QMainWindow):
     def _finalize_project_load(self, db) -> None:
         """Refresh derived UI state after database-backed project data loads."""
         self.label_history = []
+        self.review_history = []
         self.last_assigned_stack = []
         self.selected_point_index = None
         self.hover_locked = False
@@ -1396,6 +1549,8 @@ class MainWindow(QMainWindow):
         self.setup_label_shortcuts()
         self._refresh_shortcut_help()
         self.request_refresh_label_history_strip()
+        self._review_history_icon_cache.clear()
+        self.request_refresh_review_history_strip()
         self._pending_label_updates = {}
         self._autosave_last_save_time = None
         self._update_autosave_heartbeat_text()
@@ -1561,6 +1716,7 @@ class MainWindow(QMainWindow):
         self.context_info.setText(info_html)
         self._update_review_panel()
         self._update_labeling_progress_indicator()
+        self._update_al_status()
 
     def _reload_label_state_from_db(self, db=None) -> None:
         """Refresh labels and review metadata from the project DB."""
@@ -1767,6 +1923,25 @@ class MainWindow(QMainWindow):
         }
         self._refresh_review_candidate_indices()
 
+    @staticmethod
+    def _review_candidate_sort_components(
+        confidence: float | None,
+    ) -> tuple[int, float]:
+        try:
+            score = float(confidence) if confidence is not None else None
+        except Exception:
+            score = None
+        if score is None or not np.isfinite(score):
+            return (1, 0.0)
+        return (0, -score)
+
+    def _review_candidate_sort_key(self, index: int) -> tuple[int, float, int]:
+        status = self._review_status_for_index(index)
+        missing_confidence, neg_confidence = self._review_candidate_sort_components(
+            status.get("confidence")
+        )
+        return (missing_confidence, neg_confidence, index)
+
     def _refresh_review_candidate_indices(self) -> None:
         self._review_candidate_indices = [
             index
@@ -1774,6 +1949,110 @@ class MainWindow(QMainWindow):
             if self._image_review_status.get(str(path), {}).get("label")
             and not self._image_review_status.get(str(path), {}).get("verified")
         ]
+        self._review_candidate_indices.sort(key=self._review_candidate_sort_key)
+
+    def _review_candidate_position(self, index: int) -> int:
+        try:
+            return self._review_candidate_indices.index(index)
+        except ValueError:
+            return 0
+
+    def _advance_review_selection_after_resolution(self, old_pos: int) -> None:
+        if self.explorer_mode != "review":
+            self.update_context_panel()
+            if self.selected_point_index is not None:
+                self.load_preview_for_index(
+                    self.selected_point_index, source="selection"
+                )
+            return
+
+        if self._review_candidate_indices:
+            next_pos = min(max(old_pos, 0), len(self._review_candidate_indices) - 1)
+            next_index = int(self._review_candidate_indices[next_pos])
+            self.selected_point_index = next_index
+            self.hover_locked = True
+            self.request_preview_for_index(next_index, source="next-unreviewed")
+            self.request_update_explorer_selection(next_index)
+            self.update_context_panel()
+            self.load_preview_for_index(next_index, source="selection")
+            return
+
+        self.selected_point_index = None
+        self.set_explorer_mode("explore")
+        self.clear_preview_display()
+        QMessageBox.information(
+            self,
+            "Review Complete",
+            "All machine labels have been reviewed.",
+        )
+
+    def _restore_review_label_from_history(self, index: int) -> bool:
+        if index < 0 or index >= len(self.image_paths):
+            return False
+
+        path = self.image_paths[index]
+        status = self._review_status_for_index(index)
+        if not status.get("label"):
+            QMessageBox.information(
+                self,
+                "No Label To Review",
+                "This image no longer has a label that can be returned to the review queue.",
+            )
+            return False
+
+        refreshed = dict(status)
+        if status.get("verified") and self.db_path:
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+            db.mark_labels_unverified([path])
+            refreshed = db.get_label_review_status_by_path().get(str(path), status)
+            self.image_labels = db.get_all_labels()
+
+        refreshed["verified"] = False
+        refreshed["verified_at"] = None
+        self._mark_local_review_state(
+            path,
+            label=refreshed.get("label"),
+            label_source=refreshed.get("label_source"),
+            verified=False,
+            confidence=refreshed.get("confidence"),
+            auto_label_metadata=refreshed.get("auto_label_metadata"),
+            verified_at=None,
+        )
+
+        self.selected_point_index = int(index)
+        self.hover_locked = True
+        if self.explorer_mode != "review":
+            self.set_explorer_mode("review")
+        self.request_preview_for_index(self.selected_point_index, source="selection")
+        self.request_update_explorer_selection(self.selected_point_index)
+        self.update_context_panel()
+        self.update_explorer_plot()
+        self.status.showMessage(f"Returned {Path(path).name} to the review queue", 4000)
+        return True
+
+    def _prompt_review_relabel_choice(self, status: dict) -> str | None:
+        from ..gui.dialogs import ReviewRelabelDialog
+
+        scheme = self._resolve_training_scheme()
+        dialog = ReviewRelabelDialog(
+            classes=self.classes,
+            scheme=scheme,
+            initial_label=str(status.get("label") or "").strip() or None,
+            parent=self,
+        )
+        if dialog.exec() != dialog.Accepted:
+            return None
+        replacement_label = dialog.selected_label().strip()
+        if not replacement_label:
+            QMessageBox.information(
+                self,
+                "No Label Selected",
+                "Choose a replacement label to reject the machine prediction.",
+            )
+            return None
+        return replacement_label
 
     def _update_review_panel(self) -> None:
         pending = self._pending_machine_review_count()
@@ -2790,6 +3069,14 @@ class MainWindow(QMainWindow):
 
         self.candidate_indices = restored_candidates
         self.round_labeled_indices = restored_labeled
+        self._prepared_candidate_source = "current"
+        self._prepared_candidate_indices = [int(i) for i in restored_candidates]
+        self._prepared_candidate_reason_map = {}
+        self._refresh_prepared_candidate_table(
+            f"Current candidate set: {len(restored_candidates):,} items restored"
+            if restored_candidates
+            else None
+        )
 
     def _apply_cached_predictions(self, cached_preds, db):
         """Apply cached prediction data and restore model-space projections."""
@@ -3258,6 +3545,68 @@ class MainWindow(QMainWindow):
         """Coalesce strip rebuilds to avoid repeated widget churn during rapid labeling."""
         self._history_refresh_timer.start()
 
+    def refresh_review_history_strip(self):
+        """Refresh the recently-reviewed strip shown at the bottom of review mode."""
+        recent = list(reversed(self.review_history[-24:]))
+        allow_thumbnail_load = (not self._command_busy) and (
+            time.monotonic() >= self._command_block_until
+        )
+        loads_remaining = self._history_thumb_load_budget
+        pending_uncached = False
+
+        for slot_idx, slot in enumerate(self._review_history_slots):
+            card, thumb, caption = slot
+            if slot_idx >= len(recent):
+                card.setProperty("review_history_index", None)
+                card.setToolTip("")
+                thumb.clear()
+                caption.clear()
+                card.hide()
+                continue
+
+            entry = recent[slot_idx]
+            index = entry["index"]
+            label = entry["label"]
+            approved = entry.get("approved", True)
+            image_path = (
+                self.image_paths[index] if index < len(self.image_paths) else None
+            )
+
+            card.setProperty("review_history_index", int(index))
+            action_word = "Approved" if approved else "Rejected"
+            card.setToolTip(f"Click to revisit: {label} ({action_word})")
+            border_color = "#3a7a3a" if approved else "#7a3a3a"
+            card.setStyleSheet(
+                f"padding: 4px; border: 1px solid {border_color}; border-radius: 6px;"
+            )
+            caption.setText(f"{label}\n#{index}")
+            thumb.clear()
+
+            if image_path and image_path.exists():
+                icon_key = str(image_path)
+                pixmap = self._review_history_icon_cache.get(icon_key)
+                if pixmap is None and allow_thumbnail_load and loads_remaining > 0:
+                    pixmap = QPixmap(str(image_path))
+                    if not pixmap.isNull():
+                        pixmap = pixmap.scaled(
+                            72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                        )
+                        self._review_history_icon_cache[icon_key] = pixmap
+                    loads_remaining -= 1
+                elif pixmap is None:
+                    pending_uncached = True
+                if pixmap is not None and not pixmap.isNull():
+                    thumb.setPixmap(pixmap)
+
+            card.show()
+
+        if pending_uncached and not self._review_history_refresh_timer.isActive():
+            self._review_history_refresh_timer.start(80)
+
+    def request_refresh_review_history_strip(self):
+        """Coalesce review strip rebuilds to avoid widget churn during rapid reviewing."""
+        self._review_history_refresh_timer.start()
+
     def keyPressEvent(self, event) -> None:
         """Route digit keys to stepper when in multi-factor labeling mode."""
         if self._stepper is not None:
@@ -3270,10 +3619,17 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event) -> bool:
         """Handle clicks on history cards without QPushButton construction."""
         if event.type() == QEvent.MouseButtonRelease:
-            index = watched.property("history_index") if watched is not None else None
-            if index is not None:
-                self.undo_label_from_history(int(index))
-                return True
+            if watched is not None:
+                # Label history card — undo + relabel
+                index = watched.property("history_index")
+                if index is not None:
+                    self.undo_label_from_history(int(index))
+                    return True
+                # Review history card — navigate back to that image
+                review_index = watched.property("review_history_index")
+                if review_index is not None:
+                    self._restore_review_label_from_history(int(review_index))
+                    return True
         return super().eventFilter(watched, event)
 
     def _remove_history_for_index(self, index: int):
@@ -4193,6 +4549,7 @@ class MainWindow(QMainWindow):
 
         # Label assignment is only allowed in labeling mode.
         labels_enabled = mode == "labeling"
+        review_enabled = mode == "review"
         outlines_enabled = mode == "predictions"
         for i in range(self.label_buttons_layout.count()):
             widget = self.label_buttons_layout.itemAt(i).widget()
@@ -4201,6 +4558,57 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "labeling_options_group"):
             self.labeling_options_group.setVisible(labels_enabled)
+
+        if hasattr(self, "al_group"):
+            self.al_group.setVisible(labels_enabled)
+
+        if hasattr(self, "group_labeling"):
+            self.group_labeling.setVisible(labels_enabled)
+
+        if hasattr(self, "group_review"):
+            self.group_review.setVisible(review_enabled)
+
+        if hasattr(self, "history_title"):
+            self.history_title.setVisible(labels_enabled)
+        if hasattr(self, "history_scroll"):
+            self.history_scroll.setVisible(labels_enabled)
+        if hasattr(self, "review_history_title"):
+            self.review_history_title.setVisible(review_enabled)
+        if hasattr(self, "review_history_scroll"):
+            self.review_history_scroll.setVisible(review_enabled)
+
+        # Update the mode hint banner
+        if hasattr(self, "mode_hint_label"):
+            _hint_cfg = {
+                "explore": (
+                    "#1a2a1a",
+                    "#7ec87e",
+                    "Explore — click any point to preview it. Switch to <b>Labeling</b> to assign class labels.",
+                ),
+                "labeling": (
+                    "#1a2233",
+                    "#7eb8e8",
+                    "Labeling — click a point on the map, then press a shortcut key or click a class button below.",
+                ),
+                "review": (
+                    "#2a1f12",
+                    "#e8c07e",
+                    "Review — use <b>Y</b> / <b>N</b> to approve or reject machine labels. Navigate with <b>← →</b>.",
+                ),
+                "predictions": (
+                    "#1a1a2a",
+                    "#a07ee8",
+                    "Predictions — map colored by model confidence. Outlined points are low-confidence and may need labels.",
+                ),
+            }
+            bg, fg, text = _hint_cfg.get(mode, ("#222", "#aaa", ""))
+            self.mode_hint_label.setStyleSheet(
+                f"background:{bg}; color:{fg}; font-size:11px; padding:6px 8px;"
+                " border-radius:4px; border-left:3px solid;"
+                f" border-color:{fg};"
+            )
+            self.mode_hint_label.setText(text)
+            self.mode_hint_label.setVisible(True)
 
         if hasattr(self, "outline_threshold_label"):
             self.outline_threshold_label.setVisible(outlines_enabled)
@@ -4271,6 +4679,11 @@ class MainWindow(QMainWindow):
         self.candidate_indices = []
         self.round_labeled_indices = []
         self._labeling_flow_mode = "batch"
+        self._prepared_candidate_indices = []
+        self._prepared_candidate_source = None
+        self._prepared_candidate_reason_map = {}
+        self._al_candidates = None
+        self._refresh_prepared_candidate_table()
 
         if self.db_path:
             try:
@@ -4545,24 +4958,18 @@ class MainWindow(QMainWindow):
             return int(next_index), None
         return None, self._prompt_after_label_set_complete()
 
-    def _apply_sampled_candidates(self, assignments) -> None:
+    def _apply_sampled_candidates(self, assignments, candidate_indices) -> None:
         """Update UI state after sampling a new labeling candidate set."""
-        if self.candidate_indices:
-            self._labeling_flow_mode = "batch"
-            self._labeling_navigation_scope = "pool"
+        if candidate_indices:
             self.set_explorer_mode("labeling")
-            self.selected_point_index = None
-            self.hover_locked = False
-            self.selection_info.setText(
-                "<div style='line-height:1.5;'>"
-                "<b>Selected Point:</b> none<br>"
-                "<b>Hovered Point:</b> none<br>"
-                "<b>Current Label:</b> unlabeled<br>"
-                "Hover over candidate points to preview, then click to select one for labeling."
-                "</div>"
+            self._prepared_candidate_source = "random"
+            self._prepared_candidate_indices = [int(i) for i in candidate_indices]
+            self._prepared_candidate_reason_map = {}
+            self._refresh_prepared_candidate_table(
+                f"Random labeling batch ready: {len(self._prepared_candidate_indices):,} candidates across {len(set(assignments))} clusters"
             )
             self.status.showMessage(
-                f"Sampled {len(self.candidate_indices):,} unlabeled candidates across {len(set(assignments))} clusters"
+                f"Random batch ready: {len(self._prepared_candidate_indices):,} candidates across {len(set(assignments))} clusters"
             )
             return
         self.status.showMessage("No unlabeled points left in current clusters")
@@ -4580,9 +4987,8 @@ class MainWindow(QMainWindow):
             labels = self.image_labels
 
             sampled = self._sample_cluster_candidates(assignments, labels, per_cluster)
-            self.candidate_indices = self._merge_labeled_candidates(sampled, labels)
-            self._persist_candidate_indices()
-            self._apply_sampled_candidates(assignments)
+            staged_candidates = self._merge_labeled_candidates(sampled, labels)
+            self._apply_sampled_candidates(assignments, staged_candidates)
 
             self.request_update_explorer_plot()
             self.request_update_context_panel()
@@ -8825,6 +9231,319 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.metrics_view.setPlainText(f"Evaluation error: {e}")
 
+    # ──────────────────────────── Metrics tab helpers ────────────────────────────
+
+    def _compute_all_labeled_bundle(self):
+        """Compute prediction metrics for every labeled image, ignoring split membership."""
+        if self._model_probs is None:
+            return None
+        labeled_indices = [
+            i for i, lbl in enumerate(self.image_labels) if lbl and str(lbl).strip()
+        ]
+        if len(labeled_indices) < 2:
+            return None
+        eval_class_names = self._evaluation_class_names()
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
+        y_true = np.array(
+            [
+                class_to_id.get(str(self.image_labels[i]).strip(), -1)
+                for i in labeled_indices
+            ]
+        )
+        valid = y_true >= 0
+        if valid.sum() < 2:
+            return None
+        metrics, _ = self._compute_prediction_metrics_for_indices(
+            np.array(labeled_indices)[valid]
+        )
+        return metrics
+
+    def _render_split_tab_figure(self, metrics, scope_text: str, label: QLabel) -> None:
+        """Render a compact (row-of-two) confusion-matrix + per-class bar chart into *label*."""
+        try:
+            import io
+
+            import matplotlib
+
+            matplotlib.use("Agg")
+            from matplotlib.figure import Figure
+            from PySide6.QtGui import QImage, QPixmap
+
+            n_classes = len(metrics.per_class)
+            names = [c.class_name for c in metrics.per_class]
+
+            fig = Figure(figsize=(9, 3.5), facecolor="#1e1e1e")
+            ax1, ax2 = fig.subplots(1, 2)
+
+            # ── confusion matrix ──────────────────────────────────────────────
+            ax1.set_facecolor("#252526")
+            cm_raw = metrics.confusion_matrix.astype(float)
+            row_sums = cm_raw.sum(axis=1, keepdims=True)
+            cm_norm = np.divide(
+                cm_raw,
+                row_sums,
+                out=np.zeros_like(cm_raw),
+                where=row_sums > 0,
+            )
+            img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
+            ax1.set_title(f"{scope_text}: Confusion Matrix", color="#ddd", fontsize=9)
+            ax1.set_xlabel("Predicted", color="#aaa", fontsize=8)
+            ax1.set_ylabel("True", color="#aaa", fontsize=8)
+            ax1.set_xticks(range(n_classes))
+            ax1.set_yticks(range(n_classes))
+            ax1.set_xticklabels(
+                names, rotation=45, ha="right", color="#ccc", fontsize=7
+            )
+            ax1.set_yticklabels(names, color="#ccc", fontsize=7)
+            for i in range(n_classes):
+                for j in range(n_classes):
+                    ax1.text(
+                        j,
+                        i,
+                        f"{cm_raw[i, j]:.0f}",
+                        ha="center",
+                        va="center",
+                        fontsize=8,
+                        color="white" if cm_norm[i, j] > 0.5 else "#999",
+                    )
+            ax1.tick_params(colors="#aaa")
+            cbar = fig.colorbar(img, ax=ax1)
+            cbar.ax.tick_params(colors="#aaa")
+
+            # ── per-class bar chart ───────────────────────────────────────────
+            ax2.set_facecolor("#252526")
+            x = np.arange(n_classes)
+            w = 0.25
+            ax2.bar(
+                x - w,
+                [c.precision for c in metrics.per_class],
+                w,
+                label="Precision",
+                color="#4e9de0",
+            )
+            ax2.bar(
+                x,
+                [c.recall for c in metrics.per_class],
+                w,
+                label="Recall",
+                color="#5dbea3",
+            )
+            ax2.bar(
+                x + w,
+                [c.f1 for c in metrics.per_class],
+                w,
+                label="F1",
+                color="#e07b4e",
+            )
+            ax2.axhline(
+                metrics.accuracy,
+                color="#ffff66",
+                linewidth=1.2,
+                linestyle="--",
+                alpha=0.8,
+            )
+            ax2.set_title(
+                f"{scope_text}: Per-class Precision / Recall / F1",
+                color="#ddd",
+                fontsize=9,
+            )
+            ax2.set_xticks(x)
+            ax2.set_xticklabels(
+                names, rotation=45, ha="right", color="#ccc", fontsize=7
+            )
+            ax2.set_ylim(0, 1.08)
+            ax2.set_xlabel(
+                f"Acc: {metrics.accuracy:.3f}  |  Macro F1: {metrics.macro_f1:.3f}  |  n={metrics.num_samples}",
+                color="#aaa",
+                fontsize=7,
+            )
+            ax2.tick_params(colors="#aaa")
+            ax2.spines[:].set_color("#555")
+            legend = ax2.legend(
+                loc="upper right",
+                fontsize=7,
+                facecolor="#252526",
+                labelcolor="#ddd",
+            )
+            legend.get_frame().set_edgecolor("#555")
+
+            fig.tight_layout()
+
+            buf = io.BytesIO()
+            fig.savefig(
+                buf, format="png", dpi=96, bbox_inches="tight", facecolor="#1e1e1e"
+            )
+            buf.seek(0)
+            qimg = QImage.fromData(buf.read())
+            pixmap = QPixmap.fromImage(qimg)
+            label.setPixmap(pixmap)
+            label.setFixedSize(pixmap.size())
+        except Exception as exc:
+            label.setText(f"Figure error: {exc}")
+
+    def _create_split_tab_widget(self, metrics, scope_text: str) -> QWidget:
+        """Build the widget displayed inside one split tab of the Metrics tab.
+
+        Layout (top-to-bottom):
+          1. One-line summary banner (accuracy / F1 / n).
+          2. Horizontal splitter:
+             Left  — per-class table, auto-sized to all rows, no scroll.
+             Right — matplotlib figure in a scroll area.
+        """
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
+
+        # ── summary header ────────────────────────────────────────────────────
+        summary = QLabel(
+            f"<b>Accuracy:</b> {metrics.accuracy:.3f} &nbsp;|&nbsp; "
+            f"<b>Macro F1:</b> {metrics.macro_f1:.3f} &nbsp;|&nbsp; "
+            f"<b>Weighted F1:</b> {metrics.weighted_f1:.3f} &nbsp;|&nbsp; "
+            f"<b>n:</b> {metrics.num_samples}"
+        )
+        summary.setStyleSheet(
+            "background:#252526; color:#d4d4d4; padding:5px 10px;"
+            " border-radius:4px; font-size:12px;"
+        )
+        summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        outer.addWidget(summary)
+
+        # ── horizontal splitter: table | figure ──────────────────────────────
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(4)
+        splitter.setStyleSheet("QSplitter::handle { background: #3e3e42; }")
+
+        # Left: per-class table sized to show all rows without a scrollbar
+        table = QTableWidget()
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.setFocusPolicy(Qt.NoFocus)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(
+            ["Class", "Precision", "Recall", "F1", "Support"]
+        )
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for _col in range(1, 5):
+            table.horizontalHeader().setSectionResizeMode(
+                _col, QHeaderView.ResizeToContents
+            )
+        table.verticalHeader().setVisible(False)
+        table.setStyleSheet(
+            "QTableWidget { background:#1e1e1e; color:#d4d4d4;"
+            " gridline-color:#3e3e42; font-size:11px; border:none; }"
+            "QHeaderView::section { background:#252526; color:#aaa;"
+            " border:1px solid #3e3e42; padding:3px 6px; }"
+        )
+        table.setRowCount(len(metrics.per_class))
+        for _row, cm_entry in enumerate(metrics.per_class):
+            table.setItem(_row, 0, QTableWidgetItem(cm_entry.class_name))
+            for _ci, _val in enumerate(
+                [cm_entry.precision, cm_entry.recall, cm_entry.f1]
+            ):
+                _item = QTableWidgetItem(f"{_val:.3f}")
+                _item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(_row, _ci + 1, _item)
+            _sup = QTableWidgetItem(str(cm_entry.support))
+            _sup.setTextAlignment(Qt.AlignCenter)
+            table.setItem(_row, 4, _sup)
+
+        # Shrink row height and compute exact pixel height for all rows
+        _row_h = 22
+        table.verticalHeader().setDefaultSectionSize(_row_h)
+        _header_h = table.horizontalHeader().sizeHint().height()
+        _table_h = _header_h + _row_h * len(metrics.per_class) + 2
+        table.setFixedHeight(_table_h)
+        table.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        table.resizeColumnsToContents()
+        # Compute natural width so the splitter can initialise it correctly
+        _natural_w = sum(table.columnWidth(c) for c in range(table.columnCount())) + 4
+        table.setMinimumWidth(min(_natural_w, 260))
+
+        # Wrap in a container so it sits at the top without stretching
+        left_pane = QWidget()
+        left_pane.setStyleSheet("background:#1e1e1e;")
+        left_layout = QVBoxLayout(left_pane)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        left_layout.addWidget(table)
+        left_layout.addStretch(1)
+        splitter.addWidget(left_pane)
+
+        # Right: matplotlib figure in a scroll area
+        fig_label = QLabel("Rendering…")
+        fig_label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        fig_label.setStyleSheet("background:#111; border-radius:4px;")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(False)
+        scroll.setWidget(fig_label)
+        scroll.setStyleSheet("background:#111; border:none;")
+        splitter.addWidget(scroll)
+
+        # Give figure ~65 % of the width, table ~35 %
+        total_hint = 600
+        splitter.setSizes([int(total_hint * 0.35), int(total_hint * 0.65)])
+
+        outer.addWidget(splitter, 1)
+
+        self._render_split_tab_figure(metrics, scope_text, fig_label)
+
+        return container
+
+    def _populate_metrics_split_tabs(
+        self, split_metrics, main_metrics, evaluation_scope: str
+    ) -> None:
+        """Rebuild all tabs in *metrics_split_tabs* from split bundles + all-labeled."""
+        # clear existing tabs
+        while self.metrics_split_tabs.count():
+            self.metrics_split_tabs.removeTab(0)
+
+        bundles: list[tuple[str, str, object]] = []  # (tab_label, scope_text, metrics)
+
+        # train / val / test splits (from training export)
+        for item in split_metrics or []:
+            split_name = str(item.get("split_name") or "").strip()
+            scope_text = str(item.get("scope_text") or split_name).strip()
+            tab_label = split_name.title() if split_name else scope_text
+            bundles.append((tab_label, scope_text, item["metrics"]))
+
+        # All-labeled (always shown when a model is loaded)
+        all_labeled = self._compute_all_labeled_bundle()
+        if all_labeled is not None:
+            bundles.append(("All", "All labeled images", all_labeled))
+        elif main_metrics is not None and not split_metrics:
+            bundles.append(
+                (
+                    "All",
+                    evaluation_scope or "All labeled images",
+                    main_metrics,
+                )
+            )
+
+        if not bundles:
+            _ph = QLabel("No evaluation data available.")
+            _ph.setAlignment(Qt.AlignCenter)
+            _ph.setStyleSheet("color:#555; background:#111;")
+            self.metrics_split_tabs.addTab(_ph, "—")
+            return
+
+        for tab_label, scope_text, metrics in bundles:
+            tab_widget = self._create_split_tab_widget(metrics, scope_text)
+            self.metrics_split_tabs.addTab(tab_widget, tab_label)
+
+        # activate the first non-"All" tab (most informative split), else first
+        preferred = next(
+            (
+                i
+                for i in range(self.metrics_split_tabs.count())
+                if self.metrics_split_tabs.tabText(i) in ("Val", "Test")
+            ),
+            0,
+        )
+        self.metrics_split_tabs.setCurrentIndex(preferred)
+
     def _update_metrics_display(
         self,
         metrics,
@@ -8833,10 +9552,12 @@ class MainWindow(QMainWindow):
         additional_report: str = "",
         activate_metrics_tab: bool = True,
     ):
-        """Update Metrics tab: text report + matplotlib confusion matrix / per-class bars."""
+        """Update Metrics tab: text report + split-tabbed visualisations."""
         from ..core.train.metrics import format_metrics_report
 
         split_metrics = self._build_split_metrics_bundle()
+
+        # ── legacy hidden text widget (kept for API / test compatibility) ─────
         report_sections = []
         heldout_text = (
             self._heldout_validation_summary.get("text")
@@ -8851,7 +9572,10 @@ class MainWindow(QMainWindow):
                 split_label = str(item["split_name"]).title()
                 split_metric = item["metrics"]
                 summary_lines.append(
-                    f"{split_label:<8} acc={split_metric.accuracy:.3f}  macro_f1={split_metric.macro_f1:.3f}  weighted_f1={split_metric.weighted_f1:.3f}  n={split_metric.num_samples}"
+                    f"{split_label:<8} acc={split_metric.accuracy:.3f}"
+                    f"  macro_f1={split_metric.macro_f1:.3f}"
+                    f"  weighted_f1={split_metric.weighted_f1:.3f}"
+                    f"  n={split_metric.num_samples}"
                 )
             report_sections.append("\n".join(summary_lines))
             for item in split_metrics:
@@ -8870,164 +9594,12 @@ class MainWindow(QMainWindow):
         )
         report = "\n\n".join(section for section in report_sections if section)
         self.metrics_view.setPlainText(report)
-        plot_panels = self._build_metrics_plot_panels(
-            metrics,
-            evaluation_scope=evaluation_scope,
-            split_metrics=split_metrics,
-        )
+
+        # ── new split-tabbed display ──────────────────────────────────────────
+        self._populate_metrics_split_tabs(split_metrics, metrics, evaluation_scope)
+
         if activate_metrics_tab:
             self.tabs.setCurrentWidget(self.metrics_page)
-
-        try:
-            import io
-
-            import matplotlib
-            import numpy as np
-
-            matplotlib.use("Agg")
-            from matplotlib.backends.backend_agg import FigureCanvasAgg
-            from matplotlib.figure import Figure
-            from PySide6.QtGui import QImage, QPixmap
-
-            if not plot_panels:
-                self.metrics_figure_label.setText(
-                    "(Train a model to see visualizations)"
-                )
-                return
-
-            fig = Figure(
-                figsize=(12, max(4.5, 4.2 * len(plot_panels))),
-                facecolor="#1e1e1e",
-            )
-            axes = fig.subplots(len(plot_panels), 2, squeeze=False)
-
-            for row_index, panel in enumerate(plot_panels):
-                panel_metrics = panel["metrics"]
-                panel_title = str(panel.get("title") or "Evaluation subset")
-                n_classes = len(panel_metrics.per_class)
-                names = [c.class_name for c in panel_metrics.per_class]
-
-                ax1 = axes[row_index][0]
-                ax1.set_facecolor("#252526")
-                cm = panel_metrics.confusion_matrix.astype(float)
-                row_sums = cm.sum(axis=1, keepdims=True)
-                cm_norm = np.divide(
-                    cm,
-                    row_sums,
-                    out=np.zeros_like(cm, dtype=float),
-                    where=row_sums > 0,
-                )
-                img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
-                ax1.set_title(
-                    f"{panel_title}: Confusion Matrix",
-                    color="#ddd",
-                    fontsize=10,
-                )
-                ax1.set_xlabel("Predicted", color="#aaa", fontsize=9)
-                ax1.set_ylabel("True", color="#aaa", fontsize=9)
-                ax1.set_xticks(range(n_classes))
-                ax1.set_yticks(range(n_classes))
-                ax1.set_xticklabels(
-                    names, rotation=45, ha="right", color="#ccc", fontsize=8
-                )
-                ax1.set_yticklabels(names, color="#ccc", fontsize=8)
-                for i in range(n_classes):
-                    for j in range(n_classes):
-                        ax1.text(
-                            j,
-                            i,
-                            f"{cm[i, j]:.0f}",
-                            ha="center",
-                            va="center",
-                            fontsize=9,
-                            color="white" if cm_norm[i, j] > 0.5 else "#999",
-                        )
-                ax1.tick_params(colors="#aaa")
-                cbar = fig.colorbar(img, ax=ax1)
-                cbar.ax.tick_params(colors="#aaa")
-
-                ax2 = axes[row_index][1]
-                ax2.set_facecolor("#252526")
-                x = np.arange(n_classes)
-                w = 0.25
-                ax2.bar(
-                    x - w,
-                    [c.precision for c in panel_metrics.per_class],
-                    w,
-                    label="Precision",
-                    color="#4e9de0",
-                )
-                ax2.bar(
-                    x,
-                    [c.recall for c in panel_metrics.per_class],
-                    w,
-                    label="Recall",
-                    color="#5dbea3",
-                )
-                ax2.bar(
-                    x + w,
-                    [c.f1 for c in panel_metrics.per_class],
-                    w,
-                    label="F1",
-                    color="#e07b4e",
-                )
-                ax2.axhline(
-                    panel_metrics.accuracy,
-                    color="#ffff66",
-                    linewidth=1.2,
-                    linestyle="--",
-                    alpha=0.8,
-                )
-                ax2.set_title(
-                    f"{panel_title}: Per-class Precision / Recall / F1",
-                    color="#ddd",
-                    fontsize=10,
-                )
-                ax2.set_xticks(x)
-                ax2.set_xticklabels(
-                    names, rotation=45, ha="right", color="#ccc", fontsize=8
-                )
-                ax2.set_ylim(0, 1.08)
-                ax2.set_xlabel(
-                    f"Accuracy: {panel_metrics.accuracy:.3f}  |  Macro F1: {panel_metrics.macro_f1:.3f}  |  Weighted F1: {panel_metrics.weighted_f1:.3f}  |  n={panel_metrics.num_samples}",
-                    color="#aaa",
-                    fontsize=8,
-                )
-                ax2.tick_params(colors="#aaa")
-                ax2.spines[:].set_color("#555")
-                legend = ax2.legend(
-                    loc="upper right",
-                    fontsize=8,
-                    facecolor="#252526",
-                    labelcolor="#ddd",
-                )
-                legend.get_frame().set_edgecolor("#555")
-
-            heldout_short_text = self._heldout_validation_short_text()
-            if heldout_short_text:
-                fig.suptitle(
-                    heldout_short_text,
-                    color="#aaa",
-                    fontsize=10,
-                    y=0.995,
-                )
-                fig.tight_layout(rect=[0, 0, 1, 0.98])
-            else:
-                fig.tight_layout()
-
-            canvas = FigureCanvasAgg(fig)
-            canvas.draw()
-            buf = io.BytesIO()
-            fig.savefig(
-                buf, format="png", dpi=110, bbox_inches="tight", facecolor="#1e1e1e"
-            )
-            buf.seek(0)
-            qimg = QImage.fromData(buf.read())
-            pixmap = QPixmap.fromImage(qimg)
-            self.metrics_figure_label.setPixmap(pixmap)
-            self.metrics_figure_label.setFixedSize(pixmap.size())
-        except Exception as fig_exc:
-            self.metrics_figure_label.setText(f"Figure error: {fig_exc}")
 
     def _clear_metrics_display(self) -> None:
         """Reset the Metrics tab to its empty project state."""
@@ -9035,11 +9607,13 @@ class MainWindow(QMainWindow):
         self._split_membership_paths = {}
         if hasattr(self, "metrics_view"):
             self.metrics_view.clear()
-        if hasattr(self, "metrics_figure_label"):
-            self.metrics_figure_label.clear()
-            self.metrics_figure_label.setPixmap(QPixmap())
-            self.metrics_figure_label.setFixedSize(self.metrics_figure_label.sizeHint())
-            self.metrics_figure_label.setText("(Train a model to see visualizations)")
+        if hasattr(self, "metrics_split_tabs"):
+            while self.metrics_split_tabs.count():
+                self.metrics_split_tabs.removeTab(0)
+            _ph = QLabel("Train a model to see evaluation metrics here.")
+            _ph.setAlignment(Qt.AlignCenter)
+            _ph.setStyleSheet("color:#555; font-size:13px; background:#111;")
+            self.metrics_split_tabs.addTab(_ph, "—")
 
     # ================== Model-Space Projections ==================
 
@@ -9272,6 +9846,18 @@ class MainWindow(QMainWindow):
             f"Predictions: {_preds_span}"
         )
         self.al_status_label.setTextFormat(Qt.RichText)
+        active_learning_ready = preds_ready
+        self.al_group.setEnabled(active_learning_ready)
+        self.al_status_label.setEnabled(True)
+        self.al_hint_label.setEnabled(True)
+        self.al_disabled_label.setVisible(not active_learning_ready)
+        self.al_group.setToolTip(
+            ""
+            if active_learning_ready
+            else "Load a trained model checkpoint to enable active-learning batch building."
+        )
+        if not active_learning_ready:
+            self.al_candidates_badge.setText("")
 
     def _build_al_batch(self):
         """Launch ALBatchWorker to select the next high-value labeling batch."""
@@ -9310,10 +9896,9 @@ class MainWindow(QMainWindow):
             lambda p, m: self.status.showMessage(f"[AL] {m}") if m else None
         )
         self.al_candidates_badge.setText("  building…")
-        self.al_candidate_list.clear()
-        self.al_candidate_list.show()
-        self.al_start_btn.setEnabled(False)
-        self.al_highlight_btn.setEnabled(False)
+        self._prepared_candidate_source = None
+        self._prepared_candidate_indices = []
+        self._refresh_prepared_candidate_table("Building active-learning batch…")
         self._threadpool_start(worker)
 
     def _on_al_batch_success(self, result):
@@ -9327,95 +9912,154 @@ class MainWindow(QMainWindow):
             for idx in indices:
                 reason_map[int(idx)] = reason
 
-        self.al_candidate_list.clear()
-        for idx in self._al_candidates:
-            idx = int(idx)
-            reason = reason_map.get(idx, "selected")
-            path_name = (
-                self.image_paths[idx].name
-                if idx < len(self.image_paths)
-                else f"img_{idx}"
-            )
-            conf = (
-                float(self._model_probs[idx].max())
-                if self._model_probs is not None
-                else 0.0
-            )
-            pred_col = (
-                int(self._model_probs[idx].argmax())
-                if self._model_probs is not None
-                else 0
-            )
-            pred_class = (
-                self._model_class_names[pred_col]
-                if self._model_class_names and pred_col < len(self._model_class_names)
-                else f"cls_{pred_col}"
-            )
-            item_text = (
-                f"#{idx:5d}  {path_name:<30s}  conf={conf:.3f}  "
-                f"pred={pred_class:<12s}  [{reason}]"
-            )
-            item = QListWidgetItem(item_text)
-            item.setData(Qt.UserRole, idx)
-            if conf < 0.6:
-                from PySide6.QtGui import QColor
-
-                item.setForeground(QColor("#ff9944"))
-            self.al_candidate_list.addItem(item)
-
         n = len(self._al_candidates)
         self.al_candidates_badge.setText(f"  {n} selected")
-        self.al_candidate_list.show()
-        self.al_start_btn.setEnabled(n > 0)
-        self.al_highlight_btn.setEnabled(n > 0)
+        self._prepared_candidate_source = "active"
+        self._prepared_candidate_indices = [int(i) for i in self._al_candidates]
+        self._prepared_candidate_reason_map = reason_map
+        self._refresh_prepared_candidate_table(
+            f"Active-learning batch ready: {n} candidates selected"
+        )
         self.status.showMessage(
-            f"AL batch ready: {n} candidates — click ▶ Label to start"
+            f"Active-learning batch ready: {n} candidates — click Start Labeling to begin"
         )
 
-    def _start_labeling_al_batch(self):
-        """Set AL candidates as the active labeling set and enter labeling mode."""
-        if self._al_candidates is None or len(self._al_candidates) == 0:
+    def _refresh_prepared_candidate_table(self, summary: str | None = None) -> None:
+        """Render the shared candidate table for whichever batch is currently prepared."""
+        if not hasattr(self, "candidate_table"):
+            return
+
+        indices = [int(i) for i in self._prepared_candidate_indices or []]
+        source = self._prepared_candidate_source or ""
+        source_label = {
+            "random": "Random",
+            "active": "Active Learning",
+            "current": "Current",
+        }.get(source, "Prepared")
+
+        self.candidate_table.clearContents()
+        self.candidate_table.setRowCount(len(indices))
+        for row, idx in enumerate(indices):
+            file_name = (
+                self.image_paths[idx].name
+                if 0 <= idx < len(self.image_paths)
+                else f"img_{idx}"
+            )
+            current_label = (
+                self.image_labels[idx]
+                if idx < len(self.image_labels or []) and self.image_labels[idx]
+                else "unlabeled"
+            )
+            if source == "active":
+                reason = self._prepared_candidate_reason_map.get(idx, "selected")
+                conf = (
+                    float(self._model_probs[idx].max())
+                    if self._model_probs is not None and idx < len(self._model_probs)
+                    else 0.0
+                )
+                pred_col = (
+                    int(self._model_probs[idx].argmax())
+                    if self._model_probs is not None and idx < len(self._model_probs)
+                    else 0
+                )
+                pred_class = (
+                    self._model_class_names[pred_col]
+                    if self._model_class_names
+                    and pred_col < len(self._model_class_names)
+                    else f"cls_{pred_col}"
+                )
+                detail = f"pred={pred_class} · conf={conf:.3f} · label={current_label} · {reason}"
+            else:
+                cluster = (
+                    int(self.cluster_assignments[idx])
+                    if self.cluster_assignments is not None
+                    and idx < len(self.cluster_assignments)
+                    else "n/a"
+                )
+                detail = f"cluster={cluster} · label={current_label}"
+
+            source_item = QTableWidgetItem(source_label)
+            source_item.setData(Qt.UserRole, idx)
+            self.candidate_table.setItem(row, 0, source_item)
+            self.candidate_table.setItem(row, 1, QTableWidgetItem(str(idx)))
+            self.candidate_table.setItem(row, 2, QTableWidgetItem(file_name))
+            self.candidate_table.setItem(row, 3, QTableWidgetItem(detail))
+
+        self.candidate_table.setVisible(bool(indices))
+        self.btn_start_labeling.setEnabled(
+            bool(indices) and source in {"random", "active"}
+        )
+        if summary is not None:
+            self.prepared_candidates_summary.setText(summary)
+        elif indices:
+            self.prepared_candidates_summary.setText(
+                f"{source_label} batch prepared: {len(indices)} candidates ready."
+            )
+        else:
+            self.prepared_candidates_summary.setText(
+                "No candidate set prepared yet. Build one from Random Labeling or Active Learning."
+            )
+
+    def _activate_candidate_batch(self, indices: list[int], source: str) -> None:
+        """Set the active labeling candidate set and enter labeling mode."""
+        if not indices:
             return
         self._labeling_flow_mode = "batch"
         self._labeling_navigation_scope = "pool"
-        new_candidates = [int(i) for i in self._al_candidates]
-        # Preserve already-labeled images from the current candidate set so
-        # they remain visible after switching to the AL batch.
+        new_candidates = [int(i) for i in indices]
         labels = self.image_labels or []
         seen = set(new_candidates)
         for i in self.candidate_indices:
             if i not in seen and i < len(labels) and labels[i]:
                 new_candidates.append(i)
                 seen.add(i)
+
         self.candidate_indices = new_candidates
+        self._persist_candidate_indices()
         self.set_explorer_mode("labeling")
+        self.selected_point_index = None
+        self.hover_locked = False
+        self.selection_info.setText(
+            "<div style='line-height:1.5;'>"
+            "<b>Selected Point:</b> none<br>"
+            "<b>Hovered Point:</b> none<br>"
+            "<b>Current Label:</b> unlabeled<br>"
+            "Hover over candidate points to preview, then click to select one for labeling."
+            "</div>"
+        )
         self.tabs.setCurrentIndex(0)
         self.update_explorer_plot(force_fit=True)
+        self.request_update_context_panel()
+        source_text = "active-learning" if source == "active" else "random"
         self.status.showMessage(
-            f"Labeling {len(self.candidate_indices)} AL candidates — "
-            "use label buttons or 1-9 keys"
+            f"Labeling {len(self.candidate_indices)} {source_text} candidates — use label buttons or 1-9 keys"
         )
 
-    def _highlight_al_batch_on_map(self):
-        """Show AL candidates as the candidate set on the Explorer without entering labeling mode."""
-        if self._al_candidates is None or len(self._al_candidates) == 0:
+    def _start_prepared_labeling_batch(self):
+        """Start labeling using whichever candidate batch is currently prepared."""
+        indices = [int(i) for i in self._prepared_candidate_indices or []]
+        source = self._prepared_candidate_source
+        if not indices or source not in {"random", "active"}:
             return
-        self.candidate_indices = [int(i) for i in self._al_candidates]
-        self.tabs.setCurrentIndex(0)
-        self.update_explorer_plot(force_fit=True)
-        self.status.showMessage(
-            f"Highlighted {len(self.candidate_indices)} AL candidates on map"
+        self._activate_candidate_batch(indices, source)
+        self._prepared_candidate_source = "current"
+        self._prepared_candidate_indices = [int(i) for i in self.candidate_indices]
+        self._prepared_candidate_reason_map = {}
+        self._refresh_prepared_candidate_table(
+            f"Current candidate set: {len(self.candidate_indices)} items ready for labeling"
         )
 
-    def _al_candidate_goto(self, item):
-        """Jump explorer to the selected candidate when double-clicked in Batch Builder."""
-        idx = item.data(Qt.UserRole)
-        if idx is not None and 0 <= int(idx) < len(self.image_paths):
-            self.selected_point_index = int(idx)
+    def _prepared_candidate_goto(self, item):
+        """Jump explorer to a prepared candidate when double-clicked in the shared table."""
+        row = item.row()
+        if row < 0 or row >= len(self._prepared_candidate_indices):
+            return
+        idx = int(self._prepared_candidate_indices[row])
+        if 0 <= idx < len(self.image_paths):
+            self.selected_point_index = idx
             self.tabs.setCurrentIndex(0)
             self.update_explorer_plot()
-            self.load_preview_for_index(int(idx))
-            self.load_preview_for_index(int(idx))
+            self.load_preview_for_index(idx)
 
     def enter_review_mode(self) -> None:
         """Switch explorer into machine-label review mode."""
@@ -9832,6 +10476,8 @@ class MainWindow(QMainWindow):
 
         db = ClassKitDB(self.db_path)
         path = self.image_paths[self.selected_point_index]
+        approved_index = self.selected_point_index
+        old_pos = self._review_candidate_position(approved_index)
         updated = db.mark_labels_verified([path])
         if updated:
             refreshed = db.get_label_review_status_by_path().get(str(path), status)
@@ -9844,12 +10490,22 @@ class MainWindow(QMainWindow):
                 auto_label_metadata=refreshed.get("auto_label_metadata"),
                 verified_at=refreshed.get("verified_at"),
             )
+            # Record in review history and refresh the strip
+            self.review_history.append(
+                {
+                    "index": approved_index,
+                    "label": refreshed.get("label") or status.get("label"),
+                    "approved": True,
+                }
+            )
+            self.request_refresh_review_history_strip()
+
             self.status.showMessage(f"Approved label for {Path(path).name}", 4000)
-            self.update_context_panel()
-            self.load_preview_for_index(self.selected_point_index, source="selection")
+
+            self._advance_review_selection_after_resolution(old_pos)
 
     def reject_selected_review_label(self) -> None:
-        """Clear the currently selected machine label without touching verified labels."""
+        """Replace the selected machine label with a human-reviewed label."""
         if self.selected_point_index is None:
             QMessageBox.information(
                 self,
@@ -9878,26 +10534,28 @@ class MainWindow(QMainWindow):
 
         db = ClassKitDB(self.db_path)
         path = self.image_paths[self.selected_point_index]
-        db.update_labels_batch({str(path): None})
+        rejected_index = self.selected_point_index
+        rejected_label = status.get("label")
+        replacement_label = self._prompt_review_relabel_choice(status)
+        if replacement_label is None:
+            return
+
+        old_pos = self._review_candidate_position(rejected_index)
+        db.update_labels_batch({str(path): replacement_label})
         self._reload_label_state_from_db(db)
         self.update_explorer_plot()
-        self.update_context_panel()
 
-        if self.explorer_mode == "review":
-            if self._review_candidate_indices:
-                if self.selected_point_index not in self._review_candidate_indices:
-                    self.selected_point_index = self._review_candidate_indices[0]
-                self.load_preview_for_index(
-                    self.selected_point_index, source="selection"
-                )
-            else:
-                self.selected_point_index = None
-                self.set_explorer_mode("explore")
-                self.clear_preview_display()
-        elif self.selected_point_index is not None:
-            self.load_preview_for_index(self.selected_point_index, source="selection")
+        # Record in review history
+        self.review_history.append(
+            {"index": rejected_index, "label": rejected_label, "approved": False}
+        )
+        self.request_refresh_review_history_strip()
+        self.status.showMessage(
+            f"Rejected machine label for {Path(path).name}; assigned {replacement_label}",
+            4000,
+        )
 
-        self.status.showMessage(f"Rejected machine label for {Path(path).name}", 4000)
+        self._advance_review_selection_after_resolution(old_pos)
 
     def approve_all_machine_labels(self) -> None:
         """Bulk-approve every unverified machine-generated label in the project."""

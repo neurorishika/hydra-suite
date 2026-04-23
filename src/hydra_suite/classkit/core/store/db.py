@@ -479,6 +479,28 @@ class ClassKitDB:
             conn.commit()
         return updated_count
 
+    def mark_labels_unverified(self, paths: List[Path | str]) -> int:
+        """Mark existing labels as pending review without changing label metadata."""
+        if not paths:
+            return 0
+
+        updated_count = 0
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            for path in paths:
+                c.execute(
+                    """
+                    UPDATE images
+                    SET verified = 0,
+                        verified_at = NULL
+                    WHERE file_path = ? AND label IS NOT NULL
+                    """,
+                    (self._resolve_path_string(path),),
+                )
+                updated_count += c.rowcount
+            conn.commit()
+        return updated_count
+
     def count_images(self) -> int:
         """Return the total number of images registered in the database."""
         with sqlite3.connect(self.db_path) as conn:

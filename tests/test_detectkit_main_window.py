@@ -147,7 +147,48 @@ def test_load_project_filters_non_preview_models(qapp, main_win, tmp_path):
     assert main_win._tools_panel._model_combo.itemText(0) == str(obb_model)
 
 
-def test_show_image_populates_prediction_overlay(qapp, main_win, tmp_path, monkeypatch):
+def test_show_image_does_not_auto_run_prediction_overlay(
+    qapp, main_win, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    model_path = tmp_path / "models" / "best.pt"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"weights")
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.active_model_path = str(model_path)
+    proj.training_history = [
+        {
+            "run_id": "run_1",
+            "role": "obb_direct",
+            "project_model_path": str(model_path),
+        }
+    ]
+
+    main_win._load_project(proj)
+
+    called: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(main_win._canvas, "load_image", lambda _path: True)
+    monkeypatch.setattr(main_win._canvas, "fit_in_view", lambda: None)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.find_label_for_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.predict_preview_detections",
+        lambda *args, **kwargs: called.append((args, kwargs)) or [],
+    )
+
+    main_win.show_image(str(tmp_path), str(tmp_path / "sample.png"))
+
+    assert called == []
+
+
+def test_run_inference_overlay_populates_prediction_overlay(
+    qapp, main_win, tmp_path, monkeypatch
+):
     from hydra_suite.detectkit.gui.models import DetectKitProject
 
     model_path = tmp_path / "models" / "best.pt"
@@ -192,6 +233,7 @@ def test_show_image_populates_prediction_overlay(qapp, main_win, tmp_path, monke
     monkeypatch.setattr(main_win._canvas, "set_pred_detections", _capture_pred)
 
     main_win.show_image(str(tmp_path), str(tmp_path / "sample.png"))
+    main_win._run_inference_overlay()
 
     assert captured["class_names"] == ["ant"]
     assert len(captured["detections"]) == 1

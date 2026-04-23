@@ -69,3 +69,19 @@ def test_dataset_panel_navigate_prev_next(qapp):
     # Methods should exist without raising
     panel.navigate_prev()
     panel.navigate_next()
+
+
+def test_dataset_panel_has_analysis_controls(qapp):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+    assert hasattr(panel, "btn_analyze_dataset")
+    assert hasattr(panel, "_analysis_view")
+
+
+def test_dataset_panel_analysis_without_project_shows_message(qapp):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+    panel._run_dataset_analysis()
+    assert "No dataset sources" in panel._analysis_view.toPlainText()
