@@ -69,6 +69,23 @@ class LabelingScheme:
     training_modes: List[str]
     description: str = ""
 
+    def __post_init__(self) -> None:
+        is_multi_factor = len(self.factors) > 1
+        for factor in self.factors:
+            normalized_labels: list[str] = []
+            saw_unknown = False
+            for raw_label in factor.labels:
+                label = str(raw_label)
+                if label.strip().lower() == "unknown":
+                    if not saw_unknown:
+                        normalized_labels.append("unknown")
+                        saw_unknown = True
+                    continue
+                normalized_labels.append(label)
+            if is_multi_factor and not saw_unknown:
+                normalized_labels.append("unknown")
+            factor.labels = normalized_labels
+
     @property
     def total_classes(self) -> int:
         """Total number of unique composite class combinations (product of per-factor counts)."""

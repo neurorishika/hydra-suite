@@ -423,6 +423,102 @@ def test_review_relabel_dialog_multihead_encodes_selected_factors(qapp) -> None:
     assert dialog.selected_label() == "blue|right"
 
 
+def test_review_relabel_dialog_multihead_preserves_per_head_unknown(qapp) -> None:
+    scheme = LabelingScheme(
+        name="directional",
+        factors=[
+            Factor(name="color", labels=["red", "blue"]),
+            Factor(name="side", labels=["left", "right"]),
+        ],
+        training_modes=["multihead_custom"],
+    )
+
+    dialog = ReviewRelabelDialog(
+        classes=["red", "blue"],
+        scheme=scheme,
+        initial_label="unknown|right",
+    )
+
+    assert dialog.selected_label() == "unknown|right"
+
+
+def test_apply_model_predictions_as_review_labels_accepts_partial_unknown_multihead(
+    qapp, tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    image_path = project_dir / "img.jpg"
+    image_path.write_bytes(b"img")
+
+    scheme_path = classkit_scheme_path(project_dir)
+    scheme_path.parent.mkdir(parents=True, exist_ok=True)
+    scheme_path.write_text(
+        json.dumps(
+            {
+                "name": "directional",
+                "description": "two-factor",
+                "factors": [
+                    {"name": "color", "labels": ["red", "blue"], "shortcut_keys": []},
+                    {"name": "side", "labels": ["left", "right"], "shortcut_keys": []},
+                ],
+                "training_modes": ["multihead_custom"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    db = ClassKitDB(project_dir / "classkit.db")
+    db.add_images([image_path])
+
+    window = MainWindow()
+    window.project_path = project_dir
+    window.db_path = db.db_path
+    window.image_paths = [image_path.resolve()]
+    window.image_labels = [None]
+    window.image_confidences = [None]
+    window._model_probs = np.array(
+        [[0.05, 0.1, 0.85, 0.8, 0.15, 0.05]], dtype=np.float32
+    )
+    window._model_class_names = ["red", "blue", "unknown", "left", "right", "unknown"]
+    window._active_model_mode = "custom_cnn_multihead"
+    window._model_prediction_heads = [
+        {
+            "factor": "color",
+            "class_names": ["red", "blue", "unknown"],
+            "start": 0,
+            "end": 3,
+        },
+        {
+            "factor": "side",
+            "class_names": ["left", "right", "unknown"],
+            "start": 3,
+            "end": 6,
+        },
+    ]
+
+    enter_review_calls: list[bool] = []
+    monkeypatch.setattr(window, "update_explorer_plot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(window, "update_context_panel", lambda: None)
+    monkeypatch.setattr(window, "load_preview_for_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window, "enter_review_mode", lambda: enter_review_calls.append(True)
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "information", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox, "warning", lambda *args, **kwargs: None
+    )
+
+    window.apply_model_predictions_as_review_labels(indices=[0], scope_label="test")
+
+    status = db.get_label_review_status_by_path()[str(image_path.resolve())]
+    assert status["label"] == "unknown|left"
+    assert status["verified"] is False
+    assert status["label_source"] == "auto_model"
+    assert enter_review_calls == [True]
+
+
 def test_marker_size_control_updates_explorer(qapp) -> None:
     window = MainWindow()
 
