@@ -30,10 +30,9 @@ Platform-specific conda environments are used. Choose one:
 make setup            # CPU / NumPy+Numba
 make setup-mps        # Apple Silicon (M1/M2/M3/M4)
 make setup-cuda       # NVIDIA GPU (CUDA 12 or 13)
-make setup-rocm       # AMD GPU (ROCm 6.0+)
 
 # After activating the environment, install runtime packages
-make install          # or install-mps / install-cuda / install-rocm
+make install          # or install-mps / install-cuda
 
 # Install dev/audit tools
 make install-dev
@@ -42,7 +41,7 @@ make install-dev
 make docs-install
 ```
 
-Environment names: `hydra-suite`, `hydra-suite-mps`, `hydra-suite-cuda`, `hydra-suite-rocm`.
+Environment names: `hydra-suite`, `hydra-suite-mps`, `hydra-suite-cuda`.
 
 ## Running Tests
 
@@ -255,7 +254,7 @@ All compute-heavy methods use a single `compute_runtime` setting. Runtime suppor
 - `src/hydra_suite/runtime/compute_runtime.py`
 - `src/hydra_suite/utils/gpu_utils.py`
 
-Canonical runtimes: `cpu`, `mps`, `cuda`, `rocm`, `onnx_cpu`, `onnx_cuda`, `onnx_rocm`, `tensorrt`.
+Canonical runtimes: `cpu`, `mps`, `cuda`, `onnx_cpu`, `onnx_cuda`, `tensorrt`.
 
 When adding a new model/method: define a pipeline key, add capability rules in `_pipeline_supports_runtime()`, add runtime translation, wire UI intersection gating. See `docs/developer-guide/runtime-integration.md` for the full checklist.
 

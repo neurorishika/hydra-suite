@@ -373,7 +373,7 @@ def _torch_device(compute_runtime: str) -> str:
     if rt in ("mps", "onnx_coreml"):
         return "mps"
     if rt in ("rocm", "onnx_rocm"):
-        return "cuda"
+        return "cuda"  # kept for legacy configs; ROCm is no longer supported
     return "cpu"
 
 
@@ -483,6 +483,8 @@ class ClassifierBackend:
                     )
                     self._model = self._loader.load(self._model_path, native_device)
                     self._active_execution_backend = "native"
+                    if native_device.startswith("cuda"):
+                        self._warmup_native_cuda_model()
                 else:
                     self._load_onnx()
                     self._active_execution_backend = "onnx"
@@ -494,6 +496,13 @@ class ClassifierBackend:
                 )
                 self._model = self._loader.load(self._model_path, loader_target)
                 self._active_execution_backend = "native"
+                # Warm up native CUDA models immediately to trigger PyTorch/cuDNN
+                # kernel JIT compilation now rather than stalling Phase-1 batch 1
+                # for ~45 s on Ada/Hopper GPUs (e.g. EfficientNet-B0 head-tail).
+                if not self._uses_factor_backends():
+                    device_str = _torch_device(self._compute_runtime)
+                    if device_str.startswith("cuda"):
+                        self._warmup_native_cuda_model()
         except ClassifierError:
             raise
         except Exception as exc:
@@ -501,6 +510,29 @@ class ClassifierBackend:
                 f"failed to load classifier {self._model_path!r}: {exc}"
             ) from exc
         self._loaded = True
+
+    def _warmup_native_cuda_model(self) -> None:
+        """Run a single dummy forward pass to trigger PyTorch/cuDNN kernel JIT.
+
+        On Ada Lovelace and Hopper GPUs the first forward pass through a native
+        PyTorch model on CUDA triggers cuDNN algorithm selection and CUDA kernel
+        compilation, stalling for ~40-50 s for models like EfficientNet-B0.
+        Running this method during ``_ensure_loaded()`` moves that one-time cost
+        to model setup time (before Phase 1 begins) rather than stalling batch 1.
+        """
+        if self._model is None:
+            return
+        try:
+            import torch
+
+            h, w = self._metadata.input_size
+            device_str = _torch_device(self._compute_runtime)
+            dummy = torch.zeros(1, 3, h, w, dtype=torch.float32, device=device_str)
+            with torch.no_grad():
+                self._model(dummy)
+            torch.cuda.synchronize()
+        except Exception:
+            pass
 
     def _derive_onnx_peer(self) -> Path:
         """Return (creating if necessary) the ONNX peer path for this artifact."""
@@ -540,7 +572,104 @@ class ClassifierBackend:
 
         peer = self._derive_onnx_peer()
         providers = derive_onnx_execution_providers(self._compute_runtime)
+
+        is_trt = any(
+            "tensorrt" in (p if isinstance(p, str) else p[0]).lower() for p in providers
+        )
+        if is_trt:
+            # Inject TRT optimization profiles so the engine covers batch sizes
+            # 1..512 in a single compilation.  Without profiles ORT/TRT compiles
+            # a separate engine for each newly observed batch size, causing a
+            # ~44 s stall the first time a large crop batch hits batch 1.
+            # Engine caching means only the very first run ever pays this cost.
+            try:
+                providers = self._build_trt_providers_with_profiles(peer, providers)
+            except Exception:
+                pass  # silently fall back to providers without profile options
+
         self._model = ort.InferenceSession(str(peer), providers=providers)
+        # Warm up the ORT TRT session to trigger Ada/Hopper "compiler backend"
+        # JIT compilation now (during model loading) rather than stalling on the
+        # first real inference call.  Two dummy runs cover both JIT passes.
+        if is_trt:
+            self._warmup_ort_session_trt()
+
+    def _build_trt_providers_with_profiles(
+        self,
+        peer_path: "Path",
+        providers: list,
+    ) -> list:
+        """Replace the bare TRT EP string with a (name, options) tuple.
+
+        Sets TRT optimization profiles covering batch sizes 1 to 512 so TRT
+        builds a single compiled engine for the full crop-batch range, and
+        enables disk-based engine caching so subsequent process restarts avoid
+        recompilation entirely.
+        """
+        import onnxruntime as ort
+
+        from hydra_suite.paths import get_data_dir
+
+        # Probe input metadata with a cheap CPU-only session — no GPU work.
+        probe = ort.InferenceSession(str(peer_path), providers=["CPUExecutionProvider"])
+        inp = probe.get_inputs()[0]
+        inp_name = inp.name
+        h, w = self._metadata.input_size
+        # Always 3 channels in the ONNX exports produced by this codebase.
+        c = 3
+        max_batch = 512
+
+        cache_dir = get_data_dir() / "trt_engine_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        trt_opts = {
+            "trt_engine_cache_enable": True,
+            "trt_engine_cache_path": str(cache_dir),
+            "trt_profile_min_shape": f"{inp_name}:1x{c}x{h}x{w}",
+            "trt_profile_opt_shape": f"{inp_name}:64x{c}x{h}x{w}",
+            "trt_profile_max_shape": f"{inp_name}:{max_batch}x{c}x{h}x{w}",
+            "trt_max_workspace_size": 1 << 30,  # 1 GiB
+        }
+
+        updated: list = []
+        for p in providers:
+            p_name = p if isinstance(p, str) else p[0]
+            if "tensorrt" in p_name.lower():
+                updated.append((p_name, trt_opts))
+            else:
+                updated.append(p)
+        return updated
+
+    def _warmup_ort_session_trt(self) -> None:
+        """Run two dummy inferences to finish Ada/Hopper TRT JIT compilation.
+
+        The TensorRT "compiler backend" on Ada Lovelace and Hopper GPUs defers
+        CUDA kernel JIT to the first N ``session.run()`` calls (typically two).
+        Calling this method during session creation avoids ~43-second stalls at
+        the start of Phase-1 batch inference.
+        """
+        if self._model is None:
+            return
+        try:
+            import numpy as np
+
+            inputs = self._model.get_inputs()
+            if not inputs:
+                return
+            inp = inputs[0]
+            dtype_map = {
+                "tensor(float)": np.float32,
+                "tensor(float16)": np.float16,
+                "tensor(int64)": np.int64,
+                "tensor(uint8)": np.uint8,
+            }
+            np_dtype = dtype_map.get(inp.type, np.float32)
+            shape = [1 if (not isinstance(d, int) or d <= 0) else d for d in inp.shape]
+            dummy = np.zeros(shape, dtype=np_dtype)
+            self._model.run(None, {inp.name: dummy})  # JIT pass 1
+            self._model.run(None, {inp.name: dummy})  # JIT pass 2
+        except Exception:
+            pass
 
     def _uses_imagenet_normalization(self) -> bool:
         """Return True when the checkpoint expects ImageNet mean/std normalization."""
@@ -622,6 +751,173 @@ class ClassifierBackend:
 
     def _cardinalities(self) -> list[int]:
         return [len(names) for names in self._metadata.class_names_per_factor]
+
+    def _preprocess_cuda(
+        self,
+        crops_chw: list,  # list of (C, h, w) float32 CUDA tensors
+        input_is_bgr: bool = True,
+    ):
+        """Resize, colour-convert, and normalise crops into an (N, 3, H, W) CUDA batch.
+
+        GPU-native counterpart of :meth:`_preprocess`.  Each crop is an
+        ``(C, h_crop, w_crop)`` float32 CUDA tensor in [0, 255] range.
+        Returns a normalised float32 CUDA tensor suitable for
+        :meth:`_forward_torch_cuda`.
+
+        Parameters
+        ----------
+        crops_chw:
+            List of ``(C, h, w)`` float32 CUDA tensors, one per detection.
+        input_is_bgr:
+            When True (default, standard cv2 BGR path), flip channels 0↔2
+            to convert BGR→RGB before normalization.  Set False when crops
+            come from an RGB source (e.g. NVDec).
+        """
+        import torch
+        import torch.nn.functional as F
+
+        h, w = self._metadata.input_size
+        device = crops_chw[0].device
+
+        # Fix degenerate crops and expand single-channel inputs first,
+        # then stack into one tensor and do a SINGLE batch interpolate if needed.
+        # This replaces the previous per-crop F.interpolate loop (O(N) kernel
+        # launches) with at most one F.interpolate call on the full batch.
+        fixed: list = []
+        for crop in crops_chw:
+            if crop is None or crop.numel() == 0:
+                fixed.append(torch.zeros(3, h, w, dtype=torch.float32, device=device))
+                continue
+            t = crop
+            if t.dim() == 2:
+                # Single-channel → replicate to 3 channels
+                t = t.unsqueeze(0).expand(3, -1, -1).contiguous()
+            elif t.shape[0] == 1:
+                t = t.expand(3, -1, -1).contiguous()
+            fixed.append(t)
+
+        batch = torch.stack(fixed, dim=0)  # (N, C, H_crop, W_crop) float32
+
+        # Batch resize in a single F.interpolate call if needed.
+        if batch.shape[-2] != h or batch.shape[-1] != w:
+            batch = F.interpolate(
+                batch,
+                size=(h, w),
+                mode="bilinear",
+                align_corners=False,
+            )  # (N, C, H, W)
+
+        # Channel flip BGR→RGB when the source is cv2-style BGR
+        if input_is_bgr and batch.shape[1] == 3:
+            batch = batch[:, [2, 1, 0], :, :]
+
+        # Scale [0, 255] → [0, 1]
+        batch = batch * (1.0 / 255.0)
+
+        # Monochrome conversion (replicate luminance across 3 channels)
+        if self._metadata.monochrome and batch.shape[1] == 3:
+            gray = (
+                0.2989 * batch[:, 0:1] + 0.5870 * batch[:, 1:2] + 0.1140 * batch[:, 2:3]
+            )
+            batch = gray.expand(-1, 3, -1, -1)
+
+        # ImageNet normalisation
+        if self._uses_imagenet_normalization():
+            if self._metadata.monochrome:
+                mean_v = float(_IMAGENET_MEAN.mean())
+                std_v = float(_IMAGENET_STD.mean())
+                mean_t = torch.tensor(
+                    [mean_v, mean_v, mean_v], dtype=torch.float32, device=device
+                ).view(1, 3, 1, 1)
+                std_t = torch.tensor(
+                    [std_v, std_v, std_v], dtype=torch.float32, device=device
+                ).view(1, 3, 1, 1)
+            else:
+                mean_t = torch.as_tensor(
+                    _IMAGENET_MEAN, dtype=torch.float32, device=device
+                ).view(1, 3, 1, 1)
+                std_t = torch.as_tensor(
+                    _IMAGENET_STD, dtype=torch.float32, device=device
+                ).view(1, 3, 1, 1)
+            batch = (batch - mean_t) / std_t
+
+        return batch  # (N, 3, H, W) float32 CUDA
+
+    def _forward_torch_cuda(self, batch_cuda):
+        """Run the torch model on a device-resident batch; returns logits on device.
+
+        Unlike :meth:`_forward_torch`, no host↔device transfers occur.  The
+        returned tensor stays on the same device as ``batch_cuda``.
+        """
+        import torch
+
+        with torch.no_grad():
+            return self._model(batch_cuda).detach()
+
+    def predict_batch_cuda(
+        self,
+        crops_chw: list,
+        input_is_bgr: bool = True,
+    ) -> "list[list[np.ndarray]]":
+        """GPU-native :meth:`predict_batch` accepting CUDA crop tensors.
+
+        Preprocessing and forward pass run entirely on-device.  Only the final
+        per-crop probability vectors are moved to CPU.
+
+        Parameters
+        ----------
+        crops_chw:
+            List of ``(C, h, w)`` float32 CUDA tensors (e.g. from
+            :func:`~hydra_suite.core.canonicalization.crop.gpu_canonical_crop`).
+        input_is_bgr:
+            Passed to :meth:`_preprocess_cuda` for channel-order handling.
+
+        Returns
+        -------
+        list[list[np.ndarray]]
+            Same ``[N_crops][K_factors]`` probability-vector structure as
+            :meth:`predict_batch`.
+        """
+        if not crops_chw:
+            return []
+        self._ensure_loaded()
+
+        # Only the torch native backend benefits from on-device preprocessing.
+        # Fall back to the CPU path for ONNX/YOLO backends.
+        if self._active_execution_backend != "native" or self._uses_factor_backends():
+            numpy_crops = [
+                c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
+                for c in crops_chw
+            ]
+            return self.predict_batch(numpy_crops)
+
+        try:
+            batch_cuda = self._preprocess_cuda(crops_chw, input_is_bgr=input_is_bgr)
+            logits_cuda = self._forward_torch_cuda(batch_cuda)
+            logits = logits_cuda.cpu().numpy()
+        except ClassifierError:
+            raise
+        except Exception as exc:
+            raise ClassifierRuntimeError(
+                f"CUDA inference failure for {self._model_path!r}: {exc}"
+            ) from exc
+
+        cardinalities = self._cardinalities()
+        expected_total = sum(cardinalities)
+        if logits.shape[-1] != expected_total:
+            raise ClassifierRuntimeError(
+                f"{self._model_path!r}: model output width {logits.shape[-1]} "
+                f"does not match expected total {expected_total}"
+            )
+        results: list[list[np.ndarray]] = []
+        for row in logits:
+            per_factor: list[np.ndarray] = []
+            offset = 0
+            for width in cardinalities:
+                per_factor.append(self._softmax(row[offset : offset + width]))
+                offset += width
+            results.append(per_factor)
+        return results
 
     def predict_batch(self, crops: list[np.ndarray]) -> list[list[np.ndarray]]:
         """Run inference on ``crops``. Returns ``[N_crops][K_factors]`` probability vectors."""

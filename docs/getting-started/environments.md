@@ -9,7 +9,6 @@ This page documents the conda environment files and Makefile targets used in the
 | `environment.yml` | `hydra` | All | Python, NumPy, SciPy, PySide6, Qt6, OpenCV, Numba |
 | `environment-mps.yml` | `hydra-mps` | macOS M1-M4 | Same as CPU |
 | `environment-cuda.yml` | `hydra-cuda` | Linux/Windows (NVIDIA) | Same + CUDA 12 runtime libs (cublas, cudnn, curand, cufft) |
-| `environment-rocm.yml` | `hydra-rocm` | Linux (AMD) | Same as CPU (ROCm is system-level) |
 
 The conda environments provide **system libraries only** (Qt, OpenGL, CUDA runtime). Python packages are installed separately via `make install-*`, which runs `uv pip install -r requirements-*.txt`.
 
@@ -22,7 +21,6 @@ The conda environments provide **system libraries only** (Qt, OpenGL, CUDA runti
 | `requirements-cuda.txt` | `-e .` | `torch`, `torchvision`, `torchaudio`, `onnxruntime-gpu` |
 | `requirements-cuda12.txt` | `-r requirements-cuda.txt` | `--extra-index-url .../cu128`, `tensorrt-cu12-*`, `cupy-cuda12x` |
 | `requirements-cuda13.txt` | `-r requirements-cuda.txt` | `--extra-index-url .../cu130`, `tensorrt-cu13-*`, `cupy-cuda13x` |
-| `requirements-rocm.txt` | `-e .` | `torch` (ROCm), `cupy-rocm-6-0`, `onnxruntime` |
 | `requirements-dev.txt` | (standalone) | pytest, black, flake8, mypy, build, twine, etc. |
 
 All requirements files include `-e .` which installs the package in editable mode, pulling base dependencies from `pyproject.toml`. This means dependencies are declared once — in `pyproject.toml` — and requirements files only add what `pyproject.toml` cannot express (torch index URLs, GPU-specific wheels).
@@ -48,7 +46,6 @@ TensorRT follows the same rule: install exactly one CUDA wheel family. `requirem
 make setup            # CPU
 make setup-mps        # Apple Silicon
 make setup-cuda       # NVIDIA CUDA
-make setup-rocm       # AMD ROCm
 ```
 
 ### Install (pip packages into activated environment)
@@ -58,7 +55,6 @@ make install                      # CPU
 make install-mps                  # Apple Silicon
 make install-cuda CUDA_MAJOR=13  # NVIDIA CUDA 13
 make install-cuda CUDA_MAJOR=12  # NVIDIA CUDA 12
-make install-rocm                 # AMD ROCm
 make install-dev                  # Dev tools (formatting, linting, testing, publishing)
 ```
 
@@ -68,7 +64,6 @@ make install-dev                  # Dev tools (formatting, linting, testing, pub
 make env-update                      # CPU
 make env-update-mps                  # Apple Silicon
 make env-update-cuda CUDA_MAJOR=13  # NVIDIA CUDA
-make env-update-rocm                 # AMD ROCm
 ```
 
 ### Remove
@@ -77,7 +72,6 @@ make env-update-rocm                 # AMD ROCm
 make env-remove         # CPU
 make env-remove-mps     # Apple Silicon
 make env-remove-cuda    # NVIDIA CUDA
-make env-remove-rocm    # AMD ROCm
 ```
 
 ### Other useful targets

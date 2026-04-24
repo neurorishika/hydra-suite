@@ -196,7 +196,6 @@ class ClassKitTrainingDialog(QDialog):
         labels = {
             "cpu": "CPU",
             "cuda": "CUDA GPU",
-            "rocm": "ROCm GPU",
             "mps": "Apple Silicon (MPS)",
         }
         if device in labels:
@@ -637,10 +636,7 @@ class ClassKitTrainingDialog(QDialog):
             import torch
 
             if torch.cuda.is_available():
-                if getattr(torch.version, "hip", None):
-                    self.device_combo.addItem("ROCm GPU", "rocm")
-                else:
-                    self.device_combo.addItem("CUDA GPU", "cuda")
+                self.device_combo.addItem("CUDA GPU", "cuda")
             if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 self.device_combo.addItem("Apple Silicon (MPS)", "mps")
                 self.device_combo.setCurrentIndex(self.device_combo.count() - 1)
@@ -807,8 +803,6 @@ class ClassKitTrainingDialog(QDialog):
         train_device = str(self.device_combo.currentData() or "cpu").strip().lower()
         if train_device == "mps":
             return "onnx_coreml" if "onnx_coreml" in runtimes else "mps"
-        if train_device == "rocm":
-            return "onnx_rocm" if "onnx_rocm" in runtimes else "rocm"
         if train_device == "cuda":
             return "onnx_cuda" if "onnx_cuda" in runtimes else "cuda"
         return "cpu"
@@ -2200,8 +2194,6 @@ class ClassKitTrainingDialog(QDialog):
 
         _rt = str(self.compute_runtime_combo.currentData() or "cpu")
         _train_device = str(self.device_combo.currentData() or "cpu")
-        if _train_device == "rocm":
-            _train_device = "cuda"
 
         _mode = self.mode_combo.currentData() or ""
         _is_custom = _mode in ("flat_custom", "multihead_custom")

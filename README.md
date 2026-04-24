@@ -9,7 +9,7 @@ Multi-animal tracking, pose labeling, classification, detection training, datase
 [![Docs](https://img.shields.io/badge/docs-online-0A66C2?style=flat-square)](https://neurorishika.github.io/hydra-suite/)
 [![License](https://img.shields.io/badge/license-MIT-15803D?style=flat-square)](https://github.com/neurorishika/hydra-suite/blob/main/LICENSE)
 ![Python versions](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white)
-![Acceleration backends](https://img.shields.io/badge/acceleration-CPU%20%7C%20MPS%20%7C%20CUDA%20%7C%20ROCm-111827?style=flat-square)
+![Acceleration backends](https://img.shields.io/badge/acceleration-CPU%20%7C%20MPS%20%7C%20CUDA-111827?style=flat-square)
 ![Beta](https://img.shields.io/badge/status-beta-F59E0B?style=flat-square)
 
 [Install](https://neurorishika.github.io/hydra-suite/getting-started/installation/) |
@@ -31,7 +31,7 @@ HYDRA Suite is organized as one launcher plus a set of focused applications:
 | `filterkit` | Dataset filtering and curation |
 | `refinekit` | Interactive proofreading and correction |
 
-The codebase shares one runtime model across apps, with support for CPU, Apple Silicon MPS, NVIDIA CUDA, and AMD ROCm depending on the selected workflow and installed providers.
+The codebase shares one runtime model across apps, with support for CPU, Apple Silicon MPS, and NVIDIA CUDA depending on the selected workflow and installed providers.
 
 ## Quick Install
 
@@ -51,14 +51,7 @@ pip install "hydra-suite[mps]"
 # NVIDIA CUDA
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install "hydra-suite[cuda]"
-
-# AMD ROCm
-pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
-pip install "hydra-suite[rocm]"
 ```
-
-For the ROCm path, install system ROCm first and use the dedicated setup page:
-<https://neurorishika.github.io/hydra-suite/getting-started/rocm/>
 
 ### Developer Install
 
@@ -77,18 +70,12 @@ make install-mps
 make setup-cuda
 conda activate hydra-cuda
 make install-cuda CUDA_MAJOR=13
-
-# AMD ROCm
-make setup-rocm
-conda activate hydra-rocm
-make install-rocm
 ```
 
 The full installation matrix, platform notes, and troubleshooting live in the docs site:
 
 - Getting Started: <https://neurorishika.github.io/hydra-suite/getting-started/installation/>
 - Environments and Makefile: <https://neurorishika.github.io/hydra-suite/getting-started/environments/>
-- ROCm Setup: <https://neurorishika.github.io/hydra-suite/getting-started/rocm/>
 
 ## Launch
 

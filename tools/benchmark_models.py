@@ -311,7 +311,7 @@ def _runtime_to_obb_params(
     enable_onnx = False
     if rt == "mps":
         device = "mps"
-    elif rt in ("cuda", "rocm"):
+    elif rt == "cuda":
         device = "cuda:0"
     elif rt == "tensorrt":
         device = "cuda:0"
@@ -322,7 +322,7 @@ def _runtime_to_obb_params(
     elif rt in ("onnx_cpu",):
         device = "cpu"
         enable_onnx = True
-    elif rt in ("onnx_cuda", "onnx_rocm"):
+    elif rt == "onnx_cuda":
         device = "cuda:0"
         enable_onnx = True
 
@@ -356,6 +356,7 @@ def _make_detector_runtime_stub(
     batch_size: int,
     trt_workspace_gb: float = 4.0,
     trt_build_batch_size: int | None = None,
+    tracking_realtime_mode: bool = False,
 ):
     from hydra_suite.core.detectors import YOLOOBBDetector
 
@@ -367,7 +368,7 @@ def _make_detector_runtime_stub(
         trt_workspace_gb=trt_workspace_gb,
         trt_build_batch_size=trt_build_batch_size,
     )
-    params["TRACKING_REALTIME_MODE"] = False
+    params["TRACKING_REALTIME_MODE"] = bool(tracking_realtime_mode)
     detector = YOLOOBBDetector.__new__(YOLOOBBDetector)
     detector.params = params
     detector.model = None
@@ -382,6 +383,86 @@ def _make_detector_runtime_stub(
     detector.obb_predict_device = None
     detector.detect_predict_device = None
     return detector
+
+
+def _resolve_detector_runtime_artifact_path(
+    model_path: str,
+    runtime: str,
+    task: str,
+    *,
+    batch_size: int,
+    trt_workspace_gb: float = 4.0,
+    trt_build_batch_size: int | None = None,
+    tracking_realtime_mode: bool = False,
+    obb_mode: str = "direct",
+) -> Path | None:
+    """Resolve the detector artifact path using the same rules as runtime loading."""
+    resolved_model = Path(model_path).expanduser().resolve()
+    rt = _normalize_runtime(runtime)
+    if rt == "tensorrt":
+        ext = ".engine"
+    elif rt.startswith("onnx"):
+        ext = ".onnx"
+    else:
+        return None
+
+    suffix = resolved_model.suffix.lower()
+    if rt == "tensorrt" and suffix in {".engine", ".trt"}:
+        return resolved_model
+    if rt.startswith("onnx") and suffix == ".onnx":
+        return resolved_model
+
+    detector = _make_detector_runtime_stub(
+        runtime,
+        model_path,
+        batch_size=batch_size,
+        trt_workspace_gb=trt_workspace_gb,
+        trt_build_batch_size=trt_build_batch_size,
+        tracking_realtime_mode=tracking_realtime_mode,
+    )
+    detector.params["YOLO_OBB_MODE"] = str(obb_mode or "direct").strip().lower()
+
+    task_name = str(task or "obb").strip().lower()
+    if rt == "tensorrt":
+        requested_batch_size = (
+            detector.params.get("TENSORRT_MAX_BATCH_SIZE", 1)
+            if detector._is_detection_runtime_task(task_name)
+            else 1
+        )
+        if task_name == "obb":
+            requested_batch_size = detector.params.get("TENSORRT_MAX_BATCH_SIZE", 16)
+        requested_batch_size = detector._runtime_build_batch_size_override(
+            task_name,
+            requested_batch_size,
+        )
+        resolved_batch_size = detector._resolve_tensorrt_build_batch_size(
+            requested_batch_size,
+            task=task_name,
+        )
+    else:
+        requested_batch_size = (
+            detector.params.get("TENSORRT_MAX_BATCH_SIZE", 1)
+            if detector._is_detection_runtime_task(task_name)
+            else 1
+        )
+        requested_batch_size = detector._runtime_build_batch_size_override(
+            task_name,
+            requested_batch_size,
+        )
+        resolved_batch_size = detector._resolve_onnx_build_batch_size(
+            requested_batch_size,
+            task=task_name,
+        )
+
+    if task_name == "obb":
+        return resolved_model.with_name(
+            f"{resolved_model.stem}_b{int(resolved_batch_size)}{ext}"
+        )
+
+    task_tag = task_name.replace(" ", "_")
+    return resolved_model.with_name(
+        f"{resolved_model.stem}_{task_tag}{detector._aux_export_profile_suffix(task_name)}_b{int(resolved_batch_size)}{ext}"
+    )
 
 
 def _predict_detect_results(detector, frames: list[np.ndarray]):
@@ -508,13 +589,18 @@ def bench_detect_compile(
         runtime_label=runtime_label(runtime),
         batch_size=build_batch_size,
     )
-    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
+    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda"}:
         result.success = False
         result.error = "compile benchmark only supports TensorRT/ONNX runtimes"
         return result
 
-    artifact_path = _resolve_aux_artifact_path(
-        model_path, runtime, "detect", build_batch_size
+    artifact_path = _resolve_detector_runtime_artifact_path(
+        model_path,
+        runtime,
+        "detect",
+        batch_size=build_batch_size,
+        trt_workspace_gb=trt_workspace_gb,
+        trt_build_batch_size=trt_build_batch_size,
     )
     if artifact_path is not None:
         result.artifact_path = str(artifact_path)
@@ -637,16 +723,28 @@ def bench_sequential_compile(
         runtime_label=runtime_label(runtime),
         batch_size=build_batch_size,
     )
-    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
+    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda"}:
         result.success = False
         result.error = "compile benchmark only supports TensorRT/ONNX runtimes"
         return result
 
-    crop_artifact = _resolve_obb_artifact_path(
-        crop_obb_model_path, runtime, build_batch_size
+    crop_artifact = _resolve_detector_runtime_artifact_path(
+        crop_obb_model_path,
+        runtime,
+        "obb",
+        batch_size=build_batch_size,
+        trt_workspace_gb=trt_workspace_gb,
+        trt_build_batch_size=trt_build_batch_size,
+        obb_mode="sequential",
     )
-    detect_artifact = _resolve_aux_artifact_path(
-        detect_model_path, runtime, "detect", build_batch_size
+    detect_artifact = _resolve_detector_runtime_artifact_path(
+        detect_model_path,
+        runtime,
+        "detect",
+        batch_size=build_batch_size,
+        trt_workspace_gb=trt_workspace_gb,
+        trt_build_batch_size=trt_build_batch_size,
+        obb_mode="sequential",
     )
     artifact_paths = [str(p) for p in (crop_artifact, detect_artifact) if p is not None]
     result.artifact_path = ";".join(artifact_paths)
@@ -731,7 +829,6 @@ def bench_headtail(
                 "onnx_coreml",
                 "onnx_cpu",
                 "onnx_cuda",
-                "onnx_rocm",
             }
             and analyzer.backend != "yolo"
         ):
@@ -778,7 +875,7 @@ def bench_headtail_compile(
         runtime_label=runtime_label(runtime),
         batch_size=1,
     )
-    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
+    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda"}:
         result.success = False
         result.error = "compile benchmark only supports TensorRT/ONNX runtimes"
         return result
@@ -791,7 +888,12 @@ def bench_headtail_compile(
         )
         return result
 
-    artifact_path = _resolve_aux_artifact_path(model_path, runtime, "classify", 1)
+    artifact_path = _resolve_detector_runtime_artifact_path(
+        model_path,
+        runtime,
+        "classify",
+        batch_size=1,
+    )
     if artifact_path is not None:
         result.artifact_path = str(artifact_path)
         result.reused_existing = artifact_path.exists()
@@ -829,7 +931,7 @@ def bench_classify_compile(
         runtime_label=runtime_label(runtime),
         batch_size=int(batch_size),
     )
-    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
+    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda"}:
         result.success = False
         result.error = "compile benchmark only supports TensorRT/ONNX runtimes"
         return result
@@ -957,13 +1059,18 @@ def bench_obb_compile(
         runtime_label=runtime_label(runtime),
         batch_size=int(trt_build_batch_size or batch_size),
     )
-    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
+    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda"}:
         result.success = False
         result.error = "compile benchmark only supports TensorRT/ONNX runtimes"
         return result
 
-    artifact_path = _resolve_obb_artifact_path(
-        model_path, runtime, int(trt_build_batch_size or batch_size)
+    artifact_path = _resolve_detector_runtime_artifact_path(
+        model_path,
+        runtime,
+        "obb",
+        batch_size=int(trt_build_batch_size or batch_size),
+        trt_workspace_gb=trt_workspace_gb,
+        trt_build_batch_size=trt_build_batch_size,
     )
     if artifact_path is not None:
         result.artifact_path = str(artifact_path)
@@ -1009,11 +1116,9 @@ def _runtime_to_pose_flavor(runtime: str) -> tuple[str, str]:
         "cpu": ("native", "cpu"),
         "mps": ("native", "mps"),
         "cuda": ("native", "cuda:0"),
-        "rocm": ("native", "cuda:0"),
         "onnx_coreml": ("onnx", "mps"),
         "onnx_cpu": ("onnx", "cpu"),
         "onnx_cuda": ("onnx", "cuda:0"),
-        "onnx_rocm": ("onnx", "cuda:0"),
         "tensorrt": ("tensorrt", "cuda:0"),
     }
     return mapping.get(rt, ("native", "cpu"))
@@ -1116,7 +1221,7 @@ def bench_pose_compile(
         runtime_label=runtime_label(runtime),
         batch_size=int(batch_size),
     )
-    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda", "onnx_rocm"}:
+    if rt not in {"tensorrt", "onnx_coreml", "onnx_cpu", "onnx_cuda"}:
         result.success = False
         result.error = "compile benchmark only supports TensorRT/ONNX runtimes"
         return result
@@ -1458,7 +1563,6 @@ def _print_device_info() -> None:
         print()
     print(f"  CUDA:           {'✓' if info.get('cuda_available') else '✗'}")
     print(f"  Torch CUDA:     {'✓' if info.get('torch_cuda_available') else '✗'}")
-    print(f"  ROCm:           {'✓' if info.get('rocm_available') else '✗'}")
     print(f"  MPS:            {'✓' if info.get('mps_available') else '✗'}")
     print(f"  TensorRT:       {'✓' if info.get('tensorrt_available') else '✗'}", end="")
     if info.get("tensorrt_version"):
@@ -1769,7 +1873,6 @@ def _run_compile_benchmarks(
         "onnx_coreml",
         "onnx_cpu",
         "onnx_cuda",
-        "onnx_rocm",
     }
 
     _run_obb_compile_benchmarks(

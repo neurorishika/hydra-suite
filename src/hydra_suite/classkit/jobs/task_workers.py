@@ -1117,7 +1117,7 @@ class YoloInferenceWorker(QRunnable):
         if rt in ("mps", "onnx_coreml"):
             return "mps"
         if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # PyTorch uses "cuda" namespace for ROCm.
+            return "cuda"  # kept for legacy configs; ROCm is no longer supported
         return "cpu"
 
     @staticmethod
@@ -1457,7 +1457,7 @@ class ALBatchWorker(QRunnable):
 class TinyCNNInferenceWorker(QRunnable):
     """Run tiny CNN classification inference on all project images.
 
-    Supports PyTorch (cpu/mps/cuda/rocm) and ONNX/TensorRT runtimes via the
+    Supports PyTorch (cpu/mps/cuda) and ONNX/TensorRT runtimes via the
     canonical ``compute_runtime`` parameter (see ``runtime.compute_runtime``).
     ONNX inference requires a ``<stem>.onnx`` sibling of the ``.pth`` model file,
     which is auto-exported by ``runner.py`` after training.
@@ -1503,7 +1503,7 @@ class TinyCNNInferenceWorker(QRunnable):
         if rt in ("mps", "onnx_coreml"):
             return "mps"
         if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # PyTorch uses "cuda" for ROCm
+            return "cuda"  # kept for legacy configs; ROCm is no longer supported
         return "cpu"
 
     @staticmethod
@@ -1665,7 +1665,7 @@ class TinyCNNInferenceWorker(QRunnable):
 class TorchvisionInferenceWorker(QRunnable):
     """Run torchvision Custom CNN classification inference on all project images.
 
-    Supports PyTorch (cpu/mps/cuda/rocm) and ONNX runtimes via
+    Supports PyTorch (cpu/mps/cuda) and ONNX runtimes via
     ``compute_runtime``. Output contract: same as TinyCNNInferenceWorker —
     emits ``{"probs": ndarray(N, C), "class_names": list}`` via success signal.
     """
@@ -1699,7 +1699,7 @@ class TorchvisionInferenceWorker(QRunnable):
         if rt in ("mps", "onnx_coreml"):
             return "mps"
         if rt in ("rocm", "onnx_rocm"):
-            return "cuda"
+            return "cuda"  # kept for legacy configs; ROCm is no longer supported
         return "cpu"
 
     def _build_transform(self):

@@ -89,7 +89,6 @@ nav:
 - Home: index.md
 - Getting Started:
   - Installation: getting-started/installation.md
-  - ROCm Setup: getting-started/rocm.md
   - Environments and Makefile: getting-started/environments.md
   - Integrations: getting-started/integrations.md
   - Quickstart (TrackerKit): getting-started/quickstart-hydra.md

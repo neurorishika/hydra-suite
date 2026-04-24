@@ -28,8 +28,6 @@ def _gpu_stub(**overrides):
         "ONNXRUNTIME_CPU_AVAILABLE": True,
         "ONNXRUNTIME_COREML_AVAILABLE": False,
         "ONNXRUNTIME_CUDA_AVAILABLE": False,
-        "ONNXRUNTIME_ROCM_AVAILABLE": False,
-        "ROCM_AVAILABLE": False,
         "TENSORRT_AVAILABLE": False,
         "TORCH_CUDA_AVAILABLE": False,
         "SLEAP_RUNTIME_ONNX_AVAILABLE": True,

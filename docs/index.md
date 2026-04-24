@@ -9,7 +9,7 @@ Multi-animal tracking, pose labeling, classification, detection training, datase
 [![Source](https://img.shields.io/badge/source-GitHub-111827?style=flat-square&logo=github)](https://github.com/neurorishika/hydra-suite)
 [![License](https://img.shields.io/badge/license-MIT-15803D?style=flat-square)](https://github.com/neurorishika/hydra-suite/blob/main/LICENSE)
 ![Python versions](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat-square&logo=python&logoColor=white)
-![Acceleration backends](https://img.shields.io/badge/acceleration-CPU%20%7C%20MPS%20%7C%20CUDA%20%7C%20ROCm-111827?style=flat-square)
+![Acceleration backends](https://img.shields.io/badge/acceleration-CPU%20%7C%20MPS%20%7C%20CUDA-111827?style=flat-square)
 
 [Install](getting-started/installation.md) |
 [User Guide](user-guide/overview.md) |
@@ -78,10 +78,6 @@ Multi-animal tracking, pose labeling, classification, detection training, datase
     # NVIDIA CUDA
     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
     pip install "hydra-suite[cuda]"
-
-    # AMD ROCm
-    pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
-    pip install "hydra-suite[rocm]"
     ```
 
 === "Developer"
@@ -101,20 +97,9 @@ Multi-animal tracking, pose labeling, classification, detection training, datase
     make setup-cuda
     conda activate hydra-cuda
     make install-cuda CUDA_MAJOR=13
-
-    # AMD ROCm
-    make setup-rocm
-    conda activate hydra-rocm
-    make install-rocm
     ```
 
-=== "ROCm Note"
-
-    Install system ROCm before the Python packages and use the dedicated setup page:
-
-    - [ROCm Setup](getting-started/rocm.md)
-
-## Launch Commands
+=== "Launch"
 
     hydra
 

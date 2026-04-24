@@ -34,11 +34,9 @@ Core public helpers:
 - `cpu`
 - `mps`
 - `cuda`
-- `rocm`
 - `onnx_coreml`
 - `onnx_cpu`
 - `onnx_cuda`
-- `onnx_rocm`
 - `tensorrt`
 
 ## Integration Checklist (Required)

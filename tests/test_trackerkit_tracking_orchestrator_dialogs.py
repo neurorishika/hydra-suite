@@ -687,7 +687,6 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
             "onnx_cpu": "cpu",
             "onnx_coreml": "mps",
             "onnx_cuda": "cuda",
-            "onnx_rocm": "rocm",
             "tensorrt": "cuda",
         }.get(runtime, runtime),
         _find_or_plan_optimizer_cache_path=lambda *_args, **_kwargs: (

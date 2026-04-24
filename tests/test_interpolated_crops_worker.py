@@ -133,7 +133,7 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
             "CNN_COMPUTE_RUNTIME": "onnx_cpu",
             "COMPUTE_RUNTIME": "mps",
             "YOLO_HEADTAIL_MODEL_PATH": str(headtail_model),
-            "HEADTAIL_COMPUTE_RUNTIME": "rocm",
+            "HEADTAIL_COMPUTE_RUNTIME": "cuda",
         },
     )
 

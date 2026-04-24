@@ -24,7 +24,6 @@ def test_get_pose_runtime_options_on_macos_includes_mps_coreml_and_onnx_cpu(
     monkeypatch.setattr(mod, "TENSORRT_AVAILABLE", False)
     monkeypatch.setattr(mod, "CUDA_AVAILABLE", False)
     monkeypatch.setattr(mod, "TORCH_CUDA_AVAILABLE", False)
-    monkeypatch.setattr(mod, "ROCM_AVAILABLE", False)
 
     options = mod.get_pose_runtime_options("yolo")
 
@@ -44,11 +43,9 @@ def test_get_pose_runtime_options_on_linux_includes_cuda_onnx_and_tensorrt(
     monkeypatch.setattr(mod.sys, "platform", "linux")
     monkeypatch.setattr(mod, "CUDA_AVAILABLE", True)
     monkeypatch.setattr(mod, "TORCH_CUDA_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ROCM_AVAILABLE", False)
     monkeypatch.setattr(mod, "ONNXRUNTIME_AVAILABLE", True)
     monkeypatch.setattr(mod, "ONNXRUNTIME_COREML_AVAILABLE", False)
     monkeypatch.setattr(mod, "ONNXRUNTIME_CUDA_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ONNXRUNTIME_ROCM_AVAILABLE", False)
     monkeypatch.setattr(mod, "TENSORRT_AVAILABLE", True)
 
     options = mod.get_pose_runtime_options("yolo")
@@ -113,14 +110,12 @@ def test_get_device_info_collects_versions_and_device_details(monkeypatch) -> No
     monkeypatch.setattr(mod, "CUDA_AVAILABLE", True)
     monkeypatch.setattr(mod, "TORCH_AVAILABLE", True)
     monkeypatch.setattr(mod, "TORCH_CUDA_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ROCM_AVAILABLE", True)
     monkeypatch.setattr(mod, "MPS_AVAILABLE", False)
     monkeypatch.setattr(mod, "ONNXRUNTIME_AVAILABLE", True)
     monkeypatch.setattr(mod, "ONNXRUNTIME_PROVIDERS", ["CPUExecutionProvider"])
     monkeypatch.setattr(mod, "ONNXRUNTIME_CPU_AVAILABLE", True)
     monkeypatch.setattr(mod, "ONNXRUNTIME_CUDA_AVAILABLE", False)
     monkeypatch.setattr(mod, "ONNXRUNTIME_COREML_AVAILABLE", False)
-    monkeypatch.setattr(mod, "ONNXRUNTIME_ROCM_AVAILABLE", False)
     monkeypatch.setattr(mod, "TENSORRT_AVAILABLE", False)
     monkeypatch.setattr(mod, "NUMBA_AVAILABLE", False)
     monkeypatch.setattr(mod, "SLEAP_NN_EXPORT_AVAILABLE", False)
@@ -138,5 +133,4 @@ def test_get_device_info_collects_versions_and_device_details(monkeypatch) -> No
     assert info["cuda_device_count"] == 2
     assert info["cuda_device_name"] == "8.9"
     assert info["torch_cuda_device_name"] == "Fake GPU"
-    assert info["rocm_version"] == "6.0"
-    assert info["backend"] == "ROCm (AMD GPU)"
+    assert info["backend"] == "CUDA (NVIDIA GPU)"

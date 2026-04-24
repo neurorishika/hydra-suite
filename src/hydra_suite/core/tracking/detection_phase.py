@@ -2,6 +2,10 @@
 
 Runs YOLO detection on all frames (or a specified range) and caches
 the results, reporting progress via callbacks.
+
+When PyNvVideoCodec and cupy are installed and the runtime uses a CUDA-backed
+direct OBB executor, the phase can decode frames directly to GPU memory via
+NVDec hardware decode, eliminating all CPU↔GPU frame transfers during Phase 1.
 """
 
 import logging
@@ -112,6 +116,114 @@ def _compute_batch_stats(
     return current_fps, elapsed, eta, percentage
 
 
+# ---------------------------------------------------------------------------
+# NVDec GPU hardware-decode helpers
+# ---------------------------------------------------------------------------
+
+
+def _nvdec_frame_to_cuda_tensor(frame, cp):
+    """Convert a PyNvVideoCodec DecodedFrame to a CUDA torch.Tensor (zero-copy).
+
+    The frame must have been decoded with ``useDeviceMemory=True`` and
+    ``outputColorType=RGB``.  The returned tensor shares decoder memory and
+    *must* be cloned before the next ``get_batch_frames()`` call.
+    """
+    import torch
+
+    planes = frame.cuda()
+    if not planes:
+        raise ValueError("NVDec frame has no CUDA planes")
+    cai = planes[0].__cuda_array_interface__
+    shape = cai["shape"]
+    byte_size = shape[0] * shape[1] * shape[2]
+    mem = cp.cuda.UnownedMemory(cai["data"][0], byte_size, frame)
+    ptr = cp.cuda.MemoryPointer(mem, 0)
+    strides = cai.get("strides") or None
+    cp_arr = cp.ndarray(shape=shape, dtype=cp.uint8, memptr=ptr, strides=strides)
+    return torch.as_tensor(cp_arr, device="cuda")
+
+
+def _should_use_nvdec(params: dict, detector) -> bool:
+    """Return True when NVDec GPU decode should be used for Phase-1 batched detection.
+
+    Conditions (all must hold):
+    - PyNvVideoCodec and cupy are importable
+    - COMPUTE_RUNTIME is ``onnx_cuda`` or ``tensorrt``
+    - The detector's direct OBB executor is active
+    - RESIZE_FACTOR is 1.0 (sub-resolution resize is handled by the executor's
+      GPU letterbox, not a separate cv2 step, so the overall frame scale must
+      be 1.0 for coordinate bookkeeping to remain consistent)
+    """
+    if float(params.get("RESIZE_FACTOR", 1.0)) != 1.0:
+        return False
+    compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu")).strip().lower()
+    if compute_runtime not in {"onnx_cuda", "tensorrt"}:
+        return False
+    if getattr(detector, "_direct_obb_executor", None) is None:
+        return False
+    try:
+        import cupy  # noqa: F401
+        import PyNvVideoCodec  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+def _try_open_nvdec(video_path: str, start_frame: int):
+    """Try to open an NVDec hardware decoder for *video_path*.
+
+    Returns ``(decoder, metadata, cp_module)`` on success, ``None`` on failure.
+    """
+    try:
+        import cupy as cp
+        import PyNvVideoCodec as nvc
+    except ImportError:
+        return None
+    try:
+        dec = nvc.CreateSimpleDecoder(
+            encSource=str(video_path),
+            gpuid=0,
+            useDeviceMemory=True,
+            outputColorType=nvc.OutputColorType.RGB,
+        )
+        meta = dec.get_stream_metadata()
+        if start_frame > 0:
+            dec.seek_to_index(int(start_frame))
+        return dec, meta, cp
+    except Exception as exc:
+        logger.warning("NVDec: failed to open decoder for %s: %s", video_path, exc)
+        return None
+
+
+def _read_nvdec_batch(
+    sdec, cp, batch_size, start_frame, end_frame, frame_idx, is_stop_requested
+):
+    """Read up to *batch_size* NVDec-decoded CUDA tensors.
+
+    Each frame is cloned immediately after decode so the decoder buffer can
+    safely be reused for the next frame.
+
+    Returns ``(batch_tensors, frames_consumed)``.
+    """
+    batch_tensors = []
+    consumed = 0
+    for _ in range(batch_size):
+        if is_stop_requested():
+            break
+        current_frame_index = start_frame + frame_idx + consumed
+        if current_frame_index > end_frame:
+            break
+        batch = sdec.get_batch_frames(1)
+        if not batch:
+            break
+        cuda_tensor = _nvdec_frame_to_cuda_tensor(batch[0], cp)
+        # Clone immediately — NVDec decoder buffer is reused on next get_batch_frames().
+        batch_tensors.append(cuda_tensor.clone())
+        consumed += 1
+    return batch_tensors, consumed
+
+
 def run_batched_detection_phase(
     cap,
     detection_cache,
@@ -123,6 +235,7 @@ def run_batched_detection_phase(
     on_progress=None,
     on_stats=None,
     profiler=None,
+    video_path: str = "",
 ):
     """Run batched YOLO detection on a frame range and cache results.
 
@@ -137,6 +250,7 @@ def run_batched_detection_phase(
         on_progress: Optional callback ``(percentage: int, status: str) -> None``.
         on_stats: Optional callback ``(stats: dict) -> None``.
         profiler: Optional TrackingProfiler.
+        video_path: Source video path string (required for NVDec GPU decode).
 
     Returns:
         int: Total frames processed.
@@ -174,6 +288,25 @@ def run_batched_detection_phase(
         )
     logger.info(f"Batch size: {batch_size}")
 
+    # Try to open the NVDec hardware decoder as a zero-copy alternative to cv2.
+    # Falls back to cv2 silently on any failure or when conditions are not met.
+    use_nvdec = False
+    nvdec_dec = None
+    nvdec_cp = None
+    if video_path and _should_use_nvdec(params, detector):
+        _nvdec_result = _try_open_nvdec(video_path, start_frame)
+        if _nvdec_result is not None:
+            nvdec_dec, _nvdec_meta, nvdec_cp = _nvdec_result
+            use_nvdec = True
+            logger.info(
+                "NVDec GPU hardware decode enabled for Phase-1 " "(%dx%d, ~%d frames)",
+                _nvdec_meta.width,
+                _nvdec_meta.height,
+                _nvdec_meta.num_frames,
+            )
+        else:
+            logger.info("NVDec decoder unavailable for this video; using cv2 decode.")
+
     detection_start_time = time.time()
     batch_times = deque(maxlen=30)
 
@@ -187,16 +320,29 @@ def run_batched_detection_phase(
 
         if profiler:
             profiler.tick("batched_frame_read")
-        batch_frames, consumed = _read_batch_frames(
-            cap,
-            batch_size,
-            start_frame,
-            end_frame,
-            frame_idx,
-            resize_factor,
-            is_stop_requested,
-        )
+        _t_decode_start = time.time()
+        if use_nvdec:
+            batch_frames, consumed = _read_nvdec_batch(
+                nvdec_dec,
+                nvdec_cp,
+                batch_size,
+                start_frame,
+                end_frame,
+                frame_idx,
+                is_stop_requested,
+            )
+        else:
+            batch_frames, consumed = _read_batch_frames(
+                cap,
+                batch_size,
+                start_frame,
+                end_frame,
+                frame_idx,
+                resize_factor,
+                is_stop_requested,
+            )
         frame_idx += consumed
+        _t_decode = time.time() - _t_decode_start
         if profiler:
             profiler.tock("batched_frame_read")
 
@@ -241,6 +387,17 @@ def run_batched_detection_phase(
             return_raw=True,
             profiler=profiler,
         )
+
+        _bt = getattr(detector, "_batch_timings", None)
+        if _bt:
+            logger.info(
+                "  decode=%.3fs  obb=%.3fs  nms=%.3fs  ht=%.3fs(%d crops)",
+                _t_decode,
+                _bt.get("obb_s", 0.0),
+                _bt.get("nms_s", 0.0),
+                _bt.get("ht_s", 0.0),
+                _bt.get("n_ht_crops", 0),
+            )
 
         _cache_batch_results(
             detection_cache, batch_results, batch_start_idx, start_frame

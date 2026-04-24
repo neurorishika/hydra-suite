@@ -258,6 +258,10 @@ class HeadTailAnalyzer:
             # raises HeadTailFormatError if labels not in canonical set
             normalized = validate_headtail_labels(raw_labels)
             self._backend_obj = backend_obj
+            # Eagerly trigger ONNX session creation and TRT JIT warmup so that
+            # Ada/Hopper JIT compilation happens now (during model setup) rather
+            # than stalling on the first Phase-1 batch inference call.
+            backend_obj._ensure_loaded()
             self._backend = "backend_v2"
             self._class_names = normalized
             self._input_size = meta.input_size
@@ -408,6 +412,230 @@ class HeadTailAnalyzer:
     ) -> None:
         """Scatter classification results back into the per-frame results grid."""
         self._scatter_backend_v2(cls_results, all_meta, results)
+
+    # ------------------------------------------------------------------
+    # GPU-native API: analyze_crops_cuda
+    # ------------------------------------------------------------------
+
+    def analyze_crops_cuda(
+        self,
+        frames_hwc: list,
+        per_frame_obb_corners: List[List[np.ndarray]],
+        profiler=None,
+        *,
+        input_is_bgr: bool = False,
+    ) -> List[List[Tuple[float, float, int]]]:
+        """GPU-native head-tail analysis for CUDA-resident frames.
+
+        Mirrors :meth:`analyze_crops` but accepts CUDA tensors instead of
+        numpy arrays.  The affine warp, resize, and classifier forward pass
+        all stay on-device; only the final (tiny) probability vectors are
+        moved to CPU.
+
+        Parameters
+        ----------
+        frames_hwc:
+            List of ``(H, W, C)`` CUDA tensors (uint8 or float32).  Typically
+            produced by NVDec (RGB, uint8) or the sequential GPU pipeline.
+        per_frame_obb_corners:
+            Same format as :meth:`analyze_crops`.
+        input_is_bgr:
+            Set True when frames use BGR channel ordering (cv2 convention).
+            Default False assumes RGB (NVDec output).
+        """
+        if not self.is_available:
+            return [
+                [(float("nan"), 0.0, 0)] * len(corners)
+                for corners in per_frame_obb_corners
+            ]
+
+        if profiler is not None:
+            profiler.phase_start("headtail_crop")
+        all_crops_cuda, all_meta = self._collect_canonical_crops_cuda(
+            frames_hwc, per_frame_obb_corners
+        )
+        if profiler is not None:
+            profiler.phase_end("headtail_crop", work_units=len(all_crops_cuda))
+
+        results: List[List[Tuple[float, float, int]]] = [
+            [(float("nan"), 0.0, 0)] * len(c) for c in per_frame_obb_corners
+        ]
+
+        if not all_crops_cuda:
+            return results
+
+        if profiler is not None:
+            profiler.phase_start("headtail_inference")
+        cls_results = self._predict_cuda(all_crops_cuda, input_is_bgr=input_is_bgr)
+        if profiler is not None:
+            profiler.phase_end("headtail_inference", work_units=len(all_crops_cuda))
+
+        if cls_results is None or len(cls_results) == 0:
+            return results
+
+        self._scatter_results(cls_results, all_meta, results)
+        return results
+
+    def _collect_canonical_crops_cuda(
+        self,
+        frames_hwc: list,
+        per_frame_obb_corners: List[List[np.ndarray]],
+    ) -> Tuple[list, List[Tuple[int, int, float, np.ndarray]]]:
+        """Extract canonical crops from CUDA frames and return metadata.
+
+        Uses :func:`~hydra_suite.core.canonicalization.crop.gpu_canonical_crop_batch`
+        to warp all detections from each frame in a single batched GPU call,
+        reducing kernel launch overhead from O(total_crops) to O(n_frames).
+        """
+        import torch
+
+        from hydra_suite.core.canonicalization.crop import (
+            compute_alignment_affine,
+            gpu_canonical_crop_batch,
+        )
+
+        if self._input_size is not None and len(self._input_size) == 2:
+            out_w = max(8, int(self._input_size[0]))
+            out_h = max(8, int(self._input_size[1]))
+        else:
+            out_w = 128
+            out_h = max(8, int(round(128 / self._ref_ar)))
+            out_h = out_h + (out_h % 2)
+
+        all_crops: list = []
+        all_meta: List[Tuple[int, int, float, np.ndarray]] = []
+
+        for fi, (frame, corners_list) in enumerate(
+            zip(frames_hwc, per_frame_obb_corners)
+        ):
+            if not corners_list:
+                continue
+
+            # Prepare frame tensor: HWC uint8/float32 → CHW float32
+            t = frame
+            if not isinstance(t, torch.Tensor):
+                continue
+            if t.dtype == torch.uint8:
+                t = t.to(dtype=torch.float32)
+            if t.dim() == 3 and t.shape[2] <= 4:  # HWC → CHW
+                t = t.permute(2, 0, 1).contiguous()
+
+            # Compute all alignment affines for this frame on CPU (fast).
+            M_aligns_frame: list = []
+            meta_frame: list = []
+            for di, corners in enumerate(corners_list):
+                try:
+                    M_align, axis_theta = compute_alignment_affine(
+                        corners, out_w, out_h, self._padding_fraction
+                    )
+                except ValueError:
+                    continue
+                M_aligns_frame.append(M_align)
+                meta_frame.append((fi, di, float(axis_theta), M_align))
+
+            if not M_aligns_frame:
+                continue
+
+            # ONE batched warp for all detections in this frame.
+            try:
+                crops_batch = gpu_canonical_crop_batch(t, M_aligns_frame, out_w, out_h)
+            except Exception:
+                continue
+
+            for i, crop in enumerate(crops_batch.unbind(0)):
+                if crop.numel() > 0:
+                    all_crops.append(crop)
+                    all_meta.append(meta_frame[i])
+
+        return all_crops, all_meta
+
+    def _canonicalize_obb_cuda(self, frame_hwc, corners):
+        """Extract a GPU-resident canonical crop using ``gpu_canonical_crop``.
+
+        Parameters
+        ----------
+        frame_hwc:
+            CUDA tensor ``(H, W, C)`` uint8 or float32.
+        corners:
+            ``(4, 2)`` numpy array of OBB corner pixel coords.
+
+        Returns
+        -------
+        tuple[Tensor, float, np.ndarray] | None
+            ``(crop_chw, axis_theta, M_align)`` or None on failure.
+        """
+        import torch
+
+        from hydra_suite.core.canonicalization.crop import (
+            compute_alignment_affine,
+            gpu_canonical_crop,
+        )
+
+        if self._input_size is not None and len(self._input_size) == 2:
+            out_w, out_h = max(8, int(self._input_size[0])), max(
+                8, int(self._input_size[1])
+            )
+        else:
+            out_w = 128
+            out_h = max(8, int(round(128 / self._ref_ar)))
+            out_h = out_h + (out_h % 2)
+
+        try:
+            M_align, axis_theta = compute_alignment_affine(
+                corners, out_w, out_h, self._padding_fraction
+            )
+        except ValueError:
+            return None
+
+        # Convert (H, W, C) → (C, H, W) float32 for gpu_canonical_crop
+        t = frame_hwc
+        if not isinstance(t, torch.Tensor):
+            return None
+        if t.dtype == torch.uint8:
+            t = t.to(dtype=torch.float32)
+        if t.dim() == 3 and t.shape[2] <= 4:
+            # HWC → CHW
+            t = t.permute(2, 0, 1).contiguous()
+        # t is now (C, H, W) float32 CUDA
+
+        try:
+            crop_cuda = gpu_canonical_crop(t, M_align, out_w, out_h)
+        except Exception:
+            return None
+
+        if crop_cuda is None or crop_cuda.numel() == 0:
+            return None
+        return crop_cuda, axis_theta, M_align
+
+    # Maximum crops per single CUDA forward pass.  At 96×96×3 fp32 the memory
+    # footprint per crop is ~110 KB; 2048 crops = ~220 MB — well within GPU budget.
+    _CUDA_INFER_MAX_BATCH: int = 2048
+
+    def _predict_cuda(self, crops_cuda: list, input_is_bgr: bool = False):
+        """Run inference on CUDA crop tensors via :meth:`.predict_batch_cuda`.
+
+        All crops are processed in as few forward passes as possible (typically
+        one).  Unlike the CPU :meth:`_predict`, the ``_batch_size`` attribute is
+        not used here: repeated small-batch calls each force a GPU→CPU sync and
+        eliminate the GPU's ability to pipeline work.  A single large batch avoids
+        those syncs and runs the model once instead of N/_batch_size times.
+        """
+        if self._backend_obj is None or not crops_cuda:
+            return []
+        if len(crops_cuda) <= self._CUDA_INFER_MAX_BATCH:
+            return self._backend_obj.predict_batch_cuda(
+                crops_cuda, input_is_bgr=input_is_bgr
+            )
+        # Safety split only for truly extreme crop counts (>2048).
+        out = []
+        for start in range(0, len(crops_cuda), self._CUDA_INFER_MAX_BATCH):
+            out.extend(
+                self._backend_obj.predict_batch_cuda(
+                    crops_cuda[start : start + self._CUDA_INFER_MAX_BATCH],
+                    input_is_bgr=input_is_bgr,
+                )
+            )
+        return out
 
     def _scatter_backend_v2(self, cls_results, all_meta, results) -> None:
         """Scatter v2 ClassifierBackend results (list of per_factor prob arrays)."""
@@ -569,5 +797,5 @@ def _runtime_to_device(compute_runtime: str) -> str:
     if rt in ("mps", "onnx_coreml"):
         return "mps"
     if rt in ("rocm", "onnx_rocm"):
-        return "cuda"
+        return "cuda"  # kept for legacy configs; ROCm is no longer supported
     return "cpu"

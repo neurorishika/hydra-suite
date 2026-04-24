@@ -517,7 +517,7 @@ def load_tiny_onnx(onnx_path: str | Path, compute_runtime: str = "onnx_cpu"):
     """Load a TinyClassifier ONNX model as an ``onnxruntime.InferenceSession``.
 
     *compute_runtime* must be one of the canonical runtimes:
-    ``onnx_coreml``, ``onnx_cpu``, ``onnx_cuda``, ``onnx_rocm``, or ``tensorrt``.
+    ``onnx_coreml``, ``onnx_cpu``, ``onnx_cuda``, or ``tensorrt``.
     """
     import onnxruntime as ort
 

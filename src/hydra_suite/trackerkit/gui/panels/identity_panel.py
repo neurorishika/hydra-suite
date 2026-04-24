@@ -392,7 +392,7 @@ class IdentityPanel(QWidget):
         self.combo_headtail_runtime.setToolTip(
             "Compute runtime for the head-tail orientation classifier.\n"
             "cpu — always available.\n"
-            "mps / cuda / rocm — native GPU acceleration.\n"
+            "mps / cuda — native GPU acceleration.\n"
             "onnx_* / tensorrt — exported artifacts (auto-derived on first use)."
         )
         _ht_runtimes = supported_runtimes_for_pipeline("head_tail")

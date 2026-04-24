@@ -1221,8 +1221,6 @@ class SessionOrchestrator:
             return "mps"
         if rt in ("onnx_cuda", "tensorrt"):
             return "cuda"
-        if rt == "onnx_rocm":
-            return "rocm"
         return rt
 
     def _on_runtime_context_changed(self, *_args):

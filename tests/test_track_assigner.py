@@ -27,19 +27,20 @@ def _compute_cost_matrix_numba_py(
     Wo,
     Wa,
     Wasp,
-    cull_threshold,
+    per_track_gates,
     meas_ori_directed,
 ):
     cost = np.zeros((N, M), dtype=np.float32)
     for i in range(N):
         inv_S_pos = S_inv_batch[i, :2, :2]
+        gate_i = float(per_track_gates[i])
         for j in range(M):
             diff = meas_pos[j] - pred_pos[i]
             if use_maha:
                 pos_dist = float(np.sqrt(diff @ inv_S_pos @ diff))
             else:
                 pos_dist = float(np.linalg.norm(diff))
-            if pos_dist > cull_threshold:
+            if pos_dist > gate_i:
                 cost[i, j] = 1e6
                 continue
             odiff = abs(pred_ori[i] - meas_ori[j])
@@ -143,9 +144,8 @@ def test_assign_tracks_respawns_lost_track_when_valid_detection_exists() -> None
 
     track_states = ["active", "lost"]
     continuity = [10, 0]
-    trajectory_ids = [0, 1]
 
-    rows, cols, free_dets, next_id, _ = assigner.assign_tracks(
+    rows, cols, free_dets, _ = assigner.assign_tracks(
         cost=cost,
         N=2,
         M=2,
@@ -153,8 +153,6 @@ def test_assign_tracks_respawns_lost_track_when_valid_detection_exists() -> None
         track_states=track_states,
         tracking_continuity=continuity,
         kf_manager=kf,
-        trajectory_ids=trajectory_ids,
-        next_trajectory_id=2,
         spatial_candidates={},
     )
 
@@ -162,8 +160,6 @@ def test_assign_tracks_respawns_lost_track_when_valid_detection_exists() -> None
     assert (0, 0) in assigned
     assert (1, 1) in assigned
     assert free_dets == []
-    assert next_id == 3
-    assert trajectory_ids[1] == 2
 
 
 def test_assign_tracks_does_not_respawn_near_non_lost_track() -> None:
@@ -187,9 +183,8 @@ def test_assign_tracks_does_not_respawn_near_non_lost_track() -> None:
 
     track_states = ["active", "lost"]
     continuity = [10, 0]
-    trajectory_ids = [0, 1]
 
-    rows, cols, free_dets, next_id, _ = assigner.assign_tracks(
+    rows, cols, free_dets, _ = assigner.assign_tracks(
         cost=cost,
         N=2,
         M=1,
@@ -197,19 +192,15 @@ def test_assign_tracks_does_not_respawn_near_non_lost_track() -> None:
         track_states=track_states,
         tracking_continuity=continuity,
         kf_manager=kf,
-        trajectory_ids=trajectory_ids,
-        next_trajectory_id=2,
         spatial_candidates={},
     )
 
     assert rows == []
     assert cols == []
     assert free_dets == [0]
-    assert next_id == 2
-    assert trajectory_ids == [0, 1]
 
 
-def test_assign_tracks_returns_five_values_when_no_measurements() -> None:
+def test_assign_tracks_returns_four_values_when_no_measurements() -> None:
     assigner = TrackAssigner(_params())
     kf = _DummyKF(2)
     result = assigner.assign_tracks(
@@ -220,17 +211,14 @@ def test_assign_tracks_returns_five_values_when_no_measurements() -> None:
         track_states=["active", "lost"],
         tracking_continuity=[5, 0],
         kf_manager=kf,
-        trajectory_ids=[0, 1],
-        next_trajectory_id=2,
         spatial_candidates={},
     )
 
-    assert len(result) == 5
-    rows, cols, free_dets, next_id, high_cost_tracks = result
+    assert len(result) == 4
+    rows, cols, free_dets, high_cost_tracks = result
     assert rows == []
     assert cols == []
     assert free_dets == []
-    assert next_id == 2
     assert high_cost_tracks == []
 
 
@@ -349,9 +337,8 @@ def test_lost_track_respawn_uses_nearest_lost_track_only() -> None:
     measurements = [np.array([12.0, 10.0, 0.0], dtype=np.float32)]
     track_states = ["lost", "lost"]
     continuity = [0, 0]
-    trajectory_ids = [3, 4]
 
-    rows, cols, free_dets, next_id, _ = assigner.assign_tracks(
+    rows, cols, free_dets, _ = assigner.assign_tracks(
         cost=cost,
         N=2,
         M=1,
@@ -359,16 +346,12 @@ def test_lost_track_respawn_uses_nearest_lost_track_only() -> None:
         track_states=track_states,
         tracking_continuity=continuity,
         kf_manager=kf,
-        trajectory_ids=trajectory_ids,
-        next_trajectory_id=5,
         spatial_candidates={},
     )
 
     assert rows == [0]
     assert cols == [0]
     assert free_dets == []
-    assert next_id == 6
-    assert trajectory_ids[0] == 5
 
 
 def test_pose_rejection_is_more_permissive_with_weak_visibility() -> None:

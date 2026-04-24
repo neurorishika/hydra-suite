@@ -4,9 +4,7 @@
 
 `hydra_suite.utils.gpu_utils` centralizes runtime capability checks for:
 
-- CUDA (CuPy/PyTorch)
-- MPS (PyTorch)
-- ROCm (PyTorch/CuPy variants where configured)
+- CUDA (CuPy/PyTorch)\n- MPS (PyTorch)
 
 ## Where GPU Is Used
 

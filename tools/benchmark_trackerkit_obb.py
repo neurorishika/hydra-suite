@@ -8,6 +8,7 @@ python tools/benchmark_trackerkit_obb.py \
   --model /path/to/obb.pt \
   --runtime tensorrt \
   --batch-size 1 \
+  --compare-execution-modes \
   --resize-factor 0.25 \
   --tracking-realtime-mode
 
@@ -17,6 +18,7 @@ python tools/benchmark_trackerkit_obb.py \
   --headtail-model /path/to/headtail.pth \
   --runtime tensorrt \
   --batch-size 1 \
+  --compare-execution-modes \
   --resize-factor 0.25 \
   --tracking-realtime-mode
 """

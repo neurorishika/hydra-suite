@@ -117,7 +117,11 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     IKH = identity_mat - (K_eff @ H)
     P[track_idx] = (IKH @ p @ IKH.T) + (K_eff @ R @ K_eff.T)
 
-    # Propagate velocity cap through P: D P D.T where D=diag(1,1,1,vs,vs)
+    # Propagate velocity cap through P: D P D^T where D=diag(1,1,1,vs,vs).
+    # Row scaling  (P[3,:] *= vs, P[4,:] *= vs) applies D on the left → D P.
+    # Column scaling (P[:,3] *= vs, P[:,4] *= vs) applies D on the right → D P D^T.
+    # Since D is diagonal and symmetric (D = D^T), this is exactly the
+    # congruence transform that keeps P consistent with the capped velocity state.
     if vel_scale < 1.0:
         P[track_idx, 3, :] *= vel_scale
         P[track_idx, 4, :] *= vel_scale
@@ -278,6 +282,17 @@ class KalmanFilterManager:
 
         # Apply age-dependent velocity damping AFTER prediction (vectorized).
         # Young tracks have their velocity heavily damped toward zero.
+        #
+        # NOTE — double-damping for very young tracks:
+        # The F-matrix already applies a per-step friction factor ``damp``
+        # (KALMAN_DAMPING, default 0.95).  Young tracks then receive an
+        # *additional* age-based retention factor ``vr`` here (ranging from
+        # KALMAN_INITIAL_VELOCITY_RETENTION at age=0 up to 1.0 at maturity).
+        # For a brand-new track the effective per-step velocity retention is
+        #   damp × initial_velocity_retention   (e.g. 0.95 × 0.2 = 0.19).
+        # This is intentional: strong damping prevents absurd velocity
+        # extrapolation on the first few frames when the KF has no reliable
+        # motion history.
         ages = self.track_ages[: self.num_targets].astype(np.float32)
         young_mask = ages < self.age_threshold
         if np.any(young_mask):

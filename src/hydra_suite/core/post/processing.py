@@ -224,7 +224,13 @@ def _build_frame_lookup(traj_df, require_valid_x=False):
 
     lookup = {}
     for i in valid_positions:
-        lookup[frames[i]] = {col: col_arrays[col][i] for col in columns}
+        frame_id = frames[i]
+        if frame_id in lookup:
+            logger.warning(
+                "_build_frame_lookup: duplicate FrameID %s; later row overwrites earlier.",
+                frame_id,
+            )
+        lookup[frame_id] = {col: col_arrays[col][i] for col in columns}
     return lookup
 
 
@@ -433,8 +439,19 @@ def _split_segments_at_occlusion_gaps(
                 is_occluded.loc[run_group.index[0]]
                 and len(run_group) > max_occlusion_gap
             ):
-                split_indices.append(run_group.index[0])
-                stats["broken_occlusion"] += 1
+                # Split AFTER the occlusion gap rather than at its start.
+                # This keeps the occluded frames attached to the preceding
+                # segment (where _clean_trajectory strips them as trailing NaN
+                # rows) and ensures the following segment starts with the
+                # first active detection frame.  Splitting at the gap start
+                # was creating tiny segments whose rows are all occluded/NaN
+                # and that would be discarded by min_len, over-counting
+                # stats["broken_occlusion"].
+                run_end_pos = segment.index.get_loc(run_group.index[-1])
+                if run_end_pos + 1 < len(segment):
+                    next_frame_idx = segment.index[run_end_pos + 1]
+                    split_indices.append(next_frame_idx)
+                    stats["broken_occlusion"] += 1
 
         if not split_indices:
             final_segments.append(segment)
@@ -794,6 +811,14 @@ def process_trajectories(trajectories_full: object, params: object) -> object:
         if len(last_segment) >= min_len:
             cleaned_segments.append(last_segment)
 
+    # Drop helper columns — they are not part of the output contract and
+    # keeping them in cleaned_segments leaks transient velocity state.
+    _temp_cols = ["FrameDiff", "DistDiff", "Velocity"]
+    cleaned_segments = [
+        seg.drop(columns=[c for c in _temp_cols if c in seg.columns])
+        for seg in cleaned_segments
+    ]
+
     stats["final_count"] = len(cleaned_segments)
 
     # Convert dataframe segments back to list of tuples format
@@ -1001,11 +1026,11 @@ def resolve_trajectories(
     # NEW: Stitch consecutive fragments that are spatially close
     # This fixes tracking breaks during turns or fast movements
     # Use 2x agreement distance to allow for fast movements/ambiguities across small gaps
-    # Allow larger gap (3 frames) to jump over short occlusions
+    _stitch_gap = int(params.get("STITCH_MAX_GAP_FRAMES", 3))
     result_trajectories = _stitch_broken_trajectory_fragments(
         result_trajectories,
         AGREEMENT_DISTANCE * 2,
-        max_gap=3,
+        max_gap=_stitch_gap,
     )
 
     # FINAL DEDUPLICATION: Run a second redundancy pass after all merging and stitching.

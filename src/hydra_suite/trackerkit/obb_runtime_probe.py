@@ -13,7 +13,10 @@ import json
 import statistics
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 import cv2
 
@@ -139,6 +142,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="Buffer size when --read-mode=prefetch.",
     )
+    parser.add_argument(
+        "--execution-mode",
+        choices=["auto", "direct", "wrapper"],
+        default="auto",
+        help="Choose between the default OBB runtime path, the direct executor, or the legacy Ultralytics wrapper.",
+    )
+    parser.add_argument(
+        "--compare-execution-modes",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Benchmark both wrapper and direct OBB execution back-to-back and report the delta.",
+    )
+    parser.add_argument(
+        "--nvdec",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Benchmark the NVDec hardware-decode path (requires PyNvVideoCodec and cupy). "
+            "Decodes frames directly to CUDA memory and bypasses CPU preprocessing entirely. "
+            "Automatically forces --execution-mode=direct."
+        ),
+    )
     return parser
 
 
@@ -156,6 +181,7 @@ def build_detector_params(
     headtail_runtime: str | None = None,
     headtail_batch_size: int = 64,
     tracking_realtime_mode: bool = True,
+    execution_mode: str = "auto",
 ) -> dict[str, Any]:
     normalized_runtime = _normalize_runtime(runtime)
     resolved_batch_size = max(1, int(batch_size))
@@ -180,7 +206,7 @@ def build_detector_params(
     enable_onnx_runtime = False
     if normalized_runtime == "mps":
         device = "mps"
-    elif normalized_runtime in {"cuda", "rocm"}:
+    elif normalized_runtime == "cuda":
         device = "cuda:0"
     elif normalized_runtime == "tensorrt":
         device = "cuda:0"
@@ -191,7 +217,7 @@ def build_detector_params(
     elif normalized_runtime in {"onnx_cpu", "cpu"}:
         device = "cpu"
         enable_onnx_runtime = normalized_runtime.startswith("onnx_")
-    elif normalized_runtime in {"onnx_cuda", "onnx_rocm"}:
+    elif normalized_runtime == "onnx_cuda":
         device = "cuda:0"
         enable_onnx_runtime = True
 
@@ -227,10 +253,48 @@ def build_detector_params(
         ),
         "YOLO_HEADTAIL_CONF_THRESHOLD": 0.5,
         "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": 0.25,
+        "YOLO_OBB_EXECUTION_MODE": str(execution_mode or "auto").strip().lower(),
     }
     if imgsz not in (None, 0):
         params["YOLO_IMGSZ"] = int(imgsz)
     return params
+
+
+def compare_metric_summaries(
+    baseline_metrics: dict[str, Any],
+    candidate_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    comparison: dict[str, Any] = {}
+    for metric_name in sorted(set(baseline_metrics) | set(candidate_metrics)):
+        baseline = baseline_metrics.get(metric_name) or {}
+        candidate = candidate_metrics.get(metric_name) or {}
+        baseline_mean = float(baseline.get("mean_ms", 0.0))
+        candidate_mean = float(candidate.get("mean_ms", 0.0))
+        baseline_p95 = float(baseline.get("p95_ms", 0.0))
+        candidate_p95 = float(candidate.get("p95_ms", 0.0))
+        mean_delta_ms = candidate_mean - baseline_mean
+        p95_delta_ms = candidate_p95 - baseline_p95
+        mean_delta_pct = 0.0
+        p95_delta_pct = 0.0
+        if baseline_mean > 0.0:
+            mean_delta_pct = (mean_delta_ms / baseline_mean) * 100.0
+        if baseline_p95 > 0.0:
+            p95_delta_pct = (p95_delta_ms / baseline_p95) * 100.0
+        speedup = 0.0
+        if candidate_mean > 0.0:
+            speedup = baseline_mean / candidate_mean
+        comparison[metric_name] = {
+            "baseline_mean_ms": baseline_mean,
+            "candidate_mean_ms": candidate_mean,
+            "mean_delta_ms": mean_delta_ms,
+            "mean_delta_pct": mean_delta_pct,
+            "baseline_p95_ms": baseline_p95,
+            "candidate_p95_ms": candidate_p95,
+            "p95_delta_ms": p95_delta_ms,
+            "p95_delta_pct": p95_delta_pct,
+            "speedup_vs_baseline": speedup,
+        }
+    return comparison
 
 
 def summarize_series(values: list[float]) -> dict[str, float]:
@@ -371,6 +435,8 @@ def benchmark_video(
     detector = YOLOOBBDetector(params)
     profiler = TrackingProfiler(enabled=True)
     prefetcher = None
+    execution_mode = str(params.get("YOLO_OBB_EXECUTION_MODE", "auto") or "auto")
+    execution_mode = execution_mode.strip().lower()
 
     if str(read_mode).strip().lower() == "prefetch":
         prefetcher = FramePrefetcher(
@@ -546,6 +612,13 @@ def benchmark_video(
         "resize_factor": float(resize_factor),
         "read_mode": str(read_mode).strip().lower(),
         "prefetch_buffer_size": max(1, int(prefetch_buffer_size)),
+        "execution_mode": execution_mode,
+        "direct_executor_enabled": bool(
+            getattr(detector, "_direct_obb_executor", None)
+        ),
+        "runtime_artifact_path": str(
+            getattr(detector.model, "_hydra_runtime_artifact_path", "") or ""
+        ),
         "params": params,
         "metrics": {
             "frame_read": summarize_series(read_ms),
@@ -583,7 +656,12 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"batch_size: {summary['batch_size']}",
         f"resize_factor: {summary['resize_factor']:.4f}",
         f"read_mode: {summary.get('read_mode', 'direct')}",
+        f"execution_mode: {summary.get('execution_mode', 'auto')}",
+        f"direct_executor_enabled: {summary.get('direct_executor_enabled', False)}",
     ]
+    runtime_artifact_path = str(summary.get("runtime_artifact_path", "") or "")
+    if runtime_artifact_path:
+        lines.append(f"runtime_artifact_path: {runtime_artifact_path}")
     metrics = summary.get("metrics", {})
     for metric_name in metric_order:
         metric = metrics.get(metric_name, {})
@@ -603,6 +681,290 @@ def format_summary(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_comparison_summary(comparison: dict[str, Any]) -> str:
+    wrapper = comparison["runs"]["wrapper"]
+    direct = comparison["runs"]["direct"]
+    lines = [
+        "wrapper:",
+        format_summary(wrapper),
+        "",
+        "direct:",
+        format_summary(direct),
+        "",
+        "delta_vs_wrapper:",
+    ]
+    for metric_name in [
+        "detector_call",
+        "worker_style_detection_total",
+        "yolo_obb_inference_phase",
+        "yolo_obb_model_execute_phase",
+        "yolo_obb_extract_raw_phase",
+    ]:
+        metric = comparison["comparison"].get(metric_name, {})
+        lines.append(
+            "{name}: mean_delta={mean_delta:.2f} ms ({mean_pct:+.1f}%) p95_delta={p95_delta:.2f} ms ({p95_pct:+.1f}%) speedup={speedup:.2f}x".format(
+                name=metric_name,
+                mean_delta=float(metric.get("mean_delta_ms", 0.0)),
+                mean_pct=float(metric.get("mean_delta_pct", 0.0)),
+                p95_delta=float(metric.get("p95_delta_ms", 0.0)),
+                p95_pct=float(metric.get("p95_delta_pct", 0.0)),
+                speedup=float(metric.get("speedup_vs_baseline", 0.0)),
+            )
+        )
+    return "\n".join(lines)
+
+
+def _nvdec_frame_to_cuda_tensor(frame: Any, cp: Any) -> "torch.Tensor":
+    """Convert a PyNvVideoCodec DecodedFrame to a CUDA torch.Tensor (zero-copy).
+
+    The frame must have been decoded with ``outputColorType=RGB`` and
+    ``useDeviceMemory=True``.  The returned tensor shares device memory with
+    the NVDec decoder and must be consumed (or its data copied out) before the
+    next ``get_batch_frames`` call.
+    """
+    import torch
+
+    planes = frame.cuda()
+    if not planes:
+        raise ValueError("NVDec frame has no CUDA planes")
+    cai = planes[0].__cuda_array_interface__
+    shape = cai["shape"]
+    byte_size = shape[0] * shape[1] * shape[2]
+    mem = cp.cuda.UnownedMemory(cai["data"][0], byte_size, frame)
+    ptr = cp.cuda.MemoryPointer(mem, 0)
+    strides = cai.get("strides") or None
+    cp_arr = cp.ndarray(shape=shape, dtype=cp.uint8, memptr=ptr, strides=strides)
+    return torch.as_tensor(cp_arr, device="cuda")
+
+
+def benchmark_nvdec_video(
+    *,
+    video_path: str,
+    params: dict[str, Any],
+    resize_factor: float,
+    start_frame: int,
+    stride: int,
+    warmup_frames: int,
+    measure_frames: int,
+) -> dict[str, Any]:
+    """Benchmark the NVDec hardware-decode + GPU-preprocessing path.
+
+    Frames are decoded directly to CUDA memory by the NVIDIA hardware video
+    decoder (NVDec via PyNvVideoCodec), converted to a CUDA torch tensor
+    zero-copy, and then preprocessed entirely on the GPU — no CPU letterbox,
+    no pinned-memory copy, no CPU↔GPU DMA transfer.
+
+    Requires ``PyNvVideoCodec`` and ``cupy`` to be installed.  Only meaningful
+    when ``YOLO_OBB_EXECUTION_MODE`` is ``direct`` (set automatically here).
+
+    Only ``resize_factor=1.0`` is supported; pass anything else to use the
+    normal benchmark path instead.
+    """
+    try:
+        import PyNvVideoCodec as nvc
+    except ImportError as exc:
+        raise ImportError(
+            "PyNvVideoCodec is not installed.  "
+            "Install with: pip install PyNvVideoCodec"
+        ) from exc
+    try:
+        import cupy as cp
+    except ImportError as exc:
+        raise ImportError(
+            "cupy is not installed.  "
+            "Install via the appropriate variant, e.g.: pip install cupy-cuda13x"
+        ) from exc
+    import torch
+
+    if resize_factor != 1.0:
+        raise ValueError(
+            "NVDec benchmark only supports resize_factor=1.0; "
+            f"got {resize_factor!r}.  Run without --nvdec for other resize factors."
+        )
+
+    # Force direct executor — NVDec bypasses the CPU preprocessing that the
+    # wrapper path relies on.
+    nvdec_params = dict(params)
+    nvdec_params["YOLO_OBB_EXECUTION_MODE"] = "direct"
+
+    video = Path(video_path).expanduser().resolve()
+    if not video.exists():
+        raise FileNotFoundError(f"Video not found: {video}")
+
+    detector = YOLOOBBDetector(nvdec_params)
+    executor = getattr(detector, "_direct_obb_executor", None)
+    if executor is None:
+        raise RuntimeError(
+            "NVDec benchmark requires the direct OBB executor.  "
+            "Ensure the runtime supports it (onnx_cuda or tensorrt)."
+        )
+
+    def _make_decoder() -> Any:
+        dec = nvc.CreateSimpleDecoder(
+            encSource=str(video),
+            gpuid=0,
+            useDeviceMemory=True,
+            outputColorType=nvc.OutputColorType.RGB,
+        )
+        if start_frame > 0:
+            dec.seek_to_index(int(start_frame))
+        return dec
+
+    sdec = _make_decoder()
+    meta = sdec.get_stream_metadata()
+    orig_h, orig_w = int(meta.height), int(meta.width)
+    num_frames = int(meta.num_frames)
+
+    nvdec_decode_ms: list[float] = []
+    gpu_detector_ms: list[float] = []
+
+    total_needed = max(0, int(warmup_frames)) + max(0, int(measure_frames))
+    processed = 0
+    measured = 0
+    current_index = max(0, int(start_frame))
+
+    try:
+        while processed < total_needed:
+            # ── NVDec hardware decode ──────────────────────────────────────
+            t0 = time.perf_counter()
+            batch = sdec.get_batch_frames(1)
+            if not batch:
+                # End of video — restart from the beginning.
+                sdec = _make_decoder()
+                batch = sdec.get_batch_frames(1)
+                if not batch:
+                    break
+                current_index = max(0, int(start_frame))
+
+            cuda_tensor = _nvdec_frame_to_cuda_tensor(batch[0], cp)
+            torch.cuda.synchronize()
+            nvdec_elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+            # ── GPU detector call (preprocess + inference + postprocess) ───
+            is_measurement = processed >= int(warmup_frames)
+            t1 = time.perf_counter()
+            executor.predict_from_cuda_frame(
+                cuda_tensor,
+                (orig_h, orig_w),
+                conf_thres=0.25,
+                classes=None,
+                max_det=300,
+            )
+            torch.cuda.synchronize()
+            gpu_elapsed_ms = (time.perf_counter() - t1) * 1000.0
+
+            processed += 1
+            current_index += max(1, int(stride))
+
+            # Seek ahead for stride > 1 (SimpleDecoder is sequential).
+            if stride > 1 and current_index < num_frames:
+                sdec.seek_to_index(current_index)
+            elif stride > 1:
+                sdec = _make_decoder()
+                current_index = max(0, int(start_frame))
+
+            if is_measurement and measured < int(measure_frames):
+                nvdec_decode_ms.append(nvdec_elapsed_ms)
+                gpu_detector_ms.append(gpu_elapsed_ms)
+                measured += 1
+
+            if measured >= int(measure_frames):
+                break
+    finally:
+        closer = getattr(detector, "close", None)
+        if callable(closer):
+            closer()
+
+    total_ms = [d + g for d, g in zip(nvdec_decode_ms, gpu_detector_ms)]
+    return {
+        "video_path": str(video),
+        "measured_frames": measured,
+        "resize_factor": 1.0,
+        "read_mode": "nvdec",
+        "execution_mode": "direct",
+        "direct_executor_enabled": True,
+        "metrics": {
+            "nvdec_decode": summarize_series(nvdec_decode_ms),
+            "gpu_detector_call": summarize_series(gpu_detector_ms),
+            "total_per_frame": summarize_series(total_ms),
+        },
+    }
+
+
+def format_nvdec_summary(summary: dict[str, Any]) -> str:
+    """Format the output of ``benchmark_nvdec_video`` for console display."""
+    metrics = summary.get("metrics", {})
+    lines = [
+        f"video: {summary['video_path']}",
+        f"measured_frames: {summary['measured_frames']}",
+        "read_mode: nvdec (NVDec hardware decode → CUDA tensor)",
+        "execution_mode: direct (GPU-only preprocessing)",
+    ]
+    for name in ("nvdec_decode", "gpu_detector_call", "total_per_frame"):
+        m = metrics.get(name, {})
+        if not m or m.get("count", 0) == 0:
+            continue
+        lines.append(
+            f"{name}: median={m['median_ms']:.3f} ms  mean={m['mean_ms']:.3f} ms"
+            f"  p95={m['p95_ms']:.3f} ms  min={m['min_ms']:.3f} ms"
+        )
+    return "\n".join(lines)
+
+
+def benchmark_execution_modes(
+    *,
+    video_path: str,
+    params: dict[str, Any],
+    resize_factor: float,
+    batch_size: int,
+    start_frame: int,
+    stride: int,
+    warmup_frames: int,
+    measure_frames: int,
+    read_mode: str = "direct",
+    prefetch_buffer_size: int = 2,
+) -> dict[str, Any]:
+    wrapper_params = dict(params)
+    wrapper_params["YOLO_OBB_EXECUTION_MODE"] = "wrapper"
+    direct_params = dict(params)
+    direct_params["YOLO_OBB_EXECUTION_MODE"] = "direct"
+
+    wrapper = benchmark_video(
+        video_path=video_path,
+        params=wrapper_params,
+        resize_factor=resize_factor,
+        batch_size=batch_size,
+        start_frame=start_frame,
+        stride=stride,
+        warmup_frames=warmup_frames,
+        measure_frames=measure_frames,
+        read_mode=read_mode,
+        prefetch_buffer_size=prefetch_buffer_size,
+    )
+    direct = benchmark_video(
+        video_path=video_path,
+        params=direct_params,
+        resize_factor=resize_factor,
+        batch_size=batch_size,
+        start_frame=start_frame,
+        stride=stride,
+        warmup_frames=warmup_frames,
+        measure_frames=measure_frames,
+        read_mode=read_mode,
+        prefetch_buffer_size=prefetch_buffer_size,
+    )
+    return {
+        "runs": {
+            "wrapper": wrapper,
+            "direct": direct,
+        },
+        "comparison": compare_metric_summaries(
+            wrapper.get("metrics", {}),
+            direct.get("metrics", {}),
+        ),
+    }
+
+
 def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
     params = build_detector_params(
         model_path=args.model,
@@ -617,7 +979,31 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
         headtail_runtime=args.headtail_runtime,
         headtail_batch_size=args.headtail_batch_size,
         tracking_realtime_mode=args.tracking_realtime_mode,
+        execution_mode=args.execution_mode,
     )
+    if getattr(args, "nvdec", False):
+        return benchmark_nvdec_video(
+            video_path=args.video,
+            params=params,
+            resize_factor=args.resize_factor,
+            start_frame=args.start_frame,
+            stride=args.stride,
+            warmup_frames=args.warmup_frames,
+            measure_frames=args.measure_frames,
+        )
+    if args.compare_execution_modes:
+        return benchmark_execution_modes(
+            video_path=args.video,
+            params=params,
+            resize_factor=args.resize_factor,
+            batch_size=args.batch_size,
+            start_frame=args.start_frame,
+            stride=args.stride,
+            warmup_frames=args.warmup_frames,
+            measure_frames=args.measure_frames,
+            read_mode=args.read_mode,
+            prefetch_buffer_size=args.prefetch_buffer_size,
+        )
     summary = benchmark_video(
         video_path=args.video,
         params=params,
@@ -636,7 +1022,12 @@ def run_from_args(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> int:
     args = build_parser().parse_args()
     summary = run_from_args(args)
-    print(format_summary(summary))
+    if getattr(args, "nvdec", False):
+        print(format_nvdec_summary(summary))
+    elif args.compare_execution_modes:
+        print(format_comparison_summary(summary))
+    else:
+        print(format_summary(summary))
     if args.output_json:
         output_path = Path(args.output_json).expanduser().resolve()
         output_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

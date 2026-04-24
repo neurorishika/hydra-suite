@@ -958,6 +958,7 @@ class TrackingWorker(QThread):
             on_progress=lambda pct, msg: self.progress_signal.emit(pct, msg),
             on_stats=lambda stats: self.stats_signal.emit(stats),
             profiler=profiler,
+            video_path=self.video_path,
         )
 
     def run(self: object) -> object:  # noqa: C901
@@ -2722,22 +2723,17 @@ class TrackingWorker(QThread):
 
                 profiler.tock("cost_matrix")
                 profiler.tick("hungarian")
-                rows, cols, free_dets, next_id, high_cost_tracks = (
-                    assigner.assign_tracks(
-                        cost,
-                        N,
-                        len(meas),
-                        meas,
-                        track_states,
-                        tracking_continuity,
-                        self.kf_manager,  # <--- Pass the manager, not .filters
-                        trajectory_ids,
-                        next_trajectory_id,
-                        spatial_candidates,
-                        association_data=association_data,
-                    )
+                rows, cols, free_dets, high_cost_tracks = assigner.assign_tracks(
+                    cost,
+                    N,
+                    len(meas),
+                    meas,
+                    track_states,
+                    tracking_continuity,
+                    self.kf_manager,  # <--- Pass the manager, not .filters
+                    spatial_candidates,
+                    association_data=association_data,
                 )
-                next_trajectory_id = next_id
                 respawned_matches = {r for r in rows if track_states[r] == "lost"}
                 profiler.tock("hungarian")
 
@@ -2863,8 +2859,12 @@ class TrackingWorker(QThread):
                         pose_direction_fallback_count += 1
 
                     if r in respawned_matches:
-                        # Hard KF reset: Phase 3 assigns a new trajectory ID so
-                        # the KF must also start clean — mirrors the free_dets loop.
+                        # Hard KF reset for Phase-3 respawns.  All per-track state
+                        # is cleared here so the new trajectory starts clean.
+                        # Trajectory-ID assignment is done here (single code path with
+                        # the free_dets loop below) — never inside the assigner.
+                        trajectory_ids[r] = next_trajectory_id
+                        next_trajectory_id += 1
                         self.trajectories_full[r].clear()
                         trajectories_pruned[r].clear()
                         position_deques[r].clear()
@@ -2911,7 +2911,10 @@ class TrackingWorker(QThread):
                         track_x, track_y = meas_x, meas_y
 
                     tracking_continuity[r] += 1
-                    position_deques[r].append((track_x, track_y, self.frame_count))
+                    # Use raw detection position for the motion-gate reference so
+                    # that hysteresis / flip detection compares against what was
+                    # actually written to output (meas_x/y), not the KF posterior.
+                    position_deques[r].append((meas_x, meas_y, self.frame_count))
                     if len(position_deques[r]) == 2:
                         (px1, py1, pf1), (px2, py2, pf2) = position_deques[r]
                         speed = math.hypot(px2 - px1, py2 - py1) / max(1, pf2 - pf1)
@@ -3012,15 +3015,28 @@ class TrackingWorker(QThread):
                                     updated[kp_idx] = det_pose_proto[kp_idx]
                             track_pose_prototypes[r] = updated
 
-                    theta_out = orientation_last[r]
-                    # Backward fallback orientation historically needs a 180-degree correction.
+                    # Report the actual detection position, not the Kalman posterior or
+                    # smoothed orientation.  The KF state is preserved for internal prediction
+                    # and cost-matrix use, but every x,y,theta written to trajectories and CSV
+                    # must correspond to a real detection measurement.
+                    det_theta_out = theta_for_tracking
                     if self.backward_mode and not directed_heading:
-                        theta_out = (theta_out + np.pi) % (2 * np.pi)
+                        det_theta_out = (det_theta_out + np.pi) % (2 * np.pi)
 
                     # Update trajectory with actual frame index
-                    pt = (int(track_x), int(track_y), theta_out, actual_frame_index)
+                    pt = (meas_x, meas_y, det_theta_out, actual_frame_index)
                     self.trajectories_full[r].append(pt)
                     trajectories_pruned[r].append(pt)
+
+                    # Synchronise orientation_last and the KF theta state to the
+                    # emitted det_theta_out so that:
+                    #   - next-frame flip / disambiguation compares against what was written
+                    #   - KF predictions use the same reference heading as the output
+                    # (The smoothed value above served its purpose for the KF correct() call;
+                    # the output reference must track the raw emitted value, not the EMA.)
+                    orientation_last[r] = det_theta_out
+                    if r < len(self.kf_manager.X):
+                        self.kf_manager.X[r, 2] = float(det_theta_out)
 
                     if self.csv_writer_thread:
                         # Build base data row with actual frame index
@@ -3069,19 +3085,17 @@ class TrackingWorker(QThread):
                 # --- CSV for Unmatched & Final Respawn (Identical to Original) ---
                 if self.csv_writer_thread:
                     for r in unmatched:
-                        last_pos = (
-                            self.trajectories_full[r][-1]
-                            if self.trajectories_full[r]
-                            else (float("nan"),) * 4
-                        )
-                        # Build base data row with actual frame index
+                        # No detection for this track this frame — write NaN for
+                        # position/orientation so the raw CSV never contains values
+                        # that do not correspond to an actual detection.
+                        # Post-processing will interpolate or gap-fill these frames.
                         row_data = [
                             r,
                             trajectory_ids[r],
                             local_counts[r],
-                            last_pos[0],
-                            last_pos[1],
-                            last_pos[2],
+                            float("nan"),
+                            float("nan"),
+                            float("nan"),
                             actual_frame_index,
                             track_states[r],
                         ]
@@ -3221,6 +3235,52 @@ class TrackingWorker(QThread):
                     logger.info(f"Tracking stabilized (avg cost={avg_cost:.2f})")
 
                 profiler.tock("kf_update")
+
+            elif detection_initialized:
+                # No detections this frame — still advance the KF so predictions
+                # don't freeze and costs are computed from a fresh prior on the next
+                # detection frame.  Mark all tracks as occluded/lost and write NaN
+                # CSV rows so every frame has an entry (required by post-processing).
+                profiler.tick("kf_predict")
+                self.kf_manager.predict()
+                profiler.tock("kf_predict")
+
+                for r in range(N):
+                    missed_frames[r] += 1
+                    if missed_frames[r] >= params["LOST_THRESHOLD_FRAMES"]:
+                        track_states[r], tracking_continuity[r] = "lost", 0
+                    elif track_states[r] != "lost":
+                        track_states[r] = "occluded"
+
+                if self.csv_writer_thread:
+                    _save_conf_zero = params.get("SAVE_CONFIDENCE_METRICS", True)
+                    _pos_unc_zero = (
+                        self.kf_manager.get_position_uncertainties()
+                        if _save_conf_zero
+                        else []
+                    )
+                    for r in range(N):
+                        row_data = [
+                            r,
+                            trajectory_ids[r],
+                            local_counts[r],
+                            float("nan"),
+                            float("nan"),
+                            float("nan"),
+                            actual_frame_index,
+                            track_states[r],
+                        ]
+                        if _save_conf_zero:
+                            pos_uncertainty = (
+                                _pos_unc_zero[r] if r < len(_pos_unc_zero) else 0.0
+                            )
+                            row_data.extend([0.0, 0.0, pos_uncertainty])
+                        row_data.append(float("nan"))  # DetectionID
+                        if track_tag_history is not None:
+                            _tag = track_tag_history.majority_tag(r)
+                            row_data.append(_tag if _tag != NO_TAG else float("nan"))
+                        self.csv_writer_thread.enqueue(row_data)
+                        local_counts[r] += 1
 
             # --- Individual Dataset Generation (supports YOLO OBB and BG subtraction) ---
             profiler.tick("individual_dataset")

@@ -21,5 +21,6 @@ onnxscript
 # Do not co-install CPU onnxruntime.
 onnxruntime-gpu==1.24.1
 
+PyNvVideoCodec
 # Install this package in editable mode (pulls all pyproject.toml dependencies)
 -e .

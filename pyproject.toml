@@ -74,13 +74,6 @@ mps = [
     "onnxslim",
     "torchaudio",
 ]
-rocm = [
-    "cupy-rocm-6-0",
-    "onnxruntime",
-    "onnx",
-    "onnxslim",
-    "torchaudio",
-]
 dev = [
     "pytest>=7.0",
     "pytest-cov",

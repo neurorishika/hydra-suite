@@ -451,7 +451,7 @@ QTableWidget#BenchmarkResultsTable::item {
         if target.pipeline == "sequential" and assumed_targets > 0:
             return f"Comparison note: benchmarks stage-1 full-frame box detection plus stage-2 crop OBB per frame, assuming {assumed_targets} animals/frame from the Setup tab."
         if target.pipeline == "pose" and target.backend_family == "sleap":
-            return "Comparison note: native CPU/MPS/CUDA/ROCm rows benchmark the SLEAP service path, while ONNX/TensorRT rows benchmark exported direct runtimes. Both include crop transport, preprocess, inference, and postprocess during the timed phase."
+            return "Comparison note: native CPU/MPS/CUDA rows benchmark the SLEAP service path, while ONNX/TensorRT rows benchmark exported direct runtimes. Both include crop transport, preprocess, inference, and postprocess during the timed phase."
         return ""
 
     def _format_runtime_display(
@@ -470,7 +470,7 @@ QTableWidget#BenchmarkResultsTable::item {
             return runtime_text, runtime_tooltip
 
         runtime_value = str(result.runtime or "").strip().lower()
-        if runtime_value in {"cpu", "mps", "cuda", "rocm"}:
+        if runtime_value in {"cpu", "mps", "cuda"}:
             return (
                 f"{runtime_text} [Native Service]",
                 "SLEAP native runtime measured through the persistent SLEAP service backend, including crop transport and result extraction in the timed phase.",
@@ -723,7 +723,7 @@ QTableWidget#BenchmarkResultsTable::item {
         results_group = QGroupBox("Results")
         results_layout = QVBoxLayout(results_group)
         results_hint = QLabel(
-            "Timed metrics exclude model setup, artifact export, and warmup. Recommendations use per-frame latency first, then throughput, and memory columns reflect the timed benchmark phase. For SLEAP pose targets, native CPU/MPS/CUDA/ROCm rows use the SLEAP service path while ONNX/TensorRT rows use exported direct runtimes."
+            "Timed metrics exclude model setup, artifact export, and warmup. Recommendations use per-frame latency first, then throughput, and memory columns reflect the timed benchmark phase. For SLEAP pose targets, native CPU/MPS/CUDA rows use the SLEAP service path while ONNX/TensorRT rows use exported direct runtimes."
         )
         results_hint.setObjectName("BenchmarkSectionHint")
         results_hint.setWordWrap(True)

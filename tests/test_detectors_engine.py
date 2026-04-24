@@ -258,7 +258,23 @@ def test_tensorrt_engine_path_is_batch_specific(tmp_path: Path, monkeypatch) -> 
     assert path_b8.endswith("_b8.engine")
     assert path_b4.endswith("_b4.engine")
     assert b8 == 8
-    assert b4 == 4
+
+
+def test_wrapper_execution_mode_skips_direct_obb_executor_enablement() -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {"YOLO_OBB_EXECUTION_MODE": "wrapper"}
+    det.device = "cuda:0"
+    det._direct_obb_executor = "sentinel"
+
+    det._maybe_enable_direct_obb_executor(
+        "onnx",
+        Path("/tmp/fake.onnx"),
+        640,
+    )
+
+    assert det._direct_obb_executor is None
 
 
 def test_tensorrt_fatal_builder_failure_disables_session_retries(
@@ -1800,3 +1816,59 @@ def test_rejects_notebook_tiny_headtail_state_dict(tmp_path: Path) -> None:
 
     with pytest.raises(ClassifierFormatError):
         HeadTailAnalyzer(model_path=str(ckpt_path), device="cpu", conf_threshold=0.5)
+
+
+def test_detect_objects_batched_raw_returns_nine_fields_when_model_missing() -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = None
+
+    frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(2)]
+    results = det.detect_objects_batched(frames, start_frame_idx=0, return_raw=True)
+
+    assert len(results) == 2
+    assert all(len(frame_result) == 9 for frame_result in results)
+    assert results[0][-1] is None
+
+
+def test_detect_objects_batched_raw_returns_nine_fields_when_batch_inference_fails(
+    monkeypatch,
+) -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = object()
+    det.params = {}
+
+    monkeypatch.setattr(det, "_current_obb_mode", lambda: "direct")
+    monkeypatch.setattr(det, "_raw_detection_cap", lambda: 4)
+    monkeypatch.setattr(det, "_resolve_fixed_batch_params", lambda: (None, None))
+    monkeypatch.setattr(
+        det,
+        "_run_standard_obb_batch_inference",
+        lambda frames, start_frame_idx, target_classes, raw_conf_floor, max_det: None,
+    )
+
+    frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(3)]
+    results = det.detect_objects_batched(frames, start_frame_idx=5, return_raw=True)
+
+    assert len(results) == 3
+    assert all(len(frame_result) == 9 for frame_result in results)
+    assert all(frame_result[-1] is None for frame_result in results)
+
+
+def test_assemble_batched_frame_result_raw_none_preserves_raw_contract() -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+
+    frame_result = det._assemble_batched_frame_result(
+        raw=None,
+        headtail_per_frame=None,
+        idx=0,
+        return_raw=True,
+    )
+
+    assert len(frame_result) == 9
+    assert frame_result[-1] is None

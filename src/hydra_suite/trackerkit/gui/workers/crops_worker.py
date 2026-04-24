@@ -32,7 +32,7 @@ def _runtime_to_native_device(runtime: object) -> str:
     rt = str(runtime or "cpu").strip().lower()
     if rt in {"mps", "onnx_coreml", "onnx_mps"}:
         return "mps"
-    if rt in {"cuda", "onnx_cuda", "tensorrt", "rocm", "onnx_rocm"}:
+    if rt in {"cuda", "onnx_cuda", "tensorrt"}:
         return "cuda"
     return "cpu"
 

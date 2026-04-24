@@ -1731,8 +1731,6 @@ QTabBar::tab:selected {
                 options.append(f"cuda:{i}")
         if info.get("mps_available"):
             options.append("mps")
-        if info.get("rocm_available"):
-            options.append("rocm")
         return options
 
     def _imgsz_for_role(self, role) -> int:

@@ -141,7 +141,6 @@ pyproject.toml [project.dependencies]     ← single source of truth for base de
 pyproject.toml [project.optional-dependencies]
     ├── cuda: onnxruntime-gpu, cupy-cuda12x
     ├── mps: onnxruntime
-    ├── rocm: cupy-rocm-6-0, onnxruntime
     └── dev: pytest, black, flake8, mypy, ...
 
 requirements-*.txt (developer workflow only)
@@ -159,7 +158,7 @@ requirements-*.txt (developer workflow only)
 When adding new dependencies:
 
 - **Base deps** (needed by all users) → add to `pyproject.toml` `[project.dependencies]`
-- **GPU-specific deps** (CUDA/ROCm only) → add to `pyproject.toml` `[project.optional-dependencies]` AND to `requirements-cuda.txt` / `requirements-rocm.txt`
+- **GPU-specific deps** (CUDA only) → add to `pyproject.toml` `[project.optional-dependencies]` AND to `requirements-cuda.txt`
 - **torch-related** → add to `requirements-*.txt` only (cannot go in pyproject.toml)
 
 ## Version checklist

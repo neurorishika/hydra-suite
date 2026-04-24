@@ -2045,7 +2045,6 @@ class ConfigOrchestrator:
             "onnx_coreml": "onnx_coreml",
             "onnx_cpu": "onnx_cpu",
             "onnx_cuda": "onnx_cuda",
-            "onnx_rocm": "onnx_rocm",
             "tensorrt_cuda": "tensorrt",
         }.get(selected_pose_runtime, selected_pose_runtime)
         runtime_pose = derive_pose_runtime_settings(

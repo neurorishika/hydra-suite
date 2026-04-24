@@ -46,16 +46,23 @@ def _compute_cost_matrix_numba(
     Wo,
     Wa,
     Wasp,
-    cull_threshold,
+    per_track_gates,
     meas_ori_directed,
 ):
-    """Numba kernel using pre-calculated batch Inverse Covariances."""
+    """Numba kernel using pre-calculated batch Inverse Covariances.
+
+    ``per_track_gates`` is a float32 array of shape (N,) providing each
+    track's individual spatial cull distance.  This replaces the former
+    scalar ``cull_threshold`` so that young/uncertain tracks get an
+    appropriately expanded gate while established tracks keep a tight one.
+    """
     cost = np.zeros((N, M), dtype=np.float32)
 
     for i in range(N):
         # Extract pre-calculated 2x2 inverse position covariance from the 3x3 S_inv
         # (This avoids N*M matrix inversions inside the loop)
         inv_S_pos = S_inv_batch[i, :2, :2]
+        gate_i = per_track_gates[i]
 
         for j in range(M):
             diff = meas_pos[j] - pred_pos[i]
@@ -70,8 +77,10 @@ def _compute_cost_matrix_numba(
             else:
                 pos_dist = np.sqrt(diff[0] ** 2 + diff[1] ** 2)
 
-            # Spatial Culling
-            if pos_dist > cull_threshold:
+            # Spatial culling: each track uses its own adaptive gate so that
+            # young/uncertain tracks are not unfairly blocked by the smallest
+            # established-track gate.
+            if pos_dist > gate_i:
                 cost[i, j] = 1e6  # Large penalty
                 continue
 
@@ -528,23 +537,31 @@ class TrackAssigner:
         local_gates = None
         track_uncertainty = None
         track_avg_step = None
+        # Always compute per-track adaptive gates (not only for pose data).
+        # Young and high-uncertainty tracks get an expanded search radius so
+        # they are not incorrectly blocked by the established-track gate.
+        track_uncertainty = (
+            np.asarray(kf_manager.get_position_uncertainties(), dtype=np.float32)
+            if hasattr(kf_manager, "get_position_uncertainties")
+            else np.trace(kf_manager.P[:N, :2, :2], axis1=1, axis2=2).astype(np.float32)
+        )
+        track_avg_step_arr = np.asarray(
+            (
+                association_data.get("track_avg_step", np.zeros(N))
+                if association_data is not None
+                else np.zeros(N)
+            ),
+            dtype=np.float32,
+        )
+        local_gates = self._compute_local_motion_gates(
+            track_uncertainty,
+            track_avg_step_arr,
+            cull_threshold,
+        )
         if has_pose_data:
-            track_uncertainty = (
-                np.asarray(kf_manager.get_position_uncertainties(), dtype=np.float32)
-                if hasattr(kf_manager, "get_position_uncertainties")
-                else np.trace(kf_manager.P[:, :2, :2], axis1=1, axis2=2).astype(
-                    np.float32
-                )
-            )
-            track_avg_step = np.asarray(
-                association_data.get("track_avg_step", np.zeros(N)),
-                dtype=np.float32,
-            )
-            local_gates = self._compute_local_motion_gates(
-                track_uncertainty,
-                track_avg_step,
-                cull_threshold,
-            )
+            # local_gates and track_uncertainty are already computed above.
+            # track_avg_step_arr is also available; alias it for _compute_stage1_gate.
+            track_avg_step = track_avg_step_arr
             pose_candidates = self._compute_stage1_gate(
                 N,
                 M,
@@ -620,11 +637,7 @@ class TrackAssigner:
                 p["W_ORIENTATION"],
                 p["W_AREA"],
                 p["W_ASPECT"],
-                (
-                    max(cull_threshold, float(np.max(local_gates)))
-                    if local_gates is not None and len(local_gates) > 0
-                    else cull_threshold
-                ),
+                local_gates,
                 meas_ori_directed_arr,
             )
 
@@ -701,12 +714,23 @@ class TrackAssigner:
     def _assign_established_hungarian(
         self, est, cost, raw_dist_mat, MAX_DIST, VEL_GATE
     ):
-        """Phase 1 Hungarian assignment for established tracks."""
+        """Phase 1 Hungarian assignment for established tracks.
+
+        ``est`` is always built from ``for i in range(N) if ...`` so it is
+        monotonically increasing.  ``linear_sum_assignment(cost[est, :])``
+        returns row indices 0..len(est)-1 into the submatrix; ``est[r_idx]``
+        maps each back to the original track index.  Making the sort explicit
+        here documents and enforces this invariant so that the mapping is safe
+        even if the calling code ever builds ``est`` differently.
+        """
+        if not est:
+            return [], set()
+        est_sorted = sorted(est)
         assignments = []
         assigned_dets = set()
-        rows, cols = linear_sum_assignment(cost[est, :])
+        rows, cols = linear_sum_assignment(cost[est_sorted, :])
         for r_idx, c in zip(rows, cols):
-            r = est[r_idx]
+            r = est_sorted[r_idx]
             if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
                 assignments.append((r, c))
                 assigned_dets.add(c)
@@ -731,6 +755,10 @@ class TrackAssigner:
             if not avail:
                 break
             best_c = avail[np.argmin(cost[r, avail])]
+            # Skip if the cheapest candidate is still beyond the cost sentinel
+            # (all remaining detections are blocked by a hard gate).
+            if cost[r, best_c] >= 1e6:
+                continue
             raw_dist = float(
                 np.linalg.norm(np.asarray(meas[best_c][:2]) - kf_manager.X[r, :2])
             )
@@ -747,12 +775,16 @@ class TrackAssigner:
         kf_manager,
         track_states,
         N,
-        trajectory_ids,
-        next_trajectory_id,
         MAX_DIST,
         assigned_dets,
     ):
-        """Phase 3: respawn lost tracks with unassigned detections."""
+        """Phase 3: match lost tracks with unassigned detections.
+
+        Trajectory-ID management is intentionally NOT done here — it is the
+        worker's responsibility to assign new IDs when it processes
+        ``respawned_matches``.  This keeps all trajectory-ID amendments in a
+        single code path (worker KF-update loop + worker free_dets loop).
+        """
         p = self.params
         unassigned = [j for j in range(M) if j not in assigned_dets]
         respawn_dist_limit = p.get("MIN_RESPAWN_DISTANCE", MAX_DIST * 0.8)
@@ -785,9 +817,7 @@ class TrackAssigner:
                 assignments.append((best_r, c))
                 assigned_dets.add(c)
                 lost.remove(best_r)
-                trajectory_ids[best_r] = next_trajectory_id
-                next_trajectory_id += 1
-        return assignments, next_trajectory_id
+        return assignments
 
     def assign_tracks(
         self: object,
@@ -798,18 +828,20 @@ class TrackAssigner:
         track_states: object,
         tracking_continuity: object,
         kf_manager: object,
-        trajectory_ids: object,
-        next_trajectory_id: object,
         spatial_candidates: object = None,
         association_data: Dict[str, Any] | None = None,
     ) -> object:
         """
         Drop-in replacement for track assignment logic.
         Compatible with kf_manager.X state access.
+
+        Trajectory-ID management has been removed from this method — the
+        worker is solely responsible for assigning new IDs so that all
+        amendments happen in one place.
         """
         p = self.params
         if M == 0:
-            return [], [], [], next_trajectory_id, []
+            return [], [], [], []
 
         THRESH = p.get("KALMAN_MATURITY_AGE", 10)
         MAX_DIST = p["MAX_DISTANCE_THRESHOLD"]
@@ -879,26 +911,24 @@ class TrackAssigner:
         all_assignments.extend(ph2)
 
         # Phase 3: Respawn Lost Tracks
-        ph3, next_trajectory_id = self._assign_respawn(
+        ph3 = self._assign_respawn(
             lost,
             M,
             meas,
             kf_manager,
             track_states,
             N,
-            trajectory_ids,
-            next_trajectory_id,
             MAX_DIST,
             assigned_dets,
         )
         all_assignments.extend(ph3)
 
         if not all_assignments:
-            return [], [], list(range(M)), next_trajectory_id, []
+            return [], [], list(range(M)), []
 
         final_r, final_c = zip(*all_assignments)
         free_dets = list(set(range(M)) - set(final_c))
-        return list(final_r), list(final_c), free_dets, next_trajectory_id, []
+        return list(final_r), list(final_c), free_dets, []
 
     def _compute_cost_python_fallback(
         self,

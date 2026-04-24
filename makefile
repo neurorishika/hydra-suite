@@ -1,10 +1,9 @@
-.PHONY: env-create env-create-cuda env-create-mps env-create-rocm env-update env-update-cuda env-update-mps env-update-rocm env-remove env-remove-cuda env-remove-mps env-remove-rocm install install-cuda install-mps install-rocm install-dev configure-cuda-ort setup setup-cuda setup-mps setup-rocm test pytest test-cov test-cov-html verify-rocm clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
+.PHONY: env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
 ENV_NAME_GPU = hydra-cuda
 ENV_NAME_MPS = hydra-mps
-ENV_NAME_ROCM = hydra-rocm
 CUDA_MAJOR ?= 13
 PYTEST ?= pytest
 PYTHON_BIN = $(if $(CONDA_PREFIX),$(CONDA_PREFIX)/bin/python,python)
@@ -36,10 +35,6 @@ env-create-cuda:
 env-create-mps:
 	@echo "Creating Apple Silicon (MPS) environment..."
 	mamba env create -f environment-mps.yml
-
-env-create-rocm:
-	@echo "Creating AMD GPU (ROCm) environment..."
-	mamba env create -f environment-rocm.yml
 
 
 # Step 2: Install pip packages (run after activating environment)
@@ -84,11 +79,6 @@ install-mps:
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
 
-install-rocm:
-	@echo "Installing AMD GPU (ROCm) packages..."
-	$(call reset_onnxruntime_packages)
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-rocm.txt
-
 # =============================================================================
 # ENVIRONMENT MAINTENANCE
 # =============================================================================
@@ -121,12 +111,6 @@ env-update-mps:
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt --upgrade
 
-env-update-rocm:
-	@echo "Updating AMD GPU (ROCm) environment..."
-	mamba env update -f environment-rocm.yml --prune
-	$(call reset_onnxruntime_packages)
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-rocm.txt --upgrade
-
 # Remove environments
 env-remove:
 	@echo "Removing CPU environment..."
@@ -139,10 +123,6 @@ env-remove-cuda:
 env-remove-mps:
 	@echo "Removing Apple Silicon (MPS) environment..."
 	conda env remove -n $(ENV_NAME_MPS)
-
-env-remove-rocm:
-	@echo "Removing AMD GPU (ROCm) environment..."
-	conda env remove -n $(ENV_NAME_ROCM)
 
 # =============================================================================
 # TESTING & VERIFICATION
@@ -183,10 +163,6 @@ test-cov-html:
 	fi
 	$(PYTEST) --cov=src/hydra_suite --cov-report=html --cov-report=term
 	@echo "📊 Coverage report generated in htmlcov/index.html"
-
-verify-rocm:
-	@echo "🔍 Verifying ROCm installation..."
-	python verify_rocm.py
 
 # =============================================================================
 # MODEL BENCHMARKING
@@ -271,19 +247,6 @@ setup-mps:
 	@echo "📝 Next steps:"
 	@echo "   1. conda activate $(ENV_NAME_MPS)"
 	@echo "   2. make install-mps"
-
-setup-rocm:
-	@echo "📦 Setting up AMD GPU (ROCm) environment..."
-	@echo "⚠️  Note: Ensure ROCm 6.0+ is installed system-wide first!"
-	@echo "   Install guide: https://rocm.docs.amd.com/"
-	@echo ""
-	mamba env create -f environment-rocm.yml
-	@echo ""
-	@echo "✅ Conda environment created!"
-	@echo "📝 Next steps:"
-	@echo "   1. conda activate $(ENV_NAME_ROCM)"
-	@echo "   2. make install-rocm"
-	@echo "   3. make verify-rocm  # Verify ROCm installation"
 
 # =============================================================================
 # PACKAGING & PUBLISHING
@@ -489,7 +452,7 @@ dep-graph:
 		echo "Install it in your active conda environment:"; \
 		echo "  conda install -c conda-forge graphviz"; \
 		echo "Or update the environment and reinstall:"; \
-		echo "  make env-update-mps  # (or env-update / env-update-cuda / env-update-rocm)"; \
+		echo "  make env-update-mps  # (or env-update / env-update-cuda)"; \
 		echo ""; \
 		exit 1; \
 	 fi
@@ -544,23 +507,21 @@ help:
 	@echo "  make setup           - CPU / NumPy+Numba"
 	@echo "  make setup-mps       - Apple Silicon (M1/M2/M3/M4)"
 	@echo "  make setup-cuda      - NVIDIA GPU (CUDA)"
-	@echo "  make setup-rocm      - AMD GPU (ROCm)"
 	@echo ""
 	@echo "📦 INSTALL (after activating environment)"
-	@echo "  make install[-mps|-cuda|-rocm]    - Install runtime packages"
+	@echo "  make install[-mps|-cuda]          - Install runtime packages"
 	@echo "  make install-dev                  - ⭐ Install dev & audit tools"
 	@echo "  make docs-install                 - Install MkDocs dependencies"
 	@echo ""
 	@echo "🔄 ENVIRONMENT MAINTENANCE"
-	@echo "  make env-create[-mps|-cuda|-rocm] - Create conda environment"
-	@echo "  make env-update[-mps|-cuda|-rocm] - Update conda environment"
-	@echo "  make env-remove[-mps|-cuda|-rocm] - Remove conda environment"
+	@echo "  make env-create[-mps|-cuda] - Create conda environment"
+	@echo "  make env-update[-mps|-cuda] - Update conda environment"
+	@echo "  make env-remove[-mps|-cuda] - Remove conda environment"
 	@echo ""
 	@echo "🧪 TESTING"
 	@echo "  make pytest          - Run all tests"
 	@echo "  make test-cov        - Run tests with coverage report (terminal)"
 	@echo "  make test-cov-html   - Run tests with HTML coverage (htmlcov/index.html)"
-	@echo "  make verify-rocm     - Verify ROCm GPU setup"
 	@echo "  make clean           - Remove Python cache files"
 	@echo ""
 	@echo "✨ CODE QUALITY  (requires: make install-dev)"
@@ -592,6 +553,5 @@ help:
 	@echo "  make docs-check      - Build + quality metrics + terminology checks"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "Platform notes: CPU=everywhere  MPS=Apple M-series  CUDA=NVIDIA  ROCm=AMD"
-	@echo "ROCm requires ROCm 6.0+ installed system-wide: https://rocm.docs.amd.com/"
+	@echo "Platform notes: CPU=everywhere  MPS=Apple M-series  CUDA=NVIDIA"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

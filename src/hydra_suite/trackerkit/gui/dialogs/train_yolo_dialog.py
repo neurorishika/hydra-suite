@@ -815,8 +815,6 @@ class TrainYoloDialog(BaseDialog):
                 options.append(f"cuda:{i}")
         if info.get("mps_available"):
             options.append("mps")
-        if info.get("rocm_available"):
-            options.append("rocm")
         return options
 
     def _append_log(self, text: str):

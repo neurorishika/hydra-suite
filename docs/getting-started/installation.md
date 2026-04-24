@@ -14,14 +14,14 @@ All three methods support full GPU acceleration. See the [platform matrix](#plat
 
 ## Platform matrix
 
-| Feature | CPU | MPS (Apple Silicon) | CUDA (NVIDIA) | ROCm (AMD) |
-|---------|-----|---------------------|---------------|-------------|
-| YOLO detection / pose | CPU | GPU | GPU | GPU |
-| TensorRT acceleration | No | No | Yes | No (NVIDIA only) |
-| ONNX Runtime | CPU | CPU | GPU | CPU |
-| CuPy background subtraction | No | No (NVIDIA only) | GPU | GPU (experimental) |
-| Platforms | All | macOS M1-M4 | Linux, Windows | Linux only |
-| System requirements | Python 3.11+ | Python 3.11+ | Python 3.11+ | Python 3.11+, system ROCm install |
+| Feature | CPU | MPS (Apple Silicon) | CUDA (NVIDIA) |
+|---------|-----|---------------------|---------------|
+| YOLO detection / pose | CPU | GPU | GPU |
+| TensorRT acceleration | No | No | Yes (NVIDIA only) |
+| ONNX Runtime | CPU | CPU | GPU |
+| CuPy background subtraction | No | No (NVIDIA only) | GPU |
+| Platforms | All | macOS M1-M4 | Linux, Windows |
+| System requirements | Python 3.11+ | Python 3.11+ | Python 3.11+ |
 
 ---
 
@@ -73,15 +73,6 @@ pip install "hydra-suite[cuda13]"
 
 **You do not need the CUDA toolkit installed.** PyTorch's pip wheel bundles NVIDIA CUDA runtime libraries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`, `nvidia-curand-cu12`, etc.) as pip dependencies and preloads them at import time, so ONNX Runtime and TensorRT find them automatically.
 
-### AMD GPU / ROCm (Linux only)
-
-Requires ROCm installed system-wide first. See the dedicated [ROCm setup guide](rocm.md).
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
-pip install "hydra-suite[rocm]"
-```
-
 ### Why is GPU install two commands?
 
 PyTorch GPU builds are hosted on PyTorch's own server, not PyPI. Python packaging standards (PEP 621) have no way to specify per-dependency index URLs. This is how every ML project handles it: you install torch first, then the package. The second command will **not** overwrite your existing torch.
@@ -116,10 +107,6 @@ pip install "hydra-suite[cuda] @ git+https://github.com/neurorishika/hydra-suite
 # CUDA 13
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 pip install "hydra-suite[cuda13] @ git+https://github.com/neurorishika/hydra-suite.git"
-
-# ROCm
-pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
-pip install "hydra-suite[rocm] @ git+https://github.com/neurorishika/hydra-suite.git"
 ```
 
 ### Install a specific branch or tag
@@ -171,11 +158,6 @@ make install-mps
 make setup-cuda
 conda activate hydra-cuda
 make install-cuda CUDA_MAJOR=13     # or CUDA_MAJOR=12
-
-# AMD GPU (ROCm — requires system ROCm; see getting-started/rocm.md)
-make setup-rocm
-conda activate hydra-rocm
-make install-rocm
 ```
 
 ### Step 3: Install dev tools (optional)
@@ -341,13 +323,9 @@ sudo apt install libgl1-mesa-glx libegl1 libxcb-xinerama0  # Ubuntu/Debian
 
 The conda path handles this automatically.
 
-### CuPy-ROCm compilation fails
+### CuPy compilation fails
 
-CuPy-ROCm builds from source on first install (~5-10 minutes). If it fails, ensure ROCm dev packages are installed:
-
-```bash
-sudo apt install rocm-dev rocrand rocblas rocsparse rocfft hipsparse hiprand hipfft
-```
+CuPy builds from source on first install if no prebuilt wheel is found. Ensure CUDA dev packages are installed.
 
 ### Fresh reinstall
 
@@ -369,5 +347,4 @@ make install-cuda CUDA_MAJOR=13
 
 - [Environments](environments.md) — conda environment matrix and Makefile reference
 - [Integrations](integrations.md) — SLEAP, X-AnyLabeling setup
-- [ROCm Setup](rocm.md) — system ROCm install and HYDRA-specific notes
 - [Publishing to PyPI](../developer-guide/publishing.md) — releasing new versions

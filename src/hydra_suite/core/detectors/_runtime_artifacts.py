@@ -21,6 +21,13 @@ class RuntimeArtifactMixin:
     _SESSION_ONNX_CPU_FALLBACK_ARTIFACTS: set[str] = set()
     _SESSION_TENSORRT_DISABLED_CONTEXTS: dict[str, str] = {}
 
+    def _direct_obb_execution_mode(self) -> str:
+        mode = str(self.params.get("YOLO_OBB_EXECUTION_MODE", "auto") or "auto")
+        mode = mode.strip().lower()
+        if mode in {"auto", "direct", "wrapper"}:
+            return mode
+        return "auto"
+
     def _clear_direct_obb_executor(self) -> None:
         self._direct_obb_executor = None
 
@@ -34,6 +41,8 @@ class RuntimeArtifactMixin:
         class_count: int | None = None,
     ) -> None:
         self._direct_obb_executor = None
+        if self._direct_obb_execution_mode() == "wrapper":
+            return
         if not str(getattr(self, "device", "")).startswith("cuda"):
             return
         try:
@@ -55,6 +64,96 @@ class RuntimeArtifactMixin:
             self._direct_obb_executor = None
             logger.warning(
                 "Direct %s OBB executor unavailable for %s: %s",
+                runtime,
+                artifact_path,
+                exc,
+            )
+
+    def _maybe_enable_direct_cuda_obb_executor(
+        self,
+        pt_model,
+        imgsz: int,
+        *,
+        class_names: dict[int, str] | None = None,
+        class_count: int | None = None,
+    ) -> None:
+        """Enable a ``DirectPyTorchCUDAOBBExecutor`` for the pure CUDA runtime.
+
+        The Ultralytics predictor uses ``LetterBox(auto=True)`` for PyTorch
+        ``.pt`` models, which produces rectangular inputs for non-square frames
+        (e.g. 576×1024 for a 1920×1080 feed instead of the 1024×1024 expected
+        by TRT/ONNX artifacts).  This discrepancy causes different FPN
+        activations and inconsistent detection scores across runtimes.
+
+        Using a direct executor forces ``auto=False`` preprocessing so the model
+        always sees a square ``imgsz×imgsz`` padded input — identical to what
+        the TRT and ONNX direct executors send.
+        """
+        self._direct_obb_executor = None
+        if self._direct_obb_execution_mode() == "wrapper":
+            return
+        if not str(getattr(self, "device", "")).startswith("cuda"):
+            return
+        try:
+            from ._direct_obb_runtime import create_direct_obb_executor
+
+            self._direct_obb_executor = create_direct_obb_executor(
+                runtime="cuda",
+                artifact_path="",
+                imgsz=int(imgsz),
+                class_names=class_names,
+                class_count=class_count,
+                pt_model=pt_model,
+            )
+            logger.info(
+                "Enabled direct PyTorch CUDA OBB executor (imgsz=%d); "
+                "auto=False square letterboxing matches TRT/ONNX paths.",
+                int(imgsz),
+            )
+        except Exception as exc:
+            self._direct_obb_executor = None
+            logger.warning("Direct PyTorch CUDA OBB executor unavailable: %s", exc)
+
+    def _maybe_enable_direct_detect_executor(
+        self,
+        runtime: str,
+        artifact_path: Path,
+        imgsz: int,
+        *,
+        class_names: dict[int, str] | None = None,
+        class_count: int | None = None,
+    ) -> None:
+        """Enable a direct ONNX/TRT executor for sequential stage-1 detect.
+
+        Mirrors :meth:`_maybe_enable_direct_obb_executor` but creates a
+        :class:`DirectONNXDetectExecutor` / :class:`DirectTensorRTDetectExecutor`
+        so the detect step can run entirely on the GPU without the Ultralytics
+        wrapper overhead.
+        """
+        self._direct_detect_executor = None
+        if self._direct_obb_execution_mode() == "wrapper":
+            return
+        if not str(getattr(self, "device", "")).startswith("cuda"):
+            return
+        try:
+            from ._direct_obb_runtime import create_direct_detect_executor
+
+            self._direct_detect_executor = create_direct_detect_executor(
+                runtime=runtime,
+                artifact_path=str(artifact_path),
+                imgsz=int(imgsz),
+                class_names=class_names,
+                class_count=class_count,
+            )
+            logger.info(
+                "Enabled direct %s detect executor for %s",
+                runtime,
+                artifact_path.name,
+            )
+        except Exception as exc:
+            self._direct_detect_executor = None
+            logger.warning(
+                "Direct %s detect executor unavailable for %s: %s",
                 runtime,
                 artifact_path,
                 exc,
