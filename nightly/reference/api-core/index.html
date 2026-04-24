@@ -446,27 +446,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/rocm/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../getting-started/environments/" class="md-nav__link">
         
   
@@ -2651,6 +2630,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;analyze_crops_cuda
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" analyze_crops_cuda">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.identity.HeadTailAnalyzer.close" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;close
@@ -4325,6 +4328,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;analyze_crops_cuda
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" analyze_crops_cuda">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.identity.HeadTailAnalyzer.close" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;close
@@ -4750,7 +4777,7 @@ object detection, and track assignment.</p>
 
 
 <h4 id="hydra_suite.core.TrackAssigner.assign_tracks" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">trajectory_ids</span><span class="p">,</span> <span class="n">next_trajectory_id</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.TrackAssigner.assign_tracks" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -4759,6 +4786,9 @@ object detection, and track assignment.</p>
 
         <p>Drop-in replacement for track assignment logic.
 Compatible with kf_manager.X state access.</p>
+<p>Trajectory-ID management has been removed from this method — the
+worker is solely responsible for assigning new IDs so that all
+amendments happen in one place.</p>
 
     </div>
 
@@ -6481,7 +6511,7 @@ Uses batch Mahalanobis distance and Numba-accelerated spatial assignment.</p>
 
 
 <h4 id="hydra_suite.core.assigners.hungarian.TrackAssigner.assign_tracks" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">trajectory_ids</span><span class="p">,</span> <span class="n">next_trajectory_id</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.assigners.hungarian.TrackAssigner.assign_tracks" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -6490,6 +6520,9 @@ Uses batch Mahalanobis distance and Numba-accelerated spatial assignment.</p>
 
         <p>Drop-in replacement for track assignment logic.
 Compatible with kf_manager.X state access.</p>
+<p>Trajectory-ID management has been removed from this method — the
+worker is solely responsible for assigning new IDs so that all
+amendments happen in one place.</p>
 
     </div>
 
@@ -7505,6 +7538,36 @@ their original confidence.</p>
     Per-frame list of <code>(heading_radians, confidence, directed_flag)</code>
     tuples.  <code>heading_radians</code> is <code>nan</code> when direction is ambiguous.
     <code>directed_flag</code> is 1 when classifier was confident, 0 otherwise.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">analyze_crops_cuda</span><span class="p">(</span><span class="n">frames_hwc</span><span class="p">,</span> <span class="n">per_frame_obb_corners</span><span class="p">,</span> <span class="n">profiler</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">input_is_bgr</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>GPU-native head-tail analysis for CUDA-resident frames.</p>
+<p>Mirrors :meth:<code>analyze_crops</code> but accepts CUDA tensors instead of
+numpy arrays.  The affine warp, resize, and classifier forward pass
+all stay on-device; only the final (tiny) probability vectors are
+moved to CPU.</p>
+<h6 id="hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda--parameters">Parameters<a class="headerlink" href="#hydra_suite.core.identity.HeadTailAnalyzer.analyze_crops_cuda--parameters" title="Permanent link">&para;</a></h6>
+<p>frames_hwc:
+    List of <code>(H, W, C)</code> CUDA tensors (uint8 or float32).  Typically
+    produced by NVDec (RGB, uint8) or the sequential GPU pipeline.
+per_frame_obb_corners:
+    Same format as :meth:<code>analyze_crops</code>.
+input_is_bgr:
+    Set True when frames use BGR channel ordering (cv2 convention).
+    Default False assumes RGB (NVDec output).</p>
 
     </div>
 

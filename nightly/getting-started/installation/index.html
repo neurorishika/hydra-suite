@@ -16,7 +16,7 @@
         <link rel="prev" href="../..">
       
       
-        <link rel="next" href="../rocm/">
+        <link rel="next" href="../environments/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -520,15 +520,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#amd-gpu-rocm-linux-only" class="md-nav__link">
-    <span class="md-ellipsis">
-      AMD GPU / ROCm (Linux only)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#why-is-gpu-install-two-commands" class="md-nav__link">
     <span class="md-ellipsis">
       Why is GPU install two commands?
@@ -793,9 +784,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cupy-rocm-compilation-fails" class="md-nav__link">
+  <a href="#cupy-compilation-fails" class="md-nav__link">
     <span class="md-ellipsis">
-      CuPy-ROCm compilation fails
+      CuPy compilation fails
     </span>
   </a>
   
@@ -828,27 +819,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../rocm/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-      </a>
     </li>
   
 
@@ -2131,15 +2101,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#amd-gpu-rocm-linux-only" class="md-nav__link">
-    <span class="md-ellipsis">
-      AMD GPU / ROCm (Linux only)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#why-is-gpu-install-two-commands" class="md-nav__link">
     <span class="md-ellipsis">
       Why is GPU install two commands?
@@ -2404,9 +2365,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#cupy-rocm-compilation-fails" class="md-nav__link">
+  <a href="#cupy-compilation-fails" class="md-nav__link">
     <span class="md-ellipsis">
-      CuPy-ROCm compilation fails
+      CuPy compilation fails
     </span>
   </a>
   
@@ -2492,7 +2453,6 @@
 <th>CPU</th>
 <th>MPS (Apple Silicon)</th>
 <th>CUDA (NVIDIA)</th>
-<th>ROCm (AMD)</th>
 </tr>
 </thead>
 <tbody>
@@ -2501,42 +2461,36 @@
 <td>CPU</td>
 <td>GPU</td>
 <td>GPU</td>
-<td>GPU</td>
 </tr>
 <tr>
 <td>TensorRT acceleration</td>
 <td>No</td>
 <td>No</td>
-<td>Yes</td>
-<td>No (NVIDIA only)</td>
+<td>Yes (NVIDIA only)</td>
 </tr>
 <tr>
 <td>ONNX Runtime</td>
 <td>CPU</td>
 <td>CPU</td>
 <td>GPU</td>
-<td>CPU</td>
 </tr>
 <tr>
 <td>CuPy background subtraction</td>
 <td>No</td>
 <td>No (NVIDIA only)</td>
 <td>GPU</td>
-<td>GPU (experimental)</td>
 </tr>
 <tr>
 <td>Platforms</td>
 <td>All</td>
 <td>macOS M1-M4</td>
 <td>Linux, Windows</td>
-<td>Linux only</td>
 </tr>
 <tr>
 <td>System requirements</td>
 <td>Python 3.11+</td>
 <td>Python 3.11+</td>
 <td>Python 3.11+</td>
-<td>Python 3.11+, system ROCm install</td>
 </tr>
 </tbody>
 </table>
@@ -2591,11 +2545,6 @@
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda13]&quot;</span>
 </span></code></pre></div>
 <p><strong>You do not need the CUDA toolkit installed.</strong> PyTorch's pip wheel bundles NVIDIA CUDA runtime libraries (<code>nvidia-cublas-cu12</code>, <code>nvidia-cudnn-cu12</code>, <code>nvidia-curand-cu12</code>, etc.) as pip dependencies and preloads them at import time, so ONNX Runtime and TensorRT find them automatically.</p>
-<h3 id="amd-gpu-rocm-linux-only">AMD GPU / ROCm (Linux only)<a class="headerlink" href="#amd-gpu-rocm-linux-only" title="Permanent link">&para;</a></h3>
-<p>Requires ROCm installed system-wide first. See the dedicated <a href="../rocm/">ROCm setup guide</a>.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/rocm7.2
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[rocm]&quot;</span>
-</span></code></pre></div>
 <h3 id="why-is-gpu-install-two-commands">Why is GPU install two commands?<a class="headerlink" href="#why-is-gpu-install-two-commands" title="Permanent link">&para;</a></h3>
 <p>PyTorch GPU builds are hosted on PyTorch's own server, not PyPI. Python packaging standards (PEP 621) have no way to specify per-dependency index URLs. This is how every ML project handles it: you install torch first, then the package. The second command will <strong>not</strong> overwrite your existing torch.</p>
 <hr />
@@ -2607,67 +2556,58 @@
 <li>A collaborator wants to try the latest version</li>
 </ul>
 <h3 id="cpu">CPU<a class="headerlink" href="#cpu" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
 </span></code></pre></div>
 <h3 id="with-gpu-extras">With GPU extras<a class="headerlink" href="#with-gpu-extras" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># MPS</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[mps] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># CUDA</span>
-</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu128
-</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
-</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>
-</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># CUDA 13</span>
-</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu130
-</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda13] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
-</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>
-</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1"># ROCm</span>
-</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/rocm7.2
-</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[rocm] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># MPS</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[mps] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># CUDA</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu128
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># CUDA 13</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu130
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda13] @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
 </span></code></pre></div>
 <h3 id="install-a-specific-branch-or-tag">Install a specific branch or tag<a class="headerlink" href="#install-a-specific-branch-or-tag" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Specific branch</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@main&quot;</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Specific tag</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@v1.0.0&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Specific branch</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@main&quot;</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Specific tag</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git@v1.0.0&quot;</span>
 </span></code></pre></div>
 <h3 id="upgrading-a-github-install">Upgrading a GitHub install<a class="headerlink" href="#upgrading-a-github-install" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>--force-reinstall<span class="w"> </span>--no-deps<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">    </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>--force-reinstall<span class="w"> </span>--no-deps<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">    </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
 </span></code></pre></div>
 <hr />
 <h2 id="conda-pip-developer-install">conda + pip (developer install)<a class="headerlink" href="#conda-pip-developer-install" title="Permanent link">&para;</a></h2>
 <p>For active development. Uses conda for system libraries (Qt, OpenGL) and pip for Python packages. Provides editable install so code changes are live immediately.</p>
 <h3 id="step-1-clone">Step 1: Clone<a class="headerlink" href="#step-1-clone" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/neurorishika/hydra-suite.git
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="nb">cd</span><span class="w"> </span>hydra-suite
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/neurorishika/hydra-suite.git
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nb">cd</span><span class="w"> </span>hydra-suite
 </span></code></pre></div>
 <h3 id="step-2-create-environment-and-install">Step 2: Create environment and install<a class="headerlink" href="#step-2-create-environment-and-install" title="Permanent link">&para;</a></h3>
 <p>Pick your platform:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># CPU</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>make<span class="w"> </span>setup
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>make<span class="w"> </span>install
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="c1"># Apple Silicon (MPS)</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>make<span class="w"> </span>setup-mps
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>make<span class="w"> </span>install-mps
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="c1"># NVIDIA GPU (CUDA)</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a>make<span class="w"> </span>setup-cuda
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span><span class="w">     </span><span class="c1"># or CUDA_MAJOR=12</span>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="c1"># AMD GPU (ROCm — requires system ROCm; see getting-started/rocm.md)</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a>make<span class="w"> </span>setup-rocm
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-rocm
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a>make<span class="w"> </span>install-rocm
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># CPU</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>make<span class="w"> </span>setup
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>make<span class="w"> </span>install
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="c1"># Apple Silicon (MPS)</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>make<span class="w"> </span>setup-mps
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a>make<span class="w"> </span>install-mps
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="c1"># NVIDIA GPU (CUDA)</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a>make<span class="w"> </span>setup-cuda
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span><span class="w">     </span><span class="c1"># or CUDA_MAJOR=12</span>
 </span></code></pre></div>
 <h3 id="step-3-install-dev-tools-optional">Step 3: Install dev tools (optional)<a class="headerlink" href="#step-3-install-dev-tools-optional" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>make<span class="w"> </span>install-dev
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>make<span class="w"> </span>install-dev
 </span></code></pre></div>
 <p>This adds formatting, linting, testing, and publishing tools. Run <code>make help</code> for the full command catalog.</p>
 <h3 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h3>
@@ -2678,29 +2618,29 @@
 </ol>
 <p>Base dependencies (numpy, scipy, PySide6, ultralytics, etc.) are declared once in <code>pyproject.toml</code>. The requirements files only add what <code>pyproject.toml</code> cannot express (torch GPU index URLs). This means there is <strong>one source of truth</strong> for dependencies.</p>
 <h3 id="development-workflow">Development workflow<a class="headerlink" href="#development-workflow" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps<span class="w">   </span><span class="c1"># or your env</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="c1"># Edit code — changes are live immediately (editable install)</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>make<span class="w"> </span>pytest<span class="w">                               </span><span class="c1"># run tests</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>make<span class="w"> </span>format<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>make<span class="w"> </span>lint<span class="w">                  </span><span class="c1"># format and lint before committing</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps<span class="w">   </span><span class="c1"># or your env</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="c1"># Edit code — changes are live immediately (editable install)</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>make<span class="w"> </span>pytest<span class="w">                               </span><span class="c1"># run tests</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>make<span class="w"> </span>format<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>make<span class="w"> </span>lint<span class="w">                  </span><span class="c1"># format and lint before committing</span>
 </span></code></pre></div>
 <hr />
 <h2 id="after-installation">After installation<a class="headerlink" href="#after-installation" title="Permanent link">&para;</a></h2>
 <h3 id="verify">Verify<a class="headerlink" href="#verify" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>hydra<span class="w"> </span>--help
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(&#39;CUDA:&#39;, torch.cuda.is_available(), &#39;| MPS:&#39;, torch.backends.mps.is_available())&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>hydra<span class="w"> </span>--help
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(&#39;CUDA:&#39;, torch.cuda.is_available(), &#39;| MPS:&#39;, torch.backends.mps.is_available())&quot;</span>
 </span></code></pre></div>
 <p>For CUDA, also check ONNX Runtime:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import onnxruntime as ort; print(ort.get_available_providers())&quot;</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="c1"># Should include &#39;CUDAExecutionProvider&#39;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import onnxruntime as ort; print(ort.get_available_providers())&quot;</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># Should include &#39;CUDAExecutionProvider&#39;</span>
 </span></code></pre></div>
 <h3 id="launch">Launch<a class="headerlink" href="#launch" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>hydra<span class="w">              </span><span class="c1"># HYDRA Suite launcher</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>trackerkit<span class="w">         </span><span class="c1"># TrackerKit tracking GUI</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>posekit<span class="w">            </span><span class="c1"># PoseKit pose-labeling GUI</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>classkit<span class="w">           </span><span class="c1"># ClassKit labeler</span>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>detectkit<span class="w">          </span><span class="c1"># DetectKit training</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>filterkit<span class="w">          </span><span class="c1"># FilterKit tool</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>refinekit<span class="w">          </span><span class="c1"># RefineKit proofreading</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>hydra<span class="w">              </span><span class="c1"># HYDRA Suite launcher</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>trackerkit<span class="w">         </span><span class="c1"># TrackerKit tracking GUI</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>posekit<span class="w">            </span><span class="c1"># PoseKit pose-labeling GUI</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>classkit<span class="w">           </span><span class="c1"># ClassKit labeler</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>detectkit<span class="w">          </span><span class="c1"># DetectKit training</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>filterkit<span class="w">          </span><span class="c1"># FilterKit tool</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>refinekit<span class="w">          </span><span class="c1"># RefineKit proofreading</span>
 </span></code></pre></div>
 <h3 id="data-directories">Data directories<a class="headerlink" href="#data-directories" title="Permanent link">&para;</a></h3>
 <p>User data is stored in platform-appropriate locations (not inside the package):</p>
@@ -2759,44 +2699,44 @@
 </tbody>
 </table>
 <p>Examples:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1"># Use a shared lab network drive for models</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HYDRA_DATA_DIR</span><span class="o">=</span>/mnt/lab-shared/hydra-data
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>hydra
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="c1"># Use a project-specific config</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="nv">HYDRA_CONFIG_DIR</span><span class="o">=</span>./my-project-config<span class="w"> </span>mat
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="c1"># Check where everything currently points</span>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from hydra_suite.paths import print_paths; print_paths()&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Use a shared lab network drive for models</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HYDRA_DATA_DIR</span><span class="o">=</span>/mnt/lab-shared/hydra-data
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>hydra
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="c1"># Use a project-specific config</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="nv">HYDRA_CONFIG_DIR</span><span class="o">=</span>./my-project-config<span class="w"> </span>mat
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="c1"># Check where everything currently points</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from hydra_suite.paths import print_paths; print_paths()&quot;</span>
 </span></code></pre></div>
 <p>All sub-applications (TrackerKit, PoseKit, DetectKit, ClassKit, RefineKit, FilterKit) use the same <code>hydra_suite.paths</code> module, so they all respect these overrides and share the same data directories.</p>
 <h3 id="programmatic-access-from-other-tools">Programmatic access from other tools<a class="headerlink" href="#programmatic-access-from-other-tools" title="Permanent link">&para;</a></h3>
 <p>Scripts and notebooks can access the same paths:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_models_dir</span><span class="p">,</span> <span class="n">get_presets_dir</span><span class="p">,</span> <span class="n">get_skeleton_dir</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="nb">print</span><span class="p">(</span><span class="n">get_models_dir</span><span class="p">())</span>        <span class="c1"># where trained models are stored</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="nb">print</span><span class="p">(</span><span class="n">get_presets_dir</span><span class="p">())</span>       <span class="c1"># where config presets live</span>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="nb">print</span><span class="p">(</span><span class="n">get_skeleton_dir</span><span class="p">())</span>      <span class="c1"># where skeleton definitions live</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">hydra_suite.paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_models_dir</span><span class="p">,</span> <span class="n">get_presets_dir</span><span class="p">,</span> <span class="n">get_skeleton_dir</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="nb">print</span><span class="p">(</span><span class="n">get_models_dir</span><span class="p">())</span>        <span class="c1"># where trained models are stored</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="nb">print</span><span class="p">(</span><span class="n">get_presets_dir</span><span class="p">())</span>       <span class="c1"># where config presets live</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="nb">print</span><span class="p">(</span><span class="n">get_skeleton_dir</span><span class="p">())</span>      <span class="c1"># where skeleton definitions live</span>
 </span></code></pre></div>
 <h3 id="migrating-from-an-older-repo-checkout">Migrating from an older repo checkout<a class="headerlink" href="#migrating-from-an-older-repo-checkout" title="Permanent link">&para;</a></h3>
 <p>If you had models in <code>&lt;repo&gt;/models/</code> or training data in <code>&lt;repo&gt;/training/</code>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.paths_migrate<span class="w"> </span>/path/to/repo<span class="w"> </span>--dry-run<span class="w">  </span><span class="c1"># preview what would be copied</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.paths_migrate<span class="w"> </span>/path/to/repo<span class="w">            </span><span class="c1"># copy files</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.paths_migrate<span class="w"> </span>/path/to/repo<span class="w"> </span>--dry-run<span class="w">  </span><span class="c1"># preview what would be copied</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>python<span class="w"> </span>-m<span class="w"> </span>hydra_suite.paths_migrate<span class="w"> </span>/path/to/repo<span class="w">            </span><span class="c1"># copy files</span>
 </span></code></pre></div>
 <hr />
 <h2 id="updating">Updating<a class="headerlink" href="#updating" title="Permanent link">&para;</a></h2>
 <h3 id="pip-pypi">pip (PyPI)<a class="headerlink" href="#pip-pypi" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>hydra-suite
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>hydra-suite
 </span></code></pre></div>
 <h3 id="pip-github">pip (GitHub)<a class="headerlink" href="#pip-github" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>--force-reinstall<span class="w"> </span>--no-deps<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="w">    </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pip<span class="w"> </span>install<span class="w"> </span>--upgrade<span class="w"> </span>--force-reinstall<span class="w"> </span>--no-deps<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="w">    </span><span class="s2">&quot;hydra-suite @ git+https://github.com/neurorishika/hydra-suite.git&quot;</span>
 </span></code></pre></div>
 <h3 id="conda-pip-developer">conda + pip (developer)<a class="headerlink" href="#conda-pip-developer" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps<span class="w">  </span><span class="c1"># or your env</span>
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>git<span class="w"> </span>pull
-</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>mamba<span class="w"> </span>env<span class="w"> </span>update<span class="w"> </span>-f<span class="w"> </span>environment-mps.yml<span class="w"> </span>--prune<span class="w">   </span><span class="c1"># if conda deps changed</span>
-</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>make<span class="w"> </span>install-mps<span class="w">                                  </span><span class="c1"># reinstall pip packages</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-mps<span class="w">  </span><span class="c1"># or your env</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>git<span class="w"> </span>pull
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>mamba<span class="w"> </span>env<span class="w"> </span>update<span class="w"> </span>-f<span class="w"> </span>environment-mps.yml<span class="w"> </span>--prune<span class="w">   </span><span class="c1"># if conda deps changed</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>make<span class="w"> </span>install-mps<span class="w">                                  </span><span class="c1"># reinstall pip packages</span>
 </span></code></pre></div>
 <hr />
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
@@ -2811,30 +2751,27 @@
 </ul>
 <h3 id="pyside6-qt-errors-on-linux-pip-only">PySide6 / Qt errors on Linux (pip only)<a class="headerlink" href="#pyside6-qt-errors-on-linux-pip-only" title="Permanent link">&para;</a></h3>
 <p>pip-installed PySide6 may need system libraries:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>libgl1-mesa-glx<span class="w"> </span>libegl1<span class="w"> </span>libxcb-xinerama0<span class="w">  </span><span class="c1"># Ubuntu/Debian</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>libgl1-mesa-glx<span class="w"> </span>libegl1<span class="w"> </span>libxcb-xinerama0<span class="w">  </span><span class="c1"># Ubuntu/Debian</span>
 </span></code></pre></div>
 <p>The conda path handles this automatically.</p>
-<h3 id="cupy-rocm-compilation-fails">CuPy-ROCm compilation fails<a class="headerlink" href="#cupy-rocm-compilation-fails" title="Permanent link">&para;</a></h3>
-<p>CuPy-ROCm builds from source on first install (~5-10 minutes). If it fails, ensure ROCm dev packages are installed:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>rocm-dev<span class="w"> </span>rocrand<span class="w"> </span>rocblas<span class="w"> </span>rocsparse<span class="w"> </span>rocfft<span class="w"> </span>hipsparse<span class="w"> </span>hiprand<span class="w"> </span>hipfft
-</span></code></pre></div>
+<h3 id="cupy-compilation-fails">CuPy compilation fails<a class="headerlink" href="#cupy-compilation-fails" title="Permanent link">&para;</a></h3>
+<p>CuPy builds from source on first install if no prebuilt wheel is found. Ensure CUDA dev packages are installed.</p>
 <h3 id="fresh-reinstall">Fresh reinstall<a class="headerlink" href="#fresh-reinstall" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># pip</span>
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>pip<span class="w"> </span>uninstall<span class="w"> </span>hydra-suite
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda]&quot;</span>
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="c1"># conda</span>
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a>conda<span class="w"> </span>env<span class="w"> </span>remove<span class="w"> </span>-n<span class="w"> </span>hydra-cuda
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>make<span class="w"> </span>setup-cuda
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
-</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1"># pip</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>pip<span class="w"> </span>uninstall<span class="w"> </span>hydra-suite
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda]&quot;</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="c1"># conda</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>conda<span class="w"> </span>env<span class="w"> </span>remove<span class="w"> </span>-n<span class="w"> </span>hydra-cuda
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>make<span class="w"> </span>setup-cuda
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span>
 </span></code></pre></div>
 <hr />
 <h2 id="related-docs">Related docs<a class="headerlink" href="#related-docs" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="../environments/">Environments</a> — conda environment matrix and Makefile reference</li>
 <li><a href="../integrations/">Integrations</a> — SLEAP, X-AnyLabeling setup</li>
-<li><a href="../rocm/">ROCm Setup</a> — system ROCm install and HYDRA-specific notes</li>
 <li><a href="../../developer-guide/publishing/">Publishing to PyPI</a> — releasing new versions</li>
 </ul>
 
