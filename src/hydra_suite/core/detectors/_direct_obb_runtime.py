@@ -471,6 +471,13 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
         # _preprocess_cuda_batch returns a new tensor (different address) and
         # needs to update the io_binding before the ORT session run.
         self._last_bound_input_ptr: int = in_buf_ptr
+        # CUDA event used to synchronize preprocessing (default stream) →
+        # ORT CUDA EP inference without stalling the CPU more than necessary.
+        # _preprocess writes to _gpu_input via non-blocking copy_ + mul_; without
+        # this event the ORT session could start reading the buffer on ORT's
+        # internal CUDA stream before those PyTorch ops complete, producing
+        # stale-frame results.
+        self._preprocess_event = torch.cuda.Event()
         self._io_binding.bind_output(
             name=self._output_name,
             device_type="cuda",
@@ -532,6 +539,14 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
             )
             self._last_bound_input_ptr = cur_ptr
 
+        # Synchronize PyTorch's default CUDA stream before submitting the ORT
+        # session.  _preprocess writes into _gpu_input via non-blocking copy_
+        # and mul_ operations queued on PyTorch's stream; ORT's CUDA EP uses
+        # its own internal stream, so without this sync ORT would read the
+        # buffer before PyTorch's writes are visible, returning the previous
+        # frame's data (stale-frame bug).
+        self._preprocess_event.record()
+        self._preprocess_event.synchronize()
         self.session.run_with_iobinding(self._io_binding)
         return self._output_tensor
 
