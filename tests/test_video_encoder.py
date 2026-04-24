@@ -146,3 +146,12 @@ def test_nvenc_session_counter_decrements_on_release(tmp_path):
         ve._BACKEND_CACHE = saved_cache
         ve._NVENC_MAX = saved_max
         ve._NVENC_ACTIVE = saved_active
+
+
+def test_tracking_worker_module_imports_video_encoder():
+    """worker.py must import VideoEncoder from hydra_suite.utils.video_encoder."""
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    assert hasattr(
+        worker_mod, "VideoEncoder"
+    ), "worker.py must have 'from hydra_suite.utils.video_encoder import VideoEncoder'"
