@@ -36,6 +36,7 @@ from hydra_suite.utils.video_artifacts import (
     choose_writable_artifact_base_dir,
     find_existing_detection_cache_path,
 )
+from hydra_suite.utils.video_encoder import VideoEncoder
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.config.schemas import TrackerConfig
@@ -1917,9 +1918,11 @@ class TrackingOrchestrator:
         total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-        if not out.isOpened():
+        try:
+            out = VideoEncoder(
+                output_path, fps=fps, width=frame_width, height=frame_height
+            )
+        except Exception:
             logger.error(f"Failed to create output video: {output_path}")
             cap.release()
             return None

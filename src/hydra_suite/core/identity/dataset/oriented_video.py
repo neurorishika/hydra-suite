@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from ....data.detection_cache import DetectionCache
+from ....utils.video_encoder import VideoEncoder
 from ...post.processing import _fix_heading_flips
 from ..geometry import ellipse_axes_from_area, ellipse_to_obb_corners
 from .naming import build_detection_image_filename, build_interpolated_image_filename
@@ -945,7 +946,7 @@ class OrientedTrackVideoExporter:
         if not cap.isOpened():
             raise RuntimeError(f"Failed to open source video: {self.video_path}")
 
-        writers: dict[int, cv2.VideoWriter] = {}
+        writers: dict[int, VideoEncoder] = {}
         frames_written_by_track: dict[int, int] = defaultdict(int)
         images_written_by_track: dict[int, int] = defaultdict(int)
         current_pos = int(cap.get(cv2.CAP_PROP_POS_FRAMES) or 0)
@@ -1056,19 +1057,16 @@ class OrientedTrackVideoExporter:
 
     def _open_writer(
         self, trajectory_id: int, canvas_size: tuple[int, int]
-    ) -> cv2.VideoWriter:
+    ) -> VideoEncoder:
         if self.output_dir is None:
             raise RuntimeError("Video output directory is not configured for export.")
         output_path = self.output_dir / f"trajectory_{int(trajectory_id):04d}.mp4"
-        writer = cv2.VideoWriter(
-            str(output_path),
-            cv2.VideoWriter_fourcc(*self.codec),
-            self.fps,
-            canvas_size,
+        return VideoEncoder(
+            output_path,
+            fps=self.fps,
+            width=canvas_size[0],
+            height=canvas_size[1],
         )
-        if not writer.isOpened():
-            raise RuntimeError(f"Failed to create oriented track video: {output_path}")
-        return writer
 
     def _render_task(
         self,

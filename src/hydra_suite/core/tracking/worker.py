@@ -81,6 +81,7 @@ from hydra_suite.utils.video_artifacts import (
     build_detected_properties_cache_path,
     build_individual_properties_cache_path,
 )
+from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -1016,9 +1017,7 @@ class TrackingWorker(QThread):
             if self.backward_mode:
                 base, ext = os.path.splitext(out_path)
                 out_path = f"{base}_backward{ext}"
-            self.video_writer = cv2.VideoWriter(
-                out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
-            )
+            self.video_writer = VideoEncoder(out_path, fps=fps, width=w, height=h)
 
         # Initialize detector using factory function.
         # Preview mode remains compatible with fixed-batch runtimes by using
