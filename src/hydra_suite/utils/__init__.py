@@ -16,6 +16,7 @@ from .gpu_utils import (
     log_device_info,
 )
 from .image_processing import apply_image_adjustments, stabilize_lighting
+from .video_encoder import VideoEncoder, probe_video_backend
 
 __all__ = [
     "apply_image_adjustments",
@@ -30,4 +31,6 @@ __all__ = [
     "NUMBA_AVAILABLE",
     "get_device_info",
     "log_device_info",
+    "VideoEncoder",
+    "probe_video_backend",
 ]
