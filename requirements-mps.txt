@@ -15,5 +15,7 @@ onnx
 onnxslim
 onnxruntime
 
+av>=12.0
+
 # Install this package in editable mode (pulls all pyproject.toml dependencies)
 -e .
