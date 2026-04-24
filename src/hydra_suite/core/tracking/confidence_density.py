@@ -22,6 +22,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 from scipy.ndimage import find_objects, gaussian_filter, label
 
+from hydra_suite.utils.video_encoder import VideoEncoder
+
 # ---------------------------------------------------------------------------
 # DensityRegion
 # ---------------------------------------------------------------------------
@@ -765,8 +767,7 @@ def export_diagnostic_video(
     import cv2
 
     output_path = Path(output_path)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(output_path), fourcc, fps, (frame_w, frame_h))
+    writer = VideoEncoder(output_path, fps=fps, width=frame_w, height=frame_h)
 
     all_vals = (
         np.concatenate([g.ravel() for g in density_grids])

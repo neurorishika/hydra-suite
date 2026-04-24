@@ -175,3 +175,13 @@ def test_oriented_video_exporter_imports_video_encoder():
         "oriented_video.py must have "
         "'from hydra_suite.utils.video_encoder import VideoEncoder'"
     )
+
+
+def test_diagnostic_video_module_imports_video_encoder():
+    """confidence_density.py must import VideoEncoder."""
+    import hydra_suite.core.tracking.confidence_density as cd_mod
+
+    assert hasattr(cd_mod, "VideoEncoder"), (
+        "confidence_density.py must have "
+        "'from hydra_suite.utils.video_encoder import VideoEncoder'"
+    )
