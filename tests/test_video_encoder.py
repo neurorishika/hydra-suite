@@ -165,3 +165,13 @@ def test_tracking_orchestrator_imports_video_encoder():
         "orchestrators/tracking.py must have "
         "'from hydra_suite.utils.video_encoder import VideoEncoder'"
     )
+
+
+def test_oriented_video_exporter_imports_video_encoder():
+    """oriented_video.py must import VideoEncoder."""
+    import hydra_suite.core.identity.dataset.oriented_video as ov_mod
+
+    assert hasattr(ov_mod, "VideoEncoder"), (
+        "oriented_video.py must have "
+        "'from hydra_suite.utils.video_encoder import VideoEncoder'"
+    )
