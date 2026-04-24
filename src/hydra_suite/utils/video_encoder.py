@@ -45,7 +45,12 @@ _AV_CODEC_OPTS: dict[str, dict[str, str]] = {
 
 
 def _try_encode(codec_name: str) -> bool:
-    """Return True if codec_name successfully encodes a 2x2 test clip."""
+    """Return True if codec_name successfully encodes a test clip.
+
+    Uses 64x64 frames (multiple of 16) so hardware codecs exercise the same
+    avcodec_open2 path they would use for real frames.  2x2 frames are handled
+    differently by VideoToolbox and give false positives on some configurations.
+    """
     try:
         import av
 
@@ -55,10 +60,10 @@ def _try_encode(codec_name: str) -> bool:
         try:
             container = av.open(tmp, mode="w")
             stream = container.add_stream(codec_name, rate=1)
-            stream.width = 2
-            stream.height = 2
+            stream.width = 64
+            stream.height = 64
             stream.pix_fmt = "yuv420p"
-            frame = av.VideoFrame(2, 2, "yuv420p")
+            frame = av.VideoFrame(64, 64, "yuv420p")
             for pkt in stream.encode(frame):
                 container.mux(pkt)
             for pkt in stream.encode():
@@ -198,18 +203,61 @@ class VideoEncoder:
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    def _fallback_to_opencv(self, frame_bgr: np.ndarray) -> None:
+        """Close a failed PyAV container and reopen the same path with OpenCV.
+
+        Called on the first encoding failure (typically avcodec_open2 for hardware
+        codecs).  Since the codec never successfully encoded a frame, the partial
+        container can be overwritten cleanly.
+        """
+        import warnings
+
+        import cv2
+
+        global _BACKEND_CACHE, _NVENC_ACTIVE
+
+        warnings.warn(
+            f"VideoEncoder: {self._backend} encoding failed — falling back to OpenCV mp4v",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        # Close the broken container without flushing (codec was never opened).
+        if self._container is not None:
+            try:
+                self._container.close()
+            except Exception:
+                pass
+            self._container = None
+            self._stream = None
+        if self._used_nvenc:
+            _NVENC_ACTIVE = max(0, _NVENC_ACTIVE - 1)
+            self._used_nvenc = False
+        # Poison the process-level cache so future encoders skip this backend.
+        _BACKEND_CACHE = "opencv"
+        self._backend = "opencv"
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        self._cv_writer = cv2.VideoWriter(
+            str(self._path), fourcc, self._fps, (self._width, self._height)
+        )
+        if self._cv_writer.isOpened():
+            self._cv_writer.write(frame_bgr)
+
     def write(self, frame_bgr: np.ndarray) -> None:
         """Write one BGR uint8 frame (same interface as cv2.VideoWriter.write)."""
         if self._stream is None and self._cv_writer is None:
             raise RuntimeError("VideoEncoder is not open")
         if self._stream is not None:
-            import av
+            try:
+                import av
 
-            frame_rgb = frame_bgr[:, :, ::-1].copy()
-            vf = av.VideoFrame.from_ndarray(frame_rgb, format="rgb24")
-            vf = vf.reformat(format="yuv420p")
-            for pkt in self._stream.encode(vf):
-                self._container.mux(pkt)
+                frame_rgb = frame_bgr[:, :, ::-1].copy()
+                vf = av.VideoFrame.from_ndarray(frame_rgb, format="rgb24")
+                vf = vf.reformat(format="yuv420p")
+                for pkt in self._stream.encode(vf):
+                    self._container.mux(pkt)
+            except Exception:
+                # Hardware codec failed on first frame — degrade gracefully.
+                self._fallback_to_opencv(frame_bgr)
         elif self._cv_writer is not None:
             self._cv_writer.write(frame_bgr)
 
