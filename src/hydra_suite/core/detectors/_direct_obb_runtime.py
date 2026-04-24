@@ -87,8 +87,10 @@ class _BaseDirectOBBExecutor:
             # np.copyto into pinned memory — fast CPU memcpy, zero allocation.
             np.copyto(self._pinned_input.numpy()[0], lb_frame.transpose(2, 0, 1)[::-1])
             # Non-blocking async pinned→GPU copy with on-the-fly uint8→float32
-            # conversion.  ORT's run_with_iobinding() syncs the CUDA stream before
-            # reading the tensor, so the async work is guaranteed to complete.
+            # conversion.  These ops are queued on PyTorch's default CUDA stream.
+            # The caller is responsible for ensuring they complete before inference:
+            #   ONNX executor:         _run_inference calls _preprocess_event.synchronize()
+            #   PyTorch-CUDA executor: _run_inference runs on the same default stream
             self._gpu_input.copy_(self._pinned_input, non_blocking=True)
             self._gpu_input.mul_(1.0 / 255.0)
             return self._gpu_input
@@ -432,6 +434,12 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
                 int(key): str(value) for key, value in dict(parsed or {}).items()
             }
             self.nc = max(1, len(self.names) or self.nc)
+        # Read the end2end flag from ONNX metadata so _postprocess uses the
+        # correct NMS mode (iou_thres=1.0 for BNC end2end vs 0.5 for raw CBC
+        # head).  _yolo_runtime_export_profile always forces end2end=False for
+        # hydra-exported artifacts; this defensive read handles user-supplied
+        # ONNX files that may have been exported with end2end=True.
+        self._end2end = bool(meta.get("end2end", False))
 
         # Pre-allocate the output tensor and create a persistent IO binding with
         # both input and output pre-bound from fixed CUDA buffers so that
@@ -832,16 +840,25 @@ class DirectONNXDetectExecutor(DirectONNXOBBExecutor):
         if not isinstance(preds, torch.Tensor):
             preds = torch.as_tensor(preds, device=img_tensor.device)
 
+        is_end2end = getattr(self, "_end2end", False)
+        # Match the OBB _postprocess convention: raw-CBC head exports
+        # (end2end=False) require actual NMS suppression with iou_thres=0.5
+        # because the model outputs many overlapping anchors per object.
+        # End-to-end models already have NMS baked in, so iou_thres=1.0
+        # is used to pass all slots through without further suppression.
+        iou_thres = 1.0 if is_end2end else 0.5
+
         # rotated=False → standard NMS for YOLO detect.
         # Output per image: [N, 6] = [x1, y1, x2, y2, conf, cls] in letterbox space.
         filtered = nms.non_max_suppression(
             preds,
             conf_thres=conf_thres,
-            iou_thres=1.0,
+            iou_thres=iou_thres,
             classes=classes,
             max_det=max_det,
             nc=self.nc,
             rotated=False,
+            end2end=is_end2end,
         )
 
         results = []
@@ -884,14 +901,18 @@ class DirectTensorRTDetectExecutor(DirectTensorRTOBBExecutor):
         if not isinstance(preds, torch.Tensor):
             preds = torch.as_tensor(preds, device=img_tensor.device)
 
+        is_end2end = getattr(self, "_end2end", False)
+        iou_thres = 1.0 if is_end2end else 0.5
+
         filtered = nms.non_max_suppression(
             preds,
             conf_thres=conf_thres,
-            iou_thres=1.0,
+            iou_thres=iou_thres,
             classes=classes,
             max_det=max_det,
             nc=self.nc,
             rotated=False,
+            end2end=is_end2end,
         )
 
         results = []
