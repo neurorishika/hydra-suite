@@ -43,6 +43,23 @@ _AV_CODEC_OPTS: dict[str, dict[str, str]] = {
     "pyav_software": {"preset": "fast", "crf": "23"},
 }
 
+# H.264 Level 5.2 MaxFS = 36 864 macroblocks × 256 = 9 437 184 luma samples.
+# Frames larger than this must use HEVC, which has no practical limit for video.
+_H264_MAX_PIXELS = 9_437_184
+
+_H264_TO_HEVC: dict[str, str] = {
+    "h264_videotoolbox": "hevc_videotoolbox",
+    "h264_nvenc": "hevc_nvenc",
+}
+
+
+def _resolve_codec(backend: str, width: int, height: int) -> str:
+    """Return the FFmpeg codec name, upgrading H.264 → HEVC for oversized frames."""
+    codec = _AV_CODEC_NAME[backend]
+    if width * height > _H264_MAX_PIXELS:
+        codec = _H264_TO_HEVC.get(codec, codec)
+    return codec
+
 
 def _try_encode(codec_name: str) -> bool:
     """Return True if codec_name successfully encodes a test clip.
@@ -178,7 +195,7 @@ class VideoEncoder:
         if self._backend in _AV_CODEC_NAME:
             import av
 
-            codec = _AV_CODEC_NAME[self._backend]
+            codec = _resolve_codec(self._backend, self._width, self._height)
             opts = _AV_CODEC_OPTS[self._backend]
             try:
                 self._container = av.open(str(self._path), mode="w")
