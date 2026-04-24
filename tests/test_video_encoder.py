@@ -155,3 +155,13 @@ def test_tracking_worker_module_imports_video_encoder():
     assert hasattr(
         worker_mod, "VideoEncoder"
     ), "worker.py must have 'from hydra_suite.utils.video_encoder import VideoEncoder'"
+
+
+def test_tracking_orchestrator_imports_video_encoder():
+    """orchestrators/tracking.py must import VideoEncoder."""
+    import hydra_suite.trackerkit.gui.orchestrators.tracking as orch_mod
+
+    assert hasattr(orch_mod, "VideoEncoder"), (
+        "orchestrators/tracking.py must have "
+        "'from hydra_suite.utils.video_encoder import VideoEncoder'"
+    )
