@@ -36,6 +36,7 @@ def test_probe_falls_back_to_opencv_when_av_unavailable():
         result = ve._probe_backend()
         assert result == "opencv"
     finally:
+        ve._BACKEND_CACHE = None  # prevent cache state leaking to other tests
         if saved is None:
             sys.modules.pop("av", None)
         else:

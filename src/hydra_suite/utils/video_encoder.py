@@ -51,6 +51,7 @@ def _try_encode(codec_name: str) -> bool:
 
         fd, tmp = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
+        container = None
         try:
             container = av.open(tmp, mode="w")
             stream = container.add_stream(codec_name, rate=1)
@@ -63,10 +64,16 @@ def _try_encode(codec_name: str) -> bool:
             for pkt in stream.encode():
                 container.mux(pkt)
             container.close()
+            container = None
             return True
         except Exception:
             return False
         finally:
+            if container is not None:
+                try:
+                    container.close()
+                except Exception:
+                    pass
             try:
                 os.unlink(tmp)
             except OSError:
@@ -168,13 +175,19 @@ class VideoEncoder:
 
             codec = _AV_CODEC_NAME[self._backend]
             opts = _AV_CODEC_OPTS[self._backend]
-            self._container = av.open(str(self._path), mode="w")
-            self._stream = self._container.add_stream(codec, rate=int(self._fps))
-            self._stream.width = self._width
-            self._stream.height = self._height
-            self._stream.pix_fmt = "yuv420p"
-            if opts:
-                self._stream.options = opts
+            try:
+                self._container = av.open(str(self._path), mode="w")
+                self._stream = self._container.add_stream(codec, rate=int(self._fps))
+                self._stream.width = self._width
+                self._stream.height = self._height
+                self._stream.pix_fmt = "yuv420p"
+                if opts:
+                    self._stream.options = opts
+            except Exception:
+                if self._used_nvenc:
+                    _NVENC_ACTIVE = max(0, _NVENC_ACTIVE - 1)
+                    self._used_nvenc = False
+                raise
         else:
             import cv2
 
@@ -187,6 +200,8 @@ class VideoEncoder:
 
     def write(self, frame_bgr: np.ndarray) -> None:
         """Write one BGR uint8 frame (same interface as cv2.VideoWriter.write)."""
+        if self._stream is None and self._cv_writer is None:
+            raise RuntimeError("VideoEncoder is not open")
         if self._stream is not None:
             import av
 
@@ -205,11 +220,10 @@ class VideoEncoder:
             try:
                 for pkt in self._stream.encode():
                     self._container.mux(pkt)
+            finally:
                 self._container.close()
-            except Exception:
-                pass
-            self._container = None
-            self._stream = None
+                self._container = None
+                self._stream = None
         if self._cv_writer is not None:
             self._cv_writer.release()
             self._cv_writer = None
