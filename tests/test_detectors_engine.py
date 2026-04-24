@@ -1604,7 +1604,7 @@ def test_detect_objects_realtime_keeps_affines_for_final_media_export(
     monkeypatch.setattr(
         det,
         "_run_direct_raw_detection",
-        lambda frame, target_classes, raw_conf_floor, max_det: (
+        lambda frame, target_classes, raw_conf_floor, max_det, **kwargs: (
             [np.array([1.0, 1.0, 0.0], dtype=np.float32)],
             [100.0],
             [(100.0, 2.0)],
