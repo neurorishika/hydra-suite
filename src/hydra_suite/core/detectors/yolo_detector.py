@@ -294,16 +294,6 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             )
             or self.device
         )
-        # The headtail classifier is always a native PyTorch .pth model.
-        # ONNX/TRT runtimes add overhead (ONNX derivation → CUDA EP) without
-        # benefit.  Translate to the equivalent native device so ClassifierBackend
-        # loads via torch and predict_batch_cuda runs the full GPU path.
-        _ONNX_RUNTIME_TO_NATIVE = {
-            "tensorrt": "cuda",
-            "onnx_cuda": "cuda",
-            "onnx_cpu": "cpu",
-        }
-        headtail_runtime = _ONNX_RUNTIME_TO_NATIVE.get(headtail_runtime, headtail_runtime)
 
         analyzer = HeadTailAnalyzer(
             model_path=model_path_str,

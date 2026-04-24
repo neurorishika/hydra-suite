@@ -7,9 +7,13 @@ Features:
 4. Circular Angle Wrap-around
 """
 
+import logging
+
 import numpy as np
 
 from hydra_suite.utils.gpu_utils import NUMBA_AVAILABLE, njit
+
+logger = logging.getLogger(__name__)
 
 
 # --- Numba Kernels (Optimized for Large N) ---
@@ -86,8 +90,9 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     # stays consistent with the correction actually applied.
     pos_innov_sq = y[0, 0] ** 2 + y[1, 0] ** 2
     clip_scale = 1.0
-    if pos_innov_sq > max_velocity**2:
-        clip_scale = max_velocity / np.sqrt(pos_innov_sq)
+    max_v = max(max_velocity, 0.0)
+    if pos_innov_sq > max_v**2:
+        clip_scale = max_v / max(np.sqrt(pos_innov_sq), 1e-9)
         y[0, 0] *= clip_scale
         y[1, 0] *= clip_scale
 
@@ -108,8 +113,8 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     vx, vy = X[track_idx, 3], X[track_idx, 4]
     speed = np.sqrt(vx**2 + vy**2)
     vel_scale = 1.0
-    if speed > max_velocity:
-        vel_scale = max_velocity / speed
+    if speed > max_v:
+        vel_scale = max_v / max(speed, 1e-9)
         X[track_idx, 3] *= vel_scale
         X[track_idx, 4] *= vel_scale
 
@@ -155,8 +160,8 @@ class KalmanFilterManager:
 
         # Track ages (number of updates since initialization)
         self.track_ages = np.zeros(num_targets, dtype=np.int32)
-        self.age_threshold = params.get(
-            "KALMAN_MATURITY_AGE", 5
+        self.age_threshold = max(
+            1, int(params.get("KALMAN_MATURITY_AGE", 5))
         )  # Frames to reach full dynamics
         self.initial_velocity_retention = params.get(
             "KALMAN_INITIAL_VELOCITY_RETENTION", 0.2
@@ -167,8 +172,9 @@ class KalmanFilterManager:
         reference_body_size = params.get("REFERENCE_BODY_SIZE", 20.0)
         resize_factor = params.get("RESIZE_FACTOR", 1.0)
         max_velocity_multiplier = params.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0)
-        self.max_velocity = (
-            max_velocity_multiplier * reference_body_size * resize_factor
+        self.max_velocity = max(
+            0.0,
+            float(max_velocity_multiplier) * float(reference_body_size) * float(resize_factor),
         )
 
         # 1. Initialize State (N, 5)
@@ -233,6 +239,30 @@ class KalmanFilterManager:
         self.P[track_idx] = self.init_P.copy()
         self.track_ages[track_idx] = 0  # Reset age counter
 
+    def _reset_corrupted_track(self, track_idx: int, reason: str) -> None:
+        """Reset one corrupted KF slot while preserving finite position hints."""
+        old_x = np.asarray(self.X[track_idx], dtype=np.float32)
+        x0 = float(old_x[0]) if np.isfinite(old_x[0]) else 0.0
+        y0 = float(old_x[1]) if np.isfinite(old_x[1]) else 0.0
+        theta0 = float(old_x[2]) if np.isfinite(old_x[2]) else 0.0
+        self.X[track_idx] = np.array([x0, y0, theta0, 0.0, 0.0], dtype=np.float32)
+        self.P[track_idx] = self.init_P.copy()
+        self.track_ages[track_idx] = 0
+        logger.warning(
+            "Kalman track %d reset due to numerical instability: %s",
+            int(track_idx),
+            reason,
+        )
+
+    def _sanitize_all_tracks(self, reason: str) -> None:
+        """Reset any track slots with non-finite state or covariance."""
+        for i in range(self.num_targets):
+            if not (
+                np.isfinite(self.X[i]).all()
+                and np.isfinite(self.P[i]).all()
+            ):
+                self._reset_corrupted_track(i, reason)
+
     def predict(self) -> np.ndarray:
         """Predict next measurement-space states for all active track slots."""
         # Standard batch prediction
@@ -279,6 +309,9 @@ class KalmanFilterManager:
             _p_max = float(self.params.get("KALMAN_MAX_COVARIANCE_DIAGONAL", 1000.0))
             _diag = np.arange(self.dim_s)
             np.clip(self.P[:, _diag, _diag], 0.1, _p_max, out=self.P[:, _diag, _diag])
+
+        # Guard against numerical blow-ups before downstream gating/assignment.
+        self._sanitize_all_tracks("post-predict non-finite state/covariance")
 
         # Apply age-dependent velocity damping AFTER prediction (vectorized).
         # Young tracks have their velocity heavily damped toward zero.
@@ -363,6 +396,14 @@ class KalmanFilterManager:
                 measurement,
                 self.max_velocity,
             )
+            if not (
+                np.isfinite(self.X[track_idx]).all()
+                and np.isfinite(self.P[track_idx]).all()
+            ):
+                self._reset_corrupted_track(
+                    track_idx,
+                    "post-correct non-finite state/covariance (numba path)",
+                )
         else:
             # Manual fallback with Theta-Wrap logic
             z = measurement.reshape(3, 1)
@@ -378,8 +419,9 @@ class KalmanFilterManager:
             # Innovation clipping with K_eff for consistent covariance update
             pos_innov_sq = float(y[0, 0] ** 2 + y[1, 0] ** 2)
             clip_scale = 1.0
-            if pos_innov_sq > self.max_velocity**2:
-                clip_scale = self.max_velocity / np.sqrt(pos_innov_sq)
+            max_v = max(float(self.max_velocity), 0.0)
+            if pos_innov_sq > max_v**2:
+                clip_scale = max_v / max(np.sqrt(pos_innov_sq), 1e-9)
                 y[0, 0] *= clip_scale
                 y[1, 0] *= clip_scale
             K_eff = K.copy()
@@ -394,8 +436,8 @@ class KalmanFilterManager:
             # Velocity constraint + covariance propagation
             vx, vy = self.X[track_idx, 3], self.X[track_idx, 4]
             speed = np.sqrt(vx**2 + vy**2)
-            if speed > self.max_velocity:
-                vel_scale = self.max_velocity / speed
+            if speed > max_v:
+                vel_scale = max_v / max(speed, 1e-9)
                 self.X[track_idx, 3] *= vel_scale
                 self.X[track_idx, 4] *= vel_scale
                 self.P[track_idx, 3, :] *= vel_scale
@@ -403,16 +445,53 @@ class KalmanFilterManager:
                 self.P[track_idx, :, 3] *= vel_scale
                 self.P[track_idx, :, 4] *= vel_scale
 
+            if not (
+                np.isfinite(self.X[track_idx]).all()
+                and np.isfinite(self.P[track_idx]).all()
+            ):
+                self._reset_corrupted_track(
+                    track_idx,
+                    "post-correct non-finite state/covariance (python path)",
+                )
+
         # Increment track age after successful update
         self.track_ages[track_idx] += 1
 
     def get_mahalanobis_matrices(self) -> np.ndarray:
         """Return inverse innovation covariance matrices used by assignment."""
-        if NUMBA_AVAILABLE:
-            return _get_mahal_kernel(self.P, self.H, self.R)
-        else:
-            S = self.H @ self.P @ self.H.T + self.R
-            return np.linalg.inv(S)
+        # Use a robust Python path to avoid propagating invalid inverses.
+        self._sanitize_all_tracks("pre-mahal non-finite state/covariance")
+        s_inv = np.zeros((self.num_targets, self.dim_m, self.dim_m), dtype=np.float32)
+        default_s = self.H @ self.init_P @ self.H.T + self.R
+        default_s += np.eye(self.dim_m, dtype=np.float32) * 1e-6
+        default_inv = np.linalg.inv(default_s).astype(np.float32)
+        eye_m = np.eye(self.dim_m, dtype=np.float32)
+        for i in range(self.num_targets):
+            S = (self.H @ self.P[i] @ self.H.T + self.R).astype(np.float32)
+            if not np.isfinite(S).all():
+                self._reset_corrupted_track(i, "non-finite innovation covariance S")
+                s_inv[i] = default_inv
+                continue
+            try:
+                inv_i = np.linalg.inv(S)
+                if not np.isfinite(inv_i).all():
+                    raise np.linalg.LinAlgError("non-finite inverse")
+                s_inv[i] = inv_i.astype(np.float32)
+            except np.linalg.LinAlgError:
+                # Near-singular S: regularize and retry, then fall back.
+                S_reg = S + eye_m * np.float32(1e-6)
+                try:
+                    inv_i = np.linalg.inv(S_reg)
+                    if not np.isfinite(inv_i).all():
+                        raise np.linalg.LinAlgError("non-finite inverse after jitter")
+                    s_inv[i] = inv_i.astype(np.float32)
+                except np.linalg.LinAlgError:
+                    self._reset_corrupted_track(
+                        i,
+                        "singular innovation covariance S during mahal inversion",
+                    )
+                    s_inv[i] = default_inv
+        return s_inv
 
     def get_position_uncertainties(self) -> list[float]:
         """Return per-track positional uncertainty summary values."""

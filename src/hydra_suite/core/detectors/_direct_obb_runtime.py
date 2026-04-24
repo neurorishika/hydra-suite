@@ -22,6 +22,23 @@ if TYPE_CHECKING:
 import numpy as np
 
 
+def _parse_meta_bool(value, default: bool = False) -> bool:
+    """Parse a metadata boolean that may be stored as a Python string.
+
+    Ultralytics serialises ONNX ``custom_metadata_map`` values with ``str()``,
+    so ``False`` becomes the string ``"False"``.  ``bool("False")`` evaluates
+    to ``True`` (non-empty string), which would incorrectly set ``_end2end=True``
+    for raw-head CBC artifacts exported with ``end2end=False``.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "none", "")
+    return bool(value)
+
+
 class _BaseDirectOBBExecutor:
     def __init__(
         self,
@@ -439,7 +456,10 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
         # head).  _yolo_runtime_export_profile always forces end2end=False for
         # hydra-exported artifacts; this defensive read handles user-supplied
         # ONNX files that may have been exported with end2end=True.
-        self._end2end = bool(meta.get("end2end", False))
+        # NOTE: Ultralytics stores ONNX custom_metadata_map values as strings via
+        # str(), so bool(False) becomes the string "False".  Use _parse_meta_bool
+        # instead of bool() to avoid bool("False") == True.
+        self._end2end = _parse_meta_bool(meta.get("end2end", False))
 
         # Pre-allocate the output tensor and create a persistent IO binding with
         # both input and output pre-bound from fixed CUDA buffers so that
@@ -585,7 +605,9 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
             self.nc = max(1, len(self.names) or self.nc)
         # Read the end2end flag from the engine metadata so _postprocess uses
         # the correct NMS mode (iou_thres=1.0 for BNC end2end vs. 0.5 for CBC).
-        self._end2end = bool(meta.get("end2end", False))
+        # TRT metadata is JSON-parsed so values are native Python booleans, but
+        # use _parse_meta_bool for consistency with the ONNX path.
+        self._end2end = _parse_meta_bool(meta.get("end2end", False))
 
         logger = trt.Logger(trt.Logger.WARNING)
         runtime = trt.Runtime(logger)

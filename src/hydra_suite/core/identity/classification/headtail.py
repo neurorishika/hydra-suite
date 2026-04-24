@@ -247,7 +247,11 @@ class HeadTailAnalyzer:
             )
 
         try:
-            backend_obj = ClassifierBackend(path, compute_runtime=self._compute_runtime)
+            backend_obj = ClassifierBackend(
+                path,
+                compute_runtime=self._compute_runtime,
+                trt_profile_max_batch=self._batch_size,
+            )
             meta = backend_obj.metadata
             if meta.is_multihead:
                 raise HeadTailFormatError(
@@ -355,6 +359,34 @@ class HeadTailAnalyzer:
                 [(float("nan"), 0.0, 0)] * len(corners)
                 for corners in per_frame_obb_corners
             ]
+
+        # For CUDA-class runtimes, auto-route through the GPU-native path so
+        # that crop extraction (batched GPU warp) and inference (GPU forward
+        # pass) both stay on-device, avoiding N sequential cv2 warp+resize
+        # calls on the CPU.  Any failure falls through to the CPU path below.
+        if self._compute_runtime in ("cuda", "onnx_cuda", "tensorrt"):
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    frames_cuda = [
+                        torch.from_numpy(np.ascontiguousarray(f)).to(
+                            "cuda", non_blocking=True
+                        )
+                        for f in frames
+                    ]
+                    return self.analyze_crops_cuda(
+                        frames_cuda,
+                        per_frame_obb_corners,
+                        profiler=profiler,
+                        input_is_bgr=True,
+                    )
+            except Exception:
+                logger.debug(
+                    "HeadTailAnalyzer.analyze_crops: GPU auto-route failed, "
+                    "falling back to CPU path",
+                    exc_info=True,
+                )
 
         # Phase 1: collect canonical crops across all frames
         if profiler is not None:
@@ -607,31 +639,41 @@ class HeadTailAnalyzer:
             return None
         return crop_cuda, axis_theta, M_align
 
-    # Maximum crops per single CUDA forward pass.  At 96×96×3 fp32 the memory
-    # footprint per crop is ~110 KB; 2048 crops = ~220 MB — well within GPU budget.
-    _CUDA_INFER_MAX_BATCH: int = 2048
+    def _effective_infer_batch_size(self) -> int:
+        """Return the runtime-safe per-call batch size for inference.
+
+        The UI-configured ``batch_size`` is honored on all runtimes.  TensorRT
+        has a hard profile upper bound, so the user value is clamped to that
+        maximum to prevent runtime shape errors.
+        """
+        chunk = max(1, int(self._batch_size))
+        if self._compute_runtime == "tensorrt":
+            from hydra_suite.core.identity.classification.backend import (
+                ClassifierBackend,
+            )
+
+            chunk = min(chunk, ClassifierBackend._TRT_PROFILE_MAX_BATCH)
+        return chunk
 
     def _predict_cuda(self, crops_cuda: list, input_is_bgr: bool = False):
         """Run inference on CUDA crop tensors via :meth:`.predict_batch_cuda`.
 
-        All crops are processed in as few forward passes as possible (typically
-        one).  Unlike the CPU :meth:`_predict`, the ``_batch_size`` attribute is
-        not used here: repeated small-batch calls each force a GPU→CPU sync and
-        eliminate the GPU's ability to pipeline work.  A single large batch avoids
-        those syncs and runs the model once instead of N/_batch_size times.
+        Crops are processed in fixed-size chunks controlled by ``_batch_size``
+        so users can choose a stable throughput/memory operating point across
+        runs.  TensorRT requests are capped by its compiled profile limit.
         """
         if self._backend_obj is None or not crops_cuda:
             return []
-        if len(crops_cuda) <= self._CUDA_INFER_MAX_BATCH:
+        chunk = self._effective_infer_batch_size()
+        if len(crops_cuda) <= chunk:
             return self._backend_obj.predict_batch_cuda(
                 crops_cuda, input_is_bgr=input_is_bgr
             )
-        # Safety split only for truly extreme crop counts (>2048).
         out = []
-        for start in range(0, len(crops_cuda), self._CUDA_INFER_MAX_BATCH):
+        for start in range(0, len(crops_cuda), chunk):
             out.extend(
                 self._backend_obj.predict_batch_cuda(
-                    crops_cuda[start : start + self._CUDA_INFER_MAX_BATCH],
+                    crops_cuda[start : start + chunk],
                     input_is_bgr=input_is_bgr,
                 )
             )
@@ -677,6 +719,22 @@ class HeadTailAnalyzer:
         """Run inference on source crops through the shared classifier backend."""
         if self._backend_obj is None or not source_crops:
             return []
+        # GPU runtimes use the user-configured fixed chunk size, clamped for
+        # TensorRT profile safety.
+        compute_rt = getattr(self, "_compute_runtime", "cpu")
+        if compute_rt in ("cuda", "onnx_cuda", "tensorrt"):
+            chunk = self._effective_infer_batch_size()
+            if len(source_crops) <= chunk:
+                return self._backend_obj.predict_batch(source_crops)
+            out = []
+            for start in range(0, len(source_crops), chunk):
+                out.extend(
+                    self._backend_obj.predict_batch(
+                        source_crops[start : start + chunk]
+                    )
+                )
+            return out
+        # CPU / MPS path: chunk by _batch_size to keep peak memory bounded.
         if self._batch_size >= len(source_crops):
             return self._backend_obj.predict_batch(source_crops)
 
