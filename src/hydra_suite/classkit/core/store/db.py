@@ -2,14 +2,26 @@
 
 import csv
 import json
+import re
 import shutil
 import sqlite3
+from hashlib import sha1
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from hydra_suite.data.project_bundle import ensure_bundle_state_subdirectory
+from hydra_suite.data.project_bundle import (
+    bundle_root_for_path,
+    ensure_bundle_state_subdirectory,
+    ensure_bundle_subdirectory,
+)
+
+_PROJECT_ARTIFACT_PREFIXES = {
+    ("artifacts", "exports"),
+    ("artifacts", "imported_sources"),
+    ("artifacts", "models"),
+}
 
 
 class ClassKitDB:
@@ -27,6 +39,127 @@ class ClassKitDB:
     def _cache_dir(self, cache_name: str) -> Path:
         """Return the canonical bundle-aware cache directory for *cache_name*."""
         return ensure_bundle_state_subdirectory(self.db_path, cache_name)
+
+    @staticmethod
+    def _project_owned_suffix(path_value: Path) -> Optional[Path]:
+        parts = path_value.parts
+        if not parts:
+            return None
+
+        if parts[0] == "state" or parts[0] == "history":
+            return Path(*parts)
+        if len(parts) >= 2 and tuple(parts[:2]) in _PROJECT_ARTIFACT_PREFIXES:
+            return Path(*parts)
+
+        for index, part in enumerate(parts):
+            suffix = parts[index:]
+            if not suffix:
+                continue
+            if suffix[0] == "state" or suffix[0] == "history":
+                return Path(*suffix)
+            if len(suffix) >= 2 and tuple(suffix[:2]) in _PROJECT_ARTIFACT_PREFIXES:
+                return Path(*suffix)
+        return None
+
+    def _rebase_project_owned_path(self, path_value: str) -> str:
+        text = str(path_value or "").strip()
+        if not text:
+            return text
+
+        project_root = bundle_root_for_path(self.db_path)
+        candidate = Path(text).expanduser()
+        suffix = self._project_owned_suffix(candidate)
+        if suffix is None:
+            return text
+        return str((project_root / suffix).resolve())
+
+    @staticmethod
+    def _slugify_portable_name(value: object) -> str:
+        text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-._")
+        return text or "source"
+
+    @staticmethod
+    def _path_is_within_project(project_root: Path, candidate: str | Path) -> bool:
+        try:
+            Path(candidate).expanduser().resolve().relative_to(project_root.resolve())
+        except Exception:
+            return False
+        return True
+
+    def _portable_source_dir(self, source_root: str | Path) -> Path:
+        project_root = bundle_root_for_path(self.db_path)
+        imported_root = ensure_bundle_subdirectory(
+            project_root, "artifacts/imported_sources"
+        )
+        anchor = Path(str(source_root or "source")).expanduser()
+        try:
+            anchor_key = str(anchor.resolve())
+        except Exception:
+            anchor_key = str(anchor)
+        digest = sha1(anchor_key.encode("utf-8")).hexdigest()[:10]
+        folder_name = f"{self._slugify_portable_name(anchor.name)}-{digest}"
+        return ensure_bundle_subdirectory(
+            imported_root,
+            folder_name,
+        )
+
+    def materialize_linked_images(self) -> int:
+        """Copy externally linked project images into the bundle and rewrite paths."""
+        updated = 0
+        project_root = bundle_root_for_path(self.db_path).resolve()
+
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, file_path, meta_json FROM images ORDER BY id ASC")
+            image_rows = c.fetchall()
+            for row_id, stored_path, meta_json in image_rows:
+                source_path = Path(str(stored_path or "")).expanduser()
+                try:
+                    resolved_source = source_path.resolve()
+                except Exception:
+                    resolved_source = source_path
+
+                if self._path_is_within_project(project_root, resolved_source):
+                    continue
+                if not resolved_source.exists():
+                    raise FileNotFoundError(
+                        f"Linked image not found: {resolved_source}"
+                    )
+
+                metadata = self._decode_meta_json(meta_json)
+                source_root = str(metadata.get("source_root") or "").strip()
+                if not source_root:
+                    source_root = str(resolved_source.parent)
+                    metadata["source_root"] = source_root
+
+                dest_root = self._portable_source_dir(source_root)
+                images_root = dest_root / "images"
+                images_root.mkdir(parents=True, exist_ok=True)
+                file_stem = self._slugify_portable_name(resolved_source.stem)[:48]
+                dest_path = (
+                    images_root
+                    / f"{int(row_id):06d}_{file_stem}{resolved_source.suffix.lower()}"
+                ).resolve()
+                shutil.copy2(resolved_source, dest_path)
+
+                metadata["original_image_path"] = str(
+                    metadata.get("original_image_path") or resolved_source
+                )
+                metadata["standardized_source_dir"] = str(dest_root.resolve())
+
+                c.execute(
+                    "UPDATE images SET file_path = ?, meta_json = ? WHERE id = ?",
+                    (
+                        str(dest_path),
+                        json.dumps(metadata) if metadata else None,
+                        row_id,
+                    ),
+                )
+                updated += 1
+
+            conn.commit()
+
+        return updated
 
     def _init_db(self):
         """Create tables if not exist."""
@@ -271,6 +404,99 @@ class ClassKitDB:
                         (resolved, row_id),
                     )
                     updated += 1
+            conn.commit()
+        return updated
+
+    def relocate_project_owned_paths(self) -> int:
+        """Rebase bundle-owned DB paths onto the current project root.
+
+        This keeps copied/imported bundle assets portable after extracting the
+        project into a different filesystem location.
+        """
+        updated = 0
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+
+            c.execute("SELECT id, file_path, meta_json FROM images")
+            image_rows = c.fetchall()
+            for row_id, stored_path, meta_json in image_rows:
+                new_path = self._rebase_project_owned_path(stored_path)
+                metadata = self._decode_meta_json(meta_json)
+                metadata_changed = False
+                standardized_dir = metadata.get("standardized_source_dir")
+                if standardized_dir:
+                    new_standardized_dir = self._rebase_project_owned_path(
+                        str(standardized_dir)
+                    )
+                    if new_standardized_dir != str(standardized_dir):
+                        metadata["standardized_source_dir"] = new_standardized_dir
+                        metadata_changed = True
+
+                if new_path != str(stored_path) or metadata_changed:
+                    c.execute(
+                        "UPDATE images SET file_path = ?, meta_json = ? WHERE id = ?",
+                        (
+                            new_path,
+                            json.dumps(metadata) if metadata else None,
+                            row_id,
+                        ),
+                    )
+                    updated += 1
+
+            def _update_path_table(
+                table_name: str,
+                columns: tuple[str, ...],
+            ) -> None:
+                nonlocal updated
+                select_columns = ", ".join(("id",) + columns)
+                c.execute(f"SELECT {select_columns} FROM {table_name}")  # noqa: S608
+                for row in c.fetchall():
+                    row_id = int(row[0])
+                    values = list(row[1:])
+                    changed = False
+                    for index, value in enumerate(values):
+                        if not value:
+                            continue
+                        rebased = self._rebase_project_owned_path(str(value))
+                        if rebased != str(value):
+                            values[index] = rebased
+                            changed = True
+                    if changed:
+                        assignments = ", ".join(f"{column} = ?" for column in columns)
+                        c.execute(
+                            f"UPDATE {table_name} SET {assignments} WHERE id = ?",  # noqa: S608
+                            tuple(values) + (row_id,),
+                        )
+                        updated += 1
+
+            _update_path_table("embeddings", ("file_path",))
+            _update_path_table("cluster_cache", ("assignments_path", "centers_path"))
+            _update_path_table("umap_cache", ("coords_path",))
+            _update_path_table(
+                "infinite_label_cache",
+                ("distance_path", "cluster_counts_path"),
+            )
+            _update_path_table("prediction_cache", ("probs_path",))
+
+            c.execute("SELECT id, artifact_paths_json FROM model_cache")
+            for row_id, paths_json in c.fetchall():
+                try:
+                    artifact_paths = json.loads(paths_json)
+                except Exception:
+                    continue
+                if not isinstance(artifact_paths, list):
+                    continue
+                rebased_paths = [
+                    self._rebase_project_owned_path(str(path))
+                    for path in artifact_paths
+                ]
+                if rebased_paths != artifact_paths:
+                    c.execute(
+                        "UPDATE model_cache SET artifact_paths_json = ? WHERE id = ?",
+                        (json.dumps(rebased_paths), row_id),
+                    )
+                    updated += 1
+
             conn.commit()
         return updated
 

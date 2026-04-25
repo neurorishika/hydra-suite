@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -23,8 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.data.project_bundle import (
+    export_project_bundle_archive,
+    import_project_bundle_archive,
+    load_project_bundle_archive_manifest,
+)
 from hydra_suite.detectkit.config.schemas import DetectKitConfig
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
 from .evaluation import open_quick_test_dialog
@@ -36,7 +45,10 @@ from .project import (
     create_project,
     default_project_parent_dir,
     detectkit_model_path_is_previewable,
+    detectkit_project_is_portable,
+    detectkit_project_linked_reference_counts,
     detectkit_project_preview_model_paths,
+    make_detectkit_project_portable,
     open_project,
     project_exists,
     save_project,
@@ -44,6 +56,31 @@ from .project import (
 from .utils import find_label_for_image, parse_obb_label, source_class_id_map
 
 logger = logging.getLogger(__name__)
+
+
+class _DetectKitPortableWorker(BaseWorker):
+    """Background worker that localizes linked DetectKit sources and artifacts."""
+
+    success = Signal(dict)
+
+    def __init__(self, project_dir: Path):
+        super().__init__()
+        self._project_dir = Path(project_dir)
+
+    def execute(self) -> None:
+        self.status.emit(
+            "Copying linked sources and project artifacts into the bundle..."
+        )
+        project = open_project(self._project_dir)
+        if project is None:
+            raise RuntimeError(
+                f"Could not reopen DetectKit project: {self._project_dir}"
+            )
+        before_counts = detectkit_project_linked_reference_counts(project)
+        after_counts = make_detectkit_project_portable(project)
+        self.progress.emit(100)
+        self.success.emit({"before": before_counts, "after": after_counts})
+
 
 _DATASET_PANEL_MIN_WIDTH = 360
 _DATASET_PANEL_MAX_WIDTH = 420
@@ -346,6 +383,8 @@ class DetectKitMainWindow(QMainWindow):
         self._current_source_path = ""
         self._current_image_path = ""
         self._last_prediction_request: tuple[str, str, float] | None = None
+        self._portable_worker = None
+        self._portable_progress_dialog = None
 
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
@@ -401,6 +440,14 @@ class DetectKitMainWindow(QMainWindow):
         act_save = QAction("Save", self)
         act_save.triggered.connect(self._save_current_project)
         tb.addAction(act_save)
+
+        act_make_portable = QAction("Make Portable", self)
+        act_make_portable.triggered.connect(self.make_project_portable)
+        tb.addAction(act_make_portable)
+
+        act_export_zip = QAction("Export Zip", self)
+        act_export_zip.triggered.connect(self.export_project_zip)
+        tb.addAction(act_export_zip)
 
         tb.addSeparator()
 
@@ -465,6 +512,10 @@ class DetectKitMainWindow(QMainWindow):
             buttons=[
                 ButtonDef(label="New Project", callback=self.new_project),
                 ButtonDef(label="Open Project", callback=self.open_project_dialog),
+                ButtonDef(
+                    label="Open Project Zip",
+                    callback=self.open_project_zip_dialog,
+                ),
             ],
             recents_label="Recent Projects",
             recents_store=store,
@@ -572,6 +623,10 @@ class DetectKitMainWindow(QMainWindow):
         act_open.triggered.connect(self.open_project_dialog)
         file_menu.addAction(act_open)
 
+        act_open_zip = QAction("Open Project Zip...", self)
+        act_open_zip.triggered.connect(self.open_project_zip_dialog)
+        file_menu.addAction(act_open_zip)
+
         self._recent_menu = QMenu("Recent Projects", self)
         file_menu.addMenu(self._recent_menu)
         self._refresh_recent_menu()
@@ -581,6 +636,14 @@ class DetectKitMainWindow(QMainWindow):
         act_save = QAction("Save Project", self)
         act_save.triggered.connect(self._save_current_project)
         file_menu.addAction(act_save)
+
+        act_make_portable = QAction("Make Project Portable", self)
+        act_make_portable.triggered.connect(self.make_project_portable)
+        file_menu.addAction(act_make_portable)
+
+        act_export_zip = QAction("Export Project Zip...", self)
+        act_export_zip.triggered.connect(self.export_project_zip)
+        file_menu.addAction(act_export_zip)
 
         file_menu.addSeparator()
 
@@ -645,6 +708,62 @@ class DetectKitMainWindow(QMainWindow):
         )
         self._load_project(proj)
 
+    @staticmethod
+    def _next_available_project_dir(parent_dir: Path, base_name: str) -> Path:
+        cleaned = re.sub(r"[\\/]+", "_", str(base_name or "").strip())
+        cleaned = cleaned.strip() or "DetectKit Project"
+        candidate = parent_dir / cleaned
+        counter = 1
+        while candidate.exists():
+            candidate = parent_dir / f"{cleaned}_{counter}"
+            counter += 1
+        return candidate
+
+    @staticmethod
+    def _sanitize_project_folder_name(name: str, *, fallback: str) -> str:
+        cleaned = re.sub(r"[\\/]+", "_", str(name or "").strip())
+        return cleaned.strip() or fallback
+
+    def _choose_project_zip_destination(
+        self,
+        archive_path: str | Path,
+        suggested_name: str,
+    ) -> Path | None:
+        parent_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose DetectKit Project Extraction Folder",
+            str(default_project_parent_dir()),
+            QFileDialog.ShowDirsOnly,
+        )
+        if not parent_dir:
+            return None
+
+        folder_name, accepted = QInputDialog.getText(
+            self,
+            "Project Folder Name",
+            "Extract project into folder:",
+            text=self._sanitize_project_folder_name(
+                suggested_name,
+                fallback=Path(archive_path).stem,
+            ),
+        )
+        if not accepted:
+            return None
+
+        cleaned_name = self._sanitize_project_folder_name(
+            folder_name,
+            fallback=Path(archive_path).stem,
+        )
+        destination_dir = Path(parent_dir) / cleaned_name
+        if destination_dir.exists() and any(destination_dir.iterdir()):
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Destination folder is not empty:\n{destination_dir}",
+            )
+            return None
+        return destination_dir
+
     def open_project_dialog(self) -> None:
         directory = QFileDialog.getExistingDirectory(
             self, "Open DetectKit Project", str(default_project_parent_dir())
@@ -659,12 +778,54 @@ class DetectKitMainWindow(QMainWindow):
                 self, "Open Failed", f"No DetectKit project found in:\n{directory}"
             )
 
+    def open_project_zip_dialog(self) -> None:
+        archive_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open DetectKit Project Zip",
+            str(default_project_parent_dir()),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            manifest = load_project_bundle_archive_manifest(archive_path, strict=True)
+            destination_dir = self._choose_project_zip_destination(
+                archive_path,
+                manifest.display_name or Path(archive_path).stem,
+            )
+            if destination_dir is None:
+                return
+            imported_dir = import_project_bundle_archive(
+                archive_path,
+                destination_dir,
+                expected_kit="detectkit",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
+
+        proj = open_project(imported_dir)
+        if proj is not None:
+            self._load_project(proj)
+        else:
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Imported project could not be opened:\n{imported_dir}",
+            )
+
     def _load_project(self, proj: DetectKitProject) -> None:
         """Activate proj: wire panels, show toolbar, switch to workspace."""
         self._project = proj
         self._current_source_path = ""
         self._current_image_path = ""
         self._last_prediction_request = None
+
+        linked_counts = detectkit_project_linked_reference_counts(proj)
+        portability_status = (
+            "Portable" if detectkit_project_is_portable(proj) else "Linked"
+        )
 
         preview_paths = detectkit_project_preview_model_paths(proj)
         if preview_paths and not detectkit_model_path_is_previewable(
@@ -673,7 +834,9 @@ class DetectKitMainWindow(QMainWindow):
             proj.active_model_path = preview_paths[0]
 
         self._dataset_panel.set_project(proj, self)
+        self._dataset_panel.set_portability_status(portability_status, linked_counts)
         self._tools_panel.set_project(proj)
+        self._tools_panel.set_portability_status(portability_status, linked_counts)
         self._tools_panel.refresh_model_selector(preview_paths)
 
         self._toolbar.setVisible(True)
@@ -694,6 +857,143 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.collect_state(self._project)
         save_project(self._project)
         self.statusBar().showMessage("Project saved.", 3000)
+
+    def make_project_portable(self, *, interactive: bool = True) -> bool:
+        if self._project is None:
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    "Open a DetectKit project before making it portable.",
+                )
+            return False
+
+        before_counts = detectkit_project_linked_reference_counts(self._project)
+        if not any(before_counts.values()):
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    "This DetectKit project is already portable.",
+                )
+            self.statusBar().showMessage("Project already portable.", 3000)
+            return True
+
+        if interactive:
+            self._save_current_project()
+            progress = QProgressDialog(
+                "Copying linked sources and project artifacts into the bundle...",
+                None,
+                0,
+                0,
+                self,
+            )
+            progress.setWindowTitle("Make Project Portable")
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+
+            worker = _DetectKitPortableWorker(self._project.project_dir)
+            worker.status.connect(progress.setLabelText)
+            worker.error.connect(
+                lambda msg: QMessageBox.warning(self, "Make Project Portable", msg)
+            )
+
+            def _finish_portable_run() -> None:
+                progress.close()
+                self._portable_worker = None
+                self._portable_progress_dialog = None
+
+            def _handle_portable_success(result: dict) -> None:
+                reloaded_project = open_project(self._project.project_dir)
+                if reloaded_project is not None:
+                    self._load_project(reloaded_project)
+                before = result.get("before", {}) if isinstance(result, dict) else {}
+                after = result.get("after", {}) if isinstance(result, dict) else {}
+                if any(int(value or 0) for value in after.values()):
+                    QMessageBox.warning(
+                        self,
+                        "Make Project Portable",
+                        "Some linked sources or artifact references remain outside the project bundle.",
+                    )
+                    return
+                copied_sources = max(0, int(before.get("sources", 0)))
+                copied_artifacts = max(0, int(before.get("artifacts", 0)))
+                summary = f"Localized {copied_sources:,} source(s) and {copied_artifacts:,} artifact reference(s) into the project bundle."
+                self.statusBar().showMessage(summary, 5000)
+                QMessageBox.information(self, "Make Project Portable", summary)
+
+            worker.success.connect(_handle_portable_success)
+            worker.finished.connect(_finish_portable_run)
+            self._portable_worker = worker
+            self._portable_progress_dialog = progress
+            worker.start()
+            return True
+
+        try:
+            self._save_current_project()
+            after_counts = make_detectkit_project_portable(self._project)
+        except Exception as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+
+        reloaded_project = open_project(self._project.project_dir)
+        if reloaded_project is not None:
+            self._load_project(reloaded_project)
+        else:
+            self._load_project(self._project)
+
+        if any(after_counts.values()):
+            QMessageBox.warning(
+                self,
+                "Make Project Portable",
+                "Some linked sources or artifact references remain outside the project bundle.",
+            )
+            return False
+
+        copied_sources = max(0, int(before_counts.get("sources", 0)))
+        copied_artifacts = max(0, int(before_counts.get("artifacts", 0)))
+        summary = f"Localized {copied_sources:,} source(s) and {copied_artifacts:,} artifact reference(s) into the project bundle."
+        self.statusBar().showMessage(summary, 5000)
+        if interactive:
+            QMessageBox.information(self, "Make Project Portable", summary)
+        return True
+
+    def export_project_zip(self) -> None:
+        if self._project is None:
+            QMessageBox.information(
+                self,
+                "Export Project Zip",
+                "Open a DetectKit project before exporting a portable zip.",
+            )
+            return
+
+        default_archive = (
+            self._project.project_dir.parent / f"{self._project.project_dir.name}.zip"
+        )
+        archive_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export DetectKit Project Zip",
+            str(default_archive),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            if not self.make_project_portable(interactive=False):
+                return
+            self._save_current_project()
+            written_path = export_project_bundle_archive(
+                self._project.project_dir,
+                archive_path,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        self.statusBar().showMessage(f"Exported project zip: {written_path}", 5000)
 
     # ------------------------------------------------------------------
     # Dialog launchers

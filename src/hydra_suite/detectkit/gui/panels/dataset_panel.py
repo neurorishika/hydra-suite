@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import platform
+import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.paths import get_app_data_dir
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ..evaluation import build_dataset_analysis_report
@@ -40,6 +44,13 @@ if TYPE_CHECKING:
     from ..models import DetectKitProject
 
 logger = logging.getLogger(__name__)
+
+
+def _copy_tree_without_metadata(src: Path, dst: Path) -> None:
+    """Copy a directory tree without preserving macOS metadata or xattrs."""
+    if not src.exists():
+        return
+    shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=shutil.copyfile)
 
 
 class DatasetPanel(QWidget):
@@ -91,6 +102,13 @@ class DatasetPanel(QWidget):
         self._source_summary.setWordWrap(True)
         self._source_summary.setProperty("detectkitRole", "sectionHint")
         sources_layout.addWidget(self._source_summary)
+
+        self._portability_summary = QLabel(
+            "Project portability status is not available yet."
+        )
+        self._portability_summary.setWordWrap(True)
+        self._portability_summary.setProperty("detectkitRole", "sectionHint")
+        sources_layout.addWidget(self._portability_summary)
 
         layout.addWidget(sources_group)
 
@@ -210,6 +228,31 @@ class DatasetPanel(QWidget):
         if self.source_combo.count() > 0:
             self._on_source_combo_changed(self.source_combo.currentIndex())
 
+    def set_portability_status(
+        self,
+        status: str,
+        linked_counts: dict[str, int] | None = None,
+    ) -> None:
+        """Show whether the current project is fully self-contained."""
+        linked_counts = linked_counts or {}
+        if status == "Portable":
+            self._portability_summary.setText(
+                "Project portability: Portable. All current sources and project artifacts are inside the project bundle."
+            )
+            return
+
+        parts: list[str] = []
+        source_count = int(linked_counts.get("sources", 0) or 0)
+        artifact_count = int(linked_counts.get("artifacts", 0) or 0)
+        if source_count:
+            parts.append(f"{source_count} linked source(s)")
+        if artifact_count:
+            parts.append(f"{artifact_count} linked artifact reference(s)")
+        details = ", ".join(parts) if parts else "linked references detected"
+        self._portability_summary.setText(
+            f"Project portability: Linked. Exporting a zip will only include bundle-owned data; {details} remain outside the project."
+        )
+
     def collect_state(self, proj: DetectKitProject) -> None:
         """Write panel state back into the project."""
         proj.last_source_index = max(self.source_combo.currentIndex(), 0)
@@ -236,6 +279,39 @@ class DatasetPanel(QWidget):
         if idx < 0:
             return None
         return self.source_combo.itemData(idx)
+
+    @staticmethod
+    def _xal_stage_dir_for_source(source_dir: Path) -> Path:
+        """Return a stable X-AnyLabeling staging workspace for a DetectKit source."""
+        source_resolved = source_dir.expanduser().resolve()
+        digest = hashlib.sha1(str(source_resolved).encode("utf-8")).hexdigest()[:12]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source_resolved.name).strip("-._")
+        safe_name = safe_name or "source"
+        return get_app_data_dir("detectkit") / "xanylabeling" / f"{safe_name}-{digest}"
+
+    def _prepare_xal_stage(self, source_dir: Path) -> Path:
+        """Create a safe staging copy for X-AnyLabeling if one does not exist yet."""
+        stage_dir = self._xal_stage_dir_for_source(source_dir)
+        if stage_dir.exists():
+            return stage_dir
+
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        _copy_tree_without_metadata(source_dir / "images", stage_dir / "images")
+        _copy_tree_without_metadata(source_dir / "labels", stage_dir / "labels")
+        shutil.copyfile(source_dir / "classes.txt", stage_dir / "classes.txt")
+        return stage_dir
+
+    def _sync_xal_stage_back(self, source_dir: Path, stage_dir: Path) -> None:
+        """Copy edited X-AnyLabeling labels from the safe staging workspace back."""
+        labels_src = stage_dir / "labels"
+        if labels_src.exists():
+            labels_dst = source_dir / "labels"
+            shutil.rmtree(labels_dst, ignore_errors=True)
+            _copy_tree_without_metadata(labels_src, labels_dst)
+
+        classes_src = stage_dir / "classes.txt"
+        if classes_src.exists():
+            shutil.copyfile(classes_src, source_dir / "classes.txt")
 
     def _get_multiple_dirs(self, title: str) -> list[str]:
         """Open a non-native file dialog that allows multi-directory selection."""
@@ -442,6 +518,7 @@ class DatasetPanel(QWidget):
         source_dir = Path(source_path)
         try:
             self._validate_source(str(source_dir))
+            launch_dir = self._prepare_xal_stage(source_dir)
         except Exception as exc:
             QMessageBox.warning(self, "Invalid Source", str(exc))
             return
@@ -464,7 +541,7 @@ class DatasetPanel(QWidget):
                     "    activate\n"
                     '    do script "source $(conda info --base)/etc/profile.d/conda.sh '
                     f"&& conda activate {env} "
-                    f"&& cd '{source_dir}' "
+                    f"&& cd '{launch_dir}' "
                     f'&& {full_cmd}"\n'
                     "end tell"
                 )
@@ -472,7 +549,7 @@ class DatasetPanel(QWidget):
             elif system == "Windows":
                 cmd = (
                     f'start cmd /k "conda activate {env} '
-                    f"&& cd /d {source_dir} "
+                    f"&& cd /d {launch_dir} "
                     f'&& {full_cmd}"'
                 )
                 subprocess.Popen(cmd, shell=True)  # noqa: S602
@@ -481,7 +558,7 @@ class DatasetPanel(QWidget):
                 shell_cmd = (
                     f"source $(conda info --base)/etc/profile.d/conda.sh "
                     f"&& conda activate {env} "
-                    f"&& cd '{source_dir}' "
+                    f"&& cd '{launch_dir}' "
                     f"&& {full_cmd}"
                 )
                 for term_cmd in [
@@ -515,7 +592,12 @@ class DatasetPanel(QWidget):
         source_path = self._selected_source_path()
         if source_path is None:
             return
-        self._try_xlabel_convert(source_path)
+        source_dir = Path(source_path).expanduser().resolve()
+        stage_dir = self._xal_stage_dir_for_source(source_dir)
+        convert_dir = stage_dir if stage_dir.exists() else source_dir
+        self._try_xlabel_convert(str(convert_dir))
+        if convert_dir == stage_dir:
+            self._sync_xal_stage_back(source_dir, stage_dir)
         self._validate_source(source_path)
         # Refresh image list
         self._on_source_combo_changed(self.source_combo.currentIndex())

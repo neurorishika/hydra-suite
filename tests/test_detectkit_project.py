@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from hydra_suite.data.project_bundle import (
+    export_project_bundle_archive,
+    import_project_bundle_archive,
+)
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
 from hydra_suite.detectkit.gui.project import (
     create_project,
@@ -12,13 +16,17 @@ from hydra_suite.detectkit.gui.project import (
     detectkit_artifact_paths,
     detectkit_model_path_is_previewable,
     detectkit_models_dir,
+    detectkit_project_is_portable,
+    detectkit_project_linked_reference_counts,
     detectkit_project_model_paths,
     detectkit_project_preview_model_paths,
     legacy_project_file_path,
+    make_detectkit_project_portable,
     open_project,
     project_exists,
     project_file_path,
     record_training_results,
+    save_project,
 )
 
 
@@ -288,3 +296,178 @@ def test_record_training_results_prefers_previewable_active_model(
 
     assert project.active_model_path
     assert detectkit_model_path_is_previewable(project, project.active_model_path)
+
+
+def test_detectkit_project_portability_helpers_count_external_references(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", class_names=["ant"])
+    local_source = project.project_dir / "artifacts" / "imported_sources" / "source-a"
+    local_source.mkdir(parents=True, exist_ok=True)
+    local_model = project.project_dir / "models" / "best.pt"
+    local_model.parent.mkdir(parents=True, exist_ok=True)
+    local_model.write_bytes(b"weights")
+    external_source = tmp_path / "external" / "source-b"
+    external_source.mkdir(parents=True, exist_ok=True)
+    external_model = tmp_path / "external" / "best.pt"
+    external_model.write_bytes(b"weights")
+
+    project.sources = [
+        OBBSource(path=str(local_source), name="local"),
+        OBBSource(path=str(external_source), name="external"),
+    ]
+    project.active_model_path = str(local_model)
+    project.training_history = [
+        {
+            "run_id": "run_1",
+            "project_model_path": str(external_model),
+        }
+    ]
+
+    assert detectkit_project_linked_reference_counts(project) == {
+        "sources": 1,
+        "artifacts": 1,
+    }
+    assert detectkit_project_is_portable(project) is False
+
+    project.sources = [OBBSource(path=str(local_source), name="local")]
+    project.training_history = [
+        {"run_id": "run_1", "project_model_path": str(local_model)}
+    ]
+
+    assert detectkit_project_linked_reference_counts(project) == {
+        "sources": 0,
+        "artifacts": 0,
+    }
+    assert detectkit_project_is_portable(project) is True
+
+
+def test_make_detectkit_project_portable_localizes_sources_and_artifacts(
+    tmp_path: Path,
+) -> None:
+    project = create_project(tmp_path / "project", class_names=["ant"])
+    external_source = tmp_path / "external_source"
+    (external_source / "images").mkdir(parents=True, exist_ok=True)
+    (external_source / "labels").mkdir(parents=True, exist_ok=True)
+    (external_source / "images" / "frame_001.png").write_bytes(b"png")
+    (external_source / "labels" / "frame_001.txt").write_text(
+        "0 0.5 0.5 0.5 0.5\n",
+        encoding="utf-8",
+    )
+    (external_source / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    external_model = tmp_path / "external_model.pt"
+    external_model.write_bytes(b"weights")
+    external_metrics = tmp_path / "results.csv"
+    external_metrics.write_text("epoch,metric\n1,0.9\n", encoding="utf-8")
+    external_log = tmp_path / "training.log"
+    external_log.write_text("epoch 1\n", encoding="utf-8")
+
+    project.sources = [OBBSource(path=str(external_source), name="external")]
+    project.active_model_path = str(external_model)
+    project.training_history = [
+        {
+            "run_id": "run_1",
+            "artifact_paths": [str(external_model)],
+            "project_model_path": str(external_model),
+            "project_model_paths": [str(external_model)],
+            "project_metrics_paths": [str(external_metrics)],
+            "project_log_path": str(external_log),
+            "project_run_dir": str(tmp_path / "external_run"),
+        }
+    ]
+
+    linked_counts = make_detectkit_project_portable(project)
+
+    assert linked_counts == {"sources": 0, "artifacts": 0}
+    assert detectkit_project_is_portable(project) is True
+    assert Path(project.sources[0].path).is_relative_to(project.project_dir.resolve())
+    assert project.sources[0].imported is True
+    assert Path(project.active_model_path).is_relative_to(project.project_dir.resolve())
+    entry = project.training_history[0]
+    assert Path(entry["project_model_path"]).is_relative_to(
+        project.project_dir.resolve()
+    )
+    assert Path(entry["project_metrics_paths"][0]).is_relative_to(
+        project.project_dir.resolve()
+    )
+    assert Path(entry["project_log_path"]).is_relative_to(project.project_dir.resolve())
+
+
+def test_detectkit_project_owned_paths_round_trip_through_archive(
+    tmp_path: Path,
+) -> None:
+    project_dir = tmp_path / "detectkit_project"
+    project = create_project(project_dir, class_names=["ant"])
+    source_dir = project_dir / "artifacts" / "imported_sources" / "source-a"
+    source_dir.mkdir(parents=True, exist_ok=True)
+
+    model_path = project_dir / "models" / "latest.pt"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model_path.write_bytes(b"weights")
+
+    run_dir = project_dir / "artifacts" / "training_runs" / "run-a"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = run_dir / "results.csv"
+    metrics_path.write_text("epoch,metric\n1,0.9\n", encoding="utf-8")
+    log_path = run_dir / "training.log"
+    log_path.write_text("epoch 1\nmetric 0.9\n", encoding="utf-8")
+
+    project.sources = [
+        OBBSource(
+            path=str(source_dir.resolve()),
+            name="source-a",
+            original_path="/external/source-a",
+            source_kind="detectkit",
+            imported=True,
+        )
+    ]
+    project.active_model_path = str(model_path.resolve())
+    project.training_history = [
+        {
+            "run_id": "run-a",
+            "project_model_path": str(model_path.resolve()),
+            "project_model_paths": [str(model_path.resolve())],
+            "project_run_dir": str(run_dir.resolve()),
+            "project_metrics_paths": [str(metrics_path.resolve())],
+            "project_log_path": str(log_path.resolve()),
+        }
+    ]
+
+    save_project(project)
+
+    raw = json.loads(project_file_path(project_dir).read_text(encoding="utf-8"))
+    assert raw["sources"][0]["path"] == "artifacts/imported_sources/source-a"
+    assert raw["active_model_path"] == "models/latest.pt"
+    assert raw["training_history"][0]["project_model_path"] == "models/latest.pt"
+    assert (
+        raw["training_history"][0]["project_run_dir"] == "artifacts/training_runs/run-a"
+    )
+    assert raw["training_history"][0]["project_metrics_paths"] == [
+        "artifacts/training_runs/run-a/results.csv"
+    ]
+
+    archive_path = export_project_bundle_archive(
+        project_dir, tmp_path / "detectkit.zip"
+    )
+    restored_dir = import_project_bundle_archive(
+        archive_path,
+        tmp_path / "restored_detectkit_project",
+        expected_kit="detectkit",
+    )
+
+    loaded = open_project(restored_dir)
+
+    assert loaded is not None
+    assert loaded.sources[0].path == str(
+        (restored_dir / "artifacts" / "imported_sources" / "source-a").resolve()
+    )
+    assert loaded.active_model_path == str(
+        (restored_dir / "models" / "latest.pt").resolve()
+    )
+    assert loaded.training_history[0]["project_model_path"] == str(
+        (restored_dir / "models" / "latest.pt").resolve()
+    )
+    assert loaded.training_history[0]["project_run_dir"] == str(
+        (restored_dir / "artifacts" / "training_runs" / "run-a").resolve()
+    )

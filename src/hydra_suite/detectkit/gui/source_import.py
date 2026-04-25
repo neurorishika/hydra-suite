@@ -464,11 +464,13 @@ def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
 def materialize_detectkit_source(
     source_root: str | Path,
     project_dir: str | Path,
+    *,
+    force_import: bool = False,
 ) -> MaterializedDetectKitSource:
     """Resolve *source_root* into a DetectKit-ready source for *project_dir*."""
     root = Path(source_root).expanduser().resolve()
     inspection = inspect_detectkit_source(root)
-    if not inspection.requires_import:
+    if not inspection.requires_import and not force_import:
         return MaterializedDetectKitSource(
             source_root=root,
             canonical_path=root,

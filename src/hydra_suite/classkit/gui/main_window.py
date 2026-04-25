@@ -10,7 +10,7 @@ from html import escape
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -44,18 +45,45 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.data.project_bundle import (
+    export_project_bundle_archive,
+    import_project_bundle_archive,
+    load_project_bundle_archive_manifest,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.workers import BaseWorker
 
 from .project import (
     classkit_config_path,
     classkit_export_dir,
     classkit_model_dir,
+    classkit_project_is_portable,
+    classkit_project_linked_image_count,
     classkit_scheme_path,
+    default_project_parent_dir,
     ensure_classkit_project_layout,
     prepare_project_directory,
     project_exists,
 )
 from .widgets.color_utils import best_text_color, build_category_color_map, to_hex
+
+
+class _ClassKitPortableWorker(BaseWorker):
+    """Background worker that copies linked ClassKit images into the bundle."""
+
+    success = Signal(int)
+
+    def __init__(self, db_path: Path):
+        super().__init__()
+        self._db_path = Path(db_path)
+
+    def execute(self) -> None:
+        from ..core.store.db import ClassKitDB
+
+        self.status.emit("Copying linked images into the project bundle...")
+        copied_count = ClassKitDB(self._db_path).materialize_linked_images()
+        self.progress.emit(100)
+        self.success.emit(int(copied_count))
 
 
 class MainWindow(QMainWindow):
@@ -130,6 +158,8 @@ class MainWindow(QMainWindow):
         self._custom_shortcuts: dict = {}  # action_name → key sequence string
         self._outline_threshold = 0.60
         self._marker_size_multiplier = 1.0
+        self._portable_worker = None
+        self._portable_progress_dialog = None
 
         # Display enhancement settings (sync with PoseKit)
         self.clahe_clip = 2.0
@@ -325,10 +355,22 @@ class MainWindow(QMainWindow):
         open_project.triggered.connect(self.open_project)
         file_menu.addAction(open_project)
 
+        open_project_zip = QAction("Open Project &Zip...", self)
+        open_project_zip.triggered.connect(self.open_project_zip)
+        file_menu.addAction(open_project_zip)
+
         save_project = QAction("&Save Project", self)
         save_project.setShortcut("Ctrl+S")
         save_project.triggered.connect(self.save_project)
         file_menu.addAction(save_project)
+
+        make_portable = QAction("Make Project Portable", self)
+        make_portable.triggered.connect(self.make_project_portable)
+        file_menu.addAction(make_portable)
+
+        export_project_zip = QAction("Export Project Zip...", self)
+        export_project_zip.triggered.connect(self.export_project_zip)
+        file_menu.addAction(export_project_zip)
 
         file_menu.addSeparator()
 
@@ -479,6 +521,16 @@ class MainWindow(QMainWindow):
         save_btn.triggered.connect(self.save_project)
         toolbar.addAction(save_btn)
 
+        portable_btn = QAction("Make Portable", self)
+        portable_btn.setStatusTip("Copy linked images into the project bundle")
+        portable_btn.triggered.connect(self.make_project_portable)
+        toolbar.addAction(portable_btn)
+
+        export_zip_btn = QAction("Export Zip", self)
+        export_zip_btn.setStatusTip("Make the project portable and export it as a zip")
+        export_zip_btn.triggered.connect(self.export_project_zip)
+        toolbar.addAction(export_zip_btn)
+
         toolbar.addSeparator()
 
         # Data section
@@ -551,6 +603,9 @@ class MainWindow(QMainWindow):
             buttons=[
                 ButtonDef(label="New Project\u2026", callback=self.new_project),
                 ButtonDef(label="Open Project\u2026", callback=self.open_project),
+                ButtonDef(
+                    label="Open Project Zip\u2026", callback=self.open_project_zip
+                ),
                 ButtonDef(label="Quit", callback=self.close),
             ],
             recents_label="Recent Projects",
@@ -562,38 +617,111 @@ class MainWindow(QMainWindow):
 
     def _open_recent_project(self, path: str):
         """Open a project from the recent items list."""
-        from pathlib import Path
-
         self._flush_pending_label_updates(force=True)
         project_path = Path(path)
         if project_path.exists():
-            self.project_path = project_path
-            self.db_path = prepare_project_directory(project_path)
-            if self.db_path.exists():
-                self.load_project_data()
-                self.update_context_panel()
-                self.status.showMessage(f"Opened project: {self.project_path.name}")
-            else:
-                from PySide6.QtWidgets import QMessageBox
-
-                QMessageBox.warning(
-                    self,
-                    "Invalid Project",
-                    "This directory does not contain a valid ClassKit project.\n\n"
-                    "Expected file: classkit.db",
-                )
+            if not self._open_project_directory(
+                project_path, show_invalid_warning=True
+            ):
                 if hasattr(self, "_recents_store"):
                     self._recents_store.remove(path)
                     if hasattr(self, "_welcome_page"):
                         self._welcome_page.refresh_recents()
         else:
-            from PySide6.QtWidgets import QMessageBox
-
             QMessageBox.warning(self, "Not Found", f"Project not found:\n{path}")
             if hasattr(self, "_recents_store"):
                 self._recents_store.remove(path)
                 if hasattr(self, "_welcome_page"):
                     self._welcome_page.refresh_recents()
+
+    @staticmethod
+    def _next_available_project_dir(parent_dir: Path, base_name: str) -> Path:
+        cleaned = re.sub(r"[\\/]+", "_", str(base_name or "").strip())
+        cleaned = cleaned.strip() or "ClassKit Project"
+        candidate = parent_dir / cleaned
+        counter = 1
+        while candidate.exists():
+            candidate = parent_dir / f"{cleaned}_{counter}"
+            counter += 1
+        return candidate
+
+    def _open_project_directory(
+        self,
+        project_dir: Path,
+        *,
+        show_invalid_warning: bool = False,
+    ) -> bool:
+        project_dir = Path(project_dir)
+        self.project_path = project_dir
+        if not project_exists(self.project_path):
+            if show_invalid_warning:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Project",
+                    "This directory does not contain a valid ClassKit project.",
+                )
+            return False
+
+        self.db_path = prepare_project_directory(self.project_path)
+        if not self.db_path.exists():
+            if show_invalid_warning:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Project",
+                    "This directory does not contain a valid ClassKit project.",
+                )
+            return False
+
+        self.load_project_data()
+        self.update_context_panel()
+        self.status.showMessage(f"Opened project: {self.project_path.name}")
+        QTimer.singleShot(200, self._guide_to_next_step)
+        return True
+
+    @staticmethod
+    def _sanitize_project_folder_name(name: str, *, fallback: str) -> str:
+        cleaned = re.sub(r"[\\/]+", "_", str(name or "").strip())
+        return cleaned.strip() or fallback
+
+    def _choose_project_zip_destination(
+        self,
+        archive_path: str | Path,
+        suggested_name: str,
+    ) -> Path | None:
+        parent_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose ClassKit Project Extraction Folder",
+            str(default_project_parent_dir()),
+            QFileDialog.ShowDirsOnly,
+        )
+        if not parent_dir:
+            return None
+
+        folder_name, accepted = QInputDialog.getText(
+            self,
+            "Project Folder Name",
+            "Extract project into folder:",
+            text=self._sanitize_project_folder_name(
+                suggested_name,
+                fallback=Path(archive_path).stem,
+            ),
+        )
+        if not accepted:
+            return None
+
+        cleaned_name = self._sanitize_project_folder_name(
+            folder_name,
+            fallback=Path(archive_path).stem,
+        )
+        destination_dir = Path(parent_dir) / cleaned_name
+        if destination_dir.exists() and any(destination_dir.iterdir()):
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Destination folder is not empty:\n{destination_dir}",
+            )
+            return None
+        return destination_dir
 
     def setup_central_widget(self):
         """Setup main UI layout for UMAP exploration and fast labeling."""
@@ -1440,29 +1568,193 @@ class MainWindow(QMainWindow):
         )
 
         if project_dir:
-            self.project_path = Path(project_dir)
-            if not project_exists(self.project_path):
-                QMessageBox.warning(
-                    self,
-                    "Invalid Project",
-                    "This directory does not contain a valid ClassKit project.",
-                )
+            self._open_project_directory(Path(project_dir), show_invalid_warning=True)
+
+    def open_project_zip(self):
+        """Import a zipped ClassKit project bundle and open the extracted project."""
+        archive_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open ClassKit Project Zip",
+            str(default_project_parent_dir()),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            manifest = load_project_bundle_archive_manifest(archive_path, strict=True)
+            destination_dir = self._choose_project_zip_destination(
+                archive_path,
+                manifest.display_name or Path(archive_path).stem,
+            )
+            if destination_dir is None:
                 return
+            imported_dir = import_project_bundle_archive(
+                archive_path,
+                destination_dir,
+                expected_kit="classkit",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
 
-            self.db_path = prepare_project_directory(self.project_path)
+        if not self._open_project_directory(imported_dir, show_invalid_warning=True):
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Imported project could not be opened:\n{imported_dir}",
+            )
 
-            if not self.db_path.exists():
-                QMessageBox.warning(
+    def make_project_portable(self, *, interactive: bool = True) -> bool:
+        """Copy linked ClassKit images into the project bundle."""
+        if not self.project_path or not self.db_path:
+            if interactive:
+                QMessageBox.information(
                     self,
-                    "Invalid Project",
-                    "This directory does not contain a valid ClassKit project.",
+                    "Make Project Portable",
+                    "Open a ClassKit project before making it portable.",
                 )
-                return
+            return False
 
+        before_count = classkit_project_linked_image_count(
+            self.project_path,
+            self.image_paths,
+        )
+        if before_count == 0:
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    "This ClassKit project is already portable.",
+                )
+            self.status.showMessage("Project already portable", 3000)
+            return True
+
+        if interactive:
+            self.save_project()
+            progress = QProgressDialog(
+                "Copying linked images into the project bundle...",
+                None,
+                0,
+                0,
+                self,
+            )
+            progress.setWindowTitle("Make Project Portable")
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+
+            worker = _ClassKitPortableWorker(self.db_path)
+            worker.status.connect(progress.setLabelText)
+            worker.error.connect(
+                lambda msg: QMessageBox.warning(self, "Make Project Portable", msg)
+            )
+
+            def _finish_portable_run() -> None:
+                progress.close()
+                self._portable_worker = None
+                self._portable_progress_dialog = None
+
+            def _handle_portable_success(copied_count: int) -> None:
+                self.load_project_data()
+                self.update_context_panel()
+                after_count = classkit_project_linked_image_count(
+                    self.project_path,
+                    self.image_paths,
+                )
+                if after_count != 0:
+                    QMessageBox.warning(
+                        self,
+                        "Make Project Portable",
+                        f"{after_count:,} linked image(s) still remain outside the project bundle.",
+                    )
+                    return
+                self.status.showMessage(
+                    f"Copied {copied_count:,} linked image(s) into the project bundle",
+                    5000,
+                )
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    f"Copied {copied_count:,} linked image(s) into the project bundle.",
+                )
+
+            worker.success.connect(_handle_portable_success)
+            worker.finished.connect(_finish_portable_run)
+            self._portable_worker = worker
+            self._portable_progress_dialog = progress
+            worker.start()
+            return True
+
+        try:
+            self.save_project()
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+            copied_count = db.materialize_linked_images()
             self.load_project_data()
             self.update_context_panel()
-            self.status.showMessage(f"Opened project: {self.project_path.name}")
-            QTimer.singleShot(200, self._guide_to_next_step)
+        except Exception as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+
+        after_count = classkit_project_linked_image_count(
+            self.project_path,
+            self.image_paths,
+        )
+        if after_count != 0:
+            QMessageBox.warning(
+                self,
+                "Make Project Portable",
+                f"{after_count:,} linked image(s) still remain outside the project bundle.",
+            )
+            return False
+
+        self.status.showMessage(
+            f"Copied {copied_count:,} linked image(s) into the project bundle",
+            5000,
+        )
+        if interactive:
+            QMessageBox.information(
+                self,
+                "Make Project Portable",
+                f"Copied {copied_count:,} linked image(s) into the project bundle.",
+            )
+        return True
+
+    def export_project_zip(self):
+        """Write the current ClassKit project bundle as a portable zip archive."""
+        if not self.project_path:
+            QMessageBox.information(
+                self,
+                "Export Project Zip",
+                "Open a ClassKit project before exporting a portable zip.",
+            )
+            return
+
+        default_archive = self.project_path.parent / f"{self.project_path.name}.zip"
+        archive_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export ClassKit Project Zip",
+            str(default_archive),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            if not self.make_project_portable(interactive=False):
+                return
+            self.save_project()
+            written_path = export_project_bundle_archive(
+                self.project_path, archive_path
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        self.status.showMessage(f"Exported project zip: {written_path}", 5000)
 
     def save_project(self):
         """Force immediate flush of all pending label updates."""
@@ -1580,6 +1872,9 @@ class MainWindow(QMainWindow):
 
             db = ClassKitDB(self.db_path)
 
+            # Rebase project-owned bundle paths after extracting or moving a project.
+            db.relocate_project_owned_paths()
+
             # Migrate any non-resolved paths from older ingests (no-op if already resolved)
             db.migrate_paths_to_resolved()
 
@@ -1643,12 +1938,22 @@ class MainWindow(QMainWindow):
         db_state = (
             "Connected" if self.db_path and self.db_path.exists() else "Not ready"
         )
+        linked_image_count = classkit_project_linked_image_count(
+            self.project_path,
+            self.image_paths,
+        )
+        portability_state = (
+            "Portable"
+            if classkit_project_is_portable(self.project_path, self.image_paths)
+            else f"Linked ({linked_image_count:,} external image(s))"
+        )
         embedding_state = "Ready" if self.embeddings is not None else "Pending"
         cluster_state = f"{n_clusters:,}" if n_clusters else "Pending"
         umap_state = "Ready" if self.umap_coords is not None else "Pending"
 
         info_rows = [
             ("DB", db_state),
+            ("Project", portability_state),
             ("Images", f"{total_count:,}"),
             ("Labeled", f"{labeled_count:,}"),
             ("Open", f"{unlabeled_count:,}"),

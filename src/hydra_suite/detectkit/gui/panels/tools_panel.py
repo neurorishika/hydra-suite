@@ -108,6 +108,8 @@ class ToolsPanel(QWidget):
         super().__init__(parent)
         self._proj = None
         self._class_checkboxes: list[QCheckBox] = []
+        self._portability_status = "Unknown"
+        self._linked_counts: dict[str, int] = {}
         self.setFixedWidth(_PANEL_WIDTH)
         self.setProperty("detectkitRole", "panelShell")
         self._build_ui()
@@ -161,6 +163,11 @@ class ToolsPanel(QWidget):
         self._overview_progress.setTextVisible(True)
         self._overview_progress.setFormat("0 / 0 labeled")
         v.addWidget(self._overview_progress)
+
+        self._overview_portability = QLabel("Project portability: unknown")
+        self._overview_portability.setWordWrap(True)
+        self._overview_portability.setProperty("detectkitRole", "compactInfo")
+        v.addWidget(self._overview_portability)
 
         self._overview_sources_layout = QVBoxLayout()
         self._overview_sources_layout.setSpacing(2)
@@ -297,6 +304,19 @@ class ToolsPanel(QWidget):
 
         sources = self._proj.sources or []
 
+        if self._portability_status == "Portable":
+            self._overview_portability.setText("Project portability: Portable")
+        else:
+            source_count = int(self._linked_counts.get("sources", 0) or 0)
+            artifact_count = int(self._linked_counts.get("artifacts", 0) or 0)
+            details: list[str] = []
+            if source_count:
+                details.append(f"{source_count} linked source(s)")
+            if artifact_count:
+                details.append(f"{artifact_count} linked artifact(s)")
+            suffix = f" ({', '.join(details)})" if details else ""
+            self._overview_portability.setText(f"Project portability: Linked{suffix}")
+
         self._overview_progress.setRange(0, max(1, len(sources)))
         self._overview_progress.setValue(len(sources))
 
@@ -311,6 +331,17 @@ class ToolsPanel(QWidget):
 
         n_src = len(sources)
         self._overview_progress.setFormat(f"{n_src} source(s) connected")
+
+    def set_portability_status(
+        self,
+        status: str,
+        linked_counts: dict[str, int] | None = None,
+    ) -> None:
+        """Update the overview portability state for the bound project."""
+        self._portability_status = str(status or "Unknown")
+        self._linked_counts = dict(linked_counts or {})
+        if self._proj is not None:
+            self.refresh_overview()
 
     def set_image_counter(self, current: int, total: int) -> None:
         """Update the navigation counter label."""

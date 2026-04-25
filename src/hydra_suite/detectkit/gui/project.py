@@ -22,7 +22,8 @@ from hydra_suite.data.project_bundle import (
 )
 
 from .constants import DEFAULT_PROJECT_FILENAME, DEFAULT_PROJECTS_ROOT_NAME
-from .models import DetectKitProject, normalize_class_names
+from .models import DetectKitProject, OBBSource, normalize_class_names
+from .source_import import materialize_detectkit_source
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,281 @@ def _path_within_project(project_dir: Path, candidate: str | Path) -> Path | Non
     return resolved
 
 
+def detectkit_project_linked_reference_counts(
+    project: DetectKitProject,
+) -> dict[str, int]:
+    """Count project references that still point outside the project bundle."""
+    project_dir = project.project_dir.expanduser().resolve()
+    counts = {"sources": 0, "artifacts": 0}
+
+    for source in project.sources or []:
+        candidate = str(source.path or "").strip()
+        if candidate and _path_within_project(project_dir, candidate) is None:
+            counts["sources"] += 1
+
+    artifact_candidates: list[str] = []
+    active_model = str(project.active_model_path or "").strip()
+    if active_model:
+        artifact_candidates.append(active_model)
+
+    for entry in project.training_history or []:
+        for key in ("project_model_path", "project_run_dir", "project_log_path"):
+            value = str(entry.get(key, "") or "").strip()
+            if value:
+                artifact_candidates.append(value)
+        for key in ("project_model_paths", "project_metrics_paths"):
+            artifact_candidates.extend(_normalize_path_list(entry.get(key)))
+
+    seen: set[str] = set()
+    for candidate in artifact_candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _path_within_project(project_dir, candidate) is None:
+            counts["artifacts"] += 1
+
+    return counts
+
+
+def detectkit_project_is_portable(project: DetectKitProject) -> bool:
+    """Return whether all tracked sources and project artifact references are local."""
+    counts = detectkit_project_linked_reference_counts(project)
+    return all(count == 0 for count in counts.values())
+
+
+def _copy_project_artifact(
+    project_dir: Path,
+    candidate: str | Path,
+    dest_dir: Path,
+    *,
+    preferred_name: str | None = None,
+) -> str:
+    text = str(candidate or "").strip()
+    if not text:
+        return ""
+
+    owned = _path_within_project(project_dir, text)
+    if owned is not None and owned.exists():
+        return str(owned)
+
+    source_path = Path(text).expanduser()
+    if not source_path.exists():
+        return ""
+
+    destination = _dedupe_path(dest_dir, preferred_name or source_path.name)
+    shutil.copy2(str(source_path), str(destination))
+    return str(destination)
+
+
+def _materialize_history_entry_portable(
+    project_dir: Path,
+    entry: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    updated = _export_entry_artifacts(project_dir, entry)
+    model_map: dict[str, str] = {}
+
+    old_model_candidates = _entry_model_paths(entry)
+    new_model_candidates = _normalize_path_list(updated.get("project_model_paths"))
+    for index, source_model in enumerate(old_model_candidates):
+        if index >= len(new_model_candidates):
+            break
+        source_text = str(source_model or "").strip()
+        if source_text:
+            model_map[source_text] = new_model_candidates[index]
+
+    run_id = str(updated.get("run_id", "") or "run").strip()
+    project_run_dir = detectkit_artifact_paths(project_dir)["training_runs"] / _slug(
+        run_id,
+        fallback="run",
+        max_len=96,
+    )
+    project_run_dir.mkdir(parents=True, exist_ok=True)
+    updated["project_run_dir"] = str(project_run_dir)
+
+    metrics_candidates = _normalize_path_list(updated.get("project_metrics_paths"))
+    if not metrics_candidates:
+        metrics_candidates = _normalize_path_list(updated.get("metrics_paths"))
+
+    localized_metrics: list[str] = []
+    for metrics_path in metrics_candidates:
+        localized = _copy_project_artifact(project_dir, metrics_path, project_run_dir)
+        if localized:
+            localized_metrics.append(localized)
+    updated["project_metrics_paths"] = localized_metrics
+
+    log_candidate = str(updated.get("project_log_path", "") or "").strip()
+    localized_log = ""
+    if log_candidate:
+        localized_log = _copy_project_artifact(
+            project_dir,
+            log_candidate,
+            project_run_dir,
+            preferred_name="training.log",
+        )
+    if localized_log:
+        updated["project_log_path"] = localized_log
+    else:
+        updated.pop("project_log_path", None)
+
+    return updated, model_map
+
+
+def make_detectkit_project_portable(project: DetectKitProject) -> dict[str, int]:
+    """Copy linked sources and tracked artifacts into the project bundle."""
+    project_dir = project.project_dir.expanduser().resolve()
+
+    localized_sources: list[OBBSource] = []
+    for source in project.sources or []:
+        source_path = str(source.path or "").strip()
+        if source_path and _path_within_project(project_dir, source_path) is not None:
+            localized_sources.append(source)
+            continue
+
+        materialized = materialize_detectkit_source(
+            source.path,
+            project_dir,
+            force_import=True,
+        )
+        localized_sources.append(
+            OBBSource(
+                path=str(materialized.canonical_path),
+                name=source.name or materialized.display_name,
+                original_path=str(source.original_path or source.path or ""),
+                source_kind=materialized.source_kind,
+                imported=True,
+            )
+        )
+    project.sources = localized_sources
+
+    localized_history: list[dict[str, Any]] = []
+    model_map: dict[str, str] = {}
+    for entry in project.training_history or []:
+        localized_entry, entry_model_map = _materialize_history_entry_portable(
+            project_dir,
+            entry,
+        )
+        localized_history.append(localized_entry)
+        model_map.update(entry_model_map)
+    project.training_history = localized_history
+
+    active_model = str(project.active_model_path or "").strip()
+    if active_model:
+        if _path_within_project(project_dir, active_model) is not None:
+            project.active_model_path = str(Path(active_model).expanduser().resolve())
+        elif active_model in model_map:
+            project.active_model_path = model_map[active_model]
+        else:
+            localized_active = _copy_project_artifact(
+                project_dir,
+                active_model,
+                detectkit_models_dir(project_dir),
+            )
+            if localized_active:
+                project.active_model_path = localized_active
+
+    save_project(project)
+    return detectkit_project_linked_reference_counts(project)
+
+
+def _serialize_project_owned_path(project_dir: Path, value: str | Path) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    owned = _path_within_project(project_dir, text)
+    if owned is None:
+        return text
+    return owned.relative_to(project_dir.resolve()).as_posix()
+
+
+def _deserialize_project_owned_path(project_dir: Path, value: str | Path) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    candidate = Path(text).expanduser()
+    if candidate.is_absolute():
+        return str(candidate.resolve())
+    return str((project_dir.resolve() / candidate).resolve())
+
+
+def _serialize_history_entry(
+    project_dir: Path, entry: dict[str, Any]
+) -> dict[str, Any]:
+    updated = copy.deepcopy(entry)
+    for key in ("project_model_path", "project_run_dir", "project_log_path"):
+        if key in updated:
+            updated[key] = _serialize_project_owned_path(project_dir, updated.get(key))
+    for key in ("project_model_paths", "project_metrics_paths"):
+        values = _normalize_path_list(updated.get(key))
+        updated[key] = [
+            _serialize_project_owned_path(project_dir, value) for value in values
+        ]
+    return updated
+
+
+def _deserialize_history_entry(
+    project_dir: Path, entry: dict[str, Any]
+) -> dict[str, Any]:
+    updated = copy.deepcopy(entry)
+    for key in ("project_model_path", "project_run_dir", "project_log_path"):
+        if key in updated:
+            updated[key] = _deserialize_project_owned_path(
+                project_dir, updated.get(key)
+            )
+    for key in ("project_model_paths", "project_metrics_paths"):
+        values = _normalize_path_list(updated.get(key))
+        updated[key] = [
+            _deserialize_project_owned_path(project_dir, value) for value in values
+        ]
+    return updated
+
+
+def _serialize_project_state_paths(project: DetectKitProject) -> DetectKitProject:
+    serialized = copy.deepcopy(project)
+    serialized.sources = [
+        OBBSource(
+            path=_serialize_project_owned_path(project.project_dir, source.path),
+            name=source.name,
+            validated=source.validated,
+            original_path=source.original_path,
+            source_kind=source.source_kind,
+            imported=source.imported,
+        )
+        for source in project.sources
+    ]
+    serialized.active_model_path = _serialize_project_owned_path(
+        project.project_dir,
+        project.active_model_path,
+    )
+    serialized.training_history = [
+        _serialize_history_entry(project.project_dir, entry)
+        for entry in project.training_history or []
+    ]
+    return serialized
+
+
+def _deserialize_project_state_paths(project: DetectKitProject) -> DetectKitProject:
+    project.sources = [
+        OBBSource(
+            path=_deserialize_project_owned_path(project.project_dir, source.path),
+            name=source.name,
+            validated=source.validated,
+            original_path=source.original_path,
+            source_kind=source.source_kind,
+            imported=source.imported,
+        )
+        for source in project.sources
+    ]
+    project.active_model_path = _deserialize_project_owned_path(
+        project.project_dir,
+        project.active_model_path,
+    )
+    project.training_history = [
+        _deserialize_history_entry(project.project_dir, entry)
+        for entry in project.training_history or []
+    ]
+    return project
+
+
 def _history_index(entries: list[dict[str, Any]], run_id: str) -> int:
     for index, entry in enumerate(entries):
         if str(entry.get("run_id", "")).strip() == run_id:
@@ -255,7 +531,7 @@ def _export_entry_artifacts(
     existing_exports = [
         path
         for path in _normalize_path_list(updated.get("project_model_paths"))
-        if Path(path).exists()
+        if Path(path).exists() and _path_within_project(project_dir, path) is not None
     ]
     if existing_exports:
         updated["project_model_paths"] = existing_exports
@@ -578,7 +854,7 @@ def _load_bundle_project(project_dir: Path) -> Optional[DetectKitProject]:
 
     proj = DetectKitProject.load(state_path)
     proj.project_dir = project_dir
-    return proj
+    return _deserialize_project_state_paths(proj)
 
 
 def _load_legacy_project(project_dir: Path) -> Optional[DetectKitProject]:
@@ -590,7 +866,7 @@ def _load_legacy_project(project_dir: Path) -> Optional[DetectKitProject]:
     proj = DetectKitProject.load(legacy_path)
     proj.project_dir = project_dir
     save_project(proj)
-    return proj
+    return _deserialize_project_state_paths(proj)
 
 
 def _ensure_bundle_manifest(project_dir: Path) -> None:
@@ -620,6 +896,7 @@ def open_project(project_dir: Path) -> Optional[DetectKitProject]:
     if proj is None and project_file_path(project_dir).exists():
         proj = DetectKitProject.load(project_file_path(project_dir))
         proj.project_dir = project_dir
+        proj = _deserialize_project_state_paths(proj)
         _ensure_bundle_manifest(project_dir)
     if proj is None:
         logger.warning("Project file not found in: %s", project_dir)
@@ -651,6 +928,7 @@ def save_project(proj: DetectKitProject) -> None:
     """Save *proj* to its canonical project file."""
     ensure_project_bundle_layout(proj.project_dir)
     detectkit_models_dir(proj.project_dir)
-    proj.save(project_file_path(proj.project_dir))
+    serialized = _serialize_project_state_paths(proj)
+    serialized.save(project_file_path(proj.project_dir))
     _ensure_bundle_manifest(proj.project_dir)
     _archive_legacy_project_file(proj.project_dir)

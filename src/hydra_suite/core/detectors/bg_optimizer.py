@@ -409,7 +409,7 @@ def _prime_background_from_frames(prime_frames, trial_params, roi_mask):
 def _init_trial_pipeline(trial_params, frame_cache):
     """Create a fresh BG-sub pipeline state for one trial evaluation."""
     from ..background.model import BackgroundModel
-    from .engine import ObjectDetector
+    from .bg_detector import ObjectDetector
 
     bg_model = BackgroundModel(trial_params)
     prime_count = max(0, int(trial_params.get("BACKGROUND_PRIME_FRAMES", 0) or 0))

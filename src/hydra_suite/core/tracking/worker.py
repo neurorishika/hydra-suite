@@ -2164,6 +2164,7 @@ class TrackingWorker(QThread):
                 [],
             )
             raw_heading_hints = []
+            raw_heading_confidences = []
             raw_directed_mask = []
             yolo_results = None
             fg_mask = None
@@ -2287,6 +2288,7 @@ class TrackingWorker(QThread):
                 raw_obb_corners = filtered_obb_corners
                 raw_detection_ids = detection_ids
                 raw_heading_hints = []
+                raw_heading_confidences = []
                 raw_directed_mask = []
                 raw_canonical_affines = None
 
