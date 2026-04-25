@@ -1183,6 +1183,7 @@ class TrackingWorker(QThread):
             batched_detection=use_batched_detection,
             density_map_enabled=density_map_enabled,
             precompute_enabled=individual_data_precompute_enabled,
+            pass_name="backward" if self.backward_mode else "forward",
         )
         profiler.phase_end("initialization")
 
@@ -1936,6 +1937,13 @@ class TrackingWorker(QThread):
         _roi_mask_cache_key = None
         _roi_mask_resized = None
 
+        # Discard any frame-level state accumulated during Phase 1 (batched
+        # detection uses tick/tock without end_frame), and clear interval
+        # accumulators so pre-loop phase timings don't bleed into the first
+        # periodic tracking-loop summary window.
+        profiler.discard_frame_state()
+        profiler.reset_interval()
+
         profiler.phase_start("tracking_loop")
         frame_iterator = iter(frame_iterator)
 
@@ -1956,6 +1964,7 @@ class TrackingWorker(QThread):
                 start_frame,
                 end_frame,
             )
+            profiler.notify_frame_index(actual_frame_index)
 
             if self.backward_mode:
                 if actual_frame_index < start_frame:

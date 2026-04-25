@@ -152,6 +152,8 @@ class TrackingProfiler:
         self._interval_phase_totals: dict[str, float] = defaultdict(float)
         self._interval_phase_units: dict[str, float] = defaultdict(float)
         self._interval_frames: int = 0
+        self._interval_first_frame_idx: int | None = None
+        self._current_frame_idx: int | None = None
 
         # Tick tracking
         self._pending: dict[str, float] = {}
@@ -180,6 +182,57 @@ class TrackingProfiler:
         if not self.enabled:
             return
         self._config.update(kwargs)
+
+    # ------------------------------------------------------------------
+    # Phase / interval boundary helpers
+    # ------------------------------------------------------------------
+    def discard_frame_state(self) -> None:
+        """Discard any pending per-frame tick/tock state without recording it.
+
+        Call this at a phase boundary where tick/tock was used during a prior
+        phase that never called ``end_frame()`` (e.g. the batched-detection
+        phase uses ``tick/tock("batched_frame_read")`` across hundreds of
+        batches but never flushes via ``end_frame``).  Without this call, the
+        accumulated ``_frame_totals`` and the long-running ``_frame_start``
+        timestamp would be flushed on the *first* Phase-2 ``end_frame()``,
+        injecting the entire Phase-1 decode time into the per-tracking-frame
+        statistics.
+        """
+        if not self.enabled:
+            return
+        self._frame_totals = defaultdict(float)
+        self._frame_units = defaultdict(float)
+        self._frame_start = None
+        self._pending.clear()
+
+    def reset_interval(self) -> None:
+        """Reset the per-interval accumulators.
+
+        Call this just before the main tracking loop starts so that coarse
+        phase timings accumulated during Phase 1 (batched detection, confidence
+        density map, precompute, etc.) do not appear in the first periodic
+        per-frame summary window.
+        """
+        if not self.enabled:
+            return
+        self._interval_totals = defaultdict(float)
+        self._interval_phase_totals = defaultdict(float)
+        self._interval_phase_units = defaultdict(float)
+        self._interval_frames = 0
+        self._interval_first_frame_idx = None
+
+    def notify_frame_index(self, frame_idx: int) -> None:
+        """Record the current absolute frame index for periodic-log context.
+
+        Call once per tracking-loop iteration, just after *frame_idx* is
+        known, so that the periodic summary can report the exact frame range
+        it covers (e.g. "frames 8661–8760").
+        """
+        if not self.enabled:
+            return
+        if self._interval_first_frame_idx is None:
+            self._interval_first_frame_idx = frame_idx
+        self._current_frame_idx = frame_idx
 
     # ------------------------------------------------------------------
     # Section timing
@@ -303,7 +356,7 @@ class TrackingProfiler:
     # Periodic console summary (replaces the old 100-frame logger block)
     # ------------------------------------------------------------------
     def log_periodic(self, interval: int = 100) -> None:
-        """Log a summary to the logger every *interval* frames."""
+        """Log a per-frame breakdown every *interval* frames."""
         if not self.enabled:
             return
         if self._interval_frames == 0 or self._interval_frames % interval != 0:
@@ -311,7 +364,18 @@ class TrackingProfiler:
         total = sum(self._interval_totals.values())
         if total <= 0:
             return
-        logger.info("=== PROFILING SUMMARY (last %d frames) ===", self._interval_frames)
+
+        # Build a context-rich header: pass name + absolute frame range.
+        pass_name = self._config.get("pass_name", "")
+        prefix = f"{pass_name.upper()} · " if pass_name else ""
+        start_f = self._interval_first_frame_idx
+        end_f = self._current_frame_idx
+        if start_f is not None and end_f is not None:
+            header = f"{prefix}frames {start_f}\u2013{end_f}  (+{self._interval_frames} frames)"
+        else:
+            header = f"{prefix}last {self._interval_frames} frames"
+        logger.info("--- PROFILING [%s] ---", header)
+
         for cat in self._ordered_categories(self._interval_totals):
             dur = self._interval_totals[cat]
             pct = (dur / total) * 100
@@ -329,7 +393,7 @@ class TrackingProfiler:
             )
 
         if self._interval_phase_totals:
-            logger.info("  PHASE TIMING")
+            logger.info("  PHASE BREAKDOWN")
             for name in self._ordered_phases(self._interval_phase_totals):
                 dur = self._interval_phase_totals[name]
                 pct = (dur / total) * 100 if total > 0 else 0.0
@@ -352,13 +416,14 @@ class TrackingProfiler:
             "TOTAL",
             (total / self._interval_frames) * 1000,
         )
-        logger.info("=" * 50)
+        logger.info("-" * 50)
 
-        # Reset interval accumulators
+        # Reset interval accumulators for the next window.
         self._interval_totals = defaultdict(float)
         self._interval_phase_totals = defaultdict(float)
         self._interval_phase_units = defaultdict(float)
         self._interval_frames = 0
+        self._interval_first_frame_idx = None
 
     # ------------------------------------------------------------------
     # Summary generation
@@ -463,67 +528,71 @@ class TrackingProfiler:
         if n == 0:
             return
 
+        pass_name = self._config.get("pass_name", "")
+        pass_label = f"  {pass_name.upper()} PASS — " if pass_name else "  "
+
         logger.info("=" * 60)
-        logger.info("  TRACKING PROFILING — FINAL SUMMARY")
+        logger.info("%sTRACKING PROFILING — FINAL SUMMARY", pass_label)
         logger.info("=" * 60)
         logger.info(
-            "  Frames: %d | Wall-clock: %.1fs | Avg FPS: %.1f",
+            "  Frames: %d | Wall-clock: %.1fs | Throughput: %.1f fps",
             n,
             summary["wall_clock_s"],
             summary["avg_fps"],
         )
-        logger.info(
-            "  Avg frame: %.2f ms",
-            summary["avg_frame_ms"],
-        )
 
         if summary["phases"]:
             logger.info("-" * 60)
-            logger.info("  PHASE TIMING")
+            logger.info("  PHASE TIMING  (% of wall-clock)")
             for name, info in summary["phases"].items():
+                unit_suffix = ""
+                if "ms_per_unit" in info:
+                    unit_suffix = f" | {info['ms_per_unit']:.2f} ms/unit"
+                logger.info(
+                    "    %-30s %8.2f s  (%5.1f%%)%s",
+                    name,
+                    info["total_s"],
+                    info.get("percent_of_wall", 0.0),
+                    unit_suffix,
+                )
+
+        if summary["categories"]:
+            logger.info("-" * 60)
+            logger.info(
+                "  TRACKING-LOOP CATEGORIES  (per-frame, %d frames, avg %.2f ms/frame)",
+                n,
+                summary["avg_frame_ms"],
+            )
+            logger.info(
+                "  %-22s %6s %8s %8s %8s %8s",
+                "CATEGORY",
+                "%",
+                "mean",
+                "p50",
+                "p95",
+                "max",
+            )
+            logger.info("-" * 60)
+            for cat, info in summary["categories"].items():
                 unit_suffix = ""
                 if "ms_per_unit" in info:
                     unit_suffix = f" | {info['ms_per_unit']:.2f} ms/individual"
                 logger.info(
-                    "    %-30s %8.2f s  %7.2f ms/frame%s  (%5.1f%%)",
-                    name,
-                    info["total_s"],
-                    info.get("avg_ms_per_frame", 0.0),
+                    "  %-22s %5.1f%% %7.2fms %7.2fms %7.2fms %7.2fms%s",
+                    cat,
+                    info["percent"],
+                    info["mean_ms"],
+                    info["p50_ms"],
+                    info["p95_ms"],
+                    info["max_ms"],
                     unit_suffix,
-                    info.get("percent_of_wall", 0.0),
                 )
-
-        logger.info("-" * 60)
-        logger.info(
-            "  %-22s %6s %8s %8s %8s %8s",
-            "CATEGORY",
-            "%",
-            "mean",
-            "p50",
-            "p95",
-            "max",
-        )
-        logger.info("-" * 60)
-        for cat, info in summary["categories"].items():
-            unit_suffix = ""
-            if "ms_per_unit" in info:
-                unit_suffix = f" | {info['ms_per_unit']:.2f} ms/individual"
+            logger.info("-" * 60)
             logger.info(
-                "  %-22s %5.1f%% %7.2fms %7.2fms %7.2fms %7.2fms%s",
-                cat,
-                info["percent"],
-                info["mean_ms"],
-                info["p50_ms"],
-                info["p95_ms"],
-                info["max_ms"],
-                unit_suffix,
+                "  %-22s        %7.2fms",
+                "TOTAL",
+                summary["avg_frame_ms"],
             )
-        logger.info("-" * 60)
-        logger.info(
-            "  %-22s        %7.2fms",
-            "TOTAL",
-            summary["avg_frame_ms"],
-        )
         logger.info("=" * 60)
 
     # ------------------------------------------------------------------
