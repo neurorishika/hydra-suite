@@ -72,6 +72,11 @@ conda activate hydra-cuda
 make install-cuda CUDA_MAJOR=13
 ```
 
+The `make install*` targets also build and install the pinned Kronauer lab
+AprilTag fork (`Social-Evolution-and-Behavior/apriltag` at
+`c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c`) so AprilTag workflows use the lab
+wrapper instead of the stock `apriltag` module.
+
 The full installation matrix, platform notes, and troubleshooting live in the docs site:
 
 - Getting Started: <https://neurorishika.github.io/hydra-suite/getting-started/installation/>

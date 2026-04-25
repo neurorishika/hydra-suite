@@ -14,7 +14,7 @@ from .schemas import Factor, LabelingScheme
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLOR_TAG_COLORS = ["red", "blue", "green", "yellow", "white"]
+DEFAULT_COLOR_TAG_COLORS = ["pink", "blue", "green", "yellow", "orange"]
 
 
 @dataclass(frozen=True)

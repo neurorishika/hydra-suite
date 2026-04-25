@@ -13,6 +13,7 @@ working in environments where it is not installed.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -20,11 +21,25 @@ import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
+APRILTAG_FORK_REPO = "https://github.com/Social-Evolution-and-Behavior/apriltag"
+APRILTAG_FORK_COMMIT = "c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c"
+APRILTAG_REQUIRED_FAMILY = "tag36ARTag"
 
 # ---------------------------------------------------------------------------
 # Lazy import of the apriltag library
 # ---------------------------------------------------------------------------
 _apriltag_module: Any = None
+
+
+def _has_required_apriltag_family(module: Any) -> bool:
+    """Return whether the installed apriltag build exposes the lab-only family."""
+    try:
+        module.apriltag("__probe__")
+    except Exception as exc:
+        families = set(re.findall(r"^\s+(\S+)$", str(exc), re.MULTILINE))
+        if families:
+            return APRILTAG_REQUIRED_FAMILY in families
+    return False
 
 
 def _get_apriltag():
@@ -34,11 +49,19 @@ def _get_apriltag():
         try:
             import apriltag as _at  # type: ignore[import-untyped]
 
+            if not _has_required_apriltag_family(_at):
+                raise ImportError(
+                    "HYDRA requires the lab apriltag fork with tag36ARTag support. "
+                    f"Install {APRILTAG_FORK_REPO} at commit {APRILTAG_FORK_COMMIT}, "
+                    "or run `make install-apriltag-fork` in the active environment."
+                )
             _apriltag_module = _at
         except ImportError:
             raise ImportError(
-                "The 'apriltag' package is required for AprilTag detection but is "
-                "not installed.  Install it with: pip install apriltag"
+                "The lab apriltag fork is required for AprilTag detection but is "
+                "not installed in this environment. Install "
+                f"{APRILTAG_FORK_REPO} at commit {APRILTAG_FORK_COMMIT}, or run "
+                "`make install-apriltag-fork` in the active environment."
             )
     return _apriltag_module
 

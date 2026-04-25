@@ -29,6 +29,13 @@ All three methods support full GPU acceleration. See the [platform matrix](#plat
 
 Requires only Python 3.11+. No conda, no git clone.
 
+AprilTag-backed workflows are the exception: HYDRA expects the Kronauer lab fork
+of `apriltag` (`Social-Evolution-and-Behavior/apriltag` at
+`c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c`). The developer `make install*`
+targets install that fork automatically. If you use a pure pip install and need
+AprilTag features, build that fork into the same environment following the fork
+README.
+
 ### CPU (all platforms)
 
 ```bash
@@ -174,6 +181,7 @@ The conda environment provides system libraries and Python. The `make install-*`
 
 1. **torch** with the correct GPU variant and index URL
 2. **`-e .`** — an editable install that pulls all `pyproject.toml` dependencies
+3. The pinned Kronauer lab `apriltag` fork via `make install-apriltag-fork`
 
 Base dependencies (numpy, scipy, PySide6, ultralytics, etc.) are declared once in `pyproject.toml`. The requirements files only add what `pyproject.toml` cannot express (torch GPU index URLs). This means there is **one source of truth** for dependencies.
 

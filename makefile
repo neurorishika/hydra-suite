@@ -1,4 +1,4 @@
-.PHONY: env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
+.PHONY: env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
@@ -10,6 +10,9 @@ PYTHON_BIN = $(if $(CONDA_PREFIX),$(CONDA_PREFIX)/bin/python,python)
 UV_PIP = uv pip
 UV_PIP_PYTHON = $(if $(CONDA_PREFIX),--python "$(CONDA_PREFIX)/bin/python",)
 PRE_COMMIT = $(if $(CONDA_PREFIX),env LD_LIBRARY_PATH="$(CONDA_PREFIX)/targets/x86_64-linux/lib:$(CONDA_PREFIX)/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" "$(CONDA_PREFIX)/bin/pre-commit",pre-commit)
+APRILTAG_FORK_REPO = https://github.com/Social-Evolution-and-Behavior/apriltag.git
+APRILTAG_FORK_COMMIT = c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c
+APRILTAG_FORK_REF = c43a9b6
 
 define reset_onnxruntime_packages
 	@"$(PYTHON_BIN)" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
@@ -59,9 +62,38 @@ configure-cuda-ort:
 	@echo "Configured CUDA 12 runtime library path hook for ONNX Runtime GPU."
 	@"$(PYTHON_BIN)" verify_cuda_runtime.py
 
+install-apriltag-fork:
+	@prefix="$${CONDA_PREFIX:-$${VIRTUAL_ENV:-}}"; \
+	if [ -z "$$prefix" ]; then \
+		echo "ERROR: activate a conda environment or virtualenv before installing the apriltag fork."; \
+		exit 1; \
+	fi; \
+	python_bin="$$prefix/bin/python"; \
+	if [ ! -x "$$python_bin" ]; then \
+		echo "ERROR: expected Python interpreter at $$python_bin"; \
+		exit 1; \
+	fi; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT HUP INT TERM; \
+	echo "Installing apriltag fork $(APRILTAG_FORK_REF) into $$prefix..."; \
+	"$$python_bin" -m pip uninstall -y apriltag >/dev/null 2>&1 || true; \
+	git clone --quiet "$(APRILTAG_FORK_REPO)" "$$tmpdir/apriltag"; \
+	cd "$$tmpdir/apriltag"; \
+	git checkout --quiet --detach "$(APRILTAG_FORK_COMMIT)"; \
+	cmake -S . -B build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX="$$prefix" \
+		-DPython3_EXECUTABLE="$$python_bin" \
+		-DPython3_ROOT_DIR="$$prefix" \
+		-DPython3_FIND_VIRTUALENV=ONLY; \
+	cmake --build build --parallel; \
+	cmake --install build; \
+	echo "Installed apriltag fork $(APRILTAG_FORK_REF)."
+
 install:
 	@echo "Installing CPU packages..."
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt
+	@$(MAKE) install-apriltag-fork
 
 install-cuda:
 	@echo "Installing NVIDIA GPU (CUDA) packages..."
@@ -72,12 +104,14 @@ install-cuda:
 	$(call reset_onnxruntime_packages)
 	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt
+	@$(MAKE) install-apriltag-fork
 	@$(MAKE) configure-cuda-ort
 
 install-mps:
 	@echo "Installing Apple Silicon (MPS) packages..."
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
+	@$(MAKE) install-apriltag-fork
 
 # =============================================================================
 # ENVIRONMENT MAINTENANCE
@@ -88,6 +122,7 @@ env-update:
 	@echo "Updating CPU environment..."
 	mamba env update -f environment.yml --prune
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt --upgrade
+	@$(MAKE) install-apriltag-fork
 
 env-update-cuda:
 	@echo "Updating NVIDIA GPU (CUDA) environment..."
@@ -99,6 +134,7 @@ env-update-cuda:
 	$(call reset_onnxruntime_packages)
 	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
+	@$(MAKE) install-apriltag-fork
 	@if [ -n "$$CONDA_PREFIX" ]; then \
 		$(MAKE) configure-cuda-ort; \
 	else \
@@ -110,6 +146,7 @@ env-update-mps:
 	mamba env update -f environment-mps.yml --prune
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt --upgrade
+	@$(MAKE) install-apriltag-fork
 
 # Remove environments
 env-remove:
