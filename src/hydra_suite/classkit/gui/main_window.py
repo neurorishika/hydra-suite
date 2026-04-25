@@ -7504,13 +7504,16 @@ class MainWindow(QMainWindow):
             def run(self):
                 try:
                     self.signals.started.emit()
-                    for fi, _factor in enumerate(self.scheme.factors):
+                    for fi, factor in enumerate(self.scheme.factors):
                         self.signals.progress.emit(0, f"Exporting factor {fi}...")
                         factor_labels = outer_self._decode_factor_labels(
                             self.scheme, self.labels_str, fi
                         )
-                        unique = sorted(set(factor_labels))
-                        label_map = {label: i for i, label in enumerate(unique)}
+                        # Use the full scheme-defined label list so that all classes
+                        # (including "unknown") are always present in the exported
+                        # dataset, even if no training image carries that label.
+                        full_labels = list(factor.labels)
+                        label_map = {label: i for i, label in enumerate(full_labels)}
                         factor_int = [label_map[label] for label in factor_labels]
                         factor_names = {i: label for label, i in label_map.items()}
 
@@ -10753,6 +10756,8 @@ class MainWindow(QMainWindow):
 
     def approve_selected_review_label(self) -> None:
         """Mark the currently selected machine label as verified."""
+        if self.explorer_mode != "review":
+            return
         if self.selected_point_index is None:
             QMessageBox.information(
                 self,
@@ -10811,6 +10816,8 @@ class MainWindow(QMainWindow):
 
     def reject_selected_review_label(self) -> None:
         """Replace the selected machine label with a human-reviewed label."""
+        if self.explorer_mode != "review":
+            return
         if self.selected_point_index is None:
             QMessageBox.information(
                 self,
