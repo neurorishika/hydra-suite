@@ -926,7 +926,7 @@ def test_confidence_density_toggle_roundtrip_updates_visibility(
 
     assert not window._tracking_panel.g_density.isHidden()
     assert (
-        window._tracking_panel.chk_export_confidence_density_video.isChecked() is True
+        window._tracking_panel.chk_export_confidence_density_video.isChecked() is False
     )
 
     window._tracking_panel.chk_enable_confidence_density_map.setChecked(False)

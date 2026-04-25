@@ -862,12 +862,12 @@ class TrackingPanel(QWidget):
         self.chk_export_confidence_density_video = QCheckBox(
             "Export density diagnostic video"
         )
-        self.chk_export_confidence_density_video.setChecked(True)
+        self.chk_export_confidence_density_video.setChecked(False)
         self.chk_export_confidence_density_video.setToolTip(
             "Write a reduced-resolution confidence-density visualization video\n"
             "next to the source video after density-map computation completes.\n"
-            "Disable to keep density-aware matching active without exporting\n"
-            "the diagnostic visualization file."
+            "Leave disabled unless you need the diagnostic visualization,\n"
+            "because exporting it adds a full extra video write pass."
         )
         f_density.addRow("", self.chk_export_confidence_density_video)
 

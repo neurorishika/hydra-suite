@@ -343,11 +343,11 @@ def test_confidence_density_enabled_defaults_true_and_respects_flag() -> None:
     assert worker._confidence_density_enabled() is False
 
 
-def test_confidence_density_video_export_defaults_true_and_respects_flag() -> None:
+def test_confidence_density_video_export_defaults_false_and_respects_flag() -> None:
     mod = _load_worker_module()
     worker = mod.TrackingWorker("dummy.mp4")
 
-    assert worker._confidence_density_video_export_enabled({}) is True
+    assert worker._confidence_density_video_export_enabled({}) is False
     assert (
         worker._confidence_density_video_export_enabled(
             {"EXPORT_CONFIDENCE_DENSITY_VIDEO": True}

@@ -17,7 +17,7 @@ from PySide6.QtCore import QMutex, QThread, Signal, Slot
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.background.model import BackgroundModel
-from hydra_suite.core.detectors import create_detector
+from hydra_suite.core.detectors import DetectionFilter, create_detector
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.identity.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -169,7 +169,7 @@ class TrackingWorker(QThread):
     def _confidence_density_video_export_enabled(self, params=None) -> bool:
         """Return whether density-map diagnostic video export should run."""
         p = self.get_current_params() if params is None else params
-        return bool(p.get("EXPORT_CONFIDENCE_DENSITY_VIDEO", True))
+        return bool(p.get("EXPORT_CONFIDENCE_DENSITY_VIDEO", False))
 
     @staticmethod
     def _resolve_resized_roi_mask(
@@ -1003,11 +1003,6 @@ class TrackingWorker(QThread):
                 out_path = f"{base}_backward{ext}"
             self.video_writer = VideoEncoder(out_path, fps=fps, width=w, height=h)
 
-        # Initialize detector using factory function.
-        # Preview mode remains compatible with fixed-batch runtimes by using
-        # single-frame padding in the detector path.
-        detector = create_detector(p)
-
         # Determine if we should use batched detection
         # Batching is only used for YOLO in full tracking mode (not preview, not backward)
         detection_method = p.get("DETECTION_METHOD", "background_subtraction")
@@ -1262,6 +1257,21 @@ class TrackingWorker(QThread):
                 cap.release()
                 self.finished_signal.emit(False, [], [])
                 return
+
+            # Initialize the detection/filter surface only after cache reuse is
+            # resolved. Cached YOLO passes only need raw-detection filtering, not a
+            # full runtime-backed detector that can trigger ONNX/TRT artifact builds.
+            if use_cached_detections and detection_method == "yolo_obb":
+                detector = DetectionFilter(p)
+                logger.info(
+                    "Using lightweight YOLO detection filter for cached detections"
+                )
+            elif use_cached_detections:
+                detector = None
+            else:
+                # Preview mode remains compatible with fixed-batch runtimes by using
+                # single-frame padding in the detector path.
+                detector = create_detector(p)
 
             # Load density regions for backward pass from the sidecar JSON written
             # by the forward pass (backward mode skips pre-detection, so regions are

@@ -761,7 +761,7 @@ class ConfigOrchestrator:
             int(get_cfg("density_downsample_factor", default=8))
         )
         self._panels.tracking.chk_export_confidence_density_video.setChecked(
-            get_cfg("export_confidence_density_video", default=True)
+            get_cfg("export_confidence_density_video", default=False)
         )
         self._mw._on_confidence_density_map_toggled(
             self._panels.tracking.chk_enable_confidence_density_map.checkState()

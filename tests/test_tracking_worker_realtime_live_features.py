@@ -65,6 +65,15 @@ class _FakeProfiler:
     def set_config(self, **_kwargs):
         return None
 
+    def discard_frame_state(self):
+        return None
+
+    def reset_interval(self):
+        return None
+
+    def notify_frame_index(self, *_args, **_kwargs):
+        return None
+
 
 class _FakeVideoCapture:
     def __init__(self, *_args, **_kwargs):
@@ -797,6 +806,110 @@ def test_tracking_worker_realtime_ignores_existing_detection_cache(
         worker.run()
 
     assert cache_modes == ["w"]
+
+
+def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    captured = {}
+
+    class _CapturingAssigner:
+        def __init__(self, params, worker=None):
+            self.params = params
+
+        def compute_cost_matrix(
+            self,
+            N,
+            meas,
+            preds,
+            shapes,
+            kf_manager,
+            last_shape_info,
+            meas_ori_directed=None,
+            association_data=None,
+        ):
+            captured["meas"] = np.asarray(meas, dtype=np.float32)
+            raise _StopAtAssociation()
+
+    class _BackwardCacheProbe(_FakeDetectionCache):
+        def __init__(self, _path, mode="r", start_frame=None, end_frame=None):
+            super().__init__()
+            assert mode == "r"
+            self._cached_frames = {0}
+            self._frames[0] = (
+                [np.array([4.0, 4.0, 0.0], dtype=np.float32)],
+                [2.0],
+                [np.array([2.0, 1.0], dtype=np.float32)],
+                [0.95],
+                [
+                    np.array(
+                        [[3.0, 3.5], [5.0, 3.5], [5.0, 4.5], [3.0, 4.5]],
+                        dtype=np.float32,
+                    )
+                ],
+                [0],
+                [0.0],
+                [0.75],
+                [0],
+                None,
+                None,
+                None,
+            )
+
+        def covers_frame_range(self, *_args, **_kwargs):
+            return True
+
+        def get_total_frames(self):
+            return 1
+
+    cache_path = tmp_path / "cache.npz"
+    cache_path.write_bytes(b"cache")
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(
+        worker_mod,
+        "create_detector",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("backward cached run should not create a runtime detector")
+        ),
+    )
+    monkeypatch.setattr(worker_mod, "DetectionCache", _BackwardCacheProbe)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
+    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
+
+    worker = worker_mod.TrackingWorker(
+        str(tmp_path / "video.mp4"),
+        backward_mode=True,
+        detection_cache_path=str(cache_path),
+    )
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": False,
+            "TRACKING_WORKFLOW_MODE": "non_realtime",
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    with pytest.raises(_StopAtAssociation):
+        worker.run()
+
+    assert captured["meas"].shape == (1, 3)
 
 
 def test_tracking_worker_realtime_ignores_existing_analysis_caches(

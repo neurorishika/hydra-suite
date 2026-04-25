@@ -2,6 +2,7 @@ import sys
 from unittest import mock
 
 import numpy as np
+import pytest
 
 # ── probe_video_backend ────────────────────────────────────────────────────────
 
@@ -90,6 +91,38 @@ def test_video_encoder_auto_backend_writes_file(tmp_path):
             enc.write(np.zeros((64, 64, 3), dtype=np.uint8))
     assert path.exists()
     assert path.stat().st_size > 0
+
+
+def test_video_encoder_pyav_write_uses_bgr_input(monkeypatch: pytest.MonkeyPatch):
+    """PyAV path should ingest BGR frames directly without channel reversal."""
+    import hydra_suite.utils.video_encoder as ve
+
+    class _FakeFrame:
+        def reformat(self, *, format):
+            assert format == "yuv420p"
+            return self
+
+    calls = []
+
+    class _FakeVideoFrame:
+        @staticmethod
+        def from_ndarray(arr, format):
+            calls.append((arr.shape, arr.flags.c_contiguous, format))
+            return _FakeFrame()
+
+    monkeypatch.setitem(sys.modules, "av", mock.Mock(VideoFrame=_FakeVideoFrame))
+
+    enc = ve.VideoEncoder.__new__(ve.VideoEncoder)
+    enc._stream = mock.Mock()
+    enc._stream.encode.return_value = [object()]
+    enc._container = mock.Mock()
+    enc._cv_writer = None
+
+    frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    enc.write(frame)
+
+    assert calls == [((32, 32, 3), True, "bgr24")]
+    enc._container.mux.assert_called_once()
 
 
 # ── NVENC session cap ─────────────────────────────────────────────────────────

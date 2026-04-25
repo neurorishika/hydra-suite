@@ -24,6 +24,9 @@ from scipy.ndimage import find_objects, gaussian_filter, label
 
 from hydra_suite.utils.video_encoder import VideoEncoder
 
+_GAUSSIAN_TRUNCATE = 4.0
+_FULL_SMOOTH_MAX_BYTES = 256 * 1024 * 1024
+
 # ---------------------------------------------------------------------------
 # DensityRegion
 # ---------------------------------------------------------------------------
@@ -196,19 +199,27 @@ def accumulate_frame(
         return grid
     cx, cy, weights, sigmas = cx[mask], cy[mask], weights[mask], sigmas[mask]
 
-    # Pre-compute coordinate vectors once.
-    ys = np.arange(h, dtype=np.float32)
-    xs = np.arange(w, dtype=np.float32)
+    for det_cx, det_cy, det_weight, det_sigma in zip(
+        cx, cy, weights, sigmas, strict=False
+    ):
+        sigma = max(float(det_sigma), 1e-3)
+        radius = max(1, int(np.ceil(_GAUSSIAN_TRUNCATE * sigma)))
 
-    # Vectorised separable Gaussian: process all N detections in one batch.
-    # dy: (N, H), dx: (N, W) — broadcast without Python loop.
-    dy = ys[None, :] - cy[:, None]           # (N, H)
-    dx = xs[None, :] - cx[:, None]           # (N, W)
-    inv2s2 = 1.0 / (2.0 * sigmas[:, None] ** 2)  # (N, 1)
-    gauss_y = np.exp(-(dy ** 2) * inv2s2)    # (N, H)
-    gauss_x = np.exp(-(dx ** 2) * inv2s2)    # (N, W)
-    # Weighted outer-product sum: einsum over detections → (H, W) increment.
-    grid += np.einsum("n,nh,nw->hw", weights, gauss_y, gauss_x)
+        x0 = max(0, int(np.floor(float(det_cx) - radius)))
+        x1 = min(w, int(np.ceil(float(det_cx) + radius)) + 1)
+        y0 = max(0, int(np.floor(float(det_cy) - radius)))
+        y1 = min(h, int(np.ceil(float(det_cy) + radius)) + 1)
+        if x0 >= x1 or y0 >= y1:
+            continue
+
+        local_x = np.arange(x0, x1, dtype=np.float32) - np.float32(det_cx)
+        local_y = np.arange(y0, y1, dtype=np.float32) - np.float32(det_cy)
+        inv2s2 = np.float32(1.0 / (2.0 * sigma * sigma))
+        gauss_x = np.exp(-(local_x * local_x) * inv2s2)
+        gauss_y = np.exp(-(local_y * local_y) * inv2s2)
+        grid[y0:y1, x0:x1] += np.float32(det_weight) * np.multiply.outer(
+            gauss_y, gauss_x
+        )
 
     return grid
 
@@ -245,6 +256,16 @@ def smooth_and_binarize(
     binary = np.zeros((T, H, W), dtype=np.uint8)
     if T == 0:
         return binary
+
+    # For moderate volumes, smoothing once and thresholding in-place is much
+    # faster than the chunked two-pass path while remaining memory-safe.
+    volume_bytes = int(frames.nbytes)
+    if volume_bytes <= _FULL_SMOOTH_MAX_BYTES:
+        smoothed = gaussian_filter(frames, sigma=(temporal_sigma, 0.0, 0.0))
+        global_max = float(smoothed.max())
+        if global_max <= 0.0:
+            return binary
+        return (smoothed >= (threshold * global_max)).astype(np.uint8)
 
     # Effective Gaussian kernel radius (scipy default truncate=4.0).
     radius = int(np.ceil(4.0 * temporal_sigma)) + 1
@@ -771,7 +792,11 @@ def export_diagnostic_video(
     output_path = Path(output_path)
     writer = VideoEncoder(output_path, fps=fps, width=frame_w, height=frame_h)
 
-    _dg = np.asarray(density_grids) if not isinstance(density_grids, np.ndarray) else density_grids
+    _dg = (
+        np.asarray(density_grids)
+        if not isinstance(density_grids, np.ndarray)
+        else density_grids
+    )
     global_max = float(_dg.max()) if len(_dg) > 0 and _dg.max() > 0 else 1.0
 
     try:

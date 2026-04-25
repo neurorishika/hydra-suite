@@ -167,5 +167,5 @@
   "density_min_frame_duration": 3,
   "density_min_area_bodies": 0.25,
   "density_downsample_factor": 8,
-  "export_confidence_density_video": true
+  "export_confidence_density_video": false
 }

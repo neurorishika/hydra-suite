@@ -267,8 +267,12 @@ class VideoEncoder:
             try:
                 import av
 
-                frame_rgb = frame_bgr[:, :, ::-1].copy()
-                vf = av.VideoFrame.from_ndarray(frame_rgb, format="rgb24")
+                frame_data = (
+                    frame_bgr
+                    if frame_bgr.flags.c_contiguous
+                    else np.ascontiguousarray(frame_bgr)
+                )
+                vf = av.VideoFrame.from_ndarray(frame_data, format="bgr24")
                 vf = vf.reformat(format="yuv420p")
                 for pkt in self._stream.encode(vf):
                     self._container.mux(pkt)
