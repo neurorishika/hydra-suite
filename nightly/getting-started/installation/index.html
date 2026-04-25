@@ -2497,6 +2497,12 @@
 <hr />
 <h2 id="pip-install-from-pypi">pip install from PyPI<a class="headerlink" href="#pip-install-from-pypi" title="Permanent link">&para;</a></h2>
 <p>Requires only Python 3.11+. No conda, no git clone.</p>
+<p>AprilTag-backed workflows are the exception: HYDRA expects the Kronauer lab fork
+of <code>apriltag</code> (<code>Social-Evolution-and-Behavior/apriltag</code> at
+<code>c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c</code>). The developer <code>make install*</code>
+targets install that fork automatically. If you use a pure pip install and need
+AprilTag features, build that fork into the same environment following the fork
+README.</p>
 <h3 id="cpu-all-platforms">CPU (all platforms)<a class="headerlink" href="#cpu-all-platforms" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>hydra-suite
 </span></code></pre></div>
@@ -2615,6 +2621,7 @@
 <ol>
 <li><strong>torch</strong> with the correct GPU variant and index URL</li>
 <li><strong><code>-e .</code></strong> — an editable install that pulls all <code>pyproject.toml</code> dependencies</li>
+<li>The pinned Kronauer lab <code>apriltag</code> fork via <code>make install-apriltag-fork</code></li>
 </ol>
 <p>Base dependencies (numpy, scipy, PySide6, ultralytics, etc.) are declared once in <code>pyproject.toml</code>. The requirements files only add what <code>pyproject.toml</code> cannot express (torch GPU index URLs). This means there is <strong>one source of truth</strong> for dependencies.</p>
 <h3 id="development-workflow">Development workflow<a class="headerlink" href="#development-workflow" title="Permanent link">&para;</a></h3>
