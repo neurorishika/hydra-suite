@@ -22,6 +22,23 @@ if TYPE_CHECKING:
 import numpy as np
 
 
+def _parse_meta_bool(value, default: bool = False) -> bool:
+    """Parse a metadata boolean that may be stored as a Python string.
+
+    Ultralytics serialises ONNX ``custom_metadata_map`` values with ``str()``,
+    so ``False`` becomes the string ``"False"``.  ``bool("False")`` evaluates
+    to ``True`` (non-empty string), which would incorrectly set ``_end2end=True``
+    for raw-head CBC artifacts exported with ``end2end=False``.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("false", "0", "no", "none", "")
+    return bool(value)
+
+
 class _BaseDirectOBBExecutor:
     def __init__(
         self,
@@ -87,8 +104,10 @@ class _BaseDirectOBBExecutor:
             # np.copyto into pinned memory — fast CPU memcpy, zero allocation.
             np.copyto(self._pinned_input.numpy()[0], lb_frame.transpose(2, 0, 1)[::-1])
             # Non-blocking async pinned→GPU copy with on-the-fly uint8→float32
-            # conversion.  ORT's run_with_iobinding() syncs the CUDA stream before
-            # reading the tensor, so the async work is guaranteed to complete.
+            # conversion.  These ops are queued on PyTorch's default CUDA stream.
+            # The caller is responsible for ensuring they complete before inference:
+            #   ONNX executor:         _run_inference calls _preprocess_event.synchronize()
+            #   PyTorch-CUDA executor: _run_inference runs on the same default stream
             self._gpu_input.copy_(self._pinned_input, non_blocking=True)
             self._gpu_input.mul_(1.0 / 255.0)
             return self._gpu_input
@@ -236,14 +255,23 @@ class _BaseDirectOBBExecutor:
         if not isinstance(preds, torch.Tensor):
             preds = torch.as_tensor(preds, device=img_tensor.device)
 
+        is_end2end = getattr(self, "_end2end", False)
+        # For end-to-end backends (e.g. PyTorch CUDA) the model already applied
+        # NMS internally, so we skip IOU filtering here.  For raw-CBC backends
+        # (TRT, ONNX with end2end=False) the output contains many overlapping
+        # anchors for each object.  Applying NMS before the max_det cap ensures
+        # that the top-N slots are filled by *distinct* objects rather than by
+        # multiple high-confidence duplicate boxes for the same object.
+        iou_thres = 1.0 if is_end2end else 0.5
         filtered = nms.non_max_suppression(
             preds,
             conf_thres=conf_thres,
-            iou_thres=1.0,
+            iou_thres=iou_thres,
             classes=classes,
             max_det=max_det,
             nc=self.nc,
             rotated=True,
+            end2end=is_end2end,
         )
 
         results = []
@@ -290,8 +318,15 @@ class _BaseDirectOBBExecutor:
         # dimension.  Chunk and pad so the executor is never called with a
         # mismatched batch size — this covers BOTH over-sized batches (chunk)
         # and under-sized ones like the last partial batch (pad).
+        #
+        # _static_batch=True on ONNX executors when the model has a *numeric*
+        # (fixed) batch dimension.  This is set for ONNX artifacts exported with
+        # dynamic=False (batch=1 for realtime OBB).  Dynamic-axis ONNX models
+        # report _static_batch=False and the condition below is skipped so all N
+        # frames are passed in a single run_with_iobinding() call.
         model_bs = getattr(self, "_model_batch_size", 1)
-        if model_bs > 1 and len(frames) != model_bs:
+        static_batch = getattr(self, "_static_batch", False)
+        if (model_bs > 1 or static_batch) and len(frames) != model_bs:
             all_results: list = []
             for i in range(0, len(frames), model_bs):
                 chunk = list(frames[i : i + model_bs])
@@ -386,6 +421,13 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
             if isinstance(inp.shape[0], int) and inp.shape[0] > 0
             else 1
         )
+        # True when the model has a *numeric* (static) batch dimension.
+        # Dynamic-axis models have a symbolic string here (e.g. "batch_size").
+        # Used by predict() to decide whether to chunk per-frame for batch-1
+        # realtime ONNX artifacts (which fail with ORT shape errors for N>1).
+        self._static_batch: bool = (
+            isinstance(inp.shape[0], int) and inp.shape[0] > 0
+        )
         # Determine output numpy dtype and cache static output shape so _run_inference
         # can pre-allocate the output directly on CUDA, avoiding a GPU→CPU→GPU roundtrip.
         import numpy as np
@@ -409,6 +451,15 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
                 int(key): str(value) for key, value in dict(parsed or {}).items()
             }
             self.nc = max(1, len(self.names) or self.nc)
+        # Read the end2end flag from ONNX metadata so _postprocess uses the
+        # correct NMS mode (iou_thres=1.0 for BNC end2end vs 0.5 for raw CBC
+        # head).  _yolo_runtime_export_profile always forces end2end=False for
+        # hydra-exported artifacts; this defensive read handles user-supplied
+        # ONNX files that may have been exported with end2end=True.
+        # NOTE: Ultralytics stores ONNX custom_metadata_map values as strings via
+        # str(), so bool(False) becomes the string "False".  Use _parse_meta_bool
+        # instead of bool() to avoid bool("False") == True.
+        self._end2end = _parse_meta_bool(meta.get("end2end", False))
 
         # Pre-allocate the output tensor and create a persistent IO binding with
         # both input and output pre-bound from fixed CUDA buffers so that
@@ -422,10 +473,12 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
         # Pre-allocate a fp16 input staging tensor for fp16 OBB models.
         if self._fp16:
             self._gpu_input_fp16 = self._gpu_input.half()
+            in_dtype = torch.float16
             in_np_dtype = np.float16
             in_buf_ptr = self._gpu_input_fp16.data_ptr()
         else:
             self._gpu_input_fp16 = None
+            in_dtype = torch.float32
             in_np_dtype = np.float32
             in_buf_ptr = self._gpu_input.data_ptr()
 
@@ -442,6 +495,17 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
             ),
             buffer_ptr=in_buf_ptr,
         )
+        # Track the last bound input pointer so _run_inference can detect when
+        # _preprocess_cuda_batch returns a new tensor (different address) and
+        # needs to update the io_binding before the ORT session run.
+        self._last_bound_input_ptr: int = in_buf_ptr
+        # CUDA event used to synchronize preprocessing (default stream) →
+        # ORT CUDA EP inference without stalling the CPU more than necessary.
+        # _preprocess writes to _gpu_input via non-blocking copy_ + mul_; without
+        # this event the ORT session could start reading the buffer on ORT's
+        # internal CUDA stream before those PyTorch ops complete, producing
+        # stale-frame results.
+        self._preprocess_event = torch.cuda.Event()
         self._io_binding.bind_output(
             name=self._output_name,
             device_type="cuda",
@@ -482,6 +546,16 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
                 shape=tuple(self._output_tensor.shape),
                 buffer_ptr=self._output_tensor.data_ptr(),
             )
+
+        # Rebind the input whenever the data pointer changes.
+        # _preprocess_cuda_batch creates a new tensor on every call so its
+        # address differs from the pre-allocated self._gpu_input that was bound
+        # in __init__.  For the numpy single-frame path x IS self._gpu_input so
+        # the pointer is stable and this check is a no-op after the first call.
+        # If the CUDA allocator happens to reuse the same address (common for
+        # same-size tensors) the check also correctly skips the redundant rebind.
+        cur_ptr = x.data_ptr()
+        if cur_ptr != self._last_bound_input_ptr:
             self._io_binding.clear_binding_inputs()
             self._io_binding.bind_input(
                 name=self._input_name,
@@ -489,11 +563,18 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
                 device_id=0,
                 element_type=np.float16 if self._fp16 else np.float32,
                 shape=tuple(x.shape),
-                buffer_ptr=x.data_ptr(),
+                buffer_ptr=cur_ptr,
             )
+            self._last_bound_input_ptr = cur_ptr
 
-        # No rebind needed: both input and output are permanently bound to fixed
-        # CUDA buffers from __init__; data is refreshed in-place each frame.
+        # Synchronize PyTorch's default CUDA stream before submitting the ORT
+        # session.  _preprocess writes into _gpu_input via non-blocking copy_
+        # and mul_ operations queued on PyTorch's stream; ORT's CUDA EP uses
+        # its own internal stream, so without this sync ORT would read the
+        # buffer before PyTorch's writes are visible, returning the previous
+        # frame's data (stale-frame bug).
+        self._preprocess_event.record()
+        self._preprocess_event.synchronize()
         self.session.run_with_iobinding(self._io_binding)
         return self._output_tensor
 
@@ -522,6 +603,11 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
                 for key, value in dict(meta.get("names") or {}).items()
             }
             self.nc = max(1, len(self.names) or self.nc)
+        # Read the end2end flag from the engine metadata so _postprocess uses
+        # the correct NMS mode (iou_thres=1.0 for BNC end2end vs. 0.5 for CBC).
+        # TRT metadata is JSON-parsed so values are native Python booleans, but
+        # use _parse_meta_bool for consistency with the ONNX path.
+        self._end2end = _parse_meta_bool(meta.get("end2end", False))
 
         logger = trt.Logger(trt.Logger.WARNING)
         runtime = trt.Runtime(logger)
@@ -643,12 +729,42 @@ class DirectPyTorchCUDAOBBExecutor(_BaseDirectOBBExecutor):
                 self.nc = max(1, len(self.names))
         # Fixed batch size of 1 — the PT executor is always single-frame.
         self._model_batch_size = 1
+        # Always run inference in raw-head (CBC / one2many) mode so that the
+        # CUDA path is consistent with TRT and ONNX artifacts, which are
+        # exported with end2end=False by _yolo_runtime_export_profile.
+        # If the model head has end2end=True (e.g. OBB26) we store a reference
+        # and temporarily disable it for each forward call, then restore it.
+        self._end2end = False
+        self._e2e_head_ref = None  # head to patch per forward call
+        try:
+            _inner_model = getattr(self._nn_module, "model", None)
+            if _inner_model is not None:
+                _head = list(_inner_model.children())[-1]
+                if bool(getattr(_head, "end2end", False)):
+                    self._e2e_head_ref = _head
+                    import logging as _logging
+                    _logging.getLogger(__name__).info(
+                        "DirectPyTorchCUDAOBBExecutor: end2end head detected — "
+                        "running in raw CBC mode (matching TRT/ONNX export profile)."
+                    )
+        except Exception:
+            pass
 
     def _run_inference(self, img_tensor):
         import torch
 
-        with torch.no_grad():
-            output = self._nn_module(img_tensor)
+        # Temporarily disable end2end on the head so forward() returns raw CBC
+        # output from the one2many head, consistent with how TRT/ONNX artifacts
+        # are exported (end2end=False via _yolo_runtime_export_profile).
+        _head = self._e2e_head_ref
+        if _head is not None:
+            _head.end2end = False
+        try:
+            with torch.no_grad():
+                output = self._nn_module(img_tensor)
+        finally:
+            if _head is not None:
+                _head.end2end = True  # restore original state
         # Ultralytics OBB model forward() returns (decoded_preds, raw_features)
         # in eval mode; we only need the first element.
         if isinstance(output, (list, tuple)):
@@ -746,16 +862,25 @@ class DirectONNXDetectExecutor(DirectONNXOBBExecutor):
         if not isinstance(preds, torch.Tensor):
             preds = torch.as_tensor(preds, device=img_tensor.device)
 
+        is_end2end = getattr(self, "_end2end", False)
+        # Match the OBB _postprocess convention: raw-CBC head exports
+        # (end2end=False) require actual NMS suppression with iou_thres=0.5
+        # because the model outputs many overlapping anchors per object.
+        # End-to-end models already have NMS baked in, so iou_thres=1.0
+        # is used to pass all slots through without further suppression.
+        iou_thres = 1.0 if is_end2end else 0.5
+
         # rotated=False → standard NMS for YOLO detect.
         # Output per image: [N, 6] = [x1, y1, x2, y2, conf, cls] in letterbox space.
         filtered = nms.non_max_suppression(
             preds,
             conf_thres=conf_thres,
-            iou_thres=1.0,
+            iou_thres=iou_thres,
             classes=classes,
             max_det=max_det,
             nc=self.nc,
             rotated=False,
+            end2end=is_end2end,
         )
 
         results = []
@@ -798,14 +923,18 @@ class DirectTensorRTDetectExecutor(DirectTensorRTOBBExecutor):
         if not isinstance(preds, torch.Tensor):
             preds = torch.as_tensor(preds, device=img_tensor.device)
 
+        is_end2end = getattr(self, "_end2end", False)
+        iou_thres = 1.0 if is_end2end else 0.5
+
         filtered = nms.non_max_suppression(
             preds,
             conf_thres=conf_thres,
-            iou_thres=1.0,
+            iou_thres=iou_thres,
             classes=classes,
             max_det=max_det,
             nc=self.nc,
             rotated=False,
+            end2end=is_end2end,
         )
 
         results = []

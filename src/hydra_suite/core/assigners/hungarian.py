@@ -70,10 +70,13 @@ def _compute_cost_matrix_numba(
             # 1. Position Cost
             if use_maha:
                 # Mahalanobis: sqrt(d^T * S_inv * d)
-                pos_dist = np.sqrt(
+                maha_sq = (
                     diff[0] * (diff[0] * inv_S_pos[0, 0] + diff[1] * inv_S_pos[1, 0])
                     + diff[1] * (diff[0] * inv_S_pos[0, 1] + diff[1] * inv_S_pos[1, 1])
                 )
+                if maha_sq < 0.0:
+                    maha_sq = 0.0
+                pos_dist = np.sqrt(maha_sq)
             else:
                 pos_dist = np.sqrt(diff[0] ** 2 + diff[1] ** 2)
 
@@ -407,7 +410,9 @@ class TrackAssigner:
         diff = meas_pos[None, :, :] - pred_pos[:, None, :]  # (N, M, 2)
         if p["USE_MAHALANOBIS"]:
             S_inv_2x2 = S_inv_batch[:, :2, :2]  # (N, 2, 2)
-            pos_dist = np.sqrt(np.einsum("nmd,nde,nme->nm", diff, S_inv_2x2, diff))
+            maha_sq = np.einsum("nmd,nde,nme->nm", diff, S_inv_2x2, diff)
+            np.maximum(maha_sq, 0.0, out=maha_sq)
+            pos_dist = np.sqrt(maha_sq)
         else:
             pos_dist = np.linalg.norm(diff, axis=2)  # (N, M)
 
@@ -483,6 +488,13 @@ class TrackAssigner:
         # Get pre-calculated Inverse Innovation Covariances from Manager
         S_inv_batch = kf_manager.get_mahalanobis_matrices()
 
+        # Diagnostic guard: assignment requires finite numeric inputs.
+        if not np.isfinite(S_inv_batch).all():
+            bad = int(np.size(S_inv_batch) - np.count_nonzero(np.isfinite(S_inv_batch)))
+            raise ValueError(
+                f"non-finite Kalman S_inv entries ({bad}) before cost construction"
+            )
+
         # Pre-extract arrays for Numba (Avoids attribute access in loop)
         meas_pos = np.array([m[:2] for m in measurements], dtype=np.float32)
         meas_ori = np.array([m[2] for m in measurements], dtype=np.float32)
@@ -499,6 +511,19 @@ class TrackAssigner:
                 meas_ori_directed_arr = np.zeros(M, dtype=np.uint8)
         pred_pos = predictions[:, :2]  # Predictions are already (N, 3)
         pred_ori = predictions[:, 2]
+
+        if not np.isfinite(meas_pos).all() or not np.isfinite(meas_ori).all():
+            bad_pos = int(np.size(meas_pos) - np.count_nonzero(np.isfinite(meas_pos)))
+            bad_ori = int(np.size(meas_ori) - np.count_nonzero(np.isfinite(meas_ori)))
+            raise ValueError(
+                f"non-finite detection measurement entries (pos={bad_pos}, ori={bad_ori})"
+            )
+        if not np.isfinite(pred_pos).all() or not np.isfinite(pred_ori).all():
+            bad_pos = int(np.size(pred_pos) - np.count_nonzero(np.isfinite(pred_pos)))
+            bad_ori = int(np.size(pred_ori) - np.count_nonzero(np.isfinite(pred_ori)))
+            raise ValueError(
+                f"non-finite Kalman prediction entries (pos={bad_pos}, ori={bad_ori})"
+            )
 
         # Override meas_ori with the directed heading where headtail or
         # high-confidence pose supplies a reliable direction.
@@ -728,7 +753,13 @@ class TrackAssigner:
         est_sorted = sorted(est)
         assignments = []
         assigned_dets = set()
-        rows, cols = linear_sum_assignment(cost[est_sorted, :])
+        cost_sub = cost[est_sorted, :]
+        if not np.isfinite(cost_sub).all():
+            bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
+            raise ValueError(
+                f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
+            )
+        rows, cols = linear_sum_assignment(cost_sub)
         for r_idx, c in zip(rows, cols):
             r = est_sorted[r_idx]
             if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
@@ -960,11 +991,12 @@ class TrackAssigner:
             inv_S = S_inv[r, :2, :2]
             for c in det_indices:
                 diff = meas_pos[c] - pred_pos[r]
-                pos_c = (
-                    np.sqrt(diff @ inv_S @ diff)
-                    if p["USE_MAHALANOBIS"]
-                    else np.linalg.norm(diff)
-                )
+                if p["USE_MAHALANOBIS"]:
+                    maha_sq = float(diff @ inv_S @ diff)
+                    maha_sq = max(maha_sq, 0.0)
+                    pos_c = np.sqrt(maha_sq)
+                else:
+                    pos_c = np.linalg.norm(diff)
 
                 odiff = abs(pred_ori[r] - meas_ori[c])
                 if odiff > np.pi:

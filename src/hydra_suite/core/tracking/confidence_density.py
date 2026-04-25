@@ -200,13 +200,15 @@ def accumulate_frame(
     ys = np.arange(h, dtype=np.float32)
     xs = np.arange(w, dtype=np.float32)
 
-    # Separable Gaussian: O(H+W) per detection instead of O(H*W).
-    for i in range(len(cx)):
-        dy = ys - cy[i]
-        dx = xs - cx[i]
-        gauss_y = np.exp(-(dy**2) / (2.0 * sigmas[i] ** 2))  # (H,)
-        gauss_x = np.exp(-(dx**2) / (2.0 * sigmas[i] ** 2))  # (W,)
-        grid += weights[i] * np.outer(gauss_y, gauss_x)  # (H, W)
+    # Vectorised separable Gaussian: process all N detections in one batch.
+    # dy: (N, H), dx: (N, W) — broadcast without Python loop.
+    dy = ys[None, :] - cy[:, None]           # (N, H)
+    dx = xs[None, :] - cx[:, None]           # (N, W)
+    inv2s2 = 1.0 / (2.0 * sigmas[:, None] ** 2)  # (N, 1)
+    gauss_y = np.exp(-(dy ** 2) * inv2s2)    # (N, H)
+    gauss_x = np.exp(-(dx ** 2) * inv2s2)    # (N, W)
+    # Weighted outer-product sum: einsum over detections → (H, W) increment.
+    grid += np.einsum("n,nh,nw->hw", weights, gauss_y, gauss_x)
 
     return grid
 
@@ -769,12 +771,8 @@ def export_diagnostic_video(
     output_path = Path(output_path)
     writer = VideoEncoder(output_path, fps=fps, width=frame_w, height=frame_h)
 
-    all_vals = (
-        np.concatenate([g.ravel() for g in density_grids])
-        if len(density_grids) > 0
-        else np.array([0.0])
-    )
-    global_max = float(all_vals.max()) if all_vals.max() > 0 else 1.0
+    _dg = np.asarray(density_grids) if not isinstance(density_grids, np.ndarray) else density_grids
+    global_max = float(_dg.max()) if len(_dg) > 0 and _dg.max() > 0 else 1.0
 
     try:
         for frame_idx in range(n_frames):
@@ -782,7 +780,7 @@ def export_diagnostic_video(
             frame = _overlay_diag_heatmap(
                 frame,
                 frame_idx,
-                density_grids,
+                _dg,
                 global_max,
                 frame_h,
                 frame_w,

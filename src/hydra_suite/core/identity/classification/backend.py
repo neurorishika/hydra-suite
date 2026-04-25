@@ -427,7 +427,18 @@ class ClassifierBackend:
     probabilities.
     """
 
-    def __init__(self, model_path: str, compute_runtime: str = "cpu") -> None:
+    # Maximum batch size encoded into the TRT optimization profile at engine-
+    # compile time.  Inference requests that exceed this limit will be rejected
+    # by the TRT execution context.  Keep this constant in sync with the
+    # ``max_batch`` value used in :meth:`_build_trt_providers_with_profiles`.
+    _TRT_PROFILE_MAX_BATCH: int = 512
+
+    def __init__(
+        self,
+        model_path: str,
+        compute_runtime: str = "cpu",
+        trt_profile_max_batch: int | None = None,
+    ) -> None:
         if not model_path:
             raise ClassifierConfigError("model_path must be non-empty")
         path = str(model_path)
@@ -440,6 +451,11 @@ class ClassifierBackend:
         self._model = None
         self._loaded = False
         self._active_execution_backend = "unloaded"
+        self._trt_profile_max_batch = (
+            None
+            if trt_profile_max_batch is None
+            else max(1, int(trt_profile_max_batch))
+        )
 
     @property
     def metadata(self) -> ClassifierMetadata:
@@ -588,10 +604,14 @@ class ClassifierBackend:
                 pass  # silently fall back to providers without profile options
 
         self._model = ort.InferenceSession(str(peer), providers=providers)
-        # Warm up the ORT TRT session to trigger Ada/Hopper "compiler backend"
-        # JIT compilation now (during model loading) rather than stalling on the
-        # first real inference call.  Two dummy runs cover both JIT passes.
-        if is_trt:
+        # Warm up the ORT session to trigger CUDA/TRT kernel JIT now (during
+        # model loading) rather than stalling on the first real inference batch.
+        # Two dummy runs cover both JIT passes on Ada/Hopper GPUs.
+        # This applies to both TRT EP and CUDA EP sessions.
+        is_cuda = any(
+            "cuda" in (p if isinstance(p, str) else p[0]).lower() for p in providers
+        )
+        if is_trt or is_cuda:
             self._warmup_ort_session_trt()
 
     def _build_trt_providers_with_profiles(
@@ -601,9 +621,10 @@ class ClassifierBackend:
     ) -> list:
         """Replace the bare TRT EP string with a (name, options) tuple.
 
-        Sets TRT optimization profiles covering batch sizes 1 to 512 so TRT
-        builds a single compiled engine for the full crop-batch range, and
-        enables disk-based engine caching so subsequent process restarts avoid
+        Sets TRT optimization profiles covering batch sizes 1..max_batch
+        (where max_batch is user-configurable but capped at 512) so TRT builds
+        a single compiled engine for the target crop-batch range, and enables
+        disk-based engine caching so subsequent process restarts avoid
         recompilation entirely.
         """
         import onnxruntime as ort
@@ -617,18 +638,40 @@ class ClassifierBackend:
         h, w = self._metadata.input_size
         # Always 3 channels in the ONNX exports produced by this codebase.
         c = 3
-        max_batch = 512
+        max_batch = min(
+            ClassifierBackend._TRT_PROFILE_MAX_BATCH,
+            max(
+                1,
+                int(
+                    self._trt_profile_max_batch
+                    or ClassifierBackend._TRT_PROFILE_MAX_BATCH
+                ),
+            ),
+        )
 
         cache_dir = get_data_dir() / "trt_engine_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # ORT >= 1.14 uses plural key names (trt_profile_*_shapes) with
+        # colon-separated format "input_name:DxCxHxW".
+        opt_batch = min(max_batch, 64)
         trt_opts = {
             "trt_engine_cache_enable": True,
             "trt_engine_cache_path": str(cache_dir),
-            "trt_profile_min_shape": f"{inp_name}:1x{c}x{h}x{w}",
-            "trt_profile_opt_shape": f"{inp_name}:64x{c}x{h}x{w}",
-            "trt_profile_max_shape": f"{inp_name}:{max_batch}x{c}x{h}x{w}",
+            "trt_profile_min_shapes": f"{inp_name}:1x{c}x{h}x{w}",
+            "trt_profile_opt_shapes": f"{inp_name}:{opt_batch}x{c}x{h}x{w}",
+            "trt_profile_max_shapes": f"{inp_name}:{max_batch}x{c}x{h}x{w}",
             "trt_max_workspace_size": 1 << 30,  # 1 GiB
+            # FP16 inference: ~2x throughput on Ampere/Ada/Hopper with no label
+            # accuracy loss for classification (argmax is preserved).
+            "trt_fp16_enable": True,
+            # Timing cache: TRT reuses kernel-selection decisions from previous
+            # builds so re-exports and profile changes cost far less time.
+            "trt_timing_cache_enable": True,
+            "trt_timing_cache_path": str(cache_dir),
+            # Builder optimisation level 4 maximises throughput; 3 is the ORT
+            # default.  Only paid at first-build time, then cached.
+            "trt_builder_optimization_level": 4,
         }
 
         updated: list = []
@@ -742,6 +785,42 @@ class ClassifierBackend:
     def _forward_onnx(self, batch_np: np.ndarray) -> np.ndarray:
         input_name = self._model.get_inputs()[0].name
         return self._model.run(None, {input_name: batch_np.astype(np.float32)})[0]
+
+    def _forward_onnx_iobinding(self, batch_cuda) -> np.ndarray:
+        """ONNX forward pass feeding the GPU batch directly via ORT IOBinding.
+
+        Avoids the GPU\u2192CPU PCIe transfer that
+        ``batch_cuda.contiguous().cpu().numpy()`` would incur.  Both
+        ``CUDAExecutionProvider`` and ``TensorrtExecutionProvider`` support
+        IOBinding; the output (K-class probabilities) is tiny and pulled to CPU
+        after the forward pass.
+
+        Falls back to the explicit transfer path on any error so that the
+        caller never sees an unexpected exception from this optimisation.
+        """
+        try:
+            inp = self._model.get_inputs()[0]
+            # Ensure the tensor is contiguous before handing its data pointer
+            # to ORT (e.g. the channel-flip in _preprocess_cuda can leave the
+            # batch non-contiguous).
+            batch_c = batch_cuda if batch_cuda.is_contiguous() else batch_cuda.contiguous()
+            device_id = batch_c.device.index if batch_c.device.index is not None else 0
+            binding = self._model.io_binding()
+            binding.bind_input(
+                name=inp.name,
+                device_type="cuda",
+                device_id=device_id,
+                element_type=np.float32,
+                shape=tuple(batch_c.shape),
+                buffer_ptr=batch_c.data_ptr(),
+            )
+            for out_meta in self._model.get_outputs():
+                binding.bind_output(out_meta.name, device_type="cpu")
+            self._model.run_with_iobinding(binding)
+            return binding.copy_outputs_to_cpu()[0]
+        except Exception:
+            batch_np = batch_cuda.contiguous().cpu().numpy()
+            return self._forward_onnx(batch_np)
 
     @staticmethod
     def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -882,9 +961,8 @@ class ClassifierBackend:
             return []
         self._ensure_loaded()
 
-        # Only the torch native backend benefits from on-device preprocessing.
-        # Fall back to the CPU path for ONNX/YOLO backends.
-        if self._active_execution_backend != "native" or self._uses_factor_backends():
+        if self._uses_factor_backends():
+            # Factor-backend models require individual HWC numpy crops.
             numpy_crops = [
                 c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
                 for c in crops_chw
@@ -892,9 +970,24 @@ class ClassifierBackend:
             return self.predict_batch(numpy_crops)
 
         try:
+            # Preprocess on GPU in all cases — this is cheaper than 400 individual
+            # GPU→CPU transfers and CPU cv2 resizes regardless of the forward backend.
             batch_cuda = self._preprocess_cuda(crops_chw, input_is_bgr=input_is_bgr)
-            logits_cuda = self._forward_torch_cuda(batch_cuda)
-            logits = logits_cuda.cpu().numpy()
+
+            if self._active_execution_backend == "native":
+                logits_cuda = self._forward_torch_cuda(batch_cuda)
+                logits = logits_cuda.cpu().numpy()
+            elif self._active_execution_backend == "onnx":
+                # ONNX CUDA/TRT EP: feed from GPU memory via IOBinding to avoid
+                # the PCIe round-trip of an explicit GPU\u2192CPU transfer.
+                logits = self._forward_onnx_iobinding(batch_cuda)
+            else:
+                # Unknown backend — fall back to CPU path.
+                numpy_crops = [
+                    c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
+                    for c in crops_chw
+                ]
+                return self.predict_batch(numpy_crops)
         except ClassifierError:
             raise
         except Exception as exc:

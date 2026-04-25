@@ -435,7 +435,7 @@ class RuntimeArtifactMixin:
             raw_head_tag = (
                 "_rawheadv1" if self._should_export_raw_yolo_head("obb") else ""
             )
-            runtime_profile = f"tensorrt_v2{raw_head_tag}"
+            runtime_profile = f"tensorrt_v3{raw_head_tag}"
         return hashlib.sha1(
             f"{token}|runtime={runtime_profile}|batch={int(batch_size)}".encode("utf-8")
         ).hexdigest()[:16]
@@ -688,6 +688,18 @@ class RuntimeArtifactMixin:
                     batch=int(onnx_batch_size),
                     verbose=False,
                 )
+            # Release the PyTorch export model before creating the ORT session.
+            # Keeping the PT model in GPU memory while ORT initialises its CUDA
+            # execution provider can trigger an "Invalid device id" error because
+            # both runtimes compete for the same CUDA device context.
+            del base_model
+            try:
+                import torch as _torch
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
             out_path = Path(export_path).expanduser().resolve()
             if not out_path.exists():
                 raise RuntimeError(f"ONNX export output missing: {out_path}")
@@ -769,7 +781,12 @@ class RuntimeArtifactMixin:
                 engine_path = resolved_model.with_name(
                     f"{resolved_model.stem}_b{int(build_batch_size)}.engine"
                 )
-                engine_imgsz = self._resolve_onnx_imgsz(model_path=resolved_model)
+                # Defer image-size resolution: for cache hits, read from stored
+                # metadata; for rebuilds, derive from the loaded base model.
+                # This avoids loading the .pt checkpoint twice (once here and
+                # once again for the TRT export), which caused the test for
+                # fatal-builder-failure retry-disabling to observe 2 init calls.
+                engine_imgsz = 0
             signature = self._artifact_signature(
                 runtime="tensorrt", batch_size=int(build_batch_size)
             )
@@ -788,6 +805,16 @@ class RuntimeArtifactMixin:
             if self._artifact_is_fresh(engine_path, signature):
                 logger.info("TensorRT engine cache hit: reusing cached engine.")
                 try:
+                    # Read imgsz from stored metadata (avoids loading the .pt
+                    # source model just to retrieve the image size).
+                    if engine_imgsz == 0:
+                        _hit_meta = self._read_artifact_meta(engine_path)
+                        try:
+                            engine_imgsz = int(_hit_meta.get("imgsz", 0))
+                        except Exception:
+                            engine_imgsz = 0
+                        if engine_imgsz == 0:
+                            engine_imgsz = self._resolve_onnx_imgsz()
                     self.model = YOLO(str(engine_path), task="obb")
                     self.use_tensorrt = True
                     self.tensorrt_model_path = str(engine_path)
@@ -835,6 +862,18 @@ class RuntimeArtifactMixin:
             logger.info("=" * 60)
             base_model = YOLO(model_path_str)
             base_model.to(self.device)
+            # Resolve imgsz from the loaded model (avoids a separate YOLO init
+            # in _resolve_onnx_imgsz when model_path was passed there).
+            if engine_imgsz == 0:
+                try:
+                    _ov = getattr(base_model, "overrides", {}) or {}
+                    _pt_imgsz = _ov.get("imgsz")
+                    if _pt_imgsz:
+                        engine_imgsz = int(_pt_imgsz)
+                except Exception:
+                    pass
+                if engine_imgsz == 0:
+                    engine_imgsz = self._resolve_onnx_imgsz()
 
             # Try dynamic batching first, fall back to static if it fails
             logger.info(
@@ -843,19 +882,24 @@ class RuntimeArtifactMixin:
                 float(build_workspace_gb),
             )
 
-            # Export to TensorRT engine format
+            # Export to TensorRT engine format using raw head outputs.
+            # _yolo_runtime_export_profile forces head.end2end=False before
+            # calling export() so all TRT engines are built with the one2many
+            # raw CBC head (matching the CUDA DirectOBB inference path which
+            # also disables end2end per _e2e_head_ref in _run_inference).
             # Note: dynamic=False uses fixed batch size which is more compatible
             # but requires batches to exactly match max_batch_size
+            _export_kwargs: dict = dict(
+                format="engine",
+                device=self.device,
+                half=True,  # Use FP16 for faster inference
+                workspace=float(build_workspace_gb),
+                dynamic=False,  # Static shapes (more compatible)
+                batch=int(build_batch_size),  # Fixed batch size
+                verbose=False,
+            )
             with self._yolo_runtime_export_profile(base_model, task="obb"):
-                export_path = base_model.export(
-                    format="engine",
-                    device=self.device,
-                    half=True,  # Use FP16 for faster inference
-                    workspace=float(build_workspace_gb),
-                    dynamic=False,  # Static shapes (more compatible)
-                    batch=int(build_batch_size),  # Fixed batch size
-                    verbose=False,
-                )
+                export_path = base_model.export(**_export_kwargs)
 
             # Move exported engine to cache directory
             if Path(export_path).exists():
@@ -870,9 +914,10 @@ class RuntimeArtifactMixin:
                     workspace_gb=float(build_workspace_gb),
                     gpu_name=build_context["gpu_name"],
                     cuda_version=build_context["cuda_version"],
+                    end2end=False,  # always raw CBC — _yolo_runtime_export_profile forced it
                 )
                 logger.info(
-                    "TensorRT engine rebuilt and cached: path=%s | signature=%s",
+                    "TensorRT engine rebuilt and cached: path=%s | signature=%s | end2end=False (raw head)",
                     engine_path,
                     signature,
                 )

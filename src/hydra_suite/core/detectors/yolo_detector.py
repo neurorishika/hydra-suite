@@ -870,6 +870,112 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         return results_per_frame
 
     # ------------------------------------------------------------------
+    # Head-tail pre-filter helpers
+    # ------------------------------------------------------------------
+
+    def _prefilter_headtail_per_frame(self, per_frame_raw, roi_mask_per_frame=None):
+        """Select candidate detection indices for head-tail inference per frame.
+
+        Applies the same cheap gates as ``_select_headtail_candidate_indices``
+        (conf threshold, size, aspect ratio, ROI) to each frame's raw detections
+        *before* passing corners to ``_compute_headtail_hints_cross_frame``.
+        This avoids running the GPU classifier on detections that will be
+        discarded by ``filter_raw_detections`` afterwards.
+
+        Args:
+            per_frame_raw: List of per-frame raw tuples
+                ``(meas, sizes, shapes, confs, corners)`` or ``None``.
+            roi_mask_per_frame: Optional list of per-frame ROI masks.
+
+        Returns:
+            Tuple of:
+              - per_frame_candidate_indices: List[List[int]] — surviving raw
+                indices per frame.
+              - per_frame_candidate_corners: List[List[np.ndarray]] — the
+                corresponding OBB corner arrays (compact, for HT inference).
+        """
+        per_frame_candidate_indices = []
+        per_frame_candidate_corners = []
+        for fi, raw in enumerate(per_frame_raw):
+            if raw is None:
+                per_frame_candidate_indices.append([])
+                per_frame_candidate_corners.append([])
+                continue
+            raw_meas, raw_sizes, raw_shapes, raw_confs, raw_corners = raw
+            roi = (
+                roi_mask_per_frame[fi]
+                if roi_mask_per_frame is not None and fi < len(roi_mask_per_frame)
+                else None
+            )
+            indices = self._select_headtail_candidate_indices(
+                raw_meas, raw_sizes, raw_shapes, raw_confs, raw_corners, roi_mask=roi
+            )
+            per_frame_candidate_indices.append(indices)
+            per_frame_candidate_corners.append(
+                [raw_corners[i] for i in indices]
+            )
+        return per_frame_candidate_indices, per_frame_candidate_corners
+
+    def _scatter_headtail_to_raw(
+        self,
+        ht_compact,
+        per_frame_n,
+        per_frame_candidate_indices,
+        include_affines,
+    ):
+        """Scatter compact head-tail results back to full raw-detection lists.
+
+        ``_compute_headtail_hints_cross_frame`` returns results indexed to the
+        *compact* candidate subset.  This method expands them to the original
+        raw-detection count, inserting ``nan``/``0.0``/``0``/``None`` for
+        non-candidate slots so the existing cache and worker consumption code
+        is unchanged.
+
+        Args:
+            ht_compact: Output of ``_compute_headtail_hints_cross_frame`` on
+                the compact corner lists — indexed to candidates.
+            per_frame_n: List[int] — number of raw detections per frame.
+            per_frame_candidate_indices: List[List[int]] — raw indices that
+                were passed to HT inference (from ``_prefilter_headtail_per_frame``).
+            include_affines: bool — whether affine arrays were requested.
+
+        Returns:
+            List of per-frame ``(hints, confs, directed, affines)`` tuples
+            with the same structure as ``_compute_headtail_hints_cross_frame``.
+        """
+        results = []
+        for fi, (n, indices) in enumerate(
+            zip(per_frame_n, per_frame_candidate_indices)
+        ):
+            hints = [float("nan")] * n
+            confs = [0.0] * n
+            directed = [0] * n
+            affines = ([None] * n) if include_affines else None
+
+            if ht_compact is not None and fi < len(ht_compact) and indices:
+                compact_hints, compact_confs, compact_directed, compact_affines = (
+                    ht_compact[fi]
+                )
+                for slot, raw_idx in enumerate(indices):
+                    if raw_idx >= n:
+                        continue
+                    if slot < len(compact_hints):
+                        hints[raw_idx] = compact_hints[slot]
+                    if slot < len(compact_confs):
+                        confs[raw_idx] = float(compact_confs[slot])
+                    if slot < len(compact_directed):
+                        directed[raw_idx] = int(compact_directed[slot])
+                    if (
+                        affines is not None
+                        and compact_affines is not None
+                        and slot < len(compact_affines)
+                    ):
+                        affines[raw_idx] = compact_affines[slot]
+
+            results.append((hints, confs, directed, affines))
+        return results
+
+    # ------------------------------------------------------------------
     # Raw detection runners (direct / sequential)
     # ------------------------------------------------------------------
 
@@ -1621,46 +1727,31 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 )
             return [], [], [], yolo_results, []
 
-        if bool(self.params.get("TRACKING_REALTIME_MODE", False)):
-            include_canonical_affines = bool(
-                return_raw and self._should_compute_canonical_affines()
-            )
-            candidate_indices = self._select_headtail_candidate_indices(
-                raw_meas,
-                raw_sizes,
-                raw_shapes,
-                raw_confidences,
-                raw_obb_corners,
-            )
-            (
-                raw_heading_hints,
-                raw_heading_confidences,
-                raw_directed_mask,
-                _raw_affines,
-            ) = self._compute_headtail_hints_for_indices(
-                frame,
-                raw_obb_corners,
-                candidate_indices,
-                include_canonical_affines=include_canonical_affines,
-                profiler=profiler,
-            )
-        else:
-            include_canonical_affines = bool(
-                return_raw and self._should_compute_canonical_affines()
-            )
-            (
-                raw_heading_hints,
-                raw_heading_confidences,
-                raw_directed_mask,
-                _raw_affines,
-            ) = self._compute_headtail_hints_cross_frame(
-                [frame],
-                [raw_obb_corners],
-                include_canonical_affines=include_canonical_affines,
-                profiler=profiler,
-            )[
-                0
-            ]
+        include_canonical_affines = bool(
+            return_raw and self._should_compute_canonical_affines()
+        )
+        # Pre-filter: apply conf/size/AR/ROI gates before GPU classifier call,
+        # regardless of realtime mode.  This avoids classifying low-confidence
+        # raw detections that filter_raw_detections will discard afterwards.
+        candidate_indices = self._select_headtail_candidate_indices(
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+        )
+        (
+            raw_heading_hints,
+            raw_heading_confidences,
+            raw_directed_mask,
+            _raw_affines,
+        ) = self._compute_headtail_hints_for_indices(
+            frame,
+            raw_obb_corners,
+            candidate_indices,
+            include_canonical_affines=include_canonical_affines,
+            profiler=profiler,
+        )
 
         if return_raw:
             if yolo_results is not None:
@@ -1891,14 +1982,21 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             include_canonical_affines = bool(
                 return_raw and self._should_compute_canonical_affines()
             )
-            per_frame_corners = [
-                raw[4] if raw is not None else [] for raw in per_frame_raw
-            ]
-            headtail_per_frame = self._compute_headtail_hints_cross_frame(
+            # Pre-filter: only run HT on candidate detections, scatter back.
+            candidate_indices, candidate_corners = self._prefilter_headtail_per_frame(
+                per_frame_raw
+            )
+            ht_compact = self._compute_headtail_hints_cross_frame(
                 frames[:actual_frame_count],
-                per_frame_corners,
+                candidate_corners,
                 include_canonical_affines=include_canonical_affines,
                 profiler=profiler,
+            )
+            per_frame_n = [
+                len(raw[0]) if raw is not None else 0 for raw in per_frame_raw
+            ]
+            headtail_per_frame = self._scatter_headtail_to_raw(
+                ht_compact, per_frame_n, candidate_indices, include_canonical_affines
             )
         else:
             headtail_per_frame = None
@@ -2309,6 +2407,12 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         # _compute_headtail_hints_cross_frame dispatches to the GPU-native
         # analyze_crops_cuda path when frames are CUDA tensors (NVDec), or to
         # the CPU numpy analyze_crops path otherwise.
+        #
+        # Pre-filter: only run HT inference on detections that survive the
+        # application-level confidence/size/ROI gates, then scatter results
+        # back to the full raw-detection index space.  This avoids classifying
+        # the many low-confidence raw detections that will be discarded by
+        # filter_raw_detections afterwards.
 
         _bt_ht_start = time.perf_counter()
         _bt_n_ht_crops = 0
@@ -2316,15 +2420,21 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             include_canonical_affines = bool(
                 return_raw and self._should_compute_canonical_affines()
             )
-            per_frame_corners = [
-                raw[4] if raw is not None else [] for raw in per_frame_raw
-            ]
-            _bt_n_ht_crops = sum(len(c) for c in per_frame_corners)
-            headtail_per_frame = self._compute_headtail_hints_cross_frame(
+            candidate_indices, candidate_corners = self._prefilter_headtail_per_frame(
+                per_frame_raw
+            )
+            _bt_n_ht_crops = sum(len(c) for c in candidate_corners)
+            ht_compact = self._compute_headtail_hints_cross_frame(
                 frames[:actual_frame_count],
-                per_frame_corners,
+                candidate_corners,
                 include_canonical_affines=include_canonical_affines,
                 profiler=profiler,
+            )
+            per_frame_n = [
+                len(raw[0]) if raw is not None else 0 for raw in per_frame_raw
+            ]
+            headtail_per_frame = self._scatter_headtail_to_raw(
+                ht_compact, per_frame_n, candidate_indices, include_canonical_affines
             )
         else:
             headtail_per_frame = None

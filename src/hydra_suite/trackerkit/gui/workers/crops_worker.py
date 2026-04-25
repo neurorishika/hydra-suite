@@ -26,17 +26,6 @@ from hydra_suite.widgets.workers import BaseWorker
 from .merge_worker import _write_csv_artifact, _write_roi_npz
 
 logger = logging.getLogger(__name__)
-
-
-def _runtime_to_native_device(runtime: object) -> str:
-    rt = str(runtime or "cpu").strip().lower()
-    if rt in {"mps", "onnx_coreml", "onnx_mps"}:
-        return "mps"
-    if rt in {"cuda", "onnx_cuda", "tensorrt"}:
-        return "cuda"
-    return "cpu"
-
-
 class InterpolatedCropsWorker(BaseWorker):
     """Worker thread for interpolating occluded crops without blocking the UI."""
 
@@ -239,7 +228,7 @@ class InterpolatedCropsWorker(BaseWorker):
             return None
         from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-        _ht_device = _runtime_to_native_device(
+        _ht_runtime = str(
             self.params.get(
                 "HEADTAIL_COMPUTE_RUNTIME",
                 self.params.get("COMPUTE_RUNTIME", "cpu"),
@@ -247,8 +236,9 @@ class InterpolatedCropsWorker(BaseWorker):
         )
         analyzer = HeadTailAnalyzer(
             model_path=headtail_model_path,
-            device=_ht_device,
+            compute_runtime=_ht_runtime,
             conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
+            batch_size=max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64))),
             reference_aspect_ratio=float(
                 self.params.get("REFERENCE_ASPECT_RATIO", 2.0)
             ),
