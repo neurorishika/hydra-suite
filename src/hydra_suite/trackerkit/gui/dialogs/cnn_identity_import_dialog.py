@@ -36,6 +36,7 @@ def describe_cnn_identity_candidate(model_path: str) -> dict[str, Any]:
             "factor_names": list(meta.factor_names),
             "class_names_per_factor": [list(c) for c in meta.class_names_per_factor],
             "monochrome": meta.monochrome,
+            "recommended_confidence_threshold": meta.recommended_confidence_threshold,
             "source_path": meta.source_path,
         }
     finally:
@@ -64,6 +65,13 @@ class CNNIdentityImportDialog(BaseDialog):
             "Input size:",
             QLabel(f"{isz[0]} × {isz[1]}" if isz else "—"),
         )
+        threshold = summary.get("recommended_confidence_threshold")
+        threshold_text = (
+            f"{float(threshold):.0%}"
+            if isinstance(threshold, (int, float))
+            else "—"
+        )
+        layout.addRow("Recommended threshold:", QLabel(threshold_text))
 
         factor_names = list(summary.get("factor_names") or ["flat"])
         cnpf = list(summary.get("class_names_per_factor") or [[]])

@@ -376,6 +376,7 @@ class ClassKitTrainingDialog(QDialog):
             (self.epochs_spin, "epochs"),
             (self.batch_spin, "batch"),
             (self.lr_spin, "lr"),
+            (self.prediction_confidence_threshold_spin, "prediction_confidence_threshold"),
             (self.val_fraction_spin, "val_fraction"),
             (self.test_fraction_spin, "test_fraction"),
             (self.patience_spin, "patience"),
@@ -962,6 +963,21 @@ class ClassKitTrainingDialog(QDialog):
         self.lr_spin.setToolTip(
             "Initial learning rate. 0.001 is a robust default for both Tiny and YOLO."
         )
+
+        self.prediction_confidence_threshold_spin = QDoubleSpinBox()
+        self.prediction_confidence_threshold_spin.setRange(0.0, 1.0)
+        self.prediction_confidence_threshold_spin.setSingleStep(0.05)
+        self.prediction_confidence_threshold_spin.setDecimals(2)
+        self.prediction_confidence_threshold_spin.setValue(0.5)
+        self.prediction_confidence_threshold_spin.setToolTip(
+            "Inference-time abstention threshold for predictions from this model. "
+            "Predictions below this confidence are treated as unknown in ClassKit and recommended as unknown for TrackerKit consumers."
+        )
+        form.addRow(
+            "<b>Prediction Confidence Threshold:</b>",
+            self.prediction_confidence_threshold_spin,
+        )
+
         self.split_strategy_combo.setToolTip(
             "How to pick train and validation items. Stratified preserves class balance; Random uses a deterministic shuffled split."
         )
@@ -2212,6 +2228,7 @@ class ClassKitTrainingDialog(QDialog):
             "epochs": self.epochs_spin.value(),
             "batch": self.batch_spin.value(),
             "lr": self.lr_spin.value(),
+            "prediction_confidence_threshold": self.prediction_confidence_threshold_spin.value(),
             "split_strategy": self._current_split_strategy(),
             "val_fraction": self.val_fraction_spin.value(),
             "test_fraction": self.test_fraction_spin.value(),

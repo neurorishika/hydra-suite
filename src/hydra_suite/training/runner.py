@@ -237,22 +237,55 @@ def _parse_tiny_rebalance_params(spec):
     return rebalance_mode, rebalance_power, label_smoothing
 
 
-def _compute_class_weights(train_samples, num_classes, rebalance_mode, rebalance_power):
+def _resolve_ignore_label_index(
+    class_to_idx: dict[str, int],
+    ignore_label_name: object,
+) -> int | None:
+    """Return the class index for an ignored supervision label, if present."""
+    normalized = str(ignore_label_name or "").strip().lower()
+    if not normalized:
+        return None
+    for class_name, class_index in class_to_idx.items():
+        if str(class_name).strip().lower() == normalized:
+            return int(class_index)
+    return None
+
+
+def _compute_class_weights(
+    train_samples,
+    num_classes,
+    rebalance_mode,
+    rebalance_power,
+    ignored_class_indices: set[int] | None = None,
+):
     """Compute inverse-frequency class weights for rebalancing."""
+    ignored = {int(index) for index in (ignored_class_indices or set())}
     class_counts = [0] * num_classes
     for _p, lbl in train_samples:
-        if 0 <= int(lbl) < num_classes:
-            class_counts[int(lbl)] += 1
+        label_index = int(lbl)
+        if label_index in ignored:
+            continue
+        if 0 <= label_index < num_classes:
+            class_counts[label_index] += 1
 
     class_weight_values = [1.0] * num_classes
     if rebalance_mode in {"weighted_loss", "weighted_sampler", "both"}:
-        max_count = max(class_counts) if class_counts else 1
+        usable_counts = [
+            count for index, count in enumerate(class_counts) if index not in ignored
+        ]
+        max_count = max(usable_counts) if usable_counts else 1
         for idx in range(num_classes):
+            if idx in ignored:
+                class_weight_values[idx] = 0.0
+                continue
             count = max(1, class_counts[idx])
             class_weight_values[idx] = float(max_count / count) ** rebalance_power
         mean_w = sum(class_weight_values) / max(1, len(class_weight_values))
         if mean_w > 0:
             class_weight_values = [w / mean_w for w in class_weight_values]
+    for idx in ignored:
+        if 0 <= idx < len(class_weight_values):
+            class_weight_values[idx] = 0.0
     return class_weight_values
 
 
@@ -379,6 +412,7 @@ def _run_tiny_training_loop(
     log_cb,
     progress_cb,
     should_cancel,
+    ignore_index=None,
 ):
     """Run the training/validation loop.
 
@@ -402,14 +436,25 @@ def _run_tiny_training_loop(
         train_loss, train_n = 0.0, 0
         for xs, ys in train_loader:
             xs, ys = xs.to(device), ys.to(device)
+            if ignore_index is not None:
+                active_count = int((ys != int(ignore_index)).sum().item())
+                if active_count <= 0:
+                    continue
+            else:
+                active_count = len(ys)
             opt.zero_grad()
             loss = criterion(model(xs), ys)
             loss.backward()
             opt.step()
-            train_loss += float(loss.item()) * len(ys)
-            train_n += len(ys)
+            train_loss += float(loss.item()) * active_count
+            train_n += active_count
 
-        val_acc = _run_tiny_validation(model, val_loader, device)
+        val_acc = _run_tiny_validation(
+            model,
+            val_loader,
+            device,
+            ignore_index=ignore_index,
+        )
 
         mean_loss = train_loss / max(1, train_n)
         history.append(
@@ -469,7 +514,7 @@ def _run_tiny_training_loop(
     return best_state, best_val_acc, history
 
 
-def _run_tiny_validation(model, val_loader, device):
+def _run_tiny_validation(model, val_loader, device, ignore_index=None):
     """Evaluate model on validation set and return accuracy."""
     import torch
 
@@ -480,7 +525,16 @@ def _run_tiny_validation(model, val_loader, device):
     with torch.inference_mode():
         for xs, ys in val_loader:
             xs, ys = xs.to(device), ys.to(device)
+            if ignore_index is not None:
+                mask = ys != int(ignore_index)
+                if not bool(mask.any().item()):
+                    continue
+            else:
+                mask = None
             preds = model(xs).argmax(dim=1)
+            if mask is not None:
+                preds = preds[mask]
+                ys = ys[mask]
             correct += int((preds == ys).sum().item())
             total += len(ys)
     return correct / max(1, total)
@@ -680,6 +734,8 @@ def _train_tiny_classify(
         f"{num_classes} classes",
     )
     idx_to_class = {v: k for k, v in class_to_idx.items()}
+    ignore_label_name = getattr(spec.tiny_params, "ignore_label_name", "unknown")
+    ignore_label_idx = _resolve_ignore_label_index(class_to_idx, ignore_label_name)
     for cls_idx in sorted(idx_to_class):
         n_train = sum(1 for _, lbl in train_samples if lbl == cls_idx)
         n_val = sum(1 for _, lbl in val_samples if lbl == cls_idx)
@@ -694,14 +750,26 @@ def _train_tiny_classify(
         spec
     )
     class_weight_values = _compute_class_weights(
-        train_samples, num_classes, rebalance_mode, rebalance_power
+        train_samples,
+        num_classes,
+        rebalance_mode,
+        rebalance_power,
+        ignored_class_indices=(
+            {ignore_label_idx} if ignore_label_idx is not None else None
+        ),
     )
 
     _safe_log(
         log_cb,
         "tiny classify options: "
         f"rebalance={rebalance_mode}, power={rebalance_power:.2f}, "
-        f"label_smoothing={label_smoothing:.2f}",
+        f"label_smoothing={label_smoothing:.2f}, "
+        f"ignore_label={str(ignore_label_name)!r}"
+        + (
+            f" (idx={ignore_label_idx})"
+            if ignore_label_idx is not None
+            else ""
+        ),
     )
 
     TinyDataset = _build_tiny_dataset_class(input_w, input_h)
@@ -759,6 +827,11 @@ def _train_tiny_classify(
     criterion = nn.CrossEntropyLoss(
         weight=class_weight_tensor,
         label_smoothing=label_smoothing,
+        **(
+            {"ignore_index": int(ignore_label_idx)}
+            if ignore_label_idx is not None
+            else {}
+        ),
     )
 
     epochs = max(1, int(spec.tiny_params.epochs))
@@ -776,6 +849,7 @@ def _train_tiny_classify(
         log_cb,
         progress_cb,
         should_cancel,
+        ignore_index=ignore_label_idx,
     )
 
     if best_state is not None:
@@ -978,6 +1052,7 @@ def _run_torchvision_training_loop(
     log_cb,
     progress_cb,
     should_cancel,
+    ignore_index=None,
 ):
     """Run training/validation epochs for a torchvision model.
 
@@ -1032,14 +1107,22 @@ def _run_torchvision_training_loop(
 
         model.train()
         total_loss = 0.0
+        total_examples = 0
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            if ignore_index is not None:
+                active_count = int((batch_y != int(ignore_index)).sum().item())
+                if active_count <= 0:
+                    continue
+            else:
+                active_count = len(batch_y)
             optimizer.zero_grad()
             loss = criterion(model(batch_x), batch_y)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / max(len(train_loader), 1)
+            total_loss += float(loss.item()) * active_count
+            total_examples += active_count
+        avg_loss = total_loss / max(total_examples, 1)
         history["train_loss"].append(avg_loss)
 
         val_acc = None
@@ -1049,7 +1132,16 @@ def _run_torchvision_training_loop(
             with torch.no_grad():
                 for batch_x, batch_y in val_loader:
                     batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                    if ignore_index is not None:
+                        mask = batch_y != int(ignore_index)
+                        if not bool(mask.any().item()):
+                            continue
+                    else:
+                        mask = None
                     preds = model(batch_x).argmax(dim=1)
+                    if mask is not None:
+                        preds = preds[mask]
+                        batch_y = batch_y[mask]
                     correct += (preds == batch_y).sum().item()
                     total += len(batch_y)
             val_acc = correct / max(total, 1)
@@ -1172,6 +1264,7 @@ def _train_custom_classify(
                 class_rebalance_mode=str(params.class_rebalance_mode),
                 class_rebalance_power=float(params.class_rebalance_power),
                 label_smoothing=float(params.label_smoothing),
+                ignore_label_name=str(params.ignore_label_name),
             ),
         )
         return _train_tiny_classify(
@@ -1273,11 +1366,16 @@ def _train_custom_classify(
             ds.imgs = ds.samples
             ds.class_to_idx = shared_class_to_idx
             ds.classes = class_names
+    ignore_label_idx = _resolve_ignore_label_index(
+        shared_class_to_idx,
+        getattr(params, "ignore_label_name", "unknown"),
+    )
     checkpoint_extra_meta = {
         "fine_tune_method": getattr(params, "fine_tune_method", "head_only"),
         "layerwise_lr_decay": getattr(params, "layerwise_lr_decay", 0.75),
         "gradual_unfreeze_interval": getattr(params, "gradual_unfreeze_interval", 5),
         "monochrome": bool(getattr(profile, "monochrome", False)),
+        "ignore_label_name": str(getattr(params, "ignore_label_name", "unknown")),
     }
 
     _n_train = len(train_ds)
@@ -1314,6 +1412,9 @@ def _train_custom_classify(
         len(class_names),
         rebalance_mode,
         rebalance_power,
+        ignored_class_indices=(
+            {ignore_label_idx} if ignore_label_idx is not None else None
+        ),
     )
 
     from torch.utils.data import WeightedRandomSampler
@@ -1397,6 +1498,11 @@ def _train_custom_classify(
             else None
         ),
         label_smoothing=params.label_smoothing,
+        **(
+            {"ignore_index": int(ignore_label_idx)}
+            if ignore_label_idx is not None
+            else {}
+        ),
     )
 
     best_ckpt_path = (
@@ -1421,6 +1527,7 @@ def _train_custom_classify(
         log_cb,
         progress_cb,
         should_cancel,
+        ignore_index=ignore_label_idx,
     )
 
     metrics_path = run_dir / "custom_metrics.json"

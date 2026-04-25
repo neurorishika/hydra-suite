@@ -77,6 +77,8 @@ class TinyHeadTailParams:
     class_rebalance_power: float = 1.0
     # Label smoothing for CrossEntropyLoss in tiny multi-class training.
     label_smoothing: float = 0.0
+    # Class name treated as intentionally unlabeled during supervised loss.
+    ignore_label_name: str = "unknown"
 
 
 @dataclass(slots=True)
@@ -104,6 +106,7 @@ class CustomCNNParams:
     label_smoothing: float = 0.0
     class_rebalance_mode: str = "none"  # none, weighted_loss, weighted_sampler, both
     class_rebalance_power: float = 1.0
+    ignore_label_name: str = "unknown"
     # TinyClassifier-specific (ignored for torchvision backbones)
     tiny_preset: str = "medium"
     hidden_layers: int = 1

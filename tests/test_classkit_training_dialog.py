@@ -96,6 +96,7 @@ def test_training_dialog_augmentation_defaults_start_disabled(qapp) -> None:
     assert settings["contrast"] == pytest.approx(0.0)
     assert settings["monochrome"] is False
     assert settings["split_strategy"] == "stratified"
+    assert settings["prediction_confidence_threshold"] == pytest.approx(0.5)
 
 
 def test_training_dialog_restores_initial_settings(qapp) -> None:
@@ -126,6 +127,7 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
             "brightness": 0.2,
             "contrast": 0.15,
             "monochrome": True,
+            "prediction_confidence_threshold": 0.72,
             "initial_model_path": "/tmp/previous_model.pth",
         },
     )
@@ -150,10 +152,14 @@ def test_training_dialog_restores_initial_settings(qapp) -> None:
     assert dialog.epochs_spin.value() == 30
     assert dialog.batch_spin.value() == 16
     assert dialog.lr_spin.value() == pytest.approx(0.002)
+    assert dialog.prediction_confidence_threshold_spin.value() == pytest.approx(0.72)
     assert dialog.test_fraction_spin.value() == pytest.approx(0.1)
     assert dialog.patience_spin.value() == 7
     assert dialog.split_strategy_combo.currentData() == "random"
     assert dialog.get_settings()["initial_model_path"] == "/tmp/previous_model.pth"
+    assert dialog.get_settings()["prediction_confidence_threshold"] == pytest.approx(
+        0.72
+    )
 
 
 def test_training_dialog_tiny_preset_is_mirrored_between_modes(qapp) -> None:

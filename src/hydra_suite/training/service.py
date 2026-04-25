@@ -60,6 +60,19 @@ def _publish_training_artifacts(
     if not artifact_paths:
         return "", ""
 
+    raw_recommended_threshold = publish_metadata.get(
+        "recommended_confidence_threshold",
+        publish_metadata.get("prediction_confidence_threshold"),
+    )
+    try:
+        recommended_confidence_threshold = (
+            min(1.0, max(0.0, float(raw_recommended_threshold)))
+            if raw_recommended_threshold is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        recommended_confidence_threshold = None
+
     training_params = publish_metadata.get("training_params")
     base_kwargs = {
         "role": spec.role,
@@ -82,6 +95,13 @@ def _publish_training_artifacts(
             classifier_meta = classifier_metadata_for_artifact(artifact_paths[0])
         except Exception:
             classifier_meta = None
+        if (
+            isinstance(classifier_meta, dict)
+            and recommended_confidence_threshold is not None
+        ):
+            classifier_meta["recommended_confidence_threshold"] = (
+                recommended_confidence_threshold
+            )
         return publish_trained_model(
             artifact_path=artifact_paths[0],
             classifier_v2_meta=classifier_meta,
@@ -101,9 +121,17 @@ def _publish_training_artifacts(
     used_factor_names: set[str] = set()
     bundle_input_size: tuple[int, int] | None = None
     bundle_monochrome = False
+    bundle_confidence_threshold: float | None = recommended_confidence_threshold
 
     for index, artifact_path in enumerate(artifact_paths):
         classifier_meta = classifier_metadata_for_artifact(artifact_path)
+        if (
+            isinstance(classifier_meta, dict)
+            and recommended_confidence_threshold is not None
+        ):
+            classifier_meta["recommended_confidence_threshold"] = (
+                recommended_confidence_threshold
+            )
         candidate_name = ""
         if index < len(factor_names):
             candidate_name = factor_names[index]
@@ -130,6 +158,22 @@ def _publish_training_artifacts(
         if bundle_input_size is None:
             bundle_input_size = (int(input_size[0]), int(input_size[1]))
         bundle_monochrome = bool(classifier_meta.get("monochrome", bundle_monochrome))
+        recommended_confidence_threshold = classifier_meta.get(
+            "recommended_confidence_threshold"
+        )
+        if recommended_confidence_threshold is not None:
+            try:
+                threshold_value = float(recommended_confidence_threshold)
+            except (TypeError, ValueError):
+                threshold_value = None
+            if threshold_value is not None:
+                threshold_value = min(1.0, max(0.0, threshold_value))
+                if bundle_confidence_threshold is None:
+                    bundle_confidence_threshold = threshold_value
+                else:
+                    bundle_confidence_threshold = max(
+                        bundle_confidence_threshold, threshold_value
+                    )
         class_names_per_factor = classifier_meta.get("class_names_per_factor") or [[]]
         factor_entries.append(
             {
@@ -145,6 +189,7 @@ def _publish_training_artifacts(
         factor_entries=factor_entries,
         input_size=bundle_input_size or (224, 224),
         monochrome=bundle_monochrome,
+        recommended_confidence_threshold=bundle_confidence_threshold,
     )
     return published_key, str(manifest_path)
 

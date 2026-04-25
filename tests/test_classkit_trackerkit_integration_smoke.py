@@ -87,6 +87,7 @@ def test_classkit_multiartifact_publish_is_discoverable_and_selectable_in_tracke
             "model_info": "smoke_bundle",
             "scheme_name": "smoke_scheme",
             "factor_names": ["color", "shape"],
+            "prediction_confidence_threshold": 0.7,
         },
     )
 
@@ -102,6 +103,7 @@ def test_classkit_multiartifact_publish_is_discoverable_and_selectable_in_tracke
         def __init__(self, summary, parent=None):
             assert summary["is_multihead"] is True
             assert summary["factor_names"] == ["color", "shape"]
+            assert summary["recommended_confidence_threshold"] == pytest.approx(0.7)
 
         def exec(self) -> int:
             return QDialog.Accepted
@@ -137,10 +139,12 @@ def test_classkit_multiartifact_publish_is_discoverable_and_selectable_in_tracke
         assert entry["classification_label"] == "smoke_tags"
         assert entry["scoring_mode"] == "per_head_average"
         assert entry["factor_names"] == ["color", "shape"]
+        assert entry["recommended_confidence_threshold"] == pytest.approx(0.7)
 
         assert combo.findData(rel_path) >= 0
         assert combo.currentData() == rel_path
         assert window._identity_panel.lbl_cnn_label.text() == "smoke_tags"
         assert window._identity_panel.lbl_cnn_num_classes.text() == "4"
+        assert window._identity_panel.spin_cnn_confidence.value() == pytest.approx(0.7)
     finally:
         window.close()

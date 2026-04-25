@@ -228,6 +228,7 @@ class IdentityPanel(QWidget):
         self.lbl_cnn_class_names = QLabel("—")
         self.lbl_cnn_input_size = QLabel("—")
         self.lbl_cnn_label = QLabel("—")
+        self.lbl_cnn_recommended_confidence = QLabel("—")
         self.spin_cnn_confidence = QDoubleSpinBox()
         self.spin_cnn_confidence.setRange(0.0, 1.0)
         self.spin_cnn_confidence.setSingleStep(0.05)
@@ -853,11 +854,13 @@ class IdentityPanel(QWidget):
             self.lbl_class_names = QLabel("\u2014")
             self.lbl_input_size = QLabel("\u2014")
             self.lbl_label = QLabel("\u2014")
+            self.lbl_recommended_confidence = QLabel("\u2014")
             form.addRow("Architecture", self.lbl_arch)
             form.addRow("Num classes", self.lbl_num_classes)
             form.addRow("Class names", self.lbl_class_names)
             form.addRow("Input size", self.lbl_input_size)
             form.addRow("Classification label", self.lbl_label)
+            form.addRow("Recommended threshold", self.lbl_recommended_confidence)
             self.spin_confidence = QDoubleSpinBox()
             self.spin_confidence.setRange(0.0, 1.0)
             self.spin_confidence.setSingleStep(0.05)
@@ -955,6 +958,12 @@ class IdentityPanel(QWidget):
             )
             self.lbl_input_size.setText(str(meta.get("input_size", "\u2014")))
             self.lbl_label.setText(str(meta.get("classification_label", "\u2014")))
+            recommended = self._main_window._identity_panel._classifier_recommended_confidence_threshold(meta)
+            self.lbl_recommended_confidence.setText(
+                f"{recommended:.0%}" if recommended is not None else "\u2014"
+            )
+            if recommended is not None:
+                self.spin_confidence.setValue(recommended)
 
         def to_config(self):
             """Return config dict or None if no model selected."""
@@ -1270,6 +1279,12 @@ class IdentityPanel(QWidget):
         raw_size = meta.get("input_size", "\u2014")
         self.lbl_cnn_input_size.setText(str(raw_size))
         self.lbl_cnn_label.setText(str(meta.get("classification_label", "\u2014")))
+        recommended = self._classifier_recommended_confidence_threshold(meta)
+        self.lbl_cnn_recommended_confidence.setText(
+            f"{recommended:.0%}" if recommended is not None else "\u2014"
+        )
+        if recommended is not None:
+            self.spin_cnn_confidence.setValue(recommended)
 
     def _handle_add_new_cnn_identity_model(self) -> None:
         """Import a ClassKit-trained classifier for CNN identity."""
@@ -1340,6 +1355,17 @@ class IdentityPanel(QWidget):
         if not rel_path:
             return {}
         return dict(self._cnn_registry_by_path().get(rel_path, {}))
+
+    @staticmethod
+    def _classifier_recommended_confidence_threshold(meta: dict) -> float | None:
+        if not meta:
+            return None
+        raw_value = meta.get("recommended_confidence_threshold")
+        try:
+            numeric = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return min(1.0, max(0.0, numeric))
 
     @staticmethod
     def _classifier_num_classes(meta: dict) -> object:

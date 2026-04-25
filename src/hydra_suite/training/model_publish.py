@@ -149,6 +149,7 @@ def write_classifier_multihead_manifest(
     factor_entries: list[dict[str, Any]],
     input_size: tuple[int, int],
     monochrome: bool,
+    recommended_confidence_threshold: float | None = None,
     kind: str = _TRACKERKIT_MULTIHEAD_KIND,
 ) -> Path:
     """Write a TrackerKit-readable multi-head classifier manifest.
@@ -170,6 +171,10 @@ def write_classifier_multihead_manifest(
         "input_size": [int(input_size[0]), int(input_size[1])],
         "monochrome": bool(monochrome),
     }
+    if recommended_confidence_threshold is not None:
+        payload["recommended_confidence_threshold"] = float(
+            min(1.0, max(0.0, recommended_confidence_threshold))
+        )
     manifest_abs.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return manifest_abs
 
@@ -211,6 +216,14 @@ def _normalize_classifier_meta(meta: dict[str, Any]) -> dict[str, Any]:
         "monochrome": bool(meta.get("monochrome", False)),
         "num_classes": sum(len(names) for names in class_names_per_factor),
     }
+    recommended_confidence_threshold = meta.get("recommended_confidence_threshold")
+    if recommended_confidence_threshold is not None:
+        try:
+            normalized["recommended_confidence_threshold"] = float(
+                min(1.0, max(0.0, float(recommended_confidence_threshold)))
+            )
+        except (TypeError, ValueError):
+            pass
     if len(class_names_per_factor) == 1:
         normalized["class_names"] = list(class_names_per_factor[0])
     return normalized
@@ -246,6 +259,7 @@ def classifier_metadata_for_artifact(
                 "class_names_per_factor": meta.class_names_per_factor,
                 "input_size": list(meta.input_size),
                 "monochrome": meta.monochrome,
+                "recommended_confidence_threshold": meta.recommended_confidence_threshold,
             }
         )
 

@@ -50,6 +50,9 @@ class ClassifierMetadata:
             ``factor_names``.
         monochrome: Whether the model was trained with monochrome augmentation,
             affecting preprocessing normalization.
+        recommended_confidence_threshold: Optional abstention threshold carried
+            with the artifact. Consumers may use this as their default
+            confidence cutoff for collapsing uncertain predictions to unknown.
         source_path: Absolute path the artifact was loaded from (for display
             and ONNX-derivation peer location).
     """
@@ -60,7 +63,19 @@ class ClassifierMetadata:
     factor_names: list[str]
     class_names_per_factor: list[list[str]]
     monochrome: bool
+    recommended_confidence_threshold: float | None
     source_path: str
+
+
+def _normalize_recommended_confidence_threshold(raw: Any) -> float | None:
+    """Canonicalize an artifact-level abstention threshold."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return min(1.0, max(0.0, value))
 
 
 def _normalize_input_size(raw: Any) -> tuple[int, int]:
@@ -145,6 +160,9 @@ class _TinyLoader:
             factor_names=factor_names,
             class_names_per_factor=cnpf,
             monochrome=bool(ckpt.get("monochrome", False)),
+            recommended_confidence_threshold=_normalize_recommended_confidence_threshold(
+                ckpt.get("recommended_confidence_threshold")
+            ),
             source_path=path,
         )
 
@@ -200,6 +218,9 @@ class _YoloFlatLoader:
             factor_names=[str(factor_names[0])],
             class_names_per_factor=[[str(name) for name in class_names_per_factor[0]]],
             monochrome=bool(sidecar.get("monochrome", False)),
+            recommended_confidence_threshold=_normalize_recommended_confidence_threshold(
+                sidecar.get("recommended_confidence_threshold")
+            ),
             source_path=path,
         )
 
@@ -229,6 +250,9 @@ class _TorchvisionLoader:
             factor_names=factor_names,
             class_names_per_factor=cnpf,
             monochrome=bool(ckpt.get("monochrome", False)),
+            recommended_confidence_threshold=_normalize_recommended_confidence_threshold(
+                ckpt.get("recommended_confidence_threshold")
+            ),
             source_path=path,
         )
 
@@ -301,6 +325,9 @@ class _ClassifierMultiheadBundleLoader:
             factor_names=[str(n) for n in factor_names],
             class_names_per_factor=class_names_per_factor,
             monochrome=bool(data.get("monochrome", False)),
+            recommended_confidence_threshold=_normalize_recommended_confidence_threshold(
+                data.get("recommended_confidence_threshold")
+            ),
             source_path=path,
         )
 

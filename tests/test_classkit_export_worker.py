@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -237,6 +238,72 @@ def test_export_worker_uses_preset_splits_by_path(
     assert labels == [0, 0, 1, 1]
     assert splits == ["train", "test", "val", "train"]
     assert [str(path.resolve()) for path in collected_paths] == list(preset.keys())
+
+
+def test_multihead_export_worker_filters_unknown_factor_labels(
+    qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hydra_suite.classkit.gui.main_window import MainWindow
+
+    recorded_runs: list[dict[str, object]] = []
+
+    class _Emitter:
+        def emit(self, *args, **kwargs) -> None:
+            return None
+
+    class _FakeExportWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            self.image_paths = list(kwargs.get("image_paths") or [])
+            self.labels = list(kwargs.get("labels") or [])
+            self.class_names = dict(kwargs.get("class_names") or {})
+            self.output_path = kwargs.get("output_path")
+            self.signals = SimpleNamespace(
+                started=_Emitter(),
+                progress=_Emitter(),
+                success=_Emitter(),
+                error=_Emitter(),
+                finished=_Emitter(),
+            )
+
+        def run(self) -> None:
+            recorded_runs.append(
+                {
+                    "image_paths": list(self.image_paths),
+                    "labels": list(self.labels),
+                    "class_names": dict(self.class_names),
+                    "output_path": self.output_path,
+                }
+            )
+
+    monkeypatch.setattr(
+        "hydra_suite.classkit.jobs.task_workers.ExportWorker",
+        _FakeExportWorker,
+    )
+
+    window = MainWindow()
+    image_paths = [tmp_path / f"img_{idx}.png" for idx in range(3)]
+    window.image_paths = image_paths
+
+    scheme = SimpleNamespace(
+        factors=[SimpleNamespace(name="color"), SimpleNamespace(name="side")],
+        decode_label=lambda label: tuple(str(label).split("|")),
+    )
+    context = {
+        "settings": {},
+        "images": image_paths,
+        "run_dir": tmp_path / "export_root",
+        "source_split_by_path": {},
+        "expanded_split_by_key": None,
+        "labels_str": ["red|left", "unknown|right", "blue|unknown"],
+    }
+
+    worker = window._create_multihead_export_worker(context, scheme)
+    worker.run()
+
+    assert len(recorded_runs) == 2
+    assert [len(run["image_paths"]) for run in recorded_runs] == [2, 2]
+    assert set(recorded_runs[0]["class_names"].values()) == {"blue", "red"}
+    assert set(recorded_runs[1]["class_names"].values()) == {"left", "right"}
 
 
 def test_export_worker_force_monochrome_materializes_grayscale_copies(

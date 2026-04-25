@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 def test_describe_cnn_identity_candidate_flat(tiny_flat_subset):
     from hydra_suite.trackerkit.gui.dialogs.cnn_identity_import_dialog import (
@@ -14,6 +16,7 @@ def test_describe_cnn_identity_candidate_flat(tiny_flat_subset):
     assert summary["factor_names"] == ["flat"]
     assert summary["class_names_per_factor"] == [["left", "right"]]
     assert summary["input_size"] == (64, 64)
+    assert summary["recommended_confidence_threshold"] is None
 
 
 def test_describe_cnn_identity_candidate_multihead(tiny_multi_identity):
@@ -25,6 +28,7 @@ def test_describe_cnn_identity_candidate_multihead(tiny_multi_identity):
     assert summary["is_multihead"] is True
     assert summary["factor_names"] == ["color", "shape"]
     assert summary["class_names_per_factor"] == [["r", "g", "b"], ["sq", "ci"]]
+    assert summary["recommended_confidence_threshold"] is None
 
 
 def test_annotate_discovered_entry_writes_registry(
@@ -95,6 +99,7 @@ def test_import_cnn_identity_candidate_copies_external_multihead_bundle(
         ],
         input_size=(64, 64),
         monochrome=False,
+        recommended_confidence_threshold=0.72,
     )
 
     monkeypatch.setattr(model_publish, "get_models_root", lambda: models_root)
@@ -121,3 +126,4 @@ def test_import_cnn_identity_candidate_copies_external_multihead_bundle(
     assert meta["usage_role"] == "cnn_identity"
     assert meta["scoring_mode"] == "per_head_average"
     assert meta["factor_names"] == ["side", "heading"]
+    assert meta["recommended_confidence_threshold"] == pytest.approx(0.72)

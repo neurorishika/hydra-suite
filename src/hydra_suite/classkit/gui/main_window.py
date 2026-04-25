@@ -140,6 +140,7 @@ class MainWindow(QMainWindow):
         self._model_probs = None  # (N, C) per-image class probabilities
         self._model_class_names = None  # class names from (YOLO/tiny) model
         self._model_prediction_heads = None  # ordered multi-head slices + factor names
+        self._model_prediction_confidence_threshold = None
         self.umap_model_coords = None  # UMAP computed in model logits space
         self.pca_model_coords = None  # PCA computed in model logits/probability space
         self._show_model_umap = False  # Explorer toggle: embedding vs model UMAP
@@ -2347,7 +2348,7 @@ class MainWindow(QMainWindow):
             initial_label=str(status.get("label") or "").strip() or None,
             parent=self,
         )
-        if dialog.exec() != dialog.Accepted:
+        if not dialog.exec():
             return None
         replacement_label = dialog.selected_label().strip()
         if not replacement_label:
@@ -3158,6 +3159,7 @@ class MainWindow(QMainWindow):
             "custom_input_size": self._nearest_computer_friendly_size(
                 (avg_width + avg_height) / 2.0
             ),
+            "prediction_confidence_threshold": 0.5,
         }
 
     def _get_recent_project_training_settings(self) -> dict:
@@ -3386,6 +3388,9 @@ class MainWindow(QMainWindow):
     def _apply_cached_predictions(self, cached_preds, db):
         """Apply cached prediction data and restore model-space projections."""
         summary = None
+        cached_prediction_threshold = self._normalize_prediction_confidence_threshold(
+            cached_preds.get("recommended_confidence_threshold")
+        )
         get_recent_model = getattr(db, "get_most_recent_model_cache", None)
         if callable(get_recent_model):
             try:
@@ -3394,6 +3399,16 @@ class MainWindow(QMainWindow):
                 recent_model = None
             if isinstance(recent_model, dict):
                 recent_meta = recent_model.get("meta") or {}
+                if cached_prediction_threshold is None:
+                    training_settings = recent_meta.get("training_settings")
+                    if isinstance(training_settings, dict):
+                        cached_prediction_threshold = (
+                            self._normalize_prediction_confidence_threshold(
+                                training_settings.get(
+                                    "prediction_confidence_threshold"
+                                )
+                            )
+                        )
                 summary = self._validation_summary_from_results(
                     recent_meta.get("factor_validation"),
                     factor_names=recent_meta.get("factor_names"),
@@ -3410,6 +3425,7 @@ class MainWindow(QMainWindow):
             cached_preds["class_names"],
             active_model_mode=cached_preds.get("active_model_mode", "yolo"),
             prediction_heads=cached_preds.get("prediction_heads"),
+            prediction_confidence_threshold=cached_prediction_threshold,
         )
         self._set_model_projection_buttons_enabled(True)
         self._update_al_status()
@@ -3494,6 +3510,9 @@ class MainWindow(QMainWindow):
             lambda p=yolo_ckpt: self._run_yolo_inference(
                 p,
                 force_monochrome=self._resolve_yolo_force_monochrome(p),
+                prediction_confidence_threshold=self._resolve_prediction_confidence_threshold_for_path(
+                    p
+                ),
                 on_success=lambda _result: self._activate_predictions_view_if_available(),
             ),
         )
@@ -3552,6 +3571,7 @@ class MainWindow(QMainWindow):
     def _clear_label_shortcuts(self) -> None:
         """Remove existing shortcut objects before rebuilding bindings."""
         for shortcut in self._label_shortcuts:
+            shortcut.setEnabled(False)
             shortcut.setParent(None)
         self._label_shortcuts = []
 
@@ -3586,11 +3606,13 @@ class MainWindow(QMainWindow):
         self._label_shortcuts.append(shortcut)
 
     def _install_label_assignment_shortcuts(
-        self, scheme_shortcuts: dict[str, str]
+        self, scheme_shortcuts: dict[str, str], blocked_keys: set[str] | None = None
     ) -> None:
         """Install class-label shortcuts when not using the multi-factor stepper."""
         if self._stepper is not None:
             return
+
+        _blocked = {k.upper() for k in (blocked_keys or set())}
 
         for i, class_name in enumerate(self.classes[:9], start=1):
             if class_name not in scheme_shortcuts:
@@ -3599,6 +3621,8 @@ class MainWindow(QMainWindow):
                 )
 
         for label, key in scheme_shortcuts.items():
+            if QKeySequence(key).toString().upper() in _blocked:
+                continue
             self._register_label_shortcut(
                 key, lambda c=label: self.assign_label_to_selected(c)
             )
@@ -3608,23 +3632,35 @@ class MainWindow(QMainWindow):
         )
 
     def _install_global_navigation_shortcuts(
-        self, active: dict, defaults: dict
+        self, active: dict, defaults: dict, blocked_keys: set[str] | None = None
     ) -> None:
         """Install non-label global shortcuts shared across ClassKit workflows."""
 
         def _key(action: str) -> QKeySequence:
             return QKeySequence(active.get(action, defaults.get(action, "")))
 
-        shortcut_actions = [
+        _blocked = {k.upper() for k in (blocked_keys or set())}
+
+        # Approve/reject are only meaningful in review mode.  Registering them in
+        # other modes creates QShortcut ambiguity conflicts if the same key is also
+        # a scheme label shortcut, causing Qt to fire neither shortcut.
+        review_only_actions = [
             ("Approve review label", self.approve_selected_review_label),
             ("Reject review label", self.reject_selected_review_label),
+        ]
+        always_actions = [
             ("Sample next candidates", self.on_sample_next_triggered),
             ("Previous unlabeled", self.on_prev_image),
             ("Next unlabeled", self.on_next_image),
             ("Undo last label (Ctrl+Z)", self.undo_last_assignment),
         ]
-        for action_name, callback in shortcut_actions:
-            self._register_label_shortcut(_key(action_name), callback)
+        if self.explorer_mode == "review":
+            for action_name, callback in review_only_actions:
+                self._register_label_shortcut(_key(action_name), callback)
+        for action_name, callback in always_actions:
+            seq = _key(action_name)
+            if seq.toString().upper() not in _blocked:
+                self._register_label_shortcut(seq, callback)
 
     def _sanitize_custom_shortcuts(self, shortcuts: dict | None) -> dict[str, str]:
         """Keep only supported custom shortcut bindings and normalize values."""
@@ -3650,8 +3686,32 @@ class MainWindow(QMainWindow):
         defaults = dict(ShortcutEditorDialog.DEFAULT_SHORTCUTS)
         active = {**defaults, **self._sanitize_custom_shortcuts(self._custom_shortcuts)}
         scheme_shortcuts = self._load_scheme_shortcuts()
-        self._install_label_assignment_shortcuts(scheme_shortcuts)
-        self._install_global_navigation_shortcuts(active, defaults)
+
+        # In review mode, approve/reject keys take exclusive ownership of their keys
+        # so that scheme label shortcuts for the same keys don't cause Qt ambiguity.
+        # In labeling mode (and other non-review modes), approve/reject are not
+        # registered, so scheme shortcuts have free use of those keys.
+        if self.explorer_mode == "review":
+            review_keys = {
+                QKeySequence(active.get(a, defaults.get(a, ""))).toString()
+                for a in ("Approve review label", "Reject review label")
+            }
+        else:
+            review_keys = set()
+
+        # Scheme shortcuts that conflict with always-navigation keys are skipped
+        # to prevent ambiguity on any mode.
+        nav_keys = {
+            QKeySequence(active.get(a, defaults.get(a, ""))).toString()
+            for a in ("Sample next candidates", "Previous unlabeled",
+                      "Next unlabeled", "Undo last label (Ctrl+Z)")
+        }
+        scheme_blocked = review_keys | nav_keys
+
+        self._install_label_assignment_shortcuts(scheme_shortcuts, blocked_keys=scheme_blocked)
+        self._install_global_navigation_shortcuts(
+            active, defaults, blocked_keys={k for k in scheme_shortcuts.values() if k}
+        )
 
     def _begin_command(self) -> bool:
         """Return False when command input should be ignored during active/cooldown windows."""
@@ -4385,6 +4445,100 @@ class MainWindow(QMainWindow):
         self._model_prediction_heads = derived or None
         return derived
 
+    @staticmethod
+    def _normalize_prediction_confidence_threshold(
+        raw_value: object,
+    ) -> float | None:
+        try:
+            numeric = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(numeric):
+            return None
+        return min(1.0, max(0.0, numeric))
+
+    def _default_prediction_confidence_threshold(self) -> float:
+        settings = self._last_training_settings or {}
+        threshold = self._normalize_prediction_confidence_threshold(
+            settings.get("prediction_confidence_threshold")
+        )
+        return threshold if threshold is not None else 0.5
+
+    def _current_prediction_confidence_threshold(self) -> float:
+        threshold = self._normalize_prediction_confidence_threshold(
+            self._model_prediction_confidence_threshold
+        )
+        return (
+            threshold
+            if threshold is not None
+            else self._default_prediction_confidence_threshold()
+        )
+
+    def _artifact_prediction_confidence_threshold(self, path: Path) -> float | None:
+        training_settings = self._cached_model_training_settings(path)
+        if isinstance(training_settings, dict):
+            threshold = self._normalize_prediction_confidence_threshold(
+                training_settings.get("prediction_confidence_threshold")
+            )
+            if threshold is not None:
+                return threshold
+        try:
+            from ...training.model_publish import classifier_metadata_for_artifact
+
+            meta = classifier_metadata_for_artifact(path)
+        except Exception:
+            return None
+        if isinstance(meta, dict):
+            return self._normalize_prediction_confidence_threshold(
+                meta.get("recommended_confidence_threshold")
+            )
+        return None
+
+    def _resolve_prediction_confidence_threshold_for_path(self, path: Path) -> float:
+        threshold = self._artifact_prediction_confidence_threshold(path)
+        return (
+            threshold
+            if threshold is not None
+            else self._default_prediction_confidence_threshold()
+        )
+
+    def _resolve_multihead_prediction_confidence_threshold(
+        self, paths: list[Path]
+    ) -> float:
+        thresholds = [
+            threshold
+            for threshold in (
+                self._artifact_prediction_confidence_threshold(path)
+                for path in (paths or [])
+            )
+            if threshold is not None
+        ]
+        if thresholds:
+            return max(thresholds)
+        return self._default_prediction_confidence_threshold()
+
+    def _threshold_prediction_label(
+        self,
+        label: str,
+        confidence: float | None,
+    ) -> str:
+        normalized_label = str(label or "").strip()
+        if not normalized_label:
+            return "unknown"
+        if normalized_label == "unknown":
+            return normalized_label
+        try:
+            numeric_confidence = (
+                float(confidence) if confidence is not None else float("-inf")
+            )
+        except Exception:
+            numeric_confidence = float("-inf")
+        return (
+            normalized_label
+            if numeric_confidence >= self._current_prediction_confidence_threshold()
+            else "unknown"
+        )
+
     def _prediction_confidences_from_probs(
         self,
         probs,
@@ -4444,11 +4598,17 @@ class MainWindow(QMainWindow):
         *,
         active_model_mode: str,
         prediction_heads=None,
+        prediction_confidence_threshold: float | None = None,
     ) -> None:
         """Apply model outputs and normalize any multi-head metadata for UI consumers."""
         self._model_probs = probs
         self._model_class_names = list(class_names or [])
         self._active_model_mode = str(active_model_mode or "")
+        self._model_prediction_confidence_threshold = (
+            self._normalize_prediction_confidence_threshold(
+                prediction_confidence_threshold
+            )
+        )
         normalized_heads = self._normalize_prediction_heads(prediction_heads)
         if not normalized_heads:
             normalized_heads = self._derive_prediction_heads_from_scheme(
@@ -4536,7 +4696,9 @@ class MainWindow(QMainWindow):
                             start,
                         )
                     )
-                    head_labels.append(label)
+                    head_labels.append(
+                        self._threshold_prediction_label(label, _confidence)
+                    )
                 out[i] = "|".join(head_labels) if head_labels else None
             return out
 
@@ -4544,9 +4706,13 @@ class MainWindow(QMainWindow):
         for i in range(eval_n):
             pred_idx = int(np.argmax(probs[i]))
             if 0 <= pred_idx < len(names):
-                out[i] = names[pred_idx]
+                out[i] = self._threshold_prediction_label(
+                    names[pred_idx], float(probs[i][pred_idx])
+                )
             else:
-                out[i] = f"pred_{pred_idx}"
+                out[i] = self._threshold_prediction_label(
+                    f"pred_{pred_idx}", float(probs[i][pred_idx])
+                )
         return out
 
     @staticmethod
@@ -4596,6 +4762,7 @@ class MainWindow(QMainWindow):
                     class_names,
                     start,
                 )
+                thresholded_label = self._threshold_prediction_label(label, confidence)
                 top_count = max(1, min(int(top_k), finite_row.size))
                 top_indices = np.argsort(finite_row)[::-1][:top_count]
                 top_predictions = [
@@ -4615,12 +4782,12 @@ class MainWindow(QMainWindow):
                         "factor": str(
                             head.get("factor") or f"factor_{len(head_predictions) + 1}"
                         ),
-                        "predicted_label": label,
+                        "predicted_label": thresholded_label,
                         "confidence": confidence,
                         "top_predictions": top_predictions,
                     }
                 )
-                composite_labels.append(label)
+                composite_labels.append(thresholded_label)
                 composite_confidences.append(confidence)
 
             if not head_predictions:
@@ -4658,7 +4825,10 @@ class MainWindow(QMainWindow):
 
         return {
             "predicted_index": pred_idx,
-            "predicted_label": _label_for(pred_idx),
+            "predicted_label": self._threshold_prediction_label(
+                _label_for(pred_idx),
+                float(row[pred_idx]),
+            ),
             "confidence": float(row[pred_idx]),
             "top_predictions": top_predictions,
         }
@@ -4673,6 +4843,8 @@ class MainWindow(QMainWindow):
         normalized_label = str(predicted_label or "").strip()
         if not normalized_label:
             return False
+        if normalized_label == "unknown":
+            return True
 
         scheme = self._resolve_training_scheme()
         if scheme is not None:
@@ -4716,6 +4888,7 @@ class MainWindow(QMainWindow):
         metadata = {
             "active_model_mode": self._active_model_mode,
             "predicted_label": predicted_label,
+            "prediction_confidence_threshold": self._current_prediction_confidence_threshold(),
         }
         predicted_index = summary.get("predicted_index")
         if predicted_index is not None:
@@ -4935,6 +5108,10 @@ class MainWindow(QMainWindow):
                 )
 
         self._set_view_mode_combo_value(mode)
+
+        # Reinstall shortcuts so review-only bindings (Y/N) are only active in
+        # review mode, preventing QShortcut ambiguity with scheme label keys.
+        self.setup_label_shortcuts()
 
         self.request_update_explorer_plot()
         self.update_knn_panel(self.selected_point_index)
@@ -5627,14 +5804,30 @@ class MainWindow(QMainWindow):
         self.request_refresh_label_history_strip()
 
     def _next_unlabeled_candidate_index(self, current_index: int) -> int | None:
-        """Remove the labeled item from the candidate pool and return the next unlabeled one."""
+        """Remove the labeled item from the candidate pool and return the next unlabeled one.
+
+        Advances from the position of ``current_index`` in the pool (wrapping around)
+        so that navigation after a label assignment is consistent with arrow-key
+        navigation from ``_advance_unlabeled_pool``.
+        """
+        # Record position before removal so we can advance from there.
+        try:
+            current_pos = self.candidate_indices.index(current_index)
+        except ValueError:
+            current_pos = -1
+
         self.candidate_indices = [
             i for i in self.candidate_indices if i != current_index
         ]
+        if not self.candidate_indices:
+            return None
+
         labels = self.image_labels or []
-        for index in self.candidate_indices:
-            if index >= len(labels) or not labels[index]:
-                return index
+        n = len(self.candidate_indices)
+        for offset in range(n):
+            idx = self.candidate_indices[(current_pos + offset) % n]
+            if idx >= len(labels) or not labels[idx]:
+                return idx
         return None
 
     def _prompt_after_label_set_complete(self) -> str | None:
@@ -6797,6 +6990,9 @@ class MainWindow(QMainWindow):
                 class_rebalance_mode=settings.get("tiny_rebalance_mode", "none"),
                 class_rebalance_power=settings.get("tiny_rebalance_power", 1.0),
                 label_smoothing=settings.get("tiny_label_smoothing", 0.0),
+                ignore_label_name=str(
+                    settings.get("ignore_label_name", "unknown") or "unknown"
+                ),
             ),
             device=settings.get("device", "cpu"),
             training_space="original",
@@ -6836,6 +7032,9 @@ class MainWindow(QMainWindow):
                     label_smoothing=settings.get("tiny_label_smoothing", 0.0),
                     class_rebalance_mode=settings.get("tiny_rebalance_mode", "none"),
                     class_rebalance_power=settings.get("tiny_rebalance_power", 1.0),
+                    ignore_label_name=str(
+                        settings.get("ignore_label_name", "unknown") or "unknown"
+                    ),
                 ),
             )
         return spec
@@ -6941,6 +7140,9 @@ class MainWindow(QMainWindow):
         artifact = results[0].get("artifact_path", "")
         if not artifact or not Path(artifact).exists():
             return
+        prediction_confidence_threshold = self._normalize_prediction_confidence_threshold(
+            (self._last_training_settings or {}).get("prediction_confidence_threshold")
+        )
 
         if is_yolo:
             if multi_head:
@@ -6959,6 +7161,7 @@ class MainWindow(QMainWindow):
                     force_monochrome=bool(
                         (self._last_training_settings or {}).get("monochrome", False)
                     ),
+                    prediction_confidence_threshold=prediction_confidence_threshold,
                 )
             else:
                 self._yolo_model_path = Path(artifact)
@@ -6970,6 +7173,7 @@ class MainWindow(QMainWindow):
                     force_monochrome=bool(
                         (self._last_training_settings or {}).get("monochrome", False)
                     ),
+                    prediction_confidence_threshold=prediction_confidence_threshold,
                 )
         else:
             # Custom CNN or Tiny CNN .pth -- dispatch based on arch field
@@ -6988,6 +7192,7 @@ class MainWindow(QMainWindow):
                 self._run_multihead_custom_inference(
                     all_artifacts,
                     on_success=on_done,
+                    prediction_confidence_threshold=prediction_confidence_threshold,
                 )
             else:
                 _ckpt = _torch.load(
@@ -7022,12 +7227,14 @@ class MainWindow(QMainWindow):
                             if isinstance(_ckpt, dict)
                             else False
                         ),
+                        prediction_confidence_threshold=prediction_confidence_threshold,
                     )
                 else:
                     self._run_tiny_inference(
                         Path(artifact),
                         class_names=_class_names,
                         on_success=on_done,
+                        prediction_confidence_threshold=prediction_confidence_threshold,
                     )
 
     def _publish_training_results(self, dialog, scheme, scheme_name):
@@ -7076,6 +7283,18 @@ class MainWindow(QMainWindow):
                     fallback_input_size=fallback_input_size,
                     fallback_monochrome=fallback_monochrome,
                 )
+                recommended_confidence_threshold = (
+                    self._normalize_prediction_confidence_threshold(
+                        settings.get("prediction_confidence_threshold")
+                    )
+                )
+                if (
+                    isinstance(classifier_v2_meta, dict)
+                    and recommended_confidence_threshold is not None
+                ):
+                    classifier_v2_meta["recommended_confidence_threshold"] = (
+                        recommended_confidence_threshold
+                    )
                 _published_key, published_path = publish_trained_model(
                     role=role,
                     artifact_path=artifact,
@@ -7166,6 +7385,9 @@ class MainWindow(QMainWindow):
                     factor_entries=published_factor_entries,
                     input_size=bundle_input_size or fallback_input_size or (224, 224),
                     monochrome=bundle_monochrome,
+                    recommended_confidence_threshold=self._normalize_prediction_confidence_threshold(
+                        settings.get("prediction_confidence_threshold")
+                    ),
                 )
                 dialog.append_log(
                     f"Published TrackerKit manifest: {trackerkit_manifest.name}"
@@ -7493,6 +7715,9 @@ class MainWindow(QMainWindow):
 
         outer_self = self
         exp_label_expansion = context["settings"].get("label_expansion") or {}
+        ignored_label_name = str(
+            context["settings"].get("ignore_label_name", "unknown") or "unknown"
+        ).strip()
 
         class MultiHeadExportWorker(ExportWorker):
             def __init__(self, *args, **kwargs) -> None:
@@ -7504,22 +7729,34 @@ class MainWindow(QMainWindow):
             def run(self):
                 try:
                     self.signals.started.emit()
-                    for fi, factor in enumerate(self.scheme.factors):
+                    for fi, _factor in enumerate(self.scheme.factors):
                         self.signals.progress.emit(0, f"Exporting factor {fi}...")
                         factor_labels = outer_self._decode_factor_labels(
                             self.scheme, self.labels_str, fi
                         )
-                        # Use the full scheme-defined label list so that all classes
-                        # (including "unknown") are always present in the exported
-                        # dataset, even if no training image carries that label.
-                        full_labels = list(factor.labels)
-                        label_map = {label: i for i, label in enumerate(full_labels)}
-                        factor_int = [label_map[label] for label in factor_labels]
+                        kept_indices = [
+                            index
+                            for index, label in enumerate(factor_labels)
+                            if str(label).strip() != ignored_label_name
+                        ]
+                        if not kept_indices:
+                            factor_name = str(
+                                getattr(self.scheme.factors[fi], "name", "")
+                                or f"factor_{fi + 1}"
+                            )
+                            raise ValueError(
+                                f"Factor '{factor_name}' has no labeled samples after filtering '{ignored_label_name}'."
+                            )
+                        filtered_labels = [factor_labels[index] for index in kept_indices]
+                        unique = sorted(set(filtered_labels))
+                        label_map = {label: i for i, label in enumerate(unique)}
+                        factor_int = [label_map[label] for label in filtered_labels]
                         factor_names = {i: label for label, i in label_map.items()}
+                        factor_images = [self.image_paths[index] for index in kept_indices]
 
                         factor_dir = _Path(self.output_path) / f"export_f{fi}"
                         sub_worker = ExportWorker(
-                            image_paths=self.image_paths,
+                            image_paths=factor_images,
                             labels=factor_int,
                             output_path=factor_dir,
                             format="ultralytics",
@@ -7812,11 +8049,18 @@ class MainWindow(QMainWindow):
         trainer.load(path)
         self._trained_classifier = trainer
         self.status.showMessage(f"Loaded embedding head: {path.name}")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         if self.embeddings is not None:
             probs = trainer.predict_proba(self.embeddings, calibrated=True)
-            self._model_probs = probs
-            self._model_class_names = list(self.classes)
+            self._set_model_prediction_state(
+                probs,
+                list(self.classes),
+                active_model_mode="embedding_head",
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -7825,7 +8069,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(probs.max(axis=1).astype(float))
             self.update_explorer_plot()
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
@@ -7918,6 +8161,9 @@ class MainWindow(QMainWindow):
         resolved = ckpt_names or list(self.classes)
         self._active_model_mode = "custom_cnn"
         self.status.showMessage(f"Loading Custom CNN ({arch}): {path.name}...")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -7941,6 +8187,7 @@ class MainWindow(QMainWindow):
             force_monochrome=(
                 bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
             ),
+            prediction_confidence_threshold=prediction_confidence_threshold,
         )
 
     def _load_tiny_cnn_checkpoint(
@@ -7965,6 +8212,9 @@ class MainWindow(QMainWindow):
         )
         self._active_model_mode = "tiny"
         self.status.showMessage(f"Loading tiny CNN: {path.name}...")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -7987,6 +8237,7 @@ class MainWindow(QMainWindow):
             force_monochrome=(
                 bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
             ),
+            prediction_confidence_threshold=prediction_confidence_threshold,
         )
 
     def _load_yolo_checkpoint(
@@ -8001,6 +8252,9 @@ class MainWindow(QMainWindow):
         self._set_heldout_validation_summary(None)
         self._yolo_model_path = path
         self.status.showMessage(f"Loading YOLO model: {path.name}...")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -8020,6 +8274,7 @@ class MainWindow(QMainWindow):
             path,
             on_success=_after_load,
             force_monochrome=self._resolve_yolo_force_monochrome(path),
+            prediction_confidence_threshold=prediction_confidence_threshold,
         )
 
     def _load_checkpoint_from_path(
@@ -8541,6 +8796,7 @@ class MainWindow(QMainWindow):
                         },
                     },
                     "prediction_heads": normalized_heads,
+                    "recommended_confidence_threshold": self._current_prediction_confidence_threshold(),
                 },
             )
         except Exception:
@@ -8552,6 +8808,7 @@ class MainWindow(QMainWindow):
         on_success=None,
         force_monochrome: bool = False,
         apply_result: bool = True,
+        prediction_confidence_threshold: float | None = None,
     ):
         """Run YOLO inference on all images in background and update confidences."""
         if not self.image_paths:
@@ -8579,6 +8836,7 @@ class MainWindow(QMainWindow):
                 result["probs"],
                 result["class_names"],
                 active_model_mode="yolo",
+                prediction_confidence_threshold=prediction_confidence_threshold,
             )
             self.umap_model_coords = None
             self.pca_model_coords = None
@@ -8619,6 +8877,7 @@ class MainWindow(QMainWindow):
         class_names: list,
         on_success=None,
         force_monochrome: bool = False,
+        prediction_confidence_threshold: float | None = None,
     ):
         """Run TinyCNN inference on all images in background and update confidences."""
         if not self.image_paths:
@@ -8641,6 +8900,7 @@ class MainWindow(QMainWindow):
                 result["probs"],
                 result["class_names"],
                 active_model_mode="tiny",
+                prediction_confidence_threshold=prediction_confidence_threshold,
             )
             self.umap_model_coords = None
             self.pca_model_coords = None
@@ -8682,6 +8942,7 @@ class MainWindow(QMainWindow):
         input_size: int = 224,
         on_success=None,
         force_monochrome: bool = False,
+        prediction_confidence_threshold: float | None = None,
     ):
         """Launch TorchvisionInferenceWorker and wire signals to the standard post-inference path."""
         if not self.image_paths:
@@ -8704,6 +8965,7 @@ class MainWindow(QMainWindow):
                 result["probs"],
                 result["class_names"],
                 active_model_mode="custom_cnn",
+                prediction_confidence_threshold=prediction_confidence_threshold,
             )
             self.umap_model_coords = None
             self.pca_model_coords = None
@@ -8738,7 +9000,12 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(lambda: self.progress_bar.setVisible(False))
         self._threadpool_start(worker)
 
-    def _run_multihead_custom_inference(self, model_paths: list, on_success=None):
+    def _run_multihead_custom_inference(
+        self,
+        model_paths: list,
+        on_success=None,
+        prediction_confidence_threshold: float | None = None,
+    ):
         """Run multi-head TinyClassifier/Custom CNN inference and concatenate outputs."""
         import numpy as np
         import torch
@@ -8790,6 +9057,7 @@ class MainWindow(QMainWindow):
                 all_names,
                 active_model_mode="custom_cnn_multihead",
                 prediction_heads=prediction_heads,
+                prediction_confidence_threshold=prediction_confidence_threshold,
             )
             self.umap_model_coords = None
             self.pca_model_coords = None
@@ -8919,6 +9187,7 @@ class MainWindow(QMainWindow):
         model_paths: list,
         on_success=None,
         force_monochrome: bool = False,
+        prediction_confidence_threshold: float | None = None,
     ):
         """Run YOLO inference on each factor model, concatenate log-prob columns."""
         import numpy as np
@@ -8975,6 +9244,7 @@ class MainWindow(QMainWindow):
                     all_names,
                     active_model_mode="yolo_multihead",
                     prediction_heads=prediction_heads,
+                    prediction_confidence_threshold=prediction_confidence_threshold,
                 )
                 self.umap_model_coords = None
                 self.pca_model_coords = None
@@ -9057,6 +9327,17 @@ class MainWindow(QMainWindow):
             )
             return
         class_names = entry.get("class_names") or list(self.classes)
+        entry_meta = entry.get("meta") or {}
+        training_settings = (
+            entry_meta.get("training_settings") if isinstance(entry_meta, dict) else None
+        )
+        cached_threshold = (
+            self._normalize_prediction_confidence_threshold(
+                training_settings.get("prediction_confidence_threshold")
+            )
+            if isinstance(training_settings, dict)
+            else None
+        )
 
         def _after(r):
             self._evaluate_model_on_labeled()
@@ -9068,16 +9349,46 @@ class MainWindow(QMainWindow):
             if mode.startswith("multihead"):
                 all_paths = [Path(p) for p in paths if Path(p).exists()]
                 self._active_model_mode = "yolo_multihead"
-                self._run_multihead_yolo_inference(all_paths, on_success=_after)
+                self._run_multihead_yolo_inference(
+                    all_paths,
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_multihead_prediction_confidence_threshold(
+                            all_paths
+                        )
+                    ),
+                )
             else:
                 self._yolo_model_path = Path(paths[0])
                 self._active_model_mode = "yolo"
-                self._run_yolo_inference(Path(paths[0]), on_success=_after)
+                self._run_yolo_inference(
+                    Path(paths[0]),
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
+                )
         else:
             if mode.startswith("multihead"):
                 all_paths = [Path(p) for p in paths if Path(p).exists()]
                 self._active_model_mode = "custom_cnn_multihead"
-                self._run_multihead_custom_inference(all_paths, on_success=_after)
+                self._run_multihead_custom_inference(
+                    all_paths,
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_multihead_prediction_confidence_threshold(
+                            all_paths
+                        )
+                    ),
+                )
                 return
 
             ckpt = torch.load(str(paths[0]), map_location="cpu", weights_only=False)
@@ -9101,6 +9412,13 @@ class MainWindow(QMainWindow):
                     resolved_names,
                     on_success=_after,
                     force_monochrome=force_monochrome,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
                 )
             else:
                 raw_size = (
@@ -9120,6 +9438,13 @@ class MainWindow(QMainWindow):
                     input_size=size,
                     on_success=_after,
                     force_monochrome=force_monochrome,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
                 )
 
     def _labeled_eval_arrays(self):

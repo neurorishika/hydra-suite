@@ -808,6 +808,52 @@ def test_tracking_worker_realtime_ignores_existing_detection_cache(
     assert cache_modes == ["w"]
 
 
+def test_tracking_worker_forward_yolo_without_detection_cache_still_initializes_detector(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class _StopAtDetection(RuntimeError):
+        pass
+
+    detector_calls: list[dict[str, object]] = []
+
+    class _DetectorProbe:
+        def detect_objects(self, *_args, **_kwargs):
+            raise _StopAtDetection()
+
+    def _create_detector(*_args, **_kwargs):
+        detector_calls.append({"created": True})
+        return _DetectorProbe()
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "create_detector", _create_detector)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _UnusedAssigner)
+
+    worker = worker_mod.TrackingWorker(str(tmp_path / "video.mp4"))
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": False,
+            "TRACKING_WORKFLOW_MODE": "non_realtime",
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    with pytest.raises(_StopAtDetection):
+        worker.run()
+
+    assert detector_calls == [{"created": True}]
+
+
 def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

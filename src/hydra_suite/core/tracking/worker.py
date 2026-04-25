@@ -1186,6 +1186,7 @@ class TrackingWorker(QThread):
         detection_cache = None
         use_cached_detections = False
         cached_frame_indices = set()
+        detector = None
         if self.detection_cache_path:
             # Check if we should load existing cache
             cache_exists = os.path.exists(self.detection_cache_path)
@@ -1316,6 +1317,18 @@ class TrackingWorker(QThread):
                 logger.info(
                     f"Forward pass caching detections for range {start_frame}-{end_frame}"
                 )
+        else:
+            if self.backward_mode:
+                logger.error(
+                    "Backward tracking requires a configured forward detection cache path. "
+                    "Please run forward tracking first."
+                )
+                cap.release()
+                self.finished_signal.emit(False, [], [])
+                return
+
+            # Runs without a detection cache still need a live detector.
+            detector = create_detector(p)
 
         # === RUN BATCHED DETECTION PHASE (if applicable) ===
         # Only run batched detection if we don't already have cached detections

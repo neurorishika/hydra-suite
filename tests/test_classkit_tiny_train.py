@@ -197,3 +197,33 @@ def test_train_tiny_classify_rebalance_modes_smoke(tmp_path):
     result = run_training(spec, tmp_path / "run_rebalance")
     assert result["success"] is True
     assert isinstance(result.get("best_val_acc"), float)
+
+
+def test_resolve_ignore_label_index_finds_unknown_class() -> None:
+    from hydra_suite.training.runner import _resolve_ignore_label_index
+
+    assert (
+        _resolve_ignore_label_index(
+            {"ant": 0, "bee": 1, "unknown": 2}, "unknown"
+        )
+        == 2
+    )
+    assert _resolve_ignore_label_index({"ant": 0, "bee": 1}, "unknown") is None
+
+
+def test_compute_class_weights_skips_ignored_classes() -> None:
+    from hydra_suite.training.runner import _compute_class_weights
+
+    weights = _compute_class_weights(
+        [0, 0, 1, 2],
+        num_classes=3,
+        mode="loss",
+        power=1.0,
+        ignored_class_indices={2},
+    )
+
+    assert weights is not None
+    assert len(weights) == 3
+    assert weights[0] > 0.0
+    assert weights[1] > 0.0
+    assert weights[2] == pytest.approx(0.0)

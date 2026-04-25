@@ -1713,6 +1713,50 @@ def test_prediction_mode_uses_composite_multihead_labels(qapp) -> None:
     assert point_colors[0] == expected_map["red|left"].name()
     assert point_colors[1] == expected_map["blue|right"].name()
     assert "By factor:" in window.explorer.points[0].toolTip()
+
+
+def test_prediction_summary_thresholds_low_confidence_flat_predictions_to_unknown(
+    qapp,
+) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/a.png")]
+    window._set_model_prediction_state(
+        np.array([[0.60, 0.40]], dtype=np.float32),
+        ["ant", "bee"],
+        active_model_mode="tiny",
+        prediction_confidence_threshold=0.7,
+    )
+
+    summary = window._prediction_summary_for_index(0)
+
+    assert summary is not None
+    assert summary["predicted_label"] == "unknown"
+    assert window._prediction_labels_for_plot() == ["unknown"]
+
+
+def test_prediction_summary_thresholds_multihead_predictions_per_factor(qapp) -> None:
+    window = MainWindow()
+    window.image_paths = [Path("/tmp/a.png")]
+    window._set_model_prediction_state(
+        np.array([[0.90, 0.10, 0.55, 0.45]], dtype=np.float32),
+        ["blue", "red", "left", "right"],
+        active_model_mode="custom_cnn_multihead",
+        prediction_heads=[
+            {"factor": "color", "class_names": ["blue", "red"]},
+            {"factor": "side", "class_names": ["left", "right"]},
+        ],
+        prediction_confidence_threshold=0.8,
+    )
+
+    summary = window._prediction_summary_for_index(0)
+
+    assert summary is not None
+    assert summary["predicted_label"] == "blue|unknown"
+    assert [head["predicted_label"] for head in summary["head_predictions"]] == [
+        "blue",
+        "unknown",
+    ]
+    assert window._prediction_labels_for_plot() == ["blue|unknown"]
     assert "color: red" in window.explorer.points[0].toolTip()
     assert "side: left" in window.explorer.points[0].toolTip()
 
