@@ -2600,6 +2600,7 @@ def _build_relink_fragment_summaries(
                 "traj_id": traj_id_int,
                 "start_frame": start_frame,
                 "end_frame": end_frame,
+                "identity_sources": _fragment_unique_identity_sources(frag_df),
                 "start_pos": np.asarray(
                     [float(start_row["X"]), float(start_row["Y"])], dtype=np.float32
                 ),
@@ -2631,6 +2632,36 @@ def _build_relink_fragment_summaries(
     return fragments, fragment_frames
 
 
+def _parse_unique_identity_key(identity_key) -> dict[str, str]:
+    token = str(identity_key).strip() if identity_key is not None else ""
+    if not token or token.lower() == "nan":
+        return {}
+    parsed = {}
+    for item in token.split("|"):
+        if "=" not in item:
+            continue
+        source, value = item.split("=", 1)
+        source = str(source).strip()
+        value = str(value).strip()
+        if source and value:
+            parsed[source] = value
+    return parsed
+
+
+def _fragment_unique_identity_sources(frag_df: pd.DataFrame) -> dict[str, str]:
+    if "UniqueIdentityKey" not in frag_df.columns:
+        return {}
+    keys = [
+        str(value).strip()
+        for value in frag_df["UniqueIdentityKey"].tolist()
+        if str(value).strip() and str(value).strip().lower() != "nan"
+    ]
+    if not keys:
+        return {}
+    dominant_key = max(set(keys), key=keys.count)
+    return _parse_unique_identity_key(dominant_key)
+
+
 def _score_relink_candidate(
     src,
     dst,
@@ -2643,6 +2674,14 @@ def _score_relink_candidate(
     min_motion_speed,
 ):
     """Score a single (src, dst) relink candidate. Returns (score, src_id, dst_id) or None if rejected."""
+    src_identity = dict(src.get("identity_sources") or {})
+    dst_identity = dict(dst.get("identity_sources") or {})
+    if src_identity and dst_identity:
+        from hydra_suite.core.post.identity_postprocess import identity_sources_conflict
+
+        if identity_sources_conflict(src_identity, dst_identity):
+            return None
+
     gap = int(dst["start_frame"] - src["end_frame"] - 1)
     if gap < 1 or gap > max_gap:
         return None

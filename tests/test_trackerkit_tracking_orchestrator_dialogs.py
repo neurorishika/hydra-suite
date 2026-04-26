@@ -1067,6 +1067,58 @@ def test_build_pose_augmented_dataframe_includes_multihead_detected_rich_exports
     assert np.isclose(out.iloc[0]["CNN_demo_shape_Conf"], 0.72)
 
 
+def test_build_pose_augmented_dataframe_runs_identity_postprocess_stage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    final_csv_path = tmp_path / "tracks_final.csv"
+    pd.DataFrame([{"FrameID": 1, "TrajectoryID": 1, "DetectionID": 10000}]).to_csv(
+        final_csv_path, index=False
+    )
+
+    orchestrator, _main_window = _make_orchestrator()
+    orchestrator._mw = SimpleNamespace(
+        _is_pose_export_enabled=lambda: False,
+        get_parameters_dict=lambda: {"CNN_CLASSIFIERS": []},
+        current_individual_properties_cache_path=None,
+        current_detected_properties_cache_path=None,
+        current_detected_cnn_cache_paths={},
+        current_interpolated_pose_csv_path=None,
+        current_interpolated_pose_df=None,
+        current_interpolated_tag_csv_path=None,
+        current_interpolated_tag_df=None,
+        current_interpolated_cnn_csv_paths={},
+        current_interpolated_cnn_dfs={},
+        current_interpolated_headtail_csv_path=None,
+        current_interpolated_headtail_df=None,
+        current_detection_cache_path=None,
+    )
+
+    monkeypatch.setattr(
+        TrackingOrchestrator,
+        "_check_pose_export_sources",
+        lambda self: (True, "", False, "", False, None, False),
+    )
+    monkeypatch.setattr(
+        TrackingOrchestrator,
+        "_merge_pose_sources_into_df",
+        lambda self, trajectories_df, cache_path, cache_available, interp_pose_path, interp_available, interp_pose_df_mem, interp_mem_available: trajectories_df.assign(
+            CNN_demo_Class="worker",
+            CNN_demo_Conf=0.9,
+        ),
+    )
+    monkeypatch.setattr(
+        TrackingOrchestrator,
+        "_apply_identity_postprocessing_to_df",
+        lambda self, with_pose_df: with_pose_df.assign(UniqueIdentityKey="cnn:demo=worker"),
+    )
+
+    out = orchestrator._build_pose_augmented_dataframe(str(final_csv_path))
+
+    assert out is not None
+    assert out.iloc[0]["UniqueIdentityKey"] == "cnn:demo=worker"
+
+
 def test_export_pose_augmented_csv_writes_only_with_individual_and_cleans_legacy_alias(
     tmp_path: Path,
 ) -> None:
@@ -1106,3 +1158,60 @@ def test_load_video_trajectories_prefers_with_individual_then_legacy_alias(
 
     assert chosen_path == str(rich_path)
     assert int(df.iloc[0]["FrameID"]) == 3
+
+
+def test_format_video_track_label_prefers_unique_identity_key() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+
+    assert (
+        orchestrator._format_video_track_label(7, "apriltag=12")
+        == "Tag 12"
+    )
+    assert (
+        orchestrator._format_video_track_label(
+            7,
+            "cnn:uid:color=red|cnn:uid:shape=circle",
+        )
+        == "red / circle"
+    )
+    assert (
+        orchestrator._format_video_track_label(
+            7,
+            "cnn:uid=color:red+shape:circle",
+        )
+        == "red / circle"
+    )
+    assert orchestrator._format_video_track_label(7, np.nan) == "ID7"
+
+
+def test_preextract_traj_arrays_uses_unique_identity_labels_when_available() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+    trajectories_df = pd.DataFrame(
+        [
+            {
+                "FrameID": 1,
+                "TrajectoryID": 3,
+                "X": 10.0,
+                "Y": 20.0,
+                "Theta": 0.0,
+                "UniqueIdentityKey": "apriltag=8",
+            },
+            {
+                "FrameID": 2,
+                "TrajectoryID": 4,
+                "X": 11.0,
+                "Y": 21.0,
+                "Theta": 0.1,
+            },
+        ]
+    )
+
+    arrays = orchestrator._preextract_traj_arrays(
+        trajectories_df,
+        show_pose=False,
+        pose_column_triplets=[],
+        show_trails=False,
+    )
+
+    label_texts = arrays[4]
+    assert list(label_texts) == ["Tag 8", "ID4"]

@@ -130,6 +130,7 @@ def test_postprocess_panel_wired_in_main_window(main_window):
     assert isinstance(main_window._postprocess_panel, PostProcessPanel)
     assert hasattr(main_window._postprocess_panel, "enable_postprocessing")
     assert hasattr(main_window._postprocess_panel, "combo_interpolation_method")
+    assert hasattr(main_window._postprocess_panel, "spin_identity_interpolation_max_gap")
     assert hasattr(main_window._postprocess_panel, "g_refinekit")
     assert hasattr(main_window._postprocess_panel, "chk_prompt_open_refinekit")
 
@@ -144,6 +145,16 @@ def test_identity_panel_wired_in_main_window(main_window):
     assert hasattr(main_window._identity_panel, "combo_yolo_headtail_model")
     assert hasattr(main_window._identity_panel, "btn_remove_yolo_headtail_model")
     assert hasattr(main_window._identity_panel, "btn_remove_pose_model")
+
+
+def test_identity_panel_cnn_row_exposes_unique_identifier_toggle(main_window):
+    """Each CNN classifier row exposes the unique-identifier toggle."""
+    row = main_window._identity_panel._add_cnn_classifier_row()
+    try:
+        assert hasattr(row, "chk_unique_identifier")
+        assert row.chk_unique_identifier.isChecked() is False
+    finally:
+        main_window._identity_panel._remove_cnn_classifier_row(row)
 
 
 def test_detection_panel_wired_in_main_window(main_window):

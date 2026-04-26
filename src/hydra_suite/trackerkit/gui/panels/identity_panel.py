@@ -861,6 +861,15 @@ class IdentityPanel(QWidget):
             form.addRow("Input size", self.lbl_input_size)
             form.addRow("Classification label", self.lbl_label)
             form.addRow("Recommended threshold", self.lbl_recommended_confidence)
+            self.chk_unique_identifier = QCheckBox(
+                "Treat this classifier as a unique identifier"
+            )
+            self.chk_unique_identifier.setChecked(False)
+            self.chk_unique_identifier.setToolTip(
+                "Use this classifier's outputs as identity evidence during final post-processing.\n"
+                "Enable this only for classifiers whose classes uniquely identify individuals."
+            )
+            form.addRow("Unique identifier", self.chk_unique_identifier)
             self.spin_confidence = QDoubleSpinBox()
             self.spin_confidence.setRange(0.0, 1.0)
             self.spin_confidence.setSingleStep(0.05)
@@ -982,6 +991,7 @@ class IdentityPanel(QWidget):
                 "confidence": self.spin_confidence.value(),
                 "window": self.spin_window.value(),
                 "batch_size": self.spin_batch.value(),
+                "unique_identifier": self.chk_unique_identifier.isChecked(),
                 "scoring_mode": str(meta.get("scoring_mode", "atomic")),
                 "rel_path": rel_path,
             }
@@ -1020,6 +1030,9 @@ class IdentityPanel(QWidget):
                 self.spin_window.setValue(int(cfg["window"]))
             if "batch_size" in cfg:
                 self.spin_batch.setValue(int(cfg["batch_size"]))
+            self.chk_unique_identifier.setChecked(
+                bool(cfg.get("unique_identifier", False))
+            )
 
         def set_realtime_batch_cap(self, max_animals: int, realtime_enabled: bool):
             """Apply realtime batch caps for this classifier row."""

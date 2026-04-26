@@ -178,6 +178,54 @@ def test_relink_refuses_pose_mismatch_even_when_motion_matches() -> None:
     assert relinked["TrajectoryID"].nunique() == 2
 
 
+def test_relink_refuses_unique_identity_conflict_even_when_motion_matches() -> None:
+    params = _params()
+    df = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "UniqueIdentityKey": "cnn:uid=alpha",
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 1.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "UniqueIdentityKey": "cnn:uid=alpha",
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 4,
+                "X": 4.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "UniqueIdentityKey": "cnn:uid=beta",
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 5,
+                "X": 5.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "UniqueIdentityKey": "cnn:uid=beta",
+            },
+        ]
+    )
+
+    relinked = relink_trajectories_with_pose(df, params)
+
+    assert relinked["TrajectoryID"].nunique() == 2
+
+
 def test_relink_falls_back_to_motion_only_when_pose_missing() -> None:
     params = _params()
     df = pd.DataFrame(

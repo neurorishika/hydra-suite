@@ -1570,6 +1570,7 @@ class TrackingOrchestrator:
         _track_ids = trajectories_df["TrajectoryID"].to_numpy(dtype=np.int32)
         _xs = trajectories_df["X"].to_numpy(dtype=np.float64)
         _ys = trajectories_df["Y"].to_numpy(dtype=np.float64)
+        _label_texts = self._build_video_track_label_array(trajectories_df)
         _thetas = (
             trajectories_df["Theta"].to_numpy(dtype=np.float64)
             if "Theta" in trajectories_df.columns
@@ -1618,12 +1619,84 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
             _track_sorted_row_indices,
             _track_sorted_frame_vals,
         )
+
+    def _format_video_track_label(self, track_id, unique_identity_key=None) -> str:
+        """Return the overlay label for one rendered track row."""
+        token = str(unique_identity_key).strip() if unique_identity_key is not None else ""
+        if token and token.lower() != "nan":
+            try:
+                from hydra_suite.core.post.identity_postprocess import (
+                    parse_identity_key,
+                )
+
+                parsed = parse_identity_key(token)
+            except Exception:
+                parsed = {}
+            if parsed:
+                compact_parts = []
+                cnn_parts_by_label: dict[str, list[str]] = {}
+                for source in sorted(parsed):
+                    value = str(parsed[source]).strip()
+                    if not value:
+                        continue
+                    if source == "apriltag":
+                        compact_parts.append(f"Tag {value}")
+                        continue
+                    if source.startswith("cnn:"):
+                        parts = source.split(":")
+                        label = parts[1] if len(parts) >= 2 else source
+                        compact_value = value
+                        if len(parts) >= 3:
+                            compact_value = value
+                        elif "+" in value:
+                            pieces = []
+                            for item in value.split("+"):
+                                item = str(item).strip()
+                                if not item:
+                                    continue
+                                if ":" in item:
+                                    item = str(item.split(":", 1)[1]).strip()
+                                if item:
+                                    pieces.append(item)
+                            if pieces:
+                                compact_value = " / ".join(pieces)
+                        if compact_value:
+                            cnn_parts_by_label.setdefault(label, []).append(compact_value)
+                        continue
+                    compact_parts.append(f"{source}={value}")
+                for label in sorted(cnn_parts_by_label):
+                    values = [value for value in cnn_parts_by_label[label] if value]
+                    if not values:
+                        continue
+                    compact_parts.append(
+                        values[0] if len(values) == 1 else " / ".join(values)
+                    )
+                if compact_parts:
+                    return " | ".join(compact_parts)
+            return token
+        return f"ID{track_id}"
+
+    def _build_video_track_label_array(self, trajectories_df):
+        """Precompute one overlay label per row using stable identity when available."""
+        if trajectories_df is None or len(trajectories_df) == 0:
+            return np.asarray([], dtype=object)
+        if "UniqueIdentityKey" in trajectories_df.columns:
+            unique_keys = trajectories_df["UniqueIdentityKey"].tolist()
+        else:
+            unique_keys = [None] * len(trajectories_df)
+        track_ids = trajectories_df["TrajectoryID"].tolist()
+        labels = [
+            self._format_video_track_label(track_id, unique_key)
+            for track_id, unique_key in zip(track_ids, unique_keys)
+        ]
+        return np.asarray(labels, dtype=object)
 
     def _build_precomputed_color_palette(self, colors, _track_ids):
         """Build per-track-ID precomputed color list and return (palette, category20)."""
@@ -1717,6 +1790,7 @@ class TrackingOrchestrator:
         draw_p,
         _thetas,
         _pose_kpts,
+        _label_texts,
         pose_edges,
     ):
         """Draw circle, label, orientation arrow, and pose for a single track."""
@@ -1727,7 +1801,7 @@ class TrackingOrchestrator:
             label_offset = int(marker_radius + 5)
             cv2.putText(
                 frame,
-                f"ID{track_id}",
+                str(_label_texts[row_i]),
                 (cx + label_offset, cy - label_offset),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 draw_p["text_size"],
@@ -1823,6 +1897,7 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
@@ -1895,6 +1970,7 @@ class TrackingOrchestrator:
                     draw_p,
                     _thetas,
                     _pose_kpts if show_pose else None,
+                    _label_texts,
                     pose_edges,
                 )
 
@@ -2010,6 +2086,7 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
@@ -2027,6 +2104,7 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
@@ -2701,6 +2779,51 @@ class TrackingOrchestrator:
                 )
         return with_pose_df
 
+    def _resolve_current_tag_cache_path(self) -> str:
+        """Return the best available detected AprilTag cache path for this session."""
+        current_params = self._mw.get_parameters_dict()
+        if not bool(current_params.get("USE_APRILTAGS", False)):
+            return ""
+        detection_cache_path = getattr(self._mw, "current_detection_cache_path", None)
+        if not detection_cache_path or not os.path.exists(str(detection_cache_path)):
+            return ""
+        pattern = str(detection_cache_path).replace(".npz", "") + "_tags_*.npz"
+        candidates = sorted(_glob.glob(pattern))
+        return str(candidates[-1]) if candidates else ""
+
+    def _apply_identity_postprocessing_to_df(self, with_pose_df: pd.DataFrame) -> pd.DataFrame:
+        """Run identity-aware split/join processing on the augmented dataframe."""
+        if with_pose_df is None or with_pose_df.empty:
+            return with_pose_df
+
+        params = self._mw.get_parameters_dict()
+        try:
+            from hydra_suite.core.post.identity_postprocess import (
+                apply_identity_postprocessing,
+                augment_trajectories_with_detected_apriltags,
+            )
+
+            tag_cache_path = self._resolve_current_tag_cache_path()
+            if tag_cache_path and os.path.exists(tag_cache_path):
+                from hydra_suite.data.tag_observation_cache import TagObservationCache
+
+                tag_cache = TagObservationCache(tag_cache_path, mode="r")
+                try:
+                    with_pose_df = augment_trajectories_with_detected_apriltags(
+                        with_pose_df,
+                        tag_cache,
+                        params,
+                    )
+                finally:
+                    tag_cache.close()
+
+            with_pose_df = apply_identity_postprocessing(with_pose_df, params)
+        except Exception:
+            logger.exception(
+                "Identity-aware post-processing failed; using unmodified rich dataframe."
+            )
+        return with_pose_df
+
     def _build_pose_augmented_dataframe(self, final_csv_path):
         """Load final CSV and merge available cached/interpolated pose columns."""
         if not final_csv_path or not os.path.exists(final_csv_path):
@@ -2774,11 +2897,14 @@ class TrackingOrchestrator:
             m.group(1) for col in with_pose_df.columns if (m := _kpt_re.match(str(col)))
         ]
 
+        params = self._mw.get_parameters_dict()
+
         if pose_labels:
-            params = self._mw.get_parameters_dict()
             with_pose_df = self._apply_pose_quality_postprocessing(
                 with_pose_df, pose_labels, params
             )
+
+        with_pose_df = self._apply_identity_postprocessing_to_df(with_pose_df)
 
         self._log_pose_augmented_merge_summary(with_pose_df)
 

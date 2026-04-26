@@ -385,10 +385,27 @@ class PostProcessPanel(QWidget):
             "Recommended: 0.15-0.50 s."
         )
         self.lbl_interpolation_max_gap = QLabel("Maximum interpolation gap (seconds)")
+        self.spin_identity_interpolation_max_gap = QDoubleSpinBox()
+        self.spin_identity_interpolation_max_gap.setRange(0.0, 10.0)
+        self.spin_identity_interpolation_max_gap.setSingleStep(0.1)
+        self.spin_identity_interpolation_max_gap.setDecimals(2)
+        self.spin_identity_interpolation_max_gap.setValue(0.33)
+        self.spin_identity_interpolation_max_gap.setToolTip(
+            "Maximum gap duration to fill when fragments share the same stable unique identity.\n"
+            "Fragments beyond this gap can still share the same final trajectory ID, but\n"
+            "no synthetic rows are inserted between them. Set to 0 to disable identity-based gap filling."
+        )
+        self.lbl_identity_interpolation_max_gap = QLabel(
+            "Maximum ID interpolation gap (seconds)"
+        )
         self.interpolation_row_widget = self._build_field_grid(
             [
                 (self.lbl_interpolation_method, self.combo_interpolation_method),
                 (self.lbl_interpolation_max_gap, self.spin_interpolation_max_gap),
+                (
+                    self.lbl_identity_interpolation_max_gap,
+                    self.spin_identity_interpolation_max_gap,
+                ),
             ],
             columns=2,
         )

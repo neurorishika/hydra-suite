@@ -792,6 +792,13 @@ class ConfigOrchestrator:
                 default_seconds=0.33,
             )
         )
+        self._panels.postprocess.spin_identity_interpolation_max_gap.setValue(
+            get_cfg_time(
+                "identity_interpolation_max_gap_seconds",
+                "identity_interpolation_max_gap",
+                default_seconds=0.33,
+            )
+        )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
         )
@@ -999,6 +1006,7 @@ class ConfigOrchestrator:
                                 get_cfg("cnn_classifier_confidence", default=0.5)
                             ),
                             "window": int(get_cfg("cnn_classifier_window", default=10)),
+                            "unique_identifier": False,
                             "match_bonus": float(
                                 get_cfg(
                                     "cnn_classifier_match_bonus",
@@ -1630,6 +1638,7 @@ class ConfigOrchestrator:
                 "velocity_zscore_min_velocity": self._panels.postprocess.spin_velocity_zscore_min_vel.value(),
                 "interpolation_method": self._panels.postprocess.combo_interpolation_method.currentText(),
                 "interpolation_max_gap_seconds": self._panels.postprocess.spin_interpolation_max_gap.value(),
+                "identity_interpolation_max_gap_seconds": self._panels.postprocess.spin_identity_interpolation_max_gap.value(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
@@ -1942,6 +1951,10 @@ class ConfigOrchestrator:
         velocity_zscore_window = _seconds_to_frames(
             self._panels.postprocess.spin_velocity_zscore_window.value(), min_frames=5
         )
+        identity_interpolation_max_gap = _seconds_to_frames(
+            self._panels.postprocess.spin_identity_interpolation_max_gap.value(),
+            min_frames=0,
+        )
         # YOLO Batching settings from UI (overrides advanced_config defaults)
         advanced_config = self._mw.advanced_config.copy()
         advanced_config["enable_yolo_batching"] = (
@@ -2102,6 +2115,7 @@ class ConfigOrchestrator:
             "POSE_TEMPORAL_OUTLIER_ZSCORE": self._panels.postprocess.spin_pose_temporal_outlier_zscore.value(),
             "MAX_VELOCITY_ZSCORE": self._panels.postprocess.spin_max_velocity_zscore.value(),
             "VELOCITY_ZSCORE_WINDOW": velocity_zscore_window,
+            "IDENTITY_INTERPOLATION_MAX_GAP": identity_interpolation_max_gap,
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
             * scaled_body_size
             / fps,
