@@ -17,9 +17,6 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Canonical class sets (shared with engine.py)
-_HEADTAIL_DIRECTIONAL_CLASS_SET = frozenset({"left", "right"})
-
 HEADTAIL_CANONICAL_LABELS: frozenset[str] = frozenset(
     {"up", "down", "left", "right", "unknown"}
 )
@@ -729,9 +726,7 @@ class HeadTailAnalyzer:
             out = []
             for start in range(0, len(source_crops), chunk):
                 out.extend(
-                    self._backend_obj.predict_batch(
-                        source_crops[start : start + chunk]
-                    )
+                    self._backend_obj.predict_batch(source_crops[start : start + chunk])
                 )
             return out
         # CPU / MPS path: chunk by _batch_size to keep peak memory bounded.

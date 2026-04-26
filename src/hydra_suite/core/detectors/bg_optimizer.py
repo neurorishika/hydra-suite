@@ -501,36 +501,6 @@ def _aggregate_trial_scores(count_scores, consistency_scores, frame_medians):
 
 
 # ---------------------------------------------------------------------------
-# Parameter ranges  (mirrors _PARAM_RANGES in tracking/optimizer.py)
-# ---------------------------------------------------------------------------
-
-_BG_PARAM_RANGES: Dict[str, tuple] = {
-    "BRIGHTNESS": (-255, 255, "int"),
-    "CONTRAST": (0.1, 3.0, "float"),
-    "GAMMA": (0.1, 3.0, "float"),
-    "DARK_ON_LIGHT_BACKGROUND": (False, True, "bool"),
-    "BACKGROUND_PRIME_FRAMES": (0, 120, "int"),
-    "ENABLE_ADAPTIVE_BACKGROUND": (False, True, "bool"),
-    "BACKGROUND_LEARNING_RATE": (1e-5, 0.1, "float"),
-    "ENABLE_LIGHTING_STABILIZATION": (False, True, "bool"),
-    "LIGHTING_SMOOTH_FACTOR": (0.8, 0.999, "float"),
-    "LIGHTING_MEDIAN_WINDOW": (3, 15, "odd"),
-    "THRESHOLD_VALUE": (0, 255, "int"),
-    "MORPH_KERNEL_SIZE": (1, 25, "odd"),
-    "MIN_CONTOUR_AREA": (10, 500, "int"),
-    "MAX_CONTOUR_MULTIPLIER": (5, 100, "int"),
-    "ENABLE_SIZE_FILTERING": (False, True, "bool"),
-    "MIN_OBJECT_SIZE": (0.05, 2.0, "multiplier"),
-    "MAX_OBJECT_SIZE": (0.5, 10.0, "multiplier"),
-    "ENABLE_ADDITIONAL_DILATION": (False, True, "bool"),
-    "DILATION_KERNEL_SIZE": (1, 15, "odd"),
-    "DILATION_ITERATIONS": (1, 10, "int"),
-    "ENABLE_CONSERVATIVE_SPLIT": (False, True, "bool"),
-    "CONSERVATIVE_KERNEL_SIZE": (1, 15, "odd"),
-    "CONSERVATIVE_ERODE_ITER": (1, 10, "int"),
-}
-
-# ---------------------------------------------------------------------------
 # Result container
 # ---------------------------------------------------------------------------
 

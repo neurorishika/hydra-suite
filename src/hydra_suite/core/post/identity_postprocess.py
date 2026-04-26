@@ -131,9 +131,7 @@ def _apply_offline_identity_compat_columns(df: pd.DataFrame) -> pd.DataFrame:
     out["UniqueIdentitySourceCount"] = source_counts
     out["UniqueIdentityConfidence"] = assigned_conf
     out["IdentityInterpolated"] = (
-        out["IdentityInterpolated"]
-        if "IdentityInterpolated" in out.columns
-        else False
+        out["IdentityInterpolated"] if "IdentityInterpolated" in out.columns else False
     )
     return out
 
@@ -208,7 +206,9 @@ def _compare_identity_sources(
 
     grouped_results: list[tuple[int, int]] = []
     for group_key in set(lhs_grouped).intersection(rhs_grouped):
-        shared_factors = set(lhs_grouped[group_key]).intersection(rhs_grouped[group_key])
+        shared_factors = set(lhs_grouped[group_key]).intersection(
+            rhs_grouped[group_key]
+        )
         if not shared_factors:
             continue
         agreements = sum(
@@ -227,9 +227,7 @@ def _compare_identity_sources(
     }
 
 
-def _shared_identity_sources(
-    lhs: dict[str, str], rhs: dict[str, str]
-) -> set[str]:
+def _shared_identity_sources(lhs: dict[str, str], rhs: dict[str, str]) -> set[str]:
     return set(lhs).intersection(rhs)
 
 
@@ -256,12 +254,10 @@ def identity_sources_conflict(lhs: dict[str, str], rhs: dict[str, str]) -> bool:
         return False
     if comparison["direct_conflicts"] > 0:
         return True
-    return any(conflicts > agreements for agreements, conflicts in comparison["grouped_results"])
-
-
-def identity_keys_conflict(lhs_key: Any, rhs_key: Any) -> bool:
-    """Convenience wrapper for comparing serialized identity keys."""
-    return identity_sources_conflict(parse_identity_key(lhs_key), parse_identity_key(rhs_key))
+    return any(
+        conflicts > agreements
+        for agreements, conflicts in comparison["grouped_results"]
+    )
 
 
 def _trajectory_tag_confidence(row: pd.Series) -> float:
@@ -449,7 +445,9 @@ def _aggregate_identity_evidence(
     for evidence in evidences:
         for source, value in evidence["sources"].items():
             source_votes[source][value] += float(
-                evidence["weights"].get(source, evidence["confidences"].get(source, 0.0))
+                evidence["weights"].get(
+                    source, evidence["confidences"].get(source, 0.0)
+                )
             )
 
     aggregated: dict[str, str] = {}
@@ -514,14 +512,18 @@ def _stable_identity_groups(
 
     for observation in observations[1:]:
         current_identity, _ = _aggregate_identity_evidence(current, min_weight=0.0)
-        if current_identity and identity_sources_compatible(current_identity, observation["sources"]):
+        if current_identity and identity_sources_compatible(
+            current_identity, observation["sources"]
+        ):
             if pending:
                 current.extend(pending)
                 pending = []
             current.append(observation)
             continue
 
-        if current_identity and identity_sources_conflict(current_identity, observation["sources"]):
+        if current_identity and identity_sources_conflict(
+            current_identity, observation["sources"]
+        ):
             pending.append(observation)
             pending_identity, _ = _aggregate_identity_evidence(pending, min_weight=0.0)
             if (
@@ -622,7 +624,9 @@ def _fragment_summary(
         "identity_confidences": identity_conf,
         "identity_key": format_identity_key(identity_sources),
         "identity_source_count": len(identity_sources),
-        "identity_confidence": float(np.mean(list(identity_conf.values()))) if identity_conf else math.nan,
+        "identity_confidence": (
+            float(np.mean(list(identity_conf.values()))) if identity_conf else math.nan
+        ),
         "df": fragment_df.copy(),
     }
 
@@ -643,7 +647,9 @@ def _chain_assignment_score(
     chain: dict[str, Any],
     fragment: dict[str, Any],
 ) -> tuple[int, int, int]:
-    shared = _shared_identity_sources(chain["identity_sources"], fragment["identity_sources"])
+    shared = _shared_identity_sources(
+        chain["identity_sources"], fragment["identity_sources"]
+    )
     gap = int(fragment["start_frame"] - chain["fragments"][-1]["end_frame"] - 1)
     same_origin = int(
         fragment["original_trajectory_id"]
@@ -656,7 +662,9 @@ def _build_identity_chains(
     fragments: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     chains: list[dict[str, Any]] = []
-    for fragment in sorted(fragments, key=lambda item: (item["start_frame"], item["fragment_id"])):
+    for fragment in sorted(
+        fragments, key=lambda item: (item["start_frame"], item["fragment_id"])
+    ):
         identity_sources = fragment["identity_sources"]
         if not identity_sources:
             chains.append(
@@ -717,7 +725,9 @@ def _motion_allows_identity_fill(
     right_y = _safe_float(right_row.get("Y"))
     if not all(np.isfinite(v) for v in (left_x, left_y, right_x, right_y)):
         return False
-    delta_frames = max(1, int(right_fragment["start_frame"] - left_fragment["end_frame"]))
+    delta_frames = max(
+        1, int(right_fragment["start_frame"] - left_fragment["end_frame"])
+    )
     jump = float(math.hypot(right_x - left_x, right_y - left_y))
     max_velocity_break = float(params.get("MAX_VELOCITY_BREAK", 100.0))
     agreement_distance = float(params.get("AGREEMENT_DISTANCE", 15.0))
@@ -752,11 +762,23 @@ def _identity_interpolation_rows(
         row["OriginalTrajectoryID"] = left_fragment["original_trajectory_id"]
         row["IdentityFragmentID"] = left_fragment["fragment_id"]
         row["UniqueIdentityKey"] = chain_identity_key or np.nan
-        row["UniqueIdentitySources"] = ", ".join(sorted(chain_identity_sources)) or np.nan
+        row["UniqueIdentitySources"] = (
+            ", ".join(sorted(chain_identity_sources)) or np.nan
+        )
         row["UniqueIdentitySourceCount"] = int(len(chain_identity_sources))
-        row["UniqueIdentityConfidence"] = float(
-            np.mean(list(left_fragment["identity_confidences"].values()) + list(right_fragment["identity_confidences"].values()))
-        ) if (left_fragment["identity_confidences"] or right_fragment["identity_confidences"]) else math.nan
+        row["UniqueIdentityConfidence"] = (
+            float(
+                np.mean(
+                    list(left_fragment["identity_confidences"].values())
+                    + list(right_fragment["identity_confidences"].values())
+                )
+            )
+            if (
+                left_fragment["identity_confidences"]
+                or right_fragment["identity_confidences"]
+            )
+            else math.nan
+        )
         for column in numeric_linear_cols:
             left_value = _safe_float(left_row.get(column))
             right_value = _safe_float(right_row.get(column))
@@ -839,7 +861,9 @@ def apply_identity_postprocessing(
         for part in _split_trajectory_dataframe(sorted_traj, split_frames):
             if part.empty:
                 continue
-            fragments.append(_fragment_summary(next_fragment_id, part, unique_cnn_sources))
+            fragments.append(
+                _fragment_summary(next_fragment_id, part, unique_cnn_sources)
+            )
             next_fragment_id += 1
 
     if not fragments:
@@ -854,7 +878,8 @@ def apply_identity_postprocessing(
         chain_identity_key = format_identity_key(chain_identity_sources)
         assembled_rows: list[pd.DataFrame] = []
         ordered_fragments = sorted(
-            chain["fragments"], key=lambda item: (item["start_frame"], item["fragment_id"])
+            chain["fragments"],
+            key=lambda item: (item["start_frame"], item["fragment_id"]),
         )
         for frag_index, fragment in enumerate(ordered_fragments):
             part = _apply_chain_identity_metadata(fragment, chain_identity_sources)

@@ -136,17 +136,6 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     return X, P
 
 
-@njit(cache=True, fastmath=True)
-def _get_mahal_kernel(P, H, R):
-    """Batch calculation of Inverse Innovation Covariance for Assigner."""
-    num_targets = len(P)
-    S_inv = np.zeros((num_targets, 3, 3), dtype=np.float32)
-    for i in range(num_targets):
-        S = H @ P[i] @ H.T + R
-        S_inv[i] = np.linalg.inv(S)
-    return S_inv
-
-
 class KalmanFilterManager:
     """
     Manages a batch of biologically-constrained Kalman Filters.
@@ -174,7 +163,9 @@ class KalmanFilterManager:
         max_velocity_multiplier = params.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0)
         self.max_velocity = max(
             0.0,
-            float(max_velocity_multiplier) * float(reference_body_size) * float(resize_factor),
+            float(max_velocity_multiplier)
+            * float(reference_body_size)
+            * float(resize_factor),
         )
 
         # 1. Initialize State (N, 5)
@@ -257,10 +248,7 @@ class KalmanFilterManager:
     def _sanitize_all_tracks(self, reason: str) -> None:
         """Reset any track slots with non-finite state or covariance."""
         for i in range(self.num_targets):
-            if not (
-                np.isfinite(self.X[i]).all()
-                and np.isfinite(self.P[i]).all()
-            ):
+            if not (np.isfinite(self.X[i]).all() and np.isfinite(self.P[i]).all()):
                 self._reset_corrupted_track(i, reason)
 
     def predict(self) -> np.ndarray:

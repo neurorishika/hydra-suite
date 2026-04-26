@@ -3,7 +3,7 @@
 from ._obb_geometry import OBBGeometryMixin
 
 
-class DetectionFilter(OBBGeometryMixin):
+class DetectiownFilter(OBBGeometryMixin):
     """
     Lightweight post-hoc filter for cached raw YOLO detections.
 
