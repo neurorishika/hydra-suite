@@ -1981,15 +1981,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#hydra_suite.core.detectors.DetectionFilter" class="md-nav__link">
-    <span class="md-ellipsis">
-      <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DetectionFilter
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#hydra_suite.core.detectors.YOLOOBBDetector" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;YOLOOBBDetector
@@ -3741,15 +3732,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#hydra_suite.core.detectors.DetectionFilter" class="md-nav__link">
-    <span class="md-ellipsis">
-      <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DetectionFilter
-    </span>
-  </a>
   
 </li>
         
@@ -5993,59 +5975,6 @@ detection replays).</p>
     </div>
 
 </div>
-
-
-
-  </div>
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-class">
-
-
-
-<h3 id="hydra_suite.core.detectors.DetectionFilter" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <code>DetectionFilter</code>
-
-
-<a href="#hydra_suite.core.detectors.DetectionFilter" class="headerlink" title="Permanent link">&para;</a></h3>
-
-
-    <div class="doc doc-contents ">
-            <p class="doc doc-class-bases">
-              Bases: <code><span title="hydra_suite.core.detectors._obb_geometry.OBBGeometryMixin">OBBGeometryMixin</span></code></p>
-
-
-        <p>Lightweight post-hoc filter for cached raw YOLO detections.</p>
-<p>Contains only confidence thresholding and OBB IOU NMS — the exact same logic
-used by YOLOOBBDetector.filter_raw_detections — with no model loading.  Safe
-to instantiate cheaply inside inner optimizer loops.</p>
-<p>Usage::</p>
-<div class="language-text highlight"><pre><span></span><code>filt = DetectionFilter(params)
-meas, sizes, shapes, confs, corners, *_ = filt.filter_raw_detections(
-    raw_meas, raw_sizes, raw_shapes, raw_confidences, raw_obb_corners
-)
-</code></pre></div>
-
-
-
-
-
-
-
-
-
-  <div class="doc doc-children">
-
-
-
-
-
-
-
-
 
 
 
