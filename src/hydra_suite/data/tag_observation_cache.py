@@ -255,6 +255,19 @@ class TagObservationCache:
         """Return the number of frames with cached tag observations."""
         return self._total_frames
 
+    def get_cached_frames(self) -> list[int]:
+        """Return the sorted frame indices that have cached tag observations."""
+        if self.mode == "r":
+            return sorted(self._cached_frames or set())
+        cached: Set[int] = set()
+        for key in self._data:
+            if key.startswith("frame_") and key.endswith("_tag_ids"):
+                try:
+                    cached.add(int(key.split("_")[1]))
+                except (IndexError, ValueError):
+                    continue
+        return sorted(cached)
+
     def get_metadata(self) -> Dict[str, Any]:
         """Return a copy of the cache metadata dict (detector settings, version, etc.)."""
         return dict(self._metadata)

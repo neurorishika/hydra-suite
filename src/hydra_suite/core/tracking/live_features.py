@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from hydra_suite.core.identity.classification.cnn import ClassPrediction
+from hydra_suite.core.identity.evidence import IdentityEvidence
 
 
 def _compute_pose_statistics(
@@ -148,11 +149,29 @@ class LiveTagObservationStore:
 class LiveCNNIdentityStore:
     """In-memory CNN prediction store compatible with cnn_build_association_entries()."""
 
-    def __init__(self) -> None:
+    def __init__(self, catalog_labels: Optional[Sequence[str]] = None) -> None:
         self._frames: Dict[int, List[ClassPrediction]] = {}
+        self._posteriors: Dict[int, List[Optional[List[np.ndarray]]]] = {}
+        self._evidences: Dict[int, List[IdentityEvidence]] = {}
+        self._catalog_labels: Optional[tuple[str, ...]] = (
+            tuple(str(label) for label in catalog_labels)
+            if catalog_labels is not None
+            else None
+        )
+
+    @property
+    def catalog_labels(self) -> Optional[tuple[str, ...]]:
+        return self._catalog_labels
+
+    def set_catalog_labels(self, catalog_labels: Sequence[str]) -> None:
+        self._catalog_labels = tuple(str(label) for label in catalog_labels)
 
     def update_frame(
-        self, frame_idx: int, predictions: Sequence[ClassPrediction]
+        self,
+        frame_idx: int,
+        predictions: Sequence[ClassPrediction],
+        posteriors: Optional[Sequence[Optional[Sequence[np.ndarray]]]] = None,
+        evidences: Optional[Sequence[IdentityEvidence]] = None,
     ) -> None:
         copied = [
             ClassPrediction(
@@ -164,6 +183,28 @@ class LiveCNNIdentityStore:
             for pred in predictions
         ]
         self._frames[int(frame_idx)] = copied
+        if posteriors is None:
+            self._posteriors[int(frame_idx)] = [None] * len(copied)
+        else:
+            copied_posteriors: List[Optional[List[np.ndarray]]] = []
+            for det_posteriors in posteriors:
+                if det_posteriors is None:
+                    copied_posteriors.append(None)
+                    continue
+                copied_posteriors.append(
+                    [np.asarray(factor, dtype=np.float64).copy() for factor in det_posteriors]
+                )
+            self._posteriors[int(frame_idx)] = copied_posteriors
+        if evidences is not None:
+            self._evidences[int(frame_idx)] = list(evidences)
 
     def load(self, frame_idx: int) -> list[ClassPrediction]:
         return list(self._frames.get(int(frame_idx), []))
+
+    def load_posteriors(
+        self, frame_idx: int
+    ) -> list[Optional[List[np.ndarray]]]:
+        return list(self._posteriors.get(int(frame_idx), []))
+
+    def load_evidences(self, frame_idx: int) -> list[IdentityEvidence]:
+        return list(self._evidences.get(int(frame_idx), []))

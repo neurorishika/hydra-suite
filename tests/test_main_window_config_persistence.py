@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from hydra_suite.trackerkit.benchmarking import BenchmarkRecommendation
 from hydra_suite.trackerkit.gui.main_window import MainWindow
 from hydra_suite.trackerkit.gui.orchestrators import session as session_module
+from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
 
 @pytest.fixture(scope="module")
@@ -1377,6 +1378,68 @@ def test_get_parameters_dict_commits_pending_frame_range_edit(
 
     assert params["START_FRAME"] == 25
     assert params["END_FRAME"] == 25
+    window.close()
+
+
+def test_advanced_config_defaults_include_identity_decoder_tuning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    advanced_path = tmp_path / "advanced_config.json"
+
+    monkeypatch.setattr(
+        "hydra_suite.paths.get_advanced_config_path",
+        lambda: advanced_path,
+    )
+
+    advanced = ConfigOrchestrator._load_advanced_config(object())
+
+    assert advanced["identity_offline_split_min_conf"] == pytest.approx(0.75)
+    assert advanced["identity_offline_split_min_margin"] == pytest.approx(0.2)
+    assert advanced["identity_offline_split_min_frames"] == 3
+    assert advanced["identity_offline_split_max_bridge_frames"] == 6
+    assert advanced["identity_offline_ilp_time_limit"] == pytest.approx(30.0)
+    assert advanced["identity_offline_ilp_rel_gap"] == pytest.approx(1e-6)
+    assert advanced["identity_respawn_prior_strength"] == pytest.approx(0.75)
+    assert advanced["identity_respawn_prior_decay"] == pytest.approx(0.97)
+    assert advanced["identity_respawn_prior_max_gap"] == 120
+
+    saved = json.loads(advanced_path.read_text(encoding="utf-8"))
+    assert saved["identity_offline_split_min_conf"] == pytest.approx(0.75)
+    assert saved["identity_respawn_prior_max_gap"] == 120
+
+
+def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "identity_offline_split_min_conf": 0.81,
+            "identity_offline_split_min_margin": 0.27,
+            "identity_offline_split_min_frames": 5,
+            "identity_offline_split_max_bridge_frames": 8,
+            "identity_offline_ilp_time_limit": 12.5,
+            "identity_offline_ilp_rel_gap": 1e-4,
+            "identity_respawn_prior_strength": 0.62,
+            "identity_respawn_prior_decay": 0.93,
+            "identity_respawn_prior_max_gap": 44,
+        },
+    )
+
+    params = window.get_parameters_dict()
+
+    assert params["IDENTITY_OFFLINE_SPLIT_MIN_CONF"] == pytest.approx(0.81)
+    assert params["IDENTITY_OFFLINE_SPLIT_MIN_MARGIN"] == pytest.approx(0.27)
+    assert params["IDENTITY_OFFLINE_SPLIT_MIN_FRAMES"] == 5
+    assert params["IDENTITY_OFFLINE_SPLIT_MAX_BRIDGE_FRAMES"] == 8
+    assert params["IDENTITY_OFFLINE_ILP_TIME_LIMIT"] == pytest.approx(12.5)
+    assert params["IDENTITY_OFFLINE_ILP_REL_GAP"] == pytest.approx(1e-4)
+    assert params["IDENTITY_RESPAWN_PRIOR_STRENGTH"] == pytest.approx(0.62)
+    assert params["IDENTITY_RESPAWN_PRIOR_DECAY"] == pytest.approx(0.93)
+    assert params["IDENTITY_RESPAWN_PRIOR_MAX_GAP"] == 44
+    assert params["ADVANCED_CONFIG"]["identity_respawn_prior_max_gap"] == 44
     window.close()
 
 

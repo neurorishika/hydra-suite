@@ -87,6 +87,57 @@ def _ensure_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _apply_offline_identity_compat_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Back-fill legacy identity audit columns from offline decoder outputs."""
+    out = _ensure_identity_columns(df)
+    if "OriginalTrajectoryID" in out.columns and "TrajectoryID" in out.columns:
+        out["OriginalTrajectoryID"] = out["OriginalTrajectoryID"].where(
+            out["OriginalTrajectoryID"].notna(),
+            out["TrajectoryID"],
+        )
+    if "IdentityFragmentID" in out.columns and "TrajectoryID" in out.columns:
+        out["IdentityFragmentID"] = out["IdentityFragmentID"].where(
+            out["IdentityFragmentID"].notna(),
+            out["TrajectoryID"],
+        )
+
+    assigned = out.get("IdentityAssignedLabel")
+    if assigned is None:
+        assigned = out.get("IdentityOfflineLabel")
+    if assigned is None:
+        assigned = pd.Series(index=out.index, dtype=object)
+
+    assigned_conf = pd.to_numeric(
+        out.get("IdentityAssignedConfidence", out.get("IdentitySmoothedConf")),
+        errors="coerce",
+    )
+
+    keys = []
+    sources = []
+    source_counts = []
+    for label in assigned:
+        if _is_missing(label):
+            keys.append(np.nan)
+            sources.append(np.nan)
+            source_counts.append(0)
+            continue
+        source_map = {"offline": str(label)}
+        keys.append(format_identity_key(source_map) or np.nan)
+        sources.append("offline")
+        source_counts.append(1)
+
+    out["UniqueIdentityKey"] = keys
+    out["UniqueIdentitySources"] = sources
+    out["UniqueIdentitySourceCount"] = source_counts
+    out["UniqueIdentityConfidence"] = assigned_conf
+    out["IdentityInterpolated"] = (
+        out["IdentityInterpolated"]
+        if "IdentityInterpolated" in out.columns
+        else False
+    )
+    return out
+
+
 def format_identity_key(sources: dict[str, str]) -> str:
     """Serialize a source-keyed identity dict into a stable string."""
     if not sources:
@@ -744,11 +795,33 @@ def apply_identity_postprocessing(
     trajectories_df: pd.DataFrame,
     params: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Split and re-chain trajectories using stable unique-identity evidence."""
+    """Split and re-chain trajectories using stable unique-identity evidence.
+
+    .. note::
+        **Identity Phase 5 shim** — When ``ENABLE_IDENTITY_OFFLINE_DECODER`` is
+        ``True`` the offline Bayesian decoder has already been applied upstream
+        (in the tracking orchestrator's ``_apply_identity_postprocessing_to_df``
+        method) and written ``IdentityOfflineLabel`` / ``IdentitySmoothedLabel``
+        columns.  In that case this function skips the legacy heuristic
+        split/re-chain pass to avoid double-processing.
+    """
     if trajectories_df is None or trajectories_df.empty:
         return trajectories_df
 
     params = params or {}
+
+    # === Identity Phase 5 compatibility shim ===
+    # If the offline probabilistic decoder has already run, the dataframe
+    # already carries ``IdentityOfflineLabel`` rows written by
+    # ``apply_fragment_labels_to_trajectories``.  The legacy heuristic pass
+    # below would overwrite those results, so we skip it.
+    if bool(params.get("ENABLE_IDENTITY_OFFLINE_DECODER", False)):
+        if "IdentityOfflineLabel" in trajectories_df.columns:
+            return _apply_offline_identity_compat_columns(trajectories_df)
+        # Offline decoder was requested but did not produce output (evidence
+        # cache missing?).  Fall through to legacy processing so the user
+        # still gets *some* identity assignment rather than an empty result.
+
     out = _ensure_identity_columns(trajectories_df)
     if "TrajectoryID" not in out.columns or "FrameID" not in out.columns:
         return out

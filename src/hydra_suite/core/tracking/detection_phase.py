@@ -380,6 +380,8 @@ def run_batched_detection_phase(
                     f"({current}/{total})",
                 )
 
+        if profiler:
+            profiler.tick("batched_infer")
         batch_results = detector.detect_objects_batched(
             batch_frames,
             batch_start_idx,
@@ -387,6 +389,8 @@ def run_batched_detection_phase(
             return_raw=True,
             profiler=profiler,
         )
+        if profiler:
+            profiler.tock("batched_infer")
 
         _bt = getattr(detector, "_batch_timings", None)
         if _bt:
@@ -399,9 +403,13 @@ def run_batched_detection_phase(
                 _bt.get("n_ht_crops", 0),
             )
 
+        if profiler:
+            profiler.tick("batched_cache_write")
         _cache_batch_results(
             detection_cache, batch_results, batch_start_idx, start_frame
         )
+        if profiler:
+            profiler.tock("batched_cache_write")
 
         batch_time = time.time() - batch_start_time
         batch_times.append(batch_time)

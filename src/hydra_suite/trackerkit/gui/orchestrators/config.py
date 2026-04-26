@@ -2268,6 +2268,33 @@ class ConfigOrchestrator:
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
             "TAG_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
             "TAG_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
+            "IDENTITY_OFFLINE_SPLIT_MIN_CONF": float(
+                advanced_config.get("identity_offline_split_min_conf", 0.75)
+            ),
+            "IDENTITY_OFFLINE_SPLIT_MIN_MARGIN": float(
+                advanced_config.get("identity_offline_split_min_margin", 0.2)
+            ),
+            "IDENTITY_OFFLINE_SPLIT_MIN_FRAMES": int(
+                advanced_config.get("identity_offline_split_min_frames", 3)
+            ),
+            "IDENTITY_OFFLINE_SPLIT_MAX_BRIDGE_FRAMES": int(
+                advanced_config.get("identity_offline_split_max_bridge_frames", 6)
+            ),
+            "IDENTITY_OFFLINE_ILP_TIME_LIMIT": float(
+                advanced_config.get("identity_offline_ilp_time_limit", 30.0)
+            ),
+            "IDENTITY_OFFLINE_ILP_REL_GAP": float(
+                advanced_config.get("identity_offline_ilp_rel_gap", 1e-6)
+            ),
+            "IDENTITY_RESPAWN_PRIOR_STRENGTH": float(
+                advanced_config.get("identity_respawn_prior_strength", 0.75)
+            ),
+            "IDENTITY_RESPAWN_PRIOR_DECAY": float(
+                advanced_config.get("identity_respawn_prior_decay", 0.97)
+            ),
+            "IDENTITY_RESPAWN_PRIOR_MAX_GAP": int(
+                advanced_config.get("identity_respawn_prior_max_gap", 120)
+            ),
             "ENABLE_POSE_EXTRACTOR": pose_extractor_enabled,
             "POSE_MODEL_TYPE": self._panels.identity.combo_pose_model_type.currentText()
             .strip()
@@ -2605,6 +2632,16 @@ class ConfigOrchestrator:
             "headtail_batch_size": 64,  # Canonical crop batch size for head-tail classifier inference
             "realtime_visualization_emit_stride": 1,  # Emit GUI overlays every Nth frame during realtime tracking while preserving full-speed tracking/video output
             "visualization_emit_stride": 1,  # Optional GUI overlay decimation for non-realtime runs
+            # Identity decoding - offline splitter / global solver / respawn priors
+            "identity_offline_split_min_conf": 0.75,
+            "identity_offline_split_min_margin": 0.2,
+            "identity_offline_split_min_frames": 3,
+            "identity_offline_split_max_bridge_frames": 6,
+            "identity_offline_ilp_time_limit": 30.0,
+            "identity_offline_ilp_rel_gap": 1e-6,
+            "identity_respawn_prior_strength": 0.75,
+            "identity_respawn_prior_decay": 0.97,
+            "identity_respawn_prior_max_gap": 120,
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
             "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
             "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review

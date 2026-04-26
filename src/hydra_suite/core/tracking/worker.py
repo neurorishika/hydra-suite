@@ -809,6 +809,7 @@ class TrackingWorker(QThread):
                     model_path,
                 )
                 continue
+            from hydra_suite.core.identity.calibration import CalibrationModel
             from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
             from hydra_suite.core.identity.properties.cache import (
                 compute_classify_cache_id,
@@ -825,6 +826,17 @@ class TrackingWorker(QThread):
                     workflow_mode=params.get("TRACKING_WORKFLOW_MODE", "non_realtime"),
                 ),
             )
+            calibration_temperature = float(
+                cnn_cfg_dict.get(
+                    "calibration_temperature",
+                    cnn_cfg_dict.get("temperature", 1.0),
+                )
+            )
+            calibration_model = (
+                CalibrationModel(temperature=calibration_temperature)
+                if abs(calibration_temperature - 1.0) > 1e-6
+                else None
+            )
             classify_id = compute_classify_cache_id(
                 model_path=model_path,
                 compute_runtime=str(
@@ -834,6 +846,9 @@ class TrackingWorker(QThread):
                     )
                 ),
                 inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
+                calibration_signature=(
+                    calibration_model.signature if calibration_model is not None else ""
+                ),
             )
             cnn_cache_path = self._build_cnn_identity_cache_path(
                 label, classify_id, start_frame, end_frame
@@ -851,6 +866,7 @@ class TrackingWorker(QThread):
                         )
                     ),
                     name=label,
+                    calibration_model=calibration_model,
                     ignore_existing_cache=ignore_existing_cache,
                 )
                 phases.append(phase)
@@ -1071,11 +1087,22 @@ class TrackingWorker(QThread):
                 or bool(p.get("CNN_CLASSIFIERS", []))
             )
         )
+        # === Streaming Phase 5/6 ===
+        # Fresh forward YOLO runs now default to streaming-first individual
+        # analysis. Replay/precompute remains available as an explicit fallback
+        # for cached-detection rebuilds or callers that set
+        # FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY.
+        _streaming_explicitly_requested = bool(
+            p.get("ENABLE_STREAMING_INDIVIDUAL_ANALYSIS", False)
+        )
+        _force_individual_replay = bool(
+            p.get("FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY", False)
+        )
         streaming_precompute_enabled = bool(
-            realtime_tracking_mode_requested
+            individual_data_precompute_enabled
             and not self.preview_mode
             and not self.backward_mode
-            and individual_data_precompute_enabled
+            and not _force_individual_replay
         )
         effective_realtime_tracking_mode = bool(
             realtime_tracking_mode_requested
@@ -1083,8 +1110,21 @@ class TrackingWorker(QThread):
             and not self.backward_mode
         )
         if streaming_precompute_enabled:
+            if use_batched_detection:
+                use_batched_detection = False
+                logger.info(
+                    "Disabling batched YOLO prepass because streaming individual analysis is active."
+                )
             logger.info(
-                "Realtime workflow enabled: streaming advanced individual analysis inside the forward loop."
+                "Streaming-first individual analysis enabled inside the forward loop."
+            )
+            if not effective_realtime_tracking_mode and not _streaming_explicitly_requested:
+                logger.info(
+                    "Non-realtime YOLO forward runs now default to streaming individual analysis."
+                )
+        elif _force_individual_replay and individual_data_precompute_enabled:
+            logger.info(
+                "Replay individual-analysis fallback enabled: using cached/precompute rebuild path."
             )
         elif effective_realtime_tracking_mode:
             logger.info(
@@ -1099,15 +1139,15 @@ class TrackingWorker(QThread):
             self.finished_signal.emit(False, [], [])
             return
 
-        # Individual precompute needs full raw detections before tracking starts.
-        # Force two-phase detection in YOLO mode so precompute can run on cached detections.
+        # Replay/precompute fallback needs full raw detections before tracking
+        # starts. Fresh forward runs stay on the streaming path by default.
         if (
             individual_data_precompute_enabled
             and not use_batched_detection
-            and not effective_realtime_tracking_mode
+            and not streaming_precompute_enabled
         ):
             use_batched_detection = True
-            logger.info("Enabling batched YOLO prepass for precompute.")
+            logger.info("Enabling batched YOLO prepass for replay precompute fallback.")
 
         # Final canonical stills and oriented videos are exported only after
         # backward tracking and post-processing complete.
@@ -1577,7 +1617,7 @@ class TrackingWorker(QThread):
                 ),
                 reference_aspect_ratio=_ref_ar,
             )
-            if streaming_precompute_enabled:
+            if streaming_precompute_enabled and not use_cached_detections:
                 for phase in phases:
                     if phase.name == "pose":
                         props_path = str(getattr(phase, "_cache_path", "") or "")
@@ -1613,9 +1653,143 @@ class TrackingWorker(QThread):
                         set_callback = getattr(phase, "set_frame_result_callback", None)
                         if callable(set_callback):
                             set_callback(live_store.update_frame)
+                        # === Streaming Phase 3+4 / Identity Phase 0 ===
+                        # Wire identity evidence emitter when posterior cache is enabled.
+                        if (
+                            bool(p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False))
+                            or bool(p.get("ENABLE_IDENTITY_ONLINE_DECODER", False))
+                        ) and cnn_cache_path:
+                            try:
+                                from hydra_suite.core.tracking.evidence_emitter import (
+                                    IdentityEvidenceEmitter,
+                                    build_evidence_cache_path,
+                                )
+
+                                _backend = getattr(phase, "_backend", None)
+                                _meta = getattr(_backend, "metadata", None) if _backend else None
+                                _factor_labels = (
+                                    list(_meta.class_names_per_factor)
+                                    if _meta and hasattr(_meta, "class_names_per_factor")
+                                    else [["unknown"]]
+                                )
+                                _ev_path = build_evidence_cache_path(
+                                    cnn_cache_path, phase.name, "live"
+                                )
+                                _ev_emitter = IdentityEvidenceEmitter(
+                                    cache_path=_ev_path,
+                                    source_name=phase.name,
+                                    class_labels_per_factor=_factor_labels,
+                                    runtime_signature=str(
+                                        p.get("COMPUTE_RUNTIME", "cpu")
+                                    ),
+                                    calibration_signature=str(
+                                        getattr(phase, "_calibration_signature", "")
+                                        or ""
+                                    ),
+                                )
+                                live_store.set_catalog_labels(_ev_emitter.catalog_labels)
+                                if callable(set_callback):
+                                    # Chain emitter after live_store callback
+                                    def _chained_cb(
+                                        fi,
+                                        preds,
+                                        posteriors=None,
+                                        detection_ids=None,
+                                        _store=live_store,
+                                        _ev=_ev_emitter,
+                                    ):
+                                        _evidences = _ev.build_frame_evidences(
+                                            fi,
+                                            preds,
+                                            posteriors=posteriors,
+                                            detection_ids=detection_ids,
+                                        )
+                                        _store.update_frame(
+                                            fi,
+                                            preds,
+                                            posteriors=posteriors,
+                                            evidences=_evidences,
+                                        )
+                                        _ev.emit_evidences(fi, _evidences)
+                                    set_callback(_chained_cb)
+                                # Register for flush at finalization
+                                if bool(p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False)):
+                                    if not hasattr(self, "_evidence_emitters"):
+                                        self._evidence_emitters = []
+                                    self._evidence_emitters.append(_ev_emitter)
+                                logger.info(
+                                    "Identity evidence emitter enabled for '%s': %s",
+                                    phase.name,
+                                    _ev_path,
+                                )
+                            except Exception as _ee_err:
+                                logger.warning(
+                                    "Failed to set up identity evidence emitter for '%s': %s",
+                                    phase.name,
+                                    _ee_err,
+                                )
 
                 live_feature_precompute = UnifiedPrecompute(phases, crop_config)
             else:
+                if streaming_precompute_enabled and use_cached_detections:
+                    logger.info(
+                        "Using replay individual-analysis fallback from cached detections for this run."
+                    )
+                # === Streaming Phase 3+4 / Identity Phase 0 ===
+                # Wire identity evidence emitters for the batch (non-streaming) precompute path.
+                if bool(p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False)) or bool(
+                    p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+                ):
+                    try:
+                        from hydra_suite.core.tracking.evidence_emitter import (
+                            IdentityEvidenceEmitter,
+                            build_evidence_cache_path,
+                        )
+
+                        for _phase in phases:
+                            if _phase.name in ("pose", "apriltag"):
+                                continue
+                            _cnn_cache_path = str(getattr(_phase, "_cache_path", "") or "")
+                            if not _cnn_cache_path:
+                                continue
+                            _set_cb = getattr(_phase, "set_frame_result_callback", None)
+                            if not callable(_set_cb):
+                                continue
+                            _backend = getattr(_phase, "_backend", None)
+                            _meta = getattr(_backend, "metadata", None) if _backend else None
+                            _factor_labels = (
+                                list(_meta.class_names_per_factor)
+                                if _meta and hasattr(_meta, "class_names_per_factor")
+                                else [["unknown"]]
+                            )
+                            _ev_path = build_evidence_cache_path(
+                                _cnn_cache_path, _phase.name, "batch"
+                            )
+                            _ev_emitter = IdentityEvidenceEmitter(
+                                cache_path=_ev_path,
+                                source_name=_phase.name,
+                                class_labels_per_factor=_factor_labels,
+                                runtime_signature=str(p.get("COMPUTE_RUNTIME", "cpu")),
+                                calibration_signature=str(
+                                    getattr(_phase, "_calibration_signature", "")
+                                    or ""
+                                ),
+                            )
+                            _set_cb(_ev_emitter)
+                            if not hasattr(self, "_evidence_emitters"):
+                                self._evidence_emitters = []
+                            self._evidence_emitters.append(_ev_emitter)
+                            logger.info(
+                                "Identity evidence emitter (batch) enabled for '%s': %s",
+                                _phase.name,
+                                _ev_path,
+                            )
+                    except Exception as _ee_err:
+                        logger.warning(
+                            "Failed to set up batch identity evidence emitters: %s",
+                            _ee_err,
+                        )
+
                 precompute = UnifiedPrecompute(phases, crop_config)
                 profiler.phase_start("precompute")
                 try:
@@ -1692,36 +1866,65 @@ class TrackingWorker(QThread):
                     tag_observation_cache_path,
                 )
 
+        _use_legacy_tag_association = not bool(
+            p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+        ) or bool(p.get("ASSOCIATION_USE_LEGACY_TAG_HINTS", False))
+        _use_legacy_cnn_association = not bool(
+            p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+        ) or bool(p.get("ASSOCIATION_USE_LEGACY_CNN_HINTS", False))
+
         # Open CNN identity caches for reading during tracking loop (multi-phase).
-        _cnn_phase_states = (
-            []
-        )  # list of (label, cache, history, match_bonus, mismatch_penalty)
+        _cnn_phase_states = []
         for cnn_cfg_dict in p.get("CNN_CLASSIFIERS", []):
             label = str(cnn_cfg_dict.get("label", "cnn_identity"))
             model_path = str(cnn_cfg_dict.get("model_path", ""))
+            model_labels = {
+                str(_lbl)
+                for _lbl in (cnn_cfg_dict.get("labels", []) or [])
+                if str(_lbl).strip()
+            }
             live_or_path = live_cnn_caches.get(label)
             if isinstance(live_or_path, LiveCNNIdentityStore):
-                from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
-
-                _hist = TrackCNNHistory(
-                    window=int(cnn_cfg_dict.get("window", 10)),
-                    factor_names=("flat",),
-                )
-                _cnn_phase_states.append(
-                    (
-                        label,
-                        live_or_path,
-                        _hist,
-                        float(cnn_cfg_dict.get("match_bonus", 20.0)),
-                        float(cnn_cfg_dict.get("mismatch_penalty", 50.0)),
+                _hist = None
+                if _use_legacy_cnn_association:
+                    from hydra_suite.core.identity.classification.cnn import (
+                        TrackCNNHistory,
                     )
+
+                    _hist = TrackCNNHistory(
+                        window=int(cnn_cfg_dict.get("window", 10)),
+                        factor_names=("flat",),
+                    )
+                _cnn_phase_states.append(
+                    {
+                        "label": label,
+                        "cache": live_or_path,
+                        "history": _hist,
+                        "match_bonus": float(cnn_cfg_dict.get("match_bonus", 20.0)),
+                        "mismatch_penalty": float(cnn_cfg_dict.get("mismatch_penalty", 50.0)),
+                        "model_labels": model_labels,
+                        "evidence_cache": None,
+                    }
                 )
                 logger.info(
                     "Using live CNN identity outputs for realtime tracking (%s)", label
                 )
             elif not effective_realtime_tracking_mode:
+                from hydra_suite.core.identity.calibration import CalibrationModel
                 from hydra_suite.core.identity.properties.cache import (
                     compute_classify_cache_id,
+                )
+
+                _calibration_temperature = float(
+                    cnn_cfg_dict.get(
+                        "calibration_temperature",
+                        cnn_cfg_dict.get("temperature", 1.0),
+                    )
+                )
+                _calibration_signature = (
+                    CalibrationModel(temperature=_calibration_temperature).signature
+                    if abs(_calibration_temperature - 1.0) > 1e-6
+                    else ""
                 )
 
                 classify_id = compute_classify_cache_id(
@@ -1730,6 +1933,7 @@ class TrackingWorker(QThread):
                         p.get("CNN_COMPUTE_RUNTIME", p.get("COMPUTE_RUNTIME", "cpu"))
                     ),
                     inference_model_id=str(p.get("INFERENCE_MODEL_ID", "")),
+                    calibration_signature=_calibration_signature,
                 )
                 _path = self._build_cnn_identity_cache_path(
                     label, classify_id, start_frame, end_frame
@@ -1737,22 +1941,50 @@ class TrackingWorker(QThread):
                 if _path and os.path.exists(_path):
                     from hydra_suite.core.identity.classification.cnn import (
                         CNNIdentityCache,
-                        TrackCNNHistory,
+                    )
+                    from hydra_suite.core.tracking.evidence_emitter import (
+                        build_evidence_cache_path,
                     )
 
                     _cache = CNNIdentityCache(_path)
-                    _hist = TrackCNNHistory(
-                        window=int(cnn_cfg_dict.get("window", 10)),
-                        factor_names=("flat",),
-                    )
-                    _cnn_phase_states.append(
-                        (
-                            label,
-                            _cache,
-                            _hist,
-                            float(cnn_cfg_dict.get("match_bonus", 20.0)),
-                            float(cnn_cfg_dict.get("mismatch_penalty", 50.0)),
+                    _hist = None
+                    if _use_legacy_cnn_association:
+                        from hydra_suite.core.identity.classification.cnn import (
+                            TrackCNNHistory,
                         )
+
+                        _hist = TrackCNNHistory(
+                            window=int(cnn_cfg_dict.get("window", 10)),
+                            factor_names=("flat",),
+                        )
+                    _evidence_cache = None
+                    if bool(p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)):
+                        try:
+                            from hydra_suite.core.identity.cache import (
+                                IdentityEvidenceCache,
+                            )
+
+                            for _signature in ("batch", "live", ""):
+                                _ev_path = build_evidence_cache_path(_path, label, _signature)
+                                if os.path.exists(str(_ev_path)):
+                                    _evidence_cache = IdentityEvidenceCache(str(_ev_path), mode="r")
+                                    break
+                        except Exception:
+                            logger.debug(
+                                "Posterior sidecar unavailable for CNN phase '%s'",
+                                label,
+                                exc_info=True,
+                            )
+                    _cnn_phase_states.append(
+                        {
+                            "label": label,
+                            "cache": _cache,
+                            "history": _hist,
+                            "match_bonus": float(cnn_cfg_dict.get("match_bonus", 20.0)),
+                            "mismatch_penalty": float(cnn_cfg_dict.get("mismatch_penalty", 50.0)),
+                            "model_labels": model_labels,
+                            "evidence_cache": _evidence_cache,
+                        }
                     )
                     logger.info("CNN identity cache loaded (%s): %s", label, _path)
 
@@ -1959,6 +2191,177 @@ class TrackingWorker(QThread):
         _roi_contours_cache = None
         _roi_mask_cache_key = None
         _roi_mask_resized = None
+
+        # === Identity Overhaul Phase 1: Online Identity Decoder ===
+        # Instantiate the decoder when ENABLE_IDENTITY_ONLINE_DECODER is set.
+        # The decoder runs after each frame's geometric assignment to maintain
+        # per-slot probabilistic identity beliefs and enforce the uniqueness
+        # constraint across visible tracks.  The catalog is built from the
+        # union of all configured CNN classifier label sets.
+        _identity_online_decoder = None
+        _identity_online_assignments = {}  # slot_index → IdentityAssignment
+        if (
+            bool(p.get("ENABLE_IDENTITY_ONLINE_DECODER", False))
+            and individual_pipeline_enabled
+            and not self.backward_mode
+        ):
+            try:
+                from hydra_suite.core.identity.catalog import IdentityCatalog
+                from hydra_suite.core.identity.online import OnlineIdentityDecoder
+
+                # Collect all known label candidates from CNN + tag configurations.
+                _known_labels_set: list[str] = []
+                for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
+                    _clf_labels = _cnn_cfg.get("labels", []) or []
+                    for _lbl in _clf_labels:
+                        if _lbl and _lbl not in _known_labels_set:
+                            _known_labels_set.append(_lbl)
+                # Tag identities may also be provided via TAG_IDENTITY_LABELS
+                for _lbl in p.get("TAG_IDENTITY_LABELS", []):
+                    if _lbl and _lbl not in _known_labels_set:
+                        _known_labels_set.append(_lbl)
+
+                if _known_labels_set:
+                    _identity_catalog = IdentityCatalog.from_labels(_known_labels_set)
+                    _identity_online_decoder = OnlineIdentityDecoder(
+                        _identity_catalog, p
+                    )
+                    logger.info(
+                        "Identity online decoder enabled: catalog size=%d labels=%s",
+                        _identity_catalog.size,
+                        _identity_catalog.labels,
+                    )
+                else:
+                    logger.info(
+                        "Identity online decoder: no known labels configured; decoder disabled."
+                    )
+            except Exception as _dec_init_err:
+                logger.warning(
+                    "Identity online decoder init failed (non-fatal): %s",
+                    _dec_init_err,
+                )
+                _identity_online_decoder = None
+
+        def _online_identity_row_values(track_idx: int) -> list[object]:
+            assignment = _identity_online_assignments.get(track_idx)
+            belief = (
+                _identity_online_decoder.get_belief(track_idx)
+                if _identity_online_decoder is not None
+                else None
+            )
+
+            label = ""
+            catalog_index = float("nan")
+            confidence = float("nan")
+            margin = float("nan")
+            entropy = float("nan")
+            committed = 0
+            evidence_sources = ""
+            conflict_flag = 0
+            slot_lock_label = ""
+            slot_lock_strength = float("nan")
+
+            if belief is not None:
+                evidence_sources = ",".join(belief.last_evidence_sources)
+                conflict_flag = 1 if belief.last_conflict_flag else 0
+                slot_lock_label = belief.slot_lock_label or ""
+                slot_lock_strength = (
+                    float(belief.slot_lock_strength)
+                    if belief.slot_lock_label
+                    else float("nan")
+                )
+                committed = 1 if belief.committed else 0
+                if belief.committed_label:
+                    label = belief.committed_label
+                    catalog_index = float(belief.committed_index)
+                    probs = np.exp(
+                        belief.log_posterior - np.max(belief.log_posterior)
+                    )
+                    probs /= np.clip(probs.sum(), 1e-300, None)
+                    confidence = float(probs[int(belief.committed_index)])
+                    entropy = float(
+                        -np.sum(probs * np.log(np.clip(probs, 1e-300, None)))
+                    )
+                    known_probs = probs[1:]
+                    if len(known_probs) >= 2:
+                        top2 = np.partition(known_probs, -2)[-2:]
+                        margin = float(top2[1] - top2[0])
+
+            if assignment is not None:
+                if assignment.label:
+                    label = assignment.label
+                catalog_index = float(assignment.catalog_index)
+                confidence = float(assignment.confidence)
+                margin = float(assignment.margin)
+                entropy = float(assignment.entropy)
+                committed = 1 if assignment.committed else committed
+
+            return [
+                catalog_index,
+                label,
+                confidence,
+                margin,
+                entropy,
+                committed,
+                evidence_sources,
+                conflict_flag,
+                slot_lock_label,
+                slot_lock_strength,
+            ]
+
+        def _remap_source_log_probs_to_catalog(
+            log_probs: np.ndarray,
+            source_labels: list[str] | tuple[str, ...] | None,
+        ) -> np.ndarray:
+            if _identity_catalog is None:
+                return np.asarray(log_probs, dtype=np.float64)
+            arr = np.asarray(log_probs, dtype=np.float64)
+            if source_labels is None:
+                if len(arr) == _identity_catalog.size:
+                    out = arr.copy()
+                    out -= np.logaddexp.reduce(out)
+                    return out
+                return _identity_catalog.known_uniform_log_prior()
+
+            labels = tuple(str(label) for label in source_labels)
+            if len(labels) != len(arr):
+                return _identity_catalog.known_uniform_log_prior()
+
+            probs = np.exp(arr - np.max(arr))
+            probs /= np.clip(probs.sum(), 1e-300, None)
+            remapped = np.full(_identity_catalog.size, 1e-300, dtype=np.float64)
+            for src_idx, label in enumerate(labels):
+                if not _identity_catalog.contains(label):
+                    continue
+                remapped[_identity_catalog.index_of(label)] += float(probs[src_idx])
+            remapped /= np.clip(remapped.sum(), 1e-300, None)
+            return np.log(np.clip(remapped, 1e-300, None))
+
+        def _decoder_track_label(
+            track_idx: int,
+            allowed_labels: set[str] | None = None,
+        ) -> str | None:
+            if _identity_online_decoder is None:
+                return None
+            belief = _identity_online_decoder.get_belief(track_idx)
+            if belief is None:
+                return None
+            label = belief.committed_label
+            if not label:
+                probs = np.exp(belief.log_posterior - np.max(belief.log_posterior))
+                probs /= np.clip(probs.sum(), 1e-300, None)
+                known_probs = probs[1:]
+                if len(known_probs) > 0:
+                    best_idx = int(np.argmax(known_probs)) + 1
+                    if float(probs[best_idx]) >= float(
+                        p.get("IDENTITY_DISPLAY_THRESHOLD", 0.6)
+                    ):
+                        label = _identity_catalog.label_of(best_idx)
+            if not label:
+                return None
+            if allowed_labels and label not in allowed_labels:
+                return None
+            return label
 
         # Discard any frame-level state accumulated during Phase 1 (batched
         # detection uses tick/tock without end_frame), and clear interval
@@ -2304,28 +2707,84 @@ class TrackingWorker(QThread):
 
             profiler.tock("detection")
 
+            # === Streaming Phase 1: Build shared analysis payload ===
+            # Constructed from filtered detections + head-tail results so
+            # downstream pose and CNN dispatchers share a single stable index.
+            if (
+                streaming_precompute_enabled
+                and detection_ids
+                and not self.backward_mode
+            ):
+                try:
+                    from hydra_suite.core.tracking.streaming_payload import (
+                        build_streaming_payload,
+                    )
+
+                    profiler.tick("streaming_payload_build")
+                    _streaming_payload = build_streaming_payload(
+                        frame_idx=actual_frame_index,
+                        raw_meas=meas,
+                        raw_obb_corners=filtered_obb_corners if "filtered_obb_corners" in locals() else [],
+                        raw_heading_hints=filtered_heading_hints if "filtered_heading_hints" in locals() else [],
+                        raw_heading_confidences=filtered_heading_confidences if "filtered_heading_confidences" in locals() else [],
+                        raw_directed_mask=filtered_directed_mask if "filtered_directed_mask" in locals() else [],
+                        raw_canonical_affines=raw_canonical_affines if "raw_canonical_affines" in locals() else [],
+                        detection_ids=detection_ids,
+                        input_is_bgr=True,
+                        runtime_family=str(p.get("COMPUTE_RUNTIME", "cpu")),
+                    )
+                    profiler.tock("streaming_payload_build")
+                except Exception as _spay_err:
+                    logger.debug(
+                        "StreamingAnalysisPayload build failed (non-fatal): %s",
+                        _spay_err,
+                    )
+                    _streaming_payload = None
+            else:
+                _streaming_payload = None
+
             if (
                 live_feature_precompute is not None
                 and frame is not None
                 and not use_cached_detections
             ):
-                live_feature_precompute.process_live_frame(
-                    frame_idx=actual_frame_index,
-                    frame=frame,
-                    detector=detector,
-                    raw_meas=raw_meas,
-                    raw_sizes=raw_sizes,
-                    raw_shapes=raw_shapes,
-                    raw_confs=raw_confidences,
-                    raw_obb=raw_obb_corners,
-                    raw_ids=raw_detection_ids,
-                    raw_headings=raw_heading_hints,
-                    raw_heading_confidences=raw_heading_confidences,
-                    raw_directed=raw_directed_mask,
-                    raw_canonical_affines=raw_canonical_affines,
-                    roi_mask=ROI_mask_current,
-                    profiler=profiler,
-                )
+                try:
+                    live_feature_precompute.process_live_frame(
+                        frame_idx=actual_frame_index,
+                        frame=frame,
+                        detector=detector,
+                        raw_meas=raw_meas,
+                        raw_sizes=raw_sizes,
+                        raw_shapes=raw_shapes,
+                        raw_confs=raw_confidences,
+                        raw_obb=raw_obb_corners,
+                        raw_ids=raw_detection_ids,
+                        raw_headings=raw_heading_hints,
+                        raw_heading_confidences=raw_heading_confidences,
+                        raw_directed=raw_directed_mask,
+                        raw_canonical_affines=raw_canonical_affines,
+                        roi_mask=ROI_mask_current,
+                        streaming_payload=_streaming_payload,
+                        profiler=profiler,
+                    )
+                except TypeError:
+                    live_feature_precompute.process_live_frame(
+                        frame_idx=actual_frame_index,
+                        frame=frame,
+                        detector=detector,
+                        raw_meas=raw_meas,
+                        raw_sizes=raw_sizes,
+                        raw_shapes=raw_shapes,
+                        raw_confs=raw_confidences,
+                        raw_obb=raw_obb_corners,
+                        raw_ids=raw_detection_ids,
+                        raw_headings=raw_heading_hints,
+                        raw_heading_confidences=raw_heading_confidences,
+                        raw_directed=raw_directed_mask,
+                        raw_canonical_affines=raw_canonical_affines,
+                        roi_mask=ROI_mask_current,
+                        profiler=profiler,
+                    )
                 try:
                     live_feature_precompute.sync_live_frame(profiler=profiler)
                 except TypeError:
@@ -2515,7 +2974,7 @@ class TrackingWorker(QThread):
                 _det_tag_ids = build_detection_tag_id_list(_tag_det_map, len(meas))
                 _track_tag_ids = (
                     track_tag_history.build_track_tag_id_list(N)
-                    if track_tag_history is not None
+                    if track_tag_history is not None and _use_legacy_tag_association
                     else [NO_TAG] * N
                 )
 
@@ -2534,8 +2993,11 @@ class TrackingWorker(QThread):
 
                 # CNN identity data for assigner (multi-phase)
                 _cnn_phases_assoc = []
-                _cnn_frame_preds_all = []
-                for label, _cache, _history, _bonus, _penalty in _cnn_phase_states:
+                _cnn_frame_preds_all = {}
+                for _state in _cnn_phase_states:
+                    label = _state["label"]
+                    _cache = _state["cache"]
+                    _history = _state["history"]
                     _det_cls, _trk_ids, _frame_preds = _cnn_build_association_entries(
                         _cache,
                         _history,
@@ -2543,13 +3005,22 @@ class TrackingWorker(QThread):
                         len(meas),
                         N,
                     )
-                    _cnn_frame_preds_all.append(_frame_preds)
-                    if _det_cls is not None:
+                    _cnn_frame_preds_all[label] = _frame_preds
+                    if _use_legacy_cnn_association and bool(
+                        p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+                    ):
+                        _decoder_track_ids = [
+                            _decoder_track_label(i, _state.get("model_labels") or None)
+                            for i in range(N)
+                        ]
+                        if any(_label is not None for _label in _decoder_track_ids):
+                            _trk_ids = _decoder_track_ids
+                    if _use_legacy_cnn_association and _det_cls is not None:
                         _cnn_phases_assoc.append(
                             {
                                 "label": label,
-                                "match_bonus": _bonus,
-                                "mismatch_penalty": _penalty,
+                                "match_bonus": _state["match_bonus"],
+                                "mismatch_penalty": _state["mismatch_penalty"],
                                 "detection_classes": _det_cls,
                                 "track_identities": _trk_ids,
                             }
@@ -2716,9 +3187,11 @@ class TrackingWorker(QThread):
                         track_tag_history.record(r, actual_frame_index, _det_tag_ids[c])
 
                 # Update CNN track histories after assignment (multi-phase)
-                for (label, _cache, _history, _, _), _frame_preds in zip(
-                    _cnn_phase_states, _cnn_frame_preds_all
-                ):
+                for _state in _cnn_phase_states:
+                    _history = _state["history"]
+                    _frame_preds = _cnn_frame_preds_all.get(_state["label"])
+                    if _history is None:
+                        continue
                     for r in respawned_matches:
                         _history.clear_track(r)
                     _cnn_update_track_history(
@@ -2729,6 +3202,133 @@ class TrackingWorker(QThread):
                         rows,
                         cols,
                     )
+
+                # === Identity Overhaul Phase 1: Online decoder per-frame update ===
+                # Runs after history updates so head-tail and CNN histories are
+                # current.  Consumes posterior-aware CNN evidence when available,
+                # falling back to compatibility top-1 priors only when needed.
+                if _identity_online_decoder is not None:
+                    try:
+                        from hydra_suite.core.identity.evidence import IdentityEvidence
+
+                        for _r in respawned_matches:
+                            _identity_online_decoder.clear_slot(
+                                _r,
+                                reason=f"respawn at frame {actual_frame_index}",
+                                respawn_frame_idx=actual_frame_index,
+                            )
+
+                        _visible_slots = [r for r in matched]
+                        _slot_evs: dict = {}
+
+                        # Build AprilTag evidence for matched detections
+                        if track_tag_history is not None:
+                            _tag_label_map = {
+                                idx: str(label)
+                                for idx, label in enumerate(
+                                    p.get("TAG_IDENTITY_LABELS", []) or []
+                                )
+                                if str(label).strip()
+                            }
+                            for _r, _c in zip(rows, cols):
+                                _tid = _det_tag_ids[_c] if _c < len(_det_tag_ids) else -1
+                                if _tid >= 0 and hasattr(_identity_online_decoder, "_catalog"):
+                                    _cat = _identity_online_decoder._catalog
+                                    if hasattr(_cat, "apriltag_log_prior"):
+                                        _lp = _cat.apriltag_log_prior(
+                                            _tid,
+                                            _tag_label_map,
+                                        )
+                                        _det_id = (
+                                            int(detection_ids[_c])
+                                            if _c < len(detection_ids)
+                                            else int(_c)
+                                        )
+                                        _ev = IdentityEvidence.from_apriltag(
+                                            actual_frame_index, _det_id, _lp
+                                        )
+                                        _slot_evs.setdefault(_r, []).append(_ev)
+
+                        # Build CNN evidence for matched detections
+                        for _state in _cnn_phase_states:
+                            _label = _state["label"]
+                            _cache = _state["cache"]
+                            _evidence_cache = _state.get("evidence_cache")
+                            _fps = _cnn_frame_preds_all.get(_label)
+                            if _fps is None:
+                                continue
+                            _live_evidence_map = {}
+                            _source_labels = None
+                            if isinstance(_cache, LiveCNNIdentityStore):
+                                _live_evidence_map = {
+                                    int(_ev.detection_id): _ev
+                                    for _ev in _cache.load_evidences(actual_frame_index)
+                                }
+                                _source_labels = _cache.catalog_labels
+                            elif _evidence_cache is not None:
+                                _live_evidence_map = {
+                                    int(_ev.detection_id): _ev
+                                    for _ev in _evidence_cache.load_frame(actual_frame_index)
+                                }
+                                _source_labels = _evidence_cache.catalog_labels
+
+                            for _r, _c in zip(rows, cols):
+                                _det_id = (
+                                    int(detection_ids[_c])
+                                    if _c < len(detection_ids)
+                                    else int(_c)
+                                )
+                                _cached_ev = _live_evidence_map.get(_det_id)
+                                if (
+                                    _cached_ev is not None
+                                    and hasattr(_identity_online_decoder, "_catalog")
+                                ):
+                                    _mapped_lp = _remap_source_log_probs_to_catalog(
+                                        _cached_ev.log_probs,
+                                        _source_labels,
+                                    )
+                                    _slot_evs.setdefault(_r, []).append(
+                                        IdentityEvidence.from_cnn(
+                                            actual_frame_index,
+                                            _det_id,
+                                            _label,
+                                            _mapped_lp,
+                                            calibration_signature=_cached_ev.calibration_signature,
+                                            runtime_signature=_cached_ev.runtime_signature,
+                                            observed_mask=_cached_ev.observed_mask,
+                                        )
+                                    )
+                                    continue
+
+                                _pred = _fps[_c] if _c < len(_fps) else None
+                                if _pred is None:
+                                    continue
+                                if hasattr(_identity_online_decoder, "_catalog"):
+                                    _cat = _identity_online_decoder._catalog
+                                    # Build soft CNN log-prior from top-1 prediction
+                                    for _k, _cn in enumerate(_pred.class_names):
+                                        if _cn and _cat.contains(_cn):
+                                            _conf = float(_pred.confidences[_k]) if _k < len(_pred.confidences) else 0.5
+                                            _lp = _cat.cnn_log_prior(
+                                                [_conf if _l == _cn else (1.0 - _conf) / max(_cat.num_known - 1, 1) for _l in list(_cat.labels[1:])],
+                                                list(_cat.labels[1:]),
+                                            )
+                                            _ev = IdentityEvidence.from_cnn(
+                                                actual_frame_index, _det_id, _label, _lp
+                                            )
+                                            _slot_evs.setdefault(_r, []).append(_ev)
+
+                        _online_assignments = _identity_online_decoder.update_frame(
+                            actual_frame_index, _visible_slots, _slot_evs
+                        )
+                        _identity_online_assignments = {
+                            a.slot_index: a for a in _online_assignments
+                        }
+                    except Exception as _dec_err:
+                        logger.debug(
+                            "Online identity decoder update failed (non-fatal): %s",
+                            _dec_err,
+                        )
 
                 # --- KF Update & State Update ---
                 profiler.tock("state_update")
@@ -2972,6 +3572,7 @@ class TrackingWorker(QThread):
                             detection_ids[c] if c < len(detection_ids) else float("nan")
                         )
                         row_data.append(det_id)
+                        row_data.extend(_online_identity_row_values(r))
 
                         # Add TagID (majority-vote tag for this track, or NaN)
                         if track_tag_history is not None:
@@ -3014,6 +3615,7 @@ class TrackingWorker(QThread):
 
                         # Add DetectionID (NaN for unmatched tracks)
                         row_data.append(float("nan"))
+                        row_data.extend(_online_identity_row_values(r))
 
                         # Add TagID (majority-vote tag for this track, or NaN)
                         if track_tag_history is not None:
@@ -3177,6 +3779,7 @@ class TrackingWorker(QThread):
                             )
                             row_data.extend([0.0, 0.0, pos_uncertainty])
                         row_data.append(float("nan"))  # DetectionID
+                        row_data.extend(_online_identity_row_values(r))
                         if track_tag_history is not None:
                             _tag = track_tag_history.majority_tag(r)
                             row_data.append(_tag if _tag != NO_TAG else float("nan"))
@@ -3509,6 +4112,16 @@ class TrackingWorker(QThread):
                     "Realtime Analysis Finalization Failed",
                     f"Tracking finished, but finalizing realtime analysis artifacts failed:\n{exc}",
                 )
+
+        # === Streaming Phase 3+4 / Identity Phase 0 ===
+        # Flush any pending evidence emitters so all buffered frames are written.
+        if hasattr(self, "_evidence_emitters") and self._evidence_emitters:
+            for _emitter in self._evidence_emitters:
+                try:
+                    _emitter.flush()
+                except Exception as _flush_exc:
+                    logger.warning("Evidence emitter flush failed: %s", _flush_exc)
+            self._evidence_emitters.clear()
 
         cap.release()
         if self.video_writer:

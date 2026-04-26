@@ -324,6 +324,150 @@ class CNNIdentityBackend:
             )
         return results
 
+    def predict_batch_cuda(self, crops) -> list["ClassPrediction"]:
+        """GPU-native batch prediction path (Streaming Phase 2).
+
+        Delegates to ``ClassifierBackend.predict_batch_cuda()`` when the
+        underlying backend supports it.  Falls back transparently to the CPU
+        path when GPU execution is not available.
+
+        Parameters
+        ----------
+        crops:
+            Either a list of CPU ``np.ndarray`` crops or a stacked CUDA tensor
+            ``(B, C, H, W)``.  The underlying backend selects the appropriate
+            execution path based on input type and the configured runtime.
+
+        Returns
+        -------
+        list[ClassPrediction]
+            Same contract as ``predict_batch()``.
+        """
+        if crops is None:
+            return []
+        if hasattr(crops, "__len__") and len(crops) == 0:
+            return []
+        # Delegate to the GPU-capable backend method; fall back to CPU batch
+        try:
+            raw = self._backend.predict_batch_cuda(crops)
+        except (AttributeError, NotImplementedError):
+            # Backend does not support CUDA crops — convert to list and use CPU path
+            import torch
+
+            if hasattr(crops, "cpu"):
+                raw_np = crops.cpu().numpy()
+                cpu_crops = [raw_np[i].transpose(1, 2, 0) for i in range(len(raw_np))]
+            else:
+                cpu_crops = list(crops)
+            raw = self._backend.predict_batch(cpu_crops)
+
+        meta = self._backend.metadata
+        factor_names = tuple(meta.factor_names)
+        threshold = float(self._config.confidence)
+        results: list[ClassPrediction] = []
+        for det_idx, per_factor in enumerate(raw):
+            names: list[str | None] = []
+            confs: list[float] = []
+            for k, probs in enumerate(per_factor):
+                probs_arr = np.asarray(probs, dtype=np.float32)
+                best_idx = int(np.argmax(probs_arr))
+                best_conf = float(probs_arr[best_idx])
+                class_list = meta.class_names_per_factor[k]
+                if best_conf >= threshold and 0 <= best_idx < len(class_list):
+                    names.append(class_list[best_idx])
+                else:
+                    names.append(None)
+                confs.append(best_conf)
+            results.append(
+                ClassPrediction(
+                    det_index=det_idx,
+                    factor_names=factor_names,
+                    class_names=tuple(names),
+                    confidences=tuple(confs),
+                )
+            )
+        return results
+
+    def predict_batch_posteriors(
+        self,
+        crops: list[np.ndarray],
+        calibration=None,
+    ) -> tuple[list["ClassPrediction"], list[list[np.ndarray]]]:
+        """Calibrated posterior output hook (Streaming Phase 2 / Identity Phase 0).
+
+        Runs the same batch inference as ``predict_batch()`` but additionally
+        returns the full calibrated probability distribution over every class in
+        every factor, enabling the identity overhaul to build
+        ``IdentityEvidence`` objects without re-running inference.
+
+        Parameters
+        ----------
+        crops:
+            List of ``np.ndarray`` crops (same contract as ``predict_batch``).
+        calibration:
+            Optional ``CalibrationModel`` from ``identity.calibration``.
+            When ``None``, raw softmax probabilities are returned as-is.
+
+        Returns
+        -------
+        predictions: list[ClassPrediction]
+            Hard predictions (same as ``predict_batch()``).
+        posteriors: list[list[np.ndarray]]
+            ``posteriors[det_index][factor_index]`` is a shape ``(K_f,)``
+            float64 array of calibrated probabilities over the factor's
+            class list.  The caller maps these to catalog log-priors via
+            ``IdentityCatalog.cnn_log_prior()``.
+        """
+        if not crops:
+            return [], []
+        raw = self._backend.predict_batch(crops)
+        meta = self._backend.metadata
+        factor_names = tuple(meta.factor_names)
+        threshold = float(self._config.confidence)
+
+        predictions: list[ClassPrediction] = []
+        posteriors: list[list[np.ndarray]] = []
+
+        for det_idx, per_factor in enumerate(raw):
+            names: list[str | None] = []
+            confs: list[float] = []
+            det_posteriors: list[np.ndarray] = []
+
+            for k, probs in enumerate(per_factor):
+                probs_arr = np.asarray(probs, dtype=np.float64)
+
+                # Apply calibration if provided
+                if calibration is not None:
+                    # calibrate_probs expects shape (..., K); add batch dim
+                    log_p = calibration.calibrate_probs(probs_arr[None, :])[0]
+                    cal_probs = np.exp(log_p - log_p.max())
+                    cal_probs /= cal_probs.sum()
+                else:
+                    cal_probs = probs_arr / probs_arr.sum() if probs_arr.sum() > 0 else probs_arr
+
+                det_posteriors.append(cal_probs)
+
+                best_idx = int(np.argmax(cal_probs))
+                best_conf = float(cal_probs[best_idx])
+                class_list = meta.class_names_per_factor[k]
+                if best_conf >= threshold and 0 <= best_idx < len(class_list):
+                    names.append(class_list[best_idx])
+                else:
+                    names.append(None)
+                confs.append(best_conf)
+
+            predictions.append(
+                ClassPrediction(
+                    det_index=det_idx,
+                    factor_names=factor_names,
+                    class_names=tuple(names),
+                    confidences=tuple(confs),
+                )
+            )
+            posteriors.append(det_posteriors)
+
+        return predictions, posteriors
+
     def close(self) -> None:
         self._backend.close()
 

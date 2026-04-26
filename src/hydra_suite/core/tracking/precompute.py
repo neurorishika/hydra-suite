@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from hydra_suite.core.identity.calibration import CalibrationModel
 from hydra_suite.core.identity.classification.apriltag import AprilTagDetector
 from hydra_suite.core.identity.classification.cnn import (
     ClassPrediction,
@@ -621,6 +622,7 @@ class UnifiedPrecompute:
         raw_directed,
         raw_canonical_affines,
         roi_mask,
+        streaming_payload=None,
         profiler=None,
     ) -> None:
         """Run all registered phases for a single live frame.
@@ -634,28 +636,40 @@ class UnifiedPrecompute:
 
         if profiler:
             profiler.tick("live_filter")
-        filt_obb, det_ids = self._filter_detections(
-            detector,
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            raw_ids,
-            raw_headings,
-            raw_heading_confidences,
-            raw_directed,
-            roi_mask,
-            profiler,
-        )
+        if streaming_payload is not None:
+            det_ids = [int(det_id) for det_id in streaming_payload.detection_ids]
+            all_obb = [
+                np.asarray(corners, dtype=np.float32)
+                for corners in np.asarray(streaming_payload.obb_corners)
+            ]
+            use_canonical, filtered_affines = self._filter_canonical_affines(
+                raw_canonical_affines,
+                raw_ids,
+                det_ids,
+            )
+        else:
+            filt_obb, det_ids = self._filter_detections(
+                detector,
+                raw_meas,
+                raw_sizes,
+                raw_shapes,
+                raw_confs,
+                raw_obb,
+                raw_ids,
+                raw_headings,
+                raw_heading_confidences,
+                raw_directed,
+                roi_mask,
+                profiler,
+            )
+            all_obb = [np.asarray(c, dtype=np.float32) for c in (filt_obb or [])]
+            use_canonical, filtered_affines = self._filter_canonical_affines(
+                raw_canonical_affines,
+                raw_ids,
+                det_ids,
+            )
         if profiler:
             profiler.tock("live_filter")
-        all_obb = [np.asarray(c, dtype=np.float32) for c in (filt_obb or [])]
-        use_canonical, filtered_affines = self._filter_canonical_affines(
-            raw_canonical_affines,
-            raw_ids,
-            det_ids,
-        )
         if profiler:
             profiler.tick("live_crop_extraction")
         (
@@ -1049,6 +1063,11 @@ class CNNPrecomputePhase(PrecomputePhase):
 
     is_fatal = False
 
+    @staticmethod
+    def _backend_factor_names(backend) -> tuple[str, ...]:
+        names = tuple(getattr(backend, "factor_names", ()) or ())
+        return names if names else ("flat",)
+
     def __init__(
         self,
         config: CNNIdentityConfig,
@@ -1056,6 +1075,7 @@ class CNNPrecomputePhase(PrecomputePhase):
         cache_path,
         compute_runtime: str = "cpu",
         name: str = "cnn_identity",
+        calibration_model: CalibrationModel | None = None,
         frame_result_callback: Optional[
             Callable[[int, List[ClassPrediction]], None]
         ] = None,
@@ -1066,6 +1086,12 @@ class CNNPrecomputePhase(PrecomputePhase):
         self._cfg = config
         self._closed = False
         self._frame_result_callback = frame_result_callback
+        self._calibration = calibration_model
+        self._calibration_signature = (
+            str(calibration_model.signature)
+            if calibration_model is not None
+            else ""
+        )
 
         # accumulator for batching
         self._pending_crops: List[np.ndarray] = []
@@ -1101,7 +1127,7 @@ class CNNPrecomputePhase(PrecomputePhase):
                     model_path=model_path,
                     compute_runtime=compute_runtime,
                 )
-                expected_factor_names = tuple(validated_backend.factor_names)
+                expected_factor_names = self._backend_factor_names(validated_backend)
 
             try:
                 existing_factor_names = tuple(
@@ -1142,7 +1168,7 @@ class CNNPrecomputePhase(PrecomputePhase):
             )
             self._cache = CNNIdentityCache(
                 str(self._cache_path),
-                factor_names=self._backend.factor_names,
+                factor_names=self._backend_factor_names(self._backend),
             )
         elif validated_backend is not None:
             validated_backend.close()
@@ -1152,7 +1178,7 @@ class CNNPrecomputePhase(PrecomputePhase):
 
     def _placeholder_prediction(self, det_index: int) -> ClassPrediction:
         factor_names = (
-            tuple(self._backend.factor_names)
+            self._backend_factor_names(self._backend)
             if self._backend is not None
             else tuple(self._cache.factor_names)
             if self._cache is not None
@@ -1182,31 +1208,102 @@ class CNNPrecomputePhase(PrecomputePhase):
 
     def set_frame_result_callback(
         self,
-        callback: Optional[Callable[[int, List[ClassPrediction]], None]],
+        callback: Optional[Callable[..., None]],
     ) -> None:
         """Register a callback for live per-frame CNN outputs."""
         self._frame_result_callback = callback
+
+    def _predict_with_optional_posteriors(
+        self,
+        crops: List[np.ndarray],
+    ) -> tuple[List[ClassPrediction], List[Optional[List[np.ndarray]]]]:
+        """Run batch prediction and return aligned optional posterior vectors.
+
+        The identity evidence pipeline consumes calibrated per-factor
+        posteriors when available. Existing cache writers and live stores still
+        consume the compatibility `ClassPrediction` objects.
+        """
+        if self._backend is None:
+            return [], []
+        if not crops:
+            return [], []
+
+        predict_posteriors = getattr(self._backend, "predict_batch_posteriors", None)
+        if callable(predict_posteriors):
+            try:
+                preds, posteriors = predict_posteriors(
+                    crops,
+                    calibration=self._calibration,
+                )
+                return list(preds), [list(p) if p is not None else None for p in posteriors]
+            except Exception:
+                logger.debug(
+                    "Falling back to top-1 CNN callback path for %s",
+                    self.name,
+                    exc_info=True,
+                )
+
+        preds = self._backend.predict_batch(crops)
+        return list(preds), [None] * len(preds)
+
+    def _complete_frame_posteriors(
+        self,
+        frame_preds: List[ClassPrediction],
+        frame_posteriors: List[Optional[List[np.ndarray]]],
+        all_det_indices: List[int],
+    ) -> List[Optional[List[np.ndarray]]]:
+        if not all_det_indices:
+            return list(frame_posteriors)
+        post_by_det = {
+            int(pred.det_index): post
+            for pred, post in zip(frame_preds, frame_posteriors)
+        }
+        return [post_by_det.get(int(det_index)) for det_index in all_det_indices]
+
+    def _invoke_frame_result_callback(
+        self,
+        frame_idx: int,
+        predictions: List[ClassPrediction],
+        posteriors: Optional[List[Optional[List[np.ndarray]]]] = None,
+        detection_ids: Optional[List[int]] = None,
+    ) -> None:
+        if self._frame_result_callback is None:
+            return
+        try:
+            self._frame_result_callback(
+                frame_idx,
+                predictions,
+                posteriors,
+                detection_ids=detection_ids,
+            )
+        except TypeError:
+            try:
+                self._frame_result_callback(frame_idx, predictions, posteriors)
+            except TypeError:
+                self._frame_result_callback(frame_idx, predictions)
 
     def _flush_frame_batch(
         self,
         frame_idx: int,
         frame_crops: List[np.ndarray],
-        frame_det_ids: List[int],
+        frame_crop_det_ids: List[int],
         all_det_indices: List[int],
+        detection_ids: List[int],
     ) -> None:
         """Run one frame's CNN crops immediately for realtime/live consumers."""
         if self._backend is None or self._cache is None:
             return
 
         frame_preds: List[ClassPrediction] = []
+        frame_posteriors: List[Optional[List[np.ndarray]]] = []
         if frame_crops:
             batch_size = max(1, int(self._cfg.batch_size))
             for chunk_start in range(0, len(frame_crops), batch_size):
                 chunk_end = min(chunk_start + batch_size, len(frame_crops))
                 chunk_crops = frame_crops[chunk_start:chunk_end]
-                chunk_det_ids = frame_det_ids[chunk_start:chunk_end]
-                preds = self._backend.predict_batch(chunk_crops)
-                for pred, det_id in zip(preds, chunk_det_ids):
+                chunk_det_ids = frame_crop_det_ids[chunk_start:chunk_end]
+                preds, posteriors = self._predict_with_optional_posteriors(chunk_crops)
+                for pred, det_id, posterior in zip(preds, chunk_det_ids, posteriors):
                     frame_preds.append(
                         ClassPrediction(
                             det_index=int(det_id),
@@ -1215,12 +1312,22 @@ class CNNPrecomputePhase(PrecomputePhase):
                             confidences=pred.confidences,
                         )
                     )
+                    frame_posteriors.append(posterior)
 
+        completed_posteriors = self._complete_frame_posteriors(
+            frame_preds,
+            frame_posteriors,
+            all_det_indices,
+        )
         frame_preds = self._complete_frame_predictions(frame_preds, all_det_indices)
 
         self._cache.save(frame_idx, frame_preds)
-        if self._frame_result_callback is not None:
-            self._frame_result_callback(frame_idx, frame_preds)
+        self._invoke_frame_result_callback(
+            frame_idx,
+            frame_preds,
+            completed_posteriors,
+            detection_ids=[int(det_id) for det_id in detection_ids],
+        )
 
     def process_frame(
         self,
@@ -1241,8 +1348,12 @@ class CNNPrecomputePhase(PrecomputePhase):
             empty_preds = self._complete_frame_predictions([], all_det_indices)
             self._cache.save(frame_idx, empty_preds)
             self._pending_all_det_indices.pop(frame_idx, None)
-            if self._frame_result_callback is not None:
-                self._frame_result_callback(frame_idx, empty_preds)
+            self._invoke_frame_result_callback(
+                frame_idx,
+                empty_preds,
+                [None] * len(empty_preds),
+                detection_ids=[int(det_id) for det_id in detection_ids],
+            )
             return
 
         if self._frame_result_callback is not None:
@@ -1251,6 +1362,7 @@ class CNNPrecomputePhase(PrecomputePhase):
                 list(crops),
                 [int(det_idx) for det_idx in crop_det_indices],
                 all_det_indices,
+                [int(det_id) for det_id in detection_ids],
             )
             self._pending_all_det_indices.pop(frame_idx, None)
             return
@@ -1285,8 +1397,11 @@ class CNNPrecomputePhase(PrecomputePhase):
             )
             self._cache.save(fid, completed_preds)
             self._pending_all_det_indices.pop(fid, None)
-            if self._frame_result_callback is not None:
-                self._frame_result_callback(fid, completed_preds)
+            self._invoke_frame_result_callback(
+                fid,
+                completed_preds,
+                [None] * len(completed_preds),
+            )
         self._pending_crops.clear()
         self._pending_frame_idx.clear()
         self._pending_det_ids.clear()

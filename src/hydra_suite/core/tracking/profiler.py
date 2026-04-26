@@ -75,7 +75,10 @@ CATEGORY_ORDER = [
     "interp_pose_inference",
     # Batched detection diagnostic categories
     "batched_frame_read",
+    "batched_infer",          # detector.detect_objects_batched() wall time
+    "batched_cache_write",   # _cache_batch_results() wall time
 ]
+
 
 # Canonical ordering for pipeline phases (coarse timing).
 PHASE_ORDER = [
@@ -98,6 +101,11 @@ PHASE_ORDER = [
     "precompute_pose",
     "precompute_apriltag",
     "precompute_cnn_identity",
+    # Streaming individual-analysis phases (Streaming Phases 3-4)
+    "streaming_payload_build",
+    "streaming_pose_dispatch",
+    "streaming_cnn_dispatch",
+    "streaming_evidence_emit",
     "pose_transport",
     "pose_inference",
     "pose_postprocess",

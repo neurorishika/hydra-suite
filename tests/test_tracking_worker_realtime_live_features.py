@@ -751,6 +751,119 @@ def test_tracking_worker_realtime_does_not_mark_pose_directed_when_pose_is_weak(
     np.testing.assert_array_equal(captured["meas_ori_directed"], [0])
 
 
+def test_tracking_worker_realtime_keeps_cnn_hints_out_of_assignment_when_online_decoder_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    captured = {}
+
+    class _CapturingAssigner:
+        def __init__(self, params, worker=None):
+            self.params = params
+
+        def compute_cost_matrix(
+            self,
+            N,
+            meas,
+            preds,
+            shapes,
+            kf_manager,
+            last_shape_info,
+            meas_ori_directed=None,
+            association_data=None,
+        ):
+            captured["association_data"] = association_data
+            raise _StopAtAssociation()
+
+    phases = [
+        _FakePhase(
+            "pose",
+            cache_path=str(tmp_path / "pose_cache.npz"),
+            finalize_metadata={"pose_keypoint_names": ["head", "tail"]},
+        ),
+        _FakePhase("apriltag", cache_path=str(tmp_path / "tag_cache.npz")),
+        _FakePhase("cnn_identity", cache_path=str(tmp_path / "cnn_cache.npz")),
+    ]
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(
+        worker_mod, "create_detector", lambda *_args, **_kwargs: _FakeDetector()
+    )
+    monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
+    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
+    monkeypatch.setattr(cnn_mod, "TrackCNNHistory", _FakeTrackCNNHistory)
+    monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
+    monkeypatch.setattr(
+        worker_mod,
+        "CropConfig",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        worker_mod.TrackingWorker,
+        "_build_precompute_phases",
+        lambda self, params, detection_method, detection_cache, start_frame, end_frame: phases,
+    )
+    monkeypatch.setattr(
+        worker_mod,
+        "_pf_build_direction_overrides",
+        lambda n_det, pose_heading, pose_directed_mask, headtail_heading, headtail_directed_mask, pose_overrides_headtail=True: (
+            np.asarray(pose_heading, dtype=np.float32),
+            np.asarray(pose_directed_mask, dtype=np.uint8),
+        ),
+    )
+
+    worker = worker_mod.TrackingWorker(
+        str(tmp_path / "video.mp4"),
+        detection_cache_path=str(tmp_path / "cache.npz"),
+    )
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": True,
+            "TRACKING_WORKFLOW_MODE": "realtime",
+            "ENABLE_POSE_EXTRACTOR": True,
+            "USE_APRILTAGS": True,
+            "ENABLE_INDIVIDUAL_PIPELINE": True,
+            "ENABLE_IDENTITY_ONLINE_DECODER": True,
+            "ENABLE_LEGACY_CNN_ASSOCIATION": False,
+            "CNN_CLASSIFIERS": [
+                {"label": "cnn_identity", "window": 5, "labels": ["alpha", "beta"]}
+            ],
+            "POSE_DIRECTION_ANTERIOR_KEYPOINTS": ["head"],
+            "POSE_DIRECTION_POSTERIOR_KEYPOINTS": ["tail"],
+            "POSE_IGNORE_KEYPOINTS": [],
+            "POSE_MIN_KPT_CONF_VALID": 0.2,
+            "POSE_OVERRIDES_HEADTAIL": True,
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "SUPPRESS_FOREIGN_OBB_REGIONS": True,
+            "INDIVIDUAL_CROP_PADDING": 0.1,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+            "INFERENCE_MODEL_ID": "test-model",
+        }
+    )
+
+    with pytest.raises(_StopAtAssociation):
+        worker.run()
+
+    association_data = captured["association_data"]
+    assert association_data["detection_tag_ids"] == [42]
+    assert "cnn_phases" not in association_data
+
+
 def test_tracking_worker_realtime_ignores_existing_detection_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -1274,6 +1387,95 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
     assert (dataset_dir / "oriented_videos" / "trajectory_0001.mp4").exists()
 
 
+def test_non_realtime_forward_defaults_to_streaming_individual_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    video_path = tmp_path / "source.mp4"
+    detection_cache_path = tmp_path / "detections.npz"
+    pose_cache_path = tmp_path / "pose_cache.npz"
+    tag_cache_path = tmp_path / "tag_cache.npz"
+    cnn_cache_path = tmp_path / "cnn_cache.npz"
+    model_path = tmp_path / "cnn_model.fake"
+
+    _ArtifactWritingUnifiedPrecompute.instances = []
+    _write_test_video(video_path, [(0, 0, 255)])
+    model_path.write_bytes(b"fake-model")
+
+    phases = [
+        _RealtimeArtifactPhase(
+            "pose",
+            str(pose_cache_path),
+            finalize_metadata={"pose_keypoint_names": ["head", "tail"]},
+        ),
+        _RealtimeArtifactPhase("apriltag", str(tag_cache_path)),
+        _RealtimeArtifactPhase("cnn_identity", str(cnn_cache_path)),
+    ]
+
+    def _build_phases(
+        self, params, detection_method, detection_cache, start_frame, end_frame
+    ):
+        if self.backward_mode:
+            return []
+        return phases
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(
+        worker_mod, "create_detector", lambda *_args, **_kwargs: _FakeDetector()
+    )
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _UnusedAssigner)
+    monkeypatch.setattr(
+        worker_mod, "UnifiedPrecompute", _ArtifactWritingUnifiedPrecompute
+    )
+    monkeypatch.setattr(
+        worker_mod.TrackingWorker, "_build_precompute_phases", _build_phases
+    )
+
+    worker = worker_mod.TrackingWorker(
+        str(video_path),
+        detection_cache_path=str(detection_cache_path),
+    )
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": False,
+            "TRACKING_WORKFLOW_MODE": "non_realtime",
+            "ENABLE_POSE_EXTRACTOR": True,
+            "USE_APRILTAGS": True,
+            "CNN_CLASSIFIERS": [
+                {"label": "cnn_identity", "model_path": str(model_path), "window": 5}
+            ],
+            "MIN_DETECTIONS_TO_START": 2,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "VISUALIZATION_FREE_MODE": True,
+            "SUPPRESS_FOREIGN_OBB_REGIONS": True,
+            "INDIVIDUAL_CROP_PADDING": 0.1,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    worker.run()
+
+    assert _ArtifactWritingUnifiedPrecompute.instances
+    assert _ArtifactWritingUnifiedPrecompute.instances[-1].process_calls == 1
+    assert _ArtifactWritingUnifiedPrecompute.instances[-1].run_called is False
+    assert detection_cache_path.exists()
+    assert pose_cache_path.exists()
+    assert tag_cache_path.exists()
+    assert cnn_cache_path.exists()
+
+
 def test_cnn_build_association_entries_handles_multihead_cache_for_flat_history(
     tmp_path,
 ):
@@ -1302,6 +1504,35 @@ def test_cnn_build_association_entries_handles_multihead_cache_for_flat_history(
 
     assert det_classes == ["red"]
     assert track_identities == [None]
+    assert len(frame_preds) == 1
+
+
+def test_cnn_build_association_entries_supports_detection_only_cache_reads(tmp_path):
+    cache_path = tmp_path / "cnn_detection_only_assoc.npz"
+    cache = CNNIdentityCache(cache_path)
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("alpha",),
+                confidences=(0.91,),
+            )
+        ],
+    )
+    cache.flush()
+
+    det_classes, track_identities, frame_preds = cnn_build_association_entries(
+        CNNIdentityCache(str(cache_path)),
+        None,
+        0,
+        1,
+        2,
+    )
+
+    assert det_classes == ["alpha"]
+    assert track_identities == [None, None]
     assert len(frame_preds) == 1
 
 

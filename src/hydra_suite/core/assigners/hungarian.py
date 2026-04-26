@@ -230,6 +230,12 @@ class TrackAssigner:
         return []
 
     def _identity_scale(self, association_data, cnn_phases) -> float:
+        use_legacy_tag_hints = not self.params.get(
+            "ENABLE_IDENTITY_ONLINE_DECODER", False
+        ) or bool(self.params.get("ASSOCIATION_USE_LEGACY_TAG_HINTS", False))
+        use_legacy_cnn_hints = not self.params.get(
+            "ENABLE_IDENTITY_ONLINE_DECODER", False
+        ) or bool(self.params.get("ASSOCIATION_USE_LEGACY_CNN_HINTS", False))
         det_tag_ids = (
             association_data.get("detection_tag_ids", []) if association_data else []
         )
@@ -240,9 +246,23 @@ class TrackAssigner:
         def _has_valid_tag(values) -> bool:
             return any(value is not None and int(value) != -1 for value in values)
 
-        has_tag_factor = _has_valid_tag(det_tag_ids) and _has_valid_tag(track_tag_ids)
-        n_identity_factors = (1 if has_tag_factor else 0) + len(cnn_phases)
-        return 1.0 / n_identity_factors if n_identity_factors > 1 else 1.0
+        has_tag_factor = (
+            use_legacy_tag_hints
+            and _has_valid_tag(det_tag_ids)
+            and _has_valid_tag(track_tag_ids)
+        )
+        n_cnn_factors = len(cnn_phases) if use_legacy_cnn_hints else 0
+        n_identity_factors = (1 if has_tag_factor else 0) + n_cnn_factors
+        base = 1.0 / n_identity_factors if n_identity_factors > 1 else 1.0
+        hint_scale = float(
+            self.params.get(
+                "ASSOCIATION_IDENTITY_HINT_SCALE",
+                0.35
+                if self.params.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+                else 1.0,
+            )
+        )
+        return base * max(0.0, hint_scale)
 
     def _apply_tag_identity_overlay(
         self,
@@ -250,6 +270,10 @@ class TrackAssigner:
         association_data: Dict[str, Any] | None,
         identity_scale: float,
     ) -> None:
+        if self.params.get("ENABLE_IDENTITY_ONLINE_DECODER", False) and not bool(
+            self.params.get("ASSOCIATION_USE_LEGACY_TAG_HINTS", False)
+        ):
+            return
         if not association_data:
             return
         det_tag_ids = association_data.get("detection_tag_ids", [])
@@ -283,6 +307,10 @@ class TrackAssigner:
         cnn_phases: list[dict[str, Any]],
         identity_scale: float,
     ) -> None:
+        if self.params.get("ENABLE_IDENTITY_ONLINE_DECODER", False) and not bool(
+            self.params.get("ASSOCIATION_USE_LEGACY_CNN_HINTS", False)
+        ):
+            return
         if not cnn_phases:
             return
 

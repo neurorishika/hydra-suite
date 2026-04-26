@@ -505,6 +505,49 @@ def test_cnn_identity_penalty_applies_without_pose_data() -> None:
     assert float(cnn_cost[0, 0]) > float(base_cost[0, 0])
 
 
+def test_cnn_identity_overlay_is_disabled_when_online_decoder_is_authoritative() -> None:
+    params = _params()
+    params["ENABLE_IDENTITY_ONLINE_DECODER"] = True
+    params["ENABLE_LEGACY_CNN_ASSOCIATION"] = False
+
+    assigner = TrackAssigner(params)
+    kf = _DummyKF(1)
+    predictions = np.array([[20.0, 20.0, 0.1]], dtype=np.float32)
+    measurements = [np.array([20.0, 20.0, 0.1], dtype=np.float32)]
+    shapes = [(30.0, 1.2)]
+    last_shape_info = [(30.0, 1.2)]
+
+    base_cost, _ = assigner.compute_cost_matrix(
+        N=1,
+        measurements=measurements,
+        predictions=predictions,
+        shapes=shapes,
+        kf_manager=kf,
+        last_shape_info=last_shape_info,
+    )
+    cnn_cost, _ = assigner.compute_cost_matrix(
+        N=1,
+        measurements=measurements,
+        predictions=predictions,
+        shapes=shapes,
+        kf_manager=kf,
+        last_shape_info=last_shape_info,
+        association_data={
+            "cnn_phases": [
+                {
+                    "label": "cnn_identity",
+                    "match_bonus": 20.0,
+                    "mismatch_penalty": 50.0,
+                    "detection_classes": ["alpha"],
+                    "track_identities": ["beta"],
+                }
+            ]
+        },
+    )
+
+    assert float(cnn_cost[0, 0]) == float(base_cost[0, 0])
+
+
 def test_sentinel_only_tag_lists_do_not_dilute_cnn_identity_cost() -> None:
     assigner = TrackAssigner(_params())
     kf = _DummyKF(1)

@@ -54,13 +54,26 @@ def _make_cap(frame=None):
 
 def _make_det_cache():
     dc = Mock()
-    dc.get_frame.return_value = ([], [], [], [], [], [], [], [], None)
+    dc.get_frame.return_value = (
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        None,
+        None,
+        None,
+    )
     return dc
 
 
 def _make_detector():
     det = Mock()
-    det.filter_raw_detections.return_value = ([], [], [], [], [], [], [], [])
+    det.filter_raw_detections.return_value = ([], [], [], [], [], [], [], [], [])
     return det
 
 
@@ -267,7 +280,10 @@ def test_crop_offsets_passed_to_process_frame():
         [corners.tolist()],
         [0],
         [0.0],
+        [0.0],
         [False],
+        None,
+        None,
         None,
     )
     detector = _make_detector()
@@ -278,6 +294,7 @@ def test_crop_offsets_passed_to_process_frame():
         [[0.9]],
         [corners],
         [0],
+        [0.0],
         [0.0],
         [False],
     )
@@ -806,6 +823,70 @@ def test_cnn_phase_realtime_callback_flushes_per_frame(tmp_path):
         phase.finalize()
         assert mock_backend.predict_batch.call_count == 1
         assert cache_path.exists()
+
+
+def test_cnn_phase_realtime_callback_requests_calibrated_posteriors(tmp_path):
+    from hydra_suite.core.identity.calibration import CalibrationModel
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        CNNIdentityConfig,
+    )
+    from hydra_suite.core.tracking.precompute import CNNPrecomputePhase
+
+    cache_path = tmp_path / "cnn_realtime_calibrated.npz"
+    calibration = CalibrationModel(temperature=1.7)
+    captured = {}
+    live_updates = []
+
+    with patch(
+        "hydra_suite.core.tracking.precompute.CNNIdentityBackend"
+    ) as MockBackend:
+        mock_backend = MockBackend.return_value
+
+        def _predict_batch_posteriors(crops, calibration=None):
+            captured["calibration"] = calibration
+            return (
+                [
+                    ClassPrediction(
+                        det_index=-1,
+                        factor_names=("flat",),
+                        class_names=("tag_0",),
+                        confidences=(0.9,),
+                    )
+                ],
+                [[np.array([0.2, 0.8], dtype=np.float64)]],
+            )
+
+        mock_backend.predict_batch_posteriors.side_effect = _predict_batch_posteriors
+
+        phase = CNNPrecomputePhase(
+            config=CNNIdentityConfig(model_path="/fake.pth", batch_size=8),
+            model_path="/fake.pth",
+            cache_path=cache_path,
+            name="cnn_identity",
+            calibration_model=calibration,
+        )
+
+        def _callback(frame_idx, preds, posteriors, detection_ids=None):
+            live_updates.append((frame_idx, preds, posteriors, detection_ids))
+
+        phase.set_frame_result_callback(_callback)
+
+        crop = np.zeros((20, 20, 3), dtype=np.uint8)
+        phase.process_frame(
+            0,
+            [crop],
+            [101],
+            [0],
+            [np.zeros((4, 2), dtype=np.float32)],
+            [(0, 0)],
+        )
+
+        assert captured["calibration"] is calibration
+        assert len(live_updates) == 1
+        assert live_updates[0][0] == 0
+        assert live_updates[0][3] == [101]
+        np.testing.assert_allclose(live_updates[0][2][0][0], [0.2, 0.8])
 
 
 def test_cnn_phase_process_frame_empty_crops_does_not_add_to_batch(tmp_path):

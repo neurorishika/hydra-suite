@@ -14,11 +14,14 @@ def cnn_build_association_entries(
     Flat (single-factor) histories use the first factor value. Multi-factor
     histories propagate tuples so multihead predictions stay intact.
     """
-    if cnn_identity_cache is None or cnn_track_history is None:
+    if cnn_identity_cache is None:
         return None, None, None
     frame_preds = cnn_identity_cache.load(frame_idx)
     history_factors = tuple(getattr(cnn_track_history, "factor_names", ()) or ())
     multi_factor_history = len(history_factors) > 1
+    if not history_factors and frame_preds:
+        sample_factors = tuple(getattr(frame_preds[0], "factor_names", ()) or ())
+        multi_factor_history = len(sample_factors) > 1
     det_classes = [None] * n_det
     for pred in frame_preds:
         if pred.det_index < n_det:
@@ -28,6 +31,8 @@ def cnn_build_association_entries(
                 det_classes[pred.det_index] = (
                     pred.class_names[0] if pred.class_names else None
                 )
+    if cnn_track_history is None:
+        return det_classes, [None] * N, frame_preds
     identity_dict = cnn_track_history.build_track_identity_list()
     if multi_factor_history:
         track_identities = [
