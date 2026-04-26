@@ -1016,6 +1016,57 @@ def test_build_pose_augmented_dataframe_includes_detected_only_rich_exports(
     assert np.isclose(out.iloc[0]["CNN_demo_Conf"], 0.84)
 
 
+def test_build_pose_augmented_dataframe_includes_multihead_detected_rich_exports(
+    tmp_path: Path,
+) -> None:
+    final_csv_path = tmp_path / "tracks_final.csv"
+    pd.DataFrame([{"FrameID": 1, "TrajectoryID": 1, "DetectionID": 10000}]).to_csv(
+        final_csv_path, index=False
+    )
+
+    detected_cnn_path = tmp_path / "detected_cnn_multi.npz"
+    cnn_cache = CNNIdentityCache(
+        detected_cnn_path, factor_names=("color", "shape")
+    )
+    cnn_cache.save(
+        1,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("color", "shape"),
+                class_names=("worker", "major"),
+                confidences=(0.84, 0.72),
+            )
+        ],
+    )
+    cnn_cache.flush()
+
+    orchestrator, _main_window = _make_orchestrator()
+    orchestrator._mw = SimpleNamespace(
+        _is_pose_export_enabled=lambda: False,
+        get_parameters_dict=lambda: {},
+        current_individual_properties_cache_path=None,
+        current_detected_properties_cache_path=None,
+        current_detected_cnn_cache_paths={"demo": str(detected_cnn_path)},
+        current_interpolated_pose_csv_path=None,
+        current_interpolated_pose_df=None,
+        current_interpolated_tag_csv_path=None,
+        current_interpolated_tag_df=None,
+        current_interpolated_cnn_csv_paths={},
+        current_interpolated_cnn_dfs={},
+        current_interpolated_headtail_csv_path=None,
+        current_interpolated_headtail_df=None,
+    )
+
+    out = orchestrator._build_pose_augmented_dataframe(str(final_csv_path))
+
+    assert out is not None
+    assert out.iloc[0]["CNN_demo_color_Class"] == "worker"
+    assert np.isclose(out.iloc[0]["CNN_demo_color_Conf"], 0.84)
+    assert out.iloc[0]["CNN_demo_shape_Class"] == "major"
+    assert np.isclose(out.iloc[0]["CNN_demo_shape_Conf"], 0.72)
+
+
 def test_export_pose_augmented_csv_writes_only_with_individual_and_cleans_legacy_alias(
     tmp_path: Path,
 ) -> None:

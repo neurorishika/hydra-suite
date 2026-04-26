@@ -13,11 +13,15 @@ import hydra_suite.core.tracking.worker as worker_mod
 from hydra_suite.core.identity.classification.cnn import (
     ClassPrediction,
     CNNIdentityCache,
+    TrackCNNHistory,
 )
 from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
 from hydra_suite.core.identity.pose.features import build_pose_detection_keypoint_map
 from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
-from hydra_suite.core.tracking.cnn_features import cnn_build_association_entries
+from hydra_suite.core.tracking.cnn_features import (
+    cnn_build_association_entries,
+    cnn_update_track_history,
+)
 from hydra_suite.core.tracking.tag_features import build_tag_detection_map
 from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.data.tag_observation_cache import TagObservationCache
@@ -1268,3 +1272,57 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
     assert result.exported_videos == 1
     assert result.exported_frames == 1
     assert (dataset_dir / "oriented_videos" / "trajectory_0001.mp4").exists()
+
+
+def test_cnn_build_association_entries_handles_multihead_cache_for_flat_history(
+    tmp_path,
+):
+    cache_path = tmp_path / "cnn_multi_assoc.npz"
+    cache = CNNIdentityCache(cache_path, factor_names=("color", "shape"))
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("color", "shape"),
+                class_names=("red", "circle"),
+                confidences=(0.9, 0.8),
+            )
+        ],
+    )
+    cache.flush()
+
+    det_classes, track_identities, frame_preds = cnn_build_association_entries(
+        CNNIdentityCache(str(cache_path)),
+        TrackCNNHistory(window=10, factor_names=("flat",)),
+        0,
+        1,
+        1,
+    )
+
+    assert det_classes == ["red"]
+    assert track_identities == [None]
+    assert len(frame_preds) == 1
+
+
+def test_cnn_update_track_history_records_all_multihead_factors():
+    history = TrackCNNHistory(window=5, factor_names=("color", "shape"))
+    frame_preds = [
+        ClassPrediction(
+            det_index=0,
+            factor_names=("color", "shape"),
+            class_names=("red", "circle"),
+            confidences=(0.93, 0.81),
+        )
+    ]
+
+    cnn_update_track_history(
+        history,
+        frame_preds,
+        frame_idx=0,
+        N=1,
+        rows=[0],
+        cols=[0],
+    )
+
+    assert history.build_track_identity_list() == {0: ("red", "circle")}

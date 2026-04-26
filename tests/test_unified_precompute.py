@@ -528,11 +528,27 @@ def test_cnn_phase_has_cache_hit_false_when_no_file(tmp_path):
 
 
 def test_cnn_phase_has_cache_hit_true_when_file_exists(tmp_path):
-    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        CNNIdentityCache,
+        CNNIdentityConfig,
+    )
     from hydra_suite.core.tracking.precompute import CNNPrecomputePhase
 
     cache_path = tmp_path / "cnn.npz"
-    cache_path.touch()  # create the file
+    cache = CNNIdentityCache(cache_path)
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("cached",),
+                confidences=(0.8,),
+            )
+        ],
+    )
+    cache.flush()
     phase = CNNPrecomputePhase(
         config=CNNIdentityConfig(model_path="/fake/model.pth"),
         model_path="/fake/model.pth",
@@ -624,6 +640,120 @@ def test_cnn_phase_finalize_flushes_partial_batch(tmp_path):
         phase.finalize()
         assert mock_backend.predict_batch.call_count == 1  # flushed in finalize
         assert cache_path.exists()
+
+
+def test_cnn_phase_writes_placeholders_for_skipped_detection_slots(tmp_path):
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        CNNIdentityCache,
+        CNNIdentityConfig,
+    )
+    from hydra_suite.core.tracking.precompute import CNNPrecomputePhase
+
+    cache_path = tmp_path / "cnn_skipped_slots.npz"
+    with patch(
+        "hydra_suite.core.tracking.precompute.CNNIdentityBackend"
+    ) as MockBackend:
+        mock_backend = MockBackend.return_value
+        mock_backend.factor_names = ("flat",)
+        mock_backend.predict_batch.return_value = [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            )
+        ]
+
+        phase = CNNPrecomputePhase(
+            config=CNNIdentityConfig(model_path="/fake.pth", batch_size=8),
+            model_path="/fake.pth",
+            cache_path=cache_path,
+            name="cnn_identity",
+        )
+
+        crop = np.zeros((20, 20, 3), dtype=np.uint8)
+        phase.process_frame(
+            0,
+            [crop],
+            [0, 1],
+            [0],
+            [
+                np.zeros((4, 2), dtype=np.float32),
+                np.zeros((4, 2), dtype=np.float32),
+            ],
+            [(0, 0)],
+        )
+        phase.finalize()
+
+        cache = CNNIdentityCache(str(cache_path))
+        preds = cache.load(0)
+        assert [pred.det_index for pred in preds] == [0, 1]
+        assert preds[0].class_names == ("tag_0",)
+        assert preds[0].confidences == pytest.approx((0.9,))
+        assert preds[1].class_names == (None,)
+        assert preds[1].confidences == pytest.approx((0.0,))
+
+
+def test_cnn_phase_invalidates_flat_cache_for_multihead_model(tmp_path):
+    from hydra_suite.core.identity.classification.cnn import (
+        ClassPrediction,
+        CNNIdentityCache,
+        CNNIdentityConfig,
+    )
+    from hydra_suite.core.tracking.precompute import CNNPrecomputePhase
+
+    cache_path = tmp_path / "cnn_multihead_stale.npz"
+    stale_cache = CNNIdentityCache(cache_path)
+    stale_cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("old",),
+                confidences=(0.3,),
+            )
+        ],
+    )
+    stale_cache.flush()
+
+    model_path = tmp_path / "multihead.fake"
+    model_path.write_bytes(b"fake")
+
+    with patch(
+        "hydra_suite.core.tracking.precompute.CNNIdentityBackend"
+    ) as MockBackend:
+        mock_backend = MockBackend.return_value
+        mock_backend.factor_names = ("color", "shape")
+        mock_backend.predict_batch.return_value = [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("color", "shape"),
+                class_names=("red", "circle"),
+                confidences=(0.9, 0.8),
+            )
+        ]
+
+        phase = CNNPrecomputePhase(
+            config=CNNIdentityConfig(model_path=str(model_path), batch_size=4),
+            model_path=str(model_path),
+            cache_path=cache_path,
+            name="cnn_identity",
+        )
+
+        assert phase.has_cache_hit() is False
+
+        crop = np.zeros((20, 20, 3), dtype=np.uint8)
+        phase.process_frame(0, [crop], [0], [0], [], [(0, 0)])
+        phase.finalize()
+
+        rewritten_cache = CNNIdentityCache(str(cache_path))
+        assert rewritten_cache.factor_names == ("color", "shape")
+        preds = rewritten_cache.load(0)
+        assert len(preds) == 1
+        assert preds[0].class_names == ("red", "circle")
+        assert preds[0].confidences == pytest.approx((0.9, 0.8))
 
 
 def test_cnn_phase_realtime_callback_flushes_per_frame(tmp_path):

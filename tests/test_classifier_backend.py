@@ -307,6 +307,55 @@ def test_backend_generic_classifier_multihead_bundle(
     backend.close()
 
 
+def test_backend_generic_multihead_bundle_dedupes_duplicate_factor_names(
+    tmp_path, tiny_flat_subset, tiny_flat_headtail
+):
+    import json
+    import shutil
+
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    factor_a = tmp_path / "color.pth"
+    factor_b = tmp_path / "heading.pth"
+    shutil.copy2(str(tiny_flat_subset), str(factor_a))
+    shutil.copy2(str(tiny_flat_headtail), str(factor_b))
+
+    manifest = tmp_path / "duplicate.multihead.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "classifier_multihead_bundle",
+                "factor_names": ["flat", "flat"],
+                "factor_models": [
+                    {
+                        "factor": "flat",
+                        "path": factor_a.name,
+                        "class_names": ["left", "right"],
+                    },
+                    {
+                        "factor": "flat",
+                        "path": factor_b.name,
+                        "class_names": ["up", "down", "left", "right", "unknown"],
+                    },
+                ],
+                "input_size": [64, 64],
+                "monochrome": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    backend = ClassifierBackend(str(manifest), compute_runtime="cpu")
+    meta = backend.metadata
+    assert meta.factor_names == ["flat", "flat_1"]
+
+    out = backend.predict_batch([np.zeros((48, 48, 3), dtype=np.uint8)])
+    assert len(out) == 1
+    assert len(out[0]) == 2
+    backend.close()
+
+
 def test_backend_generic_multihead_bundle_preserves_onnx_runtime(
     tmp_path, tiny_flat_subset, tiny_flat_headtail, monkeypatch
 ):

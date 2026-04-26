@@ -16,6 +16,7 @@ from hydra_suite.core.identity.properties.export import (
     augment_trajectories_with_detected_cnn_cache,
     augment_trajectories_with_detected_properties_cache,
     augment_trajectories_with_pose_cache,
+    merge_interpolated_cnn_df,
     merge_interpolated_pose_df,
 )
 
@@ -325,3 +326,80 @@ def test_augment_trajectories_with_detected_cnn_cache_merges_by_detection(tmp_pa
     assert pd.isna(out.iloc[1]["CNN_idA_Class"])
     assert out.iloc[1]["CNN_idA_Conf"] == pytest.approx(0.1)
     assert pd.isna(out.iloc[2]["CNN_idA_Class"])
+
+
+def test_augment_trajectories_with_detected_cnn_cache_expands_multihead_columns(
+    tmp_path,
+):
+    cache_path = tmp_path / "cnn_cache_multi.npz"
+    cache = CNNIdentityCache(cache_path, factor_names=("color", "side"))
+    cache.save(
+        5,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("color", "side"),
+                class_names=("red", "left"),
+                confidences=(0.83, 0.74),
+            ),
+            ClassPrediction(
+                det_index=1,
+                factor_names=("color", "side"),
+                class_names=(None, "right"),
+                confidences=(0.1, 0.91),
+            ),
+        ],
+    )
+    cache.flush()
+
+    trajectories = pd.DataFrame(
+        [
+            {"FrameID": 5, "DetectionID": 50000, "TrajectoryID": 1},
+            {"FrameID": 5, "DetectionID": 50001, "TrajectoryID": 2},
+            {"FrameID": 6, "DetectionID": 60000, "TrajectoryID": 3},
+        ]
+    )
+    out = augment_trajectories_with_detected_cnn_cache(
+        trajectories, str(cache_path), label="idA"
+    )
+
+    assert out.iloc[0]["CNN_idA_color_Class"] == "red"
+    assert out.iloc[0]["CNN_idA_color_Conf"] == pytest.approx(0.83)
+    assert out.iloc[0]["CNN_idA_side_Class"] == "left"
+    assert out.iloc[0]["CNN_idA_side_Conf"] == pytest.approx(0.74)
+    assert pd.isna(out.iloc[1]["CNN_idA_color_Class"])
+    assert out.iloc[1]["CNN_idA_color_Conf"] == pytest.approx(0.1)
+    assert out.iloc[1]["CNN_idA_side_Class"] == "right"
+    assert out.iloc[1]["CNN_idA_side_Conf"] == pytest.approx(0.91)
+    assert pd.isna(out.iloc[2]["CNN_idA_color_Class"])
+    assert pd.isna(out.iloc[2]["CNN_idA_side_Class"])
+
+
+def test_merge_interpolated_cnn_df_backfills_multihead_columns():
+    trajectories = pd.DataFrame(
+        [
+            {"FrameID": 7, "TrajectoryID": 3},
+            {"FrameID": 8, "TrajectoryID": 4},
+        ]
+    )
+    interp = pd.DataFrame(
+        [
+            {
+                "frame_id": 7,
+                "trajectory_id": 3,
+                "CNN_idA_color_Class": "red",
+                "CNN_idA_color_Conf": 0.92,
+                "CNN_idA_side_Class": "left",
+                "CNN_idA_side_Conf": 0.81,
+            }
+        ]
+    )
+
+    out = merge_interpolated_cnn_df(trajectories, interp, label="idA")
+
+    assert out.iloc[0]["CNN_idA_color_Class"] == "red"
+    assert out.iloc[0]["CNN_idA_color_Conf"] == pytest.approx(0.92)
+    assert out.iloc[0]["CNN_idA_side_Class"] == "left"
+    assert out.iloc[0]["CNN_idA_side_Conf"] == pytest.approx(0.81)
+    assert pd.isna(out.iloc[1]["CNN_idA_color_Class"])
+    assert pd.isna(out.iloc[1]["CNN_idA_side_Class"])

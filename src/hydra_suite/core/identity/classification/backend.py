@@ -141,6 +141,24 @@ def _parse_factor_structure(
     return [str(n) for n in factor_names], class_names_per_factor, is_multihead
 
 
+def _dedupe_factor_names(factor_names: list[str]) -> list[str]:
+    """Return a stable list of unique factor names.
+
+    Multihead bundle manifests in the wild may still contain duplicate factor
+    names such as ["flat", "flat"]. Suffix duplicates deterministically so the
+    runtime can preserve each head instead of collapsing them into one column.
+    """
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for idx, raw_name in enumerate(factor_names):
+        base = str(raw_name).strip() or f"factor_{idx}"
+        count = seen.get(base, 0)
+        unique_name = base if count == 0 else f"{base}_{count}"
+        seen[base] = count + 1
+        unique.append(unique_name)
+    return unique
+
+
 class _TinyLoader:
     """Loader for TinyClassifier v2 .pth checkpoints (flat and multi-head)."""
 
@@ -314,6 +332,17 @@ class _ClassifierMultiheadBundleLoader:
                 )
             class_names_per_factor.append([str(n) for n in names])
 
+        normalized_factor_names = _dedupe_factor_names(
+            [str(name) for name in factor_names]
+        )
+        if normalized_factor_names != [str(name) for name in factor_names]:
+            logger.warning(
+                "Multihead manifest %s contains duplicate factor names %s; using %s instead.",
+                path,
+                factor_names,
+                normalized_factor_names,
+            )
+
         return ClassifierMetadata(
             arch=(
                 "yolo_multihead"
@@ -322,7 +351,7 @@ class _ClassifierMultiheadBundleLoader:
             ),
             input_size=_normalize_input_size(data.get("input_size")),
             is_multihead=True,
-            factor_names=[str(n) for n in factor_names],
+            factor_names=normalized_factor_names,
             class_names_per_factor=class_names_per_factor,
             monochrome=bool(data.get("monochrome", False)),
             recommended_confidence_threshold=_normalize_recommended_confidence_threshold(

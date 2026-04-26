@@ -81,7 +81,12 @@ def build_video_cache_dir(
     base_dir = (
         _normalize_base_dir(artifact_base_dir) or Path(video_path).expanduser().parent
     )
-    cache_dir = base_dir / f"{_video_stem(video_path)}_caches"
+    expected_cache_dir_name = f"{_video_stem(video_path)}_caches"
+    cache_dir = (
+        base_dir
+        if base_dir.name == expected_cache_dir_name
+        else base_dir / expected_cache_dir_name
+    )
     if create:
         cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
