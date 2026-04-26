@@ -1245,6 +1245,56 @@ def test_preextract_traj_arrays_uses_unique_identity_labels_when_available() -> 
     assert list(label_texts) == ["Tag 8", "ID4"]
 
 
+def test_build_video_track_color_key_array_prefers_identity_when_available() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+    trajectories_df = pd.DataFrame(
+        [
+            {
+                "FrameID": 1,
+                "TrajectoryID": 3,
+                "UniqueIdentityKey": "apriltag=8",
+            },
+            {
+                "FrameID": 2,
+                "TrajectoryID": 4,
+                "IdentityAssignedLabel": "worker_a",
+            },
+            {
+                "FrameID": 3,
+                "TrajectoryID": 9,
+            },
+        ]
+    )
+
+    color_keys = orchestrator._build_video_track_color_key_array(trajectories_df)
+
+    assert list(color_keys) == [
+        "identity:apriltag=8",
+        "identity:worker_a",
+        "trajectory:9",
+    ]
+
+
+def test_build_precomputed_color_palette_reuses_identity_colors_across_tracks() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+    colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+    track_ids = np.asarray([3, 8, 2], dtype=np.int32)
+    color_keys = np.asarray(
+        ["identity:worker_a", "identity:worker_a", "trajectory:2"],
+        dtype=object,
+    )
+
+    row_colors = orchestrator._build_precomputed_color_palette(
+        colors,
+        track_ids,
+        color_keys,
+    )
+
+    assert row_colors[0] == (10, 20, 30)
+    assert row_colors[1] == (10, 20, 30)
+    assert row_colors[2] == (70, 80, 90)
+
+
 def test_tag_observation_evidence_view_uses_stable_detection_ids(
     tmp_path: Path,
 ) -> None:

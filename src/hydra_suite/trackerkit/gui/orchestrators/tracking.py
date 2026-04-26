@@ -1761,8 +1761,51 @@ class TrackingOrchestrator:
         ]
         return np.asarray(labels, dtype=object)
 
-    def _build_precomputed_color_palette(self, colors, _track_ids):
-        """Build per-track-ID precomputed color list and return (palette, category20)."""
+    def _normalize_video_identity_color_key(self, value):
+        """Return a stable identity color key token or an empty string."""
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        token = str(value).strip()
+        if not token or token.lower() == "nan":
+            return ""
+        return token
+
+    def _build_video_track_color_key_array(self, trajectories_df):
+        """Precompute one color key per row, preferring identity evidence over TrajectoryID."""
+        if trajectories_df is None or len(trajectories_df) == 0:
+            return np.asarray([], dtype=object)
+
+        identity_columns = [
+            "UniqueIdentityKey",
+            "IdentityAssignedLabel",
+            "IdentityOfflineLabel",
+            "IdentitySmoothedLabel",
+        ]
+        track_ids = trajectories_df["TrajectoryID"].tolist()
+        color_keys = []
+        for row_index, track_id in enumerate(track_ids):
+            chosen_key = ""
+            for column in identity_columns:
+                if column not in trajectories_df.columns:
+                    continue
+                token = self._normalize_video_identity_color_key(
+                    trajectories_df.iloc[row_index][column]
+                )
+                if token:
+                    chosen_key = f"identity:{token}"
+                    break
+            if not chosen_key:
+                chosen_key = f"trajectory:{int(track_id)}"
+            color_keys.append(chosen_key)
+        return np.asarray(color_keys, dtype=object)
+
+    def _build_precomputed_color_palette(self, colors, _track_ids, color_keys):
+        """Build per-row colors, reusing one color for rows with the same identity key."""
         _category20_colors = [
             (127, 127, 31),
             (188, 189, 34),
@@ -1786,16 +1829,32 @@ class TrackingOrchestrator:
             (140, 162, 82),
         ]
         _n_cat = len(_category20_colors)
-        _max_track = int(_track_ids.max()) if len(_track_ids) > 0 else 0
-        _precomputed_colors = [
-            (
-                colors[_tid]
+
+        def _fallback_color(_track_id):
+            _tid = int(_track_id)
+            return (
+                tuple(colors[_tid])
                 if colors and _tid < len(colors)
                 else _category20_colors[_tid % _n_cat]
             )
-            for _tid in range(_max_track + 1)
-        ]
-        return _precomputed_colors, _category20_colors
+
+        _identity_palette = {}
+        _next_identity_color_idx = 0
+        _row_colors = []
+        for _tid, _key in zip(_track_ids.tolist(), color_keys.tolist()):
+            _key_token = str(_key)
+            if _key_token.startswith("identity:"):
+                if _key_token not in _identity_palette:
+                    _identity_palette[_key_token] = (
+                        tuple(colors[_next_identity_color_idx])
+                        if colors and _next_identity_color_idx < len(colors)
+                        else _category20_colors[_next_identity_color_idx % _n_cat]
+                    )
+                    _next_identity_color_idx += 1
+                _row_colors.append(_identity_palette[_key_token])
+                continue
+            _row_colors.append(_fallback_color(_tid))
+        return _row_colors
 
     def _draw_trail_for_track(
         self,
@@ -1966,11 +2025,8 @@ class TrackingOrchestrator:
             traj_indices_by_frame,
             _track_sorted_row_indices,
             _track_sorted_frame_vals,
-            _precomputed_colors,
-            _category20_colors,
+            _row_colors,
         ) = arrays
-
-        _n_cat = len(_category20_colors)
         _write_q: _queue.Queue = _queue.Queue(maxsize=4)
 
         def _writer_thread():
@@ -1994,11 +2050,7 @@ class TrackingOrchestrator:
             if draw_p["show_trails"]:
                 for row_i in frame_row_indices:
                     track_id = int(_track_ids[row_i])
-                    color = (
-                        _precomputed_colors[track_id]
-                        if track_id < len(_precomputed_colors)
-                        else _category20_colors[track_id % _n_cat]
-                    )
+                    color = tuple(_row_colors[row_i])
                     self._draw_trail_for_track(
                         frame,
                         track_id,
@@ -2018,11 +2070,7 @@ class TrackingOrchestrator:
                 if np.isnan(cx_f) or np.isnan(cy_f):
                     continue
                 cx, cy = int(cx_f), int(cy_f)
-                color = (
-                    _precomputed_colors[track_id]
-                    if track_id < len(_precomputed_colors)
-                    else _category20_colors[track_id % _n_cat]
-                )
+                color = tuple(_row_colors[row_i])
                 self._draw_single_track_on_frame(
                     frame,
                     row_i,
@@ -2158,8 +2206,9 @@ class TrackingOrchestrator:
         ) = self._preextract_traj_arrays(
             trajectories_df, show_pose, pose_column_triplets, draw_p["show_trails"]
         )
-        _precomputed_colors, _category20_colors = self._build_precomputed_color_palette(
-            draw_p["colors"], _track_ids
+        _color_keys = self._build_video_track_color_key_array(trajectories_df)
+        _row_colors = self._build_precomputed_color_palette(
+            draw_p["colors"], _track_ids, _color_keys
         )
 
         arrays = (
@@ -2173,8 +2222,7 @@ class TrackingOrchestrator:
             traj_indices_by_frame,
             _track_sorted_row_indices,
             _track_sorted_frame_vals,
-            _precomputed_colors,
-            _category20_colors,
+            _row_colors,
         )
         self._render_annotated_video_frames(
             cap, out, start_frame, total_frames, draw_p, pose_edges, show_pose, arrays
