@@ -1205,9 +1205,11 @@ class DetectionPanel(QWidget):
             return "cnn_classifier"  # multi-method: report as cnn_classifier for compat
         return "none_disabled"
 
-    def _identity_config(self) -> dict:
-        """Return use_apriltags + cnn_classifiers config dict."""
-        if not self._is_identity_analysis_enabled():
+    def _build_identity_config(self, *, require_enabled_gate: bool) -> dict:
+        """Collect AprilTag/CNN identity config from the identity panel."""
+        if require_enabled_gate and not self._is_identity_analysis_enabled():
+            return {"use_apriltags": False, "cnn_classifiers": []}
+        if not self._is_yolo_detection_mode():
             return {"use_apriltags": False, "cnn_classifiers": []}
         ip = getattr(self._main_window, "_identity_panel", None)
         use_apriltags = ip is not None and ip.g_apriltags.isChecked()
@@ -1231,6 +1233,14 @@ class DetectionPanel(QWidget):
             "match_bonus": match_bonus,
             "mismatch_penalty": mismatch_penalty,
         }
+
+    def _identity_config(self) -> dict:
+        """Return use_apriltags + cnn_classifiers config dict."""
+        return self._build_identity_config(require_enabled_gate=True)
+
+    def _preview_identity_config(self) -> dict:
+        """Return preview-only identity overlays without requiring the master gate."""
+        return self._build_identity_config(require_enabled_gate=False)
 
     # =========================================================================
     # YOLO BATCHING / TENSORRT HANDLERS (moved from MainWindow)
@@ -1686,7 +1696,7 @@ class DetectionPanel(QWidget):
             self._main_window._selected_compute_runtime()
         )
         runtime_detection = derive_detection_runtime_settings(selected_runtime)
-        identity_cfg = self._identity_config()
+        identity_cfg = self._preview_identity_config()
         ip = getattr(self._main_window, "_identity_panel", None)
         pose_backend_family = (
             ip.combo_pose_model_type.currentText().strip().lower()

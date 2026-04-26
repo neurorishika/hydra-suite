@@ -307,3 +307,55 @@ def test_preview_draw_obb_annotations_labels_headtail_abstain(monkeypatch) -> No
     )
 
     assert any("head abstain 0.77" in " ".join(lines) for lines in captured_labels)
+
+
+def test_preview_run_cnn_overlay_formats_multihead_predictions(monkeypatch) -> None:
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    cnn_mod = importlib.import_module("hydra_suite.core.identity.classification.cnn")
+
+    class FakeBackend:
+        def __init__(self, config, model_path=None, compute_runtime="cpu") -> None:
+            self.config = config
+            self.model_path = model_path
+            self.compute_runtime = compute_runtime
+
+        def predict_batch(self, crops):
+            return [
+                cnn_mod.ClassPrediction(
+                    det_index=0,
+                    factor_names=("color", "side"),
+                    class_names=("red", None),
+                    confidences=(0.93, 0.42),
+                )
+            ]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cnn_mod, "CNNIdentityBackend", FakeBackend)
+    monkeypatch.setattr(preview_worker, "resolve_model_path", lambda path: "/tmp/multihead.json")
+    monkeypatch.setattr(preview_worker.os.path, "exists", lambda path: True)
+
+    label_stacks = [[]]
+    backends = preview_worker._preview_run_cnn_overlay(
+        [np.zeros((4, 2), dtype=np.float32)],
+        [np.zeros((16, 16, 3), dtype=np.uint8)],
+        {
+            "cnn_classifiers": [
+                {
+                    "model_path": "classifier.multihead.json",
+                    "label": "cnn_identity",
+                    "confidence": 0.5,
+                    "batch_size": 8,
+                    "scoring_mode": "per_head_average",
+                }
+            ],
+            "cnn_runtime": "cpu",
+        },
+        label_stacks,
+    )
+
+    assert len(backends) == 1
+    assert label_stacks == [["cnn_identity: color=red 0.93 | side=unknown 0.42"]]

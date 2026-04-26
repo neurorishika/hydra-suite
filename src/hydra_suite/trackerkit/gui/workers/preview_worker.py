@@ -812,6 +812,29 @@ def _preview_run_pose_overlay(
         return None
 
 
+def _preview_format_cnn_prediction(label_name: str, prediction) -> str:
+    """Return a preview-friendly label for flat or multihead CNN predictions."""
+    factor_names = tuple(getattr(prediction, "factor_names", ()) or ())
+    class_names = tuple(getattr(prediction, "class_names", ()) or ())
+    confidences = tuple(getattr(prediction, "confidences", ()) or ())
+
+    if len(factor_names) <= 1:
+        pred_label = str(getattr(prediction, "class_name", None) or "?")
+        pred_conf = float(getattr(prediction, "confidence", 0.0))
+        return f"{label_name}: {pred_label} {pred_conf:.2f}"
+
+    parts = []
+    for idx, factor_name in enumerate(factor_names):
+        factor_label = (
+            str(class_names[idx])
+            if idx < len(class_names) and class_names[idx] is not None
+            else "unknown"
+        )
+        factor_conf = float(confidences[idx]) if idx < len(confidences) else 0.0
+        parts.append(f"{factor_name}={factor_label} {factor_conf:.2f}")
+    return f"{label_name}: " + " | ".join(parts)
+
+
 def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_stacks):
     cnn_cfgs = context.get("cnn_classifiers", []) or []
     if not filtered_corners or not cnn_cfgs:
@@ -831,7 +854,7 @@ def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_s
         if valid_cnn_entries:
             cnn_crops = [crop for _, crop in valid_cnn_entries]
             for cnn_cfg in cnn_cfgs:
-                model_path = str(cnn_cfg.get("model_path", ""))
+                model_path = str(resolve_model_path(cnn_cfg.get("model_path", "")))
                 if not model_path or not os.path.exists(model_path):
                     continue
                 label_name = str(cnn_cfg.get("label", "cnn"))
@@ -856,10 +879,8 @@ def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_s
                     if pidx >= len(cnn_predictions):
                         continue
                     prediction = cnn_predictions[pidx]
-                    pred_label = str(getattr(prediction, "class_name", None) or "?")
-                    pred_conf = float(getattr(prediction, "confidence", 0.0))
                     label_stacks[det_idx].append(
-                        f"{label_name}: {pred_label} {pred_conf:.2f}"
+                        _preview_format_cnn_prediction(label_name, prediction)
                     )
     except Exception as exc:
         logger.warning("Preview CNN overlay disabled: %s", exc)
