@@ -2428,6 +2428,72 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;predict_batch_cuda
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" predict_batch_cuda">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;predict_batch_posteriors
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" predict_batch_posteriors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4123,6 +4189,72 @@
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;predict_batch
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;predict_batch_cuda
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" predict_batch_cuda">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;predict_batch_posteriors
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" predict_batch_posteriors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -7012,6 +7144,69 @@ scoring-mode validation.</p>
 
         <p>Run inference and return per-crop <code>ClassPrediction</code> instances with
 per-factor confidence thresholding applied.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">predict_batch_cuda</span><span class="p">(</span><span class="n">crops</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>GPU-native batch prediction path (Streaming Phase 2).</p>
+<p>Delegates to <code>ClassifierBackend.predict_batch_cuda()</code> when the
+underlying backend supports it.  Falls back transparently to the CPU
+path when GPU execution is not available.</p>
+<h6 id="hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--parameters">Parameters<a class="headerlink" href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--parameters" title="Permanent link">&para;</a></h6>
+<p>crops:
+    Either a list of CPU <code>np.ndarray</code> crops or a stacked CUDA tensor
+    <code>(B, C, H, W)</code>.  The underlying backend selects the appropriate
+    execution path based on input type and the configured runtime.</p>
+<h6 id="hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--returns">Returns<a class="headerlink" href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_cuda--returns" title="Permanent link">&para;</a></h6>
+<p>list[ClassPrediction]
+    Same contract as <code>predict_batch()</code>.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">predict_batch_posteriors</span><span class="p">(</span><span class="n">crops</span><span class="p">,</span> <span class="n">calibration</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Calibrated posterior output hook (Streaming Phase 2 / Identity Phase 0).</p>
+<p>Runs the same batch inference as <code>predict_batch()</code> but additionally
+returns the full calibrated probability distribution over every class in
+every factor, enabling the identity overhaul to build
+<code>IdentityEvidence</code> objects without re-running inference.</p>
+<h6 id="hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--parameters">Parameters<a class="headerlink" href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--parameters" title="Permanent link">&para;</a></h6>
+<p>crops:
+    List of <code>np.ndarray</code> crops (same contract as <code>predict_batch</code>).
+calibration:
+    Optional <code>CalibrationModel</code> from <code>identity.calibration</code>.
+    When <code>None</code>, raw softmax probabilities are returned as-is.</p>
+<h6 id="hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--returns">Returns<a class="headerlink" href="#hydra_suite.core.identity.CNNIdentityBackend.predict_batch_posteriors--returns" title="Permanent link">&para;</a></h6>
+<p>predictions: list[ClassPrediction]
+    Hard predictions (same as <code>predict_batch()</code>).
+posteriors: list[list[np.ndarray]]
+    <code>posteriors[det_index][factor_index]</code> is a shape <code>(K_f,)</code>
+    float64 array of calibrated probabilities over the factor's
+    class list.  The caller maps these to catalog log-priors via
+    <code>IdentityCatalog.cnn_log_prior()</code>.</p>
 
     </div>
 
