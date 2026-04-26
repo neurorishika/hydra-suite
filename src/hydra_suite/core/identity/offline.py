@@ -381,13 +381,16 @@ def split_mixed_identity_trajectories(
     smoothed_df: pd.DataFrame,
     params: dict[str, Any],
 ) -> pd.DataFrame:
-    """Split trajectories when the smoothed identity posterior shows a sustained switch.
+    """Optionally split trajectories when the smoothed posterior shows a sustained switch.
 
-    This runs before fragment construction so stitched trajectories do not force
-    the fragment assigner to explain incompatible identity regimes inside one
-    trajectory.
+    By default this pass is disabled so offline identity decoding improves label
+    consensus without changing track topology. Callers can opt in with
+    ``IDENTITY_OFFLINE_SPLIT_TRAJECTORIES`` when they explicitly want the HMM
+    to fork one trajectory into multiple identity fragments.
     """
     if smoothed_df.empty:
+        return smoothed_df.copy()
+    if not bool(params.get("IDENTITY_OFFLINE_SPLIT_TRAJECTORIES", False)):
         return smoothed_df.copy()
     required_cols = {
         "TrajectoryID",

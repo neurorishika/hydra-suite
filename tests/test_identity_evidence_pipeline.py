@@ -319,6 +319,7 @@ def test_split_mixed_identity_trajectories_cuts_sustained_posterior_switch() -> 
     split_df = split_mixed_identity_trajectories(
         smoothed,
         {
+            "IDENTITY_OFFLINE_SPLIT_TRAJECTORIES": True,
             "IDENTITY_OFFLINE_SPLIT_MIN_CONF": 0.8,
             "IDENTITY_OFFLINE_SPLIT_MIN_MARGIN": 0.4,
             "IDENTITY_OFFLINE_SPLIT_MIN_FRAMES": 3,
@@ -332,3 +333,32 @@ def test_split_mixed_identity_trajectories_cuts_sustained_posterior_switch() -> 
     second_segment = split_df[split_df["TrajectoryID"] != 7]
     assert list(first_segment["FrameID"]) == [0, 1, 2, 3, 4]
     assert list(second_segment["FrameID"]) == [5, 6, 7, 8, 9]
+
+
+def test_split_mixed_identity_trajectories_is_disabled_by_default() -> None:
+    smoothed = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 7,
+                "FrameID": frame_idx,
+                "DetectionID": 70000 + frame_idx,
+                "IdentitySmoothedLabel": "mouse1" if frame_idx < 5 else "mouse2",
+                "IdentitySmoothedConf": 0.96 if frame_idx < 5 else 0.95,
+                "IdentitySmoothedMargin": 0.70 if frame_idx < 5 else 0.72,
+            }
+            for frame_idx in range(10)
+        ]
+    )
+
+    out = split_mixed_identity_trajectories(
+        smoothed,
+        {
+            "IDENTITY_OFFLINE_SPLIT_MIN_CONF": 0.8,
+            "IDENTITY_OFFLINE_SPLIT_MIN_MARGIN": 0.4,
+            "IDENTITY_OFFLINE_SPLIT_MIN_FRAMES": 3,
+            "IDENTITY_OFFLINE_SPLIT_MAX_BRIDGE_FRAMES": 1,
+        },
+    )
+
+    assert out["TrajectoryID"].nunique() == 1
+    assert "OriginalTrajectoryID" not in out.columns or out["OriginalTrajectoryID"].isna().all()

@@ -1394,6 +1394,7 @@ def test_advanced_config_defaults_include_identity_decoder_tuning(
 
     advanced = ConfigOrchestrator._load_advanced_config(object())
 
+    assert advanced["identity_offline_split_trajectories"] is False
     assert advanced["identity_offline_split_min_conf"] == pytest.approx(0.75)
     assert advanced["identity_offline_split_min_margin"] == pytest.approx(0.2)
     assert advanced["identity_offline_split_min_frames"] == 3
@@ -1405,6 +1406,7 @@ def test_advanced_config_defaults_include_identity_decoder_tuning(
     assert advanced["identity_respawn_prior_max_gap"] == 120
 
     saved = json.loads(advanced_path.read_text(encoding="utf-8"))
+    assert saved["identity_offline_split_trajectories"] is False
     assert saved["identity_offline_split_min_conf"] == pytest.approx(0.75)
     assert saved["identity_respawn_prior_max_gap"] == 120
 
@@ -1416,6 +1418,7 @@ def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
     window = _make_main_window(
         monkeypatch,
         advanced_config={
+            "identity_offline_split_trajectories": True,
             "identity_offline_split_min_conf": 0.81,
             "identity_offline_split_min_margin": 0.27,
             "identity_offline_split_min_frames": 5,
@@ -1430,6 +1433,7 @@ def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
 
     params = window.get_parameters_dict()
 
+    assert params["IDENTITY_OFFLINE_SPLIT_TRAJECTORIES"] is True
     assert params["IDENTITY_OFFLINE_SPLIT_MIN_CONF"] == pytest.approx(0.81)
     assert params["IDENTITY_OFFLINE_SPLIT_MIN_MARGIN"] == pytest.approx(0.27)
     assert params["IDENTITY_OFFLINE_SPLIT_MIN_FRAMES"] == 5
@@ -1451,17 +1455,20 @@ def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
     window = _make_main_window(
         monkeypatch,
         advanced_config={
+            "identity_offline_split_trajectories": True,
             "identity_offline_split_min_conf": 0.82,
             "identity_respawn_prior_max_gap": 77,
         },
     )
 
+    assert window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
     assert (
         window._identity_panel.spin_identity_offline_split_min_conf.value()
         == pytest.approx(0.82)
     )
     assert window._identity_panel.spin_identity_respawn_prior_max_gap.value() == 77
 
+    window._identity_panel.chk_identity_offline_split_trajectories.setChecked(False)
     window._identity_panel.spin_identity_offline_split_min_conf.setValue(0.79)
     window._identity_panel.spin_identity_offline_split_min_margin.setValue(0.24)
     window._identity_panel.spin_identity_offline_split_min_frames.setValue(4)
@@ -1476,6 +1483,7 @@ def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
 
+    assert saved_cfg["identity_offline_split_trajectories"] is False
     assert saved_cfg["identity_offline_split_min_conf"] == pytest.approx(0.79)
     assert saved_cfg["identity_offline_split_min_margin"] == pytest.approx(0.24)
     assert saved_cfg["identity_offline_split_min_frames"] == 4
@@ -1490,6 +1498,7 @@ def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
     reloaded_window = _make_main_window(monkeypatch)
     reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
 
+    assert not reloaded_window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
     assert (
         reloaded_window._identity_panel.spin_identity_offline_split_min_conf.value()
         == pytest.approx(0.79)

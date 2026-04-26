@@ -157,6 +157,20 @@ class IdentityPanel(QWidget):
         fl_identity_decoder = QFormLayout(self.g_identity_decoder_tuning)
         fl_identity_decoder.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
+        self.chk_identity_offline_split_trajectories = QCheckBox(
+            "Allow HMM to split trajectories on sustained identity switches"
+        )
+        self.chk_identity_offline_split_trajectories.setChecked(
+            bool(
+                self._main_window.advanced_config.get(
+                    "identity_offline_split_trajectories", False
+                )
+            )
+        )
+        self.chk_identity_offline_split_trajectories.setToolTip(
+            "When disabled, the offline decoder smooths and assigns identities without rewriting TrajectoryID values."
+        )
+
         self.spin_identity_offline_split_min_conf = QDoubleSpinBox()
         self.spin_identity_offline_split_min_conf.setRange(0.0, 1.0)
         self.spin_identity_offline_split_min_conf.setSingleStep(0.01)
@@ -284,6 +298,11 @@ class IdentityPanel(QWidget):
         )
         self.spin_identity_respawn_prior_max_gap.setToolTip(
             "Maximum gap in frames where a lost slot can still reuse its carried identity prior on respawn."
+        )
+
+        fl_identity_decoder.addRow(
+            "Offline split policy",
+            self.chk_identity_offline_split_trajectories,
         )
 
         fl_identity_decoder.addRow(

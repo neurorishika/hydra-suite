@@ -1045,6 +1045,16 @@ class ConfigOrchestrator:
                 )
             )
         )
+        self._panels.identity.chk_identity_offline_split_trajectories.setChecked(
+            bool(
+                get_cfg(
+                    "identity_offline_split_trajectories",
+                    default=self._mw.advanced_config.get(
+                        "identity_offline_split_trajectories", False
+                    ),
+                )
+            )
+        )
         self._panels.identity.spin_identity_offline_split_min_conf.setValue(
             float(
                 get_cfg(
@@ -1816,6 +1826,7 @@ class ConfigOrchestrator:
                 "cnn_classifier_confidence": self._panels.identity.spin_cnn_confidence.value(),
                 "identity_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
                 "identity_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
+                "identity_offline_split_trajectories": self._panels.identity.chk_identity_offline_split_trajectories.isChecked(),
                 "identity_offline_split_min_conf": self._panels.identity.spin_identity_offline_split_min_conf.value(),
                 "identity_offline_split_min_margin": self._panels.identity.spin_identity_offline_split_min_margin.value(),
                 "identity_offline_split_min_frames": self._panels.identity.spin_identity_offline_split_min_frames.value(),
@@ -2104,6 +2115,9 @@ class ConfigOrchestrator:
         )
         advanced_config["max_aspect_ratio_multiplier"] = (
             self._panels.detection.spin_max_ar_multiplier.value()
+        )
+        advanced_config["identity_offline_split_trajectories"] = (
+            self._panels.identity.chk_identity_offline_split_trajectories.isChecked()
         )
         advanced_config["identity_offline_split_min_conf"] = (
             self._panels.identity.spin_identity_offline_split_min_conf.value()
@@ -2394,6 +2408,9 @@ class ConfigOrchestrator:
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
             "TAG_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
             "TAG_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
+            "IDENTITY_OFFLINE_SPLIT_TRAJECTORIES": bool(
+                advanced_config.get("identity_offline_split_trajectories", False)
+            ),
             "IDENTITY_OFFLINE_SPLIT_MIN_CONF": float(
                 advanced_config.get("identity_offline_split_min_conf", 0.75)
             ),
@@ -2759,6 +2776,7 @@ class ConfigOrchestrator:
             "realtime_visualization_emit_stride": 1,  # Emit GUI overlays every Nth frame during realtime tracking while preserving full-speed tracking/video output
             "visualization_emit_stride": 1,  # Optional GUI overlay decimation for non-realtime runs
             # Identity decoding - offline splitter / global solver / respawn priors
+            "identity_offline_split_trajectories": False,
             "identity_offline_split_min_conf": 0.75,
             "identity_offline_split_min_margin": 0.2,
             "identity_offline_split_min_frames": 3,
