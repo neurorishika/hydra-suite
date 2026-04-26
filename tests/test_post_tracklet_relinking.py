@@ -337,3 +337,51 @@ def test_relink_collapses_chain_and_preserves_rows() -> None:
     assert len(relinked) == len(df)
     assert relinked["FrameID"].tolist() == [0, 1, 3, 4, 6, 7]
     assert relinked["DetectionID"].tolist() == [1, 2, 3, 4, 5, 6]
+
+
+def test_relink_refuses_long_gap_jump_even_when_velocity_extrapolates() -> None:
+    params = _params() | {
+        "MAX_OCCLUSION_GAP": 100,
+        "MAX_VELOCITY_BREAK": 15.0,
+        "AGREEMENT_DISTANCE": 20.0,
+    }
+    df = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 13.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 60,
+                "X": 780.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 61,
+                "X": 793.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+            },
+        ]
+    )
+
+    relinked = relink_trajectories_with_pose(df, params)
+
+    assert relinked["TrajectoryID"].nunique() == 2

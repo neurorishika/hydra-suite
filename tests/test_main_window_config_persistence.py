@@ -1443,6 +1443,86 @@ def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
     window.close()
 
 
+def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "identity_offline_split_min_conf": 0.82,
+            "identity_respawn_prior_max_gap": 77,
+        },
+    )
+
+    assert (
+        window._identity_panel.spin_identity_offline_split_min_conf.value()
+        == pytest.approx(0.82)
+    )
+    assert window._identity_panel.spin_identity_respawn_prior_max_gap.value() == 77
+
+    window._identity_panel.spin_identity_offline_split_min_conf.setValue(0.79)
+    window._identity_panel.spin_identity_offline_split_min_margin.setValue(0.24)
+    window._identity_panel.spin_identity_offline_split_min_frames.setValue(4)
+    window._identity_panel.spin_identity_offline_split_max_bridge_frames.setValue(9)
+    window._identity_panel.spin_identity_offline_ilp_time_limit.setValue(15.0)
+    window._identity_panel.spin_identity_offline_ilp_rel_gap.setValue(0.0025)
+    window._identity_panel.spin_identity_respawn_prior_strength.setValue(0.66)
+    window._identity_panel.spin_identity_respawn_prior_decay.setValue(0.91)
+    window._identity_panel.spin_identity_respawn_prior_max_gap.setValue(42)
+
+    config_path = tmp_path / "identity_decoder_tuning_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert saved_cfg["identity_offline_split_min_conf"] == pytest.approx(0.79)
+    assert saved_cfg["identity_offline_split_min_margin"] == pytest.approx(0.24)
+    assert saved_cfg["identity_offline_split_min_frames"] == 4
+    assert saved_cfg["identity_offline_split_max_bridge_frames"] == 9
+    assert saved_cfg["identity_offline_ilp_time_limit"] == pytest.approx(15.0)
+    assert saved_cfg["identity_offline_ilp_rel_gap"] == pytest.approx(0.0025)
+    assert saved_cfg["identity_respawn_prior_strength"] == pytest.approx(0.66)
+    assert saved_cfg["identity_respawn_prior_decay"] == pytest.approx(0.91)
+    assert saved_cfg["identity_respawn_prior_max_gap"] == 42
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_min_conf.value()
+        == pytest.approx(0.79)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_min_margin.value()
+        == pytest.approx(0.24)
+    )
+    assert reloaded_window._identity_panel.spin_identity_offline_split_min_frames.value() == 4
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_max_bridge_frames.value()
+        == 9
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_ilp_time_limit.value()
+        == pytest.approx(15.0)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_ilp_rel_gap.value()
+        == pytest.approx(0.0025)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_respawn_prior_strength.value()
+        == pytest.approx(0.66)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_respawn_prior_decay.value()
+        == pytest.approx(0.91)
+    )
+    assert reloaded_window._identity_panel.spin_identity_respawn_prior_max_gap.value() == 42
+    reloaded_window.close()
+
+
 def test_trail_history_special_values_update_overlay_toggle_and_clamp(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

@@ -1142,6 +1142,32 @@ def test_export_pose_augmented_csv_writes_only_with_individual_and_cleans_legacy
     assert legacy_path.exists() is False
 
 
+def test_write_rich_export_csv_drops_fully_empty_columns(tmp_path: Path) -> None:
+    final_csv_path = tmp_path / "tracks_final.csv"
+    final_csv_path.write_text("FrameID,TrajectoryID\n1,1\n", encoding="utf-8")
+
+    orchestrator, _main_window = _make_orchestrator()
+    sample_df = pd.DataFrame(
+        [
+            {
+                "FrameID": 1,
+                "TrajectoryID": 1,
+                "DetectionID": 10000,
+                "UniqueIdentityKey": "cnn:demo=worker",
+                "IdentityAssignedLabel": np.nan,
+                "DetectedTagID": np.nan,
+            }
+        ]
+    )
+
+    out_path = orchestrator._write_rich_export_csv(sample_df, str(final_csv_path))
+    saved = pd.read_csv(out_path)
+
+    assert "UniqueIdentityKey" in saved.columns
+    assert "IdentityAssignedLabel" not in saved.columns
+    assert "DetectedTagID" not in saved.columns
+
+
 def test_load_video_trajectories_prefers_with_individual_then_legacy_alias(
     tmp_path: Path,
 ) -> None:

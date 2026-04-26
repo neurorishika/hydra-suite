@@ -873,7 +873,8 @@ def apply_identity_postprocessing(
     max_interp_gap = int(max(0, params.get("IDENTITY_INTERPOLATION_MAX_GAP", 0)))
 
     result_parts: list[pd.DataFrame] = []
-    for new_traj_id, chain in enumerate(chains):
+    next_traj_id = 0
+    for chain in chains:
         chain_identity_sources = chain["identity_sources"]
         chain_identity_key = format_identity_key(chain_identity_sources)
         assembled_rows: list[pd.DataFrame] = []
@@ -881,32 +882,49 @@ def apply_identity_postprocessing(
             chain["fragments"],
             key=lambda item: (item["start_frame"], item["fragment_id"]),
         )
+
+        def _flush_chain_rows() -> None:
+            nonlocal assembled_rows, next_traj_id
+            if not assembled_rows:
+                return
+            chain_df = pd.concat(assembled_rows, ignore_index=True, sort=False)
+            chain_df = _ensure_identity_columns(chain_df)
+            chain_df = chain_df.sort_values("FrameID", kind="stable").reset_index(
+                drop=True
+            )
+            chain_df["TrajectoryID"] = next_traj_id
+            result_parts.append(chain_df)
+            next_traj_id += 1
+            assembled_rows = []
+
         for frag_index, fragment in enumerate(ordered_fragments):
             part = _apply_chain_identity_metadata(fragment, chain_identity_sources)
             assembled_rows.append(part)
+
+            bridge_to_next = False
             if frag_index == len(ordered_fragments) - 1:
+                _flush_chain_rows()
                 continue
+
             next_fragment = ordered_fragments[frag_index + 1]
             gap = int(next_fragment["start_frame"] - fragment["end_frame"] - 1)
-            if gap <= 0 or gap > max_interp_gap:
-                continue
-            if not _motion_allows_identity_fill(fragment, next_fragment, params):
-                continue
-            interp_rows = _identity_interpolation_rows(
-                fragment,
-                next_fragment,
-                chain_identity_key,
-                chain_identity_sources,
-            )
-            if interp_rows:
-                assembled_rows.append(pd.DataFrame(interp_rows))
-        if not assembled_rows:
-            continue
-        chain_df = pd.concat(assembled_rows, ignore_index=True, sort=False)
-        chain_df = _ensure_identity_columns(chain_df)
-        chain_df = chain_df.sort_values("FrameID", kind="stable").reset_index(drop=True)
-        chain_df["TrajectoryID"] = new_traj_id
-        result_parts.append(chain_df)
+            motion_ok = _motion_allows_identity_fill(fragment, next_fragment, params)
+
+            if gap == 0 and motion_ok:
+                bridge_to_next = True
+            elif 0 < gap <= max_interp_gap and motion_ok:
+                interp_rows = _identity_interpolation_rows(
+                    fragment,
+                    next_fragment,
+                    chain_identity_key,
+                    chain_identity_sources,
+                )
+                if interp_rows:
+                    assembled_rows.append(pd.DataFrame(interp_rows))
+                bridge_to_next = True
+
+            if not bridge_to_next:
+                _flush_chain_rows()
 
     if not result_parts:
         return out

@@ -120,7 +120,24 @@ def test_identity_postprocess_interpolates_small_identity_gap_only() -> None:
 
     unfilled = apply_identity_postprocessing(df, _cnn_params(max_gap=1))
     assert set(unfilled["FrameID"].tolist()) == {0, 1, 4, 5}
-    assert unfilled["TrajectoryID"].nunique() == 1
+    assert unfilled["TrajectoryID"].nunique() == 2
+    assert set(unfilled["UniqueIdentityKey"].dropna().tolist()) == {"cnn:uid=alpha"}
+
+
+def test_identity_postprocess_keeps_impossible_motion_fragments_separate() -> None:
+    df = pd.DataFrame(
+        [
+            {"TrajectoryID": 0, "FrameID": 0, "X": 0.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
+            {"TrajectoryID": 0, "FrameID": 1, "X": 1.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
+            {"TrajectoryID": 1, "FrameID": 2, "X": 500.0, "Y": 500.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.96},
+            {"TrajectoryID": 1, "FrameID": 3, "X": 501.0, "Y": 500.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.96},
+        ]
+    )
+
+    out = apply_identity_postprocessing(df, _cnn_params(max_gap=5))
+
+    assert out["TrajectoryID"].nunique() == 2
+    assert set(out["UniqueIdentityKey"].dropna().tolist()) == {"cnn:uid=alpha"}
 
 
 def test_identity_postprocess_multihead_per_head_average_rejoins_partial_match() -> None:
@@ -135,7 +152,7 @@ def test_identity_postprocess_multihead_per_head_average_rejoins_partial_match()
 
     out = apply_identity_postprocessing(
         df,
-        _cnn_params(max_gap=1, scoring_mode="per_head_average"),
+        _cnn_params(max_gap=2, scoring_mode="per_head_average"),
     )
 
     assert out["TrajectoryID"].nunique() == 1

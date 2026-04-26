@@ -120,7 +120,8 @@ class TrackingOrchestrator:
         rich_path = self._rich_export_path(final_csv_path)
         legacy_path = self._rich_export_path(final_csv_path, legacy=True)
         try:
-            rich_df.to_csv(rich_path, index=False)
+            cleaned_df = self._drop_empty_rich_export_columns(rich_df)
+            cleaned_df.to_csv(rich_path, index=False)
             if legacy_path != rich_path and os.path.exists(legacy_path):
                 os.remove(legacy_path)
         except Exception:
@@ -131,6 +132,20 @@ class TrackingOrchestrator:
         if legacy_path != rich_path:
             logger.info("Legacy rich-export alias removed: %s", legacy_path)
         return rich_path
+
+    @staticmethod
+    def _drop_empty_rich_export_columns(rich_df: pd.DataFrame) -> pd.DataFrame:
+        """Remove columns that carry no information in the current export."""
+        keep_columns: list[str] = []
+        for column in rich_df.columns:
+            series = rich_df[column]
+            if series.isna().all():
+                continue
+            non_null = series.dropna()
+            if not non_null.empty and non_null.astype(str).str.strip().eq("").all():
+                continue
+            keep_columns.append(column)
+        return rich_df.loc[:, keep_columns].copy()
 
     def _remove_legacy_rich_exports(self, final_csv_path: str) -> None:
         """Remove any stale rich-export CSV variants next to *final_csv_path*."""

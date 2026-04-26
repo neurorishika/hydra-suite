@@ -2689,7 +2689,14 @@ def _score_relink_candidate(
     delta_frames = gap + 1
 
     raw_jump = float(np.linalg.norm(dst["start_pos"] - src["end_pos"]))
-    if raw_jump > max_vel_break * float(delta_frames):
+    # Keep relinking conservative over long occlusion gaps: the destination must
+    # remain within a small absolute motion envelope, not merely a large
+    # time-scaled envelope.
+    raw_jump_limit = max(
+        agreement_distance * 2.0,
+        max_vel_break * float(min(delta_frames, 4)),
+    )
+    if raw_jump > raw_jump_limit:
         return None
 
     predicted_pos = src["end_pos"] + src["end_velocity"] * float(delta_frames)
