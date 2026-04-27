@@ -135,8 +135,6 @@
   "cnn_classifier_confidence": 0.5,
   "cnn_classifier_label": "",
   "cnn_classifier_batch_size": 64,
-  "cnn_classifier_match_bonus": 20.0,
-  "cnn_classifier_mismatch_penalty": 50.0,
   "cnn_classifier_window": 10,
   "apriltag_family": "tag36h11",
   "apriltag_decimate": 1.0,

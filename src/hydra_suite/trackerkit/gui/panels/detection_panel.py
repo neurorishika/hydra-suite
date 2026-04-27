@@ -1213,25 +1213,15 @@ class DetectionPanel(QWidget):
             return {"use_apriltags": False, "cnn_classifiers": []}
         ip = getattr(self._main_window, "_identity_panel", None)
         use_apriltags = ip is not None and ip.g_apriltags.isChecked()
-        match_bonus = float(
-            ip.spin_identity_match_bonus.value() if ip is not None else 20.0
-        )
-        mismatch_penalty = float(
-            ip.spin_identity_mismatch_penalty.value() if ip is not None else 50.0
-        )
         cnn_classifiers = []
         if ip is not None:
             for row in ip._cnn_classifier_rows():
                 cfg = row.to_config()
                 if cfg is not None:
-                    cfg["match_bonus"] = match_bonus
-                    cfg["mismatch_penalty"] = mismatch_penalty
                     cnn_classifiers.append(cfg)
         return {
             "use_apriltags": use_apriltags,
             "cnn_classifiers": cnn_classifiers,
-            "match_bonus": match_bonus,
-            "mismatch_penalty": mismatch_penalty,
         }
 
     def _identity_config(self) -> dict:
