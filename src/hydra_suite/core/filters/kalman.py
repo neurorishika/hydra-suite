@@ -60,7 +60,7 @@ def _predict_kernel(X, P, F, Q_base, q_long, q_lat):
     return X, P
 
 
-@njit(cache=True, fastmath=True)
+@njit(cache=True)
 def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_velocity):
     """
     Corrects state using Joseph Form for stability and circular angle logic.
@@ -80,15 +80,25 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     elif y[2, 0] < -np.pi:
         y[2, 0] += 2 * np.pi
 
+    # Symmetrize P before use to eliminate float32 off-diagonal drift that
+    # accumulates through repeated Joseph-form updates and can make S
+    # indefinite even when R provides a positive diagonal floor.
+    for _i in range(5):
+        for _j in range(_i + 1, 5):
+            _avg = (p[_i, _j] + p[_j, _i]) * 0.5
+            p[_i, _j] = _avg
+            p[_j, _i] = _avg
+
     # Innovation Covariance & Kalman Gain (computed before any clipping)
     S = (H @ p @ H.T) + R
     # Regularise S before inversion: with extreme anisotropic process noise
-    # (ratio up to 260:1) and float32 arithmetic, S can become ill-conditioned,
-    # producing NaN in K.  A tiny diagonal jitter (1e-4) keeps the condition
-    # number bounded without meaningfully biasing the filter (R diagonal ≈ 0.06).
-    S[0, 0] += 1e-4
-    S[1, 1] += 1e-4
-    S[2, 2] += 1e-4
+    # (ratio up to 260:1) and float32 arithmetic, accumulated P asymmetry can
+    # make S near-singular.  A 0.1 diagonal jitter is ~1.7× R_diag (≈0.06)
+    # and keeps the condition number bounded without meaningfully biasing the
+    # filter.  fastmath=True removed from this kernel for the same reason.
+    S[0, 0] += 0.1
+    S[1, 1] += 0.1
+    S[2, 2] += 0.1
     K = p @ H.T @ np.linalg.inv(S)
 
     # --- Innovation Clipping ---
@@ -128,6 +138,14 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     # Joseph Form Covariance Update using K_eff: consistent with clipped correction
     IKH = identity_mat - (K_eff @ H)
     P[track_idx] = (IKH @ p @ IKH.T) + (K_eff @ R @ K_eff.T)
+
+    # Symmetrize P after update to prevent off-diagonal float32 drift from
+    # compounding across frames into negative eigenvalues.
+    for _i in range(5):
+        for _j in range(_i + 1, 5):
+            _avg = (P[track_idx, _i, _j] + P[track_idx, _j, _i]) * 0.5
+            P[track_idx, _i, _j] = _avg
+            P[track_idx, _j, _i] = _avg
 
     # Propagate velocity cap through P: D P D^T where D=diag(1,1,1,vs,vs).
     # Row scaling  (P[3,:] *= vs, P[4,:] *= vs) applies D on the left → D P.
@@ -419,8 +437,9 @@ class KalmanFilterManager:
                 y[2, 0] -= 2 * np.pi
             elif y[2, 0] < -np.pi:
                 y[2, 0] += 2 * np.pi
+            p = (p + p.T) * 0.5  # symmetrize before use
             S = self.H @ p @ self.H.T + R_eff
-            S += np.eye(self.dim_m, dtype=np.float32) * 1e-4
+            S += np.eye(self.dim_m, dtype=np.float32) * 0.1
             K = p @ self.H.T @ np.linalg.inv(S)
             # Innovation clipping with K_eff for consistent covariance update
             pos_innov_sq = float(y[0, 0] ** 2 + y[1, 0] ** 2)
@@ -439,6 +458,7 @@ class KalmanFilterManager:
             self.X[track_idx, 2] = self.X[track_idx, 2] % (2.0 * np.pi)
             IKH = self.identity_mat - (K_eff @ self.H)
             self.P[track_idx] = IKH @ p @ IKH.T + (K_eff @ R_eff @ K_eff.T)
+            self.P[track_idx] = (self.P[track_idx] + self.P[track_idx].T) * 0.5
             # Velocity constraint + covariance propagation
             vx, vy = self.X[track_idx, 3], self.X[track_idx, 4]
             speed = np.sqrt(vx**2 + vy**2)
