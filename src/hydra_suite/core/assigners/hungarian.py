@@ -841,17 +841,16 @@ class TrackAssigner:
                 if slot not in identity_rejoined_slots:
                     uncommitted_lost.append(slot)
 
-        # Proximity-based respawn for uncommitted lost slots
+        # Proximity-based respawn for uncommitted lost slots.
+        # No proximity-to-active guard: in dense colonies every detection is
+        # near some active track, so any such guard would silently block all
+        # phase-3 respawns.  The MAX_DIST ceiling on best_c_val below is the
+        # only gate needed — if the detection is genuinely close to an active
+        # track it will have been matched in phases 1-2 and won't appear here.
         unassigned = [
             j
             for j in range(M)
             if j not in assigned_dets and j not in identity_claimed_dets
-        ]
-        respawn_dist_limit = p.get("MIN_RESPAWN_DISTANCE", MAX_DIST * 0.8)
-        non_lost_positions = [
-            np.asarray(kf_manager.X[r, :2], dtype=np.float32)
-            for r in range(N)
-            if track_states[r] != "lost"
         ]
         rows: list = []
         cols: list = []
@@ -859,16 +858,6 @@ class TrackAssigner:
         for c in unassigned:
             if not remaining_uncommitted:
                 break
-            min_dist_non_lost = (
-                min(
-                    np.linalg.norm(meas[c][:2] - track_pos)
-                    for track_pos in non_lost_positions
-                )
-                if non_lost_positions
-                else 1e6
-            )
-            if min_dist_non_lost < respawn_dist_limit:
-                continue
             best_r, best_c_val = None, 1e6
             for r in remaining_uncommitted:
                 last_pos = kf_manager.X[r, :2]
