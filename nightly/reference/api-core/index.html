@@ -2510,6 +2510,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityCache.class_names_per_factor" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;class_names_per_factor
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.identity.CNNIdentityCache.exists" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;exists
@@ -2531,6 +2540,15 @@
   <a href="#hydra_suite.core.identity.CNNIdentityCache.flush" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;flush
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityCache.load_probs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_probs
     </span>
   </a>
   
@@ -4274,6 +4292,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityCache.class_names_per_factor" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-attribute"></code>&nbsp;class_names_per_factor
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.identity.CNNIdentityCache.exists" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;exists
@@ -4295,6 +4322,15 @@
   <a href="#hydra_suite.core.identity.CNNIdentityCache.flush" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;flush
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.identity.CNNIdentityCache.load_probs" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_probs
     </span>
   </a>
   
@@ -7266,6 +7302,27 @@ caches. When loading an existing file the stored factor_names always wins.</p>
 
 
 
+<div class="doc doc-object doc-attribute">
+
+
+
+<h4 id="hydra_suite.core.identity.CNNIdentityCache.class_names_per_factor" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-attribute"></code>            <code class="highlight language-python"><span class="n">class_names_per_factor</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+<a href="#hydra_suite.core.identity.CNNIdentityCache.class_names_per_factor" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Per-factor class name lists, or None when not stored.</p>
+    </div>
+
+</div>
+
 
 
 <div class="doc doc-object doc-function">
@@ -7289,7 +7346,7 @@ caches. When loading an existing file the stored factor_names always wins.</p>
 
 
 <h4 id="hydra_suite.core.identity.CNNIdentityCache.save" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">save</span><span class="p">(</span><span class="n">frame_idx</span><span class="p">,</span> <span class="n">predictions</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">save</span><span class="p">(</span><span class="n">frame_idx</span><span class="p">,</span> <span class="n">predictions</span><span class="p">,</span> <span class="n">posteriors</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.identity.CNNIdentityCache.save" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -7297,6 +7354,10 @@ caches. When loading an existing file the stored factor_names always wins.</p>
     <div class="doc doc-contents ">
 
         <p>Update in-memory cache for <em>frame_idx</em>. Call flush() when done.</p>
+<p><code>posteriors</code> is an optional per-detection list of per-factor probability
+vectors (one np.ndarray of shape (n_classes,) per factor).  When provided
+the full distributions are persisted alongside the top-1 predictions so
+that augmented exports can include per-class probability columns.</p>
 
     </div>
 
@@ -7313,7 +7374,27 @@ caches. When loading an existing file the stored factor_names always wins.</p>
 
     <div class="doc doc-contents ">
 
-        <p>Write all in-memory predictions to disk (v2 format).</p>
+        <p>Write all in-memory predictions to disk (v3 format when probs present).</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.core.identity.CNNIdentityCache.load_probs" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">load_probs</span><span class="p">(</span><span class="n">frame_idx</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.identity.CNNIdentityCache.load_probs" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return per-detection per-factor probability vectors for <em>frame_idx</em>.</p>
+<p>Returns <code>None</code> when no probability data was stored.  Otherwise returns
+a list aligned with <code>load(frame_idx)</code>: each entry is either <code>None</code>
+(no probs for that detection) or a list of K np.ndarray prob vectors.</p>
 
     </div>
 
