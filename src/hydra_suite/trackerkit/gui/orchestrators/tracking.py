@@ -4029,7 +4029,6 @@ class TrackingOrchestrator:
                 "IdentityEvidenceSources",
                 "IdentityConflictFlag",
                 "IdentitySlotLockLabel",
-                "IdentitySlotLockStrength",
             ]
         else:
             hdr = [
@@ -4051,7 +4050,6 @@ class TrackingOrchestrator:
                 "IdentityEvidenceSources",
                 "IdentityConflictFlag",
                 "IdentitySlotLockLabel",
-                "IdentitySlotLockStrength",
             ]
         if self._mw._selected_identity_method() == "apriltags":
             hdr.append("TagID")

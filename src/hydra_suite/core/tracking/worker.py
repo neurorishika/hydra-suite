@@ -2283,17 +2283,11 @@ class TrackingWorker(QThread):
             evidence_sources = ""
             conflict_flag = 0
             slot_lock_label = ""
-            slot_lock_strength = float("nan")
 
             if belief is not None:
                 evidence_sources = ",".join(belief.last_evidence_sources)
                 conflict_flag = 1 if belief.last_conflict_flag else 0
                 slot_lock_label = belief.slot_lock_label or ""
-                slot_lock_strength = (
-                    float(belief.slot_lock_strength)
-                    if belief.slot_lock_label
-                    else float("nan")
-                )
                 committed = 1 if belief.committed else 0
                 if belief.committed_label:
                     label = belief.committed_label
@@ -2312,8 +2306,8 @@ class TrackingWorker(QThread):
             if assignment is not None:
                 if assignment.label:
                     label = assignment.label
-                catalog_index = float(assignment.catalog_index)
-                confidence = float(assignment.confidence)
+                    catalog_index = float(assignment.catalog_index)
+                    confidence = float(assignment.confidence)
                 margin = float(assignment.margin)
                 entropy = float(assignment.entropy)
                 committed = 1 if assignment.committed else committed
@@ -2328,7 +2322,6 @@ class TrackingWorker(QThread):
                 evidence_sources,
                 conflict_flag,
                 slot_lock_label,
-                slot_lock_strength,
             ]
 
         def _remap_source_log_probs_to_catalog(
