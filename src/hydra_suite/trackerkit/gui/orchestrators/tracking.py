@@ -72,9 +72,7 @@ class _TagObservationEvidenceCacheView:
 
         obs = self._tag_cache.get_frame(int(frame_idx))
         tag_ids = np.asarray(obs.get("tag_ids", np.array([], dtype=np.int32)))
-        det_indices = np.asarray(
-            obs.get("det_indices", np.array([], dtype=np.int32))
-        )
+        det_indices = np.asarray(obs.get("det_indices", np.array([], dtype=np.int32)))
         evidences = []
         for tag_id, det_idx in zip(tag_ids.tolist(), det_indices.tolist()):
             stable_detection_id = int(frame_idx) * 10000 + int(det_idx)
@@ -1692,7 +1690,9 @@ class TrackingOrchestrator:
 
     def _format_video_track_label(self, track_id, unique_identity_key=None) -> str:
         """Return the overlay label for one rendered track row."""
-        token = str(unique_identity_key).strip() if unique_identity_key is not None else ""
+        token = (
+            str(unique_identity_key).strip() if unique_identity_key is not None else ""
+        )
         if token and token.lower() != "nan":
             try:
                 from hydra_suite.core.post.identity_postprocess import (
@@ -1731,7 +1731,9 @@ class TrackingOrchestrator:
                             if pieces:
                                 compact_value = " / ".join(pieces)
                         if compact_value:
-                            cnn_parts_by_label.setdefault(label, []).append(compact_value)
+                            cnn_parts_by_label.setdefault(label, []).append(
+                                compact_value
+                            )
                         continue
                     compact_parts.append(f"{source}={value}")
                 for label in sorted(cnn_parts_by_label):
@@ -2258,8 +2260,14 @@ class TrackingOrchestrator:
                 "Preview was stopped or encountered an error.",
             )
 
-    def _run_postprocessing(self, full_traj, is_backward_mode, is_backward_enabled):
-        """Apply post-processing to trajectories and return processed result."""
+    def _run_postprocessing(
+        self, full_traj, is_backward_mode, is_backward_enabled, clean=True
+    ):
+        """Apply post-processing to trajectories and return processed result.
+
+        When clean=False, skips all velocity/occlusion/spatial cleaning and simply
+        collapses the CSV by TrajectoryID, preserving all trajectory IDs from the raw CSV.
+        """
         from hydra_suite.core.post.processing import (
             process_trajectories,
             process_trajectories_from_csv,
@@ -2278,10 +2286,18 @@ class TrackingOrchestrator:
             csv_to_process = raw_csv_path
 
         if csv_to_process and os.path.exists(csv_to_process):
+            if not clean:
+                params = dict(params)
+                params["MIN_TRAJECTORY_LENGTH"] = 1
+                params["MAX_VELOCITY_BREAK"] = float("inf")
+                params["MAX_OCCLUSION_GAP"] = 0
+                params["MAX_VELOCITY_ZSCORE"] = 0.0
             processed_trajectories, stats = process_trajectories_from_csv(
                 csv_to_process, params
             )
-            logger.info(f"Post-processing stats: {stats}")
+            logger.info(
+                f"Post-processing stats ({'full clean' if clean else 'collapse only'}): {stats}"
+            )
         else:
             processed_trajectories, stats = process_trajectories(full_traj, params)
             logger.info(f"Post-processing stats (fallback): {stats}")
@@ -2535,11 +2551,12 @@ class TrackingOrchestrator:
         self._accumulate_session_fps(fps_list, is_backward_mode)
         is_backward_enabled = self._panels.tracking.chk_enable_backward.isChecked()
 
-        processed_trajectories = full_traj
-        if self._panels.postprocess.enable_postprocessing.isChecked():
-            processed_trajectories = self._run_postprocessing(
-                full_traj, is_backward_mode, is_backward_enabled
-            )
+        processed_trajectories = self._run_postprocessing(
+            full_traj,
+            is_backward_mode,
+            is_backward_enabled,
+            clean=self._panels.postprocess.enable_postprocessing.isChecked(),
+        )
 
         if not is_backward_mode:
             self._handle_forward_tracking_done(
@@ -2902,7 +2919,9 @@ class TrackingOrchestrator:
         candidates = sorted(_glob.glob(pattern))
         return str(candidates[-1]) if candidates else ""
 
-    def _apply_identity_postprocessing_to_df(self, with_pose_df: pd.DataFrame) -> pd.DataFrame:
+    def _apply_identity_postprocessing_to_df(
+        self, with_pose_df: pd.DataFrame
+    ) -> pd.DataFrame:
         """Run identity-aware split/join processing on the augmented dataframe."""
         if with_pose_df is None or with_pose_df.empty:
             return with_pose_df
@@ -2912,9 +2931,13 @@ class TrackingOrchestrator:
         def _annotate_identity_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
             out = df.copy()
             cnn_class_columns = [
-                col for col in out.columns if str(col).startswith("CNN_") and str(col).endswith("_Class")
+                col
+                for col in out.columns
+                if str(col).startswith("CNN_") and str(col).endswith("_Class")
             ]
-            tag_labels = [str(label) for label in (params.get("TAG_IDENTITY_LABELS", []) or [])]
+            tag_labels = [
+                str(label) for label in (params.get("TAG_IDENTITY_LABELS", []) or [])
+            ]
 
             def _row_sources(row: pd.Series) -> object:
                 sources = []
@@ -2922,7 +2945,9 @@ class TrackingOrchestrator:
                     sources.append("apriltag")
                 if any(pd.notna(row.get(col)) for col in cnn_class_columns):
                     sources.append("cnn")
-                if pd.notna(row.get("IdentityOfflineLabel")) or pd.notna(row.get("IdentitySmoothedLabel")):
+                if pd.notna(row.get("IdentityOfflineLabel")) or pd.notna(
+                    row.get("IdentitySmoothedLabel")
+                ):
                     sources.append("offline")
                 if pd.notna(row.get("IdentityAssignedLabel")) and not sources:
                     sources.append("online")
@@ -3016,7 +3041,9 @@ class TrackingOrchestrator:
                             if _lbl not in _raw_labels:
                                 _raw_labels.append(_lbl)
                     if not _raw_labels:
-                        raise ValueError("ENABLE_IDENTITY_OFFLINE_DECODER requires identity labels in params.")
+                        raise ValueError(
+                            "ENABLE_IDENTITY_OFFLINE_DECODER requires identity labels in params."
+                        )
                     catalog = IdentityCatalog.from_labels(_raw_labels)
 
                     # Load all available evidence sidecars emitted by CNN phases.
@@ -3059,7 +3086,9 @@ class TrackingOrchestrator:
                                 catalog,
                                 [
                                     str(label)
-                                    for label in (params.get("TAG_IDENTITY_LABELS", []) or [])
+                                    for label in (
+                                        params.get("TAG_IDENTITY_LABELS", []) or []
+                                    )
                                 ],
                             )
                         )
