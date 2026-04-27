@@ -491,11 +491,256 @@ class PostProcessPanel(QWidget):
         )
         f_cleaning_filters.addRow("", self.chk_cleanup_temp_files)
 
+        # --- Offline Identity Decoding ---
+        self.g_offline_identity = QGroupBox("Offline Identity Decoding")
+        self._main_window._set_compact_section_widget(self.g_offline_identity)
+        vl_offline_identity = QVBoxLayout(self.g_offline_identity)
+        vl_offline_identity.addWidget(
+            self._main_window._create_help_label(
+                "Run Bayesian smoothing and global fragment assignment after tracking "
+                "to refine identity labels. Only takes effect when identity analysis is enabled. "
+                "When disabled, a simpler per-row identity assignment is applied instead."
+            )
+        )
+        self.chk_enable_offline_identity_decoder = QCheckBox(
+            "Enable offline identity decoder"
+        )
+        self.chk_enable_offline_identity_decoder.setChecked(False)
+        self.chk_enable_offline_identity_decoder.setToolTip(
+            "Run the offline Bayesian HMM smoother and MILP global fragment assignment "
+            "after tracking completes. Requires identity analysis to be configured."
+        )
+        self.chk_enable_offline_identity_decoder.stateChanged.connect(
+            self._on_offline_identity_toggled
+        )
+        vl_offline_identity.addWidget(self.chk_enable_offline_identity_decoder)
+
+        self.offline_identity_content = QWidget()
+        offline_identity_layout = QVBoxLayout(self.offline_identity_content)
+        offline_identity_layout.setContentsMargins(0, 0, 0, 0)
+        offline_identity_layout.setSpacing(8)
+
+        self.g_offline_split, f_offline_split = self._create_subsection_form(
+            "Trajectory Splitting",
+            "Split trajectories where the smoothed identity posterior shows a sustained regime change.",
+        )
+
+        self.chk_identity_offline_split_trajectories = QCheckBox(
+            "Allow HMM to split trajectories on sustained identity switches"
+        )
+        self.chk_identity_offline_split_trajectories.setChecked(
+            bool(
+                self._main_window.advanced_config.get(
+                    "identity_offline_split_trajectories", False
+                )
+            )
+        )
+        self.chk_identity_offline_split_trajectories.setToolTip(
+            "When disabled, the offline decoder smooths and assigns identities "
+            "without rewriting TrajectoryID values."
+        )
+        f_offline_split.addRow("", self.chk_identity_offline_split_trajectories)
+
+        self.spin_identity_offline_split_min_conf = QDoubleSpinBox()
+        self.spin_identity_offline_split_min_conf.setRange(0.0, 1.0)
+        self.spin_identity_offline_split_min_conf.setSingleStep(0.01)
+        self.spin_identity_offline_split_min_conf.setDecimals(2)
+        self.spin_identity_offline_split_min_conf.setValue(
+            float(
+                self._main_window.advanced_config.get(
+                    "identity_offline_split_min_conf", 0.75
+                )
+            )
+        )
+        self.spin_identity_offline_split_min_conf.setToolTip(
+            "Minimum smoothed posterior confidence required before offline splitting "
+            "considers a label regime stable."
+        )
+
+        self.spin_identity_offline_split_min_margin = QDoubleSpinBox()
+        self.spin_identity_offline_split_min_margin.setRange(0.0, 1.0)
+        self.spin_identity_offline_split_min_margin.setSingleStep(0.01)
+        self.spin_identity_offline_split_min_margin.setDecimals(2)
+        self.spin_identity_offline_split_min_margin.setValue(
+            float(
+                self._main_window.advanced_config.get(
+                    "identity_offline_split_min_margin", 0.2
+                )
+            )
+        )
+        self.spin_identity_offline_split_min_margin.setToolTip(
+            "Required posterior margin between the top two labels before offline "
+            "splitting treats a regime change as trustworthy."
+        )
+
+        self.split_conf_row = self._build_field_grid(
+            [
+                (QLabel("Min confidence"), self.spin_identity_offline_split_min_conf),
+                (QLabel("Min margin"), self.spin_identity_offline_split_min_margin),
+            ],
+            columns=2,
+        )
+        f_offline_split.addRow(self.split_conf_row)
+
+        self.spin_identity_offline_split_min_frames = QSpinBox()
+        self.spin_identity_offline_split_min_frames.setRange(1, 1000)
+        self.spin_identity_offline_split_min_frames.setValue(
+            int(
+                self._main_window.advanced_config.get(
+                    "identity_offline_split_min_frames", 3
+                )
+            )
+        )
+        self.spin_identity_offline_split_min_frames.setToolTip(
+            "Minimum consecutive frames needed on each side of an offline identity switch "
+            "before the trajectory is split."
+        )
+
+        self.spin_identity_offline_split_max_bridge_frames = QSpinBox()
+        self.spin_identity_offline_split_max_bridge_frames.setRange(0, 1000)
+        self.spin_identity_offline_split_max_bridge_frames.setValue(
+            int(
+                self._main_window.advanced_config.get(
+                    "identity_offline_split_max_bridge_frames", 6
+                )
+            )
+        )
+        self.spin_identity_offline_split_max_bridge_frames.setToolTip(
+            "Maximum ambiguous bridge length tolerated between two strong offline identity "
+            "regimes before splitting is suppressed."
+        )
+
+        self.split_span_row = self._build_field_grid(
+            [
+                (
+                    QLabel("Min frames per side"),
+                    self.spin_identity_offline_split_min_frames,
+                ),
+                (
+                    QLabel("Max bridge frames"),
+                    self.spin_identity_offline_split_max_bridge_frames,
+                ),
+            ],
+            columns=2,
+        )
+        f_offline_split.addRow(self.split_span_row)
+
+        self.g_offline_solver, f_offline_solver = self._create_subsection_form(
+            "Global Solver",
+            "MILP solver settings for the global fragment-to-identity assignment.",
+        )
+
+        self.spin_identity_offline_ilp_time_limit = QDoubleSpinBox()
+        self.spin_identity_offline_ilp_time_limit.setRange(1.0, 3600.0)
+        self.spin_identity_offline_ilp_time_limit.setSingleStep(1.0)
+        self.spin_identity_offline_ilp_time_limit.setDecimals(1)
+        self.spin_identity_offline_ilp_time_limit.setValue(
+            float(
+                self._main_window.advanced_config.get(
+                    "identity_offline_ilp_time_limit", 30.0
+                )
+            )
+        )
+        self.spin_identity_offline_ilp_time_limit.setToolTip(
+            "Wall-clock time limit in seconds for the offline global MILP fragment assignment solver."
+        )
+
+        self.spin_identity_offline_ilp_rel_gap = QDoubleSpinBox()
+        self.spin_identity_offline_ilp_rel_gap.setRange(0.0, 1.0)
+        self.spin_identity_offline_ilp_rel_gap.setSingleStep(0.0001)
+        self.spin_identity_offline_ilp_rel_gap.setDecimals(6)
+        self.spin_identity_offline_ilp_rel_gap.setValue(
+            float(
+                self._main_window.advanced_config.get(
+                    "identity_offline_ilp_rel_gap", 1e-6
+                )
+            )
+        )
+        self.spin_identity_offline_ilp_rel_gap.setToolTip(
+            "Relative optimality gap tolerated by the offline MILP solver before it stops early."
+        )
+
+        self.solver_row = self._build_field_grid(
+            [
+                (QLabel("Time limit (s)"), self.spin_identity_offline_ilp_time_limit),
+                (QLabel("Rel. gap"), self.spin_identity_offline_ilp_rel_gap),
+            ],
+            columns=2,
+        )
+        f_offline_solver.addRow(self.solver_row)
+
+        self.g_offline_respawn_prior, f_offline_respawn_prior = (
+            self._create_subsection_form(
+                "Respawn Prior",
+                "Carry a slot's identity posterior forward when it respawns, decaying over time.",
+            )
+        )
+
+        self.spin_identity_respawn_prior_strength = QDoubleSpinBox()
+        self.spin_identity_respawn_prior_strength.setRange(0.0, 1.0)
+        self.spin_identity_respawn_prior_strength.setSingleStep(0.01)
+        self.spin_identity_respawn_prior_strength.setDecimals(2)
+        self.spin_identity_respawn_prior_strength.setValue(
+            float(
+                self._main_window.advanced_config.get(
+                    "identity_respawn_prior_strength", 0.75
+                )
+            )
+        )
+        self.spin_identity_respawn_prior_strength.setToolTip(
+            "How strongly a recently lost slot's identity posterior seeds the next respawn of that slot."
+        )
+
+        self.spin_identity_respawn_prior_decay = QDoubleSpinBox()
+        self.spin_identity_respawn_prior_decay.setRange(0.0, 1.0)
+        self.spin_identity_respawn_prior_decay.setSingleStep(0.001)
+        self.spin_identity_respawn_prior_decay.setDecimals(3)
+        self.spin_identity_respawn_prior_decay.setValue(
+            float(
+                self._main_window.advanced_config.get(
+                    "identity_respawn_prior_decay", 0.97
+                )
+            )
+        )
+        self.spin_identity_respawn_prior_decay.setToolTip(
+            "Per-frame decay applied to the carried respawn prior as the slot stays absent."
+        )
+
+        self.spin_identity_respawn_prior_max_gap = QSpinBox()
+        self.spin_identity_respawn_prior_max_gap.setRange(0, 10000)
+        self.spin_identity_respawn_prior_max_gap.setValue(
+            int(
+                self._main_window.advanced_config.get(
+                    "identity_respawn_prior_max_gap", 120
+                )
+            )
+        )
+        self.spin_identity_respawn_prior_max_gap.setToolTip(
+            "Maximum gap in frames where a lost slot can still reuse its carried identity prior on respawn."
+        )
+
+        self.respawn_prior_row = self._build_field_grid(
+            [
+                (QLabel("Strength"), self.spin_identity_respawn_prior_strength),
+                (QLabel("Decay"), self.spin_identity_respawn_prior_decay),
+                (QLabel("Max gap (frames)"), self.spin_identity_respawn_prior_max_gap),
+            ],
+            columns=3,
+        )
+        f_offline_respawn_prior.addRow(self.respawn_prior_row)
+
+        offline_identity_layout.addWidget(self.g_offline_split)
+        offline_identity_layout.addWidget(self.g_offline_solver)
+        offline_identity_layout.addWidget(self.g_offline_respawn_prior)
+        vl_offline_identity.addWidget(self.offline_identity_content)
+        self.offline_identity_content.setVisible(False)
+
         cleaning_sections_layout.addWidget(self.g_cleaning_filters)
         cleaning_sections_layout.addWidget(self.g_motion_breaks)
         cleaning_sections_layout.addWidget(self.g_relinking)
         cleaning_sections_layout.addWidget(self.g_pose_quality)
         cleaning_sections_layout.addWidget(self.g_interpolation_merge)
+        cleaning_sections_layout.addWidget(self.g_offline_identity)
         vl_pp.addWidget(self.cleaning_sections_widget)
         vbox.addWidget(g_pp)
 
@@ -896,6 +1141,10 @@ class PostProcessPanel(QWidget):
         self.g_interpolation_merge.setEnabled(enabled)
         self.g_pose_quality.setVisible(pose_enabled)
         self.g_pose_quality.setEnabled(pose_enabled)
+        self.g_offline_identity.setVisible(enabled)
+        self.g_offline_identity.setEnabled(enabled)
+        if not enabled:
+            self.offline_identity_content.setVisible(False)
 
     def _set_video_output_section_state(self, checked: bool) -> None:
         """Show or hide the grouped video-export controls."""
@@ -915,6 +1164,11 @@ class PostProcessPanel(QWidget):
         """Enable/disable trajectory cleaning controls based on checkbox."""
         enabled = self.enable_postprocessing.isChecked()
         self._set_cleaning_section_state(enabled)
+
+    def _on_offline_identity_toggled(self, state):
+        """Show or hide offline identity decoder sub-sections."""
+        visible = self.chk_enable_offline_identity_decoder.isChecked()
+        self.offline_identity_content.setVisible(visible)
 
     def sync_heading_flip_posthoc_ui(self, posthoc_active: bool) -> None:
         """Toggle the heading-flip burst control vs. the post-hoc note.
