@@ -480,6 +480,25 @@ class PostProcessPanel(QWidget):
         )
         f_interpolation_merge.addRow(self.min_overlap_row_widget)
 
+        self.spin_identity_disagree_min_run = QSpinBox()
+        self.spin_identity_disagree_min_run.setRange(0, 100)
+        self.spin_identity_disagree_min_run.setValue(5)
+        self.spin_identity_disagree_min_run.setToolTip(
+            "Minimum consecutive frames of committed identity disagreement required\n"
+            "to split a spatially-agreeing forward/backward trajectory pair.\n"
+            "Forward and backward must both have committed (stable) identity labels\n"
+            "that conflict for at least this many consecutive frames before a split\n"
+            "is triggered. Set to 0 to split on every single disagreeing frame\n"
+            "(more aggressive). Higher values suppress noise from brief identity\n"
+            "uncertainty at segment boundaries. Recommended: 3-10 frames."
+        )
+        self.lbl_identity_disagree_min_run = QLabel("Identity split min run (frames)")
+        self.identity_disagree_row_widget = self._build_field_grid(
+            [(self.lbl_identity_disagree_min_run, self.spin_identity_disagree_min_run)],
+            columns=1,
+        )
+        f_interpolation_merge.addRow(self.identity_disagree_row_widget)
+
         # Cleanup option
         self.chk_cleanup_temp_files = QCheckBox("Auto-cleanup temporary files")
         self.chk_cleanup_temp_files.setChecked(True)
@@ -491,29 +510,34 @@ class PostProcessPanel(QWidget):
         )
         f_cleaning_filters.addRow("", self.chk_cleanup_temp_files)
 
-        # --- Offline Identity Decoding ---
-        self.g_offline_identity = QGroupBox("Offline Identity Decoding")
+        # --- Identity Post-Processing ---
+        self.g_offline_identity = QGroupBox("Identity Post-Processing")
         self._main_window._set_compact_section_widget(self.g_offline_identity)
         vl_offline_identity = QVBoxLayout(self.g_offline_identity)
         vl_offline_identity.addWidget(
             self._main_window._create_help_label(
-                "Run Bayesian smoothing and global fragment assignment after tracking "
-                "to refine identity labels. Only takes effect when identity analysis is enabled. "
-                "When disabled, a simpler per-row identity assignment is applied instead."
+                "Choose how identity labels are assigned after tracking. "
+                "Only takes effect when identity analysis is enabled.\n"
+                "• None — no identity post-processing.\n"
+                "• Heuristic — rule-based split/chain on per-row identity evidence.\n"
+                "• Offline Decoder — Bayesian HMM smoother + MILP global assignment."
             )
         )
-        self.chk_enable_offline_identity_decoder = QCheckBox(
-            "Enable offline identity decoder"
+        self.cmb_identity_postprocess_mode = QComboBox()
+        self.cmb_identity_postprocess_mode.addItems(
+            ["None", "Heuristic", "Offline Decoder"]
         )
-        self.chk_enable_offline_identity_decoder.setChecked(False)
-        self.chk_enable_offline_identity_decoder.setToolTip(
-            "Run the offline Bayesian HMM smoother and MILP global fragment assignment "
-            "after tracking completes. Requires identity analysis to be configured."
+        self.cmb_identity_postprocess_mode.setCurrentText("Heuristic")
+        self.cmb_identity_postprocess_mode.setToolTip(
+            "None: skip identity post-processing entirely.\n"
+            "Heuristic: split trajectories on stable identity-evidence changes and re-chain.\n"
+            "Offline Decoder: run the Bayesian HMM smoother and MILP global fragment "
+            "assignment. Requires identity analysis to be configured."
         )
-        self.chk_enable_offline_identity_decoder.stateChanged.connect(
+        self.cmb_identity_postprocess_mode.currentTextChanged.connect(
             self._on_offline_identity_toggled
         )
-        vl_offline_identity.addWidget(self.chk_enable_offline_identity_decoder)
+        vl_offline_identity.addWidget(self.cmb_identity_postprocess_mode)
 
         self.offline_identity_content = QWidget()
         offline_identity_layout = QVBoxLayout(self.offline_identity_content)
@@ -1165,9 +1189,9 @@ class PostProcessPanel(QWidget):
         enabled = self.enable_postprocessing.isChecked()
         self._set_cleaning_section_state(enabled)
 
-    def _on_offline_identity_toggled(self, state):
+    def _on_offline_identity_toggled(self, _=None):
         """Show or hide offline identity decoder sub-sections."""
-        visible = self.chk_enable_offline_identity_decoder.isChecked()
+        visible = self.cmb_identity_postprocess_mode.currentText() == "Offline Decoder"
         self.offline_identity_content.setVisible(visible)
 
     def sync_heading_flip_posthoc_ui(self, posthoc_active: bool) -> None:

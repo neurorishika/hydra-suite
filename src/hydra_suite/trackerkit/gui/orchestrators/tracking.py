@@ -302,6 +302,11 @@ class TrackingOrchestrator:
         self._request_qthread_stop(
             getattr(self._mw, "merge_worker", None), "MergeWorker", timeout_ms=1200
         )
+        self._request_qthread_stop(
+            getattr(self._mw, "postprocess_worker", None),
+            "PostProcessWorker",
+            timeout_ms=1200,
+        )
         self._request_qthread_stop(self._mw.dataset_worker, "DatasetGenerationWorker")
         self._request_qthread_stop(self._mw.interp_worker, "InterpolatedCropsWorker")
         self._request_qthread_stop(
@@ -312,6 +317,7 @@ class TrackingOrchestrator:
 
         self._cleanup_thread_reference("_cache_builder_worker")
         self._cleanup_thread_reference("merge_worker")
+        self._cleanup_thread_reference("postprocess_worker")
         self._cleanup_thread_reference("dataset_worker")
         self._cleanup_thread_reference("interp_worker")
         self._cleanup_thread_reference("final_media_export_worker")
@@ -2260,50 +2266,6 @@ class TrackingOrchestrator:
                 "Preview was stopped or encountered an error.",
             )
 
-    def _run_postprocessing(
-        self, full_traj, is_backward_mode, is_backward_enabled, clean=True
-    ):
-        """Apply post-processing to trajectories and return processed result.
-
-        When clean=False, skips all velocity/occlusion/spatial cleaning and simply
-        collapses the CSV by TrajectoryID, preserving all trajectory IDs from the raw CSV.
-        """
-        from hydra_suite.core.post.processing import (
-            process_trajectories,
-            process_trajectories_from_csv,
-        )
-
-        params = self._mw.get_parameters_dict()
-        raw_csv_path = self._panels.setup.csv_line.text()
-
-        if is_backward_mode and raw_csv_path:
-            base, ext = os.path.splitext(raw_csv_path)
-            csv_to_process = f"{base}_backward{ext}"
-        elif is_backward_enabled and raw_csv_path:
-            base, ext = os.path.splitext(raw_csv_path)
-            csv_to_process = f"{base}_forward{ext}"
-        else:
-            csv_to_process = raw_csv_path
-
-        if csv_to_process and os.path.exists(csv_to_process):
-            if not clean:
-                params = dict(params)
-                params["MIN_TRAJECTORY_LENGTH"] = 1
-                params["MAX_VELOCITY_BREAK"] = float("inf")
-                params["MAX_OCCLUSION_GAP"] = 0
-                params["MAX_VELOCITY_ZSCORE"] = 0.0
-            processed_trajectories, stats = process_trajectories_from_csv(
-                csv_to_process, params
-            )
-            logger.info(
-                f"Post-processing stats ({'full clean' if clean else 'collapse only'}): {stats}"
-            )
-        else:
-            processed_trajectories, stats = process_trajectories(full_traj, params)
-            logger.info(f"Post-processing stats (fallback): {stats}")
-
-        return processed_trajectories
-
     def _handle_forward_tracking_done(
         self, processed_trajectories, is_backward_enabled, fps_list
     ):
@@ -2551,12 +2513,70 @@ class TrackingOrchestrator:
         self._accumulate_session_fps(fps_list, is_backward_mode)
         is_backward_enabled = self._panels.tracking.chk_enable_backward.isChecked()
 
-        processed_trajectories = self._run_postprocessing(
-            full_traj,
-            is_backward_mode,
-            is_backward_enabled,
-            clean=self._panels.postprocess.enable_postprocessing.isChecked(),
+        self._mw._postprocess_is_backward_mode = is_backward_mode
+        self._mw._postprocess_is_backward_enabled = is_backward_enabled
+        self._mw._postprocess_fps_list = fps_list
+
+        self._start_postprocess_worker(is_backward_mode, is_backward_enabled)
+
+    def _start_postprocess_worker(self, is_backward_mode, is_backward_enabled):
+        """Launch PostProcessWorker to clean raw trajectory CSV in the background."""
+        from hydra_suite.trackerkit.gui.workers.postprocess_worker import (
+            PostProcessWorker,
         )
+
+        params = self._mw.get_parameters_dict()
+        raw_csv_path = self._panels.setup.csv_line.text()
+
+        if is_backward_mode:
+            base, ext = os.path.splitext(raw_csv_path)
+            csv_to_process = f"{base}_backward{ext}"
+        elif is_backward_enabled:
+            base, ext = os.path.splitext(raw_csv_path)
+            csv_to_process = f"{base}_forward{ext}"
+        else:
+            csv_to_process = raw_csv_path
+
+        clean = self._panels.postprocess.enable_postprocessing.isChecked()
+
+        self._mw.progress_bar.setVisible(True)
+        self._mw.progress_label.setVisible(True)
+        self._mw.progress_bar.setValue(0)
+        self._mw.progress_label.setText("Post-processing trajectories...")
+
+        self._mw.postprocess_worker = PostProcessWorker(
+            csv_to_process, params, clean=clean
+        )
+        self._mw.postprocess_worker.progress_signal.connect(
+            self.on_postprocess_progress
+        )
+        self._mw.postprocess_worker.finished_signal.connect(
+            self.on_postprocess_finished
+        )
+        self._mw.postprocess_worker.error_signal.connect(self.on_postprocess_error)
+        self._mw.postprocess_worker.start()
+
+    def on_postprocess_progress(self, value, message):
+        """Update progress bar during post-processing."""
+        if self._mw._stop_all_requested:
+            return
+        self._mw.progress_bar.setValue(value)
+        self._mw.progress_label.setText(message)
+
+    def on_postprocess_finished(self, processed_trajectories):
+        """Route processed trajectories to the appropriate pipeline stage."""
+        self._cleanup_thread_reference("postprocess_worker")
+        if self._mw._stop_all_requested:
+            self._mw._refresh_progress_visibility()
+            return
+        self._mw.progress_bar.setVisible(False)
+        self._mw.progress_label.setVisible(False)
+
+        is_backward_mode = getattr(self._mw, "_postprocess_is_backward_mode", False)
+        is_backward_enabled = getattr(
+            self._mw, "_postprocess_is_backward_enabled", False
+        )
+        fps_list = getattr(self._mw, "_postprocess_fps_list", [])
 
         if not is_backward_mode:
             self._handle_forward_tracking_done(
@@ -2564,6 +2584,21 @@ class TrackingOrchestrator:
             )
         else:
             self._handle_backward_tracking_done(processed_trajectories)
+
+    def on_postprocess_error(self, error_message):
+        """Handle post-processing errors."""
+        self._cleanup_thread_reference("postprocess_worker")
+        if self._mw._stop_all_requested:
+            self._mw._refresh_progress_visibility()
+            return
+        self._mw.progress_bar.setVisible(False)
+        self._mw.progress_label.setVisible(False)
+        QMessageBox.critical(
+            self._mw,
+            "Post-Processing Error",
+            f"Error during trajectory post-processing:\n{error_message}",
+        )
+        logger.error(f"Trajectory post-processing error: {error_message}")
 
     def _check_pose_export_sources(self):
         """Return (has_other_analyses, cache_path, cache_available, interp_pose_path,
@@ -3008,15 +3043,13 @@ class TrackingOrchestrator:
                 finally:
                     tag_cache.close()
 
-            offline_decoder_enabled = bool(
-                params.get("ENABLE_IDENTITY_OFFLINE_DECODER", False)
-            )
-            if not offline_decoder_enabled:
+            _identity_mode = str(params.get("IDENTITY_POSTPROCESS_MODE", "Heuristic"))
+            if _identity_mode == "Heuristic":
                 with_pose_df = apply_identity_postprocessing(with_pose_df, params)
 
             # === Identity Phase 3+4 ===
             # Run offline Bayesian smoothing + fragment assignment when enabled.
-            if offline_decoder_enabled:
+            if _identity_mode == "Offline Decoder":
                 try:
                     from hydra_suite.core.identity.cache import IdentityEvidenceCache
                     from hydra_suite.core.identity.catalog import IdentityCatalog
@@ -4067,6 +4100,14 @@ class TrackingOrchestrator:
     def start_tracking_on_video(self: object, video_path, backward_mode=False):
         """start_tracking_on_video method documentation."""
         if self._mw.tracking_worker and self._mw.tracking_worker.isRunning():
+            return
+        if not self._panels.setup.csv_line.text().strip():
+            QMessageBox.warning(
+                self._mw,
+                "No Output CSV",
+                "Please set an output CSV path before starting tracking.\n\n"
+                "A default path is set automatically when you load a video.",
+            )
             return
         self._mw._stop_all_requested = False
         self._mw._pending_finish_after_interp = False

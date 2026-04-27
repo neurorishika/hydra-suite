@@ -837,11 +837,11 @@ def apply_identity_postprocessing(
     # already carries ``IdentityOfflineLabel`` rows written by
     # ``apply_fragment_labels_to_trajectories``.  The legacy heuristic pass
     # below would overwrite those results, so we skip it.
-    if bool(params.get("ENABLE_IDENTITY_OFFLINE_DECODER", False)):
+    if str(params.get("IDENTITY_POSTPROCESS_MODE", "Heuristic")) == "Offline Decoder":
         if "IdentityOfflineLabel" in trajectories_df.columns:
             return _apply_offline_identity_compat_columns(trajectories_df)
         # Offline decoder was requested but did not produce output (evidence
-        # cache missing?).  Fall through to legacy processing so the user
+        # cache missing?).  Fall through to heuristic processing so the user
         # still gets *some* identity assignment rather than an empty result.
 
     out = _ensure_identity_columns(trajectories_df)

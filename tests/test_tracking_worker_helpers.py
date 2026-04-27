@@ -175,7 +175,6 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     classification_cnn.CNNIdentityBackend = object
     classification_cnn.CNNIdentityCache = object
     classification_cnn.CNNIdentityConfig = object
-    classification_cnn.apply_cnn_identity_cost = lambda *_args, **_kwargs: 0.0
     classification_headtail = types.ModuleType(
         "hydra_suite.core.identity.classification.headtail"
     )

@@ -685,8 +685,16 @@ class ConfigOrchestrator:
         self._panels.postprocess.enable_postprocessing.setChecked(
             get_cfg("enable_postprocessing", default=True)
         )
-        self._panels.postprocess.chk_enable_offline_identity_decoder.setChecked(
-            bool(get_cfg("enable_offline_identity_decoder", default=False))
+        _saved_mode = get_cfg("identity_postprocess_mode", default=None)
+        if _saved_mode is None:
+            # backward compat: migrate from the old boolean
+            _saved_mode = (
+                "Offline Decoder"
+                if bool(get_cfg("enable_offline_identity_decoder", default=False))
+                else "Heuristic"
+            )
+        self._panels.postprocess.cmb_identity_postprocess_mode.setCurrentText(
+            str(_saved_mode)
         )
         self._panels.postprocess.chk_prompt_open_refinekit.setChecked(
             bool(get_cfg("prompt_open_refinekit_on_tracking_complete", default=False))
@@ -806,6 +814,9 @@ class ConfigOrchestrator:
         )
         self._panels.postprocess.spin_min_overlap_frames.setValue(
             get_cfg("min_overlap_frames", default=5)
+        )
+        self._panels.postprocess.spin_identity_disagree_min_run.setValue(
+            get_cfg("identity_disagree_min_run", default=5)
         )
 
     def _load_config_visualization(self, get_cfg):
@@ -1696,7 +1707,7 @@ class ConfigOrchestrator:
                 "min_track_seconds": self._panels.tracking.spin_min_track.value(),
                 # === POST-PROCESSING ===
                 "enable_postprocessing": self._panels.postprocess.enable_postprocessing.isChecked(),
-                "enable_offline_identity_decoder": self._panels.postprocess.chk_enable_offline_identity_decoder.isChecked(),
+                "identity_postprocess_mode": self._panels.postprocess.cmb_identity_postprocess_mode.currentText(),
                 "min_trajectory_length_seconds": self._panels.postprocess.spin_min_trajectory_length.value(),
                 "max_velocity_break": self._panels.postprocess.spin_max_velocity_break.value(),
                 "max_occlusion_gap_seconds": self._panels.postprocess.spin_max_occlusion_gap.value(),
@@ -1728,6 +1739,7 @@ class ConfigOrchestrator:
                 # Agreement distance and min overlap frames for conservative merging
                 "merge_agreement_distance_multiplier": self._panels.postprocess.spin_merge_overlap_multiplier.value(),
                 "min_overlap_frames": self._panels.postprocess.spin_min_overlap_frames.value(),
+                "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
@@ -2332,6 +2344,7 @@ class ConfigOrchestrator:
             "AGREEMENT_DISTANCE": self._panels.postprocess.spin_merge_overlap_multiplier.value()
             * scaled_body_size,
             "MIN_OVERLAP_FRAMES": self._panels.postprocess.spin_min_overlap_frames.value(),
+            "IDENTITY_DISAGREE_MIN_RUN": self._panels.postprocess.spin_identity_disagree_min_run.value(),
             # Dataset generation parameters
             "ENABLE_DATASET_GENERATION": self._panels.dataset.chk_enable_dataset_gen.isChecked(),
             "DATASET_NAME": "",
@@ -2380,9 +2393,15 @@ class ConfigOrchestrator:
                 else 64
             ),
             "ENABLE_IDENTITY_ONLINE_DECODER": self._panels.tracking.chk_enable_identity_online_decoder.isChecked(),
+            "IDENTITY_POSTPROCESS_MODE": (
+                self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
+                if self._panels.postprocess.enable_postprocessing.isChecked()
+                else "None"
+            ),
             "ENABLE_IDENTITY_OFFLINE_DECODER": (
                 self._panels.postprocess.enable_postprocessing.isChecked()
-                and self._panels.postprocess.chk_enable_offline_identity_decoder.isChecked()
+                and self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
+                == "Offline Decoder"
             ),
             "ASSOCIATION_IDENTITY_HINT_SCALE": self._panels.tracking.spin_identity_weight.value(),
             "IDENTITY_COMMIT_THRESHOLD": self._panels.tracking.spin_identity_commit_threshold.value(),

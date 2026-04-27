@@ -2181,7 +2181,7 @@ class TrackingWorker(QThread):
         _identity_online_decoder = None
         _identity_online_assignments = {}  # slot_index → IdentityAssignment
         _identity_catalog = None
-        if individual_pipeline_enabled and not self.backward_mode:
+        if individual_pipeline_enabled:
             try:
                 # Collect all known label candidates from CNN + tag configurations.
                 # For multihead (multi-factor) classifiers, build composite catalog

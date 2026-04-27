@@ -292,9 +292,79 @@ def _find_merge_candidates_python(
             agreeing_frames = int(np.count_nonzero(dist <= agreement_distance))
 
             if agreeing_frames >= min_overlap:
-                merge_candidates.append((fi, bi, agreeing_frames, len(common_frames)))
+                identity_agreeing = 0
+                if (
+                    "IdentityCommitted" in fwd.columns
+                    and "IdentityAssignedLabel" in fwd.columns
+                    and "IdentityCommitted" in bwd.columns
+                    and "IdentityAssignedLabel" in bwd.columns
+                ):
+                    fwd_c = fwd["IdentityCommitted"].values
+                    bwd_c = bwd["IdentityCommitted"].values
+                    fwd_lbl = fwd["IdentityAssignedLabel"].values
+                    bwd_lbl = bwd["IdentityAssignedLabel"].values
+                    valid_indices = np.where(valid_mask)[0]
+                    for k_valid, d in zip(valid_indices, dist):
+                        if d > agreement_distance:
+                            continue
+                        fi_k = fi_indices[k_valid]
+                        bi_k = bi_indices[k_valid]
+                        if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
+                            continue
+                        l1 = str(fwd_lbl[fi_k] or "")
+                        l2 = str(bwd_lbl[bi_k] or "")
+                        if l1 and l2 and l1 == l2:
+                            identity_agreeing += 1
+                merge_candidates.append(
+                    (fi, bi, agreeing_frames, len(common_frames), identity_agreeing)
+                )
 
     return merge_candidates
+
+
+def _enrich_candidates_with_identity(
+    candidates, forward_dfs, backward_dfs, agreement_distance
+):
+    """Append identity-agreement count to Numba-produced (fi, bi, agreeing, common) tuples."""
+    enriched = []
+    for fi, bi, agreeing, total_common in candidates:
+        fwd = forward_dfs[fi]
+        bwd = backward_dfs[bi]
+        identity_agreeing = 0
+        if (
+            "IdentityCommitted" in fwd.columns
+            and "IdentityAssignedLabel" in fwd.columns
+            and "IdentityCommitted" in bwd.columns
+            and "IdentityAssignedLabel" in bwd.columns
+        ):
+            fwd_map = {f: i for i, f in enumerate(fwd["FrameID"].values)}
+            bwd_map = {f: i for i, f in enumerate(bwd["FrameID"].values)}
+            fwd_x = fwd["X"].values
+            fwd_y = fwd["Y"].values
+            bwd_x = bwd["X"].values
+            bwd_y = bwd["Y"].values
+            fwd_c = fwd["IdentityCommitted"].values
+            bwd_c = bwd["IdentityCommitted"].values
+            fwd_lbl = fwd["IdentityAssignedLabel"].values
+            bwd_lbl = bwd["IdentityAssignedLabel"].values
+            for f, fi_k in fwd_map.items():
+                bi_k = bwd_map.get(f)
+                if bi_k is None:
+                    continue
+                if pd.isna(fwd_x[fi_k]) or pd.isna(bwd_x[bi_k]):
+                    continue
+                dx = fwd_x[fi_k] - bwd_x[bi_k]
+                dy = fwd_y[fi_k] - bwd_y[bi_k]
+                if np.sqrt(dx * dx + dy * dy) > agreement_distance:
+                    continue
+                if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
+                    continue
+                l1 = str(fwd_lbl[fi_k] or "")
+                l2 = str(bwd_lbl[bi_k] or "")
+                if l1 and l2 and l1 == l2:
+                    identity_agreeing += 1
+        enriched.append((fi, bi, agreeing, total_common, identity_agreeing))
+    return enriched
 
 
 # ============================================================================
@@ -467,7 +537,14 @@ def _split_segments_at_occlusion_gaps(
 def _split_segments_at_spatial_jumps(
     segments, max_vel_break, min_len, new_traj_id, stats
 ):
-    """Split segments at large spatial discontinuities across NaN gaps.
+    """Split segments at large spatial discontinuities that span NaN gaps.
+
+    This is the complement to ``_break_trajectory_at_velocity``.  That function
+    uses ``diff()`` on the DataFrame, which produces NaN velocity wherever a row
+    has NaN X/Y (occluded/lost state), so it cannot detect teleportation across
+    an occlusion gap.  This function explicitly iterates over only valid (non-NaN)
+    positions and checks ``frame_gap > 1`` — i.e. it *only* fires across gaps,
+    never on consecutive frames.  The two functions together cover all cases.
 
     Returns (final_segments, new_traj_id).
     """
@@ -520,6 +597,11 @@ def _break_trajectory_at_velocity(
     stats,
 ):
     """Break a single trajectory at velocity-based break points.
+
+    Operates on frame-to-frame velocity between consecutively tracked positions.
+    NaN rows (occluded/lost state, inserted before this function is called) cause
+    ``diff()`` to produce NaN velocity at gap boundaries — those are invisible here
+    and are handled downstream by ``_split_segments_at_spatial_jumps`` instead.
 
     Returns (segments_list, new_traj_id).
     """
@@ -838,7 +920,7 @@ def _drop_source_column(traj_list):
 
 
 def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_overlap):
-    if NUMBA_AVAILABLE and len(forward_dfs) > 5 and len(backward_dfs) > 5:
+    if NUMBA_AVAILABLE and len(forward_dfs) > 1 and len(backward_dfs) > 1:
         logger.debug("Using Numba-accelerated merge candidate search")
         fwd_x, fwd_y, fwd_frames, fwd_starts, fwd_ends = _prepare_trajectory_arrays(
             forward_dfs
@@ -863,7 +945,10 @@ def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_ov
                     min_overlap,
                 )
             )
-            return list(zip(fi_arr, bi_arr, agreeing_arr, common_arr))
+            candidates = list(zip(fi_arr, bi_arr, agreeing_arr, common_arr))
+            return _enrich_candidates_with_identity(
+                candidates, forward_dfs, backward_dfs, agreement_distance
+            )
         except Exception as e:
             logger.warning(f"Numba acceleration failed, falling back to Python: {e}")
     return _find_merge_candidates_python(
@@ -872,23 +957,33 @@ def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_ov
 
 
 def _apply_merge_candidates(
-    merge_candidates, forward_dfs, backward_dfs, agreement_distance, min_length
+    merge_candidates,
+    forward_dfs,
+    backward_dfs,
+    agreement_distance,
+    min_length,
+    identity_disagree_min_run=5,
 ):
     used_forward = set()
     used_backward = set()
     result_trajectories = []
-    merge_candidates.sort(key=lambda x: -x[2])
-    for fi, bi, agreeing, total_common in merge_candidates:
+    merge_candidates.sort(key=lambda x: (-x[2], -x[4]))
+    for fi, bi, agreeing, total_common, identity_agreeing in merge_candidates:
         if fi in used_forward or bi in used_backward:
             continue
         used_forward.add(fi)
         used_backward.add(bi)
         logger.debug(
             f"Merging forward_{fi} with backward_{bi}: "
-            f"{agreeing}/{total_common} agreeing frames"
+            f"{agreeing}/{total_common} agreeing frames "
+            f"({identity_agreeing} identity-confirmed)"
         )
         merged_segments = _conservative_merge(
-            forward_dfs[fi], backward_dfs[bi], agreement_distance, min_length
+            forward_dfs[fi],
+            backward_dfs[bi],
+            agreement_distance,
+            min_length,
+            identity_disagree_min_run=identity_disagree_min_run,
         )
         result_trajectories.extend(merged_segments)
     for fi, fwd in enumerate(forward_dfs):
@@ -946,6 +1041,7 @@ def resolve_trajectories(
     AGREEMENT_DISTANCE = params.get("AGREEMENT_DISTANCE", 15.0)
     MIN_OVERLAP_FRAMES = params.get("MIN_OVERLAP_FRAMES", 5)
     MIN_LENGTH = params.get("MIN_TRAJECTORY_LENGTH", 5)
+    IDENTITY_DISAGREE_MIN_RUN = int(params.get("IDENTITY_DISAGREE_MIN_RUN", 5))
 
     logger.info(
         f"Starting conservative trajectory resolution with {len(forward_trajs)} forward "
@@ -1004,7 +1100,12 @@ def resolve_trajectories(
 
     # Now merge candidates using conservative strategy
     result_trajectories = _apply_merge_candidates(
-        merge_candidates, forward_dfs, backward_dfs, AGREEMENT_DISTANCE, MIN_LENGTH
+        merge_candidates,
+        forward_dfs,
+        backward_dfs,
+        AGREEMENT_DISTANCE,
+        MIN_LENGTH,
+        identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
     )
 
     # Note: Filtering by MIN_LENGTH is deferred until after stitching
@@ -1020,7 +1121,11 @@ def resolve_trajectories(
     # CRITICAL: Merge overlapping trajectories that agree spatially
     # This handles fragments that overlap in the middle (neither contains the other)
     result_trajectories = _merge_overlapping_agreeing_trajectories(
-        result_trajectories, AGREEMENT_DISTANCE, MIN_OVERLAP_FRAMES, MIN_LENGTH
+        result_trajectories,
+        AGREEMENT_DISTANCE,
+        MIN_OVERLAP_FRAMES,
+        MIN_LENGTH,
+        identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
     )
 
     # NEW: Stitch consecutive fragments that are spatially close
@@ -1054,7 +1159,71 @@ def resolve_trajectories(
     return result_trajectories
 
 
-def _classify_frame_pair(t1_by_frame, t2_by_frame, frame, agreement_distance):
+def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
+    """True when both rows carry committed, non-empty identity labels that differ."""
+    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+        return False
+    l1 = r1.get("IdentityAssignedLabel") or ""
+    l2 = r2.get("IdentityAssignedLabel") or ""
+    return bool(l1) and bool(l2) and l1 != l2
+
+
+def _committed_identity_agrees(r1: dict, r2: dict) -> bool:
+    """True when both rows carry committed, non-empty identity labels that are equal."""
+    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+        return False
+    l1 = r1.get("IdentityAssignedLabel") or ""
+    l2 = r2.get("IdentityAssignedLabel") or ""
+    return bool(l1) and bool(l2) and l1 == l2
+
+
+def _compute_identity_disagree_frames(
+    t1_by_frame: dict,
+    t2_by_frame: dict,
+    agreement_distance: float,
+    min_run: int,
+) -> frozenset:
+    """Return the set of frames that belong to a sustained identity-disagree run.
+
+    A frame qualifies when forward and backward positions agree spatially AND both
+    carry committed but conflicting identity labels.  Isolated disagreements shorter
+    than ``min_run`` consecutive frames are discarded to suppress single-frame blips.
+    Gap tolerance between consecutive candidate frames is 2 frames.
+    """
+    common = sorted(set(t1_by_frame.keys()).intersection(t2_by_frame.keys()))
+    candidates: list[int] = []
+    for frame in common:
+        r1, r2 = t1_by_frame[frame], t2_by_frame[frame]
+        x1, y1 = r1.get("X"), r1.get("Y")
+        x2, y2 = r2.get("X"), r2.get("Y")
+        if pd.isna(x1) or pd.isna(x2):
+            continue
+        dist = np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+        if dist <= agreement_distance and _committed_identity_disagrees(r1, r2):
+            candidates.append(frame)
+
+    if not candidates:
+        return frozenset()
+    if min_run <= 1:
+        return frozenset(candidates)
+
+    result: set[int] = set()
+    run_start = 0
+    for i in range(1, len(candidates) + 1):
+        if i == len(candidates) or candidates[i] - candidates[i - 1] > 2:
+            if i - run_start >= min_run:
+                result.update(candidates[run_start:i])
+            run_start = i
+    return frozenset(result)
+
+
+def _classify_frame_pair(
+    t1_by_frame,
+    t2_by_frame,
+    frame,
+    agreement_distance,
+    identity_disagree_frames=frozenset(),
+):
     in_t1 = frame in t1_by_frame
     in_t2 = frame in t2_by_frame
     if in_t1 and in_t2:
@@ -1072,6 +1241,8 @@ def _classify_frame_pair(t1_by_frame, t2_by_frame, frame, agreement_distance):
         dy = r1["Y"] - r2["Y"]
         dist = np.sqrt(dx * dx + dy * dy)
         if dist <= agreement_distance:
+            if frame in identity_disagree_frames:
+                return "disagree", (r1, r2)
             return "agree", _average_trajectory_rows(r1, r2)
         return "disagree", (r1, r2)
     if in_t1:
@@ -1181,12 +1352,15 @@ def _build_final_segments_from_rows(
     return final_segments
 
 
-def _conservative_merge(traj1, traj2, agreement_distance, min_length):
+def _conservative_merge(
+    traj1, traj2, agreement_distance, min_length, identity_disagree_min_run=5
+):
     """
     Conservatively merge two trajectories.
 
     - Agreeing frames (both exist, distance <= threshold): Average positions
     - Disagreeing frames (both exist, distance > threshold): Split into separate segments
+    - Agreeing frames where both have committed but conflicting identity: also split
     - Unique frames: Keep from whichever trajectory has them
 
     Returns list of trajectory DataFrames (may be more than input if splits occur).
@@ -1198,6 +1372,10 @@ def _conservative_merge(traj1, traj2, agreement_distance, min_length):
     frames1 = set(t1_by_frame.keys())
     frames2 = set(t2_by_frame.keys())
     all_frames = sorted(frames1.union(frames2))
+
+    identity_disagree_frames = _compute_identity_disagree_frames(
+        t1_by_frame, t2_by_frame, agreement_distance, identity_disagree_min_run
+    )
 
     # Build trajectory segments using state machine
     # State: "merged" = building single merged segment
@@ -1214,7 +1392,11 @@ def _conservative_merge(traj1, traj2, agreement_distance, min_length):
 
     for frame in all_frames:
         classification, data = _classify_frame_pair(
-            t1_by_frame, t2_by_frame, frame, agreement_distance
+            t1_by_frame,
+            t2_by_frame,
+            frame,
+            agreement_distance,
+            identity_disagree_frames,
         )
         if state == "merged":
             state, current_segment, split_t1_segment, split_t2_segment = (
@@ -1538,7 +1720,12 @@ def _count_overlap_agreement(
 
 
 def _classify_overlap_frames(
-    all_frames, lookup_a, lookup_b, has_detection_id, agreement_distance
+    all_frames,
+    lookup_a,
+    lookup_b,
+    has_detection_id,
+    agreement_distance,
+    identity_disagree_frames=frozenset(),
 ):
     """Classify each frame of the union of two trajectories as agree/disagree/single-source."""
     frame_classifications = {}
@@ -1555,8 +1742,11 @@ def _classify_overlap_frames(
             else:
                 dist = np.sqrt((ra["X"] - rb["X"]) ** 2 + (ra["Y"] - rb["Y"]) ** 2)
                 if dist <= agreement_distance:
-                    merged = _average_trajectory_rows(ra, rb)
-                    frame_classifications[frame] = ("agree", merged)
+                    if frame in identity_disagree_frames:
+                        frame_classifications[frame] = ("disagree", (ra, rb))
+                    else:
+                        merged = _average_trajectory_rows(ra, rb)
+                        frame_classifications[frame] = ("agree", merged)
                 else:
                     frame_classifications[frame] = ("disagree", (ra, rb))
         elif in_a:
@@ -1860,6 +2050,7 @@ def _try_merge_trajectory_pair(
     min_overlap,
     min_length,
     max_spatial_jump,
+    identity_disagree_min_run=5,
 ):
     """Try to merge trajectory pair (i, j). Returns merged segments list, or None if not mergeable."""
     lookup_a = traj_lookups[i]
@@ -1901,8 +2092,16 @@ def _try_merge_trajectory_pair(
         )
 
     all_frames = sorted(frames_a.union(frames_b))
+    identity_disagree_frames = _compute_identity_disagree_frames(
+        lookup_a, lookup_b, agreement_distance, identity_disagree_min_run
+    )
     frame_classifications = _classify_overlap_frames(
-        all_frames, lookup_a, lookup_b, has_detection_id, agreement_distance
+        all_frames,
+        lookup_a,
+        lookup_b,
+        has_detection_id,
+        agreement_distance,
+        identity_disagree_frames,
     )
 
     result_segments, disagree_a_obs, disagree_b_obs = (
@@ -1939,7 +2138,11 @@ def _try_merge_trajectory_pair(
 
 
 def _merge_overlapping_agreeing_trajectories(
-    trajectories, agreement_distance, min_overlap, min_length
+    trajectories,
+    agreement_distance,
+    min_overlap,
+    min_length,
+    identity_disagree_min_run=5,
 ):
     """
     Merge trajectories that overlap in time and agree spatially or share DetectionIDs.
@@ -2007,6 +2210,7 @@ def _merge_overlapping_agreeing_trajectories(
                     min_overlap,
                     min_length,
                     max_spatial_jump,
+                    identity_disagree_min_run=identity_disagree_min_run,
                 )
 
                 if result_segments is not None:
@@ -2035,6 +2239,34 @@ def _merge_overlapping_agreeing_trajectories(
     return trajectories
 
 
+def _last_committed_label(df: pd.DataFrame) -> str:
+    """Return the most recent committed identity label in df, or empty string."""
+    if (
+        "IdentityCommitted" not in df.columns
+        or "IdentityAssignedLabel" not in df.columns
+    ):
+        return ""
+    committed = df[df["IdentityCommitted"] == 1]
+    if committed.empty:
+        return ""
+    lbl = committed["IdentityAssignedLabel"].iloc[-1]
+    return str(lbl) if lbl and not pd.isna(lbl) else ""
+
+
+def _first_committed_label(df: pd.DataFrame) -> str:
+    """Return the earliest committed identity label in df, or empty string."""
+    if (
+        "IdentityCommitted" not in df.columns
+        or "IdentityAssignedLabel" not in df.columns
+    ):
+        return ""
+    committed = df[df["IdentityCommitted"] == 1]
+    if committed.empty:
+        return ""
+    lbl = committed["IdentityAssignedLabel"].iloc[0]
+    return str(lbl) if lbl and not pd.isna(lbl) else ""
+
+
 def _build_stitch_info(trajectories):
     """Build start/end frame and position lookup for stitching."""
     traj_info = {}
@@ -2046,6 +2278,8 @@ def _build_stitch_info(trajectories):
             "end_frame": df["FrameID"].iat[-1],
             "start_pos": (df["X"].iat[0], df["Y"].iat[0]),
             "end_pos": (df["X"].iat[-1], df["Y"].iat[-1]),
+            "end_identity": _last_committed_label(df),
+            "start_identity": _first_committed_label(df),
             "df": df,
         }
     sorted_indices = sorted(traj_info.keys(), key=lambda i: traj_info[i]["start_frame"])
@@ -2061,9 +2295,18 @@ def _find_best_stitch_candidate(
     agreement_distance,
     max_gap,
 ):
-    """Find the closest spatial stitch candidate within max_gap frames."""
+    """Find the best stitch candidate within max_gap frames.
+
+    Spatial proximity is the primary filter.  When multiple candidates are
+    spatially valid, committed identity agreement breaks ties.  Candidates
+    where both endpoints carry committed but conflicting identity labels are
+    blocked entirely (identity gate).
+    """
     best_idx = -1
     min_dist = float("inf")
+    best_identity_match = False
+    end_id = info_a.get("end_identity", "")
+
     for idx_next in range(idx_ptr + 1, len(sorted_indices)):
         idx_b = sorted_indices[idx_next]
         if idx_b in used:
@@ -2078,10 +2321,25 @@ def _find_best_stitch_candidate(
         bx, by = info_b["start_pos"]
         if pd.isna(ax) or pd.isna(bx):
             continue
+
+        start_id = info_b.get("start_identity", "")
+
+        # Identity gate: conflicting committed labels → skip this candidate.
+        if end_id and start_id and end_id != start_id:
+            continue
+
         dist = np.sqrt((ax - bx) ** 2 + (ay - by) ** 2)
-        if dist <= agreement_distance and dist < min_dist:
+        if dist > agreement_distance:
+            continue
+
+        identity_match = bool(end_id and start_id and end_id == start_id)
+        if dist < min_dist or (
+            dist == min_dist and identity_match and not best_identity_match
+        ):
             min_dist = dist
             best_idx = idx_b
+            best_identity_match = identity_match
+
     return best_idx, min_dist
 
 

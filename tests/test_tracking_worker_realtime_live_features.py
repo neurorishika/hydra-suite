@@ -7,21 +7,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import hydra_suite.core.identity.classification.cnn as cnn_mod
 import hydra_suite.core.tracking.precompute as precompute_mod
 import hydra_suite.core.tracking.worker as worker_mod
 from hydra_suite.core.identity.classification.cnn import (
     ClassPrediction,
     CNNIdentityCache,
-    TrackCNNHistory,
 )
 from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
 from hydra_suite.core.identity.pose.features import build_pose_detection_keypoint_map
 from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
-from hydra_suite.core.tracking.cnn_features import (
-    cnn_build_association_entries,
-    cnn_update_track_history,
-)
+from hydra_suite.core.tracking.cnn_features import cnn_build_association_entries
 from hydra_suite.core.tracking.tag_features import build_tag_detection_map
 from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.data.tag_observation_cache import TagObservationCache
@@ -242,21 +237,6 @@ class _FakeTrackTagHistory:
 
     def resize(self, _n_tracks: int):
         return None
-
-    def record(self, *_args, **_kwargs):
-        return None
-
-    def clear_track(self, *_args, **_kwargs):
-        return None
-
-
-class _FakeTrackCNNHistory:
-    def __init__(self, *, window: int = 10, factor_names: tuple = ("flat",)):
-        self.window = window
-        self.factor_names = factor_names
-
-    def build_track_identity_list(self):
-        return {}
 
     def record(self, *_args, **_kwargs):
         return None
@@ -554,7 +534,6 @@ def test_tracking_worker_realtime_streams_live_pose_tag_and_cnn_into_assignment(
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
     monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
-    monkeypatch.setattr(cnn_mod, "TrackCNNHistory", _FakeTrackCNNHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         worker_mod,
@@ -679,7 +658,6 @@ def test_tracking_worker_realtime_does_not_mark_pose_directed_when_pose_is_weak(
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
     monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
-    monkeypatch.setattr(cnn_mod, "TrackCNNHistory", _FakeTrackCNNHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         (
@@ -794,7 +772,6 @@ def test_tracking_worker_realtime_keeps_cnn_hints_out_of_assignment_when_online_
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
     monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
-    monkeypatch.setattr(cnn_mod, "TrackCNNHistory", _FakeTrackCNNHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         worker_mod,
@@ -1329,7 +1306,7 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
         cnn_cache = CNNIdentityCache(str(cnn_cache_path))
         det_classes, track_identities, frame_preds = cnn_build_association_entries(
             cnn_cache,
-            _FakeTrackCNNHistory(window=10, factor_names=("flat",)),
+            None,
             0,
             1,
             1,
@@ -1476,37 +1453,6 @@ def test_non_realtime_forward_defaults_to_streaming_individual_analysis(
     assert cnn_cache_path.exists()
 
 
-def test_cnn_build_association_entries_handles_multihead_cache_for_flat_history(
-    tmp_path,
-):
-    cache_path = tmp_path / "cnn_multi_assoc.npz"
-    cache = CNNIdentityCache(cache_path, factor_names=("color", "shape"))
-    cache.save(
-        0,
-        [
-            ClassPrediction(
-                det_index=0,
-                factor_names=("color", "shape"),
-                class_names=("red", "circle"),
-                confidences=(0.9, 0.8),
-            )
-        ],
-    )
-    cache.flush()
-
-    det_classes, track_identities, frame_preds = cnn_build_association_entries(
-        CNNIdentityCache(str(cache_path)),
-        TrackCNNHistory(window=10, factor_names=("flat",)),
-        0,
-        1,
-        1,
-    )
-
-    assert det_classes == ["red"]
-    assert track_identities == [None]
-    assert len(frame_preds) == 1
-
-
 def test_cnn_build_association_entries_supports_detection_only_cache_reads(tmp_path):
     cache_path = tmp_path / "cnn_detection_only_assoc.npz"
     cache = CNNIdentityCache(cache_path)
@@ -1534,26 +1480,3 @@ def test_cnn_build_association_entries_supports_detection_only_cache_reads(tmp_p
     assert det_classes == ["alpha"]
     assert track_identities == [None, None]
     assert len(frame_preds) == 1
-
-
-def test_cnn_update_track_history_records_all_multihead_factors():
-    history = TrackCNNHistory(window=5, factor_names=("color", "shape"))
-    frame_preds = [
-        ClassPrediction(
-            det_index=0,
-            factor_names=("color", "shape"),
-            class_names=("red", "circle"),
-            confidences=(0.93, 0.81),
-        )
-    ]
-
-    cnn_update_track_history(
-        history,
-        frame_preds,
-        frame_idx=0,
-        N=1,
-        rows=[0],
-        cols=[0],
-    )
-
-    assert history.build_track_identity_list() == {0: ("red", "circle")}
