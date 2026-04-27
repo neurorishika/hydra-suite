@@ -385,27 +385,10 @@ class PostProcessPanel(QWidget):
             "Recommended: 0.15-0.50 s."
         )
         self.lbl_interpolation_max_gap = QLabel("Maximum interpolation gap (seconds)")
-        self.spin_identity_interpolation_max_gap = QDoubleSpinBox()
-        self.spin_identity_interpolation_max_gap.setRange(0.0, 10.0)
-        self.spin_identity_interpolation_max_gap.setSingleStep(0.1)
-        self.spin_identity_interpolation_max_gap.setDecimals(2)
-        self.spin_identity_interpolation_max_gap.setValue(0.33)
-        self.spin_identity_interpolation_max_gap.setToolTip(
-            "Maximum gap duration to fill when fragments share the same stable unique identity.\n"
-            "Fragments beyond this gap can still share the same final trajectory ID, but\n"
-            "no synthetic rows are inserted between them. Set to 0 to disable identity-based gap filling."
-        )
-        self.lbl_identity_interpolation_max_gap = QLabel(
-            "Maximum ID interpolation gap (seconds)"
-        )
         self.interpolation_row_widget = self._build_field_grid(
             [
                 (self.lbl_interpolation_method, self.combo_interpolation_method),
                 (self.lbl_interpolation_max_gap, self.spin_interpolation_max_gap),
-                (
-                    self.lbl_identity_interpolation_max_gap,
-                    self.spin_identity_interpolation_max_gap,
-                ),
             ],
             columns=2,
         )
@@ -519,25 +502,47 @@ class PostProcessPanel(QWidget):
                 "Choose how identity labels are assigned after tracking. "
                 "Only takes effect when identity analysis is enabled.\n"
                 "• None — no identity post-processing.\n"
-                "• Heuristic — rule-based split/chain on per-row identity evidence.\n"
-                "• Offline Decoder — Bayesian HMM smoother + MILP global assignment."
+                "• Slot Fill — vacancy-aware slot filling: resolves wholly-unknown trajectories "
+                "using CNN evidence and spatial continuity.\n"
+                "• Offline Decoder — Slot Fill first, then Bayesian HMM smoother + MILP global "
+                "assignment for swap detection and final verification."
             )
         )
         self.cmb_identity_postprocess_mode = QComboBox()
         self.cmb_identity_postprocess_mode.addItems(
-            ["None", "Heuristic", "Offline Decoder"]
+            ["None", "Slot Fill", "Offline Decoder"]
         )
-        self.cmb_identity_postprocess_mode.setCurrentText("Heuristic")
+        self.cmb_identity_postprocess_mode.setCurrentText("Slot Fill")
         self.cmb_identity_postprocess_mode.setToolTip(
             "None: skip identity post-processing entirely.\n"
-            "Heuristic: split trajectories on stable identity-evidence changes and re-chain.\n"
-            "Offline Decoder: run the Bayesian HMM smoother and MILP global fragment "
-            "assignment. Requires identity analysis to be configured."
+            "Slot Fill: resolve wholly-unknown trajectories using CNN evidence and "
+            "spatial continuity.\n"
+            "Offline Decoder: run Slot Fill first, then the Bayesian HMM smoother "
+            "and MILP global fragment assignment. Requires identity analysis to be configured."
         )
         self.cmb_identity_postprocess_mode.currentTextChanged.connect(
             self._on_offline_identity_toggled
         )
         vl_offline_identity.addWidget(self.cmb_identity_postprocess_mode)
+
+        self.slot_fill_content = QWidget()
+        slot_fill_layout = QFormLayout(self.slot_fill_content)
+        slot_fill_layout.setContentsMargins(0, 4, 0, 0)
+        slot_fill_layout.setSpacing(4)
+
+        self.spin_slot_fill_min_score = QDoubleSpinBox()
+        self.spin_slot_fill_min_score.setRange(0.0, 1.0)
+        self.spin_slot_fill_min_score.setSingleStep(0.05)
+        self.spin_slot_fill_min_score.setDecimals(2)
+        self.spin_slot_fill_min_score.setValue(0.25)
+        self.spin_slot_fill_min_score.setToolTip(
+            "Minimum combined score (0–1) required to commit a slot-fill assignment.\n"
+            "Higher values → fewer but more confident assignments.\n"
+            "Recommended: 0.20–0.40."
+        )
+        slot_fill_layout.addRow("Slot-fill min score", self.spin_slot_fill_min_score)
+        self.slot_fill_content.setVisible(True)
+        vl_offline_identity.addWidget(self.slot_fill_content)
 
         self.offline_identity_content = QWidget()
         offline_identity_layout = QVBoxLayout(self.offline_identity_content)
@@ -1190,9 +1195,10 @@ class PostProcessPanel(QWidget):
         self._set_cleaning_section_state(enabled)
 
     def _on_offline_identity_toggled(self, _=None):
-        """Show or hide offline identity decoder sub-sections."""
-        visible = self.cmb_identity_postprocess_mode.currentText() == "Offline Decoder"
-        self.offline_identity_content.setVisible(visible)
+        """Show or hide slot-fill and offline decoder sub-sections."""
+        mode = self.cmb_identity_postprocess_mode.currentText()
+        self.slot_fill_content.setVisible(mode in ("Slot Fill", "Offline Decoder"))
+        self.offline_identity_content.setVisible(mode == "Offline Decoder")
 
     def sync_heading_flip_posthoc_ui(self, posthoc_active: bool) -> None:
         """Toggle the heading-flip burst control vs. the post-hoc note.

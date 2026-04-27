@@ -3131,170 +3131,180 @@ class TrackingOrchestrator:
             return out
 
         try:
+            from hydra_suite.core.identity.catalog import IdentityCatalog
             from hydra_suite.core.post.identity_postprocess import (
-                apply_identity_postprocessing,
                 fill_identity_nans_with_consensus,
                 sort_trajectories_by_identity,
             )
 
             tag_cache_path = self._resolve_current_tag_cache_path()
 
-            _identity_mode = str(params.get("IDENTITY_POSTPROCESS_MODE", "Heuristic"))
-            if _identity_mode == "Heuristic":
-                with_pose_df = apply_identity_postprocessing(with_pose_df, params)
+            # Build catalog once; shared by slot fill and offline decoder.
+            _raw_labels = list(params.get("TAG_IDENTITY_LABELS", []) or [])
+            for _cnn_cfg in params.get("CNN_CLASSIFIERS", []) or []:
+                _lbl = _cnn_cfg.get("label", "")
+                if _lbl and _lbl not in _raw_labels:
+                    _raw_labels.append(_lbl)
+            catalog = IdentityCatalog.from_labels(_raw_labels) if _raw_labels else None
 
-            # === Identity Phase 3+4 ===
-            # Run offline Bayesian smoothing + fragment assignment when enabled.
-            if _identity_mode == "Offline Decoder":
+            # === Identity Phase: Slot Fill ===
+            # Resolve wholly-unknown trajectories using CNN evidence + spatial continuity.
+            if params.get("ENABLE_IDENTITY_SLOT_FILL", False) and catalog is not None:
                 try:
-                    from hydra_suite.core.identity.cache import IdentityEvidenceCache
-                    from hydra_suite.core.identity.catalog import IdentityCatalog
-                    from hydra_suite.core.identity.fragments import (
-                        apply_fragment_labels_to_trajectories,
-                    )
-                    from hydra_suite.core.identity.offline import (
-                        build_identity_fragments,
-                        run_identity_residual_assignment,
-                        smooth_trajectory_identity_posteriors,
-                        solve_fragment_identity_assignment,
-                        split_mixed_identity_trajectories,
-                    )
-                    from hydra_suite.core.tracking.evidence_emitter import (
-                        build_evidence_cache_path,
+                    from hydra_suite.core.post.slot_filling import (
+                        run_vacancy_aware_slot_filling,
                     )
 
-                    # Build catalog from configured identity labels.
-                    _raw_labels = list(params.get("TAG_IDENTITY_LABELS", []) or [])
-                    for _cnn_cfg in params.get("CNN_CLASSIFIERS", []) or []:
-                        for _lbl in _cnn_cfg.get("labels", []) or []:
-                            if _lbl not in _raw_labels:
-                                _raw_labels.append(_lbl)
-                    if not _raw_labels:
-                        raise ValueError(
-                            "ENABLE_IDENTITY_OFFLINE_DECODER requires identity labels in params."
-                        )
-                    catalog = IdentityCatalog.from_labels(_raw_labels)
-
-                    # Load all available evidence sidecars emitted by CNN phases.
-                    _detected_cnn_paths = (
-                        getattr(self._mw, "current_detected_cnn_cache_paths", {}) or {}
+                    with_pose_df = run_vacancy_aware_slot_filling(
+                        with_pose_df, catalog, params
                     )
-                    ev_caches = []
-                    _seen_ev_paths = set()
-                    for _phase_name, _cnn_path in _detected_cnn_paths.items():
-                        _cnn_path = str(_cnn_path or "").strip()
-                        if not _cnn_path:
-                            continue
-                        for _signature in ("batch", "live", ""):
-                            _ev_path = build_evidence_cache_path(
-                                _cnn_path, _phase_name, _signature
-                            )
-                            _ev_path_str = str(_ev_path)
-                            if (
-                                not os.path.exists(_ev_path_str)
-                                or _ev_path_str in _seen_ev_paths
-                            ):
-                                continue
-                            ev_caches.append(
-                                IdentityEvidenceCache(_ev_path_str, mode="r")
-                            )
-                            _seen_ev_paths.add(_ev_path_str)
-
-                    if (
-                        bool(params.get("USE_APRILTAGS", False))
-                        and tag_cache_path
-                        and os.path.exists(tag_cache_path)
-                    ):
-                        from hydra_suite.data.tag_observation_cache import (
-                            TagObservationCache,
-                        )
-
-                        ev_caches.append(
-                            _TagObservationEvidenceCacheView(
-                                TagObservationCache(tag_cache_path, mode="r"),
-                                catalog,
-                                [
-                                    str(label)
-                                    for label in (
-                                        params.get("TAG_IDENTITY_LABELS", []) or []
-                                    )
-                                ],
-                            )
-                        )
-
-                    if not ev_caches:
-                        raise FileNotFoundError(
-                            "No identity evidence caches found for offline decoder. "
-                            "Run with ENABLE_IDENTITY_POSTERIOR_CACHE=True first."
-                        )
-
-                    try:
-                        with_pose_df = smooth_trajectory_identity_posteriors(
-                            with_pose_df, ev_caches, catalog, params
-                        )
-                        with_pose_df = split_mixed_identity_trajectories(
-                            with_pose_df,
-                            params,
-                        )
-                        fragments_df = build_identity_fragments(with_pose_df, params)
-                        fragments_df = solve_fragment_identity_assignment(
-                            fragments_df, catalog, params
-                        )
-                        fragments_df = run_identity_residual_assignment(
-                            fragments_df, params, catalog=catalog
-                        )
-                        with_pose_df = apply_fragment_labels_to_trajectories(
-                            with_pose_df, fragments_df
-                        )
-                        with_pose_df = apply_identity_postprocessing(
-                            with_pose_df,
-                            params,
-                        )
-
-                        assigned_labels = with_pose_df.get(
-                            "IdentityOfflineLabel",
-                            pd.Series(index=with_pose_df.index, dtype=object),
-                        )
-                        smoothed_labels = with_pose_df.get(
-                            "IdentitySmoothedLabel",
-                            pd.Series(index=with_pose_df.index, dtype=object),
-                        )
-                        assigned_label = assigned_labels.where(
-                            assigned_labels.notna(),
-                            smoothed_labels,
-                        )
-                        with_pose_df["IdentityAssignedLabel"] = assigned_label
-                        with_pose_df["IdentityAssignedConfidence"] = pd.to_numeric(
-                            with_pose_df.get("IdentitySmoothedConf"),
-                            errors="coerce",
-                        )
-                        with_pose_df["IdentityEntropy"] = pd.to_numeric(
-                            with_pose_df.get("IdentitySmoothedEntropy"),
-                            errors="coerce",
-                        )
-                        with_pose_df["IdentityCommitted"] = assigned_labels.notna()
-                        with_pose_df["IdentityAssignedID"] = [
-                            (
-                                catalog.index_of(str(label))
-                                if pd.notna(label) and catalog.contains(str(label))
-                                else np.nan
-                            )
-                            for label in with_pose_df["IdentityAssignedLabel"]
-                        ]
-                        with_pose_df = _annotate_identity_summary_columns(with_pose_df)
-                        logger.info(
-                            "Offline identity decoder applied: %d fragments resolved from %d evidence sidecars.",
-                            len(fragments_df),
-                            len(ev_caches),
-                        )
-                    finally:
-                        for _ev_cache in ev_caches:
-                            if hasattr(_ev_cache, "close"):
-                                _ev_cache.close()
+                    logger.info("Slot filling complete.")
                 except Exception:
-                    logger.exception(
-                        "Offline identity decoder failed; results unchanged."
+                    logger.exception("Slot filling failed; results unchanged.")
+
+            # === Identity Phase: Offline Decoder ===
+            # HMM forward-backward smoothing + MILP global fragment assignment.
+            if params.get("ENABLE_IDENTITY_OFFLINE_DECODER", False):
+                if catalog is None or not _raw_labels:
+                    logger.error(
+                        "ENABLE_IDENTITY_OFFLINE_DECODER requires identity labels in params."
                     )
+                else:
+                    try:
+                        from hydra_suite.core.identity.cache import (
+                            IdentityEvidenceCache,
+                        )
+                        from hydra_suite.core.identity.fragments import (
+                            apply_fragment_labels_to_trajectories,
+                        )
+                        from hydra_suite.core.identity.offline import (
+                            build_identity_fragments,
+                            smooth_trajectory_identity_posteriors,
+                            solve_fragment_identity_assignment,
+                            split_mixed_identity_trajectories,
+                        )
+                        from hydra_suite.core.tracking.evidence_emitter import (
+                            build_evidence_cache_path,
+                        )
+
+                        # Load all available evidence sidecars emitted by CNN phases.
+                        _detected_cnn_paths = (
+                            getattr(self._mw, "current_detected_cnn_cache_paths", {})
+                            or {}
+                        )
+                        ev_caches = []
+                        _seen_ev_paths = set()
+                        for _phase_name, _cnn_path in _detected_cnn_paths.items():
+                            _cnn_path = str(_cnn_path or "").strip()
+                            if not _cnn_path:
+                                continue
+                            for _signature in ("batch", "live", ""):
+                                _ev_path = build_evidence_cache_path(
+                                    _cnn_path, _phase_name, _signature
+                                )
+                                _ev_path_str = str(_ev_path)
+                                if (
+                                    not os.path.exists(_ev_path_str)
+                                    or _ev_path_str in _seen_ev_paths
+                                ):
+                                    continue
+                                ev_caches.append(
+                                    IdentityEvidenceCache(_ev_path_str, mode="r")
+                                )
+                                _seen_ev_paths.add(_ev_path_str)
+
+                        if (
+                            bool(params.get("USE_APRILTAGS", False))
+                            and tag_cache_path
+                            and os.path.exists(tag_cache_path)
+                        ):
+                            from hydra_suite.data.tag_observation_cache import (
+                                TagObservationCache,
+                            )
+
+                            ev_caches.append(
+                                _TagObservationEvidenceCacheView(
+                                    TagObservationCache(tag_cache_path, mode="r"),
+                                    catalog,
+                                    [
+                                        str(label)
+                                        for label in (
+                                            params.get("TAG_IDENTITY_LABELS", []) or []
+                                        )
+                                    ],
+                                )
+                            )
+
+                        if not ev_caches:
+                            raise FileNotFoundError(
+                                "No identity evidence caches found for offline decoder. "
+                                "Run with ENABLE_IDENTITY_POSTERIOR_CACHE=True first."
+                            )
+
+                        try:
+                            with_pose_df = smooth_trajectory_identity_posteriors(
+                                with_pose_df, ev_caches, catalog, params
+                            )
+                            with_pose_df = split_mixed_identity_trajectories(
+                                with_pose_df,
+                                params,
+                            )
+                            fragments_df = build_identity_fragments(
+                                with_pose_df, params
+                            )
+                            fragments_df = solve_fragment_identity_assignment(
+                                fragments_df, catalog, params
+                            )
+                            with_pose_df = apply_fragment_labels_to_trajectories(
+                                with_pose_df, fragments_df
+                            )
+
+                            assigned_labels = with_pose_df.get(
+                                "IdentityOfflineLabel",
+                                pd.Series(index=with_pose_df.index, dtype=object),
+                            )
+                            smoothed_labels = with_pose_df.get(
+                                "IdentitySmoothedLabel",
+                                pd.Series(index=with_pose_df.index, dtype=object),
+                            )
+                            assigned_label = assigned_labels.where(
+                                assigned_labels.notna(),
+                                smoothed_labels,
+                            )
+                            with_pose_df["IdentityAssignedLabel"] = assigned_label
+                            with_pose_df["IdentityAssignedConfidence"] = pd.to_numeric(
+                                with_pose_df.get("IdentitySmoothedConf"),
+                                errors="coerce",
+                            )
+                            with_pose_df["IdentityEntropy"] = pd.to_numeric(
+                                with_pose_df.get("IdentitySmoothedEntropy"),
+                                errors="coerce",
+                            )
+                            with_pose_df["IdentityCommitted"] = assigned_labels.notna()
+                            with_pose_df["IdentityAssignedID"] = [
+                                (
+                                    catalog.index_of(str(label))
+                                    if pd.notna(label) and catalog.contains(str(label))
+                                    else np.nan
+                                )
+                                for label in with_pose_df["IdentityAssignedLabel"]
+                            ]
+                            with_pose_df = _annotate_identity_summary_columns(
+                                with_pose_df
+                            )
+                            logger.info(
+                                "Offline identity decoder applied: %d fragments resolved from %d evidence sidecars.",
+                                len(fragments_df),
+                                len(ev_caches),
+                            )
+                        finally:
+                            for _ev_cache in ev_caches:
+                                if hasattr(_ev_cache, "close"):
+                                    _ev_cache.close()
+                    except Exception:
+                        logger.exception(
+                            "Offline identity decoder failed; results unchanged."
+                        )
 
             with_pose_df = fill_identity_nans_with_consensus(with_pose_df)
             with_pose_df = sort_trajectories_by_identity(with_pose_df)

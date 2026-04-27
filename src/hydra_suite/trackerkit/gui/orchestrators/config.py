@@ -691,8 +691,11 @@ class ConfigOrchestrator:
             _saved_mode = (
                 "Offline Decoder"
                 if bool(get_cfg("enable_offline_identity_decoder", default=False))
-                else "Heuristic"
+                else "Slot Fill"
             )
+        # "Heuristic" was renamed to "Slot Fill" — remap old presets.
+        if _saved_mode == "Heuristic":
+            _saved_mode = "Slot Fill"
         self._panels.postprocess.cmb_identity_postprocess_mode.setCurrentText(
             str(_saved_mode)
         )
@@ -796,12 +799,8 @@ class ConfigOrchestrator:
                 default_seconds=0.33,
             )
         )
-        self._panels.postprocess.spin_identity_interpolation_max_gap.setValue(
-            get_cfg_time(
-                "identity_interpolation_max_gap_seconds",
-                "identity_interpolation_max_gap",
-                default_seconds=0.33,
-            )
+        self._panels.postprocess.spin_slot_fill_min_score.setValue(
+            float(get_cfg("slot_fill_min_score", default=0.25))
         )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
@@ -1732,7 +1731,7 @@ class ConfigOrchestrator:
                 "velocity_zscore_min_velocity": self._panels.postprocess.spin_velocity_zscore_min_vel.value(),
                 "interpolation_method": self._panels.postprocess.combo_interpolation_method.currentText(),
                 "interpolation_max_gap_seconds": self._panels.postprocess.spin_interpolation_max_gap.value(),
-                "identity_interpolation_max_gap_seconds": self._panels.postprocess.spin_identity_interpolation_max_gap.value(),
+                "slot_fill_min_score": self._panels.postprocess.spin_slot_fill_min_score.value(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
@@ -2054,10 +2053,6 @@ class ConfigOrchestrator:
         velocity_zscore_window = _seconds_to_frames(
             self._panels.postprocess.spin_velocity_zscore_window.value(), min_frames=5
         )
-        identity_interpolation_max_gap = _seconds_to_frames(
-            self._panels.postprocess.spin_identity_interpolation_max_gap.value(),
-            min_frames=0,
-        )
         # YOLO Batching settings from UI (overrides advanced_config defaults)
         advanced_config = self._mw.advanced_config.copy()
         advanced_config["enable_yolo_batching"] = (
@@ -2248,7 +2243,7 @@ class ConfigOrchestrator:
             "POSE_TEMPORAL_OUTLIER_ZSCORE": self._panels.postprocess.spin_pose_temporal_outlier_zscore.value(),
             "MAX_VELOCITY_ZSCORE": self._panels.postprocess.spin_max_velocity_zscore.value(),
             "VELOCITY_ZSCORE_WINDOW": velocity_zscore_window,
-            "IDENTITY_INTERPOLATION_MAX_GAP": identity_interpolation_max_gap,
+            "SLOT_FILL_MIN_SCORE": self._panels.postprocess.spin_slot_fill_min_score.value(),
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
             * scaled_body_size
             / fps,
@@ -2397,6 +2392,11 @@ class ConfigOrchestrator:
                 self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
                 if self._panels.postprocess.enable_postprocessing.isChecked()
                 else "None"
+            ),
+            "ENABLE_IDENTITY_SLOT_FILL": (
+                self._panels.postprocess.enable_postprocessing.isChecked()
+                and self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
+                in ("Slot Fill", "Offline Decoder")
             ),
             "ENABLE_IDENTITY_OFFLINE_DECODER": (
                 self._panels.postprocess.enable_postprocessing.isChecked()
