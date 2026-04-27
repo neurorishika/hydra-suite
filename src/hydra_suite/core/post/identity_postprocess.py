@@ -934,3 +934,85 @@ def apply_identity_postprocessing(
     result = result.sort_values(["TrajectoryID", "FrameID"], kind="stable")
     result = result.reset_index(drop=True)
     return result
+
+
+def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill NaN identity label rows using the per-trajectory majority label.
+
+    Filled rows receive ``IdentityAssignedConfidence=0.0`` to signal they carry
+    no real evidence.  ``IdentitySlotLockLabel`` is filled the same way.
+    """
+    if df is None or df.empty or "TrajectoryID" not in df.columns:
+        return df
+    if "IdentityAssignedLabel" not in df.columns:
+        return df
+
+    df = df.copy()
+    if "IdentityAssignedConfidence" not in df.columns:
+        df["IdentityAssignedConfidence"] = np.nan
+
+    label_missing = df["IdentityAssignedLabel"].isna() | (
+        df["IdentityAssignedLabel"].astype(str).str.strip() == ""
+    )
+
+    for _traj_id, group in df.groupby("TrajectoryID", sort=False):
+        grp_missing = label_missing.loc[group.index]
+        present = group.loc[~grp_missing, "IdentityAssignedLabel"]
+        if present.empty or not grp_missing.any():
+            continue
+        consensus = present.mode().iloc[0]
+        fill_idx = group.index[grp_missing]
+        df.loc[fill_idx, "IdentityAssignedLabel"] = consensus
+        df.loc[fill_idx, "IdentityAssignedConfidence"] = 0.0
+
+    if "IdentitySlotLockLabel" in df.columns:
+        slot_missing = df["IdentitySlotLockLabel"].isna() | (
+            df["IdentitySlotLockLabel"].astype(str).str.strip() == ""
+        )
+        for _traj_id, group in df.groupby("TrajectoryID", sort=False):
+            grp_missing = slot_missing.loc[group.index]
+            present = group.loc[~grp_missing, "IdentitySlotLockLabel"]
+            if present.empty or not grp_missing.any():
+                continue
+            consensus = present.mode().iloc[0]
+            df.loc[group.index[grp_missing], "IdentitySlotLockLabel"] = consensus
+
+    return df
+
+
+def sort_trajectories_by_identity(df: pd.DataFrame) -> pd.DataFrame:
+    """Renumber TrajectoryIDs so same-identity fragments are consecutive.
+
+    Fragments are ordered by (consensus_identity_label, first_frame) so all
+    trajectories belonging to the same animal get adjacent IDs.  New IDs start
+    at 0 and are strictly sequential; existing values are fully replaced.
+    """
+    if df is None or df.empty or "TrajectoryID" not in df.columns:
+        return df
+
+    identity_col = next(
+        (c for c in ("IdentityAssignedLabel", "UniqueIdentityKey") if c in df.columns),
+        None,
+    )
+    frame_col = "FrameID" if "FrameID" in df.columns else None
+
+    traj_info: list[tuple] = []
+    for traj_id in df["TrajectoryID"].unique():
+        mask = df["TrajectoryID"] == traj_id
+        consensus = ""
+        if identity_col is not None:
+            vals = df.loc[mask, identity_col].dropna()
+            vals = vals[vals.astype(str).str.strip() != ""]
+            if not vals.empty:
+                consensus = str(vals.mode().iloc[0])
+        min_frame = float(df.loc[mask, frame_col].min()) if frame_col else 0.0
+        traj_info.append((traj_id, consensus, min_frame))
+
+    traj_info.sort(key=lambda x: (x[1], x[2]))
+    id_mapping = {old: new for new, (old, _, _) in enumerate(traj_info)}
+
+    df = df.copy()
+    df["TrajectoryID"] = df["TrajectoryID"].map(id_mapping)
+    sort_cols = ["TrajectoryID", frame_col] if frame_col else ["TrajectoryID"]
+    df = df.sort_values(sort_cols, kind="stable").reset_index(drop=True)
+    return df

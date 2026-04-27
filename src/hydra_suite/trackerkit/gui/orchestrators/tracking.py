@@ -3027,6 +3027,8 @@ class TrackingOrchestrator:
             from hydra_suite.core.post.identity_postprocess import (
                 apply_identity_postprocessing,
                 augment_trajectories_with_detected_apriltags,
+                fill_identity_nans_with_consensus,
+                sort_trajectories_by_identity,
             )
 
             tag_cache_path = self._resolve_current_tag_cache_path()
@@ -3199,6 +3201,9 @@ class TrackingOrchestrator:
                     logger.exception(
                         "Offline identity decoder failed; results unchanged."
                     )
+
+            with_pose_df = fill_identity_nans_with_consensus(with_pose_df)
+            with_pose_df = sort_trajectories_by_identity(with_pose_df)
         except Exception:
             logger.exception(
                 "Identity-aware post-processing failed; using unmodified rich dataframe."
