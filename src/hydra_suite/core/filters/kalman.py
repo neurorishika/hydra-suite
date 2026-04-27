@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 # --- Numba Kernels (Optimized for Large N) ---
-@njit(cache=True, fastmath=True)
+@njit(cache=True)
 def _predict_kernel(X, P, F, Q_base, q_long, q_lat):
     """
     Predicts next state and rotates process noise to align with animal heading.
@@ -70,6 +70,15 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
     x = X[track_idx].reshape(5, 1)
     p = P[track_idx]
     z = measurement.reshape(3, 1)
+
+    # Guard: if P is already corrupted (NaN/Inf from a prior predict step that
+    # slipped through sanitize), skip this correction entirely.  The caller's
+    # post-correct finiteness check will detect the unchanged non-finite P and
+    # call _reset_corrupted_track.
+    for _gi in range(5):
+        for _gj in range(5):
+            if not np.isfinite(p[_gi, _gj]):
+                return X, P
 
     # Innovation
     y = z - (H @ x)
@@ -409,16 +418,25 @@ class KalmanFilterManager:
             R_eff = self.R.copy()
             R_eff[2, 2] *= theta_r_scale
         if NUMBA_AVAILABLE:
-            self.X, self.P = _correct_kernel(
-                self.X,
-                self.P,
-                self.H,
-                R_eff,
-                self.identity_mat,
-                track_idx,
-                measurement,
-                self.max_velocity,
-            )
+            try:
+                self.X, self.P = _correct_kernel(
+                    self.X,
+                    self.P,
+                    self.H,
+                    R_eff,
+                    self.identity_mat,
+                    track_idx,
+                    measurement,
+                    self.max_velocity,
+                )
+            except np.linalg.LinAlgError:
+                # Numba's linalg.inv raises LinAlgError (not just silent NaN) when
+                # fastmath=False and S contains non-finite values.  Reset and continue.
+                self._reset_corrupted_track(
+                    track_idx,
+                    "non-finite matrix in S during correction (numba path)",
+                )
+                return
             if not (
                 np.isfinite(self.X[track_idx]).all()
                 and np.isfinite(self.P[track_idx]).all()
