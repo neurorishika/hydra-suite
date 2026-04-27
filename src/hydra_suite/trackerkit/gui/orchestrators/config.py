@@ -514,13 +514,6 @@ class ConfigOrchestrator:
                 default=1.5,
             )
         )
-        self._panels.tracking.spin_continuity_thresh.setValue(
-            get_cfg(
-                "recovery_search_distance_multiplier",
-                "continuity_threshold_multiplier",
-                default=0.5,
-            )
-        )
         self._panels.tracking.chk_enable_backward.setChecked(
             get_cfg("enable_backward_tracking", default=True)
         )
@@ -1007,43 +1000,30 @@ class ConfigOrchestrator:
                             ),
                             "window": int(get_cfg("cnn_classifier_window", default=10)),
                             "unique_identifier": False,
-                            "match_bonus": float(
-                                get_cfg(
-                                    "cnn_classifier_match_bonus",
-                                    "identity_match_bonus",
-                                    default=20.0,
-                                )
-                            ),
-                            "mismatch_penalty": float(
-                                get_cfg(
-                                    "cnn_classifier_mismatch_penalty",
-                                    "identity_mismatch_penalty",
-                                    default=50.0,
-                                )
-                            ),
                         }
                     )
 
-        # Shared identity cost settings
-        self._panels.identity.spin_identity_match_bonus.setValue(
-            float(
-                get_cfg(
-                    "identity_match_bonus",
-                    "tag_match_bonus",
-                    "cnn_classifier_match_bonus",
-                    default=20.0,
-                )
-            )
+        # Identity decoder settings (tracking panel)
+        self._panels.tracking.chk_enable_identity_online_decoder.setChecked(
+            bool(get_cfg("enable_identity_online_decoder", default=False))
         )
-        self._panels.identity.spin_identity_mismatch_penalty.setValue(
-            float(
-                get_cfg(
-                    "identity_mismatch_penalty",
-                    "tag_mismatch_penalty",
-                    "cnn_classifier_mismatch_penalty",
-                    default=50.0,
-                )
-            )
+        self._panels.tracking.spin_identity_weight.setValue(
+            float(get_cfg("identity_weight", default=1.0))
+        )
+        self._panels.tracking.spin_identity_commit_threshold.setValue(
+            float(get_cfg("identity_commit_threshold", default=0.85))
+        )
+        self._panels.tracking.spin_identity_display_threshold.setValue(
+            float(get_cfg("identity_display_threshold", default=0.6))
+        )
+        self._panels.tracking.spin_identity_transition_epsilon.setValue(
+            float(get_cfg("identity_transition_epsilon", default=0.02))
+        )
+        self._panels.tracking.spin_identity_unknown_prior.setValue(
+            float(get_cfg("identity_unknown_prior", default=0.05))
+        )
+        self._panels.tracking.spin_identity_rejoin_threshold.setValue(
+            float(get_cfg("identity_rejoin_threshold", default=0.5))
         )
         self._panels.identity.chk_identity_offline_split_trajectories.setChecked(
             bool(
@@ -1667,7 +1647,6 @@ class ConfigOrchestrator:
                 # === CORE TRACKING ===
                 "max_targets": self._panels.setup.spin_max_targets.value(),
                 "max_assignment_distance_multiplier": self._panels.tracking.spin_max_dist.value(),
-                "recovery_search_distance_multiplier": self._panels.tracking.spin_continuity_thresh.value(),
                 "enable_backward_tracking": self._panels.tracking.chk_enable_backward.isChecked(),
                 # === KALMAN FILTER ===
                 "kalman_process_noise": self._panels.tracking.spin_kalman_noise.value(),
@@ -1824,8 +1803,13 @@ class ConfigOrchestrator:
                 ),
                 # Legacy CNN Classifier settings (for backward compat on load)
                 "cnn_classifier_confidence": self._panels.identity.spin_cnn_confidence.value(),
-                "identity_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
-                "identity_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
+                "enable_identity_online_decoder": self._panels.tracking.chk_enable_identity_online_decoder.isChecked(),
+                "identity_weight": self._panels.tracking.spin_identity_weight.value(),
+                "identity_commit_threshold": self._panels.tracking.spin_identity_commit_threshold.value(),
+                "identity_display_threshold": self._panels.tracking.spin_identity_display_threshold.value(),
+                "identity_transition_epsilon": self._panels.tracking.spin_identity_transition_epsilon.value(),
+                "identity_unknown_prior": self._panels.tracking.spin_identity_unknown_prior.value(),
+                "identity_rejoin_threshold": self._panels.tracking.spin_identity_rejoin_threshold.value(),
                 "identity_offline_split_trajectories": self._panels.identity.chk_identity_offline_split_trajectories.isChecked(),
                 "identity_offline_split_min_conf": self._panels.identity.spin_identity_offline_split_min_conf.value(),
                 "identity_offline_split_min_margin": self._panels.identity.spin_identity_offline_split_min_margin.value(),
@@ -1836,8 +1820,6 @@ class ConfigOrchestrator:
                 "identity_respawn_prior_strength": self._panels.identity.spin_identity_respawn_prior_strength.value(),
                 "identity_respawn_prior_decay": self._panels.identity.spin_identity_respawn_prior_decay.value(),
                 "identity_respawn_prior_max_gap": self._panels.identity.spin_identity_respawn_prior_max_gap.value(),
-                "cnn_classifier_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
-                "cnn_classifier_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
                 "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
@@ -1847,8 +1829,6 @@ class ConfigOrchestrator:
             {
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
-                "tag_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
-                "tag_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),
                 "pose_model_type": self._panels.identity.combo_pose_model_type.currentText()
                 .strip()
@@ -2010,9 +1990,6 @@ class ConfigOrchestrator:
         )
         max_distance_pixels = (
             self._panels.tracking.spin_max_dist.value() * scaled_body_size
-        )
-        recovery_search_distance_pixels = (
-            self._panels.tracking.spin_continuity_thresh.value() * scaled_body_size
         )
         min_respawn_distance_pixels = (
             self._panels.tracking.spin_min_respawn_distance.value() * scaled_body_size
@@ -2259,7 +2236,6 @@ class ConfigOrchestrator:
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
             * scaled_body_size
             / fps,
-            "CONTINUITY_THRESHOLD": recovery_search_distance_pixels,
             "MIN_RESPAWN_DISTANCE": min_respawn_distance_pixels,
             "MIN_DETECTION_COUNTS": min_detection_counts,
             "MIN_DETECTIONS_TO_START": min_detections_to_start,
@@ -2399,15 +2375,16 @@ class ConfigOrchestrator:
                 if identity_cfg.get("cnn_classifiers")
                 else 64
             ),
-            "IDENTITY_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
-            "IDENTITY_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
-            "CNN_CLASSIFIER_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
-            "CNN_CLASSIFIER_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
+            "ENABLE_IDENTITY_ONLINE_DECODER": self._panels.tracking.chk_enable_identity_online_decoder.isChecked(),
+            "ASSOCIATION_IDENTITY_HINT_SCALE": self._panels.tracking.spin_identity_weight.value(),
+            "IDENTITY_COMMIT_THRESHOLD": self._panels.tracking.spin_identity_commit_threshold.value(),
+            "IDENTITY_DISPLAY_THRESHOLD": self._panels.tracking.spin_identity_display_threshold.value(),
+            "IDENTITY_TRANSITION_EPSILON": self._panels.tracking.spin_identity_transition_epsilon.value(),
+            "IDENTITY_UNKNOWN_PRIOR": self._panels.tracking.spin_identity_unknown_prior.value(),
+            "IDENTITY_REJOIN_THRESHOLD": self._panels.tracking.spin_identity_rejoin_threshold.value(),
             "CNN_CLASSIFIER_WINDOW": 10,
             "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
-            "TAG_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
-            "TAG_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
             "IDENTITY_OFFLINE_SPLIT_TRAJECTORIES": bool(
                 advanced_config.get("identity_offline_split_trajectories", False)
             ),

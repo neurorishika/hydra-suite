@@ -90,22 +90,6 @@ class TrackingPanel(QWidget):
         )
         f_core.addRow("Max movement (body lengths)", self.spin_max_dist)
 
-        self.spin_continuity_thresh = QDoubleSpinBox()
-        self.spin_continuity_thresh.setRange(0.1, 10.0)
-        self.spin_continuity_thresh.setSingleStep(0.1)
-        self.spin_continuity_thresh.setDecimals(2)
-        self.spin_continuity_thresh.setValue(0.5)
-        self.spin_continuity_thresh.setToolTip(
-            "Search radius for recovering lost tracks (×body size).\n"
-            "When a track is lost, looks backward within this distance.\n"
-            "Smaller = more conservative recovery (fewer false merges).\n"
-            "Recommended: 0.3-1.0×"
-        )
-        f_core.addRow(
-            "Recovery search distance (body lengths)",
-            self.spin_continuity_thresh,
-        )
-
         self.spin_kalman_max_velocity = QDoubleSpinBox()
         self.spin_kalman_max_velocity.setRange(0.5, 10.0)
         self.spin_kalman_max_velocity.setSingleStep(0.1)
@@ -521,6 +505,117 @@ class TrackingPanel(QWidget):
         vbox.addWidget(g_solver)
         self._main_window._remember_collapsible_state(
             "tracking.assignment_solver", g_solver
+        )
+
+        # Identity Decoder
+        g_identity_decoder = CollapsibleGroupBox(
+            "How should identity guide assignment?"
+        )
+        self.tracking_accordion.addCollapsible(g_identity_decoder)
+        vl_identity_decoder = QVBoxLayout()
+        vl_identity_decoder.addWidget(
+            self._main_window._create_help_label(
+                "When identity classification is configured, the Bayesian online decoder integrates "
+                "CNN and AprilTag evidence into a per-track probability distribution and uses it "
+                "as a soft cost term during assignment. The decoder is uncertain in early frames, "
+                "so identity influence starts near zero and grows as evidence accumulates."
+            )
+        )
+        f_identity_decoder = QFormLayout(None)
+        f_identity_decoder.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
+        self.chk_enable_identity_online_decoder = QCheckBox(
+            "Enable online identity decoder"
+        )
+        self.chk_enable_identity_online_decoder.setChecked(False)
+        self.chk_enable_identity_online_decoder.setToolTip(
+            "Activates the Bayesian online decoder that integrates CNN and AprilTag evidence\n"
+            "into the assignment cost as a soft probability term.\n"
+            "Requires identity classification to be configured in the Individual Analysis tab."
+        )
+        f_identity_decoder.addRow(self.chk_enable_identity_online_decoder)
+
+        self.spin_identity_weight = QDoubleSpinBox()
+        self.spin_identity_weight.setRange(0.0, 2.0)
+        self.spin_identity_weight.setSingleStep(0.05)
+        self.spin_identity_weight.setDecimals(2)
+        self.spin_identity_weight.setValue(1.0)
+        self.spin_identity_weight.setToolTip(
+            "Relative weight of the identity cost term vs. the geometric cost.\n"
+            "0.0 = identity has no influence on assignment.\n"
+            "1.0 = balanced with geometry.\n"
+            "When the decoder is uncertain (early frames), this term is near-zero automatically."
+        )
+        f_identity_decoder.addRow("Identity weight", self.spin_identity_weight)
+
+        self.spin_identity_commit_threshold = QDoubleSpinBox()
+        self.spin_identity_commit_threshold.setRange(0.5, 1.0)
+        self.spin_identity_commit_threshold.setSingleStep(0.01)
+        self.spin_identity_commit_threshold.setDecimals(2)
+        self.spin_identity_commit_threshold.setValue(0.85)
+        self.spin_identity_commit_threshold.setToolTip(
+            "Posterior confidence required before a track slot commits to an identity.\n"
+            "Higher = fewer but more certain identity assignments."
+        )
+        f_identity_decoder.addRow(
+            "Commit threshold", self.spin_identity_commit_threshold
+        )
+
+        self.spin_identity_display_threshold = QDoubleSpinBox()
+        self.spin_identity_display_threshold.setRange(0.0, 1.0)
+        self.spin_identity_display_threshold.setSingleStep(0.05)
+        self.spin_identity_display_threshold.setDecimals(2)
+        self.spin_identity_display_threshold.setValue(0.6)
+        self.spin_identity_display_threshold.setToolTip(
+            "Minimum posterior confidence before an identity label is shown in the tracking overlay."
+        )
+        f_identity_decoder.addRow(
+            "Display threshold", self.spin_identity_display_threshold
+        )
+
+        self.spin_identity_transition_epsilon = QDoubleSpinBox()
+        self.spin_identity_transition_epsilon.setRange(0.0, 0.1)
+        self.spin_identity_transition_epsilon.setSingleStep(0.005)
+        self.spin_identity_transition_epsilon.setDecimals(3)
+        self.spin_identity_transition_epsilon.setValue(0.02)
+        self.spin_identity_transition_epsilon.setToolTip(
+            "Off-diagonal probability in the identity Markov transition.\n"
+            "Lower = identity is assumed more stable between frames.\n"
+            "Higher = allows faster identity switching."
+        )
+        f_identity_decoder.addRow(
+            "Transition epsilon", self.spin_identity_transition_epsilon
+        )
+
+        self.spin_identity_unknown_prior = QDoubleSpinBox()
+        self.spin_identity_unknown_prior.setRange(0.0, 0.2)
+        self.spin_identity_unknown_prior.setSingleStep(0.005)
+        self.spin_identity_unknown_prior.setDecimals(3)
+        self.spin_identity_unknown_prior.setValue(0.05)
+        self.spin_identity_unknown_prior.setToolTip(
+            "Prior probability mass reserved for the 'unknown' identity state.\n"
+            "Higher = more uncertainty about whether any known identity applies."
+        )
+        f_identity_decoder.addRow("Unknown prior", self.spin_identity_unknown_prior)
+
+        self.spin_identity_rejoin_threshold = QDoubleSpinBox()
+        self.spin_identity_rejoin_threshold.setRange(0.0, 1.0)
+        self.spin_identity_rejoin_threshold.setSingleStep(0.05)
+        self.spin_identity_rejoin_threshold.setDecimals(2)
+        self.spin_identity_rejoin_threshold.setValue(0.5)
+        self.spin_identity_rejoin_threshold.setToolTip(
+            "Minimum identity score (probability) for a committed-lost slot to rejoin "
+            "a detection via identity evidence alone, bypassing the geometric gate."
+        )
+        f_identity_decoder.addRow(
+            "Rejoin threshold", self.spin_identity_rejoin_threshold
+        )
+
+        vl_identity_decoder.addLayout(f_identity_decoder)
+        g_identity_decoder.setContentLayout(vl_identity_decoder)
+        vbox.addWidget(g_identity_decoder)
+        self._main_window._remember_collapsible_state(
+            "tracking.identity_decoder", g_identity_decoder
         )
 
         # Orientation & Lifecycle

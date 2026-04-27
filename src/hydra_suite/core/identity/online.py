@@ -145,9 +145,7 @@ class OnlineIdentityDecoder:
     ``IdentityAssignment`` objects.
     """
 
-    def __init__(
-        self, catalog: IdentityCatalog, params: dict[str, Any]
-    ) -> None:
+    def __init__(self, catalog: IdentityCatalog, params: dict[str, Any]) -> None:
         self._catalog = catalog
         self._params = params
         self._beliefs: dict[int, TrackIdentityBelief] = {}
@@ -157,15 +155,11 @@ class OnlineIdentityDecoder:
         self._transition_epsilon: float = float(
             params.get("IDENTITY_TRANSITION_EPSILON", 0.02)
         )
-        self._unknown_prior: float = float(
-            params.get("IDENTITY_UNKNOWN_PRIOR", 0.05)
-        )
+        self._unknown_prior: float = float(params.get("IDENTITY_UNKNOWN_PRIOR", 0.05))
         self._commit_threshold: float = float(
             params.get("IDENTITY_COMMIT_THRESHOLD", 0.85)
         )
-        self._commit_min_hits: int = int(
-            params.get("IDENTITY_COMMIT_MIN_HITS", 5)
-        )
+        self._commit_min_hits: int = int(params.get("IDENTITY_COMMIT_MIN_HITS", 5))
         self._display_threshold: float = float(
             params.get("IDENTITY_DISPLAY_THRESHOLD", 0.6)
         )
@@ -189,9 +183,7 @@ class OnlineIdentityDecoder:
         )
 
         # Build sticky transition matrix in log-space once
-        self._log_transition: np.ndarray = self._build_log_transition(
-            catalog.size
-        )
+        self._log_transition: np.ndarray = self._build_log_transition(catalog.size)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -280,7 +272,7 @@ class OnlineIdentityDecoder:
 
         carry_strength = float(
             np.clip(
-                self._respawn_prior_strength * (self._respawn_prior_decay ** gap),
+                self._respawn_prior_strength * (self._respawn_prior_decay**gap),
                 0.0,
                 0.999,
             )
@@ -324,9 +316,7 @@ class OnlineIdentityDecoder:
         log_post = belief.log_posterior
         new_log = np.empty_like(log_post)
         for j in range(len(log_post)):
-            new_log[j] = np.logaddexp.reduce(
-                log_post + self._log_transition[:, j]
-            )
+            new_log[j] = np.logaddexp.reduce(log_post + self._log_transition[:, j])
         belief.log_posterior = new_log
 
     def _fuse_evidence(
@@ -358,9 +348,7 @@ class OnlineIdentityDecoder:
         except KeyError:
             return
         # Boost the locked label; renormalise
-        log_bias = np.log(
-            max(belief.slot_lock_strength, 1e-6)
-        )
+        log_bias = np.log(max(belief.slot_lock_strength, 1e-6))
         belief.log_posterior[lock_idx] += log_bias
         belief.log_posterior -= np.logaddexp.reduce(belief.log_posterior)
 
@@ -421,7 +409,9 @@ class OnlineIdentityDecoder:
             self._predict_belief(belief)
             evs = slot_evidences.get(slot, [])
             belief.last_evidence_sources = tuple(
-                sorted({str(ev.source_name) for ev in evs if str(ev.source_name).strip()})
+                sorted(
+                    {str(ev.source_name) for ev in evs if str(ev.source_name).strip()}
+                )
             )
             belief.last_conflict_flag = False
             self._fuse_evidence(belief, evs)
@@ -540,9 +530,7 @@ class OnlineIdentityDecoder:
                 result[slot] = None  # unassigned
         return result
 
-    def _greedy_assignment(
-        self, visible_slots: list[int]
-    ) -> dict[int, Optional[str]]:
+    def _greedy_assignment(self, visible_slots: list[int]) -> dict[int, Optional[str]]:
         """Greedy argmax fallback (no uniqueness guarantee among low-confidence cases)."""
         result: dict[int, Optional[str]] = {}
         used: set[int] = set()
@@ -568,6 +556,17 @@ class OnlineIdentityDecoder:
         frame_idx: int,
     ) -> None:
         """Update commitment state and soft slot-lock (Phase 2)."""
+        # Block commit if this identity is already committed on any other slot
+        for other_slot, other_belief in self._beliefs.items():
+            if (
+                other_slot != belief.slot_index
+                and other_belief.committed_label == label
+            ):
+                belief.stable_count = (
+                    0  # not converging — reset so lock doesn't fire early
+                )
+                return
+
         if not (
             label
             and confidence >= self._commit_threshold
@@ -669,7 +668,9 @@ class OnlineIdentityDecoder:
             if respawn_frame_idx is not None and self._respawn_prior_strength > 0.0:
                 self._respawn_priors[slot_index] = RespawnPrior(
                     slot_index=slot_index,
-                    log_posterior=np.asarray(old.log_posterior, dtype=np.float64).copy(),
+                    log_posterior=np.asarray(
+                        old.log_posterior, dtype=np.float64
+                    ).copy(),
                     committed_label=old.committed_label,
                     committed_index=int(old.committed_index),
                     last_frame_idx=int(old.last_frame_idx),
@@ -687,6 +688,35 @@ class OnlineIdentityDecoder:
     def get_belief(self, slot_index: int) -> Optional[TrackIdentityBelief]:
         """Return the current belief for *slot_index*, or ``None`` if absent."""
         return self._beliefs.get(slot_index)
+
+    def get_slot_log_posteriors(self, slots: list[int]) -> dict[int, np.ndarray]:
+        """Return current log-posteriors for *slots* without modifying state.
+
+        Used to build per-track priors for the Bayesian identity cost term in
+        the assignment cost matrix.  Slots with no belief yet return a uniform
+        prior over all known identities.
+        """
+        result: dict[int, np.ndarray] = {}
+        for slot in slots:
+            belief = self._beliefs.get(slot)
+            if belief is not None:
+                result[slot] = belief.log_posterior.copy()
+            else:
+                result[slot] = self._initial_log_posterior()
+        return result
+
+    def decay_absent_slot_beliefs(self, absent_slots: list[int]) -> None:
+        """Apply the Markov transition to committed-but-absent slot beliefs.
+
+        Called each frame for slots that are lost/reserved so their beliefs
+        stay current (diffuse but not frozen) for identity-first rejoining.
+        Only processes slots that have a committed_label — uncommitted absent
+        slots don't need decay since they'll be cleared on respawn anyway.
+        """
+        for slot in absent_slots:
+            belief = self._beliefs.get(slot)
+            if belief is not None and belief.committed_label:
+                self._predict_belief(belief)
 
     def all_active_slots(self) -> list[int]:
         """Return list of all slot indices with active beliefs."""

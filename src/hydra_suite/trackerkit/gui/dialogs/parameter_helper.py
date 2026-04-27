@@ -172,16 +172,10 @@ class ParameterHelperDialog(BaseDialog):
         ) * self.base_params.get("RESIZE_FACTOR", 1.0)
         _vel_mult = self.base_params.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0)
         _aniso = self.base_params.get("KALMAN_ANISOTROPY_RATIO", 10.0)
-        _recovery_mult = self.base_params.get("CONTINUITY_THRESHOLD", _body_px) / max(
-            _body_px, 1e-6
-        )
-
         summary = QLabel(
             f"\u25cf\u00a0Body size: <b>{_body_px:.1f}\u00a0px</b>"
             f"\u2002\u2502\u2002"
             f"\u25cf\u00a0Max velocity: <b>{_vel_mult:.1f}\u00d7\u00a0body/frame</b>"
-            f"\u2002\u2502\u2002"
-            f"\u25cf\u00a0Recovery distance: <b>{_recovery_mult:.1f}\u00d7\u00a0body</b>"
             f"\u2002\u2502\u2002"
             f"\u25cf\u00a0Motion anisotropy\u00a0(fwd\u00f7lat): <b>{_aniso:.1f}</b>"
         )
@@ -191,7 +185,6 @@ class ParameterHelperDialog(BaseDialog):
             "These values come directly from the Main Window tracking tab.\n"
             "Body size         \u2192 REFERENCE_BODY_SIZE \u00d7 RESIZE_FACTOR\n"
             "Max velocity      \u2192 'Max speed' spinbox (Kalman section)\n"
-            "Recovery distance \u2192 'Recovery search distance' spinbox\n"
             "Motion anisotropy \u2192 derived from Longitudinal \u00f7 Lateral noise spinboxes\n\n"
             "Close this dialog, change those values, then reopen to use different constraints.\n"
             "Changing them will invalidate any cached autotune results."
@@ -1435,7 +1428,6 @@ class ParameterHelperDialog(BaseDialog):
             "KALMAN_ANISOTROPY_RATIO": self.base_params.get(
                 "KALMAN_ANISOTROPY_RATIO", 10.0
             ),
-            "CONTINUITY_THRESHOLD": self.base_params.get("CONTINUITY_THRESHOLD", 0.0),
             "REFERENCE_BODY_SIZE": self.base_params.get("REFERENCE_BODY_SIZE", 20.0),
             "RESIZE_FACTOR": self.base_params.get("RESIZE_FACTOR", 1.0),
         }

@@ -72,7 +72,6 @@
   "yolo_manual_batch_size": 16,
   "max_targets": 25,
   "max_assignment_distance_multiplier": 2.14,
-  "recovery_search_distance_multiplier": 0.25,
   "enable_backward_tracking": true,
   "kalman_process_noise": 0.001,
   "kalman_measurement_noise": 0.0588,

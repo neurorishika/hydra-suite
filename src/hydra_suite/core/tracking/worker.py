@@ -43,12 +43,6 @@ from hydra_suite.core.identity.pose.features import (
 from hydra_suite.core.identity.pose.features import (
     resolve_pose_group_indices as _pf_resolve_indices,
 )
-from hydra_suite.core.tracking.cnn_features import (
-    cnn_build_association_entries as _cnn_build_association_entries,
-)
-from hydra_suite.core.tracking.cnn_features import (
-    cnn_update_track_history as _cnn_update_track_history,
-)
 from hydra_suite.core.tracking.density import get_density_region_flags
 from hydra_suite.core.tracking.live_features import (
     LiveCNNIdentityStore,
@@ -1118,7 +1112,10 @@ class TrackingWorker(QThread):
             logger.info(
                 "Streaming-first individual analysis enabled inside the forward loop."
             )
-            if not effective_realtime_tracking_mode and not _streaming_explicitly_requested:
+            if (
+                not effective_realtime_tracking_mode
+                and not _streaming_explicitly_requested
+            ):
                 logger.info(
                     "Non-realtime YOLO forward runs now default to streaming individual analysis."
                 )
@@ -1666,10 +1663,15 @@ class TrackingWorker(QThread):
                                 )
 
                                 _backend = getattr(phase, "_backend", None)
-                                _meta = getattr(_backend, "metadata", None) if _backend else None
+                                _meta = (
+                                    getattr(_backend, "metadata", None)
+                                    if _backend
+                                    else None
+                                )
                                 _factor_labels = (
                                     list(_meta.class_names_per_factor)
-                                    if _meta and hasattr(_meta, "class_names_per_factor")
+                                    if _meta
+                                    and hasattr(_meta, "class_names_per_factor")
                                     else [["unknown"]]
                                 )
                                 _ev_path = build_evidence_cache_path(
@@ -1687,7 +1689,9 @@ class TrackingWorker(QThread):
                                         or ""
                                     ),
                                 )
-                                live_store.set_catalog_labels(_ev_emitter.catalog_labels)
+                                live_store.set_catalog_labels(
+                                    _ev_emitter.catalog_labels
+                                )
                                 if callable(set_callback):
                                     # Chain emitter after live_store callback
                                     def _chained_cb(
@@ -1711,9 +1715,12 @@ class TrackingWorker(QThread):
                                             evidences=_evidences,
                                         )
                                         _ev.emit_evidences(fi, _evidences)
+
                                     set_callback(_chained_cb)
                                 # Register for flush at finalization
-                                if bool(p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False)):
+                                if bool(
+                                    p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False)
+                                ):
                                     if not hasattr(self, "_evidence_emitters"):
                                         self._evidence_emitters = []
                                     self._evidence_emitters.append(_ev_emitter)
@@ -1749,14 +1756,20 @@ class TrackingWorker(QThread):
                         for _phase in phases:
                             if _phase.name in ("pose", "apriltag"):
                                 continue
-                            _cnn_cache_path = str(getattr(_phase, "_cache_path", "") or "")
+                            _cnn_cache_path = str(
+                                getattr(_phase, "_cache_path", "") or ""
+                            )
                             if not _cnn_cache_path:
                                 continue
                             _set_cb = getattr(_phase, "set_frame_result_callback", None)
                             if not callable(_set_cb):
                                 continue
                             _backend = getattr(_phase, "_backend", None)
-                            _meta = getattr(_backend, "metadata", None) if _backend else None
+                            _meta = (
+                                getattr(_backend, "metadata", None)
+                                if _backend
+                                else None
+                            )
                             _factor_labels = (
                                 list(_meta.class_names_per_factor)
                                 if _meta and hasattr(_meta, "class_names_per_factor")
@@ -1771,8 +1784,7 @@ class TrackingWorker(QThread):
                                 class_labels_per_factor=_factor_labels,
                                 runtime_signature=str(p.get("COMPUTE_RUNTIME", "cpu")),
                                 calibration_signature=str(
-                                    getattr(_phase, "_calibration_signature", "")
-                                    or ""
+                                    getattr(_phase, "_calibration_signature", "") or ""
                                 ),
                             )
                             _set_cb(_ev_emitter)
@@ -1866,13 +1878,6 @@ class TrackingWorker(QThread):
                     tag_observation_cache_path,
                 )
 
-        _use_legacy_tag_association = not bool(
-            p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
-        ) or bool(p.get("ASSOCIATION_USE_LEGACY_TAG_HINTS", False))
-        _use_legacy_cnn_association = not bool(
-            p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
-        ) or bool(p.get("ASSOCIATION_USE_LEGACY_CNN_HINTS", False))
-
         # Open CNN identity caches for reading during tracking loop (multi-phase).
         _cnn_phase_states = []
         for cnn_cfg_dict in p.get("CNN_CLASSIFIERS", []):
@@ -1885,23 +1890,10 @@ class TrackingWorker(QThread):
             }
             live_or_path = live_cnn_caches.get(label)
             if isinstance(live_or_path, LiveCNNIdentityStore):
-                _hist = None
-                if _use_legacy_cnn_association:
-                    from hydra_suite.core.identity.classification.cnn import (
-                        TrackCNNHistory,
-                    )
-
-                    _hist = TrackCNNHistory(
-                        window=int(cnn_cfg_dict.get("window", 10)),
-                        factor_names=("flat",),
-                    )
                 _cnn_phase_states.append(
                     {
                         "label": label,
                         "cache": live_or_path,
-                        "history": _hist,
-                        "match_bonus": float(cnn_cfg_dict.get("match_bonus", 20.0)),
-                        "mismatch_penalty": float(cnn_cfg_dict.get("mismatch_penalty", 50.0)),
                         "model_labels": model_labels,
                         "evidence_cache": None,
                     }
@@ -1947,41 +1939,31 @@ class TrackingWorker(QThread):
                     )
 
                     _cache = CNNIdentityCache(_path)
-                    _hist = None
-                    if _use_legacy_cnn_association:
-                        from hydra_suite.core.identity.classification.cnn import (
-                            TrackCNNHistory,
-                        )
-
-                        _hist = TrackCNNHistory(
-                            window=int(cnn_cfg_dict.get("window", 10)),
-                            factor_names=("flat",),
-                        )
                     _evidence_cache = None
-                    if bool(p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)):
-                        try:
-                            from hydra_suite.core.identity.cache import (
-                                IdentityEvidenceCache,
-                            )
+                    try:
+                        from hydra_suite.core.identity.cache import (
+                            IdentityEvidenceCache,
+                        )
 
-                            for _signature in ("batch", "live", ""):
-                                _ev_path = build_evidence_cache_path(_path, label, _signature)
-                                if os.path.exists(str(_ev_path)):
-                                    _evidence_cache = IdentityEvidenceCache(str(_ev_path), mode="r")
-                                    break
-                        except Exception:
-                            logger.debug(
-                                "Posterior sidecar unavailable for CNN phase '%s'",
-                                label,
-                                exc_info=True,
+                        for _signature in ("batch", "live", ""):
+                            _ev_path = build_evidence_cache_path(
+                                _path, label, _signature
                             )
+                            if os.path.exists(str(_ev_path)):
+                                _evidence_cache = IdentityEvidenceCache(
+                                    str(_ev_path), mode="r"
+                                )
+                                break
+                    except Exception:
+                        logger.debug(
+                            "Posterior sidecar unavailable for CNN phase '%s'",
+                            label,
+                            exc_info=True,
+                        )
                     _cnn_phase_states.append(
                         {
                             "label": label,
                             "cache": _cache,
-                            "history": _hist,
-                            "match_bonus": float(cnn_cfg_dict.get("match_bonus", 20.0)),
-                            "mismatch_penalty": float(cnn_cfg_dict.get("mismatch_penalty", 50.0)),
                             "model_labels": model_labels,
                             "evidence_cache": _evidence_cache,
                         }
@@ -2274,9 +2256,7 @@ class TrackingWorker(QThread):
                 if belief.committed_label:
                     label = belief.committed_label
                     catalog_index = float(belief.committed_index)
-                    probs = np.exp(
-                        belief.log_posterior - np.max(belief.log_posterior)
-                    )
+                    probs = np.exp(belief.log_posterior - np.max(belief.log_posterior))
                     probs /= np.clip(probs.sum(), 1e-300, None)
                     confidence = float(probs[int(belief.committed_index)])
                     entropy = float(
@@ -2724,11 +2704,31 @@ class TrackingWorker(QThread):
                     _streaming_payload = build_streaming_payload(
                         frame_idx=actual_frame_index,
                         raw_meas=meas,
-                        raw_obb_corners=filtered_obb_corners if "filtered_obb_corners" in locals() else [],
-                        raw_heading_hints=filtered_heading_hints if "filtered_heading_hints" in locals() else [],
-                        raw_heading_confidences=filtered_heading_confidences if "filtered_heading_confidences" in locals() else [],
-                        raw_directed_mask=filtered_directed_mask if "filtered_directed_mask" in locals() else [],
-                        raw_canonical_affines=raw_canonical_affines if "raw_canonical_affines" in locals() else [],
+                        raw_obb_corners=(
+                            filtered_obb_corners
+                            if "filtered_obb_corners" in locals()
+                            else []
+                        ),
+                        raw_heading_hints=(
+                            filtered_heading_hints
+                            if "filtered_heading_hints" in locals()
+                            else []
+                        ),
+                        raw_heading_confidences=(
+                            filtered_heading_confidences
+                            if "filtered_heading_confidences" in locals()
+                            else []
+                        ),
+                        raw_directed_mask=(
+                            filtered_directed_mask
+                            if "filtered_directed_mask" in locals()
+                            else []
+                        ),
+                        raw_canonical_affines=(
+                            raw_canonical_affines
+                            if "raw_canonical_affines" in locals()
+                            else []
+                        ),
                         detection_ids=detection_ids,
                         input_is_bgr=True,
                         runtime_family=str(p.get("COMPUTE_RUNTIME", "cpu")),
@@ -2972,11 +2972,6 @@ class TrackingWorker(QThread):
                     tag_obs_cache, actual_frame_index
                 )
                 _det_tag_ids = build_detection_tag_id_list(_tag_det_map, len(meas))
-                _track_tag_ids = (
-                    track_tag_history.build_track_tag_id_list(N)
-                    if track_tag_history is not None and _use_legacy_tag_association
-                    else [NO_TAG] * N
-                )
 
                 # The Assigner now takes the kf_manager directly to access X and S_inv
                 association_data = {
@@ -2987,46 +2982,86 @@ class TrackingWorker(QThread):
                     "detection_pose_visibility": detection_pose_visibility,
                     "track_pose_prototypes": track_pose_prototypes,
                     "track_avg_step": track_avg_step,
-                    "detection_tag_ids": _det_tag_ids,
-                    "track_last_tag_ids": _track_tag_ids,
                 }
 
-                # CNN identity data for assigner (multi-phase)
-                _cnn_phases_assoc = []
+                # Load CNN frame predictions for each phase (used for Bayesian cost
+                # term and post-assignment decoder evidence).
                 _cnn_frame_preds_all = {}
                 for _state in _cnn_phase_states:
-                    label = _state["label"]
+                    _label = _state["label"]
                     _cache = _state["cache"]
-                    _history = _state["history"]
-                    _det_cls, _trk_ids, _frame_preds = _cnn_build_association_entries(
-                        _cache,
-                        _history,
-                        actual_frame_index,
-                        len(meas),
-                        N,
-                    )
-                    _cnn_frame_preds_all[label] = _frame_preds
-                    if _use_legacy_cnn_association and bool(
-                        p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
-                    ):
-                        _decoder_track_ids = [
-                            _decoder_track_label(i, _state.get("model_labels") or None)
-                            for i in range(N)
-                        ]
-                        if any(_label is not None for _label in _decoder_track_ids):
-                            _trk_ids = _decoder_track_ids
-                    if _use_legacy_cnn_association and _det_cls is not None:
-                        _cnn_phases_assoc.append(
-                            {
-                                "label": label,
-                                "match_bonus": _state["match_bonus"],
-                                "mismatch_penalty": _state["mismatch_penalty"],
-                                "detection_classes": _det_cls,
-                                "track_identities": _trk_ids,
-                            }
+                    try:
+                        _cnn_frame_preds_all[_label] = _cache.load(actual_frame_index)
+                    except Exception:
+                        _cnn_frame_preds_all[_label] = []
+
+                # Build Bayesian identity cost terms when the online decoder is active.
+                if _identity_online_decoder is not None:
+                    try:
+                        _cat = _identity_online_decoder._catalog
+                        _tag_label_map = {
+                            idx: str(_lbl)
+                            for idx, _lbl in enumerate(
+                                p.get("TAG_IDENTITY_LABELS", []) or []
+                            )
+                            if str(_lbl).strip()
+                        }
+                        _n_dets = len(meas)
+                        _det_log_likes: list = []
+                        for _j in range(_n_dets):
+                            _log_like = None
+                            # AprilTag contribution
+                            _tid = (
+                                _det_tag_ids[_j] if _j < len(_det_tag_ids) else NO_TAG
+                            )
+                            if _tid >= 0 and hasattr(_cat, "apriltag_log_prior"):
+                                _log_like = _cat.apriltag_log_prior(
+                                    _tid, _tag_label_map
+                                )
+                            # CNN contribution (all phases, summed in log-space)
+                            for _state in _cnn_phase_states:
+                                _fps = _cnn_frame_preds_all.get(_state["label"], [])
+                                _pred = _fps[_j] if _j < len(_fps) else None
+                                if _pred is not None and _pred.class_names:
+                                    _cn = _pred.class_names[0]
+                                    if _cn and _cat.contains(_cn):
+                                        _conf = (
+                                            float(_pred.confidences[0])
+                                            if _pred.confidences
+                                            else 0.5
+                                        )
+                                        _known = list(_cat.labels[1:])
+                                        _n_known = max(_cat.num_known - 1, 1)
+                                        _cnn_lp = _cat.cnn_log_prior(
+                                            [
+                                                (
+                                                    _conf
+                                                    if _l == _cn
+                                                    else (1.0 - _conf) / _n_known
+                                                )
+                                                for _l in _known
+                                            ],
+                                            _known,
+                                        )
+                                        _log_like = (
+                                            _cnn_lp
+                                            if _log_like is None
+                                            else _log_like + _cnn_lp
+                                        )
+                            _det_log_likes.append(_log_like)
+                        association_data["identity_detection_log_likelihoods"] = (
+                            _det_log_likes
                         )
-                if _cnn_phases_assoc:
-                    association_data["cnn_phases"] = _cnn_phases_assoc
+                        association_data["identity_track_log_posteriors"] = (
+                            _identity_online_decoder.get_slot_log_posteriors(
+                                list(range(N))
+                            )
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Bayesian identity cost term build failed (non-fatal)",
+                            exc_info=True,
+                        )
 
                 # --- Density-aware pre-gate ---
                 # For detections inside a high-density region, apply a tighter
@@ -3095,18 +3130,33 @@ class TrackingWorker(QThread):
 
                 profiler.tock("cost_matrix")
                 profiler.tick("hungarian")
-                rows, cols, free_dets, high_cost_tracks = assigner.assign_tracks(
+
+                # Build committed slot map for identity-first rejoining
+                _committed_slot_identities: "dict | None" = None
+                if _identity_online_decoder is not None and params.get(
+                    "ENABLE_IDENTITY_ONLINE_DECODER", False
+                ):
+                    _csmap: dict = {}
+                    for _s in range(N):
+                        _bel = _identity_online_decoder.get_belief(_s)
+                        if _bel is not None and _bel.committed_label:
+                            _csmap[_s] = _bel.committed_label
+                    _committed_slot_identities = _csmap if _csmap else None
+
+                rows, cols, free_dets, identity_rejoin_pairs = assigner.assign_tracks(
                     cost,
                     N,
                     len(meas),
                     meas,
                     track_states,
                     tracking_continuity,
-                    self.kf_manager,  # <--- Pass the manager, not .filters
+                    self.kf_manager,
                     spatial_candidates,
                     association_data=association_data,
+                    committed_slot_identities=_committed_slot_identities,
                 )
                 respawned_matches = {r for r in rows if track_states[r] == "lost"}
+                _identity_rejoin_slots = {s for s, _ in identity_rejoin_pairs}
                 profiler.tock("hungarian")
 
                 # --- Diagnostic: log large-distance assignments ---
@@ -3164,10 +3214,11 @@ class TrackingWorker(QThread):
                     assignment_confidences = {}
                     position_uncertainties = []
 
-                # --- State Management (Identical to Original) ---
+                # --- State Management ---
                 profiler.tick("state_update")
-                matched = set(rows)
-                unmatched = list((set(range(N)) - matched) | set(high_cost_tracks))
+                # Identity-rejoin slots count as matched (no trajectory reset)
+                matched = set(rows) | _identity_rejoin_slots
+                unmatched = list(set(range(N)) - matched)
                 for r in matched:
                     missed_frames[r], track_states[r] = 0, "active"
                 for r in unmatched:
@@ -3180,28 +3231,11 @@ class TrackingWorker(QThread):
                 # --- Record tag observations for matched tracks ---
                 if track_tag_history is not None:
                     track_tag_history.resize(N)
-                    # Clear history for respawned tracks first (new trajectory)
+                    # Clear history for uncommitted respawns (new trajectory)
                     for r in respawned_matches:
                         track_tag_history.clear_track(r)
-                    for r, c in zip(rows, cols):
+                    for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
                         track_tag_history.record(r, actual_frame_index, _det_tag_ids[c])
-
-                # Update CNN track histories after assignment (multi-phase)
-                for _state in _cnn_phase_states:
-                    _history = _state["history"]
-                    _frame_preds = _cnn_frame_preds_all.get(_state["label"])
-                    if _history is None:
-                        continue
-                    for r in respawned_matches:
-                        _history.clear_track(r)
-                    _cnn_update_track_history(
-                        _history,
-                        _frame_preds,
-                        actual_frame_index,
-                        N,
-                        rows,
-                        cols,
-                    )
 
                 # === Identity Overhaul Phase 1: Online decoder per-frame update ===
                 # Runs after history updates so head-tail and CNN histories are
@@ -3211,6 +3245,7 @@ class TrackingWorker(QThread):
                     try:
                         from hydra_suite.core.identity.evidence import IdentityEvidence
 
+                        # Only clear uncommitted respawns; identity-rejoin slots keep beliefs
                         for _r in respawned_matches:
                             _identity_online_decoder.clear_slot(
                                 _r,
@@ -3218,10 +3253,27 @@ class TrackingWorker(QThread):
                                 respawn_frame_idx=actual_frame_index,
                             )
 
+                        # Decay committed beliefs for slots that are still absent
+                        if _committed_slot_identities:
+                            _still_absent_committed = [
+                                _s
+                                for _s in _committed_slot_identities
+                                if _s not in _identity_rejoin_slots
+                                and track_states[_s] == "lost"
+                            ]
+                            if _still_absent_committed:
+                                _identity_online_decoder.decay_absent_slot_beliefs(
+                                    _still_absent_committed
+                                )
+
                         _visible_slots = [r for r in matched]
                         _slot_evs: dict = {}
 
                         # Build AprilTag evidence for matched detections
+                        # (includes identity-rejoin pairs so decoder gets updated)
+                        _all_matched_pairs = list(zip(rows, cols)) + list(
+                            identity_rejoin_pairs
+                        )
                         if track_tag_history is not None:
                             _tag_label_map = {
                                 idx: str(label)
@@ -3230,9 +3282,13 @@ class TrackingWorker(QThread):
                                 )
                                 if str(label).strip()
                             }
-                            for _r, _c in zip(rows, cols):
-                                _tid = _det_tag_ids[_c] if _c < len(_det_tag_ids) else -1
-                                if _tid >= 0 and hasattr(_identity_online_decoder, "_catalog"):
+                            for _r, _c in _all_matched_pairs:
+                                _tid = (
+                                    _det_tag_ids[_c] if _c < len(_det_tag_ids) else -1
+                                )
+                                if _tid >= 0 and hasattr(
+                                    _identity_online_decoder, "_catalog"
+                                ):
                                     _cat = _identity_online_decoder._catalog
                                     if hasattr(_cat, "apriltag_log_prior"):
                                         _lp = _cat.apriltag_log_prior(
@@ -3268,20 +3324,21 @@ class TrackingWorker(QThread):
                             elif _evidence_cache is not None:
                                 _live_evidence_map = {
                                     int(_ev.detection_id): _ev
-                                    for _ev in _evidence_cache.load_frame(actual_frame_index)
+                                    for _ev in _evidence_cache.load_frame(
+                                        actual_frame_index
+                                    )
                                 }
                                 _source_labels = _evidence_cache.catalog_labels
 
-                            for _r, _c in zip(rows, cols):
+                            for _r, _c in _all_matched_pairs:
                                 _det_id = (
                                     int(detection_ids[_c])
                                     if _c < len(detection_ids)
                                     else int(_c)
                                 )
                                 _cached_ev = _live_evidence_map.get(_det_id)
-                                if (
-                                    _cached_ev is not None
-                                    and hasattr(_identity_online_decoder, "_catalog")
+                                if _cached_ev is not None and hasattr(
+                                    _identity_online_decoder, "_catalog"
                                 ):
                                     _mapped_lp = _remap_source_log_probs_to_catalog(
                                         _cached_ev.log_probs,
@@ -3308,9 +3365,21 @@ class TrackingWorker(QThread):
                                     # Build soft CNN log-prior from top-1 prediction
                                     for _k, _cn in enumerate(_pred.class_names):
                                         if _cn and _cat.contains(_cn):
-                                            _conf = float(_pred.confidences[_k]) if _k < len(_pred.confidences) else 0.5
+                                            _conf = (
+                                                float(_pred.confidences[_k])
+                                                if _k < len(_pred.confidences)
+                                                else 0.5
+                                            )
                                             _lp = _cat.cnn_log_prior(
-                                                [_conf if _l == _cn else (1.0 - _conf) / max(_cat.num_known - 1, 1) for _l in list(_cat.labels[1:])],
+                                                [
+                                                    (
+                                                        _conf
+                                                        if _l == _cn
+                                                        else (1.0 - _conf)
+                                                        / max(_cat.num_known - 1, 1)
+                                                    )
+                                                    for _l in list(_cat.labels[1:])
+                                                ],
                                                 list(_cat.labels[1:]),
                                             )
                                             _ev = IdentityEvidence.from_cnn(
@@ -3334,7 +3403,8 @@ class TrackingWorker(QThread):
                 profiler.tock("state_update")
                 profiler.tick("kf_update")
                 total_cost = 0.0
-                for r, c in zip(rows, cols):
+                # Identity-rejoin pairs use the same KF correct path but skip hard reset
+                for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
                     meas_x = float(meas[c][0])
                     meas_y = float(meas[c][1])
                     measured_theta = float(meas[c][2])
@@ -3625,9 +3695,17 @@ class TrackingWorker(QThread):
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
 
+                _committed_slots_set = (
+                    set(_committed_slot_identities.keys())
+                    if _committed_slot_identities
+                    else set()
+                )
                 for d_idx in free_dets:
                     for track_idx in range(N):
-                        if track_states[track_idx] == "lost":
+                        if (
+                            track_states[track_idx] == "lost"
+                            and track_idx not in _committed_slots_set
+                        ):
                             # Diagnostic: log slot reuse distance
                             if self.trajectories_full[track_idx]:
                                 _old = self.trajectories_full[track_idx][-1]

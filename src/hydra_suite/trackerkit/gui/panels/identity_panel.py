@@ -124,34 +124,6 @@ class IdentityPanel(QWidget):
         )
         self.spin_color_tag_conf.setVisible(False)
 
-        # --- Shared identity cost controls ---
-        fl_identity_cost = QFormLayout()
-        fl_identity_cost.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        self.spin_identity_match_bonus = QDoubleSpinBox()
-        self.spin_identity_match_bonus.setRange(0.0, 200.0)
-        self.spin_identity_match_bonus.setSingleStep(5.0)
-        self.spin_identity_match_bonus.setValue(20.0)
-        self.spin_identity_match_bonus.setToolTip(
-            "Cost bonus (subtracted) when an identity observation matches the track.\n"
-            "Divided equally across all active identity sources (AprilTags + each CNN)."
-        )
-        self.spin_identity_mismatch_penalty = QDoubleSpinBox()
-        self.spin_identity_mismatch_penalty.setRange(0.0, 500.0)
-        self.spin_identity_mismatch_penalty.setSingleStep(5.0)
-        self.spin_identity_mismatch_penalty.setValue(50.0)
-        self.spin_identity_mismatch_penalty.setToolTip(
-            "Cost penalty (added) when an identity observation conflicts with the track.\n"
-            "Divided equally across all active identity sources (AprilTags + each CNN)."
-        )
-        self.identity_cost_row_widget = self._build_inline_fields_row(
-            [
-                ("Match bonus", self.spin_identity_match_bonus, 0),
-                ("Mismatch penalty", self.spin_identity_mismatch_penalty, 0),
-            ]
-        )
-        fl_identity_cost.addRow("Identity costs", self.identity_cost_row_widget)
-        identity_content_layout.addLayout(fl_identity_cost)
-
         self.g_identity_decoder_tuning = QGroupBox("Identity Decoder Tuning")
         self._main_window._set_compact_section_widget(self.g_identity_decoder_tuning)
         fl_identity_decoder = QFormLayout(self.g_identity_decoder_tuning)
@@ -1167,7 +1139,9 @@ class IdentityPanel(QWidget):
             )
             self.lbl_input_size.setText(str(meta.get("input_size", "\u2014")))
             self.lbl_label.setText(str(meta.get("classification_label", "\u2014")))
-            recommended = self._main_window._identity_panel._classifier_recommended_confidence_threshold(meta)
+            recommended = self._main_window._identity_panel._classifier_recommended_confidence_threshold(
+                meta
+            )
             self.lbl_recommended_confidence.setText(
                 f"{recommended:.0%}" if recommended is not None else "\u2014"
             )
