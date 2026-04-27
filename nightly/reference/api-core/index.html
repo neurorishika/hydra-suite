@@ -2296,6 +2296,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.core.post.processing.resolve_simultaneous_identity_conflicts" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;resolve_simultaneous_identity_conflicts
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.core.post.processing.interpolate_trajectories" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;interpolate_trajectories
@@ -4072,6 +4081,15 @@
   <a href="#hydra_suite.core.post.processing.resolve_trajectories" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;resolve_trajectories
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.core.post.processing.resolve_simultaneous_identity_conflicts" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;resolve_simultaneous_identity_conflicts
     </span>
   </a>
   
@@ -6830,6 +6848,30 @@ tuples from the identity-only rejoin path for committed-lost slots.</p>
     params (dict, optional): Parameters for merging thresholds</p>
 <p>Returns:
     list: Final merged trajectories as list of DataFrames</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.core.post.processing.resolve_simultaneous_identity_conflicts" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">resolve_simultaneous_identity_conflicts</span><span class="p">(</span><span class="n">result_dfs</span><span class="p">,</span> <span class="n">params</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.core.post.processing.resolve_simultaneous_identity_conflicts" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Demote the weaker of two tracks that simultaneously claim the same identity.</p>
+<p>Enforces the physical constraint that a given identity can belong to at most
+one trajectory at any point in time.  For each pair of trajectories with the
+same majority <code>IdentityAssignedLabel</code> and at least one shared frame, the
+lower-scoring one has its identity columns cleared and
+<code>IdentityConflictResolved</code> set to <code>True</code>.</p>
+<p>Scoring (descending priority): TagVotes sum → mean IdentityAssignedConfidence
+→ frame count → forward-pass preference.</p>
 
     </div>
 
