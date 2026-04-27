@@ -1651,11 +1651,8 @@ class TrackingWorker(QThread):
                         if callable(set_callback):
                             set_callback(live_store.update_frame)
                         # === Streaming Phase 3+4 / Identity Phase 0 ===
-                        # Wire identity evidence emitter when posterior cache is enabled.
-                        if (
-                            bool(p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False))
-                            or bool(p.get("ENABLE_IDENTITY_ONLINE_DECODER", False))
-                        ) and cnn_cache_path:
+                        # Wire identity evidence emitter when individual pipeline is active.
+                        if cnn_cache_path and individual_pipeline_enabled:
                             try:
                                 from hydra_suite.core.tracking.evidence_emitter import (
                                     IdentityEvidenceEmitter,
@@ -1744,9 +1741,7 @@ class TrackingWorker(QThread):
                     )
                 # === Streaming Phase 3+4 / Identity Phase 0 ===
                 # Wire identity evidence emitters for the batch (non-streaming) precompute path.
-                if bool(p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False)) or bool(
-                    p.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
-                ):
+                if individual_pipeline_enabled:
                     try:
                         from hydra_suite.core.tracking.evidence_emitter import (
                             IdentityEvidenceEmitter,
@@ -2175,18 +2170,15 @@ class TrackingWorker(QThread):
         _roi_mask_resized = None
 
         # === Identity Overhaul Phase 1: Online Identity Decoder ===
-        # Instantiate the decoder when ENABLE_IDENTITY_ONLINE_DECODER is set.
+        # Instantiate the decoder whenever individual_pipeline_enabled is set and labels exist.
         # The decoder runs after each frame's geometric assignment to maintain
         # per-slot probabilistic identity beliefs and enforce the uniqueness
         # constraint across visible tracks.  The catalog is built from the
         # union of all configured CNN classifier label sets.
         _identity_online_decoder = None
         _identity_online_assignments = {}  # slot_index → IdentityAssignment
-        if (
-            bool(p.get("ENABLE_IDENTITY_ONLINE_DECODER", False))
-            and individual_pipeline_enabled
-            and not self.backward_mode
-        ):
+        _identity_catalog = None
+        if individual_pipeline_enabled and not self.backward_mode:
             try:
                 from hydra_suite.core.identity.catalog import IdentityCatalog
                 from hydra_suite.core.identity.online import OnlineIdentityDecoder
