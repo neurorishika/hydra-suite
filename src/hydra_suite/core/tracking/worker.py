@@ -58,9 +58,10 @@ from hydra_suite.core.tracking.precompute import (
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.core.tracking.tag_features import (
     NO_TAG,
-    TrackTagHistory,
     build_detection_tag_id_list,
+    build_tag_detection_hamming_map,
     build_tag_detection_map,
+    get_detection_tag_csv_values,
 )
 from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.data.tag_observation_cache import TagObservationCache
@@ -1848,11 +1849,7 @@ class TrackingWorker(QThread):
 
         # Open tag observation cache for reading during tracking loop.
         tag_obs_cache = live_tag_obs_cache
-        track_tag_history = None
         if tag_obs_cache is not None:
-            track_tag_history = TrackTagHistory(
-                N, window=int(p.get("TAG_HISTORY_WINDOW", 30))
-            )
             logger.info("Using live AprilTag observations for realtime tracking.")
         elif (
             not effective_realtime_tracking_mode
@@ -1865,13 +1862,19 @@ class TrackingWorker(QThread):
                 tag_obs_cache.close()
                 tag_obs_cache = None
             else:
-                track_tag_history = TrackTagHistory(
-                    N, window=int(p.get("TAG_HISTORY_WINDOW", 30))
-                )
                 logger.info(
                     "Tag observation cache loaded for tracking: %s",
                     tag_observation_cache_path,
                 )
+
+        # Label map for detection-level tag CSV columns (AprilTag ID → label string).
+        _tag_label_map_csv: dict = {}
+        if tag_obs_cache is not None:
+            _tag_label_map_csv = {
+                idx: str(_lbl)
+                for idx, _lbl in enumerate(p.get("TAG_IDENTITY_LABELS", []) or [])
+                if str(_lbl).strip()
+            }
 
         # Open CNN identity caches for reading during tracking loop (multi-phase).
         _cnn_phase_states = []
@@ -3006,6 +3009,9 @@ class TrackingWorker(QThread):
                 _tag_det_map = build_tag_detection_map(
                     tag_obs_cache, actual_frame_index
                 )
+                _tag_hamming_map = build_tag_detection_hamming_map(
+                    tag_obs_cache, actual_frame_index
+                )
                 _det_tag_ids = build_detection_tag_id_list(_tag_det_map, len(meas))
 
                 # The Assigner now takes the kf_manager directly to access X and S_inv
@@ -3263,15 +3269,6 @@ class TrackingWorker(QThread):
                     elif track_states[r] != "lost":
                         track_states[r] = "occluded"
 
-                # --- Record tag observations for matched tracks ---
-                if track_tag_history is not None:
-                    track_tag_history.resize(N)
-                    # Clear history for uncommitted respawns (new trajectory)
-                    for r in respawned_matches:
-                        track_tag_history.clear_track(r)
-                    for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
-                        track_tag_history.record(r, actual_frame_index, _det_tag_ids[c])
-
                 # === Identity Overhaul Phase 1: Online decoder per-frame update ===
                 # Runs after history updates so head-tail and CNN histories are
                 # current.  Consumes posterior-aware CNN evidence when available,
@@ -3309,7 +3306,7 @@ class TrackingWorker(QThread):
                         _all_matched_pairs = list(zip(rows, cols)) + list(
                             identity_rejoin_pairs
                         )
-                        if track_tag_history is not None:
+                        if tag_obs_cache is not None:
                             _tag_label_map = {
                                 idx: str(label)
                                 for idx, label in enumerate(
@@ -3749,10 +3746,16 @@ class TrackingWorker(QThread):
                         row_data.append(det_id)
                         row_data.extend(_online_identity_row_values(r))
 
-                        # Add TagID (majority-vote tag for this track, or NaN)
-                        if track_tag_history is not None:
-                            _tag = track_tag_history.majority_tag(r)
-                            row_data.append(_tag if _tag != NO_TAG else float("nan"))
+                        # Add detection-level AprilTag columns (parallel to CNN)
+                        if tag_obs_cache is not None:
+                            row_data.extend(
+                                get_detection_tag_csv_values(
+                                    c,
+                                    _tag_det_map,
+                                    _tag_hamming_map,
+                                    _tag_label_map_csv,
+                                )
+                            )
 
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
@@ -3792,10 +3795,9 @@ class TrackingWorker(QThread):
                         row_data.append(float("nan"))
                         row_data.extend(_online_identity_row_values(r))
 
-                        # Add TagID (majority-vote tag for this track, or NaN)
-                        if track_tag_history is not None:
-                            _tag = track_tag_history.majority_tag(r)
-                            row_data.append(_tag if _tag != NO_TAG else float("nan"))
+                        # Add detection-level AprilTag columns (NaN — no detection)
+                        if tag_obs_cache is not None:
+                            row_data.extend([float("nan")] * 4)
 
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
@@ -3963,9 +3965,9 @@ class TrackingWorker(QThread):
                             row_data.extend([0.0, 0.0, pos_uncertainty])
                         row_data.append(float("nan"))  # DetectionID
                         row_data.extend(_online_identity_row_values(r))
-                        if track_tag_history is not None:
-                            _tag = track_tag_history.majority_tag(r)
-                            row_data.append(_tag if _tag != NO_TAG else float("nan"))
+                        # Add detection-level AprilTag columns (NaN — no detection)
+                        if tag_obs_cache is not None:
+                            row_data.extend([float("nan")] * 4)
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
 

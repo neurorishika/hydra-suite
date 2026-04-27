@@ -760,6 +760,190 @@ def augment_trajectories_with_detected_cnn_cache(
     )
 
 
+# ---------------------------------------------------------------------------
+# AprilTag detection-level augmentation (mirrors CNN pattern)
+# ---------------------------------------------------------------------------
+
+_APRILTAG_OUTPUT_COLUMNS = [
+    "DetectedTagID",
+    "DetectedTagLabel",
+    "DetectedTagConf",
+    "DetectedTagHamming",
+]
+
+
+def build_detected_apriltag_lookup_dataframe(
+    cache: Any,
+    tag_labels: List[str],
+) -> pd.DataFrame:
+    """Flatten detected AprilTag observations into frame+detection keyed rows.
+
+    Parameters
+    ----------
+    cache:
+        An open :class:`~hydra_suite.data.tag_observation_cache.TagObservationCache`
+        in read mode.
+    tag_labels:
+        Ordered list of identity label strings where ``tag_labels[i]`` is the
+        catalog label for AprilTag integer ID ``i``.
+
+    Returns
+    -------
+    pd.DataFrame with columns ``_apt_frame_id``, ``_apt_detection_id`` (frame
+    index × 10 000 + local detection index) and the four output columns
+    ``DetectedTagID``, ``DetectedTagLabel``, ``DetectedTagConf``,
+    ``DetectedTagHamming``.  One row per tag observation.
+    """
+    rows: List[Dict[str, Any]] = []
+    try:
+        frame_min, frame_max = cache.get_frame_range()
+    except Exception:
+        return pd.DataFrame(
+            columns=["_apt_frame_id", "_apt_detection_id", *_APRILTAG_OUTPUT_COLUMNS]
+        )
+
+    for frame_idx in range(int(frame_min), int(frame_max) + 1):
+        try:
+            obs = cache.get_frame(frame_idx)
+        except Exception:
+            continue
+
+        tag_ids = np.asarray(
+            obs.get("tag_ids", np.array([], dtype=np.int32)), dtype=np.int32
+        )
+        det_indices = np.asarray(
+            obs.get("det_indices", np.array([], dtype=np.int32)), dtype=np.int32
+        )
+        hammings = np.asarray(
+            obs.get("hammings", np.array([], dtype=np.int32)), dtype=np.int32
+        )
+
+        if len(tag_ids) == 0:
+            continue
+
+        seen_det: Set[int] = set()
+        for k in range(len(tag_ids)):
+            det_idx = int(det_indices[k]) if k < len(det_indices) else -1
+            if det_idx < 0 or det_idx in seen_det:
+                continue
+            seen_det.add(det_idx)
+
+            tag_id = int(tag_ids[k])
+            hamming = int(hammings[k]) if k < len(hammings) else 0
+            conf = 1.0 / (1.0 + max(0, hamming))
+            label: Any = tag_labels[tag_id] if 0 <= tag_id < len(tag_labels) else np.nan
+
+            rows.append(
+                {
+                    "_apt_frame_id": int(frame_idx),
+                    "_apt_detection_id": int(frame_idx) * 10000 + det_idx,
+                    "DetectedTagID": float(tag_id),
+                    "DetectedTagLabel": label,
+                    "DetectedTagConf": float(conf),
+                    "DetectedTagHamming": float(hamming),
+                }
+            )
+
+    return pd.DataFrame(
+        rows,
+        columns=["_apt_frame_id", "_apt_detection_id", *_APRILTAG_OUTPUT_COLUMNS],
+    )
+
+
+def augment_trajectories_with_detected_apriltag_df(
+    trajectories_df: pd.DataFrame,
+    lookup_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge detected AprilTag columns into trajectory rows by detection ID.
+
+    Performs a left-join on ``(FrameID, DetectionID)`` so that each trajectory
+    row receives the ``Detected*`` tag columns from the detection that was
+    matched to that track slot on that frame.  Unmatched rows get NaN.
+    """
+    if trajectories_df is None or trajectories_df.empty:
+        return trajectories_df
+    if (
+        "FrameID" not in trajectories_df.columns
+        or "DetectionID" not in trajectories_df.columns
+    ):
+        return trajectories_df.copy()
+
+    out = trajectories_df.copy()
+
+    if lookup_df is None or lookup_df.empty:
+        for col in _APRILTAG_OUTPUT_COLUMNS:
+            if col not in out.columns:
+                out[col] = np.nan
+        return out
+
+    out["_frame_join"] = (
+        pd.to_numeric(out["FrameID"], errors="coerce").round().astype("Int64")
+    )
+    out["_detection_join"] = (
+        pd.to_numeric(out["DetectionID"], errors="coerce").round().astype("Int64")
+    )
+
+    lookup = lookup_df.copy()
+    lookup["_apt_frame_id"] = (
+        pd.to_numeric(lookup["_apt_frame_id"], errors="coerce").round().astype("Int64")
+    )
+    lookup["_apt_detection_id"] = (
+        pd.to_numeric(lookup["_apt_detection_id"], errors="coerce")
+        .round()
+        .astype("Int64")
+    )
+
+    merged = out.merge(
+        lookup[["_apt_frame_id", "_apt_detection_id", *_APRILTAG_OUTPUT_COLUMNS]],
+        how="left",
+        left_on=["_frame_join", "_detection_join"],
+        right_on=["_apt_frame_id", "_apt_detection_id"],
+        sort=False,
+    )
+    merged.drop(
+        columns=[
+            "_frame_join",
+            "_detection_join",
+            "_apt_frame_id",
+            "_apt_detection_id",
+        ],
+        inplace=True,
+        errors="ignore",
+    )
+    for col in _APRILTAG_OUTPUT_COLUMNS:
+        if col not in merged.columns:
+            merged[col] = np.nan
+    return merged
+
+
+def augment_trajectories_with_detected_apriltag_cache(
+    trajectories_df: pd.DataFrame,
+    cache_path: str,
+    tag_labels: List[str],
+) -> pd.DataFrame:
+    """Load detected AprilTag cache and merge tag columns by detection ID.
+
+    Parameters
+    ----------
+    trajectories_df:
+        Full trajectory DataFrame.
+    cache_path:
+        Path to a :class:`~hydra_suite.data.tag_observation_cache.TagObservationCache`
+        ``.npz`` file.
+    tag_labels:
+        Ordered list of identity label strings (``tag_labels[i]`` = label for
+        AprilTag ID ``i``).
+    """
+    from hydra_suite.data.tag_observation_cache import TagObservationCache
+
+    cache = TagObservationCache(cache_path, mode="r")
+    try:
+        lookup = build_detected_apriltag_lookup_dataframe(cache, tag_labels)
+    finally:
+        cache.close()
+    return augment_trajectories_with_detected_apriltag_df(trajectories_df, lookup)
+
+
 def _ensure_pose_columns(
     df: pd.DataFrame, extra_cols: Optional[Sequence[str]] = None
 ) -> pd.DataFrame:

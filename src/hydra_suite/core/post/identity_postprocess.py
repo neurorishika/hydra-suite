@@ -373,7 +373,6 @@ def _row_identity_sources(
 
     detected_tag = _safe_int(row.get("DetectedTagID"))
     interp_tag = _safe_int(row.get("InterpTagID"))
-    majority_tag = _safe_int(row.get("TagID"))
     if detected_tag is not None and detected_tag >= 0:
         sources[_TAG_SOURCE] = str(detected_tag)
         conf = _clamp_confidence(row.get("DetectedTagConf"), 1.0)
@@ -384,11 +383,6 @@ def _row_identity_sources(
         conf = _clamp_confidence(row.get("InterpTagConf"), 0.65)
         confidences[_TAG_SOURCE] = conf
         weights[_TAG_SOURCE] = 0.75 * max(0.35, conf)
-    elif majority_tag is not None and majority_tag >= 0:
-        sources[_TAG_SOURCE] = str(majority_tag)
-        conf = _trajectory_tag_confidence(row)
-        confidences[_TAG_SOURCE] = conf
-        weights[_TAG_SOURCE] = 0.55 * conf
 
     for label, cfg in unique_cnn_sources.items():
         specs = list(cfg.get("specs") or [])
@@ -936,11 +930,24 @@ def apply_identity_postprocessing(
     return result
 
 
-def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
-    """Fill NaN identity label rows using the per-trajectory majority label.
+_UNKNOWN_LABEL = "unknown"
 
-    Filled rows receive ``IdentityAssignedConfidence=0.0`` to signal they carry
-    no real evidence.  ``IdentitySlotLockLabel`` is filled the same way.
+
+def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill NaN identity columns using per-trajectory majority label.
+
+    Strategy per column:
+    - ``IdentityAssignedLabel``: trajectory consensus; ``"unknown"`` when the
+      entire trajectory has no label evidence.
+    - ``IdentityAssignedID``: catalog index inferred from existing label→ID
+      pairs in the data; 0 for rows whose label resolved to ``"unknown"``.
+    - ``IdentityAssignedConfidence``: 0.0 for every filled/unknown row.
+    - ``IdentitySlotLockLabel``: trajectory consensus; ``"unknown"`` fallback.
+    - ``IdentityPosteriorMargin``: 0.0 (no detection → no discriminating
+      information between any two identities).
+    - ``IdentityEntropy``: forward-fill then backward-fill within each
+      trajectory (belief state persists between frames); 0.0 for trajectories
+      that never had a detection.
     """
     if df is None or df.empty or "TrajectoryID" not in df.columns:
         return df
@@ -951,31 +958,69 @@ def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
     if "IdentityAssignedConfidence" not in df.columns:
         df["IdentityAssignedConfidence"] = np.nan
 
+    # --- IdentityAssignedLabel + IdentityAssignedConfidence ---
     label_missing = df["IdentityAssignedLabel"].isna() | (
         df["IdentityAssignedLabel"].astype(str).str.strip() == ""
     )
-
     for _traj_id, group in df.groupby("TrajectoryID", sort=False):
         grp_missing = label_missing.loc[group.index]
-        present = group.loc[~grp_missing, "IdentityAssignedLabel"]
-        if present.empty or not grp_missing.any():
+        if not grp_missing.any():
             continue
-        consensus = present.mode().iloc[0]
+        present = group.loc[~grp_missing, "IdentityAssignedLabel"]
+        consensus = present.mode().iloc[0] if not present.empty else _UNKNOWN_LABEL
         fill_idx = group.index[grp_missing]
         df.loc[fill_idx, "IdentityAssignedLabel"] = consensus
         df.loc[fill_idx, "IdentityAssignedConfidence"] = 0.0
 
+    # --- IdentityAssignedID ---
+    if "IdentityAssignedID" in df.columns:
+        # Build label→ID mapping from rows where both are already valid.
+        valid = (
+            df["IdentityAssignedLabel"].notna()
+            & (df["IdentityAssignedLabel"].astype(str).str.strip() != "")
+            & df["IdentityAssignedID"].notna()
+        )
+        label_to_id: dict[str, float] = {}
+        for lbl, idx in zip(
+            df.loc[valid, "IdentityAssignedLabel"].astype(str),
+            df.loc[valid, "IdentityAssignedID"],
+        ):
+            label_to_id.setdefault(lbl, float(idx))
+        label_to_id[_UNKNOWN_LABEL] = 0.0
+
+        id_missing = df["IdentityAssignedID"].isna()
+        if id_missing.any():
+            df.loc[id_missing, "IdentityAssignedID"] = (
+                df.loc[id_missing, "IdentityAssignedLabel"]
+                .astype(str)
+                .map(label_to_id)
+                .fillna(0.0)
+            )
+
+    # --- IdentitySlotLockLabel ---
     if "IdentitySlotLockLabel" in df.columns:
         slot_missing = df["IdentitySlotLockLabel"].isna() | (
             df["IdentitySlotLockLabel"].astype(str).str.strip() == ""
         )
         for _traj_id, group in df.groupby("TrajectoryID", sort=False):
             grp_missing = slot_missing.loc[group.index]
-            present = group.loc[~grp_missing, "IdentitySlotLockLabel"]
-            if present.empty or not grp_missing.any():
+            if not grp_missing.any():
                 continue
-            consensus = present.mode().iloc[0]
+            present = group.loc[~grp_missing, "IdentitySlotLockLabel"]
+            consensus = present.mode().iloc[0] if not present.empty else _UNKNOWN_LABEL
             df.loc[group.index[grp_missing], "IdentitySlotLockLabel"] = consensus
+
+    # --- IdentityPosteriorMargin ---
+    if "IdentityPosteriorMargin" in df.columns:
+        df["IdentityPosteriorMargin"] = df["IdentityPosteriorMargin"].fillna(0.0)
+
+    # --- IdentityEntropy ---
+    if "IdentityEntropy" in df.columns:
+        df["IdentityEntropy"] = (
+            df.groupby("TrajectoryID", sort=False)["IdentityEntropy"]
+            .transform(lambda s: s.ffill().bfill())
+            .fillna(0.0)
+        )
 
     return df
 

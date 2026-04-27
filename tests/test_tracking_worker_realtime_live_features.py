@@ -227,24 +227,6 @@ class _FakeDetector:
         )
 
 
-class _FakeTrackTagHistory:
-    def __init__(self, n_tracks: int, window: int = 30):
-        self.n_tracks = n_tracks
-        self.window = window
-
-    def build_track_tag_id_list(self, n_tracks: int):
-        return [worker_mod.NO_TAG] * n_tracks
-
-    def resize(self, _n_tracks: int):
-        return None
-
-    def record(self, *_args, **_kwargs):
-        return None
-
-    def clear_track(self, *_args, **_kwargs):
-        return None
-
-
 class _FakeKalmanFilterManager:
     def __init__(self, n_targets: int, _params):
         self.X = np.zeros((n_targets, 5), dtype=np.float32)
@@ -533,7 +515,6 @@ def test_tracking_worker_realtime_streams_live_pose_tag_and_cnn_into_assignment(
     monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
-    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         worker_mod,
@@ -657,7 +638,6 @@ def test_tracking_worker_realtime_does_not_mark_pose_directed_when_pose_is_weak(
     monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
-    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         (
@@ -771,7 +751,6 @@ def test_tracking_worker_realtime_keeps_cnn_hints_out_of_assignment_when_online_
     monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
-    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         worker_mod,
@@ -1018,7 +997,6 @@ def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
     monkeypatch.setattr(worker_mod, "DetectionCache", _BackwardCacheProbe)
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
-    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
 
     worker = worker_mod.TrackingWorker(
         str(tmp_path / "video.mp4"),

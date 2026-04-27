@@ -2787,6 +2787,30 @@ class TrackingOrchestrator:
                 label=str(_cnn_label),
             )
 
+        _tag_cache_path = self._resolve_current_tag_cache_path()
+        if _tag_cache_path and os.path.exists(_tag_cache_path):
+            try:
+                from hydra_suite.core.identity.properties.export import (
+                    augment_trajectories_with_detected_apriltag_cache,
+                )
+
+                _tag_labels = [
+                    str(_lbl)
+                    for _lbl in (
+                        self._mw.get_parameters_dict().get("TAG_IDENTITY_LABELS", [])
+                        or []
+                    )
+                ]
+                with_pose_df = augment_trajectories_with_detected_apriltag_cache(
+                    with_pose_df,
+                    _tag_cache_path,
+                    tag_labels=_tag_labels,
+                )
+            except Exception:
+                logger.debug(
+                    "Detection-level AprilTag augmentation skipped.", exc_info=True
+                )
+
         if cache_available:
             min_valid_conf = float(
                 self._panels.identity.spin_pose_min_kpt_conf_valid.value()
@@ -3040,6 +3064,7 @@ class TrackingOrchestrator:
             return with_pose_df
 
         params = self._mw.get_parameters_dict()
+        tag_cache_path = self._resolve_current_tag_cache_path()
 
         def _annotate_identity_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
             out = df.copy()
@@ -3048,13 +3073,12 @@ class TrackingOrchestrator:
                 for col in out.columns
                 if str(col).startswith("CNN_") and str(col).endswith("_Class")
             ]
-            tag_labels = [
-                str(label) for label in (params.get("TAG_IDENTITY_LABELS", []) or [])
-            ]
 
             def _row_sources(row: pd.Series) -> object:
                 sources = []
-                if pd.notna(row.get("TagID")) or pd.notna(row.get("DetectedTagID")):
+                if pd.notna(row.get("DetectedTagID")) or pd.notna(
+                    row.get("InterpTagID")
+                ):
                     sources.append("apriltag")
                 if any(pd.notna(row.get(col)) for col in cnn_class_columns):
                     sources.append("cnn")
@@ -3071,22 +3095,9 @@ class TrackingOrchestrator:
             def _row_conflict(row: pd.Series) -> int:
                 assigned = row.get("IdentityAssignedLabel")
                 observed = set()
-                tag_id = row.get("TagID")
-                if pd.notna(tag_id):
-                    try:
-                        tag_index = int(float(tag_id))
-                    except Exception:
-                        tag_index = -1
-                    if 0 <= tag_index < len(tag_labels):
-                        observed.add(tag_labels[tag_index])
-                detected_tag_id = row.get("DetectedTagID")
-                if pd.notna(detected_tag_id):
-                    try:
-                        tag_index = int(float(detected_tag_id))
-                    except Exception:
-                        tag_index = -1
-                    if 0 <= tag_index < len(tag_labels):
-                        observed.add(tag_labels[tag_index])
+                detected_tag_label = row.get("DetectedTagLabel")
+                if pd.notna(detected_tag_label):
+                    observed.add(str(detected_tag_label))
                 for col in cnn_class_columns:
                     value = row.get(col)
                     if pd.notna(value):
@@ -3104,24 +3115,9 @@ class TrackingOrchestrator:
         try:
             from hydra_suite.core.post.identity_postprocess import (
                 apply_identity_postprocessing,
-                augment_trajectories_with_detected_apriltags,
                 fill_identity_nans_with_consensus,
                 sort_trajectories_by_identity,
             )
-
-            tag_cache_path = self._resolve_current_tag_cache_path()
-            if tag_cache_path and os.path.exists(tag_cache_path):
-                from hydra_suite.data.tag_observation_cache import TagObservationCache
-
-                tag_cache = TagObservationCache(tag_cache_path, mode="r")
-                try:
-                    with_pose_df = augment_trajectories_with_detected_apriltags(
-                        with_pose_df,
-                        tag_cache,
-                        params,
-                    )
-                finally:
-                    tag_cache.close()
 
             _identity_mode = str(params.get("IDENTITY_POSTPROCESS_MODE", "Heuristic"))
             if _identity_mode == "Heuristic":
@@ -4163,7 +4159,14 @@ class TrackingOrchestrator:
                 "IdentitySlotLockLabel",
             ]
         if self._mw._selected_identity_method() == "apriltags":
-            hdr.append("TagID")
+            hdr.extend(
+                [
+                    "DetectedTagID",
+                    "DetectedTagLabel",
+                    "DetectedTagConf",
+                    "DetectedTagHamming",
+                ]
+            )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)
         if backward_mode:

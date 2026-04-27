@@ -8,8 +8,7 @@ into the ``association_data`` dictionaries consumed by the assigner.
 from __future__ import annotations
 
 import logging
-from collections import Counter
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -17,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Sentinel for "no tag observed"
 NO_TAG: int = -1
+
+_NAN = float("nan")
 
 
 def build_tag_detection_map(
@@ -58,6 +59,44 @@ def build_tag_detection_map(
     return result
 
 
+def build_tag_detection_hamming_map(
+    tag_cache: Any,
+    frame_idx: int,
+) -> Dict[int, int]:
+    """Map detection-slot index → hamming distance for a single frame.
+
+    Parameters
+    ----------
+    tag_cache:
+        An open :class:`TagObservationCache` in read mode (or *None*).
+    frame_idx:
+        The video frame index to query.
+
+    Returns
+    -------
+    dict mapping ``det_index`` → ``hamming`` for every tag observed in this
+    frame.  Empty dict if the cache is *None* or the frame has no tags.
+    """
+    if tag_cache is None:
+        return {}
+    try:
+        obs = tag_cache.get_frame(frame_idx)
+    except Exception:
+        return {}
+
+    det_indices = obs.get("det_indices", np.array([], dtype=np.int32))
+    hammings = obs.get("hammings", np.array([], dtype=np.int32))
+
+    if len(det_indices) == 0:
+        return {}
+
+    result: Dict[int, int] = {}
+    for didx, hamming in zip(det_indices.tolist(), hammings.tolist()):
+        if didx not in result:
+            result[didx] = int(hamming)
+    return result
+
+
 def build_detection_tag_id_list(
     tag_det_map: Dict[int, int],
     num_detections: int,
@@ -69,66 +108,39 @@ def build_detection_tag_id_list(
     return [tag_det_map.get(j, NO_TAG) for j in range(num_detections)]
 
 
-# ---------------------------------------------------------------------------
-# Track-side tag history
-# ---------------------------------------------------------------------------
+def get_detection_tag_csv_values(
+    det_index: int,
+    tag_det_map: Dict[int, int],
+    tag_hamming_map: Dict[int, int],
+    tag_label_map: Dict[int, str],
+) -> Tuple[object, object, object, object]:
+    """Return ``(tag_id, label, conf, hamming)`` for *det_index*, or four NaNs.
 
+    Parameters
+    ----------
+    det_index:
+        Local detection index within the frame.
+    tag_det_map:
+        Output of :func:`build_tag_detection_map` for the current frame.
+    tag_hamming_map:
+        Output of :func:`build_tag_detection_hamming_map` for the current frame.
+    tag_label_map:
+        Mapping from integer AprilTag ID to catalog label string.
 
-class TrackTagHistory:
-    """Maintains a recent-window tag-ID history for every track slot.
-
-    Tracks accumulate tag observations over a rolling window of *n_frames*.
-    The "current" tag for a track is the majority-vote winner inside the window
-    (or :data:`NO_TAG` if no observations are available).
+    Returns
+    -------
+    tuple of ``(DetectedTagID, DetectedTagLabel, DetectedTagConf, DetectedTagHamming)``
+    or ``(nan, nan, nan, nan)`` when no tag was observed for this detection.
     """
-
-    def __init__(self, n_tracks: int, window: int = 30):
-        self._window = max(1, window)
-        # _history[track_idx] is a list of (frame_idx, tag_id) pairs, newest last
-        self._history: List[List[tuple]] = [[] for _ in range(n_tracks)]
-
-    @property
-    def n_tracks(self) -> int:
-        return len(self._history)
-
-    def resize(self, n_tracks: int) -> None:
-        """Grow (never shrink) the history to accommodate *n_tracks*."""
-        while len(self._history) < n_tracks:
-            self._history.append([])
-
-    def record(self, track_idx: int, frame_idx: int, tag_id: int) -> None:
-        """Record (or update) the tag observation for a track on this frame."""
-        if tag_id == NO_TAG:
-            return
-        if track_idx >= len(self._history):
-            self.resize(track_idx + 1)
-        self._history[track_idx].append((frame_idx, tag_id))
-        # Trim old entries beyond the window
-        cutoff = frame_idx - self._window
-        hist = self._history[track_idx]
-        while hist and hist[0][0] < cutoff:
-            hist.pop(0)
-
-    def majority_tag(self, track_idx: int) -> int:
-        """Return the majority-vote tag for *track_idx*, or :data:`NO_TAG`."""
-        if track_idx >= len(self._history):
-            return NO_TAG
-        hist = self._history[track_idx]
-        if not hist:
-            return NO_TAG
-        counts = Counter(tid for _, tid in hist)
-        winner, cnt = counts.most_common(1)[0]
-        return int(winner)
-
-    def build_track_tag_id_list(self, n_tracks: int) -> List[int]:
-        """Return a list of length *n_tracks*: majority tag per slot.
-
-        This is what goes into ``association_data["track_last_tag_ids"]``.
-        """
-        self.resize(n_tracks)
-        return [self.majority_tag(i) for i in range(n_tracks)]
-
-    def clear_track(self, track_idx: int) -> None:
-        """Reset history for a track slot (e.g. on respawn / lost)."""
-        if track_idx < len(self._history):
-            self._history[track_idx].clear()
+    tag_id = tag_det_map.get(det_index, NO_TAG)
+    if tag_id == NO_TAG:
+        return (_NAN, _NAN, _NAN, _NAN)
+    hamming = tag_hamming_map.get(det_index, 0)
+    conf = 1.0 / (1.0 + max(0, hamming))
+    label: Optional[str] = tag_label_map.get(tag_id)
+    return (
+        float(tag_id),
+        label if label is not None else _NAN,
+        float(conf),
+        float(hamming),
+    )

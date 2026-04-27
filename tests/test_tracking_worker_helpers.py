@@ -142,9 +142,12 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
 
     tag_features = types.ModuleType("hydra_suite.core.tracking.tag_features")
     tag_features.NO_TAG = -1
-    tag_features.TrackTagHistory = object
     tag_features.build_detection_tag_id_list = lambda *_args, **_kwargs: []
+    tag_features.build_tag_detection_hamming_map = lambda *_args, **_kwargs: {}
     tag_features.build_tag_detection_map = lambda *_args, **_kwargs: {}
+    tag_features.get_detection_tag_csv_values = (
+        lambda *_args, **_kwargs: (float("nan"),) * 4
+    )
 
     return {
         "hydra_suite.core.filters": core_filters,
