@@ -53,6 +53,27 @@ def _predict_kernel(X, P, F, Q_base, q_long, q_lat):
             if P[i, j, j] < 0.1:
                 P[i, j, j] = 0.1
 
+        # 4b. Symmetrize P after predict: float32 matrix multiply F@P@F.T
+        # accumulates asymmetry over time, which can make S indefinite.
+        for _pi in range(5):
+            for _pj in range(_pi + 1, 5):
+                _pavg = (P[i, _pi, _pj] + P[i, _pj, _pi]) * 0.5
+                P[i, _pi, _pj] = _pavg
+                P[i, _pj, _pi] = _pavg
+
+        # 4c. Cauchy-Schwarz clamp: |P[r,c]| <= sqrt(P[r,r]*P[c,c]).
+        # Necessary condition for a valid covariance matrix; prevents
+        # off-diagonal drift from making S near-singular.
+        for _pi in range(5):
+            for _pj in range(_pi + 1, 5):
+                _lim = (P[i, _pi, _pi] * P[i, _pj, _pj]) ** 0.5
+                if P[i, _pi, _pj] > _lim:
+                    P[i, _pi, _pj] = _lim
+                    P[i, _pj, _pi] = _lim
+                elif P[i, _pi, _pj] < -_lim:
+                    P[i, _pi, _pj] = -_lim
+                    P[i, _pj, _pi] = -_lim
+
         # 5. Normalize theta to [0, 2*pi) to prevent state drift
         two_pi = 2.0 * np.pi
         X[i, 2] = X[i, 2] - np.floor(X[i, 2] / two_pi) * two_pi
@@ -309,6 +330,15 @@ class KalmanFilterManager:
             _p_max = float(self.params.get("KALMAN_MAX_COVARIANCE_DIAGONAL", 1000.0))
             _diag = np.arange(self.dim_s)
             np.clip(self.P[:, _diag, _diag], 0.1, _p_max, out=self.P[:, _diag, _diag])
+            # Cauchy-Schwarz re-enforcement after diagonal cap: the cap may have
+            # lowered a diagonal entry, making an existing off-diagonal exceed
+            # its bound.  Clamp now so S = H@P[:3,:3]@H.T + R stays PSD.
+            _d_sqrt = np.sqrt(np.maximum(self.P[:, _diag, _diag], 0.0))  # (N, dim_s)
+            for _r in range(self.dim_s):
+                for _c in range(_r + 1, self.dim_s):
+                    _lim_rc = _d_sqrt[:, _r] * _d_sqrt[:, _c]
+                    np.clip(self.P[:, _r, _c], -_lim_rc, _lim_rc, out=self.P[:, _r, _c])
+                    self.P[:, _c, _r] = self.P[:, _r, _c]
         else:
             # Basic NumPy Fallback (Standard isotropic prediction)
             for i in range(self.num_targets):
@@ -334,6 +364,15 @@ class KalmanFilterManager:
                     if self.P[i, j, j] < 0.1:
                         self.P[i, j, j] = 0.1
 
+                # Symmetrize and Cauchy-Schwarz clamp (mirrors Numba kernel)
+                self.P[i] = (self.P[i] + self.P[i].T) * 0.5
+                _d5 = np.sqrt(np.maximum(np.diag(self.P[i]), 0.0))
+                for _r in range(5):
+                    for _c in range(_r + 1, 5):
+                        _lim = _d5[_r] * _d5[_c]
+                        self.P[i, _r, _c] = np.clip(self.P[i, _r, _c], -_lim, _lim)
+                        self.P[i, _c, _r] = self.P[i, _r, _c]
+
                 # Normalize theta to [0, 2*pi)
                 self.X[i, 2] = self.X[i, 2] % (2.0 * np.pi)
 
@@ -341,6 +380,15 @@ class KalmanFilterManager:
             _p_max = float(self.params.get("KALMAN_MAX_COVARIANCE_DIAGONAL", 1000.0))
             _diag = np.arange(self.dim_s)
             np.clip(self.P[:, _diag, _diag], 0.1, _p_max, out=self.P[:, _diag, _diag])
+
+            # Re-apply Cauchy-Schwarz after the diagonal cap (cap may have lowered
+            # a diagonal, making an existing off-diagonal exceed the new bound).
+            _d_sqrt = np.sqrt(np.maximum(self.P[:, _diag, _diag], 0.0))  # (N, dim_s)
+            for _r in range(self.dim_s):
+                for _c in range(_r + 1, self.dim_s):
+                    _lim_rc = _d_sqrt[:, _r] * _d_sqrt[:, _c]
+                    np.clip(self.P[:, _r, _c], -_lim_rc, _lim_rc, out=self.P[:, _r, _c])
+                    self.P[:, _c, _r] = self.P[:, _r, _c]
 
         # Guard against numerical blow-ups before downstream gating/assignment.
         self._sanitize_all_tracks("post-predict non-finite state/covariance")

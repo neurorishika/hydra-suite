@@ -13,27 +13,7 @@ mod = load_src_module(
 )
 
 apply_identity_postprocessing = mod.apply_identity_postprocessing
-augment_trajectories_with_detected_apriltags = (
-    mod.augment_trajectories_with_detected_apriltags
-)
 fill_identity_nans_with_consensus = mod.fill_identity_nans_with_consensus
-
-
-class FakeTagCache:
-    """Minimal stand-in for detected AprilTag cache reads."""
-
-    def __init__(self, data):
-        self._data = data
-
-    def get_frame(self, frame_idx):
-        return self._data.get(
-            frame_idx,
-            {
-                "tag_ids": [],
-                "centers_xy": [],
-                "hammings": [],
-            },
-        )
 
 
 def _cnn_params(max_gap: int = 2, scoring_mode: str = "atomic") -> dict:
@@ -51,35 +31,6 @@ def _cnn_params(max_gap: int = 2, scoring_mode: str = "atomic") -> dict:
             }
         ],
     }
-
-
-def test_augment_detected_apriltags_assigns_nearest_tag_per_row() -> None:
-    df = pd.DataFrame(
-        [
-            {"FrameID": 1, "TrajectoryID": 0, "X": 10.0, "Y": 20.0},
-            {"FrameID": 1, "TrajectoryID": 1, "X": 100.0, "Y": 100.0},
-        ]
-    )
-    cache = FakeTagCache(
-        {
-            1: {
-                "tag_ids": [5, 7],
-                "centers_xy": [[10.5, 19.5], [101.0, 99.0]],
-                "hammings": [0, 1],
-            }
-        }
-    )
-
-    out = augment_trajectories_with_detected_apriltags(
-        df,
-        cache,
-        {"TAG_ASSOCIATION_RADIUS": 10.0},
-    )
-
-    assert int(out.iloc[0]["DetectedTagID"]) == 5
-    assert int(out.iloc[1]["DetectedTagID"]) == 7
-    assert float(out.iloc[0]["DetectedTagConf"]) == 1.0
-    assert float(out.iloc[1]["DetectedTagConf"]) == 0.5
 
 
 def test_fill_identity_nans_with_consensus_handles_float_label_columns() -> None:

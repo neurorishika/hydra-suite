@@ -21,6 +21,7 @@ import pandas as pd
 
 IDENTITY_AUDIT_COLUMNS = [
     "DetectedTagID",
+    "DetectedTagLabel",
     "DetectedTagHamming",
     "DetectedTagConf",
     "OriginalTrajectoryID",
@@ -258,71 +259,6 @@ def identity_sources_conflict(lhs: dict[str, str], rhs: dict[str, str]) -> bool:
         conflicts > agreements
         for agreements, conflicts in comparison["grouped_results"]
     )
-
-
-def _trajectory_tag_confidence(row: pd.Series) -> float:
-    votes = _safe_float(row.get("TagVotes"), 0.0)
-    if not np.isfinite(votes) or votes <= 0:
-        return 0.55
-    return float(np.clip(0.45 + 0.08 * votes, 0.55, 0.85))
-
-
-def augment_trajectories_with_detected_apriltags(
-    trajectories_df: pd.DataFrame,
-    tag_cache: Any | None,
-    params: dict[str, Any] | None = None,
-) -> pd.DataFrame:
-    """Annotate rows with nearest detected AprilTag observations.
-
-    Rows are matched per frame by nearest tag center within the configured
-    association radius.
-    """
-    if trajectories_df is None or trajectories_df.empty:
-        return trajectories_df
-
-    out = _ensure_identity_columns(trajectories_df)
-    if tag_cache is None:
-        return out
-
-    assoc_radius = float((params or {}).get("TAG_ASSOCIATION_RADIUS", 50.0))
-    required_cols = {"FrameID", "X", "Y"}
-    if not required_cols.issubset(out.columns):
-        return out
-
-    for frame_id, frame_rows in out.groupby("FrameID", sort=False):
-        fid = _safe_int(frame_id)
-        if fid is None:
-            continue
-        obs = tag_cache.get_frame(fid)
-        tag_ids = np.asarray(obs.get("tag_ids", np.array([], dtype=np.int32)))
-        centers = np.asarray(
-            obs.get("centers_xy", np.zeros((0, 2), dtype=np.float32)),
-            dtype=np.float32,
-        )
-        hammings = np.asarray(
-            obs.get("hammings", np.array([], dtype=np.int32)), dtype=np.int32
-        )
-        if len(tag_ids) == 0 or len(centers) == 0:
-            continue
-
-        for row_index, row in frame_rows.iterrows():
-            x = _safe_float(row.get("X"))
-            y = _safe_float(row.get("Y"))
-            if not np.isfinite(x) or not np.isfinite(y):
-                continue
-            deltas = centers - np.asarray([x, y], dtype=np.float32)
-            dists = np.sqrt(np.sum(deltas * deltas, axis=1))
-            if len(dists) == 0:
-                continue
-            best_idx = int(np.argmin(dists))
-            if float(dists[best_idx]) > assoc_radius:
-                continue
-            out.at[row_index, "DetectedTagID"] = int(tag_ids[best_idx])
-            hamming = int(hammings[best_idx]) if best_idx < len(hammings) else 0
-            out.at[row_index, "DetectedTagHamming"] = hamming
-            out.at[row_index, "DetectedTagConf"] = float(1.0 / (1.0 + max(0, hamming)))
-
-    return out
 
 
 def _cnn_column_specs(

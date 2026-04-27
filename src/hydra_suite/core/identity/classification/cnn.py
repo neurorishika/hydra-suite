@@ -121,7 +121,7 @@ class CNNIdentityCache:
             raw = np.load(str(self._path), allow_pickle=True)
             self._data = dict(raw)
             if "factor_names" not in self._data:
-                self._is_legacy = Trues
+                self._is_legacy = True
                 self._factor_names = ("flat",)
             else:
                 stored = self._data["factor_names"]

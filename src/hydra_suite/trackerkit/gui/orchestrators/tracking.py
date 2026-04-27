@@ -3137,6 +3137,8 @@ class TrackingOrchestrator:
                 sort_trajectories_by_identity,
             )
 
+            tag_cache_path = self._resolve_current_tag_cache_path()
+
             _identity_mode = str(params.get("IDENTITY_POSTPROCESS_MODE", "Heuristic"))
             if _identity_mode == "Heuristic":
                 with_pose_df = apply_identity_postprocessing(with_pose_df, params)
