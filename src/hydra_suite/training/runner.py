@@ -765,11 +765,7 @@ def _train_tiny_classify(
         f"rebalance={rebalance_mode}, power={rebalance_power:.2f}, "
         f"label_smoothing={label_smoothing:.2f}, "
         f"ignore_label={str(ignore_label_name)!r}"
-        + (
-            f" (idx={ignore_label_idx})"
-            if ignore_label_idx is not None
-            else ""
-        ),
+        + (f" (idx={ignore_label_idx})" if ignore_label_idx is not None else ""),
     )
 
     TinyDataset = _build_tiny_dataset_class(input_w, input_h)

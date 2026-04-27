@@ -52,11 +52,7 @@ def _fragment_label_scores(fragment_df: pd.DataFrame) -> dict[str, float]:
         except Exception:
             conf_value = 0.0
         scores.setdefault(str(label), []).append(conf_value)
-    return {
-        label: float(np.mean(values))
-        for label, values in scores.items()
-        if values
-    }
+    return {label: float(np.mean(values)) for label, values in scores.items() if values}
 
 
 def _normalize_log_probs(log_probs: np.ndarray) -> np.ndarray:
@@ -194,11 +190,7 @@ def smooth_trajectory_identity_posteriors(
     traj_ids = df["TrajectoryID"].unique()
 
     for traj_id in traj_ids:
-        traj_df = (
-            df.loc[df["TrajectoryID"] == traj_id]
-            .sort_values("FrameID")
-            .copy()
-        )
+        traj_df = df.loc[df["TrajectoryID"] == traj_id].sort_values("FrameID").copy()
         if traj_df.empty:
             continue
 
@@ -206,7 +198,7 @@ def smooth_trajectory_identity_posteriors(
         frame_log_probs: list[np.ndarray] = []
         for row in traj_df.itertuples():
             try:
-                frame_idx = int(getattr(row, "FrameID"))
+                frame_idx = int(row.FrameID)
             except Exception:
                 frame_log_probs.append(default_log_probs.copy())
                 continue
@@ -290,13 +282,24 @@ def _posterior_split_runs(
     sorted_df = traj_df.sort_values("FrameID", kind="stable")
     for row in sorted_df.itertuples():
         label = getattr(row, "IdentitySmoothedLabel", None)
-        conf = float(pd.to_numeric(getattr(row, "IdentitySmoothedConf", np.nan), errors="coerce"))
-        margin = float(pd.to_numeric(getattr(row, "IdentitySmoothedMargin", np.nan), errors="coerce"))
+        conf = float(
+            pd.to_numeric(getattr(row, "IdentitySmoothedConf", np.nan), errors="coerce")
+        )
+        margin = float(
+            pd.to_numeric(
+                getattr(row, "IdentitySmoothedMargin", np.nan), errors="coerce"
+            )
+        )
         stable_label = None
         if label is not None and not pd.isna(label):
-            if np.isfinite(conf) and conf >= min_conf and np.isfinite(margin) and margin >= min_margin:
+            if (
+                np.isfinite(conf)
+                and conf >= min_conf
+                and np.isfinite(margin)
+                and margin >= min_margin
+            ):
                 stable_label = str(label)
-        frame_id = int(getattr(row, "FrameID"))
+        frame_id = int(row.FrameID)
         if not runs or runs[-1]["label"] != stable_label:
             runs.append(
                 {
@@ -337,7 +340,9 @@ def _posterior_split_frames(
             continue
         if left_run["length"] < min_seg_frames or right_run["length"] < min_seg_frames:
             continue
-        bridge_frames = sum(runs[pos]["length"] for pos in range(left_pos + 1, right_pos))
+        bridge_frames = sum(
+            runs[pos]["length"] for pos in range(left_pos + 1, right_pos)
+        )
         if bridge_frames > max_bridge_frames:
             continue
         split_frames.append(int(right_run["start_frame"]))
@@ -431,9 +436,14 @@ def split_mixed_identity_trajectories(
         return smoothed_df.copy()
 
     out = pd.concat(out_parts, ignore_index=True, sort=False)
-    out = out.sort_values(["TrajectoryID", "FrameID"], kind="stable").reset_index(drop=True)
+    out = out.sort_values(["TrajectoryID", "FrameID"], kind="stable").reset_index(
+        drop=True
+    )
     if split_count > 0:
-        log.info("Split %d mixed-identity trajectory segment(s) before fragment assignment.", split_count)
+        log.info(
+            "Split %d mixed-identity trajectory segment(s) before fragment assignment.",
+            split_count,
+        )
     return out
 
 
@@ -484,7 +494,14 @@ def build_identity_fragments(
             label = row.get("IdentitySmoothedLabel")
             conf_val = row.get("IdentitySmoothedConf", 0.0)
             fi = int(row["FrameID"])
-            conf = 0.0 if (conf_val is None or (isinstance(conf_val, float) and np.isnan(conf_val))) else float(conf_val)
+            conf = (
+                0.0
+                if (
+                    conf_val is None
+                    or (isinstance(conf_val, float) and np.isnan(conf_val))
+                )
+                else float(conf_val)
+            )
 
             label_changed = label != cur_label
             below_threshold = conf < min_conf
@@ -511,7 +528,9 @@ def build_identity_fragments(
                     frag_id += 1
                 # Start new fragment only if above threshold
                 cur_label = label if not below_threshold else None
-                cur_confs = [conf] if (not below_threshold and label is not None) else []
+                cur_confs = (
+                    [conf] if (not below_threshold and label is not None) else []
+                )
                 cur_frames = [fi] if (not below_threshold and label is not None) else []
             else:
                 cur_confs.append(conf)
@@ -632,9 +651,13 @@ def solve_fragment_identity_assignment(
             if label is not None:
                 label_to_vars.setdefault(label, []).append(var_idx)
 
-        c = np.asarray([-score for _frag_idx, _label, score in var_specs], dtype=np.float64)
+        c = np.asarray(
+            [-score for _frag_idx, _label, score in var_specs], dtype=np.float64
+        )
         integrality = np.ones(n_vars, dtype=np.int8)
-        bounds = Bounds(np.zeros(n_vars, dtype=np.float64), np.ones(n_vars, dtype=np.float64))
+        bounds = Bounds(
+            np.zeros(n_vars, dtype=np.float64), np.ones(n_vars, dtype=np.float64)
+        )
 
         constraint_rows: list[np.ndarray] = []
         lower_bounds: list[float] = []
@@ -681,7 +704,9 @@ def solve_fragment_identity_assignment(
             bounds=bounds,
             constraints=constraints,
             options={
-                "time_limit": float(params.get("IDENTITY_OFFLINE_ILP_TIME_LIMIT", 30.0)),
+                "time_limit": float(
+                    params.get("IDENTITY_OFFLINE_ILP_TIME_LIMIT", 30.0)
+                ),
                 "mip_rel_gap": float(params.get("IDENTITY_OFFLINE_ILP_REL_GAP", 1e-6)),
             },
         )
@@ -698,7 +723,10 @@ def solve_fragment_identity_assignment(
             getattr(result, "message", "unknown failure"),
         )
     except Exception:
-        log.debug("Global identity MILP unavailable; falling back to legacy solver.", exc_info=True)
+        log.debug(
+            "Global identity MILP unavailable; falling back to legacy solver.",
+            exc_info=True,
+        )
 
     return _solve_fragment_identity_assignment_legacy(df, candidate_options)
 
@@ -745,7 +773,9 @@ def _solve_fragment_identity_assignment_legacy(
             for candidate, _score in candidate_options[idx][1:]:
                 if candidate is None:
                     continue
-                if any(overlap[idx, other_idx] for other_idx in claimed.get(candidate, [])):
+                if any(
+                    overlap[idx, other_idx] for other_idx in claimed.get(candidate, [])
+                ):
                     continue
                 label = candidate
                 claimed.setdefault(candidate, []).append(idx)
@@ -867,9 +897,7 @@ def run_identity_residual_assignment(
         log.debug("Residual identity pass skipped: no catalog provided.")
         return df
 
-    ambiguity_margin = float(
-        params.get("IDENTITY_OFFLINE_AMBIGUITY_MARGIN", 0.15)
-    )
+    ambiguity_margin = float(params.get("IDENTITY_OFFLINE_AMBIGUITY_MARGIN", 0.15))
 
     for idx, row in df[df["AssignedLabel"].isna()].iterrows():
         candidates = _candidate_labels_for_fragment(row, catalog)
@@ -879,7 +907,7 @@ def run_identity_residual_assignment(
         overlapping = df[
             (df.index != idx)
             & df["AssignedLabel"].notna()
-            & df.apply(lambda other: _fragments_overlap(row, other), axis=1)
+            & df.apply(lambda other, _row=row: _fragments_overlap(_row, other), axis=1)
         ]
         used_labels = {str(label) for label in overlapping["AssignedLabel"].tolist()}
 

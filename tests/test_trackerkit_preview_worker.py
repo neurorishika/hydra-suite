@@ -335,7 +335,9 @@ def test_preview_run_cnn_overlay_formats_multihead_predictions(monkeypatch) -> N
             return None
 
     monkeypatch.setattr(cnn_mod, "CNNIdentityBackend", FakeBackend)
-    monkeypatch.setattr(preview_worker, "resolve_model_path", lambda path: "/tmp/multihead.json")
+    monkeypatch.setattr(
+        preview_worker, "resolve_model_path", lambda path: "/tmp/multihead.json"
+    )
     monkeypatch.setattr(preview_worker.os.path, "exists", lambda path: True)
 
     label_stacks = [[]]

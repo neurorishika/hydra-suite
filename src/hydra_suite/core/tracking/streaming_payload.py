@@ -11,7 +11,7 @@ the identity evidence sidecar.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
@@ -87,8 +87,7 @@ class StreamingAnalysisPayload:
     def has_cpu_crops(self) -> bool:
         """True if CPU canonical crops are available."""
         return (
-            self.canonical_crops_cpu is not None
-            and len(self.canonical_crops_cpu) > 0
+            self.canonical_crops_cpu is not None and len(self.canonical_crops_cpu) > 0
         )
 
     def best_crops(self) -> Optional[list]:

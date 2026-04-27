@@ -36,8 +36,7 @@ def cnn_build_association_entries(
     identity_dict = cnn_track_history.build_track_identity_list()
     if multi_factor_history:
         track_identities = [
-            (tuple(identity_dict[i]) if i in identity_dict else None)
-            for i in range(N)
+            (tuple(identity_dict[i]) if i in identity_dict else None) for i in range(N)
         ]
     else:
         track_identities = [
@@ -67,16 +66,12 @@ def cnn_update_track_history(cnn_track_history, frame_preds, frame_idx, N, rows,
                     for idx in range(history_size)
                 )
                 confidences = tuple(
-                    float(pred.confidences[idx])
-                    if idx < len(pred.confidences)
-                    else 0.0
+                    float(pred.confidences[idx]) if idx < len(pred.confidences) else 0.0
                     for idx in range(history_size)
                 )
             else:
                 class_names = ((pred.class_names[0] if pred.class_names else None),)
-                confidences = (
-                    float(pred.confidences[0]) if pred.confidences else 0.0,
-                )
+                confidences = (float(pred.confidences[0]) if pred.confidences else 0.0,)
             if not any(name is not None for name in class_names):
                 continue
             cnn_track_history.record(

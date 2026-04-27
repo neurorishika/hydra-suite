@@ -695,6 +695,7 @@ class RuntimeArtifactMixin:
             del base_model
             try:
                 import torch as _torch
+
                 if _torch.cuda.is_available():
                     _torch.cuda.synchronize()
                     _torch.cuda.empty_cache()

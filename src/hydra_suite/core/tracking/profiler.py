@@ -75,8 +75,8 @@ CATEGORY_ORDER = [
     "interp_pose_inference",
     # Batched detection diagnostic categories
     "batched_frame_read",
-    "batched_infer",          # detector.detect_objects_batched() wall time
-    "batched_cache_write",   # _cache_batch_results() wall time
+    "batched_infer",  # detector.detect_objects_batched() wall time
+    "batched_cache_write",  # _cache_batch_results() wall time
 ]
 
 

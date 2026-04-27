@@ -859,7 +859,9 @@ class ClassifierBackend:
             # Ensure the tensor is contiguous before handing its data pointer
             # to ORT (e.g. the channel-flip in _preprocess_cuda can leave the
             # batch non-contiguous).
-            batch_c = batch_cuda if batch_cuda.is_contiguous() else batch_cuda.contiguous()
+            batch_c = (
+                batch_cuda if batch_cuda.is_contiguous() else batch_cuda.contiguous()
+            )
             device_id = batch_c.device.index if batch_c.device.index is not None else 0
             binding = self._model.io_binding()
             binding.bind_input(

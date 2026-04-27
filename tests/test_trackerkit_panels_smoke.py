@@ -130,7 +130,9 @@ def test_postprocess_panel_wired_in_main_window(main_window):
     assert isinstance(main_window._postprocess_panel, PostProcessPanel)
     assert hasattr(main_window._postprocess_panel, "enable_postprocessing")
     assert hasattr(main_window._postprocess_panel, "combo_interpolation_method")
-    assert hasattr(main_window._postprocess_panel, "spin_identity_interpolation_max_gap")
+    assert hasattr(
+        main_window._postprocess_panel, "spin_identity_interpolation_max_gap"
+    )
     assert hasattr(main_window._postprocess_panel, "g_refinekit")
     assert hasattr(main_window._postprocess_panel, "chk_prompt_open_refinekit")
 

@@ -28,8 +28,16 @@ def test_online_decoder_marks_uniqueness_conflict_and_sources() -> None:
         10,
         [0, 1],
         {
-            0: [IdentityEvidence.from_cnn(10, 100, "cnn_primary", _log_probs(0.01, 0.95, 0.04))],
-            1: [IdentityEvidence.from_cnn(10, 101, "cnn_primary", _log_probs(0.01, 0.93, 0.06))],
+            0: [
+                IdentityEvidence.from_cnn(
+                    10, 100, "cnn_primary", _log_probs(0.01, 0.95, 0.04)
+                )
+            ],
+            1: [
+                IdentityEvidence.from_cnn(
+                    10, 101, "cnn_primary", _log_probs(0.01, 0.93, 0.06)
+                )
+            ],
         },
     )
 

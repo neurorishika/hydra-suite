@@ -1088,9 +1088,7 @@ class CNNPrecomputePhase(PrecomputePhase):
         self._frame_result_callback = frame_result_callback
         self._calibration = calibration_model
         self._calibration_signature = (
-            str(calibration_model.signature)
-            if calibration_model is not None
-            else ""
+            str(calibration_model.signature) if calibration_model is not None else ""
         )
 
         # accumulator for batching
@@ -1166,9 +1164,22 @@ class CNNPrecomputePhase(PrecomputePhase):
             self._backend = validated_backend or CNNIdentityBackend(
                 config, model_path=model_path, compute_runtime=compute_runtime
             )
+            _class_names_per_factor = None
+            try:
+                _meta = getattr(
+                    getattr(self._backend, "_backend", None), "metadata", None
+                )
+                if _meta is not None and hasattr(_meta, "class_names_per_factor"):
+                    _class_names_per_factor = tuple(
+                        tuple(str(n) for n in names)
+                        for names in _meta.class_names_per_factor
+                    )
+            except Exception:
+                pass
             self._cache = CNNIdentityCache(
                 str(self._cache_path),
                 factor_names=self._backend_factor_names(self._backend),
+                class_names_per_factor=_class_names_per_factor,
             )
         elif validated_backend is not None:
             validated_backend.close()
@@ -1180,9 +1191,11 @@ class CNNPrecomputePhase(PrecomputePhase):
         factor_names = (
             self._backend_factor_names(self._backend)
             if self._backend is not None
-            else tuple(self._cache.factor_names)
-            if self._cache is not None
-            else ("flat",)
+            else (
+                tuple(self._cache.factor_names)
+                if self._cache is not None
+                else ("flat",)
+            )
         )
         return ClassPrediction(
             det_index=int(det_index),
@@ -1235,7 +1248,9 @@ class CNNPrecomputePhase(PrecomputePhase):
                     crops,
                     calibration=self._calibration,
                 )
-                return list(preds), [list(p) if p is not None else None for p in posteriors]
+                return list(preds), [
+                    list(p) if p is not None else None for p in posteriors
+                ]
             except Exception:
                 logger.debug(
                     "Falling back to top-1 CNN callback path for %s",
@@ -1321,7 +1336,7 @@ class CNNPrecomputePhase(PrecomputePhase):
         )
         frame_preds = self._complete_frame_predictions(frame_preds, all_det_indices)
 
-        self._cache.save(frame_idx, frame_preds)
+        self._cache.save(frame_idx, frame_preds, posteriors=completed_posteriors)
         self._invoke_frame_result_callback(
             frame_idx,
             frame_preds,
@@ -1378,11 +1393,12 @@ class CNNPrecomputePhase(PrecomputePhase):
     def _flush_batch(self) -> None:
         if not self._pending_crops or self._backend is None or self._cache is None:
             return
-        preds = self._backend.predict_batch(self._pending_crops)
+        preds, posteriors = self._predict_with_optional_posteriors(self._pending_crops)
         # group by frame
         frame_preds: Dict[int, List[ClassPrediction]] = {}
-        for pred, frame_idx, det_id in zip(
-            preds, self._pending_frame_idx, self._pending_det_ids
+        frame_posteriors: Dict[int, List[Optional[List[np.ndarray]]]] = {}
+        for pred, frame_idx, det_id, posterior in zip(
+            preds, self._pending_frame_idx, self._pending_det_ids, posteriors
         ):
             fixed_pred = ClassPrediction(
                 det_index=int(det_id),
@@ -1391,16 +1407,20 @@ class CNNPrecomputePhase(PrecomputePhase):
                 confidences=pred.confidences,
             )
             frame_preds.setdefault(frame_idx, []).append(fixed_pred)
+            frame_posteriors.setdefault(frame_idx, []).append(posterior)
         for fid, fps in frame_preds.items():
-            completed_preds = self._complete_frame_predictions(
-                fps, self._pending_all_det_indices.get(fid, [])
+            all_det_indices = self._pending_all_det_indices.get(fid, [])
+            completed_preds = self._complete_frame_predictions(fps, all_det_indices)
+            raw_posts = frame_posteriors.get(fid, [])
+            completed_posts = self._complete_frame_posteriors(
+                fps, raw_posts, all_det_indices
             )
-            self._cache.save(fid, completed_preds)
+            self._cache.save(fid, completed_preds, posteriors=completed_posts)
             self._pending_all_det_indices.pop(fid, None)
             self._invoke_frame_result_callback(
                 fid,
                 completed_preds,
-                [None] * len(completed_preds),
+                completed_posts,
             )
         self._pending_crops.clear()
         self._pending_frame_idx.clear()

@@ -27,6 +27,8 @@ from hydra_suite.widgets.workers import BaseWorker
 from .merge_worker import _write_csv_artifact, _write_roi_npz
 
 logger = logging.getLogger(__name__)
+
+
 class InterpolatedCropsWorker(BaseWorker):
     """Worker thread for interpolating occluded crops without blocking the UI."""
 

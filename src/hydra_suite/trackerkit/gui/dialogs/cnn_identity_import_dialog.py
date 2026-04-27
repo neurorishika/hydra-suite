@@ -67,9 +67,7 @@ class CNNIdentityImportDialog(BaseDialog):
         )
         threshold = summary.get("recommended_confidence_threshold")
         threshold_text = (
-            f"{float(threshold):.0%}"
-            if isinstance(threshold, (int, float))
-            else "—"
+            f"{float(threshold):.0%}" if isinstance(threshold, (int, float)) else "—"
         )
         layout.addRow("Recommended threshold:", QLabel(threshold_text))
 

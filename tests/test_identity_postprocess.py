@@ -12,7 +12,9 @@ mod = load_src_module(
 )
 
 apply_identity_postprocessing = mod.apply_identity_postprocessing
-augment_trajectories_with_detected_apriltags = mod.augment_trajectories_with_detected_apriltags
+augment_trajectories_with_detected_apriltags = (
+    mod.augment_trajectories_with_detected_apriltags
+)
 
 
 class FakeTagCache:
@@ -81,12 +83,66 @@ def test_augment_detected_apriltags_assigns_nearest_tag_per_row() -> None:
 def test_identity_postprocess_splits_on_stable_identity_switch_and_rejoins() -> None:
     df = pd.DataFrame(
         [
-            {"TrajectoryID": 0, "FrameID": 0, "X": 0.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
-            {"TrajectoryID": 0, "FrameID": 1, "X": 1.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
-            {"TrajectoryID": 0, "FrameID": 2, "X": 2.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "beta", "CNN_uid_Conf": 0.96},
-            {"TrajectoryID": 0, "FrameID": 3, "X": 3.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "beta", "CNN_uid_Conf": 0.96},
-            {"TrajectoryID": 1, "FrameID": 4, "X": 4.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "beta", "CNN_uid_Conf": 0.94},
-            {"TrajectoryID": 1, "FrameID": 5, "X": 5.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "beta", "CNN_uid_Conf": 0.94},
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.95,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 1.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.95,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 2,
+                "X": 2.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "beta",
+                "CNN_uid_Conf": 0.96,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 3,
+                "X": 3.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "beta",
+                "CNN_uid_Conf": 0.96,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 4,
+                "X": 4.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "beta",
+                "CNN_uid_Conf": 0.94,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 5,
+                "X": 5.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "beta",
+                "CNN_uid_Conf": 0.94,
+            },
         ]
     )
 
@@ -106,16 +162,52 @@ def test_identity_postprocess_splits_on_stable_identity_switch_and_rejoins() -> 
 def test_identity_postprocess_interpolates_small_identity_gap_only() -> None:
     df = pd.DataFrame(
         [
-            {"TrajectoryID": 0, "FrameID": 0, "X": 0.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
-            {"TrajectoryID": 0, "FrameID": 1, "X": 1.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
-            {"TrajectoryID": 1, "FrameID": 4, "X": 4.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.96},
-            {"TrajectoryID": 1, "FrameID": 5, "X": 5.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.96},
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.95,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 1.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.95,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 4,
+                "X": 4.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.96,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 5,
+                "X": 5.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.96,
+            },
         ]
     )
 
     filled = apply_identity_postprocessing(df, _cnn_params(max_gap=2))
     assert set(filled["FrameID"].tolist()) == {0, 1, 2, 3, 4, 5}
-    assert filled[filled["IdentityInterpolated"] == True]["FrameID"].tolist() == [2, 3]
+    assert filled[filled["IdentityInterpolated"]]["FrameID"].tolist() == [2, 3]
     assert filled["TrajectoryID"].nunique() == 1
 
     unfilled = apply_identity_postprocessing(df, _cnn_params(max_gap=1))
@@ -127,10 +219,46 @@ def test_identity_postprocess_interpolates_small_identity_gap_only() -> None:
 def test_identity_postprocess_keeps_impossible_motion_fragments_separate() -> None:
     df = pd.DataFrame(
         [
-            {"TrajectoryID": 0, "FrameID": 0, "X": 0.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
-            {"TrajectoryID": 0, "FrameID": 1, "X": 1.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.95},
-            {"TrajectoryID": 1, "FrameID": 2, "X": 500.0, "Y": 500.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.96},
-            {"TrajectoryID": 1, "FrameID": 3, "X": 501.0, "Y": 500.0, "Theta": 0.0, "State": "active", "CNN_uid_Class": "alpha", "CNN_uid_Conf": 0.96},
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.95,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 1.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.95,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 2,
+                "X": 500.0,
+                "Y": 500.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.96,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 3,
+                "X": 501.0,
+                "Y": 500.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_Class": "alpha",
+                "CNN_uid_Conf": 0.96,
+            },
         ]
     )
 
@@ -140,13 +268,59 @@ def test_identity_postprocess_keeps_impossible_motion_fragments_separate() -> No
     assert set(out["UniqueIdentityKey"].dropna().tolist()) == {"cnn:uid=alpha"}
 
 
-def test_identity_postprocess_multihead_per_head_average_rejoins_partial_match() -> None:
+def test_identity_postprocess_multihead_per_head_average_rejoins_partial_match() -> (
+    None
+):
     df = pd.DataFrame(
         [
-            {"TrajectoryID": 0, "FrameID": 0, "X": 0.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.95, "CNN_uid_shape_Class": "circle", "CNN_uid_shape_Conf": 0.91},
-            {"TrajectoryID": 0, "FrameID": 1, "X": 1.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.95, "CNN_uid_shape_Class": "circle", "CNN_uid_shape_Conf": 0.91},
-            {"TrajectoryID": 1, "FrameID": 4, "X": 4.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.94, "CNN_uid_shape_Class": "", "CNN_uid_shape_Conf": 0.10},
-            {"TrajectoryID": 1, "FrameID": 5, "X": 5.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.94, "CNN_uid_shape_Class": "", "CNN_uid_shape_Conf": 0.10},
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.95,
+                "CNN_uid_shape_Class": "circle",
+                "CNN_uid_shape_Conf": 0.91,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 1.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.95,
+                "CNN_uid_shape_Class": "circle",
+                "CNN_uid_shape_Conf": 0.91,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 4,
+                "X": 4.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.94,
+                "CNN_uid_shape_Class": "",
+                "CNN_uid_shape_Conf": 0.10,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 5,
+                "X": 5.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.94,
+                "CNN_uid_shape_Class": "",
+                "CNN_uid_shape_Conf": 0.10,
+            },
         ]
     )
 
@@ -156,16 +330,64 @@ def test_identity_postprocess_multihead_per_head_average_rejoins_partial_match()
     )
 
     assert out["TrajectoryID"].nunique() == 1
-    assert "cnn:uid:color=red" in out.loc[out["FrameID"] == 0, "UniqueIdentityKey"].iloc[0]
+    assert (
+        "cnn:uid:color=red" in out.loc[out["FrameID"] == 0, "UniqueIdentityKey"].iloc[0]
+    )
 
 
-def test_identity_postprocess_multihead_per_head_average_avoids_split_on_mixed_heads() -> None:
+def test_identity_postprocess_multihead_per_head_average_avoids_split_on_mixed_heads() -> (
+    None
+):
     df = pd.DataFrame(
         [
-            {"TrajectoryID": 0, "FrameID": 0, "X": 0.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.95, "CNN_uid_shape_Class": "circle", "CNN_uid_shape_Conf": 0.91},
-            {"TrajectoryID": 0, "FrameID": 1, "X": 1.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.95, "CNN_uid_shape_Class": "circle", "CNN_uid_shape_Conf": 0.91},
-            {"TrajectoryID": 0, "FrameID": 2, "X": 2.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.94, "CNN_uid_shape_Class": "square", "CNN_uid_shape_Conf": 0.92},
-            {"TrajectoryID": 0, "FrameID": 3, "X": 3.0, "Y": 0.0, "Theta": 0.0, "State": "active", "CNN_uid_color_Class": "red", "CNN_uid_color_Conf": 0.94, "CNN_uid_shape_Class": "square", "CNN_uid_shape_Conf": 0.92},
+            {
+                "TrajectoryID": 0,
+                "FrameID": 0,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.95,
+                "CNN_uid_shape_Class": "circle",
+                "CNN_uid_shape_Conf": 0.91,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 1,
+                "X": 1.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.95,
+                "CNN_uid_shape_Class": "circle",
+                "CNN_uid_shape_Conf": 0.91,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 2,
+                "X": 2.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.94,
+                "CNN_uid_shape_Class": "square",
+                "CNN_uid_shape_Conf": 0.92,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 3,
+                "X": 3.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "CNN_uid_color_Class": "red",
+                "CNN_uid_color_Conf": 0.94,
+                "CNN_uid_shape_Class": "square",
+                "CNN_uid_shape_Conf": 0.92,
+            },
         ]
     )
 

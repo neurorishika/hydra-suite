@@ -911,9 +911,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 raw_meas, raw_sizes, raw_shapes, raw_confs, raw_corners, roi_mask=roi
             )
             per_frame_candidate_indices.append(indices)
-            per_frame_candidate_corners.append(
-                [raw_corners[i] for i in indices]
-            )
+            per_frame_candidate_corners.append([raw_corners[i] for i in indices])
         return per_frame_candidate_indices, per_frame_candidate_corners
 
     def _scatter_headtail_to_raw(

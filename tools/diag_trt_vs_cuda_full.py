@@ -114,7 +114,7 @@ raw_trt = exec_trt._run_inference(inp).clone()
 raw_onnx = exec_onnx._run_inference(inp).clone()
 
 diff = (raw_trt - raw_onnx).abs()
-print(f"  Same 1024x1024 input, TRT (FP16 internal) vs ONNX (FP32):")
+print("  Same 1024x1024 input, TRT (FP16 internal) vs ONNX (FP32):")
 print(f"  Max abs diff:  {diff.max().item():.2f}")
 print(f"  Mean abs diff: {diff.mean().item():.4f}")
 print(f"  % diff > 0.01: {(diff > 0.01).float().mean().item() * 100:.1f}%")
@@ -254,9 +254,9 @@ for conf in [0.5, 0.25, 0.1, 0.05]:
     print(f"  conf_thres={conf:.2f}: TRT={n_trt:3d}, ONNX={n_onnx:3d}  [{match}]")
 
 print()
-print(f"When BOTH use auto=False (direct executors): results match closely.")
-print(f"When TRT uses auto=False but CUDA uses auto=True: results diverge for")
-print(f"non-square video frames (1920x1080, 2048x1080, etc.).")
+print("When BOTH use auto=False (direct executors): results match closely.")
+print("When TRT uses auto=False but CUDA uses auto=True: results diverge for")
+print("non-square video frames (1920x1080, 2048x1080, etc.).")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STREAM SYNC POTENTIAL ISSUE
@@ -296,8 +296,8 @@ print(f"    For {W_video}x{H_video} video: TRT gets {shape_trt[1]}x{shape_trt[0]
 print(f"    CUDA gets {shape_cuda[1]}x{shape_cuda[0]} → different FPN activations")
 print()
 print("  Bug #2 (SECONDARY): FP16 TRT internal precision causes raw output")
-print(f"    differences (max ~600px for box coords, mean ~2.8 units)")
-print(f"    → Detections near conf threshold may differ between TRT and CUDA")
+print("    differences (max ~600px for box coords, mean ~2.8 units)")
+print("    → Detections near conf threshold may differ between TRT and CUDA")
 print()
 print("  Bug #3 (SECONDARY): imgsz not set for CUDA predict() call")
 print("    → May use different imgsz than TRT engine was built with")

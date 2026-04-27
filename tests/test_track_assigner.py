@@ -505,7 +505,9 @@ def test_cnn_identity_penalty_applies_without_pose_data() -> None:
     assert float(cnn_cost[0, 0]) > float(base_cost[0, 0])
 
 
-def test_cnn_identity_overlay_is_disabled_when_online_decoder_is_authoritative() -> None:
+def test_cnn_identity_overlay_is_disabled_when_online_decoder_is_authoritative() -> (
+    None
+):
     params = _params()
     params["ENABLE_IDENTITY_ONLINE_DECODER"] = True
     params["ENABLE_LEGACY_CNN_ASSOCIATION"] = False

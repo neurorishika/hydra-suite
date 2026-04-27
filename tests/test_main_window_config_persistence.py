@@ -1498,7 +1498,9 @@ def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
     reloaded_window = _make_main_window(monkeypatch)
     reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
 
-    assert not reloaded_window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
+    assert (
+        not reloaded_window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
+    )
     assert (
         reloaded_window._identity_panel.spin_identity_offline_split_min_conf.value()
         == pytest.approx(0.79)
@@ -1507,7 +1509,10 @@ def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
         reloaded_window._identity_panel.spin_identity_offline_split_min_margin.value()
         == pytest.approx(0.24)
     )
-    assert reloaded_window._identity_panel.spin_identity_offline_split_min_frames.value() == 4
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_min_frames.value()
+        == 4
+    )
     assert (
         reloaded_window._identity_panel.spin_identity_offline_split_max_bridge_frames.value()
         == 9
@@ -1528,7 +1533,10 @@ def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
         reloaded_window._identity_panel.spin_identity_respawn_prior_decay.value()
         == pytest.approx(0.91)
     )
-    assert reloaded_window._identity_panel.spin_identity_respawn_prior_max_gap.value() == 42
+    assert (
+        reloaded_window._identity_panel.spin_identity_respawn_prior_max_gap.value()
+        == 42
+    )
     reloaded_window.close()
 
 

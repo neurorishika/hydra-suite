@@ -1027,9 +1027,7 @@ def test_build_pose_augmented_dataframe_includes_multihead_detected_rich_exports
     )
 
     detected_cnn_path = tmp_path / "detected_cnn_multi.npz"
-    cnn_cache = CNNIdentityCache(
-        detected_cnn_path, factor_names=("color", "shape")
-    )
+    cnn_cache = CNNIdentityCache(detected_cnn_path, factor_names=("color", "shape"))
     cnn_cache.save(
         1,
         [
@@ -1112,7 +1110,9 @@ def test_build_pose_augmented_dataframe_runs_identity_postprocess_stage(
     monkeypatch.setattr(
         TrackingOrchestrator,
         "_apply_identity_postprocessing_to_df",
-        lambda self, with_pose_df: with_pose_df.assign(UniqueIdentityKey="cnn:demo=worker"),
+        lambda self, with_pose_df: with_pose_df.assign(
+            UniqueIdentityKey="cnn:demo=worker"
+        ),
     )
 
     out = orchestrator._build_pose_augmented_dataframe(str(final_csv_path))
@@ -1191,10 +1191,7 @@ def test_load_video_trajectories_prefers_with_individual_then_legacy_alias(
 def test_format_video_track_label_prefers_unique_identity_key() -> None:
     orchestrator, _main_window = _make_orchestrator()
 
-    assert (
-        orchestrator._format_video_track_label(7, "apriltag=12")
-        == "Tag 12"
-    )
+    assert orchestrator._format_video_track_label(7, "apriltag=12") == "Tag 12"
     assert (
         orchestrator._format_video_track_label(
             7,

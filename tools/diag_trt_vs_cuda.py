@@ -139,7 +139,7 @@ trt_fire = trt_bestconf > CONF_THRES
 onnx_fire = onnx_bestconf > CONF_THRES
 disagreements = (trt_fire != onnx_fire).sum().item()
 print(f"  Anchors where TRT and ONNX DISAGREE on threshold: {disagreements}")
-print(f"  (These would produce different detection counts!)")
+print("  (These would produce different detection counts!)")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PART 3: Full detection pipeline comparison

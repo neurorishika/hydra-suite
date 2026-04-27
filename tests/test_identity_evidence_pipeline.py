@@ -214,14 +214,18 @@ def test_residual_fragment_assignment_uses_alternative_label() -> None:
     )
 
     assigned = solve_fragment_identity_assignment(fragments, catalog, {})
-    assert assigned.loc[assigned["FragmentID"] == 1, "AssignedLabel"].iloc[0] == "mouse2"
+    assert (
+        assigned.loc[assigned["FragmentID"] == 1, "AssignedLabel"].iloc[0] == "mouse2"
+    )
 
     residual = run_identity_residual_assignment(
         assigned,
         {"IDENTITY_OFFLINE_AMBIGUITY_MARGIN": 0.1},
         catalog=catalog,
     )
-    assert residual.loc[residual["FragmentID"] == 1, "AssignedLabel"].iloc[0] == "mouse2"
+    assert (
+        residual.loc[residual["FragmentID"] == 1, "AssignedLabel"].iloc[0] == "mouse2"
+    )
 
 
 def test_exact_fragment_assignment_beats_greedy_choice() -> None:
@@ -361,4 +365,7 @@ def test_split_mixed_identity_trajectories_is_disabled_by_default() -> None:
     )
 
     assert out["TrajectoryID"].nunique() == 1
-    assert "OriginalTrajectoryID" not in out.columns or out["OriginalTrajectoryID"].isna().all()
+    assert (
+        "OriginalTrajectoryID" not in out.columns
+        or out["OriginalTrajectoryID"].isna().all()
+    )

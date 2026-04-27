@@ -203,10 +203,7 @@ def test_resolve_ignore_label_index_finds_unknown_class() -> None:
     from hydra_suite.training.runner import _resolve_ignore_label_index
 
     assert (
-        _resolve_ignore_label_index(
-            {"ant": 0, "bee": 1, "unknown": 2}, "unknown"
-        )
-        == 2
+        _resolve_ignore_label_index({"ant": 0, "bee": 1, "unknown": 2}, "unknown") == 2
     )
     assert _resolve_ignore_label_index({"ant": 0, "bee": 1}, "unknown") is None
 

@@ -97,9 +97,7 @@ class IdentityEvidenceCache:
     # Write API
     # ------------------------------------------------------------------
 
-    def save_frame(
-        self, frame_idx: int, evidences: list[IdentityEvidence]
-    ) -> None:
+    def save_frame(self, frame_idx: int, evidences: list[IdentityEvidence]) -> None:
         """Accumulate evidence for *frame_idx* in memory.
 
         Multiple calls with the same *frame_idx* will overwrite the previous
@@ -111,20 +109,15 @@ class IdentityEvidenceCache:
             return
 
         catalog_size: int = evidences[0].catalog_size
-        n = len(evidences)
 
         det_ids = np.array([e.detection_id for e in evidences], dtype=np.int64)
         source_types = np.array([str(e.source) for e in evidences], dtype="U32")
         sources = np.array([e.source_name for e in evidences], dtype="U32")
-        log_probs = np.stack(
-            [e.log_probs for e in evidences], axis=0
-        ).astype(np.float64)
-        cal_sigs = np.array(
-            [e.calibration_signature for e in evidences], dtype="U255"
+        log_probs = np.stack([e.log_probs for e in evidences], axis=0).astype(
+            np.float64
         )
-        rt_sigs = np.array(
-            [e.runtime_signature for e in evidences], dtype="U64"
-        )
+        cal_sigs = np.array([e.calibration_signature for e in evidences], dtype="U255")
+        rt_sigs = np.array([e.runtime_signature for e in evidences], dtype="U64")
 
         obs_rows = []
         for e in evidences:
@@ -165,7 +158,9 @@ class IdentityEvidenceCache:
             meta["catalog_labels"] = np.array(self._catalog_labels, dtype="U255")
 
         np.savez_compressed(str(self._path), **meta, **self._data)
-        log.debug("Wrote identity evidence cache: %s (%d keys)", self._path, len(self._data))
+        log.debug(
+            "Wrote identity evidence cache: %s (%d keys)", self._path, len(self._data)
+        )
 
     # ------------------------------------------------------------------
     # Read API
@@ -175,18 +170,14 @@ class IdentityEvidenceCache:
         if self._loaded:
             return
         if not self._path.exists():
-            raise FileNotFoundError(
-                f"Identity evidence cache not found: {self._path}"
-            )
+            raise FileNotFoundError(f"Identity evidence cache not found: {self._path}")
         raw = np.load(str(self._path), allow_pickle=False)
         try:
             self._data = {k: raw[k] for k in raw.files}
         finally:
             raw.close()
         if "catalog_labels" in self._data:
-            self._catalog_labels = tuple(
-                str(s) for s in self._data["catalog_labels"]
-            )
+            self._catalog_labels = tuple(str(s) for s in self._data["catalog_labels"])
         self._loaded = True
 
     def load_frame(self, frame_idx: int) -> list[IdentityEvidence]:

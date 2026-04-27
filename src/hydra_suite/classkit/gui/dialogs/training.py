@@ -376,7 +376,10 @@ class ClassKitTrainingDialog(QDialog):
             (self.epochs_spin, "epochs"),
             (self.batch_spin, "batch"),
             (self.lr_spin, "lr"),
-            (self.prediction_confidence_threshold_spin, "prediction_confidence_threshold"),
+            (
+                self.prediction_confidence_threshold_spin,
+                "prediction_confidence_threshold",
+            ),
             (self.val_fraction_spin, "val_fraction"),
             (self.test_fraction_spin, "test_fraction"),
             (self.patience_spin, "patience"),

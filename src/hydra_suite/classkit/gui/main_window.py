@@ -3404,9 +3404,7 @@ class MainWindow(QMainWindow):
                     if isinstance(training_settings, dict):
                         cached_prediction_threshold = (
                             self._normalize_prediction_confidence_threshold(
-                                training_settings.get(
-                                    "prediction_confidence_threshold"
-                                )
+                                training_settings.get("prediction_confidence_threshold")
                             )
                         )
                 summary = self._validation_summary_from_results(
@@ -3703,12 +3701,18 @@ class MainWindow(QMainWindow):
         # to prevent ambiguity on any mode.
         nav_keys = {
             QKeySequence(active.get(a, defaults.get(a, ""))).toString()
-            for a in ("Sample next candidates", "Previous unlabeled",
-                      "Next unlabeled", "Undo last label (Ctrl+Z)")
+            for a in (
+                "Sample next candidates",
+                "Previous unlabeled",
+                "Next unlabeled",
+                "Undo last label (Ctrl+Z)",
+            )
         }
         scheme_blocked = review_keys | nav_keys
 
-        self._install_label_assignment_shortcuts(scheme_shortcuts, blocked_keys=scheme_blocked)
+        self._install_label_assignment_shortcuts(
+            scheme_shortcuts, blocked_keys=scheme_blocked
+        )
         self._install_global_navigation_shortcuts(
             active, defaults, blocked_keys={k for k in scheme_shortcuts.values() if k}
         )
@@ -7140,8 +7144,12 @@ class MainWindow(QMainWindow):
         artifact = results[0].get("artifact_path", "")
         if not artifact or not Path(artifact).exists():
             return
-        prediction_confidence_threshold = self._normalize_prediction_confidence_threshold(
-            (self._last_training_settings or {}).get("prediction_confidence_threshold")
+        prediction_confidence_threshold = (
+            self._normalize_prediction_confidence_threshold(
+                (self._last_training_settings or {}).get(
+                    "prediction_confidence_threshold"
+                )
+            )
         )
 
         if is_yolo:
@@ -7747,12 +7755,16 @@ class MainWindow(QMainWindow):
                             raise ValueError(
                                 f"Factor '{factor_name}' has no labeled samples after filtering '{ignored_label_name}'."
                             )
-                        filtered_labels = [factor_labels[index] for index in kept_indices]
+                        filtered_labels = [
+                            factor_labels[index] for index in kept_indices
+                        ]
                         unique = sorted(set(filtered_labels))
                         label_map = {label: i for i, label in enumerate(unique)}
                         factor_int = [label_map[label] for label in filtered_labels]
                         factor_names = {i: label for label, i in label_map.items()}
-                        factor_images = [self.image_paths[index] for index in kept_indices]
+                        factor_images = [
+                            self.image_paths[index] for index in kept_indices
+                        ]
 
                         factor_dir = _Path(self.output_path) / f"export_f{fi}"
                         sub_worker = ExportWorker(
@@ -9329,7 +9341,9 @@ class MainWindow(QMainWindow):
         class_names = entry.get("class_names") or list(self.classes)
         entry_meta = entry.get("meta") or {}
         training_settings = (
-            entry_meta.get("training_settings") if isinstance(entry_meta, dict) else None
+            entry_meta.get("training_settings")
+            if isinstance(entry_meta, dict)
+            else None
         )
         cached_threshold = (
             self._normalize_prediction_confidence_threshold(

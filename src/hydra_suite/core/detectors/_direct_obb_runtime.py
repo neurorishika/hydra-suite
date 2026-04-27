@@ -425,9 +425,7 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
         # Dynamic-axis models have a symbolic string here (e.g. "batch_size").
         # Used by predict() to decide whether to chunk per-frame for batch-1
         # realtime ONNX artifacts (which fail with ORT shape errors for N>1).
-        self._static_batch: bool = (
-            isinstance(inp.shape[0], int) and inp.shape[0] > 0
-        )
+        self._static_batch: bool = isinstance(inp.shape[0], int) and inp.shape[0] > 0
         # Determine output numpy dtype and cache static output shape so _run_inference
         # can pre-allocate the output directly on CUDA, avoiding a GPU→CPU→GPU roundtrip.
         import numpy as np
@@ -473,12 +471,10 @@ class DirectONNXOBBExecutor(_BaseDirectOBBExecutor):
         # Pre-allocate a fp16 input staging tensor for fp16 OBB models.
         if self._fp16:
             self._gpu_input_fp16 = self._gpu_input.half()
-            in_dtype = torch.float16
             in_np_dtype = np.float16
             in_buf_ptr = self._gpu_input_fp16.data_ptr()
         else:
             self._gpu_input_fp16 = None
-            in_dtype = torch.float32
             in_np_dtype = np.float32
             in_buf_ptr = self._gpu_input.data_ptr()
 
@@ -743,6 +739,7 @@ class DirectPyTorchCUDAOBBExecutor(_BaseDirectOBBExecutor):
                 if bool(getattr(_head, "end2end", False)):
                     self._e2e_head_ref = _head
                     import logging as _logging
+
                     _logging.getLogger(__name__).info(
                         "DirectPyTorchCUDAOBBExecutor: end2end head detected — "
                         "running in raw CBC mode (matching TRT/ONNX export profile)."

@@ -21,7 +21,10 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from hydra_suite.core.identity.properties.export import build_pose_keypoint_labels
+from hydra_suite.core.identity.properties.export import (
+    DETECTED_HEADING_COLUMNS,
+    build_pose_keypoint_labels,
+)
 from hydra_suite.runtime.compute_runtime import (
     derive_detection_runtime_settings,
     derive_pose_runtime_settings,
@@ -1086,26 +1089,103 @@ class TrackingOrchestrator:
                 parts.append(f"{label}={count}")
         return ", ".join(parts) if parts else "none"
 
-    def _log_pose_augmented_merge_summary(self, with_pose_df):
-        """Log how many rows were retained or backfilled into pose-augmented output."""
-        detection_pose_rows, interpolated_pose_rows = self._count_augmented_pose_rows(
-            with_pose_df
+    def _log_rich_export_summary(self, df: pd.DataFrame) -> None:
+        """Log a structured per-source fill-rate summary for the rich export CSV."""
+        total = len(df)
+        if total == 0:
+            logger.info("Rich export summary: 0 rows — nothing to summarize.")
+            return
+
+        def fill(col: str) -> int:
+            return int(df[col].notna().sum()) if col in df.columns else 0
+
+        def fill_any(cols: list) -> int:
+            present = [c for c in cols if c in df.columns]
+            if not present:
+                return 0
+            return int(df[present].notna().any(axis=1).sum())
+
+        def pct(n: int) -> str:
+            return f"{100.0 * n / total:.1f}%" if total > 0 else "—"
+
+        lines = [f"Rich export summary — {total:,} rows"]
+
+        # --- pose (detection-keyed vs interpolated) ---
+        pose_cols = [c for c in df.columns if str(c).startswith("Pose")]
+        kpt_x_cols = [
+            c
+            for c in df.columns
+            if str(c).startswith("PoseKpt_") and str(c).endswith("_X")
+        ]
+        if pose_cols:
+            det_present = pd.to_numeric(df.get("DetectionID"), errors="coerce").notna()
+            pose_any = df[pose_cols].notna().any(axis=1)
+            det_pose = int((det_present & pose_any).sum())
+            interp_pose = int((~det_present & pose_any).sum())
+            lines.append(
+                f"  Pose (detection-keyed)   : {det_pose:>6,} / {total:,}  ({pct(det_pose)})"
+            )
+            if interp_pose:
+                lines.append(
+                    f"  Pose (interpolated)      : {interp_pose:>6,} / {total:,}  ({pct(interp_pose)})"
+                )
+
+        # --- detected heading ---
+        heading_cols = [c for c in DETECTED_HEADING_COLUMNS if c in df.columns]
+        if heading_cols:
+            h_fill = fill_any(heading_cols)
+            lines.append(
+                f"  Detected heading         : {h_fill:>6,} / {total:,}  ({pct(h_fill)})"
+            )
+
+        # --- detected CNN per label ---
+        cnn_class_cols = [c for c in df.columns if re.match(r"^CNN_.+_Class$", str(c))]
+        cnn_labels = sorted(
+            {re.match(r"^CNN_(.+)_Class$", str(c)).group(1) for c in cnn_class_cols}
         )
-        interp_tag_rows = int(
-            with_pose_df.get("InterpTagID", pd.Series(dtype=float)).notna().sum()
-        )
-        interp_headtail_rows = int(
-            with_pose_df.get("InterpHeadingRad", pd.Series(dtype=float)).notna().sum()
-        )
-        cnn_summary = self._count_interpolated_cnn_rows(with_pose_df)
-        logger.info(
-            "Pose-augmented merge summary: detection pose rows=%d, interpolated pose rows=%d, interpolated tag rows=%d, interpolated head-tail rows=%d, interpolated CNN rows=%s",
-            detection_pose_rows,
-            interpolated_pose_rows,
-            interp_tag_rows,
-            interp_headtail_rows,
-            cnn_summary,
-        )
+        for lbl in cnn_labels:
+            n = fill_any([f"CNN_{lbl}_Class", f"CNN_{lbl}_Conf"])
+            lines.append(
+                f"  CNN [{lbl}]               : {n:>6,} / {total:,}  ({pct(n)})"
+            )
+
+        # --- interpolated AprilTag ---
+        if "InterpTagID" in df.columns:
+            n = fill("InterpTagID")
+            if n:
+                lines.append(
+                    f"  AprilTag (interpolated)  : {n:>6,} / {total:,}  ({pct(n)})"
+                )
+
+        # --- interpolated head-tail ---
+        if "InterpHeadingRad" in df.columns:
+            n = fill("InterpHeadingRad")
+            if n:
+                lines.append(
+                    f"  Head-tail (interpolated) : {n:>6,} / {total:,}  ({pct(n)})"
+                )
+
+        # --- per-keypoint fill rates (grouped 4 per line) ---
+        if kpt_x_cols:
+            _kpt_re = re.compile(r"^PoseKpt_(.+)_X$")
+            kpt_entries = []
+            for col in kpt_x_cols:
+                m = _kpt_re.match(str(col))
+                if m:
+                    kpt_entries.append(f"{m.group(1)}: {pct(fill(col))}")
+            if kpt_entries:
+                lines.append("  Per-keypoint fill:")
+                for i in range(0, len(kpt_entries), 4):
+                    lines.append(
+                        "    " + "   ".join(f"{s:<22}" for s in kpt_entries[i : i + 4])
+                    )
+
+        # --- trajectory count ---
+        if "TrajectoryID" in df.columns:
+            n_tracks = int(df["TrajectoryID"].nunique())
+            lines.append(f"  Unique trajectories      : {n_tracks:,}")
+
+        logger.info("\n".join(lines))
 
     def _on_interpolated_crops_finished(self, result):
         sender = None
@@ -1166,9 +1246,7 @@ class TrackingOrchestrator:
         self._mw._refresh_progress_visibility()
 
         if self._mw._pending_pose_export_csv_path:
-            self._relink_final_pose_augmented_csv(
-                self._mw._pending_pose_export_csv_path
-            )
+            self._relink_and_export_rich_csv(self._mw._pending_pose_export_csv_path)
 
         if self._mw._pending_finish_after_interp:
             self._mw._pending_finish_after_interp = False
@@ -3210,8 +3288,8 @@ class TrackingOrchestrator:
             )
         return _annotate_identity_summary_columns(with_pose_df)
 
-    def _build_pose_augmented_dataframe(self, final_csv_path):
-        """Load final CSV and merge available cached/interpolated pose columns."""
+    def _build_rich_export_dataframe(self, final_csv_path):
+        """Load final CSV and merge all available analysis sources into a rich export dataframe."""
         if not final_csv_path or not os.path.exists(final_csv_path):
             return None
 
@@ -3225,9 +3303,6 @@ class TrackingOrchestrator:
             interp_mem_available,
         ) = self._check_pose_export_sources()
 
-        if not self._mw._is_pose_export_enabled() and not _has_other_analyses:
-            return None
-
         if (
             not cache_available
             and not interp_available
@@ -3235,7 +3310,7 @@ class TrackingOrchestrator:
             and not _has_other_analyses
         ):
             logger.warning(
-                "Pose export skipped: no pose sources found (cache=%s, interpolated=%s, in_memory=%s).",
+                "Rich export skipped: no analysis sources found (pose_cache=%s, interp=%s, in_memory=%s).",
                 cache_path or "<empty>",
                 interp_pose_path or "<empty>",
                 bool(interp_mem_available),
@@ -3246,7 +3321,7 @@ class TrackingOrchestrator:
             trajectories_df = pd.read_csv(final_csv_path)
         except Exception:
             logger.exception(
-                "Pose export skipped: failed to load trajectories CSV: %s",
+                "Rich export skipped: failed to load trajectories CSV: %s",
                 final_csv_path,
             )
             return None
@@ -3263,7 +3338,7 @@ class TrackingOrchestrator:
             )
         except Exception:
             logger.exception(
-                "Pose export skipped: failed while merging pose sources (cache=%s, interpolated=%s)",
+                "Rich export skipped: failed while merging sources (pose_cache=%s, interp=%s)",
                 cache_path or "<empty>",
                 interp_pose_path or "<empty>",
             )
@@ -3271,14 +3346,12 @@ class TrackingOrchestrator:
 
         if with_pose_df is None or with_pose_df.empty:
             logger.warning(
-                "Pose export skipped: merged pose dataframe is empty for %s",
+                "Rich export skipped: merged dataframe is empty for %s",
                 final_csv_path,
             )
             return None
 
-        import re as _re
-
-        _kpt_re = _re.compile(r"^PoseKpt_(.+)_X$")
+        _kpt_re = re.compile(r"^PoseKpt_(.+)_X$")
         pose_labels = [
             m.group(1) for col in with_pose_df.columns if (m := _kpt_re.match(str(col)))
         ]
@@ -3292,24 +3365,24 @@ class TrackingOrchestrator:
 
         with_pose_df = self._apply_identity_postprocessing_to_df(with_pose_df)
 
-        self._log_pose_augmented_merge_summary(with_pose_df)
+        self._log_rich_export_summary(with_pose_df)
 
         return with_pose_df
 
-    def _export_pose_augmented_csv(self, final_csv_path):
+    def _export_rich_csv(self, final_csv_path):
         """Write the rich individual-analysis CSV next to the final CSV."""
-        with_pose_df = self._build_pose_augmented_dataframe(final_csv_path)
+        with_pose_df = self._build_rich_export_dataframe(final_csv_path)
         if with_pose_df is None or with_pose_df.empty:
             return None
 
         return self._write_rich_export_csv(with_pose_df, final_csv_path)
 
-    def _relink_final_pose_augmented_csv(self, final_csv_path):
+    def _relink_and_export_rich_csv(self, final_csv_path):
         """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
         if not final_csv_path or not os.path.exists(final_csv_path):
             return None
 
-        with_pose_df = self._build_pose_augmented_dataframe(final_csv_path)
+        with_pose_df = self._build_rich_export_dataframe(final_csv_path)
         params = self._mw.get_parameters_dict()
 
         try:
@@ -3318,7 +3391,7 @@ class TrackingOrchestrator:
             logger.exception(
                 "Relinking skipped: failed to reload final CSV: %s", final_csv_path
             )
-            return self._export_pose_augmented_csv(final_csv_path)
+            return self._export_rich_csv(final_csv_path)
 
         relink_input_df = (
             with_pose_df
@@ -3433,7 +3506,7 @@ class TrackingOrchestrator:
 
         if final_csv_path:
             self._mw._pending_pose_export_csv_path = final_csv_path
-            self._export_pose_augmented_csv(final_csv_path)
+            self._export_rich_csv(final_csv_path)
 
         self._mw._pending_video_csv_path = final_csv_path
         self._mw._pending_video_generation = bool(
@@ -3457,7 +3530,7 @@ class TrackingOrchestrator:
                 return
 
         if final_csv_path:
-            self._relink_final_pose_augmented_csv(final_csv_path)
+            self._relink_and_export_rich_csv(final_csv_path)
 
         if self._start_pending_final_media_export(final_csv_path):
             return

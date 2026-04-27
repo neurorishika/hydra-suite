@@ -77,6 +77,7 @@ class ClassPrediction:
 
 _SENTINEL_NONE = "__NONE__"  # stored in npz when class_name is None
 _CACHE_SCHEMA_V2 = 2  # multi-factor format marker
+_CACHE_SCHEMA_V3 = 3  # adds per-detection per-factor full probability vectors
 
 
 class CNNIdentityCache:
@@ -103,25 +104,39 @@ class CNNIdentityCache:
         self,
         cache_path: str | Path,
         factor_names: tuple[str, ...] | None = None,
+        class_names_per_factor: tuple[tuple[str, ...], ...] | None = None,
     ) -> None:
         self._path = Path(cache_path)
-        # Default to ("flat",) when not provided — backward-compat signature.
         self._factor_names: tuple[str, ...] = (
             tuple(factor_names) if factor_names is not None else ("flat",)
+        )
+        self._class_names_per_factor: tuple[tuple[str, ...], ...] | None = (
+            tuple(tuple(names) for names in class_names_per_factor)
+            if class_names_per_factor is not None
+            else None
         )
         self._data: dict[str, Any] = {}
         self._is_legacy = False
         if self._path.exists():
-            raw = np.load(str(self._path), allow_pickle=True)
+            raw = np.load(str(self._path), allow_pickle=False)
             self._data = dict(raw)
             if "factor_names" not in self._data:
-                # Legacy flat format: force factor_names to ("flat",)
                 self._is_legacy = True
                 self._factor_names = ("flat",)
             else:
-                # v2 format: authoritative factor_names from disk
                 stored = self._data["factor_names"]
                 self._factor_names = tuple(str(n) for n in stored)
+            # Load class names per factor if present (v3+)
+            if self._class_names_per_factor is None:
+                loaded_names: list[tuple[str, ...]] = []
+                for k in range(len(self._factor_names)):
+                    key = f"class_names_k{k}"
+                    if key in self._data:
+                        loaded_names.append(tuple(str(n) for n in self._data[key]))
+                    else:
+                        loaded_names.append(())
+                if any(loaded_names):
+                    self._class_names_per_factor = tuple(loaded_names)
 
     def exists(self) -> bool:
         """Return True if the cache file exists on disk."""
@@ -131,8 +146,24 @@ class CNNIdentityCache:
     def factor_names(self) -> tuple[str, ...]:
         return self._factor_names
 
-    def save(self, frame_idx: int, predictions: list[ClassPrediction]) -> None:
-        """Update in-memory cache for *frame_idx*. Call flush() when done."""
+    @property
+    def class_names_per_factor(self) -> tuple[tuple[str, ...], ...] | None:
+        """Per-factor class name lists, or None when not stored."""
+        return self._class_names_per_factor
+
+    def save(
+        self,
+        frame_idx: int,
+        predictions: list[ClassPrediction],
+        posteriors: list[list[np.ndarray] | None] | None = None,
+    ) -> None:
+        """Update in-memory cache for *frame_idx*. Call flush() when done.
+
+        ``posteriors`` is an optional per-detection list of per-factor probability
+        vectors (one np.ndarray of shape (n_classes,) per factor).  When provided
+        the full distributions are persisted alongside the top-1 predictions so
+        that augmented exports can include per-class probability columns.
+        """
         K = len(self._factor_names)
         if not predictions:
             self._data[f"f{frame_idx}_det"] = np.array([], dtype=np.int32)
@@ -156,15 +187,76 @@ class CNNIdentityCache:
                     conf_col, dtype=np.float32
                 )
 
+            if posteriors is not None and len(posteriors) == len(predictions):
+                for k in range(K):
+                    prob_rows = []
+                    n_classes = 0
+                    for per_det_probs in posteriors:
+                        if per_det_probs is not None and k < len(per_det_probs):
+                            vec = np.asarray(per_det_probs[k], dtype=np.float32)
+                            n_classes = max(n_classes, len(vec))
+                            prob_rows.append(vec)
+                        else:
+                            prob_rows.append(None)
+                    if n_classes > 0:
+                        mat = np.full(
+                            (len(predictions), n_classes), np.nan, dtype=np.float32
+                        )
+                        for i, row in enumerate(prob_rows):
+                            if row is not None:
+                                mat[i, : len(row)] = row
+                        self._data[f"f{frame_idx}_probs_k{k}"] = mat
+
     def flush(self) -> None:
-        """Write all in-memory predictions to disk (v2 format)."""
+        """Write all in-memory predictions to disk (v3 format when probs present)."""
         if not self._data:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         out = dict(self._data)
         out["factor_names"] = np.array(list(self._factor_names), dtype=object)
-        out["cache_schema_version"] = np.array(_CACHE_SCHEMA_V2, dtype=np.int32)
+        has_probs = any(k.endswith("_probs_k0") for k in out)
+        if has_probs:
+            out["cache_schema_version"] = np.array(_CACHE_SCHEMA_V3, dtype=np.int32)
+            if self._class_names_per_factor is not None:
+                for k, names in enumerate(self._class_names_per_factor):
+                    out[f"class_names_k{k}"] = np.array(list(names), dtype=object)
+        else:
+            out["cache_schema_version"] = np.array(_CACHE_SCHEMA_V2, dtype=np.int32)
         np.savez_compressed(str(self._path), **out)
+
+    def load_probs(self, frame_idx: int) -> list[list[np.ndarray | None] | None] | None:
+        """Return per-detection per-factor probability vectors for *frame_idx*.
+
+        Returns ``None`` when no probability data was stored.  Otherwise returns
+        a list aligned with ``load(frame_idx)``: each entry is either ``None``
+        (no probs for that detection) or a list of K np.ndarray prob vectors.
+        """
+        key_det = f"f{frame_idx}_det"
+        if key_det not in self._data:
+            return None
+        det_arr = self._data[key_det]
+        n = len(det_arr)
+        K = len(self._factor_names)
+
+        has_any = any(f"f{frame_idx}_probs_k{k}" in self._data for k in range(K))
+        if not has_any:
+            return None
+
+        results: list[list[np.ndarray | None] | None] = []
+        for i in range(n):
+            per_factor: list[np.ndarray | None] = []
+            found = False
+            for k in range(K):
+                mat = self._data.get(f"f{frame_idx}_probs_k{k}")
+                if mat is not None and i < len(mat):
+                    row = np.asarray(mat[i], dtype=np.float32)
+                    if not np.all(np.isnan(row)):
+                        per_factor.append(row)
+                        found = True
+                        continue
+                per_factor.append(None)
+            results.append(per_factor if found else None)
+        return results
 
     def load(self, frame_idx: int) -> list[ClassPrediction]:
         """Return saved predictions for *frame_idx*, or [] if not found."""
@@ -352,7 +444,6 @@ class CNNIdentityBackend:
             raw = self._backend.predict_batch_cuda(crops)
         except (AttributeError, NotImplementedError):
             # Backend does not support CUDA crops — convert to list and use CPU path
-            import torch
 
             if hasattr(crops, "cpu"):
                 raw_np = crops.cpu().numpy()
@@ -443,7 +534,11 @@ class CNNIdentityBackend:
                     cal_probs = np.exp(log_p - log_p.max())
                     cal_probs /= cal_probs.sum()
                 else:
-                    cal_probs = probs_arr / probs_arr.sum() if probs_arr.sum() > 0 else probs_arr
+                    cal_probs = (
+                        probs_arr / probs_arr.sum()
+                        if probs_arr.sum() > 0
+                        else probs_arr
+                    )
 
                 det_posteriors.append(cal_probs)
 
