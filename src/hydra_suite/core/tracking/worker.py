@@ -4182,6 +4182,31 @@ class TrackingWorker(QThread):
                     bg_u8,
                     yolo_results,
                     filtered_obb_corners,  # Pass OBB corners for visualization
+                    # Derive per-slot identity labels for visualization: prefer the
+                    # committed belief label, then the current-frame assignment label.
+                    # Falls back to empty string (→ trajectory ID display) when the
+                    # online decoder is not active or no label has been assigned yet.
+                    identity_labels=(
+                        [
+                            (
+                                (
+                                    _identity_online_decoder.get_belief(r).committed_label
+                                    if _identity_online_decoder.get_belief(r) is not None
+                                    and _identity_online_decoder.get_belief(r).committed_label
+                                    else None
+                                )
+                                or (
+                                    _identity_online_assignments[r].label
+                                    if r in _identity_online_assignments
+                                    and _identity_online_assignments[r].label
+                                    else ""
+                                )
+                            )
+                            for r in range(len(trajectory_ids))
+                        ]
+                        if _identity_online_decoder is not None
+                        else None
+                    ),
                 )
                 profiler.tock("visualization")
 
@@ -4417,6 +4442,7 @@ class TrackingWorker(QThread):
         bg,
         yolo_results=None,
         obb_corners=None,
+        identity_labels=None,
     ):
         from hydra_suite.core.tracking.visualization import draw_overlays
 
@@ -4432,4 +4458,5 @@ class TrackingWorker(QThread):
             kf_manager=getattr(self, "kf_manager", None),
             yolo_results=yolo_results,
             obb_corners=obb_corners,
+            identity_labels=identity_labels,
         )

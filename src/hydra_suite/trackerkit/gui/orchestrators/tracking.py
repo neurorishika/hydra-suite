@@ -1833,18 +1833,36 @@ class TrackingOrchestrator:
         return f"ID{track_id}"
 
     def _build_video_track_label_array(self, trajectories_df):
-        """Precompute one overlay label per row using stable identity when available."""
+        """Precompute one overlay label per row using stable identity when available.
+
+        Checks identity columns in priority order (same as color key resolution):
+        UniqueIdentityKey → IdentityAssignedLabel → IdentityOfflineLabel →
+        IdentitySmoothedLabel.  Falls back to ``"ID{TrajectoryID}"`` when none
+        are available for a row.
+        """
         if trajectories_df is None or len(trajectories_df) == 0:
             return np.asarray([], dtype=object)
-        if "UniqueIdentityKey" in trajectories_df.columns:
-            unique_keys = trajectories_df["UniqueIdentityKey"].tolist()
-        else:
-            unique_keys = [None] * len(trajectories_df)
-        track_ids = trajectories_df["TrajectoryID"].tolist()
-        labels = [
-            self._format_video_track_label(track_id, unique_key)
-            for track_id, unique_key in zip(track_ids, unique_keys)
+
+        identity_columns = [
+            "UniqueIdentityKey",
+            "IdentityAssignedLabel",
+            "IdentityOfflineLabel",
+            "IdentitySmoothedLabel",
         ]
+        track_ids = trajectories_df["TrajectoryID"].tolist()
+        labels = []
+        for row_index, track_id in enumerate(track_ids):
+            chosen_token = None
+            for column in identity_columns:
+                if column not in trajectories_df.columns:
+                    continue
+                token = self._normalize_video_identity_color_key(
+                    trajectories_df.iloc[row_index][column]
+                )
+                if token:
+                    chosen_token = token
+                    break
+            labels.append(self._format_video_track_label(track_id, chosen_token))
         return np.asarray(labels, dtype=object)
 
     def _normalize_video_identity_color_key(self, value):
