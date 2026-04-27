@@ -959,9 +959,16 @@ class IdentityPanel(QWidget):
             models_root = get_models_root_directory()
             abs_path = os.path.join(models_root, rel_path)
             label = str(meta.get("classification_label", "") or "cnn_identity")
+            cnpf = meta.get("class_names_per_factor") or []
+            all_labels: list[str] = []
+            for factor_labels in cnpf:
+                for lbl in factor_labels:
+                    if lbl and lbl not in all_labels:
+                        all_labels.append(str(lbl))
             return {
                 "model_path": abs_path,
                 "label": label,
+                "labels": all_labels,
                 "confidence": self.spin_confidence.value(),
                 "window": self.spin_window.value(),
                 "batch_size": self.spin_batch.value(),

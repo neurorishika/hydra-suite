@@ -2187,6 +2187,34 @@ class TrackingWorker(QThread):
                 _known_labels_set: list[str] = []
                 for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
                     _clf_labels = _cnn_cfg.get("labels", []) or []
+                    if not _clf_labels:
+                        # Fallback: read labels from the model metadata file directly
+                        # when the saved config predates the "labels" field.
+                        try:
+                            import json as _json
+
+                            _mp = str(_cnn_cfg.get("model_path", ""))
+                            if _mp and os.path.exists(_mp):
+                                with open(_mp) as _mf:
+                                    _mmeta = _json.load(_mf)
+                                # Single-head / atomic: top-level class_names_per_factor or class_names
+                                _cnpf = _mmeta.get("class_names_per_factor") or []
+                                if not _cnpf:
+                                    _flat = _mmeta.get("class_names") or []
+                                    if _flat:
+                                        _cnpf = [_flat]
+                                # Multihead manifest (schema_version 2): factor_models[].class_names
+                                if not _cnpf:
+                                    for _fe in _mmeta.get("factor_models") or []:
+                                        _fl = _fe.get("class_names") or []
+                                        if _fl:
+                                            _cnpf.append(_fl)
+                                for _fl in _cnpf:
+                                    for _lbl in _fl:
+                                        if _lbl:
+                                            _clf_labels.append(str(_lbl))
+                        except Exception:
+                            pass
                     for _lbl in _clf_labels:
                         if _lbl and _lbl not in _known_labels_set:
                             _known_labels_set.append(_lbl)
