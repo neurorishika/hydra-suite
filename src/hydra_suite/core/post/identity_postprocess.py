@@ -955,6 +955,7 @@ def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     df = df.copy()
+    df["IdentityAssignedLabel"] = df["IdentityAssignedLabel"].astype(object)
     if "IdentityAssignedConfidence" not in df.columns:
         df["IdentityAssignedConfidence"] = np.nan
 
@@ -999,6 +1000,7 @@ def fill_identity_nans_with_consensus(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- IdentitySlotLockLabel ---
     if "IdentitySlotLockLabel" in df.columns:
+        df["IdentitySlotLockLabel"] = df["IdentitySlotLockLabel"].astype(object)
         slot_missing = df["IdentitySlotLockLabel"].isna() | (
             df["IdentitySlotLockLabel"].astype(str).str.strip() == ""
         )

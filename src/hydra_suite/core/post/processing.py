@@ -1152,11 +1152,123 @@ def resolve_trajectories(
     result_trajectories = _clean_trajectories(result_trajectories, MIN_LENGTH)
 
     # Reassign trajectory IDs and remove internal columns
+    # Enforce: only one trajectory may claim a given identity at any frame.
+    result_trajectories = resolve_simultaneous_identity_conflicts(
+        result_trajectories, params
+    )
+
     _reassign_trajectory_ids(result_trajectories)
 
     logger.info(f"Final result: {len(result_trajectories)} trajectories")
 
     return result_trajectories
+
+
+# ---------------------------------------------------------------------------
+# Identity conflict arbitration
+# ---------------------------------------------------------------------------
+
+_IDENTITY_LABEL_COL = "IdentityAssignedLabel"
+_IDENTITY_ID_COL = "IdentityAssignedID"
+_IDENTITY_CONF_COL = "IdentityAssignedConfidence"
+_IDENTITY_SLOT_COL = "IdentitySlotLockLabel"
+_IDENTITY_CONFLICT_COL = "IdentityConflictResolved"
+
+
+def _score_identity_claim(df: pd.DataFrame) -> tuple:
+    """Return a comparable score tuple for a trajectory's identity claim.
+
+    Higher tuple → stronger claim.  Components (descending priority):
+    tag-vote sum, mean assigned confidence, frame count, forward-pass flag.
+    """
+    tag_votes = float(df["TagVotes"].sum()) if "TagVotes" in df.columns else 0.0
+    id_conf = 0.0
+    if _IDENTITY_CONF_COL in df.columns:
+        raw = df[_IDENTITY_CONF_COL].dropna()
+        if not raw.empty:
+            candidate = float(raw.mean())
+            if np.isfinite(candidate):
+                id_conf = candidate
+    frame_count = float(len(df))
+    is_forward = int(
+        "_source" in df.columns and bool((df["_source"] == "forward").any())
+    )
+    return (tag_votes, id_conf, frame_count, is_forward)
+
+
+def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if _IDENTITY_LABEL_COL in df.columns:
+        df[_IDENTITY_LABEL_COL] = np.nan
+    if _IDENTITY_ID_COL in df.columns:
+        df[_IDENTITY_ID_COL] = np.nan
+    if _IDENTITY_CONF_COL in df.columns:
+        df[_IDENTITY_CONF_COL] = 0.0
+    if _IDENTITY_SLOT_COL in df.columns:
+        df[_IDENTITY_SLOT_COL] = np.nan
+    df[_IDENTITY_CONFLICT_COL] = True
+    return df
+
+
+def resolve_simultaneous_identity_conflicts(
+    result_dfs: list,
+    params: dict | None = None,
+) -> list:
+    """Demote the weaker of two tracks that simultaneously claim the same identity.
+
+    Enforces the physical constraint that a given identity can belong to at most
+    one trajectory at any point in time.  For each pair of trajectories with the
+    same majority ``IdentityAssignedLabel`` and at least one shared frame, the
+    lower-scoring one has its identity columns cleared and
+    ``IdentityConflictResolved`` set to ``True``.
+
+    Scoring (descending priority): TagVotes sum → mean IdentityAssignedConfidence
+    → frame count → forward-pass preference.
+    """
+    if not result_dfs:
+        return result_dfs
+
+    labeled: list[tuple] = []
+    for idx, df in enumerate(result_dfs):
+        if _IDENTITY_LABEL_COL not in df.columns or "FrameID" not in df.columns:
+            continue
+        valid = df[_IDENTITY_LABEL_COL].dropna()
+        valid = valid[valid.astype(str).str.strip() != ""]
+        if valid.empty:
+            continue
+        label = str(valid.mode().iloc[0])
+        frames = frozenset(df["FrameID"].dropna().astype(int).tolist())
+        score = _score_identity_claim(df)
+        labeled.append((idx, label, frames, score))
+
+    by_label: dict[str, list] = {}
+    for item in labeled:
+        by_label.setdefault(item[1], []).append(item)
+
+    loser_indices: set[int] = set()
+    for candidates in by_label.values():
+        if len(candidates) < 2:
+            continue
+        for i in range(len(candidates)):
+            for j in range(i + 1, len(candidates)):
+                idx_a, _, frames_a, score_a = candidates[i]
+                idx_b, _, frames_b, score_b = candidates[j]
+                if idx_a in loser_indices or idx_b in loser_indices:
+                    continue
+                if frames_a.isdisjoint(frames_b):
+                    continue
+                loser = idx_b if score_a >= score_b else idx_a
+                loser_indices.add(loser)
+                logger.debug(
+                    "Identity conflict on label '%s': trajectory index %d wins over %d",
+                    candidates[i][1],
+                    idx_a if score_a >= score_b else idx_b,
+                    loser,
+                )
+
+    for idx in loser_indices:
+        result_dfs[idx] = _strip_identity_columns(result_dfs[idx].copy())
+
+    return result_dfs
 
 
 def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:

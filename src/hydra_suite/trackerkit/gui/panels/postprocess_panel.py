@@ -859,8 +859,8 @@ class PostProcessPanel(QWidget):
         f_video_track_overlay.addRow(self.video_track_toggles_widget)
 
         self.spin_trail_duration = QDoubleSpinBox()
-        self.spin_trail_duration.setRange(0.1, 10.0)
-        self.spin_trail_duration.setSingleStep(0.5)
+        self.spin_trail_duration.setRange(-1, 86400)
+        self.spin_trail_duration.setSingleStep(1)
         self.spin_trail_duration.setDecimals(1)
         self.spin_trail_duration.setValue(1.0)
         self.spin_trail_duration.setToolTip(

@@ -120,7 +120,9 @@ def _draw_track_overlays(
             continue
         pt = (int(x), int(y))
         # Use identity label for a stable color when available; fall back to slot index.
-        identity_lbl = (identity_labels[i] if identity_labels and i < len(identity_labels) else None) or ""
+        identity_lbl = (
+            identity_labels[i] if identity_labels and i < len(identity_labels) else None
+        ) or ""
         if identity_lbl:
             col_idx = zlib.crc32(identity_lbl.encode()) % len(colors)
         else:
@@ -140,7 +142,11 @@ def _draw_track_overlays(
                 cv2.polylines(overlay, [pts], isClosed=False, color=col, thickness=2)
         if p.get("SHOW_LABELS") or p.get("SHOW_STATE"):
             if p.get("SHOW_LABELS"):
-                label = f"{identity_lbl} C:{continuity[i]}" if identity_lbl else f"T{ids[i]} C:{continuity[i]}"
+                label = (
+                    f"{identity_lbl} C:{continuity[i]}"
+                    if identity_lbl
+                    else f"T{ids[i]} C:{continuity[i]}"
+                )
             else:
                 label = ""
             state = f" [{track_states[i]}]" if p.get("SHOW_STATE") else ""

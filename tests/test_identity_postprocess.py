@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from tests.helpers.module_loader import load_src_module
@@ -15,6 +16,7 @@ apply_identity_postprocessing = mod.apply_identity_postprocessing
 augment_trajectories_with_detected_apriltags = (
     mod.augment_trajectories_with_detected_apriltags
 )
+fill_identity_nans_with_consensus = mod.fill_identity_nans_with_consensus
 
 
 class FakeTagCache:
@@ -78,6 +80,26 @@ def test_augment_detected_apriltags_assigns_nearest_tag_per_row() -> None:
     assert int(out.iloc[1]["DetectedTagID"]) == 7
     assert float(out.iloc[0]["DetectedTagConf"]) == 1.0
     assert float(out.iloc[1]["DetectedTagConf"]) == 0.5
+
+
+def test_fill_identity_nans_with_consensus_handles_float_label_columns() -> None:
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0, 1],
+            "FrameID": [0, 1, 2],
+            "IdentityAssignedLabel": [np.nan, np.nan, np.nan],
+            "IdentityAssignedID": [np.nan, np.nan, np.nan],
+            "IdentityAssignedConfidence": [np.nan, np.nan, np.nan],
+            "IdentitySlotLockLabel": [np.nan, np.nan, np.nan],
+        }
+    )
+
+    out = fill_identity_nans_with_consensus(df)
+
+    assert out["IdentityAssignedLabel"].tolist() == ["unknown", "unknown", "unknown"]
+    assert out["IdentitySlotLockLabel"].tolist() == ["unknown", "unknown", "unknown"]
+    assert out["IdentityAssignedID"].tolist() == [0.0, 0.0, 0.0]
+    assert out["IdentityAssignedConfidence"].tolist() == [0.0, 0.0, 0.0]
 
 
 def test_identity_postprocess_splits_on_stable_identity_switch_and_rejoins() -> None:

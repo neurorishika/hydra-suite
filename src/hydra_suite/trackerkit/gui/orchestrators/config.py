@@ -3446,9 +3446,11 @@ class ConfigOrchestrator:
             self._panels.setup.spin_start_frame.value(),
             self._panels.setup.spin_end_frame.value(),
         )
-        self._mw._cache_builder_worker.progress_signal.connect(self.on_progress_update)
+        self._mw._cache_builder_worker.progress_signal.connect(
+            self._mw.on_progress_update
+        )
         self._mw._cache_builder_worker.finished_signal.connect(
-            self._on_optimizer_cache_built
+            self._mw._on_optimizer_cache_built
         )
         self._mw.progress_bar.setVisible(True)
         self._mw.progress_label.setVisible(True)

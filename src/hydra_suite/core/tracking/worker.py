@@ -4192,9 +4192,14 @@ class TrackingWorker(QThread):
                         [
                             (
                                 (
-                                    _identity_online_decoder.get_belief(r).committed_label
-                                    if _identity_online_decoder.get_belief(r) is not None
-                                    and _identity_online_decoder.get_belief(r).committed_label
+                                    _identity_online_decoder.get_belief(
+                                        r
+                                    ).committed_label
+                                    if _identity_online_decoder.get_belief(r)
+                                    is not None
+                                    and _identity_online_decoder.get_belief(
+                                        r
+                                    ).committed_label
                                     else None
                                 )
                                 or (
