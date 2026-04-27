@@ -4909,7 +4909,7 @@ object detection, and track assignment.</p>
 
 
 <h4 id="hydra_suite.core.TrackAssigner.assign_tracks" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">committed_slot_identities</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.TrackAssigner.assign_tracks" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -4918,9 +4918,9 @@ object detection, and track assignment.</p>
 
         <p>Drop-in replacement for track assignment logic.
 Compatible with kf_manager.X state access.</p>
-<p>Trajectory-ID management has been removed from this method — the
-worker is solely responsible for assigning new IDs so that all
-amendments happen in one place.</p>
+<p>Returns <code>(rows, cols, free_dets, identity_rejoin_pairs)</code> where
+<code>identity_rejoin_pairs</code> is a list of <code>(slot_index, det_index)</code>
+tuples from the identity-only rejoin path for committed-lost slots.</p>
 
     </div>
 
@@ -6643,7 +6643,7 @@ Uses batch Mahalanobis distance and Numba-accelerated spatial assignment.</p>
 
 
 <h4 id="hydra_suite.core.assigners.hungarian.TrackAssigner.assign_tracks" class="doc doc-heading">
-<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">assign_tracks</span><span class="p">(</span><span class="n">cost</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">meas</span><span class="p">,</span> <span class="n">track_states</span><span class="p">,</span> <span class="n">tracking_continuity</span><span class="p">,</span> <span class="n">kf_manager</span><span class="p">,</span> <span class="n">spatial_candidates</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">association_data</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">committed_slot_identities</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#hydra_suite.core.assigners.hungarian.TrackAssigner.assign_tracks" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -6652,9 +6652,9 @@ Uses batch Mahalanobis distance and Numba-accelerated spatial assignment.</p>
 
         <p>Drop-in replacement for track assignment logic.
 Compatible with kf_manager.X state access.</p>
-<p>Trajectory-ID management has been removed from this method — the
-worker is solely responsible for assigning new IDs so that all
-amendments happen in one place.</p>
+<p>Returns <code>(rows, cols, free_dets, identity_rejoin_pairs)</code> where
+<code>identity_rejoin_pairs</code> is a list of <code>(slot_index, det_index)</code>
+tuples from the identity-only rejoin path for committed-lost slots.</p>
 
     </div>
 
