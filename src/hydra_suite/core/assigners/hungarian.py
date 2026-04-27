@@ -251,6 +251,7 @@ class TrackAssigner:
         if not track_log_posts or not det_log_likes:
             return
 
+        max_dist = float(self.params.get("MAX_DISTANCE_THRESHOLD", 1000.0))
         n_tracks, n_dets = cost.shape
         for i in range(n_tracks):
             log_post_i = track_log_posts.get(i)
@@ -261,7 +262,13 @@ class TrackAssigner:
                 if log_like_j is None:
                     continue
                 log_compat = float(np.logaddexp.reduce(log_post_i + log_like_j))
-                cost[i, j] += alpha * (-log_compat)
+                addon = alpha * (-log_compat)
+                # Cap: identity can reorder preferences but must never block a
+                # geometrically-valid match by pushing cost above max_dist.
+                if cost[i, j] < max_dist:
+                    cost[i, j] = min(cost[i, j] + addon, max_dist - 1e-3)
+                else:
+                    cost[i, j] += addon
 
     @staticmethod
     def _apply_candidate_gate(
@@ -826,6 +833,13 @@ class TrackAssigner:
             for det_j, (score, slot) in det_best.items():
                 identity_rejoin_pairs.append((slot, det_j))
                 identity_claimed_dets.add(det_j)
+
+            # Committed-lost slots that got no identity match fall back to the
+            # proximity path so they are not permanently stranded.
+            identity_rejoined_slots = {s for s, _ in identity_rejoin_pairs}
+            for slot in committed_lost:
+                if slot not in identity_rejoined_slots:
+                    uncommitted_lost.append(slot)
 
         # Proximity-based respawn for uncommitted lost slots
         unassigned = [

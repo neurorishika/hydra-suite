@@ -82,6 +82,13 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
 
     # Innovation Covariance & Kalman Gain (computed before any clipping)
     S = (H @ p @ H.T) + R
+    # Regularise S before inversion: with extreme anisotropic process noise
+    # (ratio up to 260:1) and float32 arithmetic, S can become ill-conditioned,
+    # producing NaN in K.  A tiny diagonal jitter (1e-4) keeps the condition
+    # number bounded without meaningfully biasing the filter (R diagonal ≈ 0.06).
+    S[0, 0] += 1e-4
+    S[1, 1] += 1e-4
+    S[2, 2] += 1e-4
     K = p @ H.T @ np.linalg.inv(S)
 
     # --- Innovation Clipping ---
@@ -236,7 +243,17 @@ class KalmanFilterManager:
         x0 = float(old_x[0]) if np.isfinite(old_x[0]) else 0.0
         y0 = float(old_x[1]) if np.isfinite(old_x[1]) else 0.0
         theta0 = float(old_x[2]) if np.isfinite(old_x[2]) else 0.0
-        self.X[track_idx] = np.array([x0, y0, theta0, 0.0, 0.0], dtype=np.float32)
+        # Preserve finite velocity so the track can still follow a fast-moving
+        # animal on the next frame, clamped to max_velocity for safety.
+        vx0 = float(old_x[3]) if np.isfinite(old_x[3]) else 0.0
+        vy0 = float(old_x[4]) if np.isfinite(old_x[4]) else 0.0
+        if self.max_velocity > 0.0:
+            speed = float(np.sqrt(vx0**2 + vy0**2))
+            if speed > self.max_velocity:
+                scale = self.max_velocity / max(speed, 1e-9)
+                vx0 *= scale
+                vy0 *= scale
+        self.X[track_idx] = np.array([x0, y0, theta0, vx0, vy0], dtype=np.float32)
         self.P[track_idx] = self.init_P.copy()
         self.track_ages[track_idx] = 0
         logger.warning(
@@ -403,6 +420,7 @@ class KalmanFilterManager:
             elif y[2, 0] < -np.pi:
                 y[2, 0] += 2 * np.pi
             S = self.H @ p @ self.H.T + R_eff
+            S += np.eye(self.dim_m, dtype=np.float32) * 1e-4
             K = p @ self.H.T @ np.linalg.inv(S)
             # Innovation clipping with K_eff for consistent covariance update
             pos_innov_sq = float(y[0, 0] ** 2 + y[1, 0] ** 2)
