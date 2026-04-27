@@ -1883,6 +1883,7 @@ class TrackingWorker(QThread):
                 for _lbl in (cnn_cfg_dict.get("labels", []) or [])
                 if str(_lbl).strip()
             }
+            _cnpf_phase = cnn_cfg_dict.get("class_names_per_factor") or []
             live_or_path = live_cnn_caches.get(label)
             if isinstance(live_or_path, LiveCNNIdentityStore):
                 _cnn_phase_states.append(
@@ -1890,6 +1891,7 @@ class TrackingWorker(QThread):
                         "label": label,
                         "cache": live_or_path,
                         "model_labels": model_labels,
+                        "class_names_per_factor": _cnpf_phase,
                         "evidence_cache": None,
                     }
                 )
@@ -1960,6 +1962,7 @@ class TrackingWorker(QThread):
                             "label": label,
                             "cache": _cache,
                             "model_labels": model_labels,
+                            "class_names_per_factor": _cnpf_phase,
                             "evidence_cache": _evidence_cache,
                         }
                     )
@@ -2180,16 +2183,24 @@ class TrackingWorker(QThread):
         _identity_catalog = None
         if individual_pipeline_enabled and not self.backward_mode:
             try:
+                # Collect all known label candidates from CNN + tag configurations.
+                # For multihead (multi-factor) classifiers, build composite catalog
+                # entries from the cartesian product of factor class names so the
+                # uniqueness constraint operates on whole-individual identities rather
+                # than single-factor labels.
+                import itertools as _itertools
+
                 from hydra_suite.core.identity.catalog import IdentityCatalog
                 from hydra_suite.core.identity.online import OnlineIdentityDecoder
 
-                # Collect all known label candidates from CNN + tag configurations.
                 _known_labels_set: list[str] = []
                 for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
-                    _clf_labels = _cnn_cfg.get("labels", []) or []
-                    if not _clf_labels:
-                        # Fallback: read labels from the model metadata file directly
-                        # when the saved config predates the "labels" field.
+                    # Resolve per-factor class names: prefer stored field, else read model file.
+                    _cnpf_cfg: list[list[str]] = (
+                        _cnn_cfg.get("class_names_per_factor") or []
+                    )
+                    if not _cnpf_cfg:
+                        # Try to read from the model file.
                         try:
                             import json as _json
 
@@ -2197,27 +2208,38 @@ class TrackingWorker(QThread):
                             if _mp and os.path.exists(_mp):
                                 with open(_mp) as _mf:
                                     _mmeta = _json.load(_mf)
-                                # Single-head / atomic: top-level class_names_per_factor or class_names
-                                _cnpf = _mmeta.get("class_names_per_factor") or []
-                                if not _cnpf:
+                                _cnpf_cfg = _mmeta.get("class_names_per_factor") or []
+                                if not _cnpf_cfg:
                                     _flat = _mmeta.get("class_names") or []
                                     if _flat:
-                                        _cnpf = [_flat]
-                                # Multihead manifest (schema_version 2): factor_models[].class_names
-                                if not _cnpf:
+                                        _cnpf_cfg = [_flat]
+                                if not _cnpf_cfg:
                                     for _fe in _mmeta.get("factor_models") or []:
                                         _fl = _fe.get("class_names") or []
                                         if _fl:
-                                            _cnpf.append(_fl)
-                                for _fl in _cnpf:
-                                    for _lbl in _fl:
-                                        if _lbl:
-                                            _clf_labels.append(str(_lbl))
+                                            _cnpf_cfg.append(_fl)
                         except Exception:
                             pass
-                    for _lbl in _clf_labels:
-                        if _lbl and _lbl not in _known_labels_set:
-                            _known_labels_set.append(_lbl)
+
+                    _non_empty = [fl for fl in _cnpf_cfg if fl]
+                    if len(_non_empty) > 1:
+                        # Multi-factor: composite labels (cartesian product).
+                        for _combo in _itertools.product(*_non_empty):
+                            _composite = "_".join(str(c) for c in _combo if c)
+                            if _composite and _composite not in _known_labels_set:
+                                _known_labels_set.append(_composite)
+                    else:
+                        # Single factor or flat labels list.
+                        _clf_labels: list[str] = []
+                        for _fl in _non_empty:
+                            _clf_labels.extend([str(l) for l in _fl if l])
+                        if not _clf_labels:
+                            _clf_labels = [
+                                str(l) for l in (_cnn_cfg.get("labels", []) or []) if l
+                            ]
+                        for _lbl in _clf_labels:
+                            if _lbl and _lbl not in _known_labels_set:
+                                _known_labels_set.append(_lbl)
                 # Tag identities may also be provided via TAG_IDENTITY_LABELS
                 for _lbl in p.get("TAG_IDENTITY_LABELS", []):
                     if _lbl and _lbl not in _known_labels_set:
@@ -3382,30 +3404,100 @@ class TrackingWorker(QThread):
                                     continue
                                 if hasattr(_identity_online_decoder, "_catalog"):
                                     _cat = _identity_online_decoder._catalog
-                                    # Build soft CNN log-prior from top-1 prediction
-                                    for _k, _cn in enumerate(_pred.class_names):
-                                        if _cn and _cat.contains(_cn):
-                                            _conf = (
-                                                float(_pred.confidences[_k])
-                                                if _k < len(_pred.confidences)
-                                                else 0.5
+                                    _phase_cnpf = (
+                                        _state.get("class_names_per_factor") or []
+                                    )
+                                    _non_empty_factors = [
+                                        fl for fl in _phase_cnpf if fl
+                                    ]
+                                    if len(_non_empty_factors) > 1:
+                                        # Multi-factor: build joint log-prior over composite catalog.
+                                        # Reconstruct per-factor soft distributions from top-1 and
+                                        # compute P(composite) = product of per-factor probabilities.
+                                        _per_factor_dist: list[dict[str, float]] = []
+                                        for _k, (_cn, _conf_raw) in enumerate(
+                                            zip(_pred.class_names, _pred.confidences)
+                                        ):
+                                            _fk_labels = (
+                                                _non_empty_factors[_k]
+                                                if _k < len(_non_empty_factors)
+                                                else []
                                             )
-                                            _lp = _cat.cnn_log_prior(
-                                                [
-                                                    (
-                                                        _conf
-                                                        if _l == _cn
-                                                        else (1.0 - _conf)
-                                                        / max(_cat.num_known - 1, 1)
+                                            _nk = len(_fk_labels)
+                                            if _nk == 0:
+                                                _per_factor_dist.append({})
+                                                continue
+                                            _conf_k = max(float(_conf_raw), 1e-9)
+                                            _other_p = max(
+                                                1e-9, (1.0 - _conf_k) / max(_nk - 1, 1)
+                                            )
+                                            _per_factor_dist.append(
+                                                {
+                                                    lbl: (
+                                                        _conf_k
+                                                        if lbl == _cn
+                                                        else _other_p
                                                     )
-                                                    for _l in list(_cat.labels[1:])
-                                                ],
-                                                list(_cat.labels[1:]),
+                                                    for lbl in _fk_labels
+                                                }
                                             )
-                                            _ev = IdentityEvidence.from_cnn(
-                                                actual_frame_index, _det_id, _label, _lp
-                                            )
-                                            _slot_evs.setdefault(_r, []).append(_ev)
+                                        _n_factors_local = len(_non_empty_factors)
+                                        _n_cat = _cat.size
+                                        _lp_arr = np.full(
+                                            _n_cat, np.log(1e-9), dtype=np.float64
+                                        )
+                                        for _ci in range(1, _n_cat):
+                                            _cl = _cat.label_of(_ci)
+                                            _parts = _cl.split("_")
+                                            if len(_parts) != _n_factors_local:
+                                                continue
+                                            _joint = 0.0
+                                            for _k, _part in enumerate(_parts):
+                                                _fk_p = (
+                                                    _per_factor_dist[_k].get(
+                                                        _part, 1e-9
+                                                    )
+                                                    if _k < len(_per_factor_dist)
+                                                    else 1e-9
+                                                )
+                                                _joint += np.log(max(_fk_p, 1e-300))
+                                            _lp_arr[_ci] = _joint
+                                        _lp_arr -= np.logaddexp.reduce(_lp_arr)
+                                        _ev = IdentityEvidence.from_cnn(
+                                            actual_frame_index,
+                                            _det_id,
+                                            _label,
+                                            _lp_arr,
+                                        )
+                                        _slot_evs.setdefault(_r, []).append(_ev)
+                                    else:
+                                        # Single factor: original per-label top-1 logic.
+                                        for _k, _cn in enumerate(_pred.class_names):
+                                            if _cn and _cat.contains(_cn):
+                                                _conf = (
+                                                    float(_pred.confidences[_k])
+                                                    if _k < len(_pred.confidences)
+                                                    else 0.5
+                                                )
+                                                _lp = _cat.cnn_log_prior(
+                                                    [
+                                                        (
+                                                            _conf
+                                                            if _l == _cn
+                                                            else (1.0 - _conf)
+                                                            / max(_cat.num_known - 1, 1)
+                                                        )
+                                                        for _l in list(_cat.labels[1:])
+                                                    ],
+                                                    list(_cat.labels[1:]),
+                                                )
+                                                _ev = IdentityEvidence.from_cnn(
+                                                    actual_frame_index,
+                                                    _det_id,
+                                                    _label,
+                                                    _lp,
+                                                )
+                                                _slot_evs.setdefault(_r, []).append(_ev)
 
                         _online_assignments = _identity_online_decoder.update_frame(
                             actual_frame_index, _visible_slots, _slot_evs

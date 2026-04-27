@@ -69,17 +69,42 @@ class IdentityEvidenceEmitter:
         runtime_signature: str = "",
         calibration_signature: str = "",
     ) -> None:
+        import itertools
+
         self._source_name = source_name
         self._runtime_signature = runtime_signature
         self._calibration_signature = calibration_signature
         self._class_labels_per_factor = class_labels_per_factor
 
-        # Build a flat catalog label list from all factor labels
-        catalog_labels: list[str] = ["unknown"]
-        for factor_labels in class_labels_per_factor:
-            for lbl in factor_labels:
-                if lbl and lbl not in catalog_labels:
-                    catalog_labels.append(lbl)
+        non_empty_factors = [fl for fl in class_labels_per_factor if fl]
+        self._is_composite = len(non_empty_factors) > 1
+
+        if self._is_composite:
+            # Multi-factor: composite catalog as cartesian product of factor labels.
+            catalog_labels: list[str] = ["unknown"]
+            # Store per-entry factor decomposition for fast lookup.
+            self._catalog_factor_tuples: list[tuple[str, ...]] = []
+            for combo in itertools.product(*non_empty_factors):
+                label = "_".join(str(c) for c in combo if c)
+                if label and label not in catalog_labels:
+                    catalog_labels.append(label)
+                    self._catalog_factor_tuples.append(combo)
+            # Build (factor_index, class_name) → [catalog_indices] lookup.
+            self._factor_class_to_catalog: dict[tuple[int, str], list[int]] = {}
+            for entry_idx, combo in enumerate(self._catalog_factor_tuples):
+                cat_idx = entry_idx + 1  # offset by 1 for "unknown"
+                for fi, cls in enumerate(combo):
+                    key = (fi, cls)
+                    self._factor_class_to_catalog.setdefault(key, []).append(cat_idx)
+        else:
+            # Single factor or atomic: flat catalog (original behaviour).
+            self._catalog_factor_tuples = []
+            self._factor_class_to_catalog = {}
+            catalog_labels = ["unknown"]
+            for factor_labels in class_labels_per_factor:
+                for lbl in factor_labels:
+                    if lbl and lbl not in catalog_labels:
+                        catalog_labels.append(lbl)
 
         self._catalog_labels = tuple(catalog_labels)
         self._cache = IdentityEvidenceCache(
@@ -190,7 +215,13 @@ class IdentityEvidenceEmitter:
         factor_index: int,
         factor_probs: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Map one factor posterior to the emitter's flat label space."""
+        """Map one factor posterior to the catalog label space.
+
+        For composite catalogs each factor's probabilities are distributed to
+        all composite entries that contain that factor's class, so the sum over
+        factors (in log space) gives the joint probability.  For flat catalogs
+        the original direct lookup is used.
+        """
         C = len(self._catalog_labels)
         label_map = []
         if 0 <= factor_index < len(self._class_labels_per_factor):
@@ -202,17 +233,31 @@ class IdentityEvidenceEmitter:
         observed[0] = True
 
         factor_arr = np.asarray(factor_probs, dtype=np.float64)
-        for class_idx, label in enumerate(label_map):
-            if class_idx >= len(factor_arr):
-                break
-            if not label:
-                continue
-            try:
-                catalog_idx = self._catalog_labels.index(str(label))
-            except ValueError:
-                continue
-            probs[catalog_idx] = max(float(factor_arr[class_idx]), floor)
-            observed[catalog_idx] = True
+
+        if self._is_composite:
+            for class_idx, cls in enumerate(label_map):
+                if class_idx >= len(factor_arr):
+                    break
+                if not cls:
+                    continue
+                prob = max(float(factor_arr[class_idx]), floor)
+                for cat_idx in self._factor_class_to_catalog.get(
+                    (factor_index, cls), []
+                ):
+                    probs[cat_idx] = prob
+                    observed[cat_idx] = True
+        else:
+            for class_idx, label in enumerate(label_map):
+                if class_idx >= len(factor_arr):
+                    break
+                if not label:
+                    continue
+                try:
+                    catalog_idx = self._catalog_labels.index(str(label))
+                except ValueError:
+                    continue
+                probs[catalog_idx] = max(float(factor_arr[class_idx]), floor)
+                observed[catalog_idx] = True
 
         probs /= probs.sum()
         return np.log(np.clip(probs, 1e-300, None)), observed
@@ -253,17 +298,41 @@ class IdentityEvidenceEmitter:
             if class_name is None:
                 continue
             used_any_factor = True
-            try:
-                catalog_idx = self._catalog_labels.index(class_name)
-            except ValueError:
-                continue
-            floor = max(1e-6, (1.0 - float(conf)) / max(C - 1, 1))
-            probs = np.full(C, floor, dtype=np.float64)
-            probs[catalog_idx] = max(float(conf), floor)
-            probs /= probs.sum()
-            combined += np.log(np.clip(probs, 1e-300, None))
-            observed_mask[catalog_idx] = True
-            observed_mask[0] = True
+
+            if self._is_composite:
+                # Reconstruct a soft per-factor distribution from top-1 + uniform prior.
+                factor_labels = (
+                    self._class_labels_per_factor[factor_index]
+                    if factor_index < len(self._class_labels_per_factor)
+                    else []
+                )
+                n_k = len(factor_labels)
+                if n_k == 0:
+                    continue
+                other_p = max(1e-9, (1.0 - float(conf)) / max(n_k - 1, 1))
+                factor_probs = np.full(n_k, other_p, dtype=np.float64)
+                try:
+                    top_idx = factor_labels.index(class_name)
+                    factor_probs[top_idx] = max(float(conf), other_p)
+                except ValueError:
+                    pass
+                factor_log, factor_obs = self._factor_log_prob(
+                    factor_index, factor_probs
+                )
+                combined += factor_log
+                observed_mask |= factor_obs
+            else:
+                try:
+                    catalog_idx = self._catalog_labels.index(class_name)
+                except ValueError:
+                    continue
+                floor = max(1e-6, (1.0 - float(conf)) / max(C - 1, 1))
+                probs = np.full(C, floor, dtype=np.float64)
+                probs[catalog_idx] = max(float(conf), floor)
+                probs /= probs.sum()
+                combined += np.log(np.clip(probs, 1e-300, None))
+                observed_mask[catalog_idx] = True
+                observed_mask[0] = True
 
         if not used_any_factor:
             return np.full(C, -np.log(C), dtype=np.float64), None

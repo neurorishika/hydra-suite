@@ -969,6 +969,7 @@ class IdentityPanel(QWidget):
                 "model_path": abs_path,
                 "label": label,
                 "labels": all_labels,
+                "class_names_per_factor": [[str(l) for l in fl] for fl in cnpf if fl],
                 "confidence": self.spin_confidence.value(),
                 "window": self.spin_window.value(),
                 "batch_size": self.spin_batch.value(),
