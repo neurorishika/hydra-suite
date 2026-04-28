@@ -838,7 +838,13 @@ class IdentityPanel(QWidget):
             )
             self.chk_unique_identifier.setChecked(False)
             self.chk_unique_identifier.setToolTip(
-                "Use this classifier's outputs as identity evidence during final post-processing.\n"
+                "When ON, this classifier's outputs feed the identity pipeline\n"
+                "(catalog, online decoder, assignment cost, posterior cache,\n"
+                "fragment solver) and drive IdentityAssignedLabel.\n"
+                "When OFF, the classifier still runs and its predictions are\n"
+                "appended to the *_with_individual.csv as CNN_<label>_Class /\n"
+                "CNN_<label>_Prob columns, but it has no effect on identity\n"
+                "assignment or tracking.\n"
                 "Enable this only for classifiers whose classes uniquely identify individuals."
             )
             form.addRow("Unique identifier", self.chk_unique_identifier)

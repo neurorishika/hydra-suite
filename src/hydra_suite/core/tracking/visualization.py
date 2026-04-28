@@ -120,9 +120,12 @@ def _draw_track_overlays(
             continue
         pt = (int(x), int(y))
         # Use identity label for a stable color when available; fall back to slot index.
+        # Treat the bare "unknown" sentinel as no-identity so visualization shows trajectory ID.
         identity_lbl = (
             identity_labels[i] if identity_labels and i < len(identity_labels) else None
         ) or ""
+        if identity_lbl.strip().lower() == "unknown":
+            identity_lbl = ""
         if identity_lbl:
             col_idx = zlib.crc32(identity_lbl.encode()) % len(colors)
         else:

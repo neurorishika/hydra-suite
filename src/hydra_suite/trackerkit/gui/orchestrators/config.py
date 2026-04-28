@@ -1042,6 +1042,12 @@ class ConfigOrchestrator:
                     )
 
         # Identity decoder settings (tracking panel)
+        self._panels.tracking.chk_enable_identity_in_tracking.setChecked(
+            bool(get_cfg("enable_identity_in_tracking", default=True))
+        )
+        self._panels.tracking._on_identity_in_tracking_toggled(
+            self._panels.tracking.chk_enable_identity_in_tracking.isChecked()
+        )
         self._panels.tracking.chk_enable_identity_online_decoder.setChecked(
             bool(get_cfg("enable_identity_online_decoder", default=False))
         )
@@ -1754,6 +1760,7 @@ class ConfigOrchestrator:
                 ),
                 # Legacy CNN Classifier settings (for backward compat on load)
                 "cnn_classifier_confidence": self._panels.identity.spin_cnn_confidence.value(),
+                "enable_identity_in_tracking": self._panels.tracking.chk_enable_identity_in_tracking.isChecked(),
                 "enable_identity_online_decoder": self._panels.tracking.chk_enable_identity_online_decoder.isChecked(),
                 "identity_weight": self._panels.tracking.spin_identity_weight.value(),
                 "identity_commit_threshold": self._panels.tracking.spin_identity_commit_threshold.value(),
@@ -2293,7 +2300,11 @@ class ConfigOrchestrator:
                 if identity_cfg.get("cnn_classifiers")
                 else 64
             ),
-            "ENABLE_IDENTITY_ONLINE_DECODER": self._panels.tracking.chk_enable_identity_online_decoder.isChecked(),
+            "ENABLE_IDENTITY_IN_TRACKING": self._panels.tracking.chk_enable_identity_in_tracking.isChecked(),
+            "ENABLE_IDENTITY_ONLINE_DECODER": (
+                self._panels.tracking.chk_enable_identity_in_tracking.isChecked()
+                and self._panels.tracking.chk_enable_identity_online_decoder.isChecked()
+            ),
             "IDENTITY_POSTPROCESS_MODE": (
                 self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
                 if self._panels.postprocess.enable_postprocessing.isChecked()

@@ -524,14 +524,32 @@ class TrackingPanel(QWidget):
         f_identity_decoder = QFormLayout(None)
         f_identity_decoder.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
+        self.chk_enable_identity_in_tracking = QCheckBox(
+            "Use identity to influence tracking"
+        )
+        self.chk_enable_identity_in_tracking.setChecked(True)
+        self.chk_enable_identity_in_tracking.setToolTip(
+            "Master switch for identity influence on tracking.\n"
+            "When OFF, identity has zero effect on tracking: no online decoder is built,\n"
+            "no Bayesian cost term is added, no identity-based rejoin or commit logic runs.\n"
+            "Identity classification still runs and labels are still written to the\n"
+            "*_with_individual.csv (and offline post-processing such as the fragment\n"
+            "solver still works), but the live tracking pipeline is purely geometric."
+        )
+        self.chk_enable_identity_in_tracking.toggled.connect(
+            self._on_identity_in_tracking_toggled
+        )
+        f_identity_decoder.addRow(self.chk_enable_identity_in_tracking)
+
         self.chk_enable_identity_online_decoder = QCheckBox(
-            "Enable online identity decoder"
+            "Enable online identity decoder (Bayesian cost term)"
         )
         self.chk_enable_identity_online_decoder.setChecked(False)
         self.chk_enable_identity_online_decoder.setToolTip(
             "Activates the Bayesian online decoder that integrates CNN and AprilTag evidence\n"
             "into the assignment cost as a soft probability term.\n"
-            "Requires identity classification to be configured in the Individual Analysis tab."
+            "Requires identity classification to be configured in the Individual Analysis tab\n"
+            "AND the master 'Use identity to influence tracking' switch above to be ON."
         )
         f_identity_decoder.addRow(self.chk_enable_identity_online_decoder)
 
@@ -992,6 +1010,20 @@ class TrackingPanel(QWidget):
         enabled = self.chk_enable_confidence_density_map.isChecked()
         self.g_density.setVisible(enabled)
         self.g_density.setEnabled(enabled)
+
+    def _on_identity_in_tracking_toggled(self, _checked):
+        """Disable identity-decoder controls when the master switch is OFF."""
+        enabled = self.chk_enable_identity_in_tracking.isChecked()
+        for widget in (
+            self.chk_enable_identity_online_decoder,
+            self.spin_identity_weight,
+            self.spin_identity_commit_threshold,
+            self.spin_identity_display_threshold,
+            self.spin_identity_transition_epsilon,
+            self.spin_identity_unknown_prior,
+            self.spin_identity_rejoin_threshold,
+        ):
+            widget.setEnabled(enabled)
 
     def sync_directed_orient_posthoc_ui(self, posthoc_active: bool) -> None:
         """Toggle between online-consistency controls and the post-hoc note.

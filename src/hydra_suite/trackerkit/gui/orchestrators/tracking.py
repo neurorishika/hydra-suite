@@ -1820,7 +1820,13 @@ class TrackingOrchestrator:
         return np.asarray(labels, dtype=object)
 
     def _normalize_video_identity_color_key(self, value):
-        """Return a stable identity color key token or an empty string."""
+        """Return a stable identity color key token or an empty string.
+
+        Treats values that are missing, NaN, the bare word ``"unknown"``, or a
+        source-keyed identity string whose every value is empty/``"unknown"``
+        as having no identity — so the caller falls back to TrajectoryID for
+        both labels and colors.
+        """
         if value is None:
             return ""
         try:
@@ -1831,6 +1837,22 @@ class TrackingOrchestrator:
         token = str(value).strip()
         if not token or token.lower() == "nan":
             return ""
+        if token.lower() == "unknown":
+            return ""
+        try:
+            from hydra_suite.core.post.identity_postprocess import parse_identity_key
+
+            parsed = parse_identity_key(token)
+        except Exception:
+            parsed = {}
+        if parsed:
+            informative_values = [
+                str(v).strip()
+                for v in parsed.values()
+                if str(v).strip() and str(v).strip().lower() != "unknown"
+            ]
+            if not informative_values:
+                return ""
         return token
 
     def _build_video_track_color_key_array(self, trajectories_df):

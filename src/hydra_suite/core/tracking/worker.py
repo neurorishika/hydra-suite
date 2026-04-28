@@ -1887,6 +1887,7 @@ class TrackingWorker(QThread):
                 if str(_lbl).strip()
             }
             _cnpf_phase = cnn_cfg_dict.get("class_names_per_factor") or []
+            _is_identity_provider = bool(cnn_cfg_dict.get("unique_identifier", False))
             live_or_path = live_cnn_caches.get(label)
             if isinstance(live_or_path, LiveCNNIdentityStore):
                 _cnn_phase_states.append(
@@ -1896,6 +1897,7 @@ class TrackingWorker(QThread):
                         "model_labels": model_labels,
                         "class_names_per_factor": _cnpf_phase,
                         "evidence_cache": None,
+                        "is_identity_provider": _is_identity_provider,
                     }
                 )
                 logger.info(
@@ -1967,6 +1969,7 @@ class TrackingWorker(QThread):
                             "model_labels": model_labels,
                             "class_names_per_factor": _cnpf_phase,
                             "evidence_cache": _evidence_cache,
+                            "is_identity_provider": _is_identity_provider,
                         }
                     )
                     logger.info("CNN identity cache loaded (%s): %s", label, _path)
@@ -2184,7 +2187,8 @@ class TrackingWorker(QThread):
         _identity_online_decoder = None
         _identity_online_assignments = {}  # slot_index → IdentityAssignment
         _identity_catalog = None
-        if individual_pipeline_enabled:
+        _identity_in_tracking_enabled = bool(p.get("ENABLE_IDENTITY_IN_TRACKING", True))
+        if individual_pipeline_enabled and _identity_in_tracking_enabled:
             try:
                 # Collect all known label candidates from CNN + tag configurations.
                 # For multihead (multi-factor) classifiers, build composite catalog
@@ -2198,6 +2202,8 @@ class TrackingWorker(QThread):
 
                 _known_labels_set: list[str] = []
                 for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
+                    if not bool(_cnn_cfg.get("unique_identifier", False)):
+                        continue
                     # Resolve per-factor class names: prefer stored field, else read model file.
                     _cnpf_cfg: list[list[str]] = (
                         _cnn_cfg.get("class_names_per_factor") or []
@@ -3068,8 +3074,10 @@ class TrackingWorker(QThread):
                                 _log_like = _cat.apriltag_log_prior(
                                     _tid, _tag_label_map
                                 )
-                            # CNN contribution (all phases, summed in log-space)
+                            # CNN contribution (identity-providing phases only, summed in log-space)
                             for _state in _cnn_phase_states:
+                                if not _state.get("is_identity_provider", False):
+                                    continue
                                 _fps = _cnn_frame_preds_all.get(_state["label"], [])
                                 _pred = _fps[_j] if _j < len(_fps) else None
                                 if _pred is not None and _pred.class_names:
@@ -3346,8 +3354,10 @@ class TrackingWorker(QThread):
                                         )
                                         _slot_evs.setdefault(_r, []).append(_ev)
 
-                        # Build CNN evidence for matched detections
+                        # Build CNN evidence for matched detections (identity-providing phases only)
                         for _state in _cnn_phase_states:
+                            if not _state.get("is_identity_provider", False):
+                                continue
                             _label = _state["label"]
                             _cache = _state["cache"]
                             _evidence_cache = _state.get("evidence_cache")
