@@ -187,12 +187,19 @@ def _spatial_score_for_fragment(
     max_velocity: float,
     no_neighbor_score: float = 0.3,
 ) -> tuple[float, bool]:
-    """Gaussian spatial continuity score against nearest prior/following fragment of identity.
+    """Velocity-based spatial continuity score against nearest neighboring segment.
 
-    Returns (score, has_neighbors). has_neighbors is True when at least one valid
-    neighboring segment was found in the schedule; in that case the score is a
-    genuine distance-based Gaussian. When False, the score is the no_neighbor_score
-    fallback and should not be used to veto an assignment.
+    Returns (score, has_neighbors).
+
+    Scoring:
+    - Implied velocity = dist / gap (pixels per frame).
+    - Hard veto: if velocity > max_velocity for any neighbor, return (0.0, True)
+      immediately — physically impossible jump, caller should mark ineligible.
+    - Otherwise: score = exp(-2 * (velocity / max_velocity)^2).
+      This is a velocity-space Gaussian where max_velocity is one sigma; scores
+      range from ~1.0 (stationary) through ~0.61 (half max) to ~0.14 (at max).
+    - When has_neighbors is False the spatial score cannot be trusted;
+      the caller should use evidence-only scoring.
     """
     t0 = int(frag["StartFrame"])
     t1 = int(frag["EndFrame"])
@@ -210,9 +217,11 @@ def _spatial_score_for_fragment(
         math.isfinite(v) for v in [x0, y0, prior["end_X"], prior["end_Y"]]
     ):
         gap = max(1, t0 - prior["end_frame"])
-        sigma = max_velocity * gap
         dist = math.hypot(x0 - prior["end_X"], y0 - prior["end_Y"])
-        term_scores.append(math.exp(-(dist**2) / (2.0 * sigma**2)))
+        velocity = dist / gap
+        if velocity > max_velocity:
+            return 0.0, True  # physically impossible — hard veto
+        term_scores.append(math.exp(-2.0 * (velocity / max_velocity) ** 2))
 
     following = min(
         (s for s in segs if s["start_frame"] > t1),
@@ -223,9 +232,11 @@ def _spatial_score_for_fragment(
         math.isfinite(v) for v in [x1, y1, following["start_X"], following["start_Y"]]
     ):
         gap = max(1, following["start_frame"] - t1)
-        sigma = max_velocity * gap
         dist = math.hypot(x1 - following["start_X"], y1 - following["start_Y"])
-        term_scores.append(math.exp(-(dist**2) / (2.0 * sigma**2)))
+        velocity = dist / gap
+        if velocity > max_velocity:
+            return 0.0, True  # physically impossible — hard veto
+        term_scores.append(math.exp(-2.0 * (velocity / max_velocity) ** 2))
 
     if term_scores:
         return float(np.mean(term_scores)), True
@@ -262,16 +273,25 @@ def _build_score_matrix(
 ) -> np.ndarray:
     """Build (n_frags x n_labels) score matrix.  -1 means ineligible.
 
-    Length weighting is multiplicative: raw_score * (1 - length_w * (1 - length_scale)),
-    where length_scale = log1p(n_frames) / log1p(max_frames). This means a short
-    fragment's full evidence (CNN + tag + prior + spatial) is discounted relative to a
-    long fragment, preventing a tiny high-confidence fragment from winning the MILP
-    over a large spatially-consistent track purely on CNN/prior strength.
+    Scoring strategy:
+    - When temporal neighbors exist (has_neighbors=True):
+        score = evidence × spatial_s × length_factor
+      where evidence = cnn_w * cnn_s + tag_w * tag_s + prior_bonus.
+      Spatial multiplies all evidence: a near-zero spatial score (fast jump)
+      suppresses the cell even if CNN is very strong, so spatial continuity
+      dominates when it can be measured.
+    - When no neighbors exist (has_neighbors=False):
+        score = evidence × length_factor
+      Spatial assessment is impossible; CNN/tag/prior decide.
 
-    Spatial veto: when spatial neighbors exist and the computed score is below
-    FRAGMENT_SPATIAL_VETO_THRESHOLD, the fragment is ineligible for that identity
-    (score = -1). This handles fragments whose position is provably inconsistent with
-    the expected identity location.
+    Spatial veto: if has_neighbors and spatial_s < FRAGMENT_SPATIAL_VETO_THRESHOLD
+    (default 0.05), the cell is marked -1 (ineligible). Combined with the hard
+    velocity veto in _spatial_score_for_fragment (any neighbor implying
+    velocity > MAX_VELOCITY_BREAK returns score=0.0), this guarantees that
+    physically impossible jumps are never assigned.
+
+    Length weighting: short fragments are discounted relative to long ones so a
+    tiny high-confidence fragment cannot outbid a large spatially-consistent track.
     """
     cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
     spatial_w = float(params.get("FRAGMENT_SPATIAL_WEIGHT", 0.35))
@@ -331,9 +351,14 @@ def _build_score_matrix(
             if has_neighbors and spatial_s < spatial_veto:
                 continue  # score_mat[i, j] stays -1 (ineligible)
             prior_bonus = prior_w * online_conf if label == online_lbl else 0.0
-            raw_score = (
-                cnn_w * cnn_s + tag_w * tag_s + spatial_w * spatial_s + prior_bonus
-            )
+            evidence = cnn_w * cnn_s + tag_w * tag_s + prior_bonus
+            if has_neighbors:
+                # Spatial gates all evidence: high-velocity jumps suppress the
+                # score even when CNN is strong, so spatial continuity wins.
+                raw_score = evidence * spatial_s
+            else:
+                # No temporal neighbors — spatial assessment impossible.
+                raw_score = evidence
             score_mat[i, j] = raw_score * length_factor
 
     # Cross-trajectory spatial veto: if a shorter fragment overlaps a longer one
@@ -646,13 +671,25 @@ def solve_global_assignment(
     score_mat2 = _build_score_matrix(summaries, known_labels, schedule2, params)
     assigned2 = _milp_solve(summaries, known_labels, score_mat2, params)
 
+    # Trajectories where every label was spatially vetoed: prefer "unknown" over
+    # an online label that may itself represent a spatial jump.
+    all_vetoed = frozenset(
+        i for i in range(n_trajs) if all(score_mat2[i, j] < 0 for j in range(n_labels))
+    )
+
     # Apply margin threshold.
     labels_out: list[str] = []
     for i in range(n_trajs):
         online_lbl = _catalog_label_or_unknown(str(summaries.iloc[i]["OnlineLabel"]))
         milp_label = assigned2.get(i)
 
-        if milp_label is None or milp_label == online_lbl:
+        if milp_label is None:
+            # Use "unknown" when spatial constraints ruled out every assignment,
+            # so we don't silently keep an online label that implies a jump.
+            labels_out.append("unknown" if i in all_vetoed else online_lbl)
+            continue
+
+        if milp_label == online_lbl:
             labels_out.append(online_lbl)
             continue
 
