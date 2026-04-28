@@ -174,142 +174,6 @@ def split_trajectories_at_changepoints(
     return result
 
 
-def build_fragments(
-    df: pd.DataFrame,
-    changepoints: dict[Any, list[int]],
-    catalog: IdentityCatalog,
-    params: dict[str, Any],
-) -> pd.DataFrame:
-    """Return a fragments DataFrame with one row per (traj_id, segment).
-
-    Columns: TrajectoryID, FragmentID, StartFrame, EndFrame,
-    StartX, StartY, EndX, EndY, MeanCNNProbs (dict), MeanTagProbs (dict),
-    OnlineLabel, OnlineConfidence.
-    """
-    known_labels = list(catalog.labels[1:])
-
-    rows: list[dict] = []
-    frag_counter = 0
-
-    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
-        grp_sorted = grp.sort_values("FrameID").reset_index(drop=True)
-        frames = grp_sorted["FrameID"].values
-        split_frames = sorted(changepoints.get(traj_id, []))
-
-        # Build segment boundaries: list of (start_frame, end_frame) inclusive.
-        boundaries: list[tuple[int, int]] = []
-        prev = int(frames[0])
-        for sf in split_frames:
-            if prev <= sf < int(frames[-1]):
-                boundaries.append((prev, sf))
-                prev = sf + 1
-        boundaries.append((prev, int(frames[-1])))
-
-        for start_f, end_f in boundaries:
-            mask = (grp_sorted["FrameID"] >= start_f) & (grp_sorted["FrameID"] <= end_f)
-            seg = grp_sorted[mask]
-            if seg.empty:
-                continue
-
-            # Spatial endpoints.
-            valid_xy = (
-                seg[seg["X"].notna() & seg["Y"].notna()].sort_values("FrameID")
-                if "X" in seg.columns and "Y" in seg.columns
-                else pd.DataFrame()
-            )
-            if not valid_xy.empty:
-                sx, sy = float(valid_xy.iloc[0]["X"]), float(valid_xy.iloc[0]["Y"])
-                ex, ey = float(valid_xy.iloc[-1]["X"]), float(valid_xy.iloc[-1]["Y"])
-            else:
-                sx = sy = ex = ey = math.nan
-
-            # CNN mean probabilities.
-            mean_probs: dict[str, float] = {}
-            for label in known_labels:
-                suffix = f"_{label}_Prob"
-                prob_col = next(
-                    (c for c in seg.columns if str(c).endswith(suffix)), None
-                )
-                if prob_col is not None:
-                    vals = pd.to_numeric(seg[prob_col], errors="coerce")
-                    if vals.notna().any():
-                        mean_probs[label] = float(np.nanmean(vals.values))
-
-            # Tag evidence: fraction of frames with each known label's AprilTag.
-            tag_probs: dict[str, float] = {}
-            if "DetectedTagLabel" in seg.columns:
-                tag_vals = seg["DetectedTagLabel"].dropna().astype(str).str.strip()
-                tag_known = tag_vals[~tag_vals.isin(_UNKNOWN_VALUES)]
-                n_rows = len(seg)
-                if len(tag_known) > 0 and n_rows > 0:
-                    for label in known_labels:
-                        frac = float((tag_known == str(label)).sum()) / n_rows
-                        if frac > 0.0:
-                            tag_probs[label] = frac
-
-            # Online label: dominant non-unknown label.
-            if _LABEL_COL in seg.columns:  # noqa: SIM401
-                label_col = seg[_LABEL_COL]
-            else:
-                label_col = pd.Series("unknown", index=seg.index, dtype=object)
-            unknown_mask = label_col.isna() | label_col.astype(str).str.strip().isin(
-                _UNKNOWN_VALUES
-            )
-            known_rows = seg[~unknown_mask]
-            if not known_rows.empty:
-                online_label = str(known_rows[_LABEL_COL].astype(str).mode().iloc[0])
-                # Confidence averaged over known-label rows only.
-                if _CONF_COL in known_rows.columns:
-                    conf_vals = pd.to_numeric(known_rows[_CONF_COL], errors="coerce")
-                    online_conf = (
-                        float(np.nanmean(conf_vals.values))
-                        if conf_vals.notna().any()
-                        else 0.0
-                    )
-                else:
-                    online_conf = 0.0
-            else:
-                online_label = "unknown"
-                online_conf = 0.0
-
-            rows.append(
-                {
-                    "TrajectoryID": traj_id,
-                    "FragmentID": frag_counter,
-                    "StartFrame": start_f,
-                    "EndFrame": end_f,
-                    "StartX": sx,
-                    "StartY": sy,
-                    "EndX": ex,
-                    "EndY": ey,
-                    "MeanCNNProbs": mean_probs,
-                    "MeanTagProbs": tag_probs,
-                    "OnlineLabel": online_label,
-                    "OnlineConfidence": online_conf,
-                }
-            )
-            frag_counter += 1
-
-    if not rows:
-        return pd.DataFrame(
-            columns=[
-                "TrajectoryID",
-                "FragmentID",
-                "StartFrame",
-                "EndFrame",
-                "StartX",
-                "StartY",
-                "EndX",
-                "EndY",
-                "MeanCNNProbs",
-                "MeanTagProbs",
-                "OnlineLabel",
-                "OnlineConfidence",
-            ]
-        )
-    return pd.DataFrame(rows)
-
-
 def _fragments_overlap(a: pd.Series, b: pd.Series) -> bool:
     return int(a["StartFrame"]) <= int(b["EndFrame"]) and int(b["StartFrame"]) <= int(
         a["EndFrame"]
@@ -747,111 +611,19 @@ def solve_global_assignment(
     return out
 
 
-def apply_fragment_labels(
-    df: pd.DataFrame,
-    fragments_df: pd.DataFrame,
-    catalog: IdentityCatalog | None = None,
-) -> pd.DataFrame:
-    """Write AssignedLabel from fragments back into trajectories.
-
-    Updates IdentityAssignedLabel, IdentityFragmentScore, IdentityCommitted.
-    IdentityAssignedConfidence is preserved (not overwritten — it comes from
-    the online decoder and is probabilistic; AssignedScore is an MILP objective
-    value with different semantics).
-    IdentityAssignedID is updated from catalog when catalog is provided.
-    Rows not covered by any fragment are unchanged.
-    Returns a copy.
-    """
-    original_index = df.index
-    out = df.copy().reset_index(drop=True)
-
-    if "IdentityAssignedLabel" not in out.columns:
-        out["IdentityAssignedLabel"] = np.nan
-    if "IdentityAssignedConfidence" not in out.columns:
-        out["IdentityAssignedConfidence"] = np.nan
-    if "IdentityCommitted" not in out.columns:
-        out["IdentityCommitted"] = False
-    if "IdentityFragmentScore" not in out.columns:
-        out["IdentityFragmentScore"] = np.nan
-
-    if "AssignedLabel" not in fragments_df.columns:
-        out.index = original_index
-        return out
-
-    frag_cols = ["TrajectoryID", "StartFrame", "EndFrame", "AssignedLabel"]
-    if "AssignedScore" in fragments_df.columns:
-        frag_cols.append("AssignedScore")
-
-    valid_frags = fragments_df[
-        fragments_df["AssignedLabel"].notna()
-        & ~fragments_df["AssignedLabel"].astype(str).str.strip().isin(_UNKNOWN_VALUES)
-    ][frag_cols].copy()
-
-    if "AssignedScore" not in valid_frags.columns:
-        valid_frags["AssignedScore"] = np.nan
-
-    if valid_frags.empty:
-        out.index = original_index
-        return out
-
-    # Vectorized range-join: cross-join on TrajectoryID, then filter by frame range.
-    tmp = (
-        out[["TrajectoryID", "FrameID"]]
-        .assign(_idx=np.arange(len(out)))
-        .merge(valid_frags, on="TrajectoryID", how="inner")
-    )
-    in_range = (tmp["FrameID"] >= tmp["StartFrame"]) & (
-        tmp["FrameID"] <= tmp["EndFrame"]
-    )
-    matched = tmp[in_range].drop_duplicates(subset=["_idx"])
-
-    if matched.empty:
-        out.index = original_index
-        return out
-
-    row_positions = matched["_idx"].values
-    out.loc[row_positions, "IdentityAssignedLabel"] = matched["AssignedLabel"].values
-    out.loc[row_positions, "IdentityFragmentScore"] = matched["AssignedScore"].values
-    out.loc[row_positions, "IdentityCommitted"] = True
-
-    if catalog is not None and "IdentityAssignedID" in out.columns:
-        for label_val in matched["AssignedLabel"].unique():
-            label_str = str(label_val)
-            if catalog.contains(label_str):
-                lbl_mask = matched["AssignedLabel"].astype(str) == label_str
-                out.loc[matched.loc[lbl_mask, "_idx"].values, "IdentityAssignedID"] = (
-                    catalog.index_of(label_str)
-                )
-
-    # Sanitize non-catalog values in IdentityAssignedLabel (e.g. AprilTag family
-    # strings written by the online decoder that never mapped to a real identity).
-    # Any value that is neither a catalog label nor already "unknown"/"" is cleared.
-    if catalog is not None and "IdentityAssignedLabel" in out.columns:
-        valid_labels = {str(l) for l in catalog.labels} | _UNKNOWN_VALUES
-        bad_mask = out["IdentityAssignedLabel"].notna() & ~out[
-            "IdentityAssignedLabel"
-        ].astype(str).str.strip().isin(valid_labels)
-        if bad_mask.any():
-            out.loc[bad_mask, "IdentityAssignedLabel"] = "unknown"
-            if "IdentityAssignedID" in out.columns:
-                out.loc[bad_mask, "IdentityAssignedID"] = np.nan
-
-    out.index = original_index
-    return out
-
-
 def run_fragment_solver(
     trajectories_df: pd.DataFrame,
     catalog: IdentityCatalog,
     params: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """End-to-end fragment solver: detect -> build -> assign -> apply.
+    """End-to-end fragment solver: (optional PELT split) -> MILP assign.
 
     Parameters
     ----------
     trajectories_df : post-augmentation trajectory DataFrame.
     catalog : IdentityCatalog for the run.
     params : optional overrides. Keys:
+        ENABLE_PELT_SPLITTING            bool   default False
         CHANGEPOINT_PENALTY              float  default 3.0
         MIN_FRAGMENT_FRAMES              int    default 5
         PELT_MODEL                       str    default "rbf" (l1 / l2 / rbf)
@@ -862,7 +634,6 @@ def run_fragment_solver(
         ASSIGNMENT_MARGIN_THRESHOLD      float  default 0.10
         MAX_VELOCITY_BREAK               float  default 50.0
         FRAGMENT_SOLVER_ILP_TIME_LIMIT   float  default 30.0
-        ENABLE_FRAGMENT_SCORING          bool   default True
     """
     params = params or {}
 
@@ -873,27 +644,23 @@ def run_fragment_solver(
     if not known_labels:
         return trajectories_df
 
-    enable_scoring = bool(params.get("ENABLE_FRAGMENT_SCORING", True))
+    if params.get("ENABLE_PELT_SPLITTING", False):
+        changepoints = detect_identity_changepoints(trajectories_df, catalog, params)
+        split_df = split_trajectories_at_changepoints(
+            trajectories_df, changepoints, params
+        )
+        n_splits = sum(len(v) for v in changepoints.values())
+        log.info(
+            "fragment_solver: PELT found %d changepoints; %d → %d trajectories after splitting.",
+            n_splits,
+            trajectories_df["TrajectoryID"].nunique(),
+            split_df["TrajectoryID"].nunique(),
+        )
+    else:
+        split_df = trajectories_df
+        log.info(
+            "fragment_solver: PELT splitting disabled; MILP assigning labels to %d existing trajectories.",
+            trajectories_df["TrajectoryID"].nunique(),
+        )
 
-    changepoints = detect_identity_changepoints(trajectories_df, catalog, params)
-    fragments_df = build_fragments(trajectories_df, changepoints, catalog, params)
-
-    if fragments_df.empty:
-        log.debug("fragment_solver: no fragments built; returning unchanged.")
-        return trajectories_df
-
-    log.info(
-        "fragment_solver: %d fragments across %d trajectories; %d changepoints detected.",
-        len(fragments_df),
-        int(fragments_df["TrajectoryID"].nunique()),
-        sum(len(v) for v in changepoints.values()),
-    )
-
-    if not enable_scoring:
-        log.debug("fragment_solver: scoring disabled; labels not updated.")
-        return trajectories_df
-
-    fragments_df = solve_global_assignment(fragments_df, catalog, params)
-    result = apply_fragment_labels(trajectories_df, fragments_df, catalog)
-
-    return result
+    return solve_global_assignment(split_df, catalog, params)

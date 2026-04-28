@@ -1,7 +1,15 @@
 def test_fragment_solver_imports():
-    from hydra_suite.core.identity.fragment_solver import run_fragment_solver
+    from hydra_suite.core.identity.fragment_solver import (
+        detect_identity_changepoints,
+        run_fragment_solver,
+        solve_global_assignment,
+        split_trajectories_at_changepoints,
+    )
 
     assert callable(run_fragment_solver)
+    assert callable(detect_identity_changepoints)
+    assert callable(split_trajectories_at_changepoints)
+    assert callable(solve_global_assignment)
 
 
 import pandas as pd
@@ -67,55 +75,6 @@ def test_changepoint_no_cnn_columns_returns_empty():
     catalog = _make_catalog()
     result = detect_identity_changepoints(df, catalog, {})
     assert result == {}, "no CNN columns should produce empty changepoint dict"
-
-
-from hydra_suite.core.identity.fragment_solver import build_fragments
-
-
-def test_build_fragments_splits_at_changepoint():
-    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
-    catalog = _make_catalog()
-    # Provide changepoint at frame 29 (inclusive end of first segment).
-    changepoints = {1: [29]}
-    frags = build_fragments(df, changepoints, catalog, {})
-    assert len(frags) == 2
-    row0 = frags[frags["FragmentID"] == 0].iloc[0]
-    row1 = frags[frags["FragmentID"] == 1].iloc[0]
-    assert int(row0["StartFrame"]) == 0
-    assert int(row0["EndFrame"]) == 29
-    assert int(row1["StartFrame"]) == 30
-    assert int(row1["EndFrame"]) == 59
-
-
-def test_build_fragments_no_changepoints_one_fragment():
-    df = _make_df_with_prob_cols(n_frames=40, swap_at=40)
-    catalog = _make_catalog()
-    frags = build_fragments(df, {}, catalog, {})
-    assert len(frags) == 1
-    assert int(frags.iloc[0]["StartFrame"]) == 0
-    assert int(frags.iloc[0]["EndFrame"]) == 39
-
-
-def test_build_fragments_has_required_columns():
-    df = _make_df_with_prob_cols(n_frames=20, swap_at=20)
-    catalog = _make_catalog()
-    frags = build_fragments(df, {}, catalog, {})
-    required = {
-        "TrajectoryID",
-        "FragmentID",
-        "StartFrame",
-        "EndFrame",
-        "StartX",
-        "StartY",
-        "EndX",
-        "EndY",
-        "MeanCNNProbs",
-        "OnlineLabel",
-        "OnlineConfidence",
-    }
-    assert required.issubset(
-        set(frags.columns)
-    ), f"missing: {required - set(frags.columns)}"
 
 
 from hydra_suite.core.identity.fragment_solver import solve_global_assignment
@@ -202,41 +161,13 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
     assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
 
 
-from hydra_suite.core.identity.fragment_solver import (
-    apply_fragment_labels,
-    run_fragment_solver,
-)
-
-
-def test_apply_fragment_labels_writes_assigned_label():
-    df = _make_df_with_prob_cols(n_frames=10, swap_at=10)
-    frags = pd.DataFrame(
-        [
-            {
-                "TrajectoryID": 1,
-                "FragmentID": 0,
-                "StartFrame": 0,
-                "EndFrame": 9,
-                "StartX": 0.0,
-                "StartY": 0.0,
-                "EndX": 1.0,
-                "EndY": 0.0,
-                "MeanCNNProbs": {"blue": 0.9},
-                "OnlineLabel": "blue",
-                "OnlineConfidence": 0.9,
-                "AssignedLabel": "green",
-            }
-        ]
-    )
-    result = apply_fragment_labels(df, frags)
-    assert (result["IdentityAssignedLabel"] == "green").all()
-    assert result["IdentityCommitted"].all()
+from hydra_suite.core.identity.fragment_solver import run_fragment_solver
 
 
 def test_run_fragment_solver_returns_dataframe():
     df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
     catalog = _make_catalog()
-    result = run_fragment_solver(df, catalog, {"CHANGEPOINT_PENALTY": 2.0})
+    result = run_fragment_solver(df, catalog, {})
     assert isinstance(result, pd.DataFrame)
     assert len(result) == len(df)
     assert "IdentityAssignedLabel" in result.columns
@@ -246,6 +177,31 @@ def test_run_fragment_solver_empty_df():
     catalog = _make_catalog()
     result = run_fragment_solver(pd.DataFrame(), catalog, {})
     assert isinstance(result, pd.DataFrame)
+
+
+def test_run_fragment_solver_pelt_disabled_by_default():
+    """With PELT disabled (default), TrajectoryIDs are unchanged."""
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    catalog = _make_catalog()
+    result = run_fragment_solver(df, catalog, {})
+    assert sorted(result["TrajectoryID"].unique()) == sorted(
+        df["TrajectoryID"].unique()
+    )
+
+
+def test_run_fragment_solver_pelt_enabled_splits_trajectory():
+    """With PELT enabled, a clear CNN swap produces two distinct TrajectoryIDs."""
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    catalog = _make_catalog()
+    result = run_fragment_solver(
+        df, catalog, {"ENABLE_PELT_SPLITTING": True, "CHANGEPOINT_PENALTY": 2.0}
+    )
+    assert isinstance(result, pd.DataFrame)
+    assert (
+        result["TrajectoryID"].nunique() == 2
+    ), f"expected 2 trajectories after PELT split, got {result['TrajectoryID'].nunique()}"
+    assert "OriginalTrajectoryID" in result.columns
+    assert (result["OriginalTrajectoryID"] == 1).all()
 
 
 from hydra_suite.core.identity.fragment_solver import split_trajectories_at_changepoints
