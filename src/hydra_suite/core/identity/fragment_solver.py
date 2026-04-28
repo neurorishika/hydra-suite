@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -23,6 +24,160 @@ log = logging.getLogger(__name__)
 _LABEL_COL = "IdentityAssignedLabel"
 _CONF_COL = "IdentityAssignedConfidence"
 _UNKNOWN_VALUES = frozenset({"", "unknown"})
+_CNN_CLASS_SUFFIX = "_Class"
+_CNN_PROB_SUFFIX = "_Prob"
+
+
+def _sanitize_probability_token(value: Any) -> str:
+    token = re.sub(r"[^0-9A-Za-z]+", "_", str(value)).strip("_").lower()
+    return token
+
+
+def _build_cnn_probability_prefix_map(columns: pd.Index) -> dict[str, dict[str, str]]:
+    """Return ``prefix -> class_token -> prob_column`` for exported CNN columns.
+
+    Exported wide CSVs always include ``CNN_*_Class`` columns that identify the
+    phase/factor prefix. Probability columns share that prefix and append the
+    sanitized class token before ``_Prob``.
+    """
+    prefixes = sorted(
+        {
+            str(col)[: -len(_CNN_CLASS_SUFFIX)]
+            for col in columns
+            if str(col).startswith("CNN_") and str(col).endswith(_CNN_CLASS_SUFFIX)
+        },
+        key=len,
+        reverse=True,
+    )
+    if not prefixes:
+        return {}
+
+    result: dict[str, dict[str, str]] = {}
+    for col in columns:
+        token = str(col)
+        if not token.startswith("CNN_") or not token.endswith(_CNN_PROB_SUFFIX):
+            continue
+        for prefix in prefixes:
+            prefix_token = f"{prefix}_"
+            if not token.startswith(prefix_token):
+                continue
+            class_token = token[len(prefix_token) : -len(_CNN_PROB_SUFFIX)]
+            if class_token:
+                result.setdefault(prefix, {})[class_token] = token
+            break
+    return result
+
+
+def _build_cnn_label_specs(
+    known_labels: list[str],
+    prefix_prob_cols: dict[str, dict[str, str]],
+    columns: pd.Index,
+) -> dict[str, dict[str, Any]]:
+    """Precompute how each downstream label is reconstructed from CNN columns."""
+    specs: dict[str, dict[str, Any]] = {}
+    for label in known_labels:
+        label_token = _sanitize_probability_token(label)
+        if not label_token:
+            specs[label] = {"direct_cols": [], "part_cols": {}, "parts": set()}
+            continue
+
+        direct_cols = [
+            str(col)
+            for col in columns
+            if str(col).startswith("CNN_")
+            and str(col).endswith(f"_{label_token}{_CNN_PROB_SUFFIX}")
+        ]
+        part_cols: dict[str, list[str]] = {}
+        parts = tuple(part for part in label_token.split("_") if part)
+        for class_token_map in prefix_prob_cols.values():
+            direct_col = class_token_map.get(label_token)
+            if direct_col is not None and direct_col not in direct_cols:
+                direct_cols.append(direct_col)
+                continue
+
+            matched_parts = [part for part in parts if part in class_token_map]
+            if len(matched_parts) == 1:
+                part = matched_parts[0]
+                part_cols.setdefault(part, []).append(class_token_map[part])
+
+        specs[label] = {
+            "direct_cols": direct_cols,
+            "part_cols": part_cols,
+            "parts": set(parts),
+        }
+    return specs
+
+
+def _trajectory_mean_cnn_probs(
+    grp_sorted: pd.DataFrame,
+    known_labels: list[str],
+    label_specs: dict[str, dict[str, Any]],
+) -> dict[str, float]:
+    """Return mean downstream-label probabilities reconstructed from CNN exports."""
+    mean_probs: dict[str, float] = {}
+    for label in known_labels:
+        spec = label_specs.get(label, {})
+        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
+        part_cols = {
+            part: [col for col in cols if col in grp_sorted]
+            for part, cols in (spec.get("part_cols", {}) or {}).items()
+        }
+        parts = set(spec.get("parts", set()))
+
+        direct_vals: list[np.ndarray] = []
+        for col in direct_cols:
+            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
+            direct_vals.append(np.clip(vals, 1e-9, 1.0))
+
+        part_vals: list[np.ndarray] = []
+        part_mask = np.ones(len(grp_sorted), dtype=bool)
+        use_parts = bool(parts)
+        if use_parts:
+            for part in parts:
+                cols = part_cols.get(part, [])
+                if not cols:
+                    use_parts = False
+                    break
+                part_present = np.zeros(len(grp_sorted), dtype=bool)
+                for col in cols:
+                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
+                        dtype=np.float64
+                    )
+                    part_present |= np.isfinite(vals)
+                    part_vals.append(np.clip(vals, 1e-9, 1.0))
+                part_mask &= part_present
+
+        row_prob = np.full(len(grp_sorted), np.nan, dtype=np.float64)
+        any_used = False
+        if direct_vals:
+            any_used = True
+            direct_stack = np.stack(direct_vals, axis=0)
+            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
+            if np.any(direct_mask):
+                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
+
+        if use_parts and part_vals:
+            any_used = True
+            part_stack = np.stack(part_vals, axis=0)
+            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
+            if np.any(valid_part_mask):
+                part_prod = np.full(len(grp_sorted), np.nan, dtype=np.float64)
+                part_prod[valid_part_mask] = np.prod(
+                    part_stack[:, valid_part_mask], axis=0
+                )
+                missing_mask = valid_part_mask & np.isnan(row_prob)
+                overlap_mask = valid_part_mask & np.isfinite(row_prob)
+                if np.any(missing_mask):
+                    row_prob[missing_mask] = part_prod[missing_mask]
+                if np.any(overlap_mask):
+                    row_prob[overlap_mask] *= part_prod[overlap_mask]
+
+        if any_used and np.isfinite(row_prob).any():
+            mean_probs[label] = float(np.nanmean(row_prob))
+
+    return mean_probs
 
 
 def detect_identity_changepoints(
@@ -513,6 +668,8 @@ def _build_traj_summaries(
     MeanCNNProbs (dict), MeanTagProbs (dict), OnlineLabel, OnlineConfidence.
     """
     known_labels = list(catalog.labels[1:])
+    prefix_prob_cols = _build_cnn_probability_prefix_map(df.columns)
+    label_specs = _build_cnn_label_specs(known_labels, prefix_prob_cols, df.columns)
     rows: list[dict] = []
 
     for traj_id, grp in df.groupby("TrajectoryID", sort=False):
@@ -535,16 +692,7 @@ def _build_traj_summaries(
         else:
             sx = sy = ex = ey = math.nan
 
-        mean_probs: dict[str, float] = {}
-        for label in known_labels:
-            suffix = f"_{label}_Prob"
-            prob_col = next(
-                (c for c in grp_sorted.columns if str(c).endswith(suffix)), None
-            )
-            if prob_col is not None:
-                vals = pd.to_numeric(grp_sorted[prob_col], errors="coerce")
-                if vals.notna().any():
-                    mean_probs[label] = float(np.nanmean(vals.values))
+        mean_probs = _trajectory_mean_cnn_probs(grp_sorted, known_labels, label_specs)
 
         tag_probs: dict[str, float] = {}
         if "DetectedTagLabel" in grp_sorted.columns:

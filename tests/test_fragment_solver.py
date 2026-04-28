@@ -161,6 +161,74 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
     assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
 
 
+def test_solve_global_assignment_combines_multiple_cnn_phases():
+    catalog = _make_catalog()
+    n = 20
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * n,
+            "FrameID": list(range(n)),
+            "X": [float(i) for i in range(n)],
+            "Y": [0.0] * n,
+            "IdentityAssignedLabel": ["blue"] * n,
+            "IdentityAssignedConfidence": [0.2] * n,
+            "CNN_phase_a_Class": ["blue"] * n,
+            "CNN_phase_a_Conf": [0.7] * n,
+            "CNN_phase_b_Class": ["green"] * n,
+            "CNN_phase_b_Conf": [0.9] * n,
+            "CNN_phase_a_blue_Prob": [0.7] * n,
+            "CNN_phase_a_green_Prob": [0.3] * n,
+            "CNN_phase_b_blue_Prob": [0.1] * n,
+            "CNN_phase_b_green_Prob": [0.9] * n,
+        }
+    )
+    params = {
+        "ONLINE_PRIOR_WEIGHT": 0.05,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+        "FRAGMENT_CNN_WEIGHT": 0.9,
+        "FRAGMENT_SPATIAL_WEIGHT": 0.05,
+        "MAX_VELOCITY_BREAK": 50.0,
+    }
+
+    result = solve_global_assignment(df, catalog, params)
+
+    assert result.iloc[0]["IdentityAssignedLabel"] == "green"
+
+
+def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
+    catalog = IdentityCatalog.from_labels(["red_left", "blue_right"])
+    n = 20
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * n,
+            "FrameID": list(range(n)),
+            "X": [float(i) for i in range(n)],
+            "Y": [0.0] * n,
+            "IdentityAssignedLabel": ["blue_right"] * n,
+            "IdentityAssignedConfidence": [0.2] * n,
+            "CNN_identity_color_Class": ["red"] * n,
+            "CNN_identity_color_Conf": [0.9] * n,
+            "CNN_identity_side_Class": ["left"] * n,
+            "CNN_identity_side_Conf": [0.9] * n,
+            "CNN_identity_color_red_Prob": [0.9] * n,
+            "CNN_identity_color_blue_Prob": [0.1] * n,
+            "CNN_identity_side_left_Prob": [0.9] * n,
+            "CNN_identity_side_right_Prob": [0.1] * n,
+        }
+    )
+    params = {
+        "ONLINE_PRIOR_WEIGHT": 0.05,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+        "FRAGMENT_CNN_WEIGHT": 0.95,
+        "FRAGMENT_SPATIAL_WEIGHT": 0.05,
+        "MAX_VELOCITY_BREAK": 50.0,
+    }
+
+    result = solve_global_assignment(df, catalog, params)
+
+    assert result.iloc[0]["IdentityAssignedLabel"] == "red_left"
+
+
 from hydra_suite.core.identity.fragment_solver import run_fragment_solver
 
 
