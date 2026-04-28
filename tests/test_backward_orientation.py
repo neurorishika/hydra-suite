@@ -1,8 +1,10 @@
 """Regression tests for backward-pass orientation handling."""
 
 import math
+from collections import deque
 
 from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
+from hydra_suite.core.tracking.orientation import smooth_orientation
 
 
 def _simulate_backward_orientation_loop(
@@ -116,11 +118,6 @@ def test_collapse_obb_axis_theta_with_internal_reference_is_stable():
         ref = theta_for_tracking  # the fix: feed internal value back, not output
         history.append(ref)
     assert all(abs(h - history[0]) < 1e-9 for h in history), history
-
-
-from collections import deque
-
-from hydra_suite.core.tracking.orientation import smooth_orientation
 
 
 def _make_position_deque(prev_xy, curr_xy):
