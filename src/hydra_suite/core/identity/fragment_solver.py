@@ -333,20 +333,8 @@ def solve_global_assignment(
         mean_probs: dict[str, float] = frag_row["MeanCNNProbs"] or {}
         online_lbl = str(frag_row["OnlineLabel"])
         online_conf = float(frag_row["OnlineConfidence"])
-        t0 = int(frag_row["StartFrame"])
-        t1 = int(frag_row["EndFrame"])
-
-        # Labels occupied by a different fragment overlapping this time window.
-        occupied = {
-            lbl
-            for lbl, segs in schedule.items()
-            if lbl != online_lbl
-            and any(s["start_frame"] <= t1 and s["end_frame"] >= t0 for s in segs)
-        }
 
         for j, label in enumerate(known_labels):
-            if label in occupied:
-                continue
             cnn_s = float(mean_probs.get(label, 0.0))
             spatial_s = _spatial_score_for_fragment(frag_row, label, schedule, max_vel)
             prior_bonus = prior_w * online_conf if label == online_lbl else 0.0
@@ -423,6 +411,12 @@ def solve_global_assignment(
                 for k, (i, j) in enumerate(pairs):
                     if opt.x[k] > 0.5:
                         assigned[i] = known_labels[j]
+            else:
+                log.warning(
+                    "MILP returned status %s (%s); falling back to online labels.",
+                    opt.status,
+                    opt.message,
+                )
         else:
             row_ind, col_ind = linear_sum_assignment(
                 np.where(score_mat < 0, 1e6, -score_mat)
