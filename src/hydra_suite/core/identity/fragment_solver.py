@@ -164,21 +164,25 @@ def build_fragments(
                         mean_probs[label] = float(np.nanmean(vals.values))
 
             # Online label: dominant non-unknown label (or "unknown" if all unknown).
-            label_col = seg.get(_LABEL_COL, pd.Series(dtype=object))
+            if _LABEL_COL in seg.columns:  # noqa: SIM401
+                label_col = seg[_LABEL_COL]
+            else:
+                label_col = pd.Series("unknown", index=seg.index, dtype=object)
             unknown_mask = label_col.isna() | label_col.astype(str).str.strip().isin(
                 _UNKNOWN_VALUES
             )
             known_rows = seg[~unknown_mask]
             if not known_rows.empty:
                 online_label = str(known_rows[_LABEL_COL].astype(str).mode().iloc[0])
-                conf_vals = pd.to_numeric(
-                    seg.get(_CONF_COL, pd.Series(dtype=float)), errors="coerce"
-                )
-                online_conf = (
-                    float(np.nanmean(conf_vals.values))
-                    if conf_vals.notna().any()
-                    else 0.0
-                )
+                if _CONF_COL in seg.columns:
+                    conf_vals = pd.to_numeric(seg[_CONF_COL], errors="coerce")
+                    online_conf = (
+                        float(np.nanmean(conf_vals.values))
+                        if conf_vals.notna().any()
+                        else 0.0
+                    )
+                else:
+                    online_conf = 0.0
             else:
                 online_label = "unknown"
                 online_conf = 0.0
