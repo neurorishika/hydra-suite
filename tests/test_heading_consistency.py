@@ -180,6 +180,7 @@ class TestSmoothOrientationHysteresis:
         from hydra_suite.core.tracking.worker import TrackingWorker
 
         worker = MagicMock(spec=TrackingWorker)
+        worker.backward_mode = False
         worker._smooth_orientation = TrackingWorker._smooth_orientation.__get__(
             worker, TrackingWorker
         )

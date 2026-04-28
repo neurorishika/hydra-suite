@@ -4473,6 +4473,7 @@ class TrackingWorker(QThread):
             directed_heading=directed_heading,
             orient_confidence=orient_confidence,
             heading_flip_counters=heading_flip_counters,
+            motion_is_reversed=bool(self.backward_mode),
         )
 
     def _draw_overlays(

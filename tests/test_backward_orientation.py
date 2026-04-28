@@ -116,3 +116,87 @@ def test_collapse_obb_axis_theta_with_internal_reference_is_stable():
         ref = theta_for_tracking  # the fix: feed internal value back, not output
         history.append(ref)
     assert all(abs(h - history[0]) < 1e-9 for h in history), history
+
+
+from collections import deque
+
+from hydra_suite.core.tracking.orientation import smooth_orientation
+
+
+def _make_position_deque(prev_xy, curr_xy):
+    dq = deque(maxlen=2)
+    dq.append((prev_xy[0], prev_xy[1], 0))
+    dq.append((curr_xy[0], curr_xy[1], 1))
+    return dq
+
+
+def _params(**overrides):
+    base = {
+        "VELOCITY_THRESHOLD": 0.5,
+        "MAX_ORIENT_DELTA_STOPPED": 30.0,
+        "INSTANT_FLIP_ORIENTATION": True,
+        "DIRECTED_ORIENT_SMOOTHING": True,
+        "DIRECTED_ORIENT_FLIP_CONFIDENCE": 0.0,
+        "DIRECTED_ORIENT_FLIP_PERSISTENCE": 3,
+        "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_undirected_instant_flip_forward_aligns_to_motion():
+    """Forward: motion vector points head-first; theta opposing motion gets flipped."""
+    deque_r = _make_position_deque((0.0, 0.0), (10.0, 0.0))  # motion = +x
+    theta = math.pi  # heading -x, opposite to motion
+    out = smooth_orientation(
+        r=0,
+        theta=theta,
+        speed=10.0,
+        p=_params(),
+        orientation_last=[0.0],
+        position_deques=[deque_r],
+        directed_heading=False,
+    )
+    # Forward + opposing motion -> flip toward motion (= 0).
+    assert abs(((out - 0.0 + math.pi) % (2 * math.pi)) - math.pi) < 1e-6
+
+
+def test_undirected_instant_flip_backward_aligns_to_true_motion():
+    """Backward: position_deque motion is reversed; with motion_is_reversed=True the
+    flip should align with the *true* head direction (opposite of deque motion)."""
+    deque_r = _make_position_deque((0.0, 0.0), (10.0, 0.0))  # processing motion = +x
+    # In backward, true motion (head direction) is -x.
+    # theta = 0 (pointing +x) opposes true head direction; should be flipped to pi.
+    theta = 0.0
+    out = smooth_orientation(
+        r=0,
+        theta=theta,
+        speed=10.0,
+        p=_params(),
+        orientation_last=[math.pi],
+        position_deques=[deque_r],
+        directed_heading=False,
+        motion_is_reversed=True,
+    )
+    assert abs(((out - math.pi + math.pi) % (2 * math.pi)) - math.pi) < 1e-6
+
+
+def test_directed_smoothed_flip_motion_supported_uses_negated_motion_in_backward():
+    """Directed mode: _is_flip_motion_supported should compare against true motion
+    direction, not processing-time motion."""
+    deque_r = _make_position_deque((0.0, 0.0), (10.0, 0.0))  # processing motion = +x
+    flip_counters = [0]
+    out = smooth_orientation(
+        r=0,
+        theta=0.0,
+        speed=10.0,
+        p=_params(DIRECTED_ORIENT_FLIP_CONFIDENCE=0.0),
+        orientation_last=[math.pi],
+        position_deques=[deque_r],
+        directed_heading=True,
+        orient_confidence=1.0,
+        heading_flip_counters=flip_counters,
+        motion_is_reversed=True,
+    )
+    # Should keep old direction (pi); hysteresis flips new=0 back to pi.
+    assert abs(((out - math.pi + math.pi) % (2 * math.pi)) - math.pi) < 1e-6
