@@ -37,7 +37,68 @@ def detect_identity_changepoints(
     Trajectories with no CNN evidence or fewer than min_fragment_frames*2
     rows are returned with no splits.
     """
-    raise NotImplementedError
+    try:
+        import ruptures as rpt
+    except ImportError:
+        log.warning(
+            "ruptures not installed; changepoint detection skipped — install ruptures>=1.1"
+        )
+        return {}
+
+    penalty = float(params.get("CHANGEPOINT_PENALTY", 3.0))
+    min_frames = int(params.get("MIN_FRAGMENT_FRAMES", 5))
+    known_labels = list(catalog.labels[1:])
+
+    # Find CNN_*_Prob columns for known labels only.
+    prob_cols: list[str] = []
+    for label in known_labels:
+        suffix = f"_{label}_Prob"
+        for col in df.columns:
+            if str(col).endswith(suffix):
+                prob_cols.append(col)
+                break
+
+    if not prob_cols:
+        return {}
+
+    result: dict[Any, list[int]] = {}
+
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        grp_sorted = grp.sort_values("FrameID")
+        if len(grp_sorted) < min_frames * 2:
+            continue
+
+        signal = (
+            grp_sorted[prob_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0.5)
+            .values
+        )
+        # z-score per column to suppress magnitude drift.
+        col_std = signal.std(axis=0)
+        col_std[col_std < 1e-8] = 1.0
+        signal = (signal - signal.mean(axis=0)) / col_std
+
+        try:
+            splits = (
+                rpt.Pelt(model="rbf", min_size=min_frames, jump=1)
+                .fit(signal)
+                .predict(pen=penalty)
+            )
+        except Exception as exc:
+            log.debug("PELT failed for traj %s: %s", traj_id, exc)
+            continue
+
+        # ruptures returns end-of-segment indices (1-indexed frame position in grp_sorted).
+        # Convert to FrameID values (drop the final sentinel which equals len).
+        frame_ids = grp_sorted["FrameID"].values
+        split_frames = [
+            int(frame_ids[s - 1]) for s in splits[:-1] if s < len(frame_ids)
+        ]
+        if split_frames:
+            result[traj_id] = split_frames
+
+    return result
 
 
 def build_fragments(
