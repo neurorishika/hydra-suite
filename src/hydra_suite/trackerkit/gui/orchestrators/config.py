@@ -687,15 +687,10 @@ class ConfigOrchestrator:
         )
         _saved_mode = get_cfg("identity_postprocess_mode", default=None)
         if _saved_mode is None:
-            # backward compat: migrate from the old boolean
-            _saved_mode = (
-                "Offline Decoder"
-                if bool(get_cfg("enable_offline_identity_decoder", default=False))
-                else "Slot Fill"
-            )
-        # "Heuristic" was renamed to "Slot Fill" — remap old presets.
-        if _saved_mode == "Heuristic":
-            _saved_mode = "Slot Fill"
+            _saved_mode = "Fragment Solver"
+        # Remap legacy mode names.
+        if _saved_mode in ("Heuristic", "Slot Fill", "Offline Decoder"):
+            _saved_mode = "Fragment Solver"
         self._panels.postprocess.cmb_identity_postprocess_mode.setCurrentText(
             str(_saved_mode)
         )
@@ -799,8 +794,17 @@ class ConfigOrchestrator:
                 default_seconds=0.33,
             )
         )
-        self._panels.postprocess.spin_slot_fill_min_score.setValue(
-            float(get_cfg("slot_fill_min_score", default=0.25))
+        self._panels.postprocess.spin_changepoint_penalty.setValue(
+            float(get_cfg("changepoint_penalty", default=3.0))
+        )
+        self._panels.postprocess.spin_online_prior_weight.setValue(
+            float(get_cfg("online_prior_weight", default=0.25))
+        )
+        self._panels.postprocess.spin_assignment_margin_threshold.setValue(
+            float(get_cfg("assignment_margin_threshold", default=0.10))
+        )
+        self._panels.postprocess.spin_min_fragment_frames.setValue(
+            int(get_cfg("min_fragment_frames", default=5))
         )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
@@ -1037,106 +1041,6 @@ class ConfigOrchestrator:
         )
         self._panels.tracking.spin_identity_rejoin_threshold.setValue(
             float(get_cfg("identity_rejoin_threshold", default=0.5))
-        )
-        self._panels.postprocess.chk_identity_offline_split_trajectories.setChecked(
-            bool(
-                get_cfg(
-                    "identity_offline_split_trajectories",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_split_trajectories", False
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_offline_split_min_conf.setValue(
-            float(
-                get_cfg(
-                    "identity_offline_split_min_conf",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_split_min_conf", 0.75
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_offline_split_min_margin.setValue(
-            float(
-                get_cfg(
-                    "identity_offline_split_min_margin",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_split_min_margin", 0.2
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_offline_split_min_frames.setValue(
-            int(
-                get_cfg(
-                    "identity_offline_split_min_frames",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_split_min_frames", 3
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_offline_split_max_bridge_frames.setValue(
-            int(
-                get_cfg(
-                    "identity_offline_split_max_bridge_frames",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_split_max_bridge_frames", 6
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_offline_ilp_time_limit.setValue(
-            float(
-                get_cfg(
-                    "identity_offline_ilp_time_limit",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_ilp_time_limit", 30.0
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_offline_ilp_rel_gap.setValue(
-            float(
-                get_cfg(
-                    "identity_offline_ilp_rel_gap",
-                    default=self._mw.advanced_config.get(
-                        "identity_offline_ilp_rel_gap", 1e-6
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_respawn_prior_strength.setValue(
-            float(
-                get_cfg(
-                    "identity_respawn_prior_strength",
-                    default=self._mw.advanced_config.get(
-                        "identity_respawn_prior_strength", 0.75
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_respawn_prior_decay.setValue(
-            float(
-                get_cfg(
-                    "identity_respawn_prior_decay",
-                    default=self._mw.advanced_config.get(
-                        "identity_respawn_prior_decay", 0.97
-                    ),
-                )
-            )
-        )
-        self._panels.postprocess.spin_identity_respawn_prior_max_gap.setValue(
-            int(
-                get_cfg(
-                    "identity_respawn_prior_max_gap",
-                    default=self._mw.advanced_config.get(
-                        "identity_respawn_prior_max_gap", 120
-                    ),
-                )
-            )
         )
         apriltag_family = get_cfg("apriltag_family", default="tag36h11")
         idx = self._panels.identity.combo_apriltag_family.findText(apriltag_family)
@@ -1731,7 +1635,10 @@ class ConfigOrchestrator:
                 "velocity_zscore_min_velocity": self._panels.postprocess.spin_velocity_zscore_min_vel.value(),
                 "interpolation_method": self._panels.postprocess.combo_interpolation_method.currentText(),
                 "interpolation_max_gap_seconds": self._panels.postprocess.spin_interpolation_max_gap.value(),
-                "slot_fill_min_score": self._panels.postprocess.spin_slot_fill_min_score.value(),
+                "changepoint_penalty": self._panels.postprocess.spin_changepoint_penalty.value(),
+                "online_prior_weight": self._panels.postprocess.spin_online_prior_weight.value(),
+                "assignment_margin_threshold": self._panels.postprocess.spin_assignment_margin_threshold.value(),
+                "min_fragment_frames": self._panels.postprocess.spin_min_fragment_frames.value(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
@@ -1825,16 +1732,6 @@ class ConfigOrchestrator:
                 "identity_transition_epsilon": self._panels.tracking.spin_identity_transition_epsilon.value(),
                 "identity_unknown_prior": self._panels.tracking.spin_identity_unknown_prior.value(),
                 "identity_rejoin_threshold": self._panels.tracking.spin_identity_rejoin_threshold.value(),
-                "identity_offline_split_trajectories": self._panels.postprocess.chk_identity_offline_split_trajectories.isChecked(),
-                "identity_offline_split_min_conf": self._panels.postprocess.spin_identity_offline_split_min_conf.value(),
-                "identity_offline_split_min_margin": self._panels.postprocess.spin_identity_offline_split_min_margin.value(),
-                "identity_offline_split_min_frames": self._panels.postprocess.spin_identity_offline_split_min_frames.value(),
-                "identity_offline_split_max_bridge_frames": self._panels.postprocess.spin_identity_offline_split_max_bridge_frames.value(),
-                "identity_offline_ilp_time_limit": self._panels.postprocess.spin_identity_offline_ilp_time_limit.value(),
-                "identity_offline_ilp_rel_gap": self._panels.postprocess.spin_identity_offline_ilp_rel_gap.value(),
-                "identity_respawn_prior_strength": self._panels.postprocess.spin_identity_respawn_prior_strength.value(),
-                "identity_respawn_prior_decay": self._panels.postprocess.spin_identity_respawn_prior_decay.value(),
-                "identity_respawn_prior_max_gap": self._panels.postprocess.spin_identity_respawn_prior_max_gap.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
                 "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
@@ -2104,37 +2001,6 @@ class ConfigOrchestrator:
         advanced_config["max_aspect_ratio_multiplier"] = (
             self._panels.detection.spin_max_ar_multiplier.value()
         )
-        advanced_config["identity_offline_split_trajectories"] = (
-            self._panels.postprocess.chk_identity_offline_split_trajectories.isChecked()
-        )
-        advanced_config["identity_offline_split_min_conf"] = (
-            self._panels.postprocess.spin_identity_offline_split_min_conf.value()
-        )
-        advanced_config["identity_offline_split_min_margin"] = (
-            self._panels.postprocess.spin_identity_offline_split_min_margin.value()
-        )
-        advanced_config["identity_offline_split_min_frames"] = (
-            self._panels.postprocess.spin_identity_offline_split_min_frames.value()
-        )
-        advanced_config["identity_offline_split_max_bridge_frames"] = (
-            self._panels.postprocess.spin_identity_offline_split_max_bridge_frames.value()
-        )
-        advanced_config["identity_offline_ilp_time_limit"] = (
-            self._panels.postprocess.spin_identity_offline_ilp_time_limit.value()
-        )
-        advanced_config["identity_offline_ilp_rel_gap"] = (
-            self._panels.postprocess.spin_identity_offline_ilp_rel_gap.value()
-        )
-        advanced_config["identity_respawn_prior_strength"] = (
-            self._panels.postprocess.spin_identity_respawn_prior_strength.value()
-        )
-        advanced_config["identity_respawn_prior_decay"] = (
-            self._panels.postprocess.spin_identity_respawn_prior_decay.value()
-        )
-        advanced_config["identity_respawn_prior_max_gap"] = (
-            self._panels.postprocess.spin_identity_respawn_prior_max_gap.value()
-        )
-
         individual_pipeline_enabled = self._mw._is_individual_pipeline_enabled()
         final_canonical_image_export_enabled = (
             self._mw._is_individual_image_save_enabled()
@@ -2243,7 +2109,10 @@ class ConfigOrchestrator:
             "POSE_TEMPORAL_OUTLIER_ZSCORE": self._panels.postprocess.spin_pose_temporal_outlier_zscore.value(),
             "MAX_VELOCITY_ZSCORE": self._panels.postprocess.spin_max_velocity_zscore.value(),
             "VELOCITY_ZSCORE_WINDOW": velocity_zscore_window,
-            "SLOT_FILL_MIN_SCORE": self._panels.postprocess.spin_slot_fill_min_score.value(),
+            "CHANGEPOINT_PENALTY": self._panels.postprocess.spin_changepoint_penalty.value(),
+            "ONLINE_PRIOR_WEIGHT": self._panels.postprocess.spin_online_prior_weight.value(),
+            "ASSIGNMENT_MARGIN_THRESHOLD": self._panels.postprocess.spin_assignment_margin_threshold.value(),
+            "MIN_FRAGMENT_FRAMES": self._panels.postprocess.spin_min_fragment_frames.value(),
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
             * scaled_body_size
             / fps,
@@ -2393,15 +2262,10 @@ class ConfigOrchestrator:
                 if self._panels.postprocess.enable_postprocessing.isChecked()
                 else "None"
             ),
-            "ENABLE_IDENTITY_SLOT_FILL": (
+            "ENABLE_IDENTITY_FRAGMENT_SOLVER": (
                 self._panels.postprocess.enable_postprocessing.isChecked()
                 and self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
-                in ("Slot Fill", "Offline Decoder")
-            ),
-            "ENABLE_IDENTITY_OFFLINE_DECODER": (
-                self._panels.postprocess.enable_postprocessing.isChecked()
-                and self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
-                == "Offline Decoder"
+                == "Fragment Solver"
             ),
             "ASSOCIATION_IDENTITY_HINT_SCALE": self._panels.tracking.spin_identity_weight.value(),
             "IDENTITY_COMMIT_THRESHOLD": self._panels.tracking.spin_identity_commit_threshold.value(),
@@ -2412,36 +2276,6 @@ class ConfigOrchestrator:
             "CNN_CLASSIFIER_WINDOW": 10,
             "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
-            "IDENTITY_OFFLINE_SPLIT_TRAJECTORIES": bool(
-                advanced_config.get("identity_offline_split_trajectories", False)
-            ),
-            "IDENTITY_OFFLINE_SPLIT_MIN_CONF": float(
-                advanced_config.get("identity_offline_split_min_conf", 0.75)
-            ),
-            "IDENTITY_OFFLINE_SPLIT_MIN_MARGIN": float(
-                advanced_config.get("identity_offline_split_min_margin", 0.2)
-            ),
-            "IDENTITY_OFFLINE_SPLIT_MIN_FRAMES": int(
-                advanced_config.get("identity_offline_split_min_frames", 3)
-            ),
-            "IDENTITY_OFFLINE_SPLIT_MAX_BRIDGE_FRAMES": int(
-                advanced_config.get("identity_offline_split_max_bridge_frames", 6)
-            ),
-            "IDENTITY_OFFLINE_ILP_TIME_LIMIT": float(
-                advanced_config.get("identity_offline_ilp_time_limit", 30.0)
-            ),
-            "IDENTITY_OFFLINE_ILP_REL_GAP": float(
-                advanced_config.get("identity_offline_ilp_rel_gap", 1e-6)
-            ),
-            "IDENTITY_RESPAWN_PRIOR_STRENGTH": float(
-                advanced_config.get("identity_respawn_prior_strength", 0.75)
-            ),
-            "IDENTITY_RESPAWN_PRIOR_DECAY": float(
-                advanced_config.get("identity_respawn_prior_decay", 0.97)
-            ),
-            "IDENTITY_RESPAWN_PRIOR_MAX_GAP": int(
-                advanced_config.get("identity_respawn_prior_max_gap", 120)
-            ),
             "ENABLE_POSE_EXTRACTOR": pose_extractor_enabled,
             "POSE_MODEL_TYPE": self._panels.identity.combo_pose_model_type.currentText()
             .strip()
@@ -2779,17 +2613,6 @@ class ConfigOrchestrator:
             "headtail_batch_size": 64,  # Canonical crop batch size for head-tail classifier inference
             "realtime_visualization_emit_stride": 1,  # Emit GUI overlays every Nth frame during realtime tracking while preserving full-speed tracking/video output
             "visualization_emit_stride": 1,  # Optional GUI overlay decimation for non-realtime runs
-            # Identity decoding - offline splitter / global solver / respawn priors
-            "identity_offline_split_trajectories": False,
-            "identity_offline_split_min_conf": 0.75,
-            "identity_offline_split_min_margin": 0.2,
-            "identity_offline_split_min_frames": 3,
-            "identity_offline_split_max_bridge_frames": 6,
-            "identity_offline_ilp_time_limit": 30.0,
-            "identity_offline_ilp_rel_gap": 1e-6,
-            "identity_respawn_prior_strength": 0.75,
-            "identity_respawn_prior_decay": 0.97,
-            "identity_respawn_prior_max_gap": 120,
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
             "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
             "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review
