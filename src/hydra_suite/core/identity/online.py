@@ -266,7 +266,7 @@ class OnlineIdentityDecoder:
         if carried is None or frame_idx is None or self._respawn_prior_strength <= 0.0:
             return base_log
 
-        gap = max(0, int(frame_idx) - int(carried.last_frame_idx) - 1)
+        gap = max(0, abs(int(frame_idx) - int(carried.last_frame_idx)) - 1)
         if gap > self._respawn_prior_max_gap:
             return base_log
 

@@ -219,3 +219,48 @@ def test_online_decoder_respawn_carries_recent_prior() -> None:
     assert belief is not None
     probs = decoder._posterior_probs(belief)
     assert probs[catalog.index_of("mouse1")] > probs[catalog.index_of("mouse2")]
+
+
+def test_online_decoder_respawn_prior_max_gap_applies_in_backward() -> None:
+    """In backward processing frame_idx decreases; gap calc must use absolute
+    difference so max_gap correctly discards far-back stale priors."""
+    catalog = IdentityCatalog.from_labels(["mouse1", "mouse2"])
+    decoder = OnlineIdentityDecoder(
+        catalog,
+        {
+            "IDENTITY_DISPLAY_THRESHOLD": 0.4,
+            "IDENTITY_COMMIT_THRESHOLD": 0.6,
+            "IDENTITY_COMMIT_MIN_HITS": 1,
+            "IDENTITY_RESPAWN_PRIOR_STRENGTH": 0.9,
+            "IDENTITY_RESPAWN_PRIOR_DECAY": 0.99,
+            "IDENTITY_RESPAWN_PRIOR_MAX_GAP": 3,
+        },
+    )
+
+    # Establish a strong belief in mouse1 at frame 100.
+    decoder.update_frame(
+        100,
+        [0],
+        {
+            0: [
+                IdentityEvidence.from_cnn(
+                    1,
+                    100,
+                    "cnn_primary",
+                    _log_probs(0.01, 0.98, 0.01),
+                )
+            ]
+        },
+    )
+    # Backward respawn with |100-90|-1 = 9 > max_gap=3 -> prior must be discarded.
+    decoder.clear_slot(0, reason="respawn", respawn_frame_idx=90)
+    decoder.update_frame(90, [0], {})
+
+    belief = decoder.get_belief(0)
+    assert belief is not None
+    probs = decoder._posterior_probs(belief)
+    # Without carried prior, mouse1 and mouse2 should be near-equal.
+    assert (
+        abs(probs[catalog.index_of("mouse1")] - probs[catalog.index_of("mouse2")])
+        < 0.05
+    ), probs
