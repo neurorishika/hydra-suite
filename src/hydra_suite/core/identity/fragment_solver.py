@@ -6,14 +6,12 @@ Replaces the HMM-based offline decoder with:
 3. Global MILP assignment: maximises spatial continuity + CNN/tag evidence
    with a confidence-weighted online-label prior and a margin threshold.
 """
+
 from __future__ import annotations
 
 import logging
-import math
-from itertools import combinations
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from hydra_suite.core.identity.catalog import IdentityCatalog
@@ -32,7 +30,10 @@ def detect_identity_changepoints(
 ) -> dict[Any, list[int]]:
     """Return {traj_id: [split_frame_indices]} using PELT on CNN prob matrix.
 
-    A split_frame_index is the *last frame of a segment* (exclusive end).
+    A split_frame_index is the *exclusive end* of a segment (i.e., the first
+    frame of the following segment), matching the convention returned by
+    ``ruptures`` ``predict()``.  Equivalently, segment k spans
+    [split_indices[k-1], split_indices[k]).
     Trajectories with no CNN evidence or fewer than min_fragment_frames*2
     rows are returned with no splits.
     """
@@ -99,14 +100,14 @@ def run_fragment_solver(
     trajectories_df : post-augmentation trajectory DataFrame.
     catalog : IdentityCatalog for the run.
     params : optional overrides. Keys:
-        CHANGEPOINT_PENALTY     float  default 3.0
-        MIN_FRAGMENT_FRAMES     int    default 5
-        SLOT_FILL_CNN_WEIGHT    float  default 0.40
-        SLOT_FILL_SPATIAL_WEIGHT float default 0.35
-        ONLINE_PRIOR_WEIGHT     float  default 0.25
-        ASSIGNMENT_MARGIN_THRESHOLD float default 0.10
-        MAX_VELOCITY_BREAK      float  default 50.0
-        TAG_IDENTITY_LABELS     list   default []
+        CHANGEPOINT_PENALTY          float  default 3.0
+        MIN_FRAGMENT_FRAMES          int    default 5
+        FRAGMENT_CNN_WEIGHT          float  default 0.40
+        FRAGMENT_SPATIAL_WEIGHT      float  default 0.35
+        ONLINE_PRIOR_WEIGHT          float  default 0.25
+        ASSIGNMENT_MARGIN_THRESHOLD  float  default 0.10
+        MAX_VELOCITY_BREAK           float  default 50.0
+        TAG_IDENTITY_LABELS          list   default []
         FRAGMENT_SOLVER_ILP_TIME_LIMIT float default 30.0
     """
     raise NotImplementedError
