@@ -634,6 +634,19 @@ def apply_fragment_labels(
                     catalog.index_of(label_str)
                 )
 
+    # Sanitize non-catalog values in IdentityAssignedLabel (e.g. AprilTag family
+    # strings written by the online decoder that never mapped to a real identity).
+    # Any value that is neither a catalog label nor already "unknown"/"" is cleared.
+    if catalog is not None and "IdentityAssignedLabel" in out.columns:
+        valid_labels = {str(l) for l in catalog.labels} | _UNKNOWN_VALUES
+        bad_mask = out["IdentityAssignedLabel"].notna() & ~out[
+            "IdentityAssignedLabel"
+        ].astype(str).str.strip().isin(valid_labels)
+        if bad_mask.any():
+            out.loc[bad_mask, "IdentityAssignedLabel"] = "unknown"
+            if "IdentityAssignedID" in out.columns:
+                out.loc[bad_mask, "IdentityAssignedID"] = np.nan
+
     out.index = original_index
     return out
 
