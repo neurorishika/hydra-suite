@@ -3562,6 +3562,20 @@ class TrackingWorker(QThread):
                                 dtype=np.float32,
                             ),
                         )
+                    elif r in _identity_rejoin_slots:
+                        # Soft KF reset for identity-rejoin: snap position to the
+                        # matched detection and clear stale covariance from coasting.
+                        # Trajectory state is preserved (no trajectory-ID reset) since
+                        # identity confirms this is the same animal.  Without this reset
+                        # the large P accumulated during the gap makes S near-singular
+                        # in float32, causing LinAlgError in the correction step.
+                        self.kf_manager.initialize_filter(
+                            r,
+                            np.array(
+                                [meas_x, meas_y, theta_for_tracking, 0.0, 0.0],
+                                dtype=np.float32,
+                            ),
+                        )
 
                     corrected_meas = np.asarray(
                         [meas_x, meas_y, theta_for_tracking], dtype=np.float32

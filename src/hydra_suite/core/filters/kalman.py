@@ -61,12 +61,16 @@ def _predict_kernel(X, P, F, Q_base, q_long, q_lat):
                 P[i, _pi, _pj] = _pavg
                 P[i, _pj, _pi] = _pavg
 
-        # 4c. Cauchy-Schwarz clamp: |P[r,c]| <= sqrt(P[r,r]*P[c,c]).
+        # 4c. Cauchy-Schwarz clamp: |P[r,c]| <= 0.99 * sqrt(P[r,r]*P[c,c]).
         # Necessary condition for a valid covariance matrix; prevents
-        # off-diagonal drift from making S near-singular.
+        # off-diagonal drift from making S near-singular.  The 0.99 factor
+        # (strict inequality) keeps the matrix away from rank-deficiency:
+        # when all diagonals are at the cap and off-diagonals equal the
+        # diagonals, S becomes rank-1 in float32 and linalg.inv raises
+        # LinAlgError.  0.99 keeps cond(S) bounded without material filter bias.
         for _pi in range(5):
             for _pj in range(_pi + 1, 5):
-                _lim = (P[i, _pi, _pi] * P[i, _pj, _pj]) ** 0.5
+                _lim = (P[i, _pi, _pi] * P[i, _pj, _pj]) ** 0.5 * np.float32(0.99)
                 if P[i, _pi, _pj] > _lim:
                     P[i, _pi, _pj] = _lim
                     P[i, _pj, _pi] = _lim
@@ -121,14 +125,18 @@ def _correct_kernel(X, P, H, R, identity_mat, track_idx, measurement, max_veloci
 
     # Innovation Covariance & Kalman Gain (computed before any clipping)
     S = (H @ p @ H.T) + R
-    # Regularise S before inversion: with extreme anisotropic process noise
-    # (ratio up to 260:1) and float32 arithmetic, accumulated P asymmetry can
-    # make S near-singular.  A 0.1 diagonal jitter is ~1.7× R_diag (≈0.06)
-    # and keeps the condition number bounded without meaningfully biasing the
-    # filter.  fastmath=True removed from this kernel for the same reason.
-    S[0, 0] += 0.1
-    S[1, 1] += 0.1
-    S[2, 2] += 0.1
+    # Adaptive diagonal jitter: scales with the position block of P so the
+    # condition number of S stays bounded (~100) even when P diagonal reaches
+    # the covariance cap (default 1000).  A fixed 0.1 jitter fails when P is
+    # large because the off-diagonals (Cauchy-Schwarz-clamped to sqrt(P*P)≈P)
+    # make S near-rank-1 in float32 arithmetic, causing linalg.inv to raise
+    # LinAlgError.  The adaptive term p[0,0]+p[1,1]+p[2,2] is the trace of the
+    # 3×3 position block; multiplying by 0.01 gives jitter ≈ P_max/100 which
+    # keeps cond(S) ≤ ~100 regardless of P magnitude.
+    _jitter = max(np.float32(0.1), (p[0, 0] + p[1, 1] + p[2, 2]) * np.float32(0.01))
+    S[0, 0] += _jitter
+    S[1, 1] += _jitter
+    S[2, 2] += _jitter
     K = p @ H.T @ np.linalg.inv(S)
 
     # --- Innovation Clipping ---
@@ -332,11 +340,12 @@ class KalmanFilterManager:
             np.clip(self.P[:, _diag, _diag], 0.1, _p_max, out=self.P[:, _diag, _diag])
             # Cauchy-Schwarz re-enforcement after diagonal cap: the cap may have
             # lowered a diagonal entry, making an existing off-diagonal exceed
-            # its bound.  Clamp now so S = H@P[:3,:3]@H.T + R stays PSD.
+            # its bound.  Use 0.99 factor (strict inequality) to prevent the
+            # matrix from reaching rank-deficiency when all diagonals are equal.
             _d_sqrt = np.sqrt(np.maximum(self.P[:, _diag, _diag], 0.0))  # (N, dim_s)
             for _r in range(self.dim_s):
                 for _c in range(_r + 1, self.dim_s):
-                    _lim_rc = _d_sqrt[:, _r] * _d_sqrt[:, _c]
+                    _lim_rc = _d_sqrt[:, _r] * _d_sqrt[:, _c] * np.float32(0.99)
                     np.clip(self.P[:, _r, _c], -_lim_rc, _lim_rc, out=self.P[:, _r, _c])
                     self.P[:, _c, _r] = self.P[:, _r, _c]
         else:
@@ -364,12 +373,12 @@ class KalmanFilterManager:
                     if self.P[i, j, j] < 0.1:
                         self.P[i, j, j] = 0.1
 
-                # Symmetrize and Cauchy-Schwarz clamp (mirrors Numba kernel)
+                # Symmetrize and Cauchy-Schwarz clamp (mirrors Numba kernel, 0.99 factor)
                 self.P[i] = (self.P[i] + self.P[i].T) * 0.5
                 _d5 = np.sqrt(np.maximum(np.diag(self.P[i]), 0.0))
                 for _r in range(5):
                     for _c in range(_r + 1, 5):
-                        _lim = _d5[_r] * _d5[_c]
+                        _lim = _d5[_r] * _d5[_c] * 0.99
                         self.P[i, _r, _c] = np.clip(self.P[i, _r, _c], -_lim, _lim)
                         self.P[i, _c, _r] = self.P[i, _r, _c]
 
@@ -381,12 +390,13 @@ class KalmanFilterManager:
             _diag = np.arange(self.dim_s)
             np.clip(self.P[:, _diag, _diag], 0.1, _p_max, out=self.P[:, _diag, _diag])
 
-            # Re-apply Cauchy-Schwarz after the diagonal cap (cap may have lowered
-            # a diagonal, making an existing off-diagonal exceed the new bound).
+            # Re-apply Cauchy-Schwarz after the diagonal cap (0.99 factor mirrors
+            # the Numba path above; cap may have lowered a diagonal making an
+            # off-diagonal exceed the new bound).
             _d_sqrt = np.sqrt(np.maximum(self.P[:, _diag, _diag], 0.0))  # (N, dim_s)
             for _r in range(self.dim_s):
                 for _c in range(_r + 1, self.dim_s):
-                    _lim_rc = _d_sqrt[:, _r] * _d_sqrt[:, _c]
+                    _lim_rc = _d_sqrt[:, _r] * _d_sqrt[:, _c] * np.float32(0.99)
                     np.clip(self.P[:, _r, _c], -_lim_rc, _lim_rc, out=self.P[:, _r, _c])
                     self.P[:, _c, _r] = self.P[:, _r, _c]
 
