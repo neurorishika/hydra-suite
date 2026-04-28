@@ -618,6 +618,7 @@ def solve_global_assignment(
         out["IdentityAssignedLabel"] = np.nan
     if "IdentityCommitted" not in out.columns:
         out["IdentityCommitted"] = False
+    out["IdentityCommitted"] = out["IdentityCommitted"].fillna(False).astype(bool)
     if "IdentityFragmentScore" not in out.columns:
         out["IdentityFragmentScore"] = np.nan
 
