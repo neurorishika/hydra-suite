@@ -370,17 +370,6 @@ def solve_global_assignment(
         lb_list.append(-np.inf)
         ub_list.append(1.0)
 
-    # Each label assigned at most 1 fragment globally.
-    for j in range(n_labels):
-        idxs = [pair_idx[(i, j)] for i in range(n_frags) if (i, j) in pair_idx]
-        if len(idxs) < 2:
-            continue
-        row = np.zeros(n_vars)
-        row[idxs] = 1.0
-        A_rows.append(row)
-        lb_list.append(-np.inf)
-        ub_list.append(1.0)
-
     # Pairwise: overlapping fragments cannot share a label.
     for a, b in combinations(range(n_frags), 2):
         if not _fragments_overlap(frags.iloc[a], frags.iloc[b]):
@@ -447,8 +436,19 @@ def solve_global_assignment(
         else:
             labels_out.append(online_lbl)
 
+    assigned_scores: list[float] = []
+    for i, frag_row in frags.iterrows():
+        label = labels_out[i]
+        if label in known_labels:
+            j = known_labels.index(label)
+            s = score_mat[i, j]
+            assigned_scores.append(float(s) if s >= 0 else 0.0)
+        else:
+            assigned_scores.append(0.0)
+
     out = frags.copy()
     out["AssignedLabel"] = labels_out
+    out["AssignedScore"] = assigned_scores
     return out
 
 
@@ -459,7 +459,7 @@ def apply_fragment_labels(
     """Write AssignedLabel from fragments back into trajectories.
 
     Updates IdentityAssignedLabel, IdentityAssignedConfidence,
-    IdentityAssignedID, IdentityCommitted in the trajectory DataFrame.
+    IdentityCommitted in the trajectory DataFrame.
     Rows not covered by any fragment are unchanged.
     Returns a copy.
     """
@@ -486,7 +486,11 @@ def apply_fragment_labels(
             & (out["FrameID"] <= end)
         )
         out.loc[mask, "IdentityAssignedLabel"] = assigned
-        score = frag.get("AssignedScore", frag.get("OnlineConfidence", np.nan))
+        score = (
+            frag["AssignedScore"]
+            if "AssignedScore" in frag.index
+            else frag.get("OnlineConfidence", np.nan)
+        )
         out.loc[mask, "IdentityAssignedConfidence"] = score
         out.loc[mask, "IdentityCommitted"] = True
 
@@ -532,10 +536,6 @@ def run_fragment_solver(
         return trajectories_df
 
     fragments_df = solve_global_assignment(fragments_df, catalog, params)
-
-    # Attach online confidence as score proxy for apply_fragment_labels.
-    fragments_df = fragments_df.copy()
-    fragments_df["AssignedScore"] = fragments_df["OnlineConfidence"].astype(float)
 
     result = apply_fragment_labels(trajectories_df, fragments_df)
 
