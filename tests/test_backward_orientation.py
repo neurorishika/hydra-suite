@@ -103,3 +103,16 @@ def test_forward_undirected_output_stable_either_way():
                 f"feed_back={feed_back} frame {i}: forward mode should be stable; "
                 f"got delta={delta}. Outputs: {outputs}"
             )
+
+
+def test_collapse_obb_axis_theta_with_internal_reference_is_stable():
+    """End-to-end-style: with the fix, the next-frame reference (theta_for_tracking)
+    is bit-stable when the OBB axis is unchanged."""
+    obb_axis = 0.0
+    ref = collapse_obb_axis_theta(obb_axis, None)
+    history = [ref]
+    for _ in range(10):
+        theta_for_tracking = collapse_obb_axis_theta(obb_axis, ref)
+        ref = theta_for_tracking  # the fix: feed internal value back, not output
+        history.append(ref)
+    assert all(abs(h - history[0]) < 1e-9 for h in history), history

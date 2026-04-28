@@ -3725,6 +3725,14 @@ class TrackingWorker(QThread):
                     # smoothed orientation.  The KF state is preserved for internal prediction
                     # and cost-matrix use, but every x,y,theta written to trajectories and CSV
                     # must correspond to a real detection measurement.
+                    #
+                    # In backward+undirected mode we expose det_theta_out flipped by pi
+                    # (so the OUTPUT represents head-direction in forward time), but we
+                    # MUST keep orientation_last and the KF theta state aligned with the
+                    # internal theta_for_tracking — feeding the flipped output back into
+                    # orientation_last makes next-frame OBB-axis disambiguation pick the
+                    # opposite representative, producing a 180° per-frame oscillation in
+                    # both stored state and emitted output.
                     det_theta_out = theta_for_tracking
                     if self.backward_mode and not directed_heading:
                         det_theta_out = (det_theta_out + np.pi) % (2 * np.pi)
@@ -3735,14 +3743,11 @@ class TrackingWorker(QThread):
                     trajectories_pruned[r].append(pt)
 
                     # Synchronise orientation_last and the KF theta state to the
-                    # emitted det_theta_out so that:
-                    #   - next-frame flip / disambiguation compares against what was written
-                    #   - KF predictions use the same reference heading as the output
-                    # (The smoothed value above served its purpose for the KF correct() call;
-                    # the output reference must track the raw emitted value, not the EMA.)
-                    orientation_last[r] = det_theta_out
+                    # internal theta_for_tracking (the value passed to KF correct()),
+                    # NOT to the emitted det_theta_out — see comment above.
+                    orientation_last[r] = float(theta_for_tracking)
                     if r < len(self.kf_manager.X):
-                        self.kf_manager.X[r, 2] = float(det_theta_out)
+                        self.kf_manager.X[r, 2] = float(theta_for_tracking)
 
                     if self.csv_writer_thread:
                         # Build base data row with actual frame index
