@@ -499,270 +499,83 @@ class PostProcessPanel(QWidget):
         vl_offline_identity = QVBoxLayout(self.g_offline_identity)
         vl_offline_identity.addWidget(
             self._main_window._create_help_label(
-                "Choose how identity labels are assigned after tracking. "
+                "Choose how identity labels are finalised after tracking. "
                 "Only takes effect when identity analysis is enabled.\n"
                 "• None — no identity post-processing.\n"
-                "• Slot Fill — vacancy-aware slot filling: resolves wholly-unknown trajectories "
-                "using CNN evidence and spatial continuity.\n"
-                "• Offline Decoder — Slot Fill first, then Bayesian HMM smoother + MILP global "
-                "assignment for swap detection and final verification."
+                "• Fragment Solver — PELT changepoint detection fragments each trajectory "
+                "at identity evidence regime changes; a global assignment then jointly "
+                "optimises spatial continuity and CNN/tag evidence across all fragments, "
+                "using the online decoder label as a confidence-weighted prior."
             )
         )
         self.cmb_identity_postprocess_mode = QComboBox()
-        self.cmb_identity_postprocess_mode.addItems(
-            ["None", "Slot Fill", "Offline Decoder"]
-        )
-        self.cmb_identity_postprocess_mode.setCurrentText("Slot Fill")
+        self.cmb_identity_postprocess_mode.addItems(["None", "Fragment Solver"])
+        self.cmb_identity_postprocess_mode.setCurrentText("Fragment Solver")
         self.cmb_identity_postprocess_mode.setToolTip(
             "None: skip identity post-processing entirely.\n"
-            "Slot Fill: resolve wholly-unknown trajectories using CNN evidence and "
-            "spatial continuity.\n"
-            "Offline Decoder: run Slot Fill first, then the Bayesian HMM smoother "
-            "and MILP global fragment assignment. Requires identity analysis to be configured."
+            "Fragment Solver: PELT-based changepoint detection + global MILP assignment."
         )
         self.cmb_identity_postprocess_mode.currentTextChanged.connect(
             self._on_offline_identity_toggled
         )
         vl_offline_identity.addWidget(self.cmb_identity_postprocess_mode)
 
-        self.slot_fill_content = QWidget()
-        slot_fill_layout = QFormLayout(self.slot_fill_content)
-        slot_fill_layout.setContentsMargins(0, 4, 0, 0)
-        slot_fill_layout.setSpacing(4)
+        self.fragment_solver_content = QWidget()
+        fs_layout = QFormLayout(self.fragment_solver_content)
+        fs_layout.setContentsMargins(0, 4, 0, 0)
+        fs_layout.setSpacing(4)
 
-        self.spin_slot_fill_min_score = QDoubleSpinBox()
-        self.spin_slot_fill_min_score.setRange(0.0, 1.0)
-        self.spin_slot_fill_min_score.setSingleStep(0.05)
-        self.spin_slot_fill_min_score.setDecimals(2)
-        self.spin_slot_fill_min_score.setValue(0.25)
-        self.spin_slot_fill_min_score.setToolTip(
-            "Minimum combined score (0–1) required to commit a slot-fill assignment.\n"
-            "Higher values → fewer but more confident assignments.\n"
-            "Recommended: 0.20–0.40."
+        self.spin_changepoint_penalty = QDoubleSpinBox()
+        self.spin_changepoint_penalty.setRange(0.5, 50.0)
+        self.spin_changepoint_penalty.setSingleStep(0.5)
+        self.spin_changepoint_penalty.setDecimals(1)
+        self.spin_changepoint_penalty.setValue(3.0)
+        self.spin_changepoint_penalty.setToolTip(
+            "PELT penalty — controls how aggressively trajectories are fragmented.\n"
+            "Higher → fewer, longer fragments. Lower → more, shorter fragments.\n"
+            "Recommended: 2.0–5.0."
         )
-        slot_fill_layout.addRow("Slot-fill min score", self.spin_slot_fill_min_score)
-        self.slot_fill_content.setVisible(True)
-        vl_offline_identity.addWidget(self.slot_fill_content)
+        fs_layout.addRow("Changepoint penalty", self.spin_changepoint_penalty)
 
-        self.offline_identity_content = QWidget()
-        offline_identity_layout = QVBoxLayout(self.offline_identity_content)
-        offline_identity_layout.setContentsMargins(0, 0, 0, 0)
-        offline_identity_layout.setSpacing(8)
+        self.spin_online_prior_weight = QDoubleSpinBox()
+        self.spin_online_prior_weight.setRange(0.0, 1.0)
+        self.spin_online_prior_weight.setSingleStep(0.05)
+        self.spin_online_prior_weight.setDecimals(2)
+        self.spin_online_prior_weight.setValue(0.25)
+        self.spin_online_prior_weight.setToolTip(
+            "Weight applied to the online decoder's label as a prior in the global solver.\n"
+            "Scaled by each fragment's IdentityAssignedConfidence.\n"
+            "Higher → harder to override confident online assignments.\n"
+            "Recommended: 0.15–0.35."
+        )
+        fs_layout.addRow("Online label prior weight", self.spin_online_prior_weight)
 
-        self.g_offline_split, f_offline_split = self._create_subsection_form(
-            "Trajectory Splitting",
-            "Split trajectories where the smoothed identity posterior shows a sustained regime change.",
+        self.spin_assignment_margin_threshold = QDoubleSpinBox()
+        self.spin_assignment_margin_threshold.setRange(0.0, 1.0)
+        self.spin_assignment_margin_threshold.setSingleStep(0.05)
+        self.spin_assignment_margin_threshold.setDecimals(2)
+        self.spin_assignment_margin_threshold.setValue(0.10)
+        self.spin_assignment_margin_threshold.setToolTip(
+            "Minimum score margin between the best and second-best assignment.\n"
+            "If the margin is below this, the online label is kept.\n"
+            "Recommended: 0.05–0.20."
         )
-
-        self.chk_identity_offline_split_trajectories = QCheckBox(
-            "Allow HMM to split trajectories on sustained identity switches"
-        )
-        self.chk_identity_offline_split_trajectories.setChecked(
-            bool(
-                self._main_window.advanced_config.get(
-                    "identity_offline_split_trajectories", False
-                )
-            )
-        )
-        self.chk_identity_offline_split_trajectories.setToolTip(
-            "When disabled, the offline decoder smooths and assigns identities "
-            "without rewriting TrajectoryID values."
-        )
-        f_offline_split.addRow("", self.chk_identity_offline_split_trajectories)
-
-        self.spin_identity_offline_split_min_conf = QDoubleSpinBox()
-        self.spin_identity_offline_split_min_conf.setRange(0.0, 1.0)
-        self.spin_identity_offline_split_min_conf.setSingleStep(0.01)
-        self.spin_identity_offline_split_min_conf.setDecimals(2)
-        self.spin_identity_offline_split_min_conf.setValue(
-            float(
-                self._main_window.advanced_config.get(
-                    "identity_offline_split_min_conf", 0.75
-                )
-            )
-        )
-        self.spin_identity_offline_split_min_conf.setToolTip(
-            "Minimum smoothed posterior confidence required before offline splitting "
-            "considers a label regime stable."
+        fs_layout.addRow(
+            "Assignment margin threshold", self.spin_assignment_margin_threshold
         )
 
-        self.spin_identity_offline_split_min_margin = QDoubleSpinBox()
-        self.spin_identity_offline_split_min_margin.setRange(0.0, 1.0)
-        self.spin_identity_offline_split_min_margin.setSingleStep(0.01)
-        self.spin_identity_offline_split_min_margin.setDecimals(2)
-        self.spin_identity_offline_split_min_margin.setValue(
-            float(
-                self._main_window.advanced_config.get(
-                    "identity_offline_split_min_margin", 0.2
-                )
-            )
+        self.spin_min_fragment_frames = QSpinBox()
+        self.spin_min_fragment_frames.setRange(1, 200)
+        self.spin_min_fragment_frames.setValue(5)
+        self.spin_min_fragment_frames.setToolTip(
+            "Minimum number of frames required on each side of a changepoint.\n"
+            "Prevents over-fragmentation of short noisy segments.\n"
+            "Recommended: 3–10."
         )
-        self.spin_identity_offline_split_min_margin.setToolTip(
-            "Required posterior margin between the top two labels before offline "
-            "splitting treats a regime change as trustworthy."
-        )
+        fs_layout.addRow("Min fragment frames", self.spin_min_fragment_frames)
 
-        self.split_conf_row = self._build_field_grid(
-            [
-                (QLabel("Min confidence"), self.spin_identity_offline_split_min_conf),
-                (QLabel("Min margin"), self.spin_identity_offline_split_min_margin),
-            ],
-            columns=2,
-        )
-        f_offline_split.addRow(self.split_conf_row)
-
-        self.spin_identity_offline_split_min_frames = QSpinBox()
-        self.spin_identity_offline_split_min_frames.setRange(1, 1000)
-        self.spin_identity_offline_split_min_frames.setValue(
-            int(
-                self._main_window.advanced_config.get(
-                    "identity_offline_split_min_frames", 3
-                )
-            )
-        )
-        self.spin_identity_offline_split_min_frames.setToolTip(
-            "Minimum consecutive frames needed on each side of an offline identity switch "
-            "before the trajectory is split."
-        )
-
-        self.spin_identity_offline_split_max_bridge_frames = QSpinBox()
-        self.spin_identity_offline_split_max_bridge_frames.setRange(0, 1000)
-        self.spin_identity_offline_split_max_bridge_frames.setValue(
-            int(
-                self._main_window.advanced_config.get(
-                    "identity_offline_split_max_bridge_frames", 6
-                )
-            )
-        )
-        self.spin_identity_offline_split_max_bridge_frames.setToolTip(
-            "Maximum ambiguous bridge length tolerated between two strong offline identity "
-            "regimes before splitting is suppressed."
-        )
-
-        self.split_span_row = self._build_field_grid(
-            [
-                (
-                    QLabel("Min frames per side"),
-                    self.spin_identity_offline_split_min_frames,
-                ),
-                (
-                    QLabel("Max bridge frames"),
-                    self.spin_identity_offline_split_max_bridge_frames,
-                ),
-            ],
-            columns=2,
-        )
-        f_offline_split.addRow(self.split_span_row)
-
-        self.g_offline_solver, f_offline_solver = self._create_subsection_form(
-            "Global Solver",
-            "MILP solver settings for the global fragment-to-identity assignment.",
-        )
-
-        self.spin_identity_offline_ilp_time_limit = QDoubleSpinBox()
-        self.spin_identity_offline_ilp_time_limit.setRange(1.0, 3600.0)
-        self.spin_identity_offline_ilp_time_limit.setSingleStep(1.0)
-        self.spin_identity_offline_ilp_time_limit.setDecimals(1)
-        self.spin_identity_offline_ilp_time_limit.setValue(
-            float(
-                self._main_window.advanced_config.get(
-                    "identity_offline_ilp_time_limit", 30.0
-                )
-            )
-        )
-        self.spin_identity_offline_ilp_time_limit.setToolTip(
-            "Wall-clock time limit in seconds for the offline global MILP fragment assignment solver."
-        )
-
-        self.spin_identity_offline_ilp_rel_gap = QDoubleSpinBox()
-        self.spin_identity_offline_ilp_rel_gap.setRange(0.0, 1.0)
-        self.spin_identity_offline_ilp_rel_gap.setSingleStep(0.0001)
-        self.spin_identity_offline_ilp_rel_gap.setDecimals(6)
-        self.spin_identity_offline_ilp_rel_gap.setValue(
-            float(
-                self._main_window.advanced_config.get(
-                    "identity_offline_ilp_rel_gap", 1e-6
-                )
-            )
-        )
-        self.spin_identity_offline_ilp_rel_gap.setToolTip(
-            "Relative optimality gap tolerated by the offline MILP solver before it stops early."
-        )
-
-        self.solver_row = self._build_field_grid(
-            [
-                (QLabel("Time limit (s)"), self.spin_identity_offline_ilp_time_limit),
-                (QLabel("Rel. gap"), self.spin_identity_offline_ilp_rel_gap),
-            ],
-            columns=2,
-        )
-        f_offline_solver.addRow(self.solver_row)
-
-        self.g_offline_respawn_prior, f_offline_respawn_prior = (
-            self._create_subsection_form(
-                "Respawn Prior",
-                "Carry a slot's identity posterior forward when it respawns, decaying over time.",
-            )
-        )
-
-        self.spin_identity_respawn_prior_strength = QDoubleSpinBox()
-        self.spin_identity_respawn_prior_strength.setRange(0.0, 1.0)
-        self.spin_identity_respawn_prior_strength.setSingleStep(0.01)
-        self.spin_identity_respawn_prior_strength.setDecimals(2)
-        self.spin_identity_respawn_prior_strength.setValue(
-            float(
-                self._main_window.advanced_config.get(
-                    "identity_respawn_prior_strength", 0.75
-                )
-            )
-        )
-        self.spin_identity_respawn_prior_strength.setToolTip(
-            "How strongly a recently lost slot's identity posterior seeds the next respawn of that slot."
-        )
-
-        self.spin_identity_respawn_prior_decay = QDoubleSpinBox()
-        self.spin_identity_respawn_prior_decay.setRange(0.0, 1.0)
-        self.spin_identity_respawn_prior_decay.setSingleStep(0.001)
-        self.spin_identity_respawn_prior_decay.setDecimals(3)
-        self.spin_identity_respawn_prior_decay.setValue(
-            float(
-                self._main_window.advanced_config.get(
-                    "identity_respawn_prior_decay", 0.97
-                )
-            )
-        )
-        self.spin_identity_respawn_prior_decay.setToolTip(
-            "Per-frame decay applied to the carried respawn prior as the slot stays absent."
-        )
-
-        self.spin_identity_respawn_prior_max_gap = QSpinBox()
-        self.spin_identity_respawn_prior_max_gap.setRange(0, 10000)
-        self.spin_identity_respawn_prior_max_gap.setValue(
-            int(
-                self._main_window.advanced_config.get(
-                    "identity_respawn_prior_max_gap", 120
-                )
-            )
-        )
-        self.spin_identity_respawn_prior_max_gap.setToolTip(
-            "Maximum gap in frames where a lost slot can still reuse its carried identity prior on respawn."
-        )
-
-        self.respawn_prior_row = self._build_field_grid(
-            [
-                (QLabel("Strength"), self.spin_identity_respawn_prior_strength),
-                (QLabel("Decay"), self.spin_identity_respawn_prior_decay),
-                (QLabel("Max gap (frames)"), self.spin_identity_respawn_prior_max_gap),
-            ],
-            columns=3,
-        )
-        f_offline_respawn_prior.addRow(self.respawn_prior_row)
-
-        offline_identity_layout.addWidget(self.g_offline_split)
-        offline_identity_layout.addWidget(self.g_offline_solver)
-        offline_identity_layout.addWidget(self.g_offline_respawn_prior)
-        vl_offline_identity.addWidget(self.offline_identity_content)
-        self.offline_identity_content.setVisible(False)
+        self.fragment_solver_content.setVisible(True)
+        vl_offline_identity.addWidget(self.fragment_solver_content)
 
         cleaning_sections_layout.addWidget(self.g_cleaning_filters)
         cleaning_sections_layout.addWidget(self.g_motion_breaks)
@@ -1195,10 +1008,9 @@ class PostProcessPanel(QWidget):
         self._set_cleaning_section_state(enabled)
 
     def _on_offline_identity_toggled(self, _=None):
-        """Show or hide slot-fill and offline decoder sub-sections."""
+        """Show or hide fragment solver controls."""
         mode = self.cmb_identity_postprocess_mode.currentText()
-        self.slot_fill_content.setVisible(mode in ("Slot Fill", "Offline Decoder"))
-        self.offline_identity_content.setVisible(mode == "Offline Decoder")
+        self.fragment_solver_content.setVisible(mode == "Fragment Solver")
 
     def sync_heading_flip_posthoc_ui(self, posthoc_active: bool) -> None:
         """Toggle the heading-flip burst control vs. the post-hoc note.
