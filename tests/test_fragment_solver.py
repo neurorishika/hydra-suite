@@ -116,3 +116,96 @@ def test_build_fragments_has_required_columns():
     assert required.issubset(
         set(frags.columns)
     ), f"missing: {required - set(frags.columns)}"
+
+
+from hydra_suite.core.identity.fragment_solver import (
+    build_fragments,
+    solve_global_assignment,
+)
+
+
+def _make_two_swapped_fragments():
+    """Two fragments: frag0 has strong green CNN evidence but online label 'blue';
+    frag1 has strong blue CNN evidence but online label 'green'.
+    Non-overlapping. Expect solver to swap them."""
+    frags = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 1,
+                "FragmentID": 0,
+                "StartFrame": 0,
+                "EndFrame": 29,
+                "StartX": 0.0,
+                "StartY": 0.0,
+                "EndX": 5.0,
+                "EndY": 0.0,
+                "MeanCNNProbs": {"blue": 0.1, "green": 0.9},
+                "OnlineLabel": "blue",
+                "OnlineConfidence": 0.3,
+            },
+            {
+                "TrajectoryID": 2,
+                "FragmentID": 1,
+                "StartFrame": 30,
+                "EndFrame": 59,
+                "StartX": 5.0,
+                "StartY": 0.0,
+                "EndX": 10.0,
+                "EndY": 0.0,
+                "MeanCNNProbs": {"blue": 0.9, "green": 0.1},
+                "OnlineLabel": "green",
+                "OnlineConfidence": 0.3,
+            },
+        ]
+    )
+    return frags
+
+
+def test_solve_global_assignment_corrects_swap():
+    catalog = _make_catalog()
+    frags = _make_two_swapped_fragments()
+    params = {
+        "ONLINE_PRIOR_WEIGHT": 0.1,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
+        "FRAGMENT_CNN_WEIGHT": 0.7,
+        "FRAGMENT_SPATIAL_WEIGHT": 0.2,
+        "MAX_VELOCITY_BREAK": 50.0,
+        "TAG_IDENTITY_LABELS": [],
+    }
+    result = solve_global_assignment(frags, catalog, params)
+    assert "AssignedLabel" in result.columns
+    frag0_label = result[result["FragmentID"] == 0].iloc[0]["AssignedLabel"]
+    frag1_label = result[result["FragmentID"] == 1].iloc[0]["AssignedLabel"]
+    assert frag0_label == "green", f"expected green for frag0, got {frag0_label}"
+    assert frag1_label == "blue", f"expected blue for frag1, got {frag1_label}"
+
+
+def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
+    catalog = _make_catalog()
+    frags = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 1,
+                "FragmentID": 0,
+                "StartFrame": 0,
+                "EndFrame": 29,
+                "StartX": 0.0,
+                "StartY": 0.0,
+                "EndX": 5.0,
+                "EndY": 0.0,
+                "MeanCNNProbs": {"blue": 0.52, "green": 0.48},  # near-tie
+                "OnlineLabel": "blue",
+                "OnlineConfidence": 0.9,
+            }
+        ]
+    )
+    params = {
+        "ONLINE_PRIOR_WEIGHT": 0.25,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.20,
+        "FRAGMENT_CNN_WEIGHT": 0.7,
+        "FRAGMENT_SPATIAL_WEIGHT": 0.3,
+        "MAX_VELOCITY_BREAK": 50.0,
+        "TAG_IDENTITY_LABELS": [],
+    }
+    result = solve_global_assignment(frags, catalog, params)
+    assert result.iloc[0]["AssignedLabel"] == "blue"
