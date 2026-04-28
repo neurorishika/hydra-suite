@@ -463,7 +463,34 @@ def apply_fragment_labels(
     Rows not covered by any fragment are unchanged.
     Returns a copy.
     """
-    raise NotImplementedError
+    out = df.copy()
+    if "IdentityAssignedLabel" not in out.columns:
+        out["IdentityAssignedLabel"] = np.nan
+    if "IdentityAssignedConfidence" not in out.columns:
+        out["IdentityAssignedConfidence"] = np.nan
+    if "IdentityCommitted" not in out.columns:
+        out["IdentityCommitted"] = False
+
+    for _, frag in fragments_df.iterrows():
+        assigned = frag.get("AssignedLabel")
+        if assigned is None or (isinstance(assigned, float) and np.isnan(assigned)):
+            continue
+        if str(assigned) in _UNKNOWN_VALUES:
+            continue
+        traj_id = frag["TrajectoryID"]
+        start = int(frag["StartFrame"])
+        end = int(frag["EndFrame"])
+        mask = (
+            (out["TrajectoryID"] == traj_id)
+            & (out["FrameID"] >= start)
+            & (out["FrameID"] <= end)
+        )
+        out.loc[mask, "IdentityAssignedLabel"] = assigned
+        score = frag.get("AssignedScore", frag.get("OnlineConfidence", np.nan))
+        out.loc[mask, "IdentityAssignedConfidence"] = score
+        out.loc[mask, "IdentityCommitted"] = True
+
+    return out
 
 
 def run_fragment_solver(
@@ -488,4 +515,34 @@ def run_fragment_solver(
         TAG_IDENTITY_LABELS          list   default []
         FRAGMENT_SOLVER_ILP_TIME_LIMIT float default 30.0
     """
-    raise NotImplementedError
+    params = params or {}
+
+    if trajectories_df is None or trajectories_df.empty:
+        return trajectories_df if trajectories_df is not None else pd.DataFrame()
+
+    known_labels = list(catalog.labels[1:])
+    if not known_labels:
+        return trajectories_df
+
+    changepoints = detect_identity_changepoints(trajectories_df, catalog, params)
+    fragments_df = build_fragments(trajectories_df, changepoints, catalog, params)
+
+    if fragments_df.empty:
+        log.debug("fragment_solver: no fragments built; returning unchanged.")
+        return trajectories_df
+
+    fragments_df = solve_global_assignment(fragments_df, catalog, params)
+
+    # Attach online confidence as score proxy for apply_fragment_labels.
+    fragments_df = fragments_df.copy()
+    fragments_df["AssignedScore"] = fragments_df["OnlineConfidence"].astype(float)
+
+    result = apply_fragment_labels(trajectories_df, fragments_df)
+
+    log.info(
+        "fragment_solver: %d fragments across %d trajectories; %d changepoints detected.",
+        len(fragments_df),
+        int(fragments_df["TrajectoryID"].nunique()),
+        sum(len(v) for v in changepoints.values()),
+    )
+    return result

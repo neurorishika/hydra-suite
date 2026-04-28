@@ -209,3 +209,49 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
     }
     result = solve_global_assignment(frags, catalog, params)
     assert result.iloc[0]["AssignedLabel"] == "blue"
+
+
+from hydra_suite.core.identity.fragment_solver import (
+    apply_fragment_labels,
+    run_fragment_solver,
+)
+
+
+def test_apply_fragment_labels_writes_assigned_label():
+    df = _make_df_with_prob_cols(n_frames=10, swap_at=10)
+    frags = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 1,
+                "FragmentID": 0,
+                "StartFrame": 0,
+                "EndFrame": 9,
+                "StartX": 0.0,
+                "StartY": 0.0,
+                "EndX": 1.0,
+                "EndY": 0.0,
+                "MeanCNNProbs": {"blue": 0.9},
+                "OnlineLabel": "blue",
+                "OnlineConfidence": 0.9,
+                "AssignedLabel": "green",
+            }
+        ]
+    )
+    result = apply_fragment_labels(df, frags)
+    assert (result["IdentityAssignedLabel"] == "green").all()
+    assert result["IdentityCommitted"].all()
+
+
+def test_run_fragment_solver_returns_dataframe():
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    catalog = _make_catalog()
+    result = run_fragment_solver(df, catalog, {"CHANGEPOINT_PENALTY": 2.0})
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == len(df)
+    assert "IdentityAssignedLabel" in result.columns
+
+
+def test_run_fragment_solver_empty_df():
+    catalog = _make_catalog()
+    result = run_fragment_solver(pd.DataFrame(), catalog, {})
+    assert isinstance(result, pd.DataFrame)
