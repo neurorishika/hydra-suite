@@ -110,6 +110,70 @@ def detect_identity_changepoints(
     return result
 
 
+def split_trajectories_at_changepoints(
+    df: pd.DataFrame,
+    changepoints: dict[Any, list[int]],
+    params: dict[str, Any],
+) -> pd.DataFrame:
+    """Split trajectories at PELT-detected changepoints, assigning new TrajectoryIDs.
+
+    Each value in changepoints is a list of FrameID values that are the
+    *inclusive end* of a segment (same convention as detect_identity_changepoints).
+    Sub-segments shorter than MIN_FRAGMENT_FRAMES rows are dropped.
+    OriginalTrajectoryID is set to the pre-split TrajectoryID on all rows.
+    Trajectories with no changepoints pass through unchanged.
+    """
+    min_frames = int(params.get("MIN_FRAGMENT_FRAMES", 5))
+
+    to_split = {tid: sorted(sfs) for tid, sfs in changepoints.items() if sfs}
+    if not to_split:
+        out = df.copy()
+        if "OriginalTrajectoryID" not in out.columns:
+            out["OriginalTrajectoryID"] = out["TrajectoryID"]
+        return out
+
+    out = df.copy()
+    if "OriginalTrajectoryID" not in out.columns:
+        out["OriginalTrajectoryID"] = out["TrajectoryID"]
+
+    next_id = int(out["TrajectoryID"].max()) + 1
+
+    unchanged = out[~out["TrajectoryID"].isin(to_split)].copy()
+    parts: list[pd.DataFrame] = [unchanged]
+
+    for traj_id, split_frames in to_split.items():
+        grp = out[out["TrajectoryID"] == traj_id].sort_values("FrameID")
+        if grp.empty:
+            continue
+
+        first_frame = int(grp["FrameID"].min())
+        last_frame = int(grp["FrameID"].max())
+
+        # Build inclusive (start, end) boundaries from split_frames.
+        boundaries: list[tuple[int, int]] = []
+        prev = first_frame
+        for sf in split_frames:
+            if prev <= sf < last_frame:
+                boundaries.append((prev, sf))
+                prev = sf + 1
+        boundaries.append((prev, last_frame))
+
+        for start_f, end_f in boundaries:
+            seg = grp[(grp["FrameID"] >= start_f) & (grp["FrameID"] <= end_f)].copy()
+            if len(seg) < min_frames:
+                continue
+            seg["TrajectoryID"] = next_id
+            seg["OriginalTrajectoryID"] = traj_id
+            next_id += 1
+            parts.append(seg)
+
+    result = pd.concat(parts, ignore_index=True)
+    result = result.sort_values(["TrajectoryID", "FrameID"], kind="stable").reset_index(
+        drop=True
+    )
+    return result
+
+
 def build_fragments(
     df: pd.DataFrame,
     changepoints: dict[Any, list[int]],

@@ -255,3 +255,75 @@ def test_run_fragment_solver_empty_df():
     catalog = _make_catalog()
     result = run_fragment_solver(pd.DataFrame(), catalog, {})
     assert isinstance(result, pd.DataFrame)
+
+
+from hydra_suite.core.identity.fragment_solver import split_trajectories_at_changepoints
+
+
+def test_split_trajectories_produces_two_ids_on_changepoint():
+    """A 60-frame trajectory split at frame 29 becomes two trajectories."""
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    changepoints = {1: [29]}
+    result = split_trajectories_at_changepoints(df, changepoints, {})
+    ids = result["TrajectoryID"].unique()
+    assert len(ids) == 2, f"expected 2 trajectories, got {len(ids)}"
+    for tid in ids:
+        seg = result[result["TrajectoryID"] == tid]
+        frames = sorted(seg["FrameID"].values)
+        assert frames == list(
+            range(frames[0], frames[-1] + 1)
+        ), f"trajectory {tid} has non-contiguous frames: {frames}"
+
+
+def test_split_trajectories_preserves_original_id():
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    changepoints = {1: [29]}
+    result = split_trajectories_at_changepoints(df, changepoints, {})
+    assert "OriginalTrajectoryID" in result.columns
+    assert (
+        result["OriginalTrajectoryID"] == 1
+    ).all(), "all rows should reference original trajectory 1"
+
+
+def test_split_trajectories_no_changepoints_unchanged():
+    df = _make_df_with_prob_cols(n_frames=40, swap_at=40)
+    result = split_trajectories_at_changepoints(df, {}, {})
+    assert sorted(result["TrajectoryID"].unique()) == sorted(
+        df["TrajectoryID"].unique()
+    )
+    assert len(result) == len(df)
+
+
+def test_split_trajectories_drops_short_segments():
+    """A split that would produce a segment shorter than MIN_FRAGMENT_FRAMES is dropped."""
+    df = _make_df_with_prob_cols(n_frames=20, swap_at=20)
+    changepoints = {1: [2]}
+    result = split_trajectories_at_changepoints(
+        df, changepoints, {"MIN_FRAGMENT_FRAMES": 5}
+    )
+    assert len(result["TrajectoryID"].unique()) == 1
+    assert len(result) == 17
+
+
+def test_split_trajectories_preserves_all_columns():
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    changepoints = {1: [29]}
+    result = split_trajectories_at_changepoints(df, changepoints, {})
+    original_cols = set(df.columns)
+    assert original_cols.issubset(
+        set(result.columns)
+    ), f"missing columns: {original_cols - set(result.columns)}"
+
+
+def test_split_trajectories_multiple_trajectories_independent():
+    """Splitting traj 1 does not affect traj 2."""
+    df1 = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    df2 = _make_df_with_prob_cols(n_frames=40, swap_at=40)
+    df2 = df2.copy()
+    df2["TrajectoryID"] = 2
+    df2["FrameID"] = list(range(40))
+    combined = pd.concat([df1, df2], ignore_index=True)
+    changepoints = {1: [29]}
+    result = split_trajectories_at_changepoints(combined, changepoints, {})
+    traj2_rows = result[result["OriginalTrajectoryID"] == 2]
+    assert len(traj2_rows) == 40
