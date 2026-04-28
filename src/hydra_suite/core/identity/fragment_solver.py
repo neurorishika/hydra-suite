@@ -10,8 +10,10 @@ Replaces the HMM-based offline decoder with:
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from hydra_suite.core.identity.catalog import IdentityCatalog
@@ -112,7 +114,109 @@ def build_fragments(
     StartX, StartY, EndX, EndY, MeanCNNProbs (dict serialised as object),
     OnlineLabel, OnlineConfidence.
     """
-    raise NotImplementedError
+    known_labels = list(catalog.labels[1:])
+
+    rows: list[dict] = []
+    frag_counter = 0
+
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        grp_sorted = grp.sort_values("FrameID").reset_index(drop=True)
+        frames = grp_sorted["FrameID"].values
+        split_frames = sorted(changepoints.get(traj_id, []))
+
+        # Build segment boundaries: list of (start_frame, end_frame) inclusive.
+        boundaries: list[tuple[int, int]] = []
+        prev = int(frames[0])
+        for sf in split_frames:
+            if prev <= sf < int(frames[-1]):
+                boundaries.append((prev, sf))
+                prev = sf + 1
+        boundaries.append((prev, int(frames[-1])))
+
+        for start_f, end_f in boundaries:
+            mask = (grp_sorted["FrameID"] >= start_f) & (grp_sorted["FrameID"] <= end_f)
+            seg = grp_sorted[mask]
+            if seg.empty:
+                continue
+
+            # Spatial endpoints.
+            valid_xy = (
+                seg[seg["X"].notna() & seg["Y"].notna()].sort_values("FrameID")
+                if "X" in seg.columns and "Y" in seg.columns
+                else pd.DataFrame()
+            )
+            if not valid_xy.empty:
+                sx, sy = float(valid_xy.iloc[0]["X"]), float(valid_xy.iloc[0]["Y"])
+                ex, ey = float(valid_xy.iloc[-1]["X"]), float(valid_xy.iloc[-1]["Y"])
+            else:
+                sx = sy = ex = ey = math.nan
+
+            # CNN mean probabilities.
+            mean_probs: dict[str, float] = {}
+            for label in known_labels:
+                suffix = f"_{label}_Prob"
+                prob_col = next(
+                    (c for c in seg.columns if str(c).endswith(suffix)), None
+                )
+                if prob_col is not None:
+                    vals = pd.to_numeric(seg[prob_col], errors="coerce")
+                    if vals.notna().any():
+                        mean_probs[label] = float(np.nanmean(vals.values))
+
+            # Online label: dominant non-unknown label (or "unknown" if all unknown).
+            label_col = seg.get(_LABEL_COL, pd.Series(dtype=object))
+            unknown_mask = label_col.isna() | label_col.astype(str).str.strip().isin(
+                _UNKNOWN_VALUES
+            )
+            known_rows = seg[~unknown_mask]
+            if not known_rows.empty:
+                online_label = str(known_rows[_LABEL_COL].astype(str).mode().iloc[0])
+                conf_vals = pd.to_numeric(
+                    seg.get(_CONF_COL, pd.Series(dtype=float)), errors="coerce"
+                )
+                online_conf = (
+                    float(np.nanmean(conf_vals.values))
+                    if conf_vals.notna().any()
+                    else 0.0
+                )
+            else:
+                online_label = "unknown"
+                online_conf = 0.0
+
+            rows.append(
+                {
+                    "TrajectoryID": traj_id,
+                    "FragmentID": frag_counter,
+                    "StartFrame": start_f,
+                    "EndFrame": end_f,
+                    "StartX": sx,
+                    "StartY": sy,
+                    "EndX": ex,
+                    "EndY": ey,
+                    "MeanCNNProbs": mean_probs,
+                    "OnlineLabel": online_label,
+                    "OnlineConfidence": online_conf,
+                }
+            )
+            frag_counter += 1
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "TrajectoryID",
+                "FragmentID",
+                "StartFrame",
+                "EndFrame",
+                "StartX",
+                "StartY",
+                "EndX",
+                "EndY",
+                "MeanCNNProbs",
+                "OnlineLabel",
+                "OnlineConfidence",
+            ]
+        )
+    return pd.DataFrame(rows)
 
 
 def solve_global_assignment(

@@ -67,3 +67,52 @@ def test_changepoint_no_cnn_columns_returns_empty():
     catalog = _make_catalog()
     result = detect_identity_changepoints(df, catalog, {})
     assert result == {}, "no CNN columns should produce empty changepoint dict"
+
+
+from hydra_suite.core.identity.fragment_solver import build_fragments
+
+
+def test_build_fragments_splits_at_changepoint():
+    df = _make_df_with_prob_cols(n_frames=60, swap_at=30)
+    catalog = _make_catalog()
+    # Provide changepoint at frame 29 (inclusive end of first segment).
+    changepoints = {1: [29]}
+    frags = build_fragments(df, changepoints, catalog, {})
+    assert len(frags) == 2
+    row0 = frags[frags["FragmentID"] == 0].iloc[0]
+    row1 = frags[frags["FragmentID"] == 1].iloc[0]
+    assert int(row0["StartFrame"]) == 0
+    assert int(row0["EndFrame"]) == 29
+    assert int(row1["StartFrame"]) == 30
+    assert int(row1["EndFrame"]) == 59
+
+
+def test_build_fragments_no_changepoints_one_fragment():
+    df = _make_df_with_prob_cols(n_frames=40, swap_at=40)
+    catalog = _make_catalog()
+    frags = build_fragments(df, {}, catalog, {})
+    assert len(frags) == 1
+    assert int(frags.iloc[0]["StartFrame"]) == 0
+    assert int(frags.iloc[0]["EndFrame"]) == 39
+
+
+def test_build_fragments_has_required_columns():
+    df = _make_df_with_prob_cols(n_frames=20, swap_at=20)
+    catalog = _make_catalog()
+    frags = build_fragments(df, {}, catalog, {})
+    required = {
+        "TrajectoryID",
+        "FragmentID",
+        "StartFrame",
+        "EndFrame",
+        "StartX",
+        "StartY",
+        "EndX",
+        "EndY",
+        "MeanCNNProbs",
+        "OnlineLabel",
+        "OnlineConfidence",
+    }
+    assert required.issubset(
+        set(frags.columns)
+    ), f"missing: {required - set(frags.columns)}"
