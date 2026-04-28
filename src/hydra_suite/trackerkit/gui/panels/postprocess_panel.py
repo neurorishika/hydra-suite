@@ -558,9 +558,9 @@ class PostProcessPanel(QWidget):
 
         fs_layout.addRow(
             self._main_window._create_help_label(
-                "Evidence weights — set each source's relative importance. "
-                "Values are auto-normalized to sum 1 before scoring. "
-                "Set a weight to 0 to disable that evidence source."
+                "Evidence weights — CNN, AprilTag, and the online prior set the "
+                "fragment unary evidence used by the MILP. Spatial continuity is "
+                "applied separately as a continuity gate, not as a weighted source."
             )
         )
 
@@ -570,8 +570,8 @@ class PostProcessPanel(QWidget):
         self.spin_fragment_cnn_weight.setDecimals(2)
         self.spin_fragment_cnn_weight.setValue(0.40)
         self.spin_fragment_cnn_weight.setToolTip(
-            "Relative weight for CNN classifier probability evidence.\n"
-            "Auto-normalized with the other three weights before scoring.\n"
+            "Relative weight for CNN classifier log-evidence.\n"
+            "Combined with AprilTag evidence and the online prior before scoring.\n"
             "Set to 0 to ignore CNN probabilities entirely."
         )
         self.lbl_fragment_cnn_weight = QLabel("CNN classifier")
@@ -582,12 +582,13 @@ class PostProcessPanel(QWidget):
         self.spin_fragment_spatial_weight.setDecimals(2)
         self.spin_fragment_spatial_weight.setValue(0.35)
         self.spin_fragment_spatial_weight.setToolTip(
-            "Relative weight for spatial continuity (Gaussian distance to nearest\n"
-            "prior/following fragment of the same identity).\n"
-            "Auto-normalized with the other three weights before scoring.\n"
-            "Set to 0 to disable spatial evidence (useful when positions are unreliable)."
+            "Legacy compatibility control. The current fragment solver applies spatial\n"
+            "continuity as a separate veto/gating term based on implied motion, so\n"
+            "this weight is not currently used by the solver."
         )
-        self.lbl_fragment_spatial_weight = QLabel("Spatial continuity")
+        self.spin_fragment_spatial_weight.setEnabled(False)
+        self.lbl_fragment_spatial_weight = QLabel("Spatial continuity (legacy)")
+        self.lbl_fragment_spatial_weight.setEnabled(False)
 
         self.spin_fragment_tag_weight = QDoubleSpinBox()
         self.spin_fragment_tag_weight.setRange(0.0, 2.0)
@@ -595,9 +596,8 @@ class PostProcessPanel(QWidget):
         self.spin_fragment_tag_weight.setDecimals(2)
         self.spin_fragment_tag_weight.setValue(0.15)
         self.spin_fragment_tag_weight.setToolTip(
-            "Relative weight for AprilTag evidence (fraction of frames in a fragment\n"
-            "where the detected tag label matches a known identity).\n"
-            "Auto-normalized with the other three weights before scoring.\n"
+            "Relative weight for AprilTag-derived label evidence across the fragment.\n"
+            "Combined with CNN evidence and the online prior before scoring.\n"
             "Leave at 0 if AprilTag detection is not enabled."
         )
         self.lbl_fragment_tag_weight = QLabel("AprilTag evidence")
@@ -608,9 +608,9 @@ class PostProcessPanel(QWidget):
         self.spin_online_prior_weight.setDecimals(2)
         self.spin_online_prior_weight.setValue(0.25)
         self.spin_online_prior_weight.setToolTip(
-            "Relative weight for the online decoder's label as a prior.\n"
-            "Scaled by each fragment's IdentityAssignedConfidence.\n"
-            "Auto-normalized with the other three weights before scoring.\n"
+            "Relative weight for the online decoder's label as a soft prior.\n"
+            "Scaled by each fragment's IdentityAssignedConfidence and combined with\n"
+            "CNN and AprilTag evidence before scoring.\n"
             "Higher → harder to override confident online assignments."
         )
         self.lbl_online_prior_weight = QLabel("Online label prior")

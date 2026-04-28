@@ -180,6 +180,191 @@ def _trajectory_mean_cnn_probs(
     return mean_probs
 
 
+def _trajectory_cnn_log_evidence(
+    grp_sorted: pd.DataFrame,
+    known_labels: list[str],
+    label_specs: dict[str, dict[str, Any]],
+) -> dict[str, float]:
+    """Return mean log-evidence per downstream label from exported CNN columns.
+
+    Rows without CNN evidence are treated as neutral for that row so sparse
+    detections do not dominate long fragments simply because only observed rows
+    contribute to the average.
+    """
+    log_scores: dict[str, float] = {}
+    n_rows = len(grp_sorted)
+    if n_rows == 0:
+        return log_scores
+
+    for label in known_labels:
+        spec = label_specs.get(label, {})
+        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
+        part_cols = {
+            part: [col for col in cols if col in grp_sorted]
+            for part, cols in (spec.get("part_cols", {}) or {}).items()
+        }
+        parts = set(spec.get("parts", set()))
+
+        direct_vals: list[np.ndarray] = []
+        for col in direct_cols:
+            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
+            direct_vals.append(np.clip(vals, 1e-9, 1.0))
+
+        part_vals: list[np.ndarray] = []
+        part_mask = np.ones(n_rows, dtype=bool)
+        use_parts = bool(parts)
+        if use_parts:
+            for part in parts:
+                cols = part_cols.get(part, [])
+                if not cols:
+                    use_parts = False
+                    break
+                part_present = np.zeros(n_rows, dtype=bool)
+                for col in cols:
+                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
+                        dtype=np.float64
+                    )
+                    part_present |= np.isfinite(vals)
+                    part_vals.append(np.clip(vals, 1e-9, 1.0))
+                part_mask &= part_present
+
+        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
+        any_used = False
+        if direct_vals:
+            any_used = True
+            direct_stack = np.stack(direct_vals, axis=0)
+            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
+            if np.any(direct_mask):
+                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
+
+        if use_parts and part_vals:
+            any_used = True
+            part_stack = np.stack(part_vals, axis=0)
+            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
+            if np.any(valid_part_mask):
+                part_prod = np.full(n_rows, np.nan, dtype=np.float64)
+                part_prod[valid_part_mask] = np.prod(
+                    part_stack[:, valid_part_mask], axis=0
+                )
+                missing_mask = valid_part_mask & np.isnan(row_prob)
+                overlap_mask = valid_part_mask & np.isfinite(row_prob)
+                if np.any(missing_mask):
+                    row_prob[missing_mask] = part_prod[missing_mask]
+                if np.any(overlap_mask):
+                    row_prob[overlap_mask] *= part_prod[overlap_mask]
+
+        if any_used:
+            row_log = np.zeros(n_rows, dtype=np.float64)
+            finite_mask = np.isfinite(row_prob)
+            if np.any(finite_mask):
+                row_log[finite_mask] = np.log(
+                    np.clip(row_prob[finite_mask], 1e-12, 1.0)
+                )
+                log_scores[label] = float(np.mean(row_log))
+
+    return log_scores
+
+
+def _trajectory_tag_evidence(
+    grp_sorted: pd.DataFrame,
+    known_labels: list[str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Return mean tag probabilities and mean tag log-evidence per label."""
+    mean_probs: dict[str, float] = {}
+    log_scores: dict[str, float] = {}
+    n_rows = len(grp_sorted)
+    if n_rows == 0 or "DetectedTagLabel" not in grp_sorted.columns:
+        return mean_probs, log_scores
+
+    tag_vals = grp_sorted["DetectedTagLabel"].astype(object)
+    tag_labels = tag_vals.where(tag_vals.notna(), np.nan).astype(str).str.strip()
+    detected_mask = (~tag_vals.isna()) & (~tag_labels.isin(_UNKNOWN_VALUES))
+    if not detected_mask.any():
+        return mean_probs, log_scores
+
+    if "DetectedTagConf" in grp_sorted.columns:
+        conf_vals = pd.to_numeric(
+            grp_sorted["DetectedTagConf"], errors="coerce"
+        ).to_numpy(dtype=np.float64)
+    elif "DetectedTagHamming" in grp_sorted.columns:
+        hammings = pd.to_numeric(
+            grp_sorted["DetectedTagHamming"], errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        conf_vals = 1.0 / (1.0 + np.clip(hammings, 0.0, None))
+    else:
+        conf_vals = np.ones(n_rows, dtype=np.float64)
+
+    conf_vals = np.clip(conf_vals, 1e-4, 1.0 - 1e-4)
+    detected_mask_arr = detected_mask.to_numpy(dtype=bool)
+    tag_labels_arr = tag_labels.to_numpy(dtype=object)
+    n_known = len(known_labels)
+
+    for label in known_labels:
+        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
+        match_mask = detected_mask_arr & (tag_labels_arr == label)
+        other_mask = detected_mask_arr & (tag_labels_arr != label)
+        if np.any(match_mask):
+            row_prob[match_mask] = conf_vals[match_mask]
+        if np.any(other_mask):
+            if n_known > 1:
+                row_prob[other_mask] = (1.0 - conf_vals[other_mask]) / (n_known - 1)
+            else:
+                row_prob[other_mask] = 1e-4
+        finite_mask = np.isfinite(row_prob)
+        if np.any(finite_mask):
+            mean_probs[label] = float(np.nanmean(row_prob))
+            row_log = np.zeros(n_rows, dtype=np.float64)
+            row_log[finite_mask] = np.log(np.clip(row_prob[finite_mask], 1e-12, 1.0))
+            log_scores[label] = float(np.mean(row_log))
+
+    return mean_probs, log_scores
+
+
+def _normalize_support_scores(
+    known_labels: list[str],
+    log_scores: dict[str, float],
+) -> dict[str, float]:
+    """Convert log-supports into a normalized per-label score distribution."""
+    raw = np.array(
+        [
+            math.exp(float(log_scores[label])) if label in log_scores else 0.0
+            for label in known_labels
+        ],
+        dtype=np.float64,
+    )
+    raw[~np.isfinite(raw)] = 0.0
+    total = float(raw.sum())
+    if total <= 1e-12:
+        if not known_labels:
+            return {}
+        uniform = 1.0 / len(known_labels)
+        return {label: uniform for label in known_labels}
+    raw /= total
+    return {label: float(raw[idx]) for idx, label in enumerate(known_labels)}
+
+
+def _build_prior_log_scores(
+    known_labels: list[str],
+    online_label: str,
+    online_confidence: float,
+) -> dict[str, float]:
+    """Build a soft prior over labels from the online label/confidence pair."""
+    if online_label not in known_labels or not np.isfinite(online_confidence):
+        return {label: 0.0 for label in known_labels}
+
+    conf = float(np.clip(online_confidence, 1e-4, 1.0 - 1e-4))
+    n_labels = len(known_labels)
+    if n_labels <= 1:
+        return {known_labels[0]: math.log(conf)} if known_labels else {}
+    other = max((1.0 - conf) / (n_labels - 1), 1e-6)
+    return {
+        label: math.log(conf if label == online_label else other)
+        for label in known_labels
+    }
+
+
 def detect_identity_changepoints(
     df: pd.DataFrame,
     catalog: IdentityCatalog,
@@ -429,15 +614,14 @@ def _build_score_matrix(
     """Build (n_frags x n_labels) score matrix.  -1 means ineligible.
 
     Scoring strategy:
-    - When temporal neighbors exist (has_neighbors=True):
-        score = evidence × spatial_s × length_factor
-      where evidence = cnn_w * cnn_s + tag_w * tag_s + prior_bonus.
-      Spatial multiplies all evidence: a near-zero spatial score (fast jump)
-      suppresses the cell even if CNN is very strong, so spatial continuity
-      dominates when it can be measured.
-    - When no neighbors exist (has_neighbors=False):
-        score = evidence × length_factor
-      Spatial assessment is impossible; CNN/tag/prior decide.
+        - Reconstruct per-fragment per-label unary evidence from all CNN phases and
+            tag detections as weighted average log-evidence, then normalize that into a
+            candidate score distribution.
+        - Fuse the online label/confidence as a soft prior in the same log domain.
+        - When temporal neighbors exist (has_neighbors=True):
+                score = unary_score × spatial_s × length_factor
+        - When no neighbors exist (has_neighbors=False):
+                score = unary_score × length_factor
 
     Spatial veto: if has_neighbors and spatial_s < FRAGMENT_SPATIAL_VETO_THRESHOLD
     (default 0.05), the cell is marked -1 (ineligible). Combined with the hard
@@ -449,7 +633,6 @@ def _build_score_matrix(
     tiny high-confidence fragment cannot outbid a large spatially-consistent track.
     """
     cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
-    spatial_w = float(params.get("FRAGMENT_SPATIAL_WEIGHT", 0.35))
     prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
     # FRAGMENT_LENGTH_WEIGHT: multiplicative blend coefficient in [0, 1].
@@ -463,15 +646,6 @@ def _build_score_matrix(
     # Score below this threshold (when neighbors exist) → fragment is spatially
     # incompatible with the identity and is marked ineligible.
     spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
-    # Normalize evidence weights to sum 1 (length_w is not part of this sum —
-    # it is a multiplicative penalty applied after evidence aggregation).
-    total_w = cnn_w + spatial_w + prior_w + tag_w
-    if total_w > 1e-9:
-        cnn_w /= total_w
-        spatial_w /= total_w
-        prior_w /= total_w
-        tag_w /= total_w
-
     n_frags = len(frags)
     n_labels = len(known_labels)
     score_mat = np.full((n_frags, n_labels), -1.0, dtype=np.float64)
@@ -484,29 +658,53 @@ def _build_score_matrix(
     max_duration = max(durations) if durations else 1
     log_max = math.log1p(max_duration)
 
-    for (i, frag_row), duration in zip(frags.iterrows(), durations):
-        mean_probs: dict[str, float] = frag_row.get("MeanCNNProbs") or {}
-        raw_tag = frag_row.get("MeanTagProbs")
-        mean_tag_probs: dict[str, float] = raw_tag if isinstance(raw_tag, dict) else {}
+    combined_supports: list[dict[str, float]] = []
+    source_supports: list[dict[str, float]] = []
+
+    for _, frag_row in frags.iterrows():
+        cnn_log_scores = frag_row.get("CNNLogEvidence") or {}
+        tag_log_scores = frag_row.get("TagLogEvidence") or {}
         online_lbl = str(frag_row["OnlineLabel"])
         online_conf = float(frag_row["OnlineConfidence"])
+        prior_log_scores = _build_prior_log_scores(
+            known_labels, online_lbl, online_conf
+        )
+
+        source_log_scores = {
+            label: (
+                cnn_w * float(cnn_log_scores.get(label, 0.0))
+                + tag_w * float(tag_log_scores.get(label, 0.0))
+            )
+            for label in known_labels
+        }
+        combined_log_scores = {
+            label: source_log_scores[label] + prior_w * float(prior_log_scores[label])
+            for label in known_labels
+        }
+
+        source_supports.append(
+            _normalize_support_scores(known_labels, source_log_scores)
+        )
+        combined_supports.append(
+            _normalize_support_scores(known_labels, combined_log_scores)
+        )
+
+    for (i, frag_row), duration in zip(frags.iterrows(), durations):
         # Multiplicative length factor: 1.0 for the longest fragment, smaller for
         # shorter ones.  Discounts the entire evidence bundle so a tiny high-confidence
         # fragment cannot outbid a long spatially-consistent track on CNN alone.
         length_scale = math.log1p(duration) / log_max if log_max > 1e-9 else 1.0
         length_factor = 1.0 - length_w * (1.0 - length_scale)
+        unary_support = combined_supports[i]
 
         for j, label in enumerate(known_labels):
-            cnn_s = float(mean_probs.get(label, 0.0))
-            tag_s = float(mean_tag_probs.get(label, 0.0))
             spatial_s, has_neighbors = _spatial_score_for_fragment(
                 frag_row, label, schedule, max_vel, no_neighbor_score
             )
             # Veto: fragment is at the wrong place for this identity.
             if has_neighbors and spatial_s < spatial_veto:
                 continue  # score_mat[i, j] stays -1 (ineligible)
-            prior_bonus = prior_w * online_conf if label == online_lbl else 0.0
-            evidence = cnn_w * cnn_s + tag_w * tag_s + prior_bonus
+            evidence = float(unary_support.get(label, 0.0))
             if has_neighbors:
                 # Spatial gates all evidence: high-velocity jumps suppress the
                 # score even when CNN is strong, so spatial continuity wins.
@@ -554,7 +752,7 @@ def _build_score_matrix(
                 cross_s = math.exp(-(dist**2) / (2.0 * max_vel**2))
                 if cross_s >= spatial_veto:
                     continue
-                b_probs: dict[str, float] = row_b.get("MeanCNNProbs") or {}
+                b_probs = source_supports[idx_b]
                 for j, label in enumerate(known_labels):
                     if (
                         float(b_probs.get(label, 0.0)) > 0.3
@@ -665,7 +863,8 @@ def _build_traj_summaries(
     """Build a per-trajectory summary DataFrame for the MILP.
 
     Columns: TrajectoryID, StartFrame, EndFrame, StartX, StartY, EndX, EndY,
-    MeanCNNProbs (dict), MeanTagProbs (dict), OnlineLabel, OnlineConfidence.
+    MeanCNNProbs (dict), MeanTagProbs (dict), CNNLogEvidence (dict),
+    TagLogEvidence (dict), OnlineLabel, OnlineConfidence.
     """
     known_labels = list(catalog.labels[1:])
     prefix_prob_cols = _build_cnn_probability_prefix_map(df.columns)
@@ -693,17 +892,10 @@ def _build_traj_summaries(
             sx = sy = ex = ey = math.nan
 
         mean_probs = _trajectory_mean_cnn_probs(grp_sorted, known_labels, label_specs)
-
-        tag_probs: dict[str, float] = {}
-        if "DetectedTagLabel" in grp_sorted.columns:
-            tag_vals = grp_sorted["DetectedTagLabel"].dropna().astype(str).str.strip()
-            tag_known = tag_vals[~tag_vals.isin(_UNKNOWN_VALUES)]
-            n_rows = len(grp_sorted)
-            if len(tag_known) > 0 and n_rows > 0:
-                for label in known_labels:
-                    frac = float((tag_known == str(label)).sum()) / n_rows
-                    if frac > 0.0:
-                        tag_probs[label] = frac
+        cnn_log_scores = _trajectory_cnn_log_evidence(
+            grp_sorted, known_labels, label_specs
+        )
+        tag_probs, tag_log_scores = _trajectory_tag_evidence(grp_sorted, known_labels)
 
         label_col = grp_sorted.get(
             _LABEL_COL, pd.Series("unknown", index=grp_sorted.index, dtype=object)
@@ -738,6 +930,8 @@ def _build_traj_summaries(
                 "EndY": ey,
                 "MeanCNNProbs": mean_probs,
                 "MeanTagProbs": tag_probs,
+                "CNNLogEvidence": cnn_log_scores,
+                "TagLogEvidence": tag_log_scores,
                 "OnlineLabel": online_label,
                 "OnlineConfidence": online_conf,
             }
@@ -755,6 +949,8 @@ def _build_traj_summaries(
                 "EndY",
                 "MeanCNNProbs",
                 "MeanTagProbs",
+                "CNNLogEvidence",
+                "TagLogEvidence",
                 "OnlineLabel",
                 "OnlineConfidence",
             ]
@@ -911,7 +1107,7 @@ def run_fragment_solver(
         PELT_MODEL                       str    default "rbf" (l1 / l2 / rbf)
         FRAGMENT_CNN_WEIGHT              float  default 0.40
         FRAGMENT_TAG_WEIGHT              float  default 0.15
-        FRAGMENT_SPATIAL_WEIGHT          float  default 0.35
+        FRAGMENT_SPATIAL_WEIGHT          float  default 0.35 (legacy; currently unused)
         ONLINE_PRIOR_WEIGHT              float  default 0.25
         FRAGMENT_LENGTH_WEIGHT           float  default 0.60
             Multiplicative blend [0,1]: discounts short fragments' evidence relative
