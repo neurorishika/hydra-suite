@@ -7,13 +7,11 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.identity.catalog import IdentityCatalog
 from hydra_suite.core.identity.classification.cnn import (
     ClassPrediction,
     CNNIdentityCache,
 )
 from hydra_suite.core.identity.properties.detected_cache import DetectedPropertiesCache
-from hydra_suite.data.tag_observation_cache import TagObservationCache
 from hydra_suite.trackerkit.gui.orchestrators import config as config_module
 from hydra_suite.trackerkit.gui.orchestrators import tracking as tracking_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
@@ -1290,33 +1288,3 @@ def test_build_precomputed_color_palette_reuses_identity_colors_across_tracks() 
     assert row_colors[0] == (10, 20, 30)
     assert row_colors[1] == (10, 20, 30)
     assert row_colors[2] == (70, 80, 90)
-
-
-def test_tag_observation_evidence_view_uses_stable_detection_ids(
-    tmp_path: Path,
-) -> None:
-    cache_path = tmp_path / "tags.npz"
-    writer = TagObservationCache(cache_path, mode="w")
-    writer.add_frame(
-        7,
-        tag_ids=[1],
-        centers_xy=[(4.0, 4.0)],
-        corners=[np.zeros((4, 2), dtype=np.float32)],
-        det_indices=[3],
-        hammings=[0],
-    )
-    writer.save()
-
-    tag_cache = TagObservationCache(cache_path, mode="r")
-    view = tracking_module._TagObservationEvidenceCacheView(
-        tag_cache,
-        IdentityCatalog.from_labels(["mouse1", "mouse2"]),
-        ["mouse1", "mouse2"],
-    )
-    try:
-        assert view.get_cached_frames() == [7]
-        evidences = view.load_frame(7)
-        assert len(evidences) == 1
-        assert evidences[0].detection_id == 70003
-    finally:
-        view.close()
