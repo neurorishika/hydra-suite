@@ -2,7 +2,7 @@
 
 Identity Phase 0: all evidence sources (AprilTag, CNN) map into this index space.
 The catalog is immutable after construction and is passed through to all
-online and offline decoder components.
+online decoding and post-processing components.
 
 Index 0 is always the ``unknown`` / unobserved state.
 Indices 1..N correspond to the configured unique-identity labels.

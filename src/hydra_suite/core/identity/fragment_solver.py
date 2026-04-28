@@ -1,6 +1,6 @@
 """Global identity fragment solver.
 
-Replaces the HMM-based offline decoder with:
+Current identity post-processing pipeline:
 1. PELT changepoint detection on per-trajectory CNN probability matrices.
 2. Fragment building from detected changepoints.
 3. Global MILP assignment: maximises spatial continuity + CNN/tag evidence

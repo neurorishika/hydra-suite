@@ -494,10 +494,10 @@ class PostProcessPanel(QWidget):
         f_cleaning_filters.addRow("", self.chk_cleanup_temp_files)
 
         # --- Identity Post-Processing ---
-        self.g_offline_identity = QGroupBox("Identity Post-Processing")
-        self._main_window._set_compact_section_widget(self.g_offline_identity)
-        vl_offline_identity = QVBoxLayout(self.g_offline_identity)
-        vl_offline_identity.addWidget(
+        self.g_identity_postprocess = QGroupBox("Identity Post-Processing")
+        self._main_window._set_compact_section_widget(self.g_identity_postprocess)
+        vl_identity_postprocess = QVBoxLayout(self.g_identity_postprocess)
+        vl_identity_postprocess.addWidget(
             self._main_window._create_help_label(
                 "Choose how identity labels are finalised after tracking. "
                 "Only takes effect when identity analysis is enabled.\n"
@@ -516,9 +516,9 @@ class PostProcessPanel(QWidget):
             "Fragment Solver: PELT-based changepoint detection + global MILP assignment."
         )
         self.cmb_identity_postprocess_mode.currentTextChanged.connect(
-            self._on_offline_identity_toggled
+            self._on_identity_postprocess_mode_changed
         )
-        vl_offline_identity.addWidget(self.cmb_identity_postprocess_mode)
+        vl_identity_postprocess.addWidget(self.cmb_identity_postprocess_mode)
 
         self.fragment_solver_content = QWidget()
         fs_layout = QFormLayout(self.fragment_solver_content)
@@ -711,14 +711,14 @@ class PostProcessPanel(QWidget):
         fs_layout.addRow("", self.chk_enable_fragment_scoring)
 
         self.fragment_solver_content.setVisible(True)
-        vl_offline_identity.addWidget(self.fragment_solver_content)
+        vl_identity_postprocess.addWidget(self.fragment_solver_content)
 
         cleaning_sections_layout.addWidget(self.g_cleaning_filters)
         cleaning_sections_layout.addWidget(self.g_motion_breaks)
         cleaning_sections_layout.addWidget(self.g_relinking)
         cleaning_sections_layout.addWidget(self.g_pose_quality)
         cleaning_sections_layout.addWidget(self.g_interpolation_merge)
-        cleaning_sections_layout.addWidget(self.g_offline_identity)
+        cleaning_sections_layout.addWidget(self.g_identity_postprocess)
         vl_pp.addWidget(self.cleaning_sections_widget)
         vbox.addWidget(g_pp)
 
@@ -1119,10 +1119,10 @@ class PostProcessPanel(QWidget):
         self.g_interpolation_merge.setEnabled(enabled)
         self.g_pose_quality.setVisible(pose_enabled)
         self.g_pose_quality.setEnabled(pose_enabled)
-        self.g_offline_identity.setVisible(enabled)
-        self.g_offline_identity.setEnabled(enabled)
+        self.g_identity_postprocess.setVisible(enabled)
+        self.g_identity_postprocess.setEnabled(enabled)
         if not enabled:
-            self.offline_identity_content.setVisible(False)
+            self.fragment_solver_content.setVisible(False)
 
     def _set_video_output_section_state(self, checked: bool) -> None:
         """Show or hide the grouped video-export controls."""
@@ -1143,7 +1143,7 @@ class PostProcessPanel(QWidget):
         enabled = self.enable_postprocessing.isChecked()
         self._set_cleaning_section_state(enabled)
 
-    def _on_offline_identity_toggled(self, _=None):
+    def _on_identity_postprocess_mode_changed(self, _=None):
         """Show or hide fragment solver controls."""
         mode = self.cmb_identity_postprocess_mode.currentText()
         self.fragment_solver_content.setVisible(mode == "Fragment Solver")

@@ -2,9 +2,9 @@
 
 Identity Phase 0: accumulates ``IdentityEvidence`` objects during a tracking
 run and persists them as a compressed NumPy archive next to the detection and
-CNN caches.  The evidence sidecar is written equivalently from both the live
-streaming path and the replay fallback path so the offline decoder sees the
-same artifact regardless of which execution path was used.
+CNN caches. The evidence sidecar is written equivalently from both the live
+streaming path and the replay fallback path so identity post-processing sees
+the same artifact regardless of which execution path was used.
 
 Naming convention::
 

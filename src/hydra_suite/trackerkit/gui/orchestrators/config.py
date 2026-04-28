@@ -688,9 +688,6 @@ class ConfigOrchestrator:
         _saved_mode = get_cfg("identity_postprocess_mode", default=None)
         if _saved_mode is None:
             _saved_mode = "Fragment Solver"
-        # Remap legacy mode names.
-        if _saved_mode in ("Heuristic", "Slot Fill", "Offline Decoder"):
-            _saved_mode = "Fragment Solver"
         self._panels.postprocess.cmb_identity_postprocess_mode.setCurrentText(
             str(_saved_mode)
         )

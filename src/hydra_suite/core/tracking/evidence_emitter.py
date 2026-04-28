@@ -11,9 +11,9 @@ used batch precompute or streaming live analysis, satisfying the parity
 requirement from the streaming plan.
 
 The emitter does not require a full ``IdentityCatalog`` to be available at
-construction time.  It uses the CNN model's own class labels as the initial
-label space and persists them in the sidecar so the offline decoder can map
-them to catalog indices later.
+construction time. It uses the CNN model's own class labels as the initial
+label space and persists them in the sidecar so later post-processing can map
+them to run-specific catalog indices.
 """
 
 from __future__ import annotations
