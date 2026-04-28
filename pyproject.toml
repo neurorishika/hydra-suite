@@ -41,6 +41,7 @@ dependencies = [
     "usearch",
     "annoy",
     "platformdirs>=3.0",
+    "ruptures>=1.1",
 ]
 
 [project.optional-dependencies]
