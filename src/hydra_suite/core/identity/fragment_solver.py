@@ -37,6 +37,9 @@ def detect_identity_changepoints(
     FrameIDs [split_indices[k-1]+1, split_indices[k]].
     Trajectories with no CNN evidence or fewer than min_fragment_frames*2
     rows are returned with no splits.
+
+    PELT model is read from params["PELT_MODEL"] (l1 / l2 / rbf; default rbf).
+    Z-scoring is skipped for l1 since l1 is already median-based.
     """
     try:
         import ruptures as rpt
@@ -48,6 +51,9 @@ def detect_identity_changepoints(
 
     penalty = float(params.get("CHANGEPOINT_PENALTY", 3.0))
     min_frames = int(params.get("MIN_FRAGMENT_FRAMES", 5))
+    pelt_model = str(params.get("PELT_MODEL", "rbf")).lower()
+    if pelt_model not in ("l1", "l2", "rbf"):
+        pelt_model = "rbf"
     known_labels = list(catalog.labels[1:])
 
     # Find CNN_*_Prob columns for known labels only.
@@ -75,14 +81,16 @@ def detect_identity_changepoints(
             .fillna(0.5)
             .values
         )
-        # z-score per column to suppress magnitude drift.
-        col_std = signal.std(axis=0)
-        col_std[col_std < 1e-8] = 1.0
-        signal = (signal - signal.mean(axis=0)) / col_std
+        # Z-score per column to suppress magnitude drift.
+        # Skipped for l1 which is already median-based and scale-insensitive.
+        if pelt_model != "l1":
+            col_std = signal.std(axis=0)
+            col_std[col_std < 1e-8] = 1.0
+            signal = (signal - signal.mean(axis=0)) / col_std
 
         try:
             splits = (
-                rpt.Pelt(model="rbf", min_size=min_frames, jump=1)
+                rpt.Pelt(model=pelt_model, min_size=min_frames, jump=1)
                 .fit(signal)
                 .predict(pen=penalty)
             )
@@ -111,7 +119,7 @@ def build_fragments(
     """Return a fragments DataFrame with one row per (traj_id, segment).
 
     Columns: TrajectoryID, FragmentID, StartFrame, EndFrame,
-    StartX, StartY, EndX, EndY, MeanCNNProbs (dict serialised as object),
+    StartX, StartY, EndX, EndY, MeanCNNProbs (dict), MeanTagProbs (dict),
     OnlineLabel, OnlineConfidence.
     """
     known_labels = list(catalog.labels[1:])
@@ -163,7 +171,19 @@ def build_fragments(
                     if vals.notna().any():
                         mean_probs[label] = float(np.nanmean(vals.values))
 
-            # Online label: dominant non-unknown label (or "unknown" if all unknown).
+            # Tag evidence: fraction of frames with each known label's AprilTag.
+            tag_probs: dict[str, float] = {}
+            if "DetectedTagLabel" in seg.columns:
+                tag_vals = seg["DetectedTagLabel"].dropna().astype(str).str.strip()
+                tag_known = tag_vals[~tag_vals.isin(_UNKNOWN_VALUES)]
+                n_rows = len(seg)
+                if len(tag_known) > 0 and n_rows > 0:
+                    for label in known_labels:
+                        frac = float((tag_known == str(label)).sum()) / n_rows
+                        if frac > 0.0:
+                            tag_probs[label] = frac
+
+            # Online label: dominant non-unknown label.
             if _LABEL_COL in seg.columns:  # noqa: SIM401
                 label_col = seg[_LABEL_COL]
             else:
@@ -174,8 +194,9 @@ def build_fragments(
             known_rows = seg[~unknown_mask]
             if not known_rows.empty:
                 online_label = str(known_rows[_LABEL_COL].astype(str).mode().iloc[0])
-                if _CONF_COL in seg.columns:
-                    conf_vals = pd.to_numeric(seg[_CONF_COL], errors="coerce")
+                # Confidence averaged over known-label rows only.
+                if _CONF_COL in known_rows.columns:
+                    conf_vals = pd.to_numeric(known_rows[_CONF_COL], errors="coerce")
                     online_conf = (
                         float(np.nanmean(conf_vals.values))
                         if conf_vals.notna().any()
@@ -198,6 +219,7 @@ def build_fragments(
                     "EndX": ex,
                     "EndY": ey,
                     "MeanCNNProbs": mean_probs,
+                    "MeanTagProbs": tag_probs,
                     "OnlineLabel": online_label,
                     "OnlineConfidence": online_conf,
                 }
@@ -216,6 +238,7 @@ def build_fragments(
                 "EndX",
                 "EndY",
                 "MeanCNNProbs",
+                "MeanTagProbs",
                 "OnlineLabel",
                 "OnlineConfidence",
             ]
@@ -272,47 +295,12 @@ def _spatial_score_for_fragment(
     return float(np.mean(term_scores)) if term_scores else 0.5
 
 
-def solve_global_assignment(
-    fragments_df: pd.DataFrame,
-    catalog: IdentityCatalog,
-    params: dict[str, Any],
-) -> pd.DataFrame:
-    """Return fragments_df with an added AssignedLabel column.
-
-    Uses MILP with:
-    - Spatial continuity score between consecutive fragments of the same identity.
-    - CNN evidence score from MeanCNNProbs.
-    - Online label prior: online_prior_weight * OnlineConfidence bonus for the
-      online label column.
-    - Margin threshold: only re-assign when best_score - second_best > threshold;
-      otherwise keep OnlineLabel.
-    - Uniqueness: at most one fragment per identity per overlapping time window.
-    """
-    from itertools import combinations
-
-    from scipy.optimize import Bounds, LinearConstraint, linear_sum_assignment, milp
-
-    known_labels = list(catalog.labels[1:])
-    if not known_labels or fragments_df.empty:
-        out = fragments_df.copy()
-        out["AssignedLabel"] = fragments_df["OnlineLabel"]
-        return out
-
-    cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
-    spatial_w = float(params.get("FRAGMENT_SPATIAL_WEIGHT", 0.35))
-    prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
-    margin_thresh = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
-    max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
-
-    n_frags = len(fragments_df)
-    n_labels = len(known_labels)
-    frags = fragments_df.reset_index(drop=True)
-
-    # Seed schedule from online labels so spatial scores are informed.
+def _build_schedule(frags: pd.DataFrame, label_col: str) -> dict[str, list[dict]]:
+    """Build a spatial schedule dict from a fragments DataFrame column."""
     schedule: dict[str, list[dict]] = {}
     for _, row in frags.iterrows():
-        lbl = str(row["OnlineLabel"])
-        if lbl in _UNKNOWN_VALUES or lbl not in known_labels:
+        lbl = str(row[label_col])
+        if lbl in _UNKNOWN_VALUES:
             continue
         schedule.setdefault(lbl, []).append(
             {
@@ -326,28 +314,67 @@ def solve_global_assignment(
         )
     for lbl in schedule:
         schedule[lbl].sort(key=lambda s: s["start_frame"])
+    return schedule
 
-    # Build score matrix (n_frags x n_labels). -1 means ineligible.
+
+def _build_score_matrix(
+    frags: pd.DataFrame,
+    known_labels: list[str],
+    schedule: dict[str, list[dict]],
+    params: dict[str, Any],
+) -> np.ndarray:
+    """Build (n_frags x n_labels) score matrix.  -1 means ineligible."""
+    cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
+    spatial_w = float(params.get("FRAGMENT_SPATIAL_WEIGHT", 0.35))
+    prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
+    tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
+    max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
+
+    n_frags = len(frags)
+    n_labels = len(known_labels)
     score_mat = np.full((n_frags, n_labels), -1.0, dtype=np.float64)
+
     for i, frag_row in frags.iterrows():
-        mean_probs: dict[str, float] = frag_row["MeanCNNProbs"] or {}
+        mean_probs: dict[str, float] = frag_row.get("MeanCNNProbs") or {}
+        raw_tag = frag_row.get("MeanTagProbs")
+        mean_tag_probs: dict[str, float] = raw_tag if isinstance(raw_tag, dict) else {}
         online_lbl = str(frag_row["OnlineLabel"])
         online_conf = float(frag_row["OnlineConfidence"])
 
         for j, label in enumerate(known_labels):
             cnn_s = float(mean_probs.get(label, 0.0))
+            tag_s = float(mean_tag_probs.get(label, 0.0))
             spatial_s = _spatial_score_for_fragment(frag_row, label, schedule, max_vel)
             prior_bonus = prior_w * online_conf if label == online_lbl else 0.0
-            score_mat[i, j] = cnn_w * cnn_s + spatial_w * spatial_s + prior_bonus
+            score_mat[i, j] = (
+                cnn_w * cnn_s + tag_w * tag_s + spatial_w * spatial_s + prior_bonus
+            )
 
-    # Collect eligible (fragment, label) pairs for MILP.
+    return score_mat
+
+
+def _milp_solve(
+    frags: pd.DataFrame,
+    known_labels: list[str],
+    score_mat: np.ndarray,
+    params: dict[str, Any],
+) -> dict[int, str | None]:
+    """Run the MILP and return {frag_index: assigned_label_or_None}.
+
+    Uses scipy.sparse constraint matrix for memory efficiency.
+    """
+    from itertools import combinations
+
+    from scipy.optimize import Bounds, LinearConstraint, linear_sum_assignment, milp
+    from scipy.sparse import csr_matrix, lil_matrix
+
+    n_frags = len(frags)
+    n_labels = len(known_labels)
     pairs = [
         (i, j) for i in range(n_frags) for j in range(n_labels) if score_mat[i, j] >= 0
     ]
     if not pairs:
-        out = frags.copy()
-        out["AssignedLabel"] = frags["OnlineLabel"]
-        return out
+        return {i: None for i in range(n_frags)}
 
     n_vars = len(pairs)
     pair_idx = {p: k for k, p in enumerate(pairs)}
@@ -355,20 +382,14 @@ def solve_global_assignment(
     bounds = Bounds(lb=np.zeros(n_vars), ub=np.ones(n_vars))
     integrality = np.ones(n_vars, dtype=np.int8)
 
-    A_rows: list[np.ndarray] = []
-    lb_list: list[float] = []
-    ub_list: list[float] = []
+    # Collect all constraints as (col_indices, lb, ub) before allocating matrix.
+    constraint_specs: list[tuple[list[int], float, float]] = []
 
     # Each fragment assigned at most 1 label.
     for i in range(n_frags):
         idxs = [pair_idx[(i, j)] for j in range(n_labels) if (i, j) in pair_idx]
-        if len(idxs) < 2:
-            continue
-        row = np.zeros(n_vars)
-        row[idxs] = 1.0
-        A_rows.append(row)
-        lb_list.append(-np.inf)
-        ub_list.append(1.0)
+        if len(idxs) >= 2:
+            constraint_specs.append((idxs, -np.inf, 1.0))
 
     # Pairwise: overlapping fragments cannot share a label.
     for a, b in combinations(range(n_frags), 2):
@@ -379,22 +400,28 @@ def solve_global_assignment(
             kb = pair_idx.get((b, j))
             if ka is None or kb is None:
                 continue
-            row = np.zeros(n_vars)
-            row[ka] = 1.0
-            row[kb] = 1.0
-            A_rows.append(row)
-            lb_list.append(-np.inf)
-            ub_list.append(1.0)
+            constraint_specs.append(([ka, kb], -np.inf, 1.0))
 
     assigned: dict[int, str | None] = {i: None for i in range(n_frags)}
     try:
-        if A_rows:
-            A = np.vstack(A_rows)
-            constraints = LinearConstraint(
-                A, lb=np.array(lb_list), ub=np.array(ub_list)
-            )
+        if constraint_specs:
+            n_constraints = len(constraint_specs)
+            A = lil_matrix((n_constraints, n_vars))
+            lb_arr = np.empty(n_constraints)
+            ub_arr = np.empty(n_constraints)
+            for k, (col_idxs, lb_val, ub_val) in enumerate(constraint_specs):
+                for ci in col_idxs:
+                    A[k, ci] = 1.0
+                lb_arr[k] = lb_val
+                ub_arr[k] = ub_val
+            time_limit = float(params.get("FRAGMENT_SOLVER_ILP_TIME_LIMIT", 30.0))
+            constraints = LinearConstraint(csr_matrix(A), lb=lb_arr, ub=ub_arr)
             opt = milp(
-                c_vec, constraints=constraints, integrality=integrality, bounds=bounds
+                c_vec,
+                constraints=constraints,
+                integrality=integrality,
+                bounds=bounds,
+                options={"time_limit": time_limit, "disp": False},
             )
             if opt.success:
                 for k, (i, j) in enumerate(pairs):
@@ -416,32 +443,88 @@ def solve_global_assignment(
     except Exception as exc:
         log.warning("MILP solve failed (%s); falling back to online labels.", exc)
 
-    # Apply margin threshold: only accept re-assignments that beat second-best by margin_thresh.
+    return assigned
+
+
+def solve_global_assignment(
+    fragments_df: pd.DataFrame,
+    catalog: IdentityCatalog,
+    params: dict[str, Any],
+) -> pd.DataFrame:
+    """Return fragments_df with added AssignedLabel and AssignedScore columns.
+
+    Two-pass strategy removes circular bias from the online-label schedule seed:
+    - Pass 1: schedule seeded from OnlineLabel → MILP.
+    - Pass 2: schedule re-seeded from Pass-1 labels → MILP again.
+
+    Margin threshold applied to Pass-2 results: only re-assign when
+    score(milp_label) - score(second_best) >= ASSIGNMENT_MARGIN_THRESHOLD.
+    """
+    known_labels = list(catalog.labels[1:])
+    if not known_labels or fragments_df.empty:
+        out = fragments_df.copy()
+        out["AssignedLabel"] = fragments_df["OnlineLabel"]
+        out["AssignedScore"] = 0.0
+        return out
+
+    margin_thresh = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
+    frags = fragments_df.reset_index(drop=True)
+    n_frags = len(frags)
+    n_labels = len(known_labels)
+
+    # Pass 1: seed schedule from OnlineLabel.
+    schedule1 = _build_schedule(frags, "OnlineLabel")
+    score_mat1 = _build_score_matrix(frags, known_labels, schedule1, params)
+    assigned1 = _milp_solve(frags, known_labels, score_mat1, params)
+
+    # Build intermediate label list for schedule re-seeding (no margin threshold yet).
+    pass1_labels = [
+        str(assigned1.get(i) or frags.iloc[i]["OnlineLabel"]) for i in range(n_frags)
+    ]
+
+    # Pass 2: re-seed schedule from Pass-1 labels to remove online-label bias.
+    frags_pass1 = frags.copy()
+    frags_pass1["_pass1_label"] = pass1_labels
+    schedule2 = _build_schedule(frags_pass1, "_pass1_label")
+    score_mat2 = _build_score_matrix(frags, known_labels, schedule2, params)
+    assigned2 = _milp_solve(frags, known_labels, score_mat2, params)
+
+    # Apply margin threshold: accept re-assignment only when it beats second-best.
     labels_out: list[str] = []
-    for i, frag_row in frags.iterrows():
-        online_lbl = str(frag_row["OnlineLabel"])
-        milp_label = assigned.get(i)
+    for i in range(n_frags):
+        online_lbl = str(frags.iloc[i]["OnlineLabel"])
+        milp_label = assigned2.get(i)
 
         if milp_label is None or milp_label == online_lbl:
             labels_out.append(online_lbl)
             continue
 
-        row_scores = score_mat[i]
-        valid_scores = sorted(row_scores[row_scores >= 0], reverse=True)
-        if (
-            len(valid_scores) >= 2
-            and (valid_scores[0] - valid_scores[1]) >= margin_thresh
-        ):
+        try:
+            milp_j = known_labels.index(milp_label)
+        except ValueError:
+            labels_out.append(online_lbl)
+            continue
+
+        milp_score = score_mat2[i, milp_j]
+        other_scores = [
+            score_mat2[i, j]
+            for j in range(n_labels)
+            if j != milp_j and score_mat2[i, j] >= 0
+        ]
+        second_best = max(other_scores) if other_scores else 0.0
+
+        if milp_score - second_best >= margin_thresh:
             labels_out.append(milp_label)
         else:
             labels_out.append(online_lbl)
 
+    # AssignedScore from pass-2 matrix for the accepted label.
     assigned_scores: list[float] = []
-    for i, frag_row in frags.iterrows():
+    for i in range(n_frags):
         label = labels_out[i]
         if label in known_labels:
             j = known_labels.index(label)
-            s = score_mat[i, j]
+            s = score_mat2[i, j]
             assigned_scores.append(float(s) if s >= 0 else 0.0)
         else:
             assigned_scores.append(0.0)
@@ -455,45 +538,80 @@ def solve_global_assignment(
 def apply_fragment_labels(
     df: pd.DataFrame,
     fragments_df: pd.DataFrame,
+    catalog: IdentityCatalog | None = None,
 ) -> pd.DataFrame:
     """Write AssignedLabel from fragments back into trajectories.
 
-    Updates IdentityAssignedLabel, IdentityAssignedConfidence,
-    IdentityCommitted in the trajectory DataFrame.
+    Updates IdentityAssignedLabel, IdentityFragmentScore, IdentityCommitted.
+    IdentityAssignedConfidence is preserved (not overwritten — it comes from
+    the online decoder and is probabilistic; AssignedScore is an MILP objective
+    value with different semantics).
+    IdentityAssignedID is updated from catalog when catalog is provided.
     Rows not covered by any fragment are unchanged.
     Returns a copy.
     """
-    out = df.copy()
+    original_index = df.index
+    out = df.copy().reset_index(drop=True)
+
     if "IdentityAssignedLabel" not in out.columns:
         out["IdentityAssignedLabel"] = np.nan
     if "IdentityAssignedConfidence" not in out.columns:
         out["IdentityAssignedConfidence"] = np.nan
     if "IdentityCommitted" not in out.columns:
         out["IdentityCommitted"] = False
+    if "IdentityFragmentScore" not in out.columns:
+        out["IdentityFragmentScore"] = np.nan
 
-    for _, frag in fragments_df.iterrows():
-        assigned = frag.get("AssignedLabel")
-        if assigned is None or (isinstance(assigned, float) and np.isnan(assigned)):
-            continue
-        if str(assigned) in _UNKNOWN_VALUES:
-            continue
-        traj_id = frag["TrajectoryID"]
-        start = int(frag["StartFrame"])
-        end = int(frag["EndFrame"])
-        mask = (
-            (out["TrajectoryID"] == traj_id)
-            & (out["FrameID"] >= start)
-            & (out["FrameID"] <= end)
-        )
-        out.loc[mask, "IdentityAssignedLabel"] = assigned
-        score = (
-            frag["AssignedScore"]
-            if "AssignedScore" in frag.index
-            else frag.get("OnlineConfidence", np.nan)
-        )
-        out.loc[mask, "IdentityAssignedConfidence"] = score
-        out.loc[mask, "IdentityCommitted"] = True
+    if "AssignedLabel" not in fragments_df.columns:
+        out.index = original_index
+        return out
 
+    frag_cols = ["TrajectoryID", "StartFrame", "EndFrame", "AssignedLabel"]
+    if "AssignedScore" in fragments_df.columns:
+        frag_cols.append("AssignedScore")
+
+    valid_frags = fragments_df[
+        fragments_df["AssignedLabel"].notna()
+        & ~fragments_df["AssignedLabel"].astype(str).str.strip().isin(_UNKNOWN_VALUES)
+    ][frag_cols].copy()
+
+    if "AssignedScore" not in valid_frags.columns:
+        valid_frags["AssignedScore"] = np.nan
+
+    if valid_frags.empty:
+        out.index = original_index
+        return out
+
+    # Vectorized range-join: cross-join on TrajectoryID, then filter by frame range.
+    tmp = (
+        out[["TrajectoryID", "FrameID"]]
+        .assign(_idx=np.arange(len(out)))
+        .merge(valid_frags, on="TrajectoryID", how="inner")
+    )
+    in_range = (tmp["FrameID"] >= tmp["StartFrame"]) & (
+        tmp["FrameID"] <= tmp["EndFrame"]
+    )
+    matched = tmp[in_range].drop_duplicates(subset=["_idx"])
+
+    if matched.empty:
+        out.index = original_index
+        return out
+
+    row_positions = matched["_idx"].values
+    out.loc[row_positions, "IdentityAssignedLabel"] = matched["AssignedLabel"].values
+    out.loc[row_positions, "IdentityFragmentScore"] = matched["AssignedScore"].values
+    out.loc[row_positions, "IdentityCommitted"] = True
+
+    if catalog is not None and "IdentityAssignedID" in out.columns:
+        for label_val in matched["AssignedLabel"].unique():
+            label_str = str(label_val)
+            if catalog.contains(label_str):
+                lbl_mask = matched["AssignedLabel"].astype(str) == label_str
+                out.loc[matched.loc[lbl_mask, "_idx"].values, "IdentityAssignedID"] = (
+                    catalog.index_of(label_str)
+                )
+
+    out.index = original_index
     return out
 
 
@@ -509,15 +627,17 @@ def run_fragment_solver(
     trajectories_df : post-augmentation trajectory DataFrame.
     catalog : IdentityCatalog for the run.
     params : optional overrides. Keys:
-        CHANGEPOINT_PENALTY          float  default 3.0
-        MIN_FRAGMENT_FRAMES          int    default 5
-        FRAGMENT_CNN_WEIGHT          float  default 0.40
-        FRAGMENT_SPATIAL_WEIGHT      float  default 0.35
-        ONLINE_PRIOR_WEIGHT          float  default 0.25
-        ASSIGNMENT_MARGIN_THRESHOLD  float  default 0.10
-        MAX_VELOCITY_BREAK           float  default 50.0
-        TAG_IDENTITY_LABELS          list   default []
-        FRAGMENT_SOLVER_ILP_TIME_LIMIT float default 30.0
+        CHANGEPOINT_PENALTY              float  default 3.0
+        MIN_FRAGMENT_FRAMES              int    default 5
+        PELT_MODEL                       str    default "rbf" (l1 / l2 / rbf)
+        FRAGMENT_CNN_WEIGHT              float  default 0.40
+        FRAGMENT_TAG_WEIGHT              float  default 0.15
+        FRAGMENT_SPATIAL_WEIGHT          float  default 0.35
+        ONLINE_PRIOR_WEIGHT              float  default 0.25
+        ASSIGNMENT_MARGIN_THRESHOLD      float  default 0.10
+        MAX_VELOCITY_BREAK               float  default 50.0
+        FRAGMENT_SOLVER_ILP_TIME_LIMIT   float  default 30.0
+        ENABLE_FRAGMENT_SCORING          bool   default True
     """
     params = params or {}
 
@@ -528,6 +648,8 @@ def run_fragment_solver(
     if not known_labels:
         return trajectories_df
 
+    enable_scoring = bool(params.get("ENABLE_FRAGMENT_SCORING", True))
+
     changepoints = detect_identity_changepoints(trajectories_df, catalog, params)
     fragments_df = build_fragments(trajectories_df, changepoints, catalog, params)
 
@@ -535,14 +657,18 @@ def run_fragment_solver(
         log.debug("fragment_solver: no fragments built; returning unchanged.")
         return trajectories_df
 
-    fragments_df = solve_global_assignment(fragments_df, catalog, params)
-
-    result = apply_fragment_labels(trajectories_df, fragments_df)
-
     log.info(
         "fragment_solver: %d fragments across %d trajectories; %d changepoints detected.",
         len(fragments_df),
         int(fragments_df["TrajectoryID"].nunique()),
         sum(len(v) for v in changepoints.values()),
     )
+
+    if not enable_scoring:
+        log.debug("fragment_solver: scoring disabled; labels not updated.")
+        return trajectories_df
+
+    fragments_df = solve_global_assignment(fragments_df, catalog, params)
+    result = apply_fragment_labels(trajectories_df, fragments_df, catalog)
+
     return result

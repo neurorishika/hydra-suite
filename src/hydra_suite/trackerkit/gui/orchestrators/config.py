@@ -806,6 +806,15 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_min_fragment_frames.setValue(
             int(get_cfg("min_fragment_frames", default=5))
         )
+        self._panels.postprocess.cmb_pelt_model.setCurrentText(
+            str(get_cfg("pelt_model", default="rbf"))
+        )
+        self._panels.postprocess.spin_fragment_solver_ilp_time_limit.setValue(
+            float(get_cfg("fragment_solver_ilp_time_limit", default=30.0))
+        )
+        self._panels.postprocess.chk_enable_fragment_scoring.setChecked(
+            bool(get_cfg("enable_fragment_scoring", default=True))
+        )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
         )
@@ -1639,6 +1648,9 @@ class ConfigOrchestrator:
                 "online_prior_weight": self._panels.postprocess.spin_online_prior_weight.value(),
                 "assignment_margin_threshold": self._panels.postprocess.spin_assignment_margin_threshold.value(),
                 "min_fragment_frames": self._panels.postprocess.spin_min_fragment_frames.value(),
+                "pelt_model": self._panels.postprocess.cmb_pelt_model.currentText(),
+                "fragment_solver_ilp_time_limit": self._panels.postprocess.spin_fragment_solver_ilp_time_limit.value(),
+                "enable_fragment_scoring": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
@@ -2113,6 +2125,9 @@ class ConfigOrchestrator:
             "ONLINE_PRIOR_WEIGHT": self._panels.postprocess.spin_online_prior_weight.value(),
             "ASSIGNMENT_MARGIN_THRESHOLD": self._panels.postprocess.spin_assignment_margin_threshold.value(),
             "MIN_FRAGMENT_FRAMES": self._panels.postprocess.spin_min_fragment_frames.value(),
+            "PELT_MODEL": self._panels.postprocess.cmb_pelt_model.currentText(),
+            "FRAGMENT_SOLVER_ILP_TIME_LIMIT": self._panels.postprocess.spin_fragment_solver_ilp_time_limit.value(),
+            "ENABLE_FRAGMENT_SCORING": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
             * scaled_body_size
             / fps,

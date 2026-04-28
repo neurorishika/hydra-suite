@@ -574,6 +574,42 @@ class PostProcessPanel(QWidget):
         )
         fs_layout.addRow("Min fragment frames", self.spin_min_fragment_frames)
 
+        self.cmb_pelt_model = QComboBox()
+        self.cmb_pelt_model.addItems(["rbf", "l1", "l2"])
+        self.cmb_pelt_model.setCurrentText("rbf")
+        self.cmb_pelt_model.setToolTip(
+            "PELT signal model for changepoint detection:\n"
+            "• rbf — nonparametric kernel; robust to non-Gaussian evidence (default).\n"
+            "• l1 — median-based; outlier-resistant, no z-scoring applied.\n"
+            "• l2 — mean-based; fastest, assumes Gaussian evidence."
+        )
+        fs_layout.addRow("PELT model", self.cmb_pelt_model)
+
+        self.spin_fragment_solver_ilp_time_limit = QDoubleSpinBox()
+        self.spin_fragment_solver_ilp_time_limit.setRange(1.0, 300.0)
+        self.spin_fragment_solver_ilp_time_limit.setSingleStep(5.0)
+        self.spin_fragment_solver_ilp_time_limit.setDecimals(1)
+        self.spin_fragment_solver_ilp_time_limit.setValue(30.0)
+        self.spin_fragment_solver_ilp_time_limit.setToolTip(
+            "Maximum wall-clock seconds the MILP solver is allowed to run.\n"
+            "For large videos with many fragments, increase this value.\n"
+            "The solver returns the best solution found within the limit.\n"
+            "Recommended: 30–120 s."
+        )
+        fs_layout.addRow(
+            "ILP time limit (seconds)", self.spin_fragment_solver_ilp_time_limit
+        )
+
+        self.chk_enable_fragment_scoring = QCheckBox("Apply MILP label reassignment")
+        self.chk_enable_fragment_scoring.setChecked(True)
+        self.chk_enable_fragment_scoring.setToolTip(
+            "When checked, MILP jointly optimises all fragment labels using CNN,\n"
+            "tag, spatial, and prior evidence — updating IdentityAssignedLabel.\n"
+            "Uncheck to run PELT changepoint detection only (log changepoints\n"
+            "without modifying any labels)."
+        )
+        fs_layout.addRow("", self.chk_enable_fragment_scoring)
+
         self.fragment_solver_content.setVisible(True)
         vl_offline_identity.addWidget(self.fragment_solver_content)
 
