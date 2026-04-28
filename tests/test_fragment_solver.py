@@ -118,86 +118,78 @@ def test_build_fragments_has_required_columns():
     ), f"missing: {required - set(frags.columns)}"
 
 
-from hydra_suite.core.identity.fragment_solver import (
-    build_fragments,
-    solve_global_assignment,
-)
+from hydra_suite.core.identity.fragment_solver import solve_global_assignment
 
 
-def _make_two_swapped_fragments():
-    """Two fragments: frag0 has strong green CNN evidence but online label 'blue';
-    frag1 has strong blue CNN evidence but online label 'green'.
-    Non-overlapping. Expect solver to swap them."""
-    frags = pd.DataFrame(
-        [
-            {
-                "TrajectoryID": 1,
-                "FragmentID": 0,
-                "StartFrame": 0,
-                "EndFrame": 29,
-                "StartX": 0.0,
-                "StartY": 0.0,
-                "EndX": 5.0,
-                "EndY": 0.0,
-                "MeanCNNProbs": {"blue": 0.1, "green": 0.9},
-                "OnlineLabel": "blue",
-                "OnlineConfidence": 0.3,
-            },
-            {
-                "TrajectoryID": 2,
-                "FragmentID": 1,
-                "StartFrame": 30,
-                "EndFrame": 59,
-                "StartX": 5.0,
-                "StartY": 0.0,
-                "EndX": 10.0,
-                "EndY": 0.0,
-                "MeanCNNProbs": {"blue": 0.9, "green": 0.1},
-                "OnlineLabel": "green",
-                "OnlineConfidence": 0.3,
-            },
-        ]
+def _make_two_trajectory_df():
+    """Two trajectories: traj 1 has strong green CNN but online label 'blue';
+    traj 2 has strong blue CNN but online label 'green'. Non-overlapping in time."""
+    n = 30
+    frames_t1 = list(range(0, n))
+    frames_t2 = list(range(n, 2 * n))
+    return pd.DataFrame(
+        {
+            "TrajectoryID": [1] * n + [2] * n,
+            "FrameID": frames_t1 + frames_t2,
+            "X": [float(i) for i in range(2 * n)],
+            "Y": [0.0] * (2 * n),
+            "IdentityAssignedLabel": ["blue"] * n + ["green"] * n,
+            "IdentityAssignedConfidence": [0.3] * (2 * n),
+            "CNN_test_blue_Prob": [0.1] * n + [0.9] * n,
+            "CNN_test_green_Prob": [0.9] * n + [0.1] * n,
+        }
     )
-    return frags
 
 
 def test_solve_global_assignment_corrects_swap():
     catalog = _make_catalog()
-    frags = _make_two_swapped_fragments()
+    df = _make_two_trajectory_df()
     params = {
         "ONLINE_PRIOR_WEIGHT": 0.1,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
         "FRAGMENT_CNN_WEIGHT": 0.7,
         "FRAGMENT_SPATIAL_WEIGHT": 0.2,
         "MAX_VELOCITY_BREAK": 50.0,
-        "TAG_IDENTITY_LABELS": [],
     }
-    result = solve_global_assignment(frags, catalog, params)
-    assert "AssignedLabel" in result.columns
-    frag0_label = result[result["FragmentID"] == 0].iloc[0]["AssignedLabel"]
-    frag1_label = result[result["FragmentID"] == 1].iloc[0]["AssignedLabel"]
-    assert frag0_label == "green", f"expected green for frag0, got {frag0_label}"
-    assert frag1_label == "blue", f"expected blue for frag1, got {frag1_label}"
+    result = solve_global_assignment(df, catalog, params)
+    assert "IdentityAssignedLabel" in result.columns
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    assert label_t1 == "green", f"expected green for traj 1, got {label_t1}"
+    assert label_t2 == "blue", f"expected blue for traj 2, got {label_t2}"
+
+
+def test_solve_global_assignment_uniform_labels_per_trajectory():
+    """Every row within a trajectory must get the same assigned label."""
+    catalog = _make_catalog()
+    df = _make_two_trajectory_df()
+    params = {
+        "ONLINE_PRIOR_WEIGHT": 0.1,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
+        "FRAGMENT_CNN_WEIGHT": 0.7,
+        "FRAGMENT_SPATIAL_WEIGHT": 0.2,
+        "MAX_VELOCITY_BREAK": 50.0,
+    }
+    result = solve_global_assignment(df, catalog, params)
+    for tid in result["TrajectoryID"].unique():
+        labels = result[result["TrajectoryID"] == tid]["IdentityAssignedLabel"].unique()
+        assert len(labels) == 1, f"trajectory {tid} has mixed labels: {labels}"
 
 
 def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
     catalog = _make_catalog()
-    frags = pd.DataFrame(
-        [
-            {
-                "TrajectoryID": 1,
-                "FragmentID": 0,
-                "StartFrame": 0,
-                "EndFrame": 29,
-                "StartX": 0.0,
-                "StartY": 0.0,
-                "EndX": 5.0,
-                "EndY": 0.0,
-                "MeanCNNProbs": {"blue": 0.52, "green": 0.48},  # near-tie
-                "OnlineLabel": "blue",
-                "OnlineConfidence": 0.9,
-            }
-        ]
+    n = 30
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * n,
+            "FrameID": list(range(n)),
+            "X": [float(i) for i in range(n)],
+            "Y": [0.0] * n,
+            "IdentityAssignedLabel": ["blue"] * n,
+            "IdentityAssignedConfidence": [0.9] * n,
+            "CNN_test_blue_Prob": [0.52] * n,
+            "CNN_test_green_Prob": [0.48] * n,
+        }
     )
     params = {
         "ONLINE_PRIOR_WEIGHT": 0.25,
@@ -205,10 +197,9 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
         "FRAGMENT_CNN_WEIGHT": 0.7,
         "FRAGMENT_SPATIAL_WEIGHT": 0.3,
         "MAX_VELOCITY_BREAK": 50.0,
-        "TAG_IDENTITY_LABELS": [],
     }
-    result = solve_global_assignment(frags, catalog, params)
-    assert result.iloc[0]["AssignedLabel"] == "blue"
+    result = solve_global_assignment(df, catalog, params)
+    assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
 
 
 from hydra_suite.core.identity.fragment_solver import (

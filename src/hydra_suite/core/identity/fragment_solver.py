@@ -518,68 +518,178 @@ def _milp_solve(
     return assigned
 
 
+def _build_traj_summaries(
+    df: pd.DataFrame,
+    catalog: IdentityCatalog,
+) -> pd.DataFrame:
+    """Build a per-trajectory summary DataFrame for the MILP.
+
+    Columns: TrajectoryID, StartFrame, EndFrame, StartX, StartY, EndX, EndY,
+    MeanCNNProbs (dict), MeanTagProbs (dict), OnlineLabel, OnlineConfidence.
+    """
+    known_labels = list(catalog.labels[1:])
+    rows: list[dict] = []
+
+    for traj_id, grp in df.groupby("TrajectoryID", sort=False):
+        grp_sorted = grp.sort_values("FrameID").reset_index(drop=True)
+        start_f = int(grp_sorted["FrameID"].iloc[0])
+        end_f = int(grp_sorted["FrameID"].iloc[-1])
+
+        valid_xy = (
+            grp_sorted[grp_sorted["X"].notna() & grp_sorted["Y"].notna()].sort_values(
+                "FrameID"
+            )
+            if "X" in grp_sorted.columns and "Y" in grp_sorted.columns
+            else pd.DataFrame()
+        )
+        if not valid_xy.empty:
+            sx = float(valid_xy.iloc[0]["X"])
+            sy = float(valid_xy.iloc[0]["Y"])
+            ex = float(valid_xy.iloc[-1]["X"])
+            ey = float(valid_xy.iloc[-1]["Y"])
+        else:
+            sx = sy = ex = ey = math.nan
+
+        mean_probs: dict[str, float] = {}
+        for label in known_labels:
+            suffix = f"_{label}_Prob"
+            prob_col = next(
+                (c for c in grp_sorted.columns if str(c).endswith(suffix)), None
+            )
+            if prob_col is not None:
+                vals = pd.to_numeric(grp_sorted[prob_col], errors="coerce")
+                if vals.notna().any():
+                    mean_probs[label] = float(np.nanmean(vals.values))
+
+        tag_probs: dict[str, float] = {}
+        if "DetectedTagLabel" in grp_sorted.columns:
+            tag_vals = grp_sorted["DetectedTagLabel"].dropna().astype(str).str.strip()
+            tag_known = tag_vals[~tag_vals.isin(_UNKNOWN_VALUES)]
+            n_rows = len(grp_sorted)
+            if len(tag_known) > 0 and n_rows > 0:
+                for label in known_labels:
+                    frac = float((tag_known == str(label)).sum()) / n_rows
+                    if frac > 0.0:
+                        tag_probs[label] = frac
+
+        label_col = grp_sorted.get(
+            _LABEL_COL, pd.Series("unknown", index=grp_sorted.index, dtype=object)
+        )
+        unknown_mask = label_col.isna() | label_col.astype(str).str.strip().isin(
+            _UNKNOWN_VALUES
+        )
+        known_rows = grp_sorted[~unknown_mask]
+        if not known_rows.empty:
+            online_label = str(known_rows[_LABEL_COL].astype(str).mode().iloc[0])
+            if _CONF_COL in known_rows.columns:
+                conf_vals = pd.to_numeric(known_rows[_CONF_COL], errors="coerce")
+                online_conf = (
+                    float(np.nanmean(conf_vals.values))
+                    if conf_vals.notna().any()
+                    else 0.0
+                )
+            else:
+                online_conf = 0.0
+        else:
+            online_label = "unknown"
+            online_conf = 0.0
+
+        rows.append(
+            {
+                "TrajectoryID": traj_id,
+                "StartFrame": start_f,
+                "EndFrame": end_f,
+                "StartX": sx,
+                "StartY": sy,
+                "EndX": ex,
+                "EndY": ey,
+                "MeanCNNProbs": mean_probs,
+                "MeanTagProbs": tag_probs,
+                "OnlineLabel": online_label,
+                "OnlineConfidence": online_conf,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "TrajectoryID",
+                "StartFrame",
+                "EndFrame",
+                "StartX",
+                "StartY",
+                "EndX",
+                "EndY",
+                "MeanCNNProbs",
+                "MeanTagProbs",
+                "OnlineLabel",
+                "OnlineConfidence",
+            ]
+        )
+    return pd.DataFrame(rows)
+
+
 def solve_global_assignment(
-    fragments_df: pd.DataFrame,
+    df: pd.DataFrame,
     catalog: IdentityCatalog,
     params: dict[str, Any],
 ) -> pd.DataFrame:
-    """Return fragments_df with added AssignedLabel and AssignedScore columns.
+    """Assign one identity label per trajectory using a two-pass MILP.
 
-    Two-pass strategy removes circular bias from the online-label schedule seed:
-    - Pass 1: schedule seeded from OnlineLabel → MILP.
-    - Pass 2: schedule re-seeded from Pass-1 labels → MILP again.
+    Builds per-trajectory summaries internally, runs the MILP with spatial
+    continuity + CNN evidence + online-label prior, then writes
+    IdentityAssignedLabel, IdentityFragmentScore, and IdentityCommitted back
+    into every row of each trajectory.  Returns a modified copy of df.
 
-    Margin threshold applied to Pass-2 results: only re-assign when
+    Two-pass strategy:
+    - Pass 1: spatial schedule seeded from online labels.
+    - Pass 2: schedule re-seeded from Pass-1 results to remove online-label bias.
+    Margin threshold applied to Pass-2: only accept re-assignment when
     score(milp_label) - score(second_best) >= ASSIGNMENT_MARGIN_THRESHOLD.
     """
     known_labels = list(catalog.labels[1:])
-    if not known_labels or fragments_df.empty:
-        out = fragments_df.copy()
-        out["AssignedLabel"] = fragments_df["OnlineLabel"]
-        out["AssignedScore"] = 0.0
-        return out
+    if not known_labels or df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
 
-    margin_thresh = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
-    frags = fragments_df.reset_index(drop=True)
-    n_frags = len(frags)
-    n_labels = len(known_labels)
     known_label_set = set(known_labels)
+    margin_thresh = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
 
     def _catalog_label_or_unknown(lbl: str) -> str:
-        # Non-catalog strings (e.g. AprilTag family names) become "unknown" so they
-        # don't propagate into AssignedLabel or pollute the spatial schedule.
         return lbl if lbl in known_label_set else "unknown"
 
-    # Pass 1: seed schedule from OnlineLabel.
-    schedule1 = _build_schedule(frags, "OnlineLabel")
-    score_mat1 = _build_score_matrix(frags, known_labels, schedule1, params)
-    assigned1 = _milp_solve(frags, known_labels, score_mat1, params)
+    traj_summaries = _build_traj_summaries(df, catalog)
+    if traj_summaries.empty:
+        return df
 
-    # Build intermediate label list for schedule re-seeding (no margin threshold yet).
-    # Filter to catalog labels so non-catalog online labels don't pollute the schedule.
+    summaries = traj_summaries.reset_index(drop=True)
+    n_trajs = len(summaries)
+    n_labels = len(known_labels)
+
+    # Pass 1: seed schedule from OnlineLabel.
+    schedule1 = _build_schedule(summaries, "OnlineLabel")
+    score_mat1 = _build_score_matrix(summaries, known_labels, schedule1, params)
+    assigned1 = _milp_solve(summaries, known_labels, score_mat1, params)
+
     pass1_labels = [
         (
             str(assigned1.get(i))
             if assigned1.get(i) is not None
-            else _catalog_label_or_unknown(str(frags.iloc[i]["OnlineLabel"]))
+            else _catalog_label_or_unknown(str(summaries.iloc[i]["OnlineLabel"]))
         )
-        for i in range(n_frags)
+        for i in range(n_trajs)
     ]
 
     # Pass 2: re-seed schedule from Pass-1 labels to remove online-label bias.
-    frags_pass1 = frags.copy()
-    frags_pass1["_pass1_label"] = pass1_labels
-    schedule2 = _build_schedule(frags_pass1, "_pass1_label")
-    score_mat2 = _build_score_matrix(frags, known_labels, schedule2, params)
-    assigned2 = _milp_solve(frags, known_labels, score_mat2, params)
+    summaries_pass1 = summaries.copy()
+    summaries_pass1["_pass1_label"] = pass1_labels
+    schedule2 = _build_schedule(summaries_pass1, "_pass1_label")
+    score_mat2 = _build_score_matrix(summaries, known_labels, schedule2, params)
+    assigned2 = _milp_solve(summaries, known_labels, score_mat2, params)
 
-    # Apply margin threshold: accept re-assignment only when it beats second-best.
-    # OnlineLabel fallbacks are filtered to known catalog labels — non-catalog values
-    # (e.g. AprilTag family strings written by the online decoder) become "unknown"
-    # and are skipped by apply_fragment_labels rather than polluting the output.
+    # Apply margin threshold.
     labels_out: list[str] = []
-    for i in range(n_frags):
-        online_lbl = _catalog_label_or_unknown(str(frags.iloc[i]["OnlineLabel"]))
+    for i in range(n_trajs):
+        online_lbl = _catalog_label_or_unknown(str(summaries.iloc[i]["OnlineLabel"]))
         milp_label = assigned2.get(i)
 
         if milp_label is None or milp_label == online_lbl:
@@ -605,9 +715,8 @@ def solve_global_assignment(
         else:
             labels_out.append(online_lbl)
 
-    # AssignedScore from pass-2 matrix for the accepted label.
     assigned_scores: list[float] = []
-    for i in range(n_frags):
+    for i in range(n_trajs):
         label = labels_out[i]
         if label in known_labels:
             j = known_labels.index(label)
@@ -616,9 +725,25 @@ def solve_global_assignment(
         else:
             assigned_scores.append(0.0)
 
-    out = frags.copy()
-    out["AssignedLabel"] = labels_out
-    out["AssignedScore"] = assigned_scores
+    # Write one label per trajectory back to every row.
+    out = df.copy()
+    if "IdentityAssignedLabel" not in out.columns:
+        out["IdentityAssignedLabel"] = np.nan
+    if "IdentityCommitted" not in out.columns:
+        out["IdentityCommitted"] = False
+    if "IdentityFragmentScore" not in out.columns:
+        out["IdentityFragmentScore"] = np.nan
+
+    for i in range(n_trajs):
+        label = labels_out[i]
+        if not label or label in _UNKNOWN_VALUES:
+            continue
+        traj_id = summaries.iloc[i]["TrajectoryID"]
+        mask = out["TrajectoryID"] == traj_id
+        out.loc[mask, "IdentityAssignedLabel"] = label
+        out.loc[mask, "IdentityFragmentScore"] = assigned_scores[i]
+        out.loc[mask, "IdentityCommitted"] = True
+
     return out
 
 
