@@ -43,7 +43,7 @@ def test_changepoint_detects_clear_swap():
     # Trajectory 1 should have exactly one split near frame 30.
     splits = result.get(1, [])
     assert len(splits) == 1
-    assert 25 <= splits[0] <= 35, f"expected split near 30, got {splits[0]}"
+    assert 27 <= splits[0] <= 32, f"expected split near 29-30, got {splits[0]}"
 
 
 def test_changepoint_no_split_when_stable():

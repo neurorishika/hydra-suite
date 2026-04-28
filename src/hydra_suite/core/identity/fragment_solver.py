@@ -30,10 +30,9 @@ def detect_identity_changepoints(
 ) -> dict[Any, list[int]]:
     """Return {traj_id: [split_frame_indices]} using PELT on CNN prob matrix.
 
-    A split_frame_index is the *exclusive end* of a segment (i.e., the first
-    frame of the following segment), matching the convention returned by
-    ``ruptures`` ``predict()``.  Equivalently, segment k spans
-    [split_indices[k-1], split_indices[k]).
+    Each split_frame_index is the *inclusive end* (last FrameID) of a segment.
+    ``build_fragments`` treats these as inclusive boundaries: segment k spans
+    FrameIDs [split_indices[k-1]+1, split_indices[k]].
     Trajectories with no CNN evidence or fewer than min_fragment_frames*2
     rows are returned with no splits.
     """
@@ -86,7 +85,7 @@ def detect_identity_changepoints(
                 .predict(pen=penalty)
             )
         except Exception as exc:
-            log.debug("PELT failed for traj %s: %s", traj_id, exc)
+            log.warning("PELT failed for traj %s: %s", traj_id, exc)
             continue
 
         # ruptures returns end-of-segment indices (1-indexed frame position in grp_sorted).
