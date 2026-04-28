@@ -9,6 +9,7 @@ Optimizations:
 """
 
 import logging
+import math
 import re
 
 import numpy as np
@@ -1175,25 +1176,77 @@ _IDENTITY_SLOT_COL = "IdentitySlotLockLabel"
 _IDENTITY_CONFLICT_COL = "IdentityConflictResolved"
 
 
-def _score_identity_claim(df: pd.DataFrame) -> tuple:
-    """Return a comparable score tuple for a trajectory's identity claim.
+_CLAIM_TAG_WEIGHT = 1.5
 
-    Higher tuple → stronger claim.  Components (descending priority):
-    tag-vote sum, mean assigned confidence, frame count, forward-pass flag.
+
+def _claim_features(df: pd.DataFrame, modal_label: str) -> tuple:
+    """Return the per-trajectory features feeding ``_claim_score``.
+
+    Components (in declaration order):
+    - tag_votes: sum of AprilTag agreements
+    - agreement: fraction of labelled rows whose label matches ``modal_label``
+    - mean_conf: mean of ``IdentityAssignedConfidence`` over labelled rows
+    - frame_count: number of rows in the trajectory
+    - is_forward: 1 when any row was contributed by the forward pass
     """
     tag_votes = float(df["TagVotes"].sum()) if "TagVotes" in df.columns else 0.0
-    id_conf = 0.0
+
+    label_series = (
+        df[_IDENTITY_LABEL_COL]
+        if _IDENTITY_LABEL_COL in df.columns
+        else pd.Series(dtype=object)
+    )
+    valid_label_mask = label_series.notna() & (
+        label_series.astype(str).str.strip() != ""
+    )
+    valid_count = int(valid_label_mask.sum())
+    if valid_count > 0:
+        match = (label_series.astype(str) == modal_label) & valid_label_mask
+        agreement = float(match.sum()) / float(valid_count)
+    else:
+        agreement = 0.0
+
+    mean_conf = 0.0
     if _IDENTITY_CONF_COL in df.columns:
-        raw = df[_IDENTITY_CONF_COL].dropna()
-        if not raw.empty:
-            candidate = float(raw.mean())
+        conf_series = df.loc[valid_label_mask, _IDENTITY_CONF_COL].dropna()
+        if not conf_series.empty:
+            candidate = float(conf_series.mean())
             if np.isfinite(candidate):
-                id_conf = candidate
-    frame_count = float(len(df))
+                mean_conf = max(0.0, min(1.0, candidate))
+
+    frame_count = int(len(df))
     is_forward = int(
         "_source" in df.columns and bool((df["_source"] == "forward").any())
     )
-    return (tag_votes, id_conf, frame_count, is_forward)
+    return (tag_votes, agreement, mean_conf, frame_count, is_forward)
+
+
+def _claim_score(
+    features: tuple,
+    max_frame_count: int,
+    max_tag_votes: float,
+    tag_weight: float = _CLAIM_TAG_WEIGHT,
+) -> float:
+    """Combine claim features into a scalar score (higher = stronger claim).
+
+    Mirrors the iterative fragment-solver objective:
+    ``agreement × mean_conf × length_factor`` is the unary trajectory-quality
+    term; the tag-vote sum is a separate additive bonus so a heavily
+    tag-confirmed claim dominates over noisy long ones. Use
+    ``(_claim_score, is_forward)`` as the lexicographic ordering key — the
+    forward-pass flag breaks exact ties.
+    """
+    tag_votes, agreement, mean_conf, frame_count, _ = features
+    if max_frame_count <= 0:
+        length_factor = 1.0
+    else:
+        log_max = math.log1p(max_frame_count)
+        length_factor = math.log1p(frame_count) / log_max if log_max > 0 else 1.0
+    if max_tag_votes <= 0:
+        tag_norm = 0.0
+    else:
+        tag_norm = tag_votes / max_tag_votes
+    return float(agreement * mean_conf * length_factor + tag_weight * tag_norm)
 
 
 def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -1221,8 +1274,12 @@ def resolve_simultaneous_identity_conflicts(
     lower-scoring one has its identity columns cleared and
     ``IdentityConflictResolved`` set to ``True``.
 
-    Scoring (descending priority): TagVotes sum → mean IdentityAssignedConfidence
-    → frame count → forward-pass preference.
+    Scoring follows the same shape as the iterative fragment solver: a unary
+    quality term ``agreement × mean_conf × length_factor`` plus an additive
+    AprilTag bonus, with the forward-pass flag as the lex tiebreaker. A long
+    track with consistent labels and a clear margin therefore wins over a
+    short, jittery, or low-confidence one — the loser is the one that gets
+    cleared to Unknown.
     """
     if not result_dfs:
         return result_dfs
@@ -1237,11 +1294,23 @@ def resolve_simultaneous_identity_conflicts(
             continue
         label = str(valid.mode().iloc[0])
         frames = frozenset(df["FrameID"].dropna().astype(int).tolist())
-        score = _score_identity_claim(df)
-        labeled.append((idx, label, frames, score))
+        features = _claim_features(df, label)
+        labeled.append((idx, label, frames, features))
+
+    if not labeled:
+        return result_dfs
+
+    max_frame_count = max(features[3] for _, _, _, features in labeled)
+    max_tag_votes = max(features[0] for _, _, _, features in labeled)
+
+    scored: list[tuple] = []
+    for idx, label, frames, features in labeled:
+        score = _claim_score(features, max_frame_count, max_tag_votes)
+        is_forward = features[4]
+        scored.append((idx, label, frames, (score, is_forward)))
 
     by_label: dict[str, list] = {}
-    for item in labeled:
+    for item in scored:
         by_label.setdefault(item[1], []).append(item)
 
     loser_indices: set[int] = set()

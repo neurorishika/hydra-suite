@@ -797,9 +797,6 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_fragment_cnn_weight.setValue(
             float(get_cfg("fragment_cnn_weight", default=0.40))
         )
-        self._panels.postprocess.spin_fragment_spatial_weight.setValue(
-            float(get_cfg("fragment_spatial_weight", default=0.35))
-        )
         self._panels.postprocess.spin_fragment_tag_weight.setValue(
             float(get_cfg("fragment_tag_weight", default=0.15))
         )
@@ -817,9 +814,6 @@ class ConfigOrchestrator:
         )
         self._panels.postprocess.cmb_pelt_model.setCurrentText(
             str(get_cfg("pelt_model", default="rbf"))
-        )
-        self._panels.postprocess.spin_fragment_solver_ilp_time_limit.setValue(
-            float(get_cfg("fragment_solver_ilp_time_limit", default=30.0))
         )
         self._panels.postprocess.chk_enable_fragment_scoring.setChecked(
             bool(get_cfg("enable_fragment_scoring", default=True))
@@ -1664,14 +1658,12 @@ class ConfigOrchestrator:
                 "interpolation_max_gap_seconds": self._panels.postprocess.spin_interpolation_max_gap.value(),
                 "changepoint_penalty": self._panels.postprocess.spin_changepoint_penalty.value(),
                 "fragment_cnn_weight": self._panels.postprocess.spin_fragment_cnn_weight.value(),
-                "fragment_spatial_weight": self._panels.postprocess.spin_fragment_spatial_weight.value(),
                 "fragment_tag_weight": self._panels.postprocess.spin_fragment_tag_weight.value(),
                 "online_prior_weight": self._panels.postprocess.spin_online_prior_weight.value(),
                 "fragment_length_weight": self._panels.postprocess.spin_fragment_length_weight.value(),
                 "assignment_margin_threshold": self._panels.postprocess.spin_assignment_margin_threshold.value(),
                 "min_fragment_frames": self._panels.postprocess.spin_min_fragment_frames.value(),
                 "pelt_model": self._panels.postprocess.cmb_pelt_model.currentText(),
-                "fragment_solver_ilp_time_limit": self._panels.postprocess.spin_fragment_solver_ilp_time_limit.value(),
                 "enable_fragment_scoring": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
                 "enable_pelt_splitting": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
@@ -2147,14 +2139,12 @@ class ConfigOrchestrator:
             "VELOCITY_ZSCORE_WINDOW": velocity_zscore_window,
             "CHANGEPOINT_PENALTY": self._panels.postprocess.spin_changepoint_penalty.value(),
             "FRAGMENT_CNN_WEIGHT": self._panels.postprocess.spin_fragment_cnn_weight.value(),
-            "FRAGMENT_SPATIAL_WEIGHT": self._panels.postprocess.spin_fragment_spatial_weight.value(),
             "FRAGMENT_TAG_WEIGHT": self._panels.postprocess.spin_fragment_tag_weight.value(),
             "ONLINE_PRIOR_WEIGHT": self._panels.postprocess.spin_online_prior_weight.value(),
             "FRAGMENT_LENGTH_WEIGHT": self._panels.postprocess.spin_fragment_length_weight.value(),
             "ASSIGNMENT_MARGIN_THRESHOLD": self._panels.postprocess.spin_assignment_margin_threshold.value(),
             "MIN_FRAGMENT_FRAMES": self._panels.postprocess.spin_min_fragment_frames.value(),
             "PELT_MODEL": self._panels.postprocess.cmb_pelt_model.currentText(),
-            "FRAGMENT_SOLVER_ILP_TIME_LIMIT": self._panels.postprocess.spin_fragment_solver_ilp_time_limit.value(),
             "ENABLE_FRAGMENT_SCORING": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
             "ENABLE_PELT_SPLITTING": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()

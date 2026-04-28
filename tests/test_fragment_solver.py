@@ -107,7 +107,6 @@ def test_solve_global_assignment_corrects_swap():
         "ONLINE_PRIOR_WEIGHT": 0.1,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
         "FRAGMENT_CNN_WEIGHT": 0.7,
-        "FRAGMENT_SPATIAL_WEIGHT": 0.2,
         "MAX_VELOCITY_BREAK": 50.0,
     }
     result = solve_global_assignment(df, catalog, params)
@@ -126,7 +125,6 @@ def test_solve_global_assignment_uniform_labels_per_trajectory():
         "ONLINE_PRIOR_WEIGHT": 0.1,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
         "FRAGMENT_CNN_WEIGHT": 0.7,
-        "FRAGMENT_SPATIAL_WEIGHT": 0.2,
         "MAX_VELOCITY_BREAK": 50.0,
     }
     result = solve_global_assignment(df, catalog, params)
@@ -154,7 +152,6 @@ def test_solve_global_assignment_keeps_online_label_when_margin_too_small():
         "ONLINE_PRIOR_WEIGHT": 0.25,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.20,
         "FRAGMENT_CNN_WEIGHT": 0.7,
-        "FRAGMENT_SPATIAL_WEIGHT": 0.3,
         "MAX_VELOCITY_BREAK": 50.0,
     }
     result = solve_global_assignment(df, catalog, params)
@@ -186,7 +183,6 @@ def test_solve_global_assignment_combines_multiple_cnn_phases():
         "ONLINE_PRIOR_WEIGHT": 0.05,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
         "FRAGMENT_CNN_WEIGHT": 0.9,
-        "FRAGMENT_SPATIAL_WEIGHT": 0.05,
         "MAX_VELOCITY_BREAK": 50.0,
     }
 
@@ -220,7 +216,6 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
         "ONLINE_PRIOR_WEIGHT": 0.05,
         "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
         "FRAGMENT_CNN_WEIGHT": 0.95,
-        "FRAGMENT_SPATIAL_WEIGHT": 0.05,
         "MAX_VELOCITY_BREAK": 50.0,
     }
 
@@ -403,7 +398,6 @@ def test_long_consistent_track_beats_short_confident_fragment():
 
     params = {
         "FRAGMENT_CNN_WEIGHT": 0.40,
-        "FRAGMENT_SPATIAL_WEIGHT": 0.35,
         "ONLINE_PRIOR_WEIGHT": 0.25,
         "FRAGMENT_TAG_WEIGHT": 0.15,
         "FRAGMENT_LENGTH_WEIGHT": 0.60,
@@ -419,3 +413,232 @@ def test_long_consistent_track_beats_short_confident_fragment():
     assert (
         label_large == "blue"
     ), f"long id-consistent track should retain 'blue', got '{label_large}'"
+
+
+# === Iterative-solver-specific tests ===
+
+import numpy as np
+
+from hydra_suite.core.identity.fragment_solver import (
+    _build_traj_summaries,
+    _fragment_stability,
+    _iterative_assign,
+)
+
+
+def test_fragment_stability_clean_vs_jittery():
+    """A consistent high-margin fragment scores higher than a jittery one."""
+    n = 20
+    n_labels = 2
+    clean = np.zeros((n, n_labels))
+    clean[:, 0] = 0.9
+    clean[:, 1] = 0.1
+
+    jittery = np.zeros((n, n_labels))
+    # Alternate top-1 between labels with a small margin.
+    for i in range(n):
+        if i % 2 == 0:
+            jittery[i] = [0.55, 0.45]
+        else:
+            jittery[i] = [0.45, 0.55]
+
+    s_clean = _fragment_stability(clean)
+    s_jittery = _fragment_stability(jittery)
+    assert s_clean > s_jittery, f"clean={s_clean}, jittery={s_jittery}"
+    # Clean: agreement=1.0, margin=0.8 → 0.8.
+    assert abs(s_clean - 0.8) < 1e-6
+    # Jittery: agreement=0.5, margin=0.1 → 0.05.
+    assert abs(s_jittery - 0.05) < 1e-6
+
+
+def test_fragment_stability_no_evidence_returns_zero():
+    arr = np.full((10, 2), np.nan)
+    assert _fragment_stability(arr) == 0.0
+
+
+def test_per_row_probs_extracts_direct_columns():
+    catalog = _make_catalog()
+    df = _make_df_with_prob_cols(n_frames=10, swap_at=10)
+    summaries = _build_traj_summaries(df, catalog)
+    assert len(summaries) == 1
+    # The single fragment is consistent "blue" → high stability.
+    assert float(summaries.iloc[0]["Stability"]) > 0.5
+
+
+def test_iterative_solver_resolves_spurious_blocking_fragment():
+    """The reported pathology: a spurious 5-frame fragment with confident-wrong
+    label, sandwiched by long correctly-labeled fragments of a different
+    identity.  The iterative solver must relabel (or Unknown) the spurious
+    fragment so the long fragment that was blocked from its correct label can
+    keep it.
+    """
+    catalog = _make_catalog()
+    rows = []
+    # Long blue track (correctly online-labeled) frames 0-99 at X=0..99.
+    for f in range(100):
+        rows.append(
+            {
+                "TrajectoryID": 1,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": "blue",
+                "IdentityAssignedConfidence": 0.85,
+                "CNN_test_blue_Prob": 0.80,
+                "CNN_test_green_Prob": 0.20,
+                "DetectedTagLabel": float("nan"),
+            }
+        )
+    # Long green track (correctly online-labeled) frames 0-99 at X=0..99 but Y=200.
+    for f in range(100):
+        rows.append(
+            {
+                "TrajectoryID": 2,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 200.0,
+                "IdentityAssignedLabel": "green",
+                "IdentityAssignedConfidence": 0.85,
+                "CNN_test_blue_Prob": 0.20,
+                "CNN_test_green_Prob": 0.80,
+                "DetectedTagLabel": float("nan"),
+            }
+        )
+    # Spurious 5-frame fragment claiming "green" but spatially aligned with the
+    # blue track (Y=0). It should NOT keep "green" — the iterative solver should
+    # see the massive Y jump between this fragment and the actual green track.
+    for k, f in enumerate(range(40, 45)):
+        rows.append(
+            {
+                "TrajectoryID": 3,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": "green",
+                "IdentityAssignedConfidence": 0.92,
+                "CNN_test_blue_Prob": 0.05,
+                "CNN_test_green_Prob": 0.95,
+                "DetectedTagLabel": float("nan"),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.40,
+        "FRAGMENT_TAG_WEIGHT": 0.0,
+        "ONLINE_PRIOR_WEIGHT": 0.25,
+        "FRAGMENT_LENGTH_WEIGHT": 0.60,
+        "SPATIAL_NO_NEIGHBOR_SCORE": 0.3,
+        "FRAGMENT_SPATIAL_VETO_THRESHOLD": 0.05,
+        "MAX_VELOCITY_BREAK": 50.0,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+    }
+    result = solve_global_assignment(df, catalog, params)
+
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    label_t3 = result[result["TrajectoryID"] == 3]["IdentityAssignedLabel"].iloc[0]
+
+    # The two long anchor tracks must keep their correct online labels.
+    assert label_t1 == "blue", f"long blue track lost label, got {label_t1!r}"
+    assert label_t2 == "green", f"long green track lost label, got {label_t2!r}"
+    # The spurious fragment must NOT remain "green" (would imply impossible jump).
+    # It should either be relabeled "blue" or stay Unknown.
+    assert (
+        label_t3 != "green"
+    ), f"spurious fragment should not retain colliding 'green' label; got {label_t3!r}"
+
+
+def test_iterative_solver_unknown_promotion_when_feasible():
+    """An Unknown fragment with strong CNN evidence and no spatial conflict is
+    promoted to its top label by the iterative solver."""
+    catalog = _make_catalog()
+    rows = []
+    # Long blue anchor.
+    for f in range(50):
+        rows.append(
+            {
+                "TrajectoryID": 1,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": "blue",
+                "IdentityAssignedConfidence": 0.9,
+                "CNN_test_blue_Prob": 0.9,
+                "CNN_test_green_Prob": 0.1,
+            }
+        )
+    # Unknown fragment with strong green CNN, far from blue.
+    for f in range(60, 80):
+        rows.append(
+            {
+                "TrajectoryID": 2,
+                "FrameID": f,
+                "X": 500.0,
+                "Y": 500.0,
+                "IdentityAssignedLabel": "unknown",
+                "IdentityAssignedConfidence": 0.0,
+                "CNN_test_blue_Prob": 0.05,
+                "CNN_test_green_Prob": 0.95,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.6,
+        "ONLINE_PRIOR_WEIGHT": 0.1,
+        "FRAGMENT_LENGTH_WEIGHT": 0.6,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+    }
+    result = solve_global_assignment(df, catalog, params)
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    assert label_t2 == "green", f"expected Unknown→green promotion, got {label_t2!r}"
+
+
+def test_iterative_solver_monotone_gate_blocks_marginal_flips():
+    """A flip whose evidence delta is below ASSIGNMENT_MARGIN_THRESHOLD must be
+    rejected; the online label survives."""
+    catalog = _make_catalog()
+    n = 30
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * n,
+            "FrameID": list(range(n)),
+            "X": [float(i) for i in range(n)],
+            "Y": [0.0] * n,
+            "IdentityAssignedLabel": ["blue"] * n,
+            "IdentityAssignedConfidence": [0.9] * n,
+            # CNN very near 50/50 — minimal margin.
+            "CNN_test_blue_Prob": [0.51] * n,
+            "CNN_test_green_Prob": [0.49] * n,
+        }
+    )
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.7,
+        "ONLINE_PRIOR_WEIGHT": 0.25,
+        # Aggressive monotone gate: any plausible flip must clear 50% of the unit objective.
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.50,
+        "FRAGMENT_LENGTH_WEIGHT": 0.6,
+    }
+    result = solve_global_assignment(df, catalog, params)
+    assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
+
+
+def test_iterative_solver_returns_assignments_dict():
+    """Direct call to _iterative_assign returns one entry per fragment."""
+    catalog = _make_catalog()
+    df = _make_two_trajectory_df()
+    summaries = _build_traj_summaries(df, catalog).reset_index(drop=True)
+    out = _iterative_assign(
+        summaries,
+        list(catalog.labels[1:]),
+        {
+            "FRAGMENT_CNN_WEIGHT": 0.7,
+            "ONLINE_PRIOR_WEIGHT": 0.1,
+            "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+        },
+    )
+    assert set(out.keys()) == set(range(len(summaries)))
+    # Each value is either a known label or None (Unknown).
+    for v in out.values():
+        assert v is None or v in {"blue", "green"}
