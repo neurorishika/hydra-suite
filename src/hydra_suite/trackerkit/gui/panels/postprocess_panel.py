@@ -537,18 +537,75 @@ class PostProcessPanel(QWidget):
         )
         fs_layout.addRow("Changepoint penalty", self.spin_changepoint_penalty)
 
+        fs_layout.addRow(
+            self._main_window._create_help_label(
+                "Evidence weights — set each source's relative importance. "
+                "Values are auto-normalized to sum 1 before scoring. "
+                "Set a weight to 0 to disable that evidence source."
+            )
+        )
+
+        self.spin_fragment_cnn_weight = QDoubleSpinBox()
+        self.spin_fragment_cnn_weight.setRange(0.0, 2.0)
+        self.spin_fragment_cnn_weight.setSingleStep(0.05)
+        self.spin_fragment_cnn_weight.setDecimals(2)
+        self.spin_fragment_cnn_weight.setValue(0.40)
+        self.spin_fragment_cnn_weight.setToolTip(
+            "Relative weight for CNN classifier probability evidence.\n"
+            "Auto-normalized with the other three weights before scoring.\n"
+            "Set to 0 to ignore CNN probabilities entirely."
+        )
+        self.lbl_fragment_cnn_weight = QLabel("CNN classifier")
+
+        self.spin_fragment_spatial_weight = QDoubleSpinBox()
+        self.spin_fragment_spatial_weight.setRange(0.0, 2.0)
+        self.spin_fragment_spatial_weight.setSingleStep(0.05)
+        self.spin_fragment_spatial_weight.setDecimals(2)
+        self.spin_fragment_spatial_weight.setValue(0.35)
+        self.spin_fragment_spatial_weight.setToolTip(
+            "Relative weight for spatial continuity (Gaussian distance to nearest\n"
+            "prior/following fragment of the same identity).\n"
+            "Auto-normalized with the other three weights before scoring.\n"
+            "Set to 0 to disable spatial evidence (useful when positions are unreliable)."
+        )
+        self.lbl_fragment_spatial_weight = QLabel("Spatial continuity")
+
+        self.spin_fragment_tag_weight = QDoubleSpinBox()
+        self.spin_fragment_tag_weight.setRange(0.0, 2.0)
+        self.spin_fragment_tag_weight.setSingleStep(0.05)
+        self.spin_fragment_tag_weight.setDecimals(2)
+        self.spin_fragment_tag_weight.setValue(0.15)
+        self.spin_fragment_tag_weight.setToolTip(
+            "Relative weight for AprilTag evidence (fraction of frames in a fragment\n"
+            "where the detected tag label matches a known identity).\n"
+            "Auto-normalized with the other three weights before scoring.\n"
+            "Leave at 0 if AprilTag detection is not enabled."
+        )
+        self.lbl_fragment_tag_weight = QLabel("AprilTag evidence")
+
         self.spin_online_prior_weight = QDoubleSpinBox()
-        self.spin_online_prior_weight.setRange(0.0, 1.0)
+        self.spin_online_prior_weight.setRange(0.0, 2.0)
         self.spin_online_prior_weight.setSingleStep(0.05)
         self.spin_online_prior_weight.setDecimals(2)
         self.spin_online_prior_weight.setValue(0.25)
         self.spin_online_prior_weight.setToolTip(
-            "Weight applied to the online decoder's label as a prior in the global solver.\n"
+            "Relative weight for the online decoder's label as a prior.\n"
             "Scaled by each fragment's IdentityAssignedConfidence.\n"
-            "Higher → harder to override confident online assignments.\n"
-            "Recommended: 0.15–0.35."
+            "Auto-normalized with the other three weights before scoring.\n"
+            "Higher → harder to override confident online assignments."
         )
-        fs_layout.addRow("Online label prior weight", self.spin_online_prior_weight)
+        self.lbl_online_prior_weight = QLabel("Online label prior")
+
+        self.evidence_weight_grid = self._build_field_grid(
+            [
+                (self.lbl_fragment_cnn_weight, self.spin_fragment_cnn_weight),
+                (self.lbl_fragment_spatial_weight, self.spin_fragment_spatial_weight),
+                (self.lbl_fragment_tag_weight, self.spin_fragment_tag_weight),
+                (self.lbl_online_prior_weight, self.spin_online_prior_weight),
+            ],
+            columns=2,
+        )
+        fs_layout.addRow(self.evidence_weight_grid)
 
         self.spin_assignment_margin_threshold = QDoubleSpinBox()
         self.spin_assignment_margin_threshold.setRange(0.0, 1.0)

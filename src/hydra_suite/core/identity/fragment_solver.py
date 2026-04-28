@@ -329,6 +329,14 @@ def _build_score_matrix(
     prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
+    # Normalize to sum 1 so the score is on a stable [0,1] scale regardless
+    # of how users set the individual weights.
+    total_w = cnn_w + spatial_w + prior_w + tag_w
+    if total_w > 1e-9:
+        cnn_w /= total_w
+        spatial_w /= total_w
+        prior_w /= total_w
+        tag_w /= total_w
 
     n_frags = len(frags)
     n_labels = len(known_labels)
