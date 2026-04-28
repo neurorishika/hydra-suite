@@ -17,6 +17,7 @@ dependencies:
 - umap-learn
 - scikit-learn
 - pyyaml
+- ruptures
 
   # Visualization
 - matplotlib
