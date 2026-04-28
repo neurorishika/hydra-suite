@@ -3122,6 +3122,8 @@ class TrackingOrchestrator:
 
             _raw_labels: list[str] = []
             for _cnn_cfg in params.get("CNN_CLASSIFIERS", []) or []:
+                if not bool(_cnn_cfg.get("unique_identifier", False)):
+                    continue
                 _cnpf = list(_cnn_cfg.get("class_names_per_factor") or [])
                 _non_empty = [fl for fl in _cnpf if fl]
                 if len(_non_empty) > 1:
