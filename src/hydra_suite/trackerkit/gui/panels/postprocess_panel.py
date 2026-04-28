@@ -525,6 +525,23 @@ class PostProcessPanel(QWidget):
         fs_layout.setContentsMargins(0, 4, 0, 0)
         fs_layout.setSpacing(4)
 
+        self.chk_enable_pelt_splitting = QCheckBox(
+            "Split trajectories at identity changepoints"
+        )
+        self.chk_enable_pelt_splitting.setChecked(False)
+        self.chk_enable_pelt_splitting.setToolTip(
+            "When checked, PELT changepoint detection physically splits each trajectory\n"
+            "at detected identity-swap points, assigning new TrajectoryIDs to each segment.\n"
+            "Disable this (default) when you have not observed identity swaps — enabling it\n"
+            "on clean data may cause over-fragmentation."
+        )
+        fs_layout.addRow("", self.chk_enable_pelt_splitting)
+
+        self.pelt_controls_widget = QWidget()
+        pelt_controls_layout = QFormLayout(self.pelt_controls_widget)
+        pelt_controls_layout.setContentsMargins(0, 0, 0, 0)
+        pelt_controls_layout.setSpacing(4)
+
         self.spin_changepoint_penalty = QDoubleSpinBox()
         self.spin_changepoint_penalty.setRange(0.5, 50.0)
         self.spin_changepoint_penalty.setSingleStep(0.5)
@@ -535,7 +552,9 @@ class PostProcessPanel(QWidget):
             "Higher → fewer, longer fragments. Lower → more, shorter fragments.\n"
             "Recommended: 2.0–5.0."
         )
-        fs_layout.addRow("Changepoint penalty", self.spin_changepoint_penalty)
+        pelt_controls_layout.addRow(
+            "Changepoint penalty", self.spin_changepoint_penalty
+        )
 
         fs_layout.addRow(
             self._main_window._create_help_label(
@@ -596,12 +615,27 @@ class PostProcessPanel(QWidget):
         )
         self.lbl_online_prior_weight = QLabel("Online label prior")
 
+        self.spin_fragment_length_weight = QDoubleSpinBox()
+        self.spin_fragment_length_weight.setRange(0.0, 2.0)
+        self.spin_fragment_length_weight.setSingleStep(0.05)
+        self.spin_fragment_length_weight.setDecimals(2)
+        self.spin_fragment_length_weight.setValue(0.20)
+        self.spin_fragment_length_weight.setToolTip(
+            "Bonus added to every fragment's score proportional to log(duration).\n"
+            "Longer fragments score higher in the MILP objective, so they win\n"
+            "over short fragments when both compete for the same identity.\n"
+            "Set to 0 to treat all durations equally.\n"
+            "Recommended: 0.10–0.30."
+        )
+        self.lbl_fragment_length_weight = QLabel("Fragment length bonus")
+
         self.evidence_weight_grid = self._build_field_grid(
             [
                 (self.lbl_fragment_cnn_weight, self.spin_fragment_cnn_weight),
                 (self.lbl_fragment_spatial_weight, self.spin_fragment_spatial_weight),
                 (self.lbl_fragment_tag_weight, self.spin_fragment_tag_weight),
                 (self.lbl_online_prior_weight, self.spin_online_prior_weight),
+                (self.lbl_fragment_length_weight, self.spin_fragment_length_weight),
             ],
             columns=2,
         )
@@ -629,7 +663,9 @@ class PostProcessPanel(QWidget):
             "Prevents over-fragmentation of short noisy segments.\n"
             "Recommended: 3–10."
         )
-        fs_layout.addRow("Min fragment frames", self.spin_min_fragment_frames)
+        pelt_controls_layout.addRow(
+            "Min fragment frames", self.spin_min_fragment_frames
+        )
 
         self.cmb_pelt_model = QComboBox()
         self.cmb_pelt_model.addItems(["rbf", "l1", "l2"])
@@ -640,7 +676,13 @@ class PostProcessPanel(QWidget):
             "• l1 — median-based; outlier-resistant, no z-scoring applied.\n"
             "• l2 — mean-based; fastest, assumes Gaussian evidence."
         )
-        fs_layout.addRow("PELT model", self.cmb_pelt_model)
+        pelt_controls_layout.addRow("PELT model", self.cmb_pelt_model)
+
+        self.pelt_controls_widget.setEnabled(False)
+        fs_layout.addRow(self.pelt_controls_widget)
+        self.chk_enable_pelt_splitting.toggled.connect(
+            self.pelt_controls_widget.setEnabled
+        )
 
         self.spin_fragment_solver_ilp_time_limit = QDoubleSpinBox()
         self.spin_fragment_solver_ilp_time_limit.setRange(1.0, 300.0)

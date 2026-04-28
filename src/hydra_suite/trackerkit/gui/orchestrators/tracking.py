@@ -3084,6 +3084,13 @@ class TrackingOrchestrator:
             return out
 
         try:
+            # Build catalog the same way as the online decoder: CNN composite
+            # class labels (cartesian product for multi-factor models) followed
+            # by tag labels that match CNN classes.  Using the CNN *phase name*
+            # (e.g. "test") instead of class names was the previous bug — phase
+            # names are model identifiers, not individual animal identities.
+            import itertools as _itertools
+
             from hydra_suite.core.identity.catalog import IdentityCatalog
             from hydra_suite.core.identity.fragment_solver import run_fragment_solver
             from hydra_suite.core.post.identity_postprocess import (
@@ -3091,11 +3098,42 @@ class TrackingOrchestrator:
                 sort_trajectories_by_identity,
             )
 
-            _raw_labels = list(params.get("TAG_IDENTITY_LABELS", []) or [])
+            _raw_labels: list[str] = []
             for _cnn_cfg in params.get("CNN_CLASSIFIERS", []) or []:
-                _lbl = _cnn_cfg.get("label", "")
-                if _lbl and _lbl not in _raw_labels:
-                    _raw_labels.append(_lbl)
+                _cnpf = list(_cnn_cfg.get("class_names_per_factor") or [])
+                _non_empty = [fl for fl in _cnpf if fl]
+                if len(_non_empty) > 1:
+                    for _combo in _itertools.product(*_non_empty):
+                        _c = "_".join(str(x) for x in _combo if x)
+                        if _c and _c not in _raw_labels:
+                            _raw_labels.append(_c)
+                elif len(_non_empty) == 1:
+                    for _l in _non_empty[0]:
+                        if _l and str(_l) not in _raw_labels:
+                            _raw_labels.append(str(_l))
+                else:
+                    for _l in _cnn_cfg.get("labels", []) or []:
+                        if _l and str(_l) not in _raw_labels:
+                            _raw_labels.append(str(_l))
+
+            _cnn_label_set = set(_raw_labels)
+            for _lbl in params.get("TAG_IDENTITY_LABELS", []) or []:
+                _s = str(_lbl).strip()
+                if not _s:
+                    continue
+                # When CNN classes are known, only accept tag labels that
+                # match them — prevents garbage composites from entering.
+                if _cnn_label_set and _s not in _cnn_label_set:
+                    continue
+                if _s not in _raw_labels:
+                    _raw_labels.append(_s)
+
+            # Tag-only config (no CNN): accept all tag labels.
+            if not _raw_labels:
+                for _lbl in params.get("TAG_IDENTITY_LABELS", []) or []:
+                    _s = str(_lbl).strip()
+                    if _s and _s not in _raw_labels:
+                        _raw_labels.append(_s)
 
             if params.get("ENABLE_IDENTITY_FRAGMENT_SOLVER", False) and _raw_labels:
                 try:

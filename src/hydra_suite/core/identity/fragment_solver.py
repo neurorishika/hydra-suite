@@ -185,6 +185,7 @@ def _spatial_score_for_fragment(
     identity: str,
     schedule: dict[str, list[dict]],
     max_velocity: float,
+    no_neighbor_score: float = 0.3,
 ) -> float:
     """Gaussian spatial continuity score against nearest prior/following fragment of identity."""
     t0 = int(frag["StartFrame"])
@@ -220,7 +221,7 @@ def _spatial_score_for_fragment(
         dist = math.hypot(x1 - following["start_X"], y1 - following["start_Y"])
         term_scores.append(math.exp(-(dist**2) / (2.0 * sigma**2)))
 
-    return float(np.mean(term_scores)) if term_scores else 0.5
+    return float(np.mean(term_scores)) if term_scores else no_neighbor_score
 
 
 def _build_schedule(frags: pd.DataFrame, label_col: str) -> dict[str, list[dict]]:
@@ -256,7 +257,9 @@ def _build_score_matrix(
     spatial_w = float(params.get("FRAGMENT_SPATIAL_WEIGHT", 0.35))
     prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
+    length_w = float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.20))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
+    no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
     # Normalize to sum 1 so the score is on a stable [0,1] scale regardless
     # of how users set the individual weights.
     total_w = cnn_w + spatial_w + prior_w + tag_w
@@ -270,20 +273,40 @@ def _build_score_matrix(
     n_labels = len(known_labels)
     score_mat = np.full((n_frags, n_labels), -1.0, dtype=np.float64)
 
-    for i, frag_row in frags.iterrows():
+    # Pre-compute log-normalized duration for each fragment.
+    # Longer fragments earn a bonus added uniformly across all labels, biasing
+    # the MILP objective to prefer longer fragments when two overlap and compete
+    # for the same identity.
+    durations = [
+        max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1)
+        for _, r in frags.iterrows()
+    ]
+    max_duration = max(durations) if durations else 1
+    log_max = math.log1p(max_duration)
+
+    for (i, frag_row), duration in zip(frags.iterrows(), durations):
         mean_probs: dict[str, float] = frag_row.get("MeanCNNProbs") or {}
         raw_tag = frag_row.get("MeanTagProbs")
         mean_tag_probs: dict[str, float] = raw_tag if isinstance(raw_tag, dict) else {}
         online_lbl = str(frag_row["OnlineLabel"])
         online_conf = float(frag_row["OnlineConfidence"])
+        length_bonus = (
+            length_w * (math.log1p(duration) / log_max) if log_max > 1e-9 else 0.0
+        )
 
         for j, label in enumerate(known_labels):
             cnn_s = float(mean_probs.get(label, 0.0))
             tag_s = float(mean_tag_probs.get(label, 0.0))
-            spatial_s = _spatial_score_for_fragment(frag_row, label, schedule, max_vel)
+            spatial_s = _spatial_score_for_fragment(
+                frag_row, label, schedule, max_vel, no_neighbor_score
+            )
             prior_bonus = prior_w * online_conf if label == online_lbl else 0.0
             score_mat[i, j] = (
-                cnn_w * cnn_s + tag_w * tag_s + spatial_w * spatial_s + prior_bonus
+                cnn_w * cnn_s
+                + tag_w * tag_s
+                + spatial_w * spatial_s
+                + prior_bonus
+                + length_bonus
             )
 
     return score_mat
@@ -631,6 +654,8 @@ def run_fragment_solver(
         FRAGMENT_TAG_WEIGHT              float  default 0.15
         FRAGMENT_SPATIAL_WEIGHT          float  default 0.35
         ONLINE_PRIOR_WEIGHT              float  default 0.25
+        FRAGMENT_LENGTH_WEIGHT           float  default 0.20
+        SPATIAL_NO_NEIGHBOR_SCORE        float  default 0.3
         ASSIGNMENT_MARGIN_THRESHOLD      float  default 0.10
         MAX_VELOCITY_BREAK               float  default 50.0
         FRAGMENT_SOLVER_ILP_TIME_LIMIT   float  default 30.0

@@ -2243,10 +2243,19 @@ class TrackingWorker(QThread):
                         for _lbl in _clf_labels:
                             if _lbl and _lbl not in _known_labels_set:
                                 _known_labels_set.append(_lbl)
-                # Tag identities may also be provided via TAG_IDENTITY_LABELS
+                # Tag identities may also be provided via TAG_IDENTITY_LABELS.
+                # Only accept tag labels that match CNN-derived classes when CNN
+                # is configured — this blocks garbage composites (e.g. phase
+                # names) from polluting the identity catalog and assignment.
+                _cnn_derived = set(_known_labels_set)
                 for _lbl in p.get("TAG_IDENTITY_LABELS", []):
-                    if _lbl and _lbl not in _known_labels_set:
-                        _known_labels_set.append(_lbl)
+                    _s = str(_lbl).strip() if _lbl else ""
+                    if not _s:
+                        continue
+                    if _cnn_derived and _s not in _cnn_derived:
+                        continue
+                    if _s not in _known_labels_set:
+                        _known_labels_set.append(_s)
 
                 if _known_labels_set:
                     _identity_catalog = IdentityCatalog.from_labels(_known_labels_set)
