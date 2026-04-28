@@ -810,7 +810,7 @@ class ConfigOrchestrator:
             float(get_cfg("online_prior_weight", default=0.25))
         )
         self._panels.postprocess.spin_fragment_length_weight.setValue(
-            float(get_cfg("fragment_length_weight", default=0.20))
+            float(get_cfg("fragment_length_weight", default=0.60))
         )
         self._panels.postprocess.spin_assignment_margin_threshold.setValue(
             float(get_cfg("assignment_margin_threshold", default=0.10))

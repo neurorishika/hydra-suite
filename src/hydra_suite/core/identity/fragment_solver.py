@@ -186,8 +186,14 @@ def _spatial_score_for_fragment(
     schedule: dict[str, list[dict]],
     max_velocity: float,
     no_neighbor_score: float = 0.3,
-) -> float:
-    """Gaussian spatial continuity score against nearest prior/following fragment of identity."""
+) -> tuple[float, bool]:
+    """Gaussian spatial continuity score against nearest prior/following fragment of identity.
+
+    Returns (score, has_neighbors). has_neighbors is True when at least one valid
+    neighboring segment was found in the schedule; in that case the score is a
+    genuine distance-based Gaussian. When False, the score is the no_neighbor_score
+    fallback and should not be used to veto an assignment.
+    """
     t0 = int(frag["StartFrame"])
     t1 = int(frag["EndFrame"])
     x0, y0 = float(frag["StartX"]), float(frag["StartY"])
@@ -221,7 +227,9 @@ def _spatial_score_for_fragment(
         dist = math.hypot(x1 - following["start_X"], y1 - following["start_Y"])
         term_scores.append(math.exp(-(dist**2) / (2.0 * sigma**2)))
 
-    return float(np.mean(term_scores)) if term_scores else no_neighbor_score
+    if term_scores:
+        return float(np.mean(term_scores)), True
+    return no_neighbor_score, False
 
 
 def _build_schedule(frags: pd.DataFrame, label_col: str) -> dict[str, list[dict]]:
@@ -252,16 +260,36 @@ def _build_score_matrix(
     schedule: dict[str, list[dict]],
     params: dict[str, Any],
 ) -> np.ndarray:
-    """Build (n_frags x n_labels) score matrix.  -1 means ineligible."""
+    """Build (n_frags x n_labels) score matrix.  -1 means ineligible.
+
+    Length weighting is multiplicative: raw_score * (1 - length_w * (1 - length_scale)),
+    where length_scale = log1p(n_frames) / log1p(max_frames). This means a short
+    fragment's full evidence (CNN + tag + prior + spatial) is discounted relative to a
+    long fragment, preventing a tiny high-confidence fragment from winning the MILP
+    over a large spatially-consistent track purely on CNN/prior strength.
+
+    Spatial veto: when spatial neighbors exist and the computed score is below
+    FRAGMENT_SPATIAL_VETO_THRESHOLD, the fragment is ineligible for that identity
+    (score = -1). This handles fragments whose position is provably inconsistent with
+    the expected identity location.
+    """
     cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
     spatial_w = float(params.get("FRAGMENT_SPATIAL_WEIGHT", 0.35))
     prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
-    length_w = float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.20))
+    # FRAGMENT_LENGTH_WEIGHT: multiplicative blend coefficient in [0, 1].
+    # At 0.0, length has no effect. At 1.0, the shortest fragment scores 0.
+    # Default 0.60 is chosen so that a fragment with a good online prior (conf≥0.75)
+    # survives length discounting while a tiny (≤5 frame) confident-but-isolated
+    # fragment cannot displace it through CNN/tag strength alone.
+    length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
-    # Normalize to sum 1 so the score is on a stable [0,1] scale regardless
-    # of how users set the individual weights.
+    # Score below this threshold (when neighbors exist) → fragment is spatially
+    # incompatible with the identity and is marked ineligible.
+    spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
+    # Normalize evidence weights to sum 1 (length_w is not part of this sum —
+    # it is a multiplicative penalty applied after evidence aggregation).
     total_w = cnn_w + spatial_w + prior_w + tag_w
     if total_w > 1e-9:
         cnn_w /= total_w
@@ -273,10 +301,7 @@ def _build_score_matrix(
     n_labels = len(known_labels)
     score_mat = np.full((n_frags, n_labels), -1.0, dtype=np.float64)
 
-    # Pre-compute log-normalized duration for each fragment.
-    # Longer fragments earn a bonus added uniformly across all labels, biasing
-    # the MILP objective to prefer longer fragments when two overlap and compete
-    # for the same identity.
+    # Pre-compute log-normalised durations for the multiplicative length factor.
     durations = [
         max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1)
         for _, r in frags.iterrows()
@@ -290,24 +315,72 @@ def _build_score_matrix(
         mean_tag_probs: dict[str, float] = raw_tag if isinstance(raw_tag, dict) else {}
         online_lbl = str(frag_row["OnlineLabel"])
         online_conf = float(frag_row["OnlineConfidence"])
-        length_bonus = (
-            length_w * (math.log1p(duration) / log_max) if log_max > 1e-9 else 0.0
-        )
+        # Multiplicative length factor: 1.0 for the longest fragment, smaller for
+        # shorter ones.  Discounts the entire evidence bundle so a tiny high-confidence
+        # fragment cannot outbid a long spatially-consistent track on CNN alone.
+        length_scale = math.log1p(duration) / log_max if log_max > 1e-9 else 1.0
+        length_factor = 1.0 - length_w * (1.0 - length_scale)
 
         for j, label in enumerate(known_labels):
             cnn_s = float(mean_probs.get(label, 0.0))
             tag_s = float(mean_tag_probs.get(label, 0.0))
-            spatial_s = _spatial_score_for_fragment(
+            spatial_s, has_neighbors = _spatial_score_for_fragment(
                 frag_row, label, schedule, max_vel, no_neighbor_score
             )
+            # Veto: fragment is at the wrong place for this identity.
+            if has_neighbors and spatial_s < spatial_veto:
+                continue  # score_mat[i, j] stays -1 (ineligible)
             prior_bonus = prior_w * online_conf if label == online_lbl else 0.0
-            score_mat[i, j] = (
-                cnn_w * cnn_s
-                + tag_w * tag_s
-                + spatial_w * spatial_s
-                + prior_bonus
-                + length_bonus
+            raw_score = (
+                cnn_w * cnn_s + tag_w * tag_s + spatial_w * spatial_s + prior_bonus
             )
+            score_mat[i, j] = raw_score * length_factor
+
+    # Cross-trajectory spatial veto: if a shorter fragment overlaps a longer one
+    # and is spatially inconsistent with it at their temporal overlap midpoint, the
+    # shorter fragment is ineligible for labels where the longer one has meaningful
+    # CNN evidence.  This catches the case where the schedule-based veto above cannot
+    # fire (neither fragment has temporal neighbors yet).
+    if spatial_veto > 0.0:
+        frag_list = [
+            (idx, row, dur) for (idx, row), dur in zip(frags.iterrows(), durations)
+        ]
+        for idx_a, row_a, dur_a in frag_list:
+            for idx_b, row_b, dur_b in frag_list:
+                if dur_b <= dur_a or not _fragments_overlap(row_a, row_b):
+                    continue
+                os_ = max(int(row_a["StartFrame"]), int(row_b["StartFrame"]))
+                oe_ = min(int(row_a["EndFrame"]), int(row_b["EndFrame"]))
+                mid = 0.5 * (os_ + oe_)
+                sf_a, ef_a = int(row_a["StartFrame"]), int(row_a["EndFrame"])
+                alpha_a = (mid - sf_a) / max(1, ef_a - sf_a)
+                ax = float(row_a["StartX"]) + alpha_a * (
+                    float(row_a["EndX"]) - float(row_a["StartX"])
+                )
+                ay = float(row_a["StartY"]) + alpha_a * (
+                    float(row_a["EndY"]) - float(row_a["StartY"])
+                )
+                sf_b, ef_b = int(row_b["StartFrame"]), int(row_b["EndFrame"])
+                alpha_b = (mid - sf_b) / max(1, ef_b - sf_b)
+                bx = float(row_b["StartX"]) + alpha_b * (
+                    float(row_b["EndX"]) - float(row_b["StartX"])
+                )
+                by = float(row_b["StartY"]) + alpha_b * (
+                    float(row_b["EndY"]) - float(row_b["StartY"])
+                )
+                if not all(math.isfinite(v) for v in [ax, ay, bx, by]):
+                    continue
+                dist = math.hypot(ax - bx, ay - by)
+                cross_s = math.exp(-(dist**2) / (2.0 * max_vel**2))
+                if cross_s >= spatial_veto:
+                    continue
+                b_probs: dict[str, float] = row_b.get("MeanCNNProbs") or {}
+                for j, label in enumerate(known_labels):
+                    if (
+                        float(b_probs.get(label, 0.0)) > 0.3
+                        and score_mat[idx_a, j] >= 0
+                    ):
+                        score_mat[idx_a, j] = -1.0
 
     return score_mat
 
@@ -655,8 +728,14 @@ def run_fragment_solver(
         FRAGMENT_TAG_WEIGHT              float  default 0.15
         FRAGMENT_SPATIAL_WEIGHT          float  default 0.35
         ONLINE_PRIOR_WEIGHT              float  default 0.25
-        FRAGMENT_LENGTH_WEIGHT           float  default 0.20
+        FRAGMENT_LENGTH_WEIGHT           float  default 0.60
+            Multiplicative blend [0,1]: discounts short fragments' evidence relative
+            to the longest fragment in the pool.  Prevents a tiny high-confidence
+            fragment from overriding a long spatially-consistent track on CNN alone.
         SPATIAL_NO_NEIGHBOR_SCORE        float  default 0.3
+        FRAGMENT_SPATIAL_VETO_THRESHOLD  float  default 0.05
+            Minimum acceptable spatial score when neighbors exist; fragments below
+            this are marked ineligible for that identity (spatially incompatible).
         ASSIGNMENT_MARGIN_THRESHOLD      float  default 0.10
         MAX_VELOCITY_BREAK               float  default 50.0
         FRAGMENT_SOLVER_ILP_TIME_LIMIT   float  default 30.0

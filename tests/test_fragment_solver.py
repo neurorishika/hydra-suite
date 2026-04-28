@@ -274,3 +274,80 @@ def test_split_trajectories_multiple_trajectories_independent():
     result = split_trajectories_at_changepoints(combined, changepoints, {})
     traj2_rows = result[result["OriginalTrajectoryID"] == 2]
     assert len(traj2_rows) == 40
+
+
+def test_long_consistent_track_beats_short_confident_fragment():
+    """A short high-confidence fragment must NOT displace a long id-consistent track.
+
+    Scenario (mirrors the reported bug):
+    - Traj 1 (large, 100 frames): consistently labeled "blue" by online tracker
+      (conf=0.80), moderate CNN for "blue" — the "real" identity holder.
+    - Traj 2 (small, 5 frames): also labeled "blue" online (mislabeled) with very
+      high CNN + tag evidence, but at a spatially inconsistent position.  Both
+      overlap in time, so the MILP uniqueness constraint forces a choice.
+
+    Before the fix (additive length bonus only) the small fragment won due to its
+    CNN + tag + prior advantage.  The multiplicative length weighting (default 0.60)
+    must discount the small fragment enough that the large track retains "blue".
+
+    Note: the small fragment may also retain "blue" via the online-label fallback
+    (dual-assignment is a separate known issue); the critical assertion is that the
+    large track is not displaced.
+    """
+    catalog = _make_catalog()
+
+    n_large = 100
+    n_small = 5
+    small_start = 40  # sits in the middle of the large track's time range
+
+    rows = []
+    for f in range(n_large):
+        rows.append(
+            {
+                "TrajectoryID": 1,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                # "id consistent" — online tracker labeled it "blue" throughout
+                "IdentityAssignedLabel": "blue",
+                "IdentityAssignedConfidence": 0.80,
+                "CNN_test_blue_Prob": 0.70,
+                "CNN_test_green_Prob": 0.30,
+                "DetectedTagLabel": float("nan"),
+            }
+        )
+    for f in range(small_start, small_start + n_small):
+        rows.append(
+            {
+                "TrajectoryID": 2,
+                "FrameID": f,
+                "X": 500.0,  # far from traj 1's position — spatially inconsistent
+                "Y": 500.0,
+                "IdentityAssignedLabel": "blue",
+                "IdentityAssignedConfidence": 0.95,
+                "CNN_test_blue_Prob": 0.99,
+                "CNN_test_green_Prob": 0.01,
+                "DetectedTagLabel": "blue",
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.40,
+        "FRAGMENT_SPATIAL_WEIGHT": 0.35,
+        "ONLINE_PRIOR_WEIGHT": 0.25,
+        "FRAGMENT_TAG_WEIGHT": 0.15,
+        "FRAGMENT_LENGTH_WEIGHT": 0.60,
+        "SPATIAL_NO_NEIGHBOR_SCORE": 0.3,
+        "FRAGMENT_SPATIAL_VETO_THRESHOLD": 0.05,
+        "MAX_VELOCITY_BREAK": 50.0,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.05,
+    }
+    result = solve_global_assignment(df, catalog, params)
+
+    label_large = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+
+    assert (
+        label_large == "blue"
+    ), f"long id-consistent track should retain 'blue', got '{label_large}'"

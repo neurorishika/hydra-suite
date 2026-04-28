@@ -619,11 +619,12 @@ class PostProcessPanel(QWidget):
         self.spin_fragment_length_weight.setRange(0.0, 2.0)
         self.spin_fragment_length_weight.setSingleStep(0.05)
         self.spin_fragment_length_weight.setDecimals(2)
-        self.spin_fragment_length_weight.setValue(0.20)
+        self.spin_fragment_length_weight.setValue(0.60)
         self.spin_fragment_length_weight.setToolTip(
-            "Bonus added to every fragment's score proportional to log(duration).\n"
-            "Longer fragments score higher in the MILP objective, so they win\n"
-            "over short fragments when both compete for the same identity.\n"
+            "Multiplicative length discount [0–1]: discounts short fragments'\n"
+            "total evidence relative to the longest fragment in the pool.\n"
+            "Longer fragments win the MILP over short ones when competing for\n"
+            "the same identity. Set to 0 to treat all durations equally.\n"
             "Set to 0 to treat all durations equally.\n"
             "Recommended: 0.10–0.30."
         )
