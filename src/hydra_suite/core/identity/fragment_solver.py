@@ -479,6 +479,12 @@ def solve_global_assignment(
     frags = fragments_df.reset_index(drop=True)
     n_frags = len(frags)
     n_labels = len(known_labels)
+    known_label_set = set(known_labels)
+
+    def _catalog_label_or_unknown(lbl: str) -> str:
+        # Non-catalog strings (e.g. AprilTag family names) become "unknown" so they
+        # don't propagate into AssignedLabel or pollute the spatial schedule.
+        return lbl if lbl in known_label_set else "unknown"
 
     # Pass 1: seed schedule from OnlineLabel.
     schedule1 = _build_schedule(frags, "OnlineLabel")
@@ -486,8 +492,14 @@ def solve_global_assignment(
     assigned1 = _milp_solve(frags, known_labels, score_mat1, params)
 
     # Build intermediate label list for schedule re-seeding (no margin threshold yet).
+    # Filter to catalog labels so non-catalog online labels don't pollute the schedule.
     pass1_labels = [
-        str(assigned1.get(i) or frags.iloc[i]["OnlineLabel"]) for i in range(n_frags)
+        (
+            str(assigned1.get(i))
+            if assigned1.get(i) is not None
+            else _catalog_label_or_unknown(str(frags.iloc[i]["OnlineLabel"]))
+        )
+        for i in range(n_frags)
     ]
 
     # Pass 2: re-seed schedule from Pass-1 labels to remove online-label bias.
@@ -498,9 +510,12 @@ def solve_global_assignment(
     assigned2 = _milp_solve(frags, known_labels, score_mat2, params)
 
     # Apply margin threshold: accept re-assignment only when it beats second-best.
+    # OnlineLabel fallbacks are filtered to known catalog labels — non-catalog values
+    # (e.g. AprilTag family strings written by the online decoder) become "unknown"
+    # and are skipped by apply_fragment_labels rather than polluting the output.
     labels_out: list[str] = []
     for i in range(n_frags):
-        online_lbl = str(frags.iloc[i]["OnlineLabel"])
+        online_lbl = _catalog_label_or_unknown(str(frags.iloc[i]["OnlineLabel"]))
         milp_label = assigned2.get(i)
 
         if milp_label is None or milp_label == online_lbl:
