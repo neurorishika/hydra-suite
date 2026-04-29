@@ -3047,11 +3047,10 @@ class MainWindow(QMainWindow):
         *,
         can_rewrite: bool,
         multihead_factors: list[list[str]] | None = None,
-        can_recode_existing: bool = False,
     ) -> str:
         """Ask how to handle imported labels that do not fit the current schema.
 
-        Returns one of: "rewrite", "rewrite_multihead", "recode", "images_only", "cancel".
+        Returns one of: "rewrite", "rewrite_multihead", "images_only", "cancel".
         """
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Warning)
@@ -3065,7 +3064,6 @@ class MainWindow(QMainWindow):
         rewrite_multihead_button = None
         rewrite_flat_button = None
         rewrite_button = None
-        recode_button = None
 
         if can_rewrite and multihead_factors:
             n = len(multihead_factors)
@@ -3082,8 +3080,7 @@ class MainWindow(QMainWindow):
             )
             msg.setInformativeText(
                 f"Detected factors:\n{factor_lines}\n\n"
-                "Imported labels: "
-                f"{imported_preview}\n\n"
+                f"Imported labels: {imported_preview}\n\n"
                 "Import as a multihead scheme (one classifier per factor), "
                 "as a flat single-class scheme, or import images only?"
             )
@@ -3100,10 +3097,8 @@ class MainWindow(QMainWindow):
                 "the current project schema."
             )
             msg.setInformativeText(
-                "Imported labels: "
-                f"{imported_preview}\n"
-                "Project schema: "
-                f"{current_preview}\n\n"
+                f"Imported labels: {imported_preview}\n"
+                f"Project schema: {current_preview}\n\n"
                 + (
                     "This is the first source in the project, so you can replace the "
                     "project schema with these imported labels, import images only, or cancel."
@@ -3116,12 +3111,6 @@ class MainWindow(QMainWindow):
                     "Rewrite Schema and Import Labels",
                     QMessageBox.AcceptRole,
                 )
-
-        if not can_rewrite and can_recode_existing:
-            recode_button = msg.addButton(
-                "Import Labels (re-encode _ to |)",
-                QMessageBox.AcceptRole,
-            )
 
         import_images_only_button = msg.addButton(
             "Import Images Only",
@@ -3137,8 +3126,6 @@ class MainWindow(QMainWindow):
             return "rewrite"
         if rewrite_button is not None and clicked == rewrite_button:
             return "rewrite"
-        if recode_button is not None and clicked == recode_button:
-            return "recode"
         if clicked == import_images_only_button:
             return "images_only"
         return "cancel"
@@ -3170,18 +3157,24 @@ class MainWindow(QMainWindow):
             return {"source_root": source_root, "import_labels": True}
 
         can_rewrite = self._project_image_count() == 0
+
+        # When the source labels, re-encoded from _ to |, exactly match the existing
+        # multihead scheme's valid labels, skip the dialog and import silently.
+        if not can_rewrite and self._can_recode_into_existing_scheme(imported_labels):
+            return {
+                "source_root": source_root,
+                "import_labels": True,
+                "label_recode": ("_", "|"),
+            }
+
         multihead_factors = (
             detect_multihead_label_structure(imported_labels) if can_rewrite else None
-        )
-        can_recode_existing = not can_rewrite and self._can_recode_into_existing_scheme(
-            imported_labels
         )
         resolution = self._prompt_schema_mismatch_resolution(
             source_root,
             imported_labels,
             can_rewrite=can_rewrite,
             multihead_factors=multihead_factors,
-            can_recode_existing=can_recode_existing,
         )
         if resolution == "rewrite_multihead" and multihead_factors:
             recoded_labels = ["|".join(l.split("_")) for l in imported_labels]
@@ -3197,12 +3190,6 @@ class MainWindow(QMainWindow):
         if resolution == "rewrite":
             self._replace_project_schema_from_labels(imported_labels)
             return {"source_root": source_root, "import_labels": True}
-        if resolution == "recode":
-            return {
-                "source_root": source_root,
-                "import_labels": True,
-                "label_recode": ("_", "|"),
-            }
         if resolution == "images_only":
             return {"source_root": source_root, "import_labels": False}
         return None
