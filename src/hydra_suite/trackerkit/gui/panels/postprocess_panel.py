@@ -644,6 +644,39 @@ class PostProcessPanel(QWidget):
             "Relabel acceptance threshold", self.spin_assignment_margin_threshold
         )
 
+        self.spin_max_bridge_gap_frames = QSpinBox()
+        self.spin_max_bridge_gap_frames.setRange(1, 100000)
+        self.spin_max_bridge_gap_frames.setValue(30)
+        self.spin_max_bridge_gap_frames.setToolTip(
+            "Cap on the temporal gap (in frames) used when checking the implied\n"
+            "velocity between two same-identity fragments.  Without a cap, an\n"
+            "arbitrarily long pause excuses an arbitrarily large spatial jump\n"
+            "(dist / gap shrinks with gap), so the same identity could be\n"
+            "assigned to two trajectories at far-apart positions.  Beyond this\n"
+            "window we have no evidence of the animal's path; the bridge must\n"
+            "remain plausible as if the gap were no longer than this many\n"
+            "frames.  Lower → tighter spatial gating; higher → more permissive.\n"
+            "Recommended: 30–120 (≈1–4 seconds at 30 fps)."
+        )
+        fs_layout.addRow("Max bridge gap (frames)", self.spin_max_bridge_gap_frames)
+
+        self.spin_fragment_spatial_veto_threshold = QDoubleSpinBox()
+        self.spin_fragment_spatial_veto_threshold.setRange(0.0, 1.0)
+        self.spin_fragment_spatial_veto_threshold.setSingleStep(0.01)
+        self.spin_fragment_spatial_veto_threshold.setDecimals(3)
+        self.spin_fragment_spatial_veto_threshold.setValue(0.05)
+        self.spin_fragment_spatial_veto_threshold.setToolTip(
+            "Minimum spatial-continuity score required when same-identity\n"
+            "neighbors exist: fragments scoring below this are marked\n"
+            "ineligible for that identity.  Higher → stricter geometry\n"
+            "filtering, more fragments fall through to other labels or\n"
+            "Unknown; lower → more permissive.\n"
+            "Recommended: 0.02–0.10."
+        )
+        fs_layout.addRow(
+            "Spatial veto threshold", self.spin_fragment_spatial_veto_threshold
+        )
+
         self.spin_min_fragment_frames = QSpinBox()
         self.spin_min_fragment_frames.setRange(1, 200)
         self.spin_min_fragment_frames.setValue(5)

@@ -2143,6 +2143,8 @@ class ConfigOrchestrator:
             "ONLINE_PRIOR_WEIGHT": self._panels.postprocess.spin_online_prior_weight.value(),
             "FRAGMENT_LENGTH_WEIGHT": self._panels.postprocess.spin_fragment_length_weight.value(),
             "ASSIGNMENT_MARGIN_THRESHOLD": self._panels.postprocess.spin_assignment_margin_threshold.value(),
+            "MAX_BRIDGE_GAP_FRAMES": self._panels.postprocess.spin_max_bridge_gap_frames.value(),
+            "FRAGMENT_SPATIAL_VETO_THRESHOLD": self._panels.postprocess.spin_fragment_spatial_veto_threshold.value(),
             "MIN_FRAGMENT_FRAMES": self._panels.postprocess.spin_min_fragment_frames.value(),
             "PELT_MODEL": self._panels.postprocess.cmb_pelt_model.currentText(),
             "ENABLE_FRAGMENT_SCORING": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),

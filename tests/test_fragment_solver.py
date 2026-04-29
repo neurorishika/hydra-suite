@@ -624,6 +624,163 @@ def test_iterative_solver_monotone_gate_blocks_marginal_flips():
     assert result.iloc[0]["IdentityAssignedLabel"] == "blue"
 
 
+def test_long_gap_does_not_excuse_implausible_distance():
+    """Two same-identity trajectories at very distant positions, separated by a
+    LONG temporal gap, must not both retain the same identity.
+
+    Reported pathology: looking at a single identity label across the run, the
+    points "flicker" between two distant locations.  The animal cannot occupy
+    two arena-spanning positions simultaneously, so one of the two trajectories
+    must be a misassignment; the solver must veto and relabel one of them
+    (relabel to the other known identity if evidence supports it, otherwise
+    Unknown).
+
+    Why the linear ``velocity = dist / gap`` check fails to catch this:
+    over a large gap (e.g. 1000 frames), ``dist = 5000`` gives velocity 5
+    px/frame — well below the 50 px/frame ``MAX_VELOCITY_BREAK`` cap — so the
+    spatial veto never fires even though the implied displacement is
+    physically unreasonable for a freely-moving animal.
+
+    The fix: clamp the gap denominator with ``MAX_BRIDGE_GAP_FRAMES``.  Beyond
+    that window we have no evidence of the animal's path, so we cap the gap
+    when checking whether the same-identity bridge is plausible.
+    """
+    catalog = _make_catalog()
+    rows = []
+    # Anchor identity "blue" sits at (0..49, Y=0), frames 0-49.  Strong CNN.
+    for f in range(50):
+        rows.append(
+            {
+                "TrajectoryID": 1,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": "blue",
+                "IdentityAssignedConfidence": 0.9,
+                "CNN_test_blue_Prob": 0.9,
+                "CNN_test_green_Prob": 0.1,
+            }
+        )
+    # Two short fragments online-labeled "green" at distant positions, separated
+    # by a 1000-frame gap.  Linear velocity = 7071 / 991 ≈ 7.1 px/frame —
+    # below the 50 px/frame cap, so the existing hard veto misses this.
+    for f in range(50, 60):
+        rows.append(
+            {
+                "TrajectoryID": 2,
+                "FrameID": f,
+                "X": 0.0,
+                "Y": 0.0,
+                "IdentityAssignedLabel": "green",
+                "IdentityAssignedConfidence": 0.9,
+                "CNN_test_blue_Prob": 0.05,
+                "CNN_test_green_Prob": 0.95,
+            }
+        )
+    for f in range(1050, 1060):
+        rows.append(
+            {
+                "TrajectoryID": 3,
+                "FrameID": f,
+                "X": 5000.0,
+                "Y": 5000.0,
+                "IdentityAssignedLabel": "green",
+                "IdentityAssignedConfidence": 0.9,
+                "CNN_test_blue_Prob": 0.05,
+                "CNN_test_green_Prob": 0.95,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.6,
+        "ONLINE_PRIOR_WEIGHT": 0.1,
+        "FRAGMENT_LENGTH_WEIGHT": 0.6,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+        "MAX_VELOCITY_BREAK": 50.0,
+    }
+    result = solve_global_assignment(df, catalog, params)
+
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    label_t3 = result[result["TrajectoryID"] == 3]["IdentityAssignedLabel"].iloc[0]
+    # Both cannot be "green": they would imply a single animal occupying
+    # (0,0) and (5000,5000) at frames separated by 1000 — an implausible
+    # bridge regardless of how large the gap is.
+    assert not (label_t2 == "green" and label_t3 == "green"), (
+        f"both distant fragments retained 'green' (t2={label_t2!r}, "
+        f"t3={label_t3!r}); long gap should not excuse a 7000px jump"
+    )
+
+
+def test_iterative_solver_breaks_label_lockin_via_swap():
+    """Greedy lock-in case: two long anchors are mutually mislabeled by the
+    online tracker (each holds the *other's* identity), and they sit far apart
+    spatially.  Without a swap move the iterative solver gets stuck — neither
+    can flip to its true label, because the other is currently sitting on it
+    and the spatial veto fires.
+
+    Setup (positions chosen so the spatial-veto fires for both flips):
+    - Track A (frames 0–99, position x=0..99 y=0): online-labeled "blue" but
+      CNN strongly says green.
+    - Track B (frames 200–299, position x=0..99 y=3000): online-labeled
+      "green" but CNN strongly says blue.
+
+    Distance A↔B is ~3000 px; clamped gap is 30 frames; implied velocity is
+    100 px/frame, well above the 50 px/frame ``MAX_VELOCITY_BREAK`` cap, so
+    each flip would be vetoed in isolation.  The swap move resolves the
+    deadlock by exchanging both labels in a single atomic step.
+    """
+    catalog = _make_catalog()
+    rows = []
+    for f in range(100):
+        rows.append(
+            {
+                "TrajectoryID": 1,
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": "blue",
+                "IdentityAssignedConfidence": 0.5,
+                "CNN_test_blue_Prob": 0.05,
+                "CNN_test_green_Prob": 0.95,
+            }
+        )
+    for f in range(200, 300):
+        rows.append(
+            {
+                "TrajectoryID": 2,
+                "FrameID": f,
+                "X": float(f - 200),
+                "Y": 3000.0,
+                "IdentityAssignedLabel": "green",
+                "IdentityAssignedConfidence": 0.5,
+                "CNN_test_blue_Prob": 0.95,
+                "CNN_test_green_Prob": 0.05,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    params = {
+        "FRAGMENT_CNN_WEIGHT": 0.7,
+        "ONLINE_PRIOR_WEIGHT": 0.05,
+        "FRAGMENT_LENGTH_WEIGHT": 0.6,
+        "ASSIGNMENT_MARGIN_THRESHOLD": 0.01,
+        "MAX_VELOCITY_BREAK": 50.0,
+    }
+    result = solve_global_assignment(df, catalog, params)
+
+    label_t1 = result[result["TrajectoryID"] == 1]["IdentityAssignedLabel"].iloc[0]
+    label_t2 = result[result["TrajectoryID"] == 2]["IdentityAssignedLabel"].iloc[0]
+    assert label_t1 == "green", (
+        f"swap move should let track 1 reach 'green' despite track 2 sitting "
+        f"on it; got {label_t1!r}"
+    )
+    assert label_t2 == "blue", (
+        f"swap move should let track 2 reach 'blue' in the same exchange; "
+        f"got {label_t2!r}"
+    )
+
+
 def test_iterative_solver_returns_assignments_dict():
     """Direct call to _iterative_assign returns one entry per fragment."""
     catalog = _make_catalog()

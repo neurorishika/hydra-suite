@@ -640,15 +640,21 @@ def _spatial_score_for_fragment(
     schedule: dict[str, list[dict]],
     max_velocity: float,
     no_neighbor_score: float = 0.3,
+    max_bridge_gap: int = 30,
 ) -> tuple[float, bool]:
     """Velocity-based spatial continuity score against nearest neighboring segment.
 
     Returns (score, has_neighbors).
 
     Scoring:
-    - Implied velocity = dist / gap (pixels per frame).
+    - Effective gap = min(actual gap, ``max_bridge_gap``). Clamping prevents
+      arbitrarily long temporal gaps from excusing arbitrarily large spatial
+      jumps: beyond ``max_bridge_gap`` frames we have no evidence of the
+      animal's path, so the bridge must still be explainable as if the gap
+      were no longer than this window.
+    - Implied velocity = dist / effective_gap (pixels per frame).
     - Hard veto: if velocity > max_velocity for any neighbor, return (0.0, True)
-      immediately — physically impossible jump, caller should mark ineligible.
+      immediately — physically implausible jump, caller should mark ineligible.
     - Otherwise: score = exp(-2 * (velocity / max_velocity)^2).
       This is a velocity-space Gaussian where max_velocity is one sigma; scores
       range from ~1.0 (stationary) through ~0.61 (half max) to ~0.14 (at max).
@@ -661,6 +667,7 @@ def _spatial_score_for_fragment(
     x1, y1 = float(frag["EndX"]), float(frag["EndY"])
     segs = schedule.get(identity, [])
     term_scores: list[float] = []
+    cap = max(1, int(max_bridge_gap))
 
     prior = max(
         (s for s in segs if s["end_frame"] < t0),
@@ -671,10 +678,11 @@ def _spatial_score_for_fragment(
         math.isfinite(v) for v in [x0, y0, prior["end_X"], prior["end_Y"]]
     ):
         gap = max(1, t0 - prior["end_frame"])
+        effective_gap = min(gap, cap)
         dist = math.hypot(x0 - prior["end_X"], y0 - prior["end_Y"])
-        velocity = dist / gap
+        velocity = dist / effective_gap
         if velocity > max_velocity:
-            return 0.0, True  # physically impossible — hard veto
+            return 0.0, True  # physically implausible — hard veto
         term_scores.append(math.exp(-2.0 * (velocity / max_velocity) ** 2))
 
     following = min(
@@ -686,10 +694,11 @@ def _spatial_score_for_fragment(
         math.isfinite(v) for v in [x1, y1, following["start_X"], following["start_Y"]]
     ):
         gap = max(1, following["start_frame"] - t1)
+        effective_gap = min(gap, cap)
         dist = math.hypot(x1 - following["start_X"], y1 - following["start_Y"])
-        velocity = dist / gap
+        velocity = dist / effective_gap
         if velocity > max_velocity:
-            return 0.0, True  # physically impossible — hard veto
+            return 0.0, True  # physically implausible — hard veto
         term_scores.append(math.exp(-2.0 * (velocity / max_velocity) ** 2))
 
     if term_scores:
@@ -734,6 +743,7 @@ def _iterative_assign(
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
     length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
+    max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
     spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
     monotone_eps = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
@@ -805,34 +815,137 @@ def _iterative_assign(
         if lbl is not None:
             schedule[lbl].append((i, _seg_from_row(frags.iloc[i])))
 
-    def _spatial_for(label: str, exclude_idx: int) -> dict[str, list[dict]]:
+    def _spatial_for(
+        label: str, exclude_idx: int, also_exclude: int | None = None
+    ) -> dict[str, list[dict]]:
+        excludes = {exclude_idx}
+        if also_exclude is not None:
+            excludes.add(also_exclude)
         return {
-            label: [seg for (idx, seg) in schedule.get(label, []) if idx != exclude_idx]
+            label: [
+                seg for (idx, seg) in schedule.get(label, []) if idx not in excludes
+            ]
         }
 
-    def _has_collision(label: str, exclude_idx: int, t0: int, t1: int) -> bool:
+    def _has_collision(
+        label: str,
+        exclude_idx: int,
+        t0: int,
+        t1: int,
+        also_exclude: int | None = None,
+    ) -> bool:
         for idx, seg in schedule.get(label, []):
-            if idx == exclude_idx:
+            if idx in (exclude_idx, also_exclude):
                 continue
             if seg["start_frame"] <= t1 and t0 <= seg["end_frame"]:
                 return True
         return False
 
-    def _candidate_score(i: int, label: str) -> tuple[float, bool]:
-        """Evaluate placing fragment i under ``label``. Returns (score, vetoed)."""
+    def _candidate_score(
+        i: int, label: str, also_exclude: int | None = None
+    ) -> tuple[float, bool]:
+        """Evaluate placing fragment i under ``label``. Returns (score, vetoed).
+
+        ``also_exclude`` lets callers temporarily ignore another fragment in the
+        schedule (used by the swap move to score i under ``label`` as if the
+        blocking neighbor had already been displaced).
+        """
         row = frags.iloc[i]
         t0 = int(row["StartFrame"])
         t1 = int(row["EndFrame"])
-        if _has_collision(label, i, t0, t1):
+        if _has_collision(label, i, t0, t1, also_exclude):
             return 0.0, True
         spatial_s, has_neighbors = _spatial_score_for_fragment(
-            row, label, _spatial_for(label, i), max_vel, no_neighbor_score
+            row,
+            label,
+            _spatial_for(label, i, also_exclude),
+            max_vel,
+            no_neighbor_score,
+            max_bridge_gap,
         )
         if has_neighbors and spatial_s < spatial_veto:
             return 0.0, True
         evidence = float(combined_supports[i].get(label, 0.0))
         raw = evidence * spatial_s if has_neighbors else evidence
         return float(raw * float(length_factors[i])), False
+
+    def _find_blocker(i: int, label: str) -> int | None:
+        """Identify the schedule entry whose presence vetoes placing i under
+        ``label``. Returns the blocking fragment index or None if no single
+        blocker is responsible (e.g. when the no-neighbor score is below
+        ``spatial_veto``, which cannot be resolved by displacing one segment).
+
+        Mirrors the veto checks in ``_has_collision`` and
+        ``_spatial_score_for_fragment``.
+        """
+        row = frags.iloc[i]
+        t0 = int(row["StartFrame"])
+        t1 = int(row["EndFrame"])
+        segs_with_idx = [
+            (idx, seg) for (idx, seg) in schedule.get(label, []) if idx != i
+        ]
+        for idx, seg in segs_with_idx:
+            if seg["start_frame"] <= t1 and t0 <= seg["end_frame"]:
+                return idx
+        x0, y0 = float(row["StartX"]), float(row["StartY"])
+        x1, y1 = float(row["EndX"]), float(row["EndY"])
+        cap = max(1, int(max_bridge_gap))
+        prior = max(
+            ((idx, seg) for (idx, seg) in segs_with_idx if seg["end_frame"] < t0),
+            key=lambda x: x[1]["end_frame"],
+            default=None,
+        )
+        if prior is not None:
+            idx, seg = prior
+            if all(math.isfinite(v) for v in [x0, y0, seg["end_X"], seg["end_Y"]]):
+                gap = max(1, t0 - seg["end_frame"])
+                if (
+                    math.hypot(x0 - seg["end_X"], y0 - seg["end_Y"]) / min(gap, cap)
+                    > max_vel
+                ):
+                    return idx
+        following = min(
+            ((idx, seg) for (idx, seg) in segs_with_idx if seg["start_frame"] > t1),
+            key=lambda x: x[1]["start_frame"],
+            default=None,
+        )
+        if following is not None:
+            idx, seg = following
+            if all(math.isfinite(v) for v in [x1, y1, seg["start_X"], seg["start_Y"]]):
+                gap = max(1, seg["start_frame"] - t1)
+                if (
+                    math.hypot(x1 - seg["start_X"], y1 - seg["start_Y"]) / min(gap, cap)
+                    > max_vel
+                ):
+                    return idx
+        return None
+
+    def _best_alt_for(
+        j: int, exclude_label: str, partner: int
+    ) -> tuple[float, str | None]:
+        """Best feasible label for fragment j excluding ``exclude_label``,
+        scored as if ``partner`` were already absent from the schedule.
+
+        Used by the swap move: when i takes ``exclude_label`` and j is the
+        displaced occupant, j must find an alternative — and j scores its
+        candidates as if i had already vacated j's eventual destination
+        (``partner`` was the segment whose presence forced the displacement).
+        Returns (score, label_or_None).
+        """
+        sup = combined_supports[j]
+        ranked = sorted(known_labels, key=lambda lbl: -sup.get(lbl, 0.0))[:top_k]
+        best_s = 0.0  # Unknown is the floor (score 0, never vetoed).
+        best_l: str | None = None
+        for jc in ranked:
+            if jc == exclude_label:
+                continue
+            s, vetoed = _candidate_score(j, jc, also_exclude=partner)
+            if vetoed:
+                continue
+            if s > best_s:
+                best_s = s
+                best_l = jc
+        return best_s, best_l
 
     def _current_score(i: int) -> float:
         cur = current[i]
@@ -848,7 +961,12 @@ def _iterative_assign(
         if cur is None:
             return s_norm * l_norm + unknown_doubt_bonus
         spatial_s, has_neighbors = _spatial_score_for_fragment(
-            frags.iloc[i], cur, _spatial_for(cur, i), max_vel, no_neighbor_score
+            frags.iloc[i],
+            cur,
+            _spatial_for(cur, i),
+            max_vel,
+            no_neighbor_score,
+            max_bridge_gap,
         )
         fit = float(spatial_s) if has_neighbors else no_neighbor_score
         return s_norm * l_norm * (1.0 - fit)
@@ -882,26 +1000,70 @@ def _iterative_assign(
 
             best_score = cur_score
             best_label: str | None = cur
+            best_swap: tuple[int, str | None] | None = None
+            best_delta = 0.0
             for c in candidates:
                 if c == cur:
                     continue
                 if c is None:
                     score = 0.0
+                    vetoed = False
                 else:
                     score, vetoed = _candidate_score(i, c)
-                    if vetoed:
-                        continue
-                if score > best_score:
-                    best_score = score
+                if not vetoed:
+                    delta = score - cur_score
+                    if score > best_score and delta > best_delta:
+                        best_score = score
+                        best_label = c
+                        best_swap = None
+                        best_delta = delta
+                    continue
+                # Vetoed simple flip — try a one-step swap with the blocker.
+                if c is None:
+                    continue
+                blocker = _find_blocker(i, c)
+                if blocker is None or blocker == i or current[blocker] != c:
+                    continue
+                score_i_clean, vetoed_i = _candidate_score(i, c, also_exclude=blocker)
+                if vetoed_i:
+                    continue
+                cur_score_j = _current_score(blocker)
+                if not math.isfinite(cur_score_j):
+                    cur_score_j = 0.0
+                alt_score_j, alt_label_j = _best_alt_for(blocker, c, partner=i)
+                # Both fragments must individually be no worse off under the
+                # swap.  Without this guard a high-evidence short fragment
+                # could displace a long anchor whenever the short fragment's
+                # gain exceeds the anchor's loss in joint sum — re-introducing
+                # the very behavior the length factor exists to prevent.
+                cur_score_i_finite = cur_score if math.isfinite(cur_score) else 0.0
+                if score_i_clean < cur_score_i_finite or alt_score_j < cur_score_j:
+                    continue
+                swap_delta = (score_i_clean + alt_score_j) - (
+                    cur_score_i_finite + cur_score_j
+                )
+                if swap_delta < monotone_eps:
+                    continue
+                if swap_delta > best_delta:
+                    best_score = score_i_clean
                     best_label = c
+                    best_swap = (blocker, alt_label_j)
+                    best_delta = swap_delta
 
-            if best_label == cur:
+            if best_label == cur and best_swap is None:
                 continue
-            delta = best_score - cur_score
-            if not (delta >= monotone_eps):
+            if best_delta < monotone_eps:
                 continue
-            _commit(i, best_label)
-            flips += 1
+            if best_swap is not None:
+                blocker, alt_label_j = best_swap
+                # Free the blocker first so the schedule is consistent when
+                # i's commit re-adds it under best_label.
+                _commit(blocker, alt_label_j)
+                _commit(i, best_label)
+                flips += 2
+            else:
+                _commit(i, best_label)
+                flips += 1
 
         log.debug("iterative fragment solver pass %d: %d flips", pass_idx + 1, flips)
         if flips == 0:
@@ -1081,6 +1243,7 @@ def solve_global_assignment(
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
     length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
+    max_bridge_gap = max(1, int(params.get("MAX_BRIDGE_GAP_FRAMES", 30)))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
 
     durations = np.array(
@@ -1129,7 +1292,12 @@ def solve_global_assignment(
             ]
         }
         spatial_s, has_neighbors = _spatial_score_for_fragment(
-            summaries.iloc[i], lbl, sched_minus_self, max_vel, no_neighbor_score
+            summaries.iloc[i],
+            lbl,
+            sched_minus_self,
+            max_vel,
+            no_neighbor_score,
+            max_bridge_gap,
         )
         evidence = float(support.get(lbl, 0.0))
         raw = evidence * spatial_s if has_neighbors else evidence
@@ -1195,6 +1363,15 @@ def run_fragment_solver(
             Minimum global-objective delta required to accept a fragment relabel
             during iterative refinement (monotone gate epsilon).
         MAX_VELOCITY_BREAK               float  default 50.0
+        MAX_BRIDGE_GAP_FRAMES            int    default 30
+            Cap on the temporal gap (in frames) used when computing the implied
+            velocity between two same-identity segments.  Without this cap an
+            arbitrarily long temporal gap would excuse an arbitrarily large
+            spatial jump (``dist / gap`` shrinks with gap), so the same identity
+            could be assigned to two trajectories at far-apart positions
+            separated by a long pause.  Beyond this window we have no evidence
+            of the animal's path; the bridge must remain plausible as if the
+            gap were no longer than this many frames.
         FRAGMENT_TOP_K                   int    default 3
             Number of top-evidence candidate labels evaluated per fragment per pass.
         FRAGMENT_MAX_PASSES              int    default 10
