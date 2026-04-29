@@ -191,3 +191,74 @@ def test_non_overlapping_same_label_both_kept() -> None:
     result = resolve_simultaneous_identity_conflicts([a.copy(), b.copy()])
     assert _label(result[0]) == "ant_9"
     assert _label(result[1]) == "ant_9"
+
+
+def _make_traj_mixed_labels(
+    frames: list[int],
+    labels: list[str],
+    conf: float = 0.8,
+    tag_votes: int = 0,
+    source: str = "forward",
+) -> pd.DataFrame:
+    """Build a trajectory whose per-row labels vary (used to exercise agreement)."""
+    assert len(frames) == len(labels)
+    rows = []
+    for f, lbl in zip(frames, labels):
+        rows.append(
+            {
+                "FrameID": f,
+                "X": float(f),
+                "Y": 0.0,
+                "IdentityAssignedLabel": lbl,
+                "IdentityAssignedConfidence": conf,
+                "IdentityAssignedID": 0,
+                "TagVotes": tag_votes,
+                "_source": source,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def test_jittery_loses_to_consistent_at_same_length_and_conf() -> None:
+    """Two tracks of equal length and mean confidence: the one whose per-row
+    labels actually agree on the modal label wins. Agreement enters the score
+    multiplicatively, so this case used to tie under the old lex-tuple."""
+    consistent = _make_traj([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], label="ant_x", conf=0.7)
+    jittery_labels = ["ant_x", "ant_y", "ant_x", "ant_y", "ant_x"] * 2
+    jittery = _make_traj_mixed_labels(list(range(1, 11)), jittery_labels, conf=0.7)
+    result = resolve_simultaneous_identity_conflicts(
+        [consistent.copy(), jittery.copy()]
+    )
+    assert _label(result[0]) == "ant_x", "consistent track must keep its label"
+    assert pd.isna(_label(result[1])), "jittery (low-agreement) track must lose"
+    assert _conflict_flag(result[1])
+
+
+def test_long_high_conf_wins_over_short_high_conf_at_zero_tags() -> None:
+    """Length × confidence multiplicative weighting: a 50-frame track at conf
+    0.8 beats a 5-frame track at conf 0.85 even though the short one has a
+    higher mean confidence — the length factor dominates."""
+    long_track = _make_traj(list(range(1, 51)), label="ant_z", conf=0.8)
+    short_track = _make_traj(list(range(20, 25)), label="ant_z", conf=0.85)
+    result = resolve_simultaneous_identity_conflicts(
+        [long_track.copy(), short_track.copy()]
+    )
+    assert _label(result[0]) == "ant_z"
+    assert pd.isna(_label(result[1]))
+
+
+def test_strong_tag_evidence_overrides_long_low_margin_track() -> None:
+    """A short track with strong AprilTag confirmation must beat a long track
+    with weaker mean confidence and no tags — tag-vote bonus is additive and
+    weighted heavily enough to dominate the length-driven unary term."""
+    long_no_tags = _make_traj(
+        list(range(1, 101)), label="ant_q", conf=0.45, tag_votes=0
+    )
+    short_with_tags = _make_traj(
+        list(range(40, 50)), label="ant_q", conf=0.8, tag_votes=15
+    )
+    result = resolve_simultaneous_identity_conflicts(
+        [long_no_tags.copy(), short_with_tags.copy()]
+    )
+    assert pd.isna(_label(result[0])), "long no-tag track must lose to tagged short one"
+    assert _label(result[1]) == "ant_q"

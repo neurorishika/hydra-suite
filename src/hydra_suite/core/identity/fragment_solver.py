@@ -1,10 +1,15 @@
 """Global identity fragment solver.
 
-Current identity post-processing pipeline:
+Identity post-processing pipeline:
 1. PELT changepoint detection on per-trajectory CNN probability matrices.
 2. Fragment building from detected changepoints.
-3. Global MILP assignment: maximises spatial continuity + CNN/tag evidence
-   with a confidence-weighted online-label prior and a margin threshold.
+3. Iterative greedy label refinement: walks fragments in order of doubt score
+   (low CNN stability × short length × poor spatial fit + Unknown bonus),
+   evaluates the top-K candidate labels for each, and commits a flip only if
+   it strictly increases a global objective (sum of evidence × spatial × length
+   over all fragments). Iterates to a fixed point. Long fragments with stable
+   per-frame CNN agreement settle to the bottom of the queue and act as
+   anchors; short or jittery fragments yield to the schedule formed by them.
 """
 
 from __future__ import annotations
@@ -267,6 +272,121 @@ def _trajectory_cnn_log_evidence(
     return log_scores
 
 
+def _trajectory_per_row_probs(
+    grp_sorted: pd.DataFrame,
+    known_labels: list[str],
+    label_specs: dict[str, dict[str, Any]],
+) -> np.ndarray:
+    """Return ``(n_rows, n_labels)`` per-row reconstructed CNN probabilities.
+
+    Cells where no CNN evidence is present remain NaN. Direct probability
+    columns and part-product columns are combined identically to the mean-prob
+    helper so the per-row matrix stays consistent with the fragment-level
+    aggregates.
+    """
+    n_rows = len(grp_sorted)
+    n_labels = len(known_labels)
+    out = np.full((n_rows, n_labels), np.nan, dtype=np.float64)
+    if n_rows == 0 or n_labels == 0:
+        return out
+
+    for j, label in enumerate(known_labels):
+        spec = label_specs.get(label, {})
+        direct_cols = [col for col in spec.get("direct_cols", []) if col in grp_sorted]
+        part_cols = {
+            part: [col for col in cols if col in grp_sorted]
+            for part, cols in (spec.get("part_cols", {}) or {}).items()
+        }
+        parts = set(spec.get("parts", set()))
+
+        direct_vals: list[np.ndarray] = []
+        for col in direct_cols:
+            vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
+            direct_vals.append(np.clip(vals, 1e-9, 1.0))
+
+        part_vals: list[np.ndarray] = []
+        part_mask = np.ones(n_rows, dtype=bool)
+        use_parts = bool(parts)
+        if use_parts:
+            for part in parts:
+                cols = part_cols.get(part, [])
+                if not cols:
+                    use_parts = False
+                    break
+                part_present = np.zeros(n_rows, dtype=bool)
+                for col in cols:
+                    vals = pd.to_numeric(grp_sorted[col], errors="coerce").to_numpy(
+                        dtype=np.float64
+                    )
+                    part_present |= np.isfinite(vals)
+                    part_vals.append(np.clip(vals, 1e-9, 1.0))
+                part_mask &= part_present
+
+        row_prob = np.full(n_rows, np.nan, dtype=np.float64)
+        if direct_vals:
+            direct_stack = np.stack(direct_vals, axis=0)
+            direct_mask = np.all(np.isfinite(direct_stack), axis=0)
+            if np.any(direct_mask):
+                row_prob[direct_mask] = np.prod(direct_stack[:, direct_mask], axis=0)
+
+        if use_parts and part_vals:
+            part_stack = np.stack(part_vals, axis=0)
+            valid_part_mask = part_mask & np.all(np.isfinite(part_stack), axis=0)
+            if np.any(valid_part_mask):
+                part_prod = np.full(n_rows, np.nan, dtype=np.float64)
+                part_prod[valid_part_mask] = np.prod(
+                    part_stack[:, valid_part_mask], axis=0
+                )
+                missing_mask = valid_part_mask & np.isnan(row_prob)
+                overlap_mask = valid_part_mask & np.isfinite(row_prob)
+                if np.any(missing_mask):
+                    row_prob[missing_mask] = part_prod[missing_mask]
+                if np.any(overlap_mask):
+                    row_prob[overlap_mask] *= part_prod[overlap_mask]
+
+        out[:, j] = row_prob
+
+    return out
+
+
+def _fragment_stability(per_row_probs: np.ndarray) -> float:
+    """Combined agreement × mean-margin stability score in [0, 1].
+
+    Stability is high for fragments whose per-frame argmax is consistently the
+    same label (high agreement) *and* whose top-1 / top-2 separation is wide
+    (high mean margin). A long fragment with jittery per-frame predictions or
+    a small margin scores low even though it has many rows; a short fragment
+    that is internally consistent and confident scores high.
+
+    Returns 0.0 when no per-frame CNN evidence is present.
+    """
+    if per_row_probs.size == 0:
+        return 0.0
+    valid_mask = np.isfinite(per_row_probs).any(axis=1)
+    if not valid_mask.any():
+        return 0.0
+    valid = per_row_probs[valid_mask]
+    valid = np.where(np.isfinite(valid), valid, 0.0)
+    n = valid.shape[0]
+    n_labels = valid.shape[1]
+
+    top1_idx = np.argmax(valid, axis=1)
+    if n_labels >= 2:
+        sorted_desc = np.sort(valid, axis=1)[:, ::-1]
+        top1 = sorted_desc[:, 0]
+        top2 = sorted_desc[:, 1]
+    else:
+        top1 = valid[:, 0]
+        top2 = np.zeros(n, dtype=np.float64)
+
+    counts = np.bincount(top1_idx, minlength=n_labels)
+    agreement = float(counts.max()) / float(n)
+    margin = float(np.mean(top1 - top2))
+    return float(agreement * max(0.0, margin))
+
+
 def _trajectory_tag_evidence(
     grp_sorted: pd.DataFrame,
     known_labels: list[str],
@@ -514,12 +634,6 @@ def split_trajectories_at_changepoints(
     return result
 
 
-def _fragments_overlap(a: pd.Series, b: pd.Series) -> bool:
-    return int(a["StartFrame"]) <= int(b["EndFrame"]) and int(b["StartFrame"]) <= int(
-        a["EndFrame"]
-    )
-
-
 def _spatial_score_for_fragment(
     frag: pd.Series,
     identity: str,
@@ -583,288 +697,253 @@ def _spatial_score_for_fragment(
     return no_neighbor_score, False
 
 
-def _build_schedule(frags: pd.DataFrame, label_col: str) -> dict[str, list[dict]]:
-    """Build a spatial schedule dict from a fragments DataFrame column."""
-    schedule: dict[str, list[dict]] = {}
-    for _, row in frags.iterrows():
-        lbl = str(row[label_col])
-        if lbl in _UNKNOWN_VALUES:
-            continue
-        schedule.setdefault(lbl, []).append(
-            {
-                "start_frame": int(row["StartFrame"]),
-                "end_frame": int(row["EndFrame"]),
-                "start_X": float(row["StartX"]),
-                "start_Y": float(row["StartY"]),
-                "end_X": float(row["EndX"]),
-                "end_Y": float(row["EndY"]),
-            }
-        )
-    for lbl in schedule:
-        schedule[lbl].sort(key=lambda s: s["start_frame"])
-    return schedule
+def _seg_from_row(row: pd.Series) -> dict:
+    return {
+        "start_frame": int(row["StartFrame"]),
+        "end_frame": int(row["EndFrame"]),
+        "start_X": float(row["StartX"]),
+        "start_Y": float(row["StartY"]),
+        "end_X": float(row["EndX"]),
+        "end_Y": float(row["EndY"]),
+    }
 
 
-def _build_score_matrix(
+def _iterative_assign(
     frags: pd.DataFrame,
     known_labels: list[str],
-    schedule: dict[str, list[dict]],
     params: dict[str, Any],
-) -> np.ndarray:
-    """Build (n_frags x n_labels) score matrix.  -1 means ineligible.
+) -> dict[int, str | None]:
+    """Iteratively refine fragment-to-label assignment.
 
-    Scoring strategy:
-        - Reconstruct per-fragment per-label unary evidence from all CNN phases and
-            tag detections as weighted average log-evidence, then normalize that into a
-            candidate score distribution.
-        - Fuse the online label/confidence as a soft prior in the same log domain.
-        - When temporal neighbors exist (has_neighbors=True):
-                score = unary_score × spatial_s × length_factor
-        - When no neighbors exist (has_neighbors=False):
-                score = unary_score × length_factor
+    Walks fragments by descending doubt score, evaluates the top-K candidate
+    labels (∪ Unknown ∪ current) for each, and commits a flip only if the
+    delta against the current per-fragment score is at least
+    ``ASSIGNMENT_MARGIN_THRESHOLD``. Iterates to a fixed point (no flips in a
+    pass) or until ``FRAGMENT_MAX_PASSES`` is hit.
 
-    Spatial veto: if has_neighbors and spatial_s < FRAGMENT_SPATIAL_VETO_THRESHOLD
-    (default 0.05), the cell is marked -1 (ineligible). Combined with the hard
-    velocity veto in _spatial_score_for_fragment (any neighbor implying
-    velocity > MAX_VELOCITY_BREAK returns score=0.0), this guarantees that
-    physically impossible jumps are never assigned.
+    The schedule of committed labels is updated incrementally after every
+    accepted flip; collision (same-label time overlap) and physical-velocity
+    vetoes are enforced per-evaluation. A final Unknown-rescue pass assigns
+    Unknown fragments their best feasible label even when the score is below
+    the monotone gate, since Unknown contributes 0 to the global objective.
 
-    Length weighting: short fragments are discounted relative to long ones so a
-    tiny high-confidence fragment cannot outbid a large spatially-consistent track.
+    Returns ``{frag_index: assigned_label_or_None}`` (None means Unknown).
     """
     cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
     prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
     tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
-    # FRAGMENT_LENGTH_WEIGHT: multiplicative blend coefficient in [0, 1].
-    # At 0.0, length has no effect. At 1.0, the shortest fragment scores 0.
-    # Default 0.60 is chosen so that a fragment with a good online prior (conf≥0.75)
-    # survives length discounting while a tiny (≤5 frame) confident-but-isolated
-    # fragment cannot displace it through CNN/tag strength alone.
     length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
     max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
     no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
-    # Score below this threshold (when neighbors exist) → fragment is spatially
-    # incompatible with the identity and is marked ineligible.
     spatial_veto = float(params.get("FRAGMENT_SPATIAL_VETO_THRESHOLD", 0.05))
+    monotone_eps = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
+    top_k = max(1, int(params.get("FRAGMENT_TOP_K", 3)))
+    max_passes = max(1, int(params.get("FRAGMENT_MAX_PASSES", 10)))
+    unknown_doubt_bonus = float(params.get("FRAGMENT_UNKNOWN_DOUBT_BONUS", 0.5))
+
     n_frags = len(frags)
-    n_labels = len(known_labels)
-    score_mat = np.full((n_frags, n_labels), -1.0, dtype=np.float64)
+    if n_frags == 0:
+        return {}
 
-    # Pre-compute log-normalised durations for the multiplicative length factor.
-    durations = [
-        max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1)
-        for _, r in frags.iterrows()
-    ]
-    max_duration = max(durations) if durations else 1
+    known_label_set = set(known_labels)
+
+    # Pre-compute durations and length factors.
+    durations = np.array(
+        [
+            max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1)
+            for _, r in frags.iterrows()
+        ],
+        dtype=np.float64,
+    )
+    max_duration = float(durations.max())
     log_max = math.log1p(max_duration)
+    length_scales = (
+        np.log1p(durations) / log_max
+        if log_max > 1e-9
+        else np.ones(n_frags, dtype=np.float64)
+    )
+    length_factors = 1.0 - length_w * (1.0 - length_scales)
 
+    # Pre-compute combined evidence supports (used for candidate ranking + scoring).
     combined_supports: list[dict[str, float]] = []
-    source_supports: list[dict[str, float]] = []
-
     for _, frag_row in frags.iterrows():
-        cnn_log_scores = frag_row.get("CNNLogEvidence") or {}
-        tag_log_scores = frag_row.get("TagLogEvidence") or {}
+        cnn_log = frag_row.get("CNNLogEvidence") or {}
+        tag_log = frag_row.get("TagLogEvidence") or {}
         online_lbl = str(frag_row["OnlineLabel"])
         online_conf = float(frag_row["OnlineConfidence"])
-        prior_log_scores = _build_prior_log_scores(
-            known_labels, online_lbl, online_conf
-        )
-
-        source_log_scores = {
+        prior_log = _build_prior_log_scores(known_labels, online_lbl, online_conf)
+        combined_log = {
             label: (
-                cnn_w * float(cnn_log_scores.get(label, 0.0))
-                + tag_w * float(tag_log_scores.get(label, 0.0))
+                cnn_w * float(cnn_log.get(label, 0.0))
+                + tag_w * float(tag_log.get(label, 0.0))
+                + prior_w * float(prior_log[label])
             )
             for label in known_labels
         }
-        combined_log_scores = {
-            label: source_log_scores[label] + prior_w * float(prior_log_scores[label])
-            for label in known_labels
-        }
+        combined_supports.append(_normalize_support_scores(known_labels, combined_log))
 
-        source_supports.append(
-            _normalize_support_scores(known_labels, source_log_scores)
-        )
-        combined_supports.append(
-            _normalize_support_scores(known_labels, combined_log_scores)
-        )
+    stabilities = np.array(
+        [float(r.get("Stability", 0.0)) for _, r in frags.iterrows()],
+        dtype=np.float64,
+    )
 
-    for (i, frag_row), duration in zip(frags.iterrows(), durations):
-        # Multiplicative length factor: 1.0 for the longest fragment, smaller for
-        # shorter ones.  Discounts the entire evidence bundle so a tiny high-confidence
-        # fragment cannot outbid a long spatially-consistent track on CNN alone.
-        length_scale = math.log1p(duration) / log_max if log_max > 1e-9 else 1.0
-        length_factor = 1.0 - length_w * (1.0 - length_scale)
-        unary_support = combined_supports[i]
+    def _sanitize(lbl: Any) -> str | None:
+        s = str(lbl)
+        if s in _UNKNOWN_VALUES or s not in known_label_set:
+            return None
+        return s
 
-        for j, label in enumerate(known_labels):
-            spatial_s, has_neighbors = _spatial_score_for_fragment(
-                frag_row, label, schedule, max_vel, no_neighbor_score
-            )
-            # Veto: fragment is at the wrong place for this identity.
-            if has_neighbors and spatial_s < spatial_veto:
-                continue  # score_mat[i, j] stays -1 (ineligible)
-            evidence = float(unary_support.get(label, 0.0))
-            if has_neighbors:
-                # Spatial gates all evidence: high-velocity jumps suppress the
-                # score even when CNN is strong, so spatial continuity wins.
-                raw_score = evidence * spatial_s
-            else:
-                # No temporal neighbors — spatial assessment impossible.
-                raw_score = evidence
-            score_mat[i, j] = raw_score * length_factor
-
-    # Cross-trajectory spatial veto: if a shorter fragment overlaps a longer one
-    # and is spatially inconsistent with it at their temporal overlap midpoint, the
-    # shorter fragment is ineligible for labels where the longer one has meaningful
-    # CNN evidence.  This catches the case where the schedule-based veto above cannot
-    # fire (neither fragment has temporal neighbors yet).
-    if spatial_veto > 0.0:
-        frag_list = [
-            (idx, row, dur) for (idx, row), dur in zip(frags.iterrows(), durations)
-        ]
-        for idx_a, row_a, dur_a in frag_list:
-            for idx_b, row_b, dur_b in frag_list:
-                if dur_b <= dur_a or not _fragments_overlap(row_a, row_b):
-                    continue
-                os_ = max(int(row_a["StartFrame"]), int(row_b["StartFrame"]))
-                oe_ = min(int(row_a["EndFrame"]), int(row_b["EndFrame"]))
-                mid = 0.5 * (os_ + oe_)
-                sf_a, ef_a = int(row_a["StartFrame"]), int(row_a["EndFrame"])
-                alpha_a = (mid - sf_a) / max(1, ef_a - sf_a)
-                ax = float(row_a["StartX"]) + alpha_a * (
-                    float(row_a["EndX"]) - float(row_a["StartX"])
-                )
-                ay = float(row_a["StartY"]) + alpha_a * (
-                    float(row_a["EndY"]) - float(row_a["StartY"])
-                )
-                sf_b, ef_b = int(row_b["StartFrame"]), int(row_b["EndFrame"])
-                alpha_b = (mid - sf_b) / max(1, ef_b - sf_b)
-                bx = float(row_b["StartX"]) + alpha_b * (
-                    float(row_b["EndX"]) - float(row_b["StartX"])
-                )
-                by = float(row_b["StartY"]) + alpha_b * (
-                    float(row_b["EndY"]) - float(row_b["StartY"])
-                )
-                if not all(math.isfinite(v) for v in [ax, ay, bx, by]):
-                    continue
-                dist = math.hypot(ax - bx, ay - by)
-                cross_s = math.exp(-(dist**2) / (2.0 * max_vel**2))
-                if cross_s >= spatial_veto:
-                    continue
-                b_probs = source_supports[idx_b]
-                for j, label in enumerate(known_labels):
-                    if (
-                        float(b_probs.get(label, 0.0)) > 0.3
-                        and score_mat[idx_a, j] >= 0
-                    ):
-                        score_mat[idx_a, j] = -1.0
-
-    return score_mat
-
-
-def _milp_solve(
-    frags: pd.DataFrame,
-    known_labels: list[str],
-    score_mat: np.ndarray,
-    params: dict[str, Any],
-) -> dict[int, str | None]:
-    """Run the MILP and return {frag_index: assigned_label_or_None}.
-
-    Uses scipy.sparse constraint matrix for memory efficiency.
-    """
-    from itertools import combinations
-
-    from scipy.optimize import Bounds, LinearConstraint, linear_sum_assignment, milp
-    from scipy.sparse import csr_matrix, lil_matrix
-
-    n_frags = len(frags)
-    n_labels = len(known_labels)
-    pairs = [
-        (i, j) for i in range(n_frags) for j in range(n_labels) if score_mat[i, j] >= 0
+    current: list[str | None] = [
+        _sanitize(frags.iloc[i]["OnlineLabel"]) for i in range(n_frags)
     ]
-    if not pairs:
-        return {i: None for i in range(n_frags)}
 
-    n_vars = len(pairs)
-    pair_idx = {p: k for k, p in enumerate(pairs)}
-    c_vec = np.array([-score_mat[i, j] for i, j in pairs], dtype=np.float64)
-    bounds = Bounds(lb=np.zeros(n_vars), ub=np.ones(n_vars))
-    integrality = np.ones(n_vars, dtype=np.int8)
-
-    # Collect all constraints as (col_indices, lb, ub) before allocating matrix.
-    constraint_specs: list[tuple[list[int], float, float]] = []
-
-    # Each fragment assigned at most 1 label.
+    # Schedule: dict[label] -> list of (frag_idx, segment_dict), unordered;
+    # spatial helpers don't require sortedness.
+    schedule: dict[str, list[tuple[int, dict]]] = {lbl: [] for lbl in known_labels}
     for i in range(n_frags):
-        idxs = [pair_idx[(i, j)] for j in range(n_labels) if (i, j) in pair_idx]
-        if len(idxs) >= 2:
-            constraint_specs.append((idxs, -np.inf, 1.0))
+        lbl = current[i]
+        if lbl is not None:
+            schedule[lbl].append((i, _seg_from_row(frags.iloc[i])))
 
-    # Pairwise: overlapping fragments cannot share a label.
-    for a, b in combinations(range(n_frags), 2):
-        if not _fragments_overlap(frags.iloc[a], frags.iloc[b]):
-            continue
-        for j in range(n_labels):
-            ka = pair_idx.get((a, j))
-            kb = pair_idx.get((b, j))
-            if ka is None or kb is None:
+    def _spatial_for(label: str, exclude_idx: int) -> dict[str, list[dict]]:
+        return {
+            label: [seg for (idx, seg) in schedule.get(label, []) if idx != exclude_idx]
+        }
+
+    def _has_collision(label: str, exclude_idx: int, t0: int, t1: int) -> bool:
+        for idx, seg in schedule.get(label, []):
+            if idx == exclude_idx:
                 continue
-            constraint_specs.append(([ka, kb], -np.inf, 1.0))
+            if seg["start_frame"] <= t1 and t0 <= seg["end_frame"]:
+                return True
+        return False
 
-    assigned: dict[int, str | None] = {i: None for i in range(n_frags)}
-    try:
-        if constraint_specs:
-            n_constraints = len(constraint_specs)
-            A = lil_matrix((n_constraints, n_vars))
-            lb_arr = np.empty(n_constraints)
-            ub_arr = np.empty(n_constraints)
-            for k, (col_idxs, lb_val, ub_val) in enumerate(constraint_specs):
-                for ci in col_idxs:
-                    A[k, ci] = 1.0
-                lb_arr[k] = lb_val
-                ub_arr[k] = ub_val
-            time_limit = float(params.get("FRAGMENT_SOLVER_ILP_TIME_LIMIT", 30.0))
-            constraints = LinearConstraint(csr_matrix(A), lb=lb_arr, ub=ub_arr)
-            opt = milp(
-                c_vec,
-                constraints=constraints,
-                integrality=integrality,
-                bounds=bounds,
-                options={"time_limit": time_limit, "disp": False},
-            )
-            if opt.success:
-                for k, (i, j) in enumerate(pairs):
-                    if opt.x[k] > 0.5:
-                        assigned[i] = known_labels[j]
-            else:
-                log.warning(
-                    "MILP returned status %s (%s); falling back to online labels.",
-                    opt.status,
-                    opt.message,
-                )
-        else:
-            row_ind, col_ind = linear_sum_assignment(
-                np.where(score_mat < 0, 1e6, -score_mat)
-            )
-            for r, c in zip(row_ind, col_ind):
-                if score_mat[r, c] >= 0:
-                    assigned[r] = known_labels[c]
-    except Exception as exc:
-        log.warning("MILP solve failed (%s); falling back to online labels.", exc)
+    def _candidate_score(i: int, label: str) -> tuple[float, bool]:
+        """Evaluate placing fragment i under ``label``. Returns (score, vetoed)."""
+        row = frags.iloc[i]
+        t0 = int(row["StartFrame"])
+        t1 = int(row["EndFrame"])
+        if _has_collision(label, i, t0, t1):
+            return 0.0, True
+        spatial_s, has_neighbors = _spatial_score_for_fragment(
+            row, label, _spatial_for(label, i), max_vel, no_neighbor_score
+        )
+        if has_neighbors and spatial_s < spatial_veto:
+            return 0.0, True
+        evidence = float(combined_supports[i].get(label, 0.0))
+        raw = evidence * spatial_s if has_neighbors else evidence
+        return float(raw * float(length_factors[i])), False
 
-    return assigned
+    def _current_score(i: int) -> float:
+        cur = current[i]
+        if cur is None:
+            return 0.0
+        score, vetoed = _candidate_score(i, cur)
+        return -math.inf if vetoed else score
+
+    def _doubt_score(i: int) -> float:
+        s_norm = 1.0 - float(stabilities[i])
+        l_norm = 1.0 - float(length_scales[i])
+        cur = current[i]
+        if cur is None:
+            return s_norm * l_norm + unknown_doubt_bonus
+        spatial_s, has_neighbors = _spatial_score_for_fragment(
+            frags.iloc[i], cur, _spatial_for(cur, i), max_vel, no_neighbor_score
+        )
+        fit = float(spatial_s) if has_neighbors else no_neighbor_score
+        return s_norm * l_norm * (1.0 - fit)
+
+    def _commit(i: int, new_label: str | None) -> None:
+        cur = current[i]
+        if cur is not None:
+            schedule[cur] = [(idx, seg) for (idx, seg) in schedule[cur] if idx != i]
+        if new_label is not None:
+            schedule[new_label].append((i, _seg_from_row(frags.iloc[i])))
+        current[i] = new_label
+
+    for pass_idx in range(max_passes):
+        order = sorted(range(n_frags), key=lambda i: -_doubt_score(i))
+        flips = 0
+        for i in order:
+            cur = current[i]
+            cur_score = _current_score(i)
+
+            sup = combined_supports[i]
+            top_evidence = sorted(known_labels, key=lambda lbl: -sup.get(lbl, 0.0))[
+                :top_k
+            ]
+            seen: set[str | None] = set()
+            candidates: list[str | None] = [None]  # Unknown is always a candidate.
+            seen.add(None)
+            for c in top_evidence:
+                if c not in seen:
+                    candidates.append(c)
+                    seen.add(c)
+
+            best_score = cur_score
+            best_label: str | None = cur
+            for c in candidates:
+                if c == cur:
+                    continue
+                if c is None:
+                    score = 0.0
+                else:
+                    score, vetoed = _candidate_score(i, c)
+                    if vetoed:
+                        continue
+                if score > best_score:
+                    best_score = score
+                    best_label = c
+
+            if best_label == cur:
+                continue
+            delta = best_score - cur_score
+            if not (delta >= monotone_eps):
+                continue
+            _commit(i, best_label)
+            flips += 1
+
+        log.debug("iterative fragment solver pass %d: %d flips", pass_idx + 1, flips)
+        if flips == 0:
+            break
+    else:
+        log.warning(
+            "Iterative fragment solver hit FRAGMENT_MAX_PASSES (%d) without convergence.",
+            max_passes,
+        )
+
+    # Unknown-rescue pass: assign any Unknown fragment its best feasible label
+    # even if the score is below the monotone gate (Unknown contributes 0, any
+    # feasible label strictly improves the objective).
+    for i in range(n_frags):
+        if current[i] is not None:
+            continue
+        sup = combined_supports[i]
+        top_evidence = sorted(known_labels, key=lambda lbl: -sup.get(lbl, 0.0))[:top_k]
+        best_score = 0.0
+        best_label: str | None = None
+        for c in top_evidence:
+            score, vetoed = _candidate_score(i, c)
+            if vetoed:
+                continue
+            if score > best_score:
+                best_score = score
+                best_label = c
+        if best_label is not None:
+            _commit(i, best_label)
+
+    return {i: current[i] for i in range(n_frags)}
 
 
 def _build_traj_summaries(
     df: pd.DataFrame,
     catalog: IdentityCatalog,
 ) -> pd.DataFrame:
-    """Build a per-trajectory summary DataFrame for the MILP.
+    """Build a per-trajectory summary DataFrame consumed by the iterative solver.
 
     Columns: TrajectoryID, StartFrame, EndFrame, StartX, StartY, EndX, EndY,
     MeanCNNProbs (dict), MeanTagProbs (dict), CNNLogEvidence (dict),
-    TagLogEvidence (dict), OnlineLabel, OnlineConfidence.
+    TagLogEvidence (dict), Stability (float), OnlineLabel, OnlineConfidence.
     """
     known_labels = list(catalog.labels[1:])
     prefix_prob_cols = _build_cnn_probability_prefix_map(df.columns)
@@ -895,6 +974,8 @@ def _build_traj_summaries(
         cnn_log_scores = _trajectory_cnn_log_evidence(
             grp_sorted, known_labels, label_specs
         )
+        per_row_probs = _trajectory_per_row_probs(grp_sorted, known_labels, label_specs)
+        stability = _fragment_stability(per_row_probs)
         tag_probs, tag_log_scores = _trajectory_tag_evidence(grp_sorted, known_labels)
 
         label_col = grp_sorted.get(
@@ -932,6 +1013,7 @@ def _build_traj_summaries(
                 "MeanTagProbs": tag_probs,
                 "CNNLogEvidence": cnn_log_scores,
                 "TagLogEvidence": tag_log_scores,
+                "Stability": stability,
                 "OnlineLabel": online_label,
                 "OnlineConfidence": online_conf,
             }
@@ -951,6 +1033,7 @@ def _build_traj_summaries(
                 "MeanTagProbs",
                 "CNNLogEvidence",
                 "TagLogEvidence",
+                "Stability",
                 "OnlineLabel",
                 "OnlineConfidence",
             ]
@@ -963,28 +1046,17 @@ def solve_global_assignment(
     catalog: IdentityCatalog,
     params: dict[str, Any],
 ) -> pd.DataFrame:
-    """Assign one identity label per trajectory using a two-pass MILP.
+    """Assign one identity label per trajectory via the iterative solver.
 
-    Builds per-trajectory summaries internally, runs the MILP with spatial
-    continuity + CNN evidence + online-label prior, then writes
-    IdentityAssignedLabel, IdentityFragmentScore, and IdentityCommitted back
-    into every row of each trajectory.  Returns a modified copy of df.
-
-    Two-pass strategy:
-    - Pass 1: spatial schedule seeded from online labels.
-    - Pass 2: schedule re-seeded from Pass-1 results to remove online-label bias.
-    Margin threshold applied to Pass-2: only accept re-assignment when
-    score(milp_label) - score(second_best) >= ASSIGNMENT_MARGIN_THRESHOLD.
+    Builds per-trajectory summaries internally, runs ``_iterative_assign`` with
+    spatial continuity + CNN/tag evidence + online-label prior + per-fragment
+    stability, then writes IdentityAssignedLabel, IdentityFragmentScore, and
+    IdentityCommitted back into every row of each trajectory. Returns a
+    modified copy of df.
     """
     known_labels = list(catalog.labels[1:])
     if not known_labels or df is None or df.empty:
         return df if df is not None else pd.DataFrame()
-
-    known_label_set = set(known_labels)
-    margin_thresh = float(params.get("ASSIGNMENT_MARGIN_THRESHOLD", 0.10))
-
-    def _catalog_label_or_unknown(lbl: str) -> str:
-        return lbl if lbl in known_label_set else "unknown"
 
     traj_summaries = _build_traj_summaries(df, catalog)
     if traj_summaries.empty:
@@ -992,79 +1064,76 @@ def solve_global_assignment(
 
     summaries = traj_summaries.reset_index(drop=True)
     n_trajs = len(summaries)
-    n_labels = len(known_labels)
 
-    # Pass 1: seed schedule from OnlineLabel.
-    schedule1 = _build_schedule(summaries, "OnlineLabel")
-    score_mat1 = _build_score_matrix(summaries, known_labels, schedule1, params)
-    assigned1 = _milp_solve(summaries, known_labels, score_mat1, params)
+    assigned = _iterative_assign(summaries, known_labels, params)
 
-    pass1_labels = [
-        (
-            str(assigned1.get(i))
-            if assigned1.get(i) is not None
-            else _catalog_label_or_unknown(str(summaries.iloc[i]["OnlineLabel"]))
-        )
-        for i in range(n_trajs)
-    ]
-
-    # Pass 2: re-seed schedule from Pass-1 labels to remove online-label bias.
-    summaries_pass1 = summaries.copy()
-    summaries_pass1["_pass1_label"] = pass1_labels
-    schedule2 = _build_schedule(summaries_pass1, "_pass1_label")
-    score_mat2 = _build_score_matrix(summaries, known_labels, schedule2, params)
-    assigned2 = _milp_solve(summaries, known_labels, score_mat2, params)
-
-    # Trajectories where every label was spatially vetoed: prefer "unknown" over
-    # an online label that may itself represent a spatial jump.
-    all_vetoed = frozenset(
-        i for i in range(n_trajs) if all(score_mat2[i, j] < 0 for j in range(n_labels))
-    )
-
-    # Apply margin threshold.
-    labels_out: list[str] = []
+    # Per-fragment final score for committed labels (recomputed with the final
+    # schedule so the value reflects the converged spatial configuration).
+    final_schedule: dict[str, list[dict]] = {}
     for i in range(n_trajs):
-        online_lbl = _catalog_label_or_unknown(str(summaries.iloc[i]["OnlineLabel"]))
-        milp_label = assigned2.get(i)
-
-        if milp_label is None:
-            # Use "unknown" when spatial constraints ruled out every assignment,
-            # so we don't silently keep an online label that implies a jump.
-            labels_out.append("unknown" if i in all_vetoed else online_lbl)
+        lbl = assigned.get(i)
+        if lbl is None:
             continue
+        final_schedule.setdefault(lbl, []).append(_seg_from_row(summaries.iloc[i]))
 
-        if milp_label == online_lbl:
-            labels_out.append(online_lbl)
-            continue
+    cnn_w = float(params.get("FRAGMENT_CNN_WEIGHT", 0.40))
+    prior_w = float(params.get("ONLINE_PRIOR_WEIGHT", 0.25))
+    tag_w = float(params.get("FRAGMENT_TAG_WEIGHT", 0.15))
+    length_w = min(1.0, max(0.0, float(params.get("FRAGMENT_LENGTH_WEIGHT", 0.60))))
+    max_vel = float(params.get("MAX_VELOCITY_BREAK", 50.0))
+    no_neighbor_score = float(params.get("SPATIAL_NO_NEIGHBOR_SCORE", 0.3))
 
-        try:
-            milp_j = known_labels.index(milp_label)
-        except ValueError:
-            labels_out.append(online_lbl)
-            continue
-
-        milp_score = score_mat2[i, milp_j]
-        other_scores = [
-            score_mat2[i, j]
-            for j in range(n_labels)
-            if j != milp_j and score_mat2[i, j] >= 0
-        ]
-        second_best = max(other_scores) if other_scores else 0.0
-
-        if milp_score - second_best >= margin_thresh:
-            labels_out.append(milp_label)
-        else:
-            labels_out.append(online_lbl)
+    durations = np.array(
+        [
+            max(1, int(r["EndFrame"]) - int(r["StartFrame"]) + 1)
+            for _, r in summaries.iterrows()
+        ],
+        dtype=np.float64,
+    )
+    log_max = math.log1p(float(durations.max()))
+    length_scales = (
+        np.log1p(durations) / log_max
+        if log_max > 1e-9
+        else np.ones(n_trajs, dtype=np.float64)
+    )
+    length_factors = 1.0 - length_w * (1.0 - length_scales)
 
     assigned_scores: list[float] = []
     for i in range(n_trajs):
-        label = labels_out[i]
-        if label in known_labels:
-            j = known_labels.index(label)
-            s = score_mat2[i, j]
-            assigned_scores.append(float(s) if s >= 0 else 0.0)
-        else:
+        lbl = assigned.get(i)
+        if lbl is None or lbl not in known_labels:
             assigned_scores.append(0.0)
+            continue
+        cnn_log = summaries.iloc[i].get("CNNLogEvidence") or {}
+        tag_log = summaries.iloc[i].get("TagLogEvidence") or {}
+        online_lbl = str(summaries.iloc[i]["OnlineLabel"])
+        online_conf = float(summaries.iloc[i]["OnlineConfidence"])
+        prior_log = _build_prior_log_scores(known_labels, online_lbl, online_conf)
+        combined_log = {
+            label: (
+                cnn_w * float(cnn_log.get(label, 0.0))
+                + tag_w * float(tag_log.get(label, 0.0))
+                + prior_w * float(prior_log[label])
+            )
+            for label in known_labels
+        }
+        support = _normalize_support_scores(known_labels, combined_log)
+        sched_minus_self = {
+            lbl: [
+                seg
+                for j, seg in enumerate(final_schedule.get(lbl, []))
+                if not (
+                    seg["start_frame"] == int(summaries.iloc[i]["StartFrame"])
+                    and seg["end_frame"] == int(summaries.iloc[i]["EndFrame"])
+                )
+            ]
+        }
+        spatial_s, has_neighbors = _spatial_score_for_fragment(
+            summaries.iloc[i], lbl, sched_minus_self, max_vel, no_neighbor_score
+        )
+        evidence = float(support.get(lbl, 0.0))
+        raw = evidence * spatial_s if has_neighbors else evidence
+        assigned_scores.append(float(raw * float(length_factors[i])))
 
     # Write one label per trajectory back to every row.
     out = df.copy()
@@ -1077,11 +1146,17 @@ def solve_global_assignment(
         out["IdentityFragmentScore"] = np.nan
 
     for i in range(n_trajs):
-        label = labels_out[i]
-        if not label or label in _UNKNOWN_VALUES:
-            continue
+        label = assigned.get(i)
         traj_id = summaries.iloc[i]["TrajectoryID"]
         mask = out["TrajectoryID"] == traj_id
+        if label is None or label in _UNKNOWN_VALUES:
+            # The solver explicitly chose Unknown for this fragment (e.g. its
+            # spatial fit under every feasible label fails the veto). Clear the
+            # online label so the user sees the solver's decision.
+            out.loc[mask, "IdentityAssignedLabel"] = "unknown"
+            out.loc[mask, "IdentityFragmentScore"] = 0.0
+            out.loc[mask, "IdentityCommitted"] = False
+            continue
         out.loc[mask, "IdentityAssignedLabel"] = label
         out.loc[mask, "IdentityFragmentScore"] = assigned_scores[i]
         out.loc[mask, "IdentityCommitted"] = True
@@ -1094,7 +1169,7 @@ def run_fragment_solver(
     catalog: IdentityCatalog,
     params: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """End-to-end fragment solver: (optional PELT split) -> MILP assign.
+    """End-to-end fragment solver: (optional PELT split) → iterative assign.
 
     Parameters
     ----------
@@ -1107,7 +1182,6 @@ def run_fragment_solver(
         PELT_MODEL                       str    default "rbf" (l1 / l2 / rbf)
         FRAGMENT_CNN_WEIGHT              float  default 0.40
         FRAGMENT_TAG_WEIGHT              float  default 0.15
-        FRAGMENT_SPATIAL_WEIGHT          float  default 0.35 (legacy; currently unused)
         ONLINE_PRIOR_WEIGHT              float  default 0.25
         FRAGMENT_LENGTH_WEIGHT           float  default 0.60
             Multiplicative blend [0,1]: discounts short fragments' evidence relative
@@ -1118,8 +1192,16 @@ def run_fragment_solver(
             Minimum acceptable spatial score when neighbors exist; fragments below
             this are marked ineligible for that identity (spatially incompatible).
         ASSIGNMENT_MARGIN_THRESHOLD      float  default 0.10
+            Minimum global-objective delta required to accept a fragment relabel
+            during iterative refinement (monotone gate epsilon).
         MAX_VELOCITY_BREAK               float  default 50.0
-        FRAGMENT_SOLVER_ILP_TIME_LIMIT   float  default 30.0
+        FRAGMENT_TOP_K                   int    default 3
+            Number of top-evidence candidate labels evaluated per fragment per pass.
+        FRAGMENT_MAX_PASSES              int    default 10
+            Hard cap on iterative-refinement passes.
+        FRAGMENT_UNKNOWN_DOUBT_BONUS     float  default 0.5
+            Additive doubt bonus for currently-Unknown fragments so they get
+            re-evaluated early in each pass.
     """
     params = params or {}
 
@@ -1145,7 +1227,7 @@ def run_fragment_solver(
     else:
         split_df = trajectories_df
         log.info(
-            "fragment_solver: PELT splitting disabled; MILP assigning labels to %d existing trajectories.",
+            "fragment_solver: PELT splitting disabled; iteratively assigning labels to %d existing trajectories.",
             trajectories_df["TrajectoryID"].nunique(),
         )
 

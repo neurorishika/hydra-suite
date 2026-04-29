@@ -502,10 +502,13 @@ class PostProcessPanel(QWidget):
                 "Choose how identity labels are finalised after tracking. "
                 "Only takes effect when identity analysis is enabled.\n"
                 "• None — no identity post-processing.\n"
-                "• Fragment Solver — PELT changepoint detection fragments each trajectory "
-                "at identity evidence regime changes; a global assignment then jointly "
-                "optimises spatial continuity and CNN/tag evidence across all fragments, "
-                "using the online decoder label as a confidence-weighted prior."
+                "• Fragment Solver — optional PELT changepoint splitting, then "
+                "iterative greedy label refinement: each fragment is re-evaluated "
+                "against the spatial schedule formed by the others (sorted by a "
+                "doubt score that combines short length, low CNN stability, poor "
+                "spatial fit, and Unknown labels), and a relabel is committed only "
+                "when it strictly increases the global evidence × spatial × length "
+                "objective."
             )
         )
         self.cmb_identity_postprocess_mode = QComboBox()
@@ -513,7 +516,7 @@ class PostProcessPanel(QWidget):
         self.cmb_identity_postprocess_mode.setCurrentText("Fragment Solver")
         self.cmb_identity_postprocess_mode.setToolTip(
             "None: skip identity post-processing entirely.\n"
-            "Fragment Solver: PELT-based changepoint detection + global MILP assignment."
+            "Fragment Solver: optional PELT splitting + iterative label refinement."
         )
         self.cmb_identity_postprocess_mode.currentTextChanged.connect(
             self._on_identity_postprocess_mode_changed
@@ -559,8 +562,8 @@ class PostProcessPanel(QWidget):
         fs_layout.addRow(
             self._main_window._create_help_label(
                 "Evidence weights — CNN, AprilTag, and the online prior set the "
-                "fragment unary evidence used by the MILP. Spatial continuity is "
-                "applied separately as a continuity gate, not as a weighted source."
+                "fragment unary evidence used by the iterative solver. Spatial "
+                "continuity is applied separately as a velocity-based gate."
             )
         )
 
@@ -575,20 +578,6 @@ class PostProcessPanel(QWidget):
             "Set to 0 to ignore CNN probabilities entirely."
         )
         self.lbl_fragment_cnn_weight = QLabel("CNN classifier")
-
-        self.spin_fragment_spatial_weight = QDoubleSpinBox()
-        self.spin_fragment_spatial_weight.setRange(0.0, 2.0)
-        self.spin_fragment_spatial_weight.setSingleStep(0.05)
-        self.spin_fragment_spatial_weight.setDecimals(2)
-        self.spin_fragment_spatial_weight.setValue(0.35)
-        self.spin_fragment_spatial_weight.setToolTip(
-            "Legacy compatibility control. The current fragment solver applies spatial\n"
-            "continuity as a separate veto/gating term based on implied motion, so\n"
-            "this weight is not currently used by the solver."
-        )
-        self.spin_fragment_spatial_weight.setEnabled(False)
-        self.lbl_fragment_spatial_weight = QLabel("Spatial continuity (legacy)")
-        self.lbl_fragment_spatial_weight.setEnabled(False)
 
         self.spin_fragment_tag_weight = QDoubleSpinBox()
         self.spin_fragment_tag_weight.setRange(0.0, 2.0)
@@ -623,17 +612,15 @@ class PostProcessPanel(QWidget):
         self.spin_fragment_length_weight.setToolTip(
             "Multiplicative length discount [0–1]: discounts short fragments'\n"
             "total evidence relative to the longest fragment in the pool.\n"
-            "Longer fragments win the MILP over short ones when competing for\n"
-            "the same identity. Set to 0 to treat all durations equally.\n"
-            "Set to 0 to treat all durations equally.\n"
-            "Recommended: 0.10–0.30."
+            "Longer fragments win out over short ones when competing for the same\n"
+            "identity. Set to 0 to treat all durations equally.\n"
+            "Recommended: 0.50–0.80."
         )
         self.lbl_fragment_length_weight = QLabel("Fragment length bonus")
 
         self.evidence_weight_grid = self._build_field_grid(
             [
                 (self.lbl_fragment_cnn_weight, self.spin_fragment_cnn_weight),
-                (self.lbl_fragment_spatial_weight, self.spin_fragment_spatial_weight),
                 (self.lbl_fragment_tag_weight, self.spin_fragment_tag_weight),
                 (self.lbl_online_prior_weight, self.spin_online_prior_weight),
                 (self.lbl_fragment_length_weight, self.spin_fragment_length_weight),
@@ -648,12 +635,13 @@ class PostProcessPanel(QWidget):
         self.spin_assignment_margin_threshold.setDecimals(2)
         self.spin_assignment_margin_threshold.setValue(0.10)
         self.spin_assignment_margin_threshold.setToolTip(
-            "Minimum score margin between the best and second-best assignment.\n"
-            "If the margin is below this, the online label is kept.\n"
+            "Monotone gate epsilon: minimum global-objective improvement required\n"
+            "to commit a fragment relabel during iterative refinement. Higher →\n"
+            "fewer flips, more conservative; lower → more flips, more aggressive.\n"
             "Recommended: 0.05–0.20."
         )
         fs_layout.addRow(
-            "Assignment margin threshold", self.spin_assignment_margin_threshold
+            "Relabel acceptance threshold", self.spin_assignment_margin_threshold
         )
 
         self.spin_min_fragment_frames = QSpinBox()
@@ -685,28 +673,14 @@ class PostProcessPanel(QWidget):
             self.pelt_controls_widget.setEnabled
         )
 
-        self.spin_fragment_solver_ilp_time_limit = QDoubleSpinBox()
-        self.spin_fragment_solver_ilp_time_limit.setRange(1.0, 300.0)
-        self.spin_fragment_solver_ilp_time_limit.setSingleStep(5.0)
-        self.spin_fragment_solver_ilp_time_limit.setDecimals(1)
-        self.spin_fragment_solver_ilp_time_limit.setValue(30.0)
-        self.spin_fragment_solver_ilp_time_limit.setToolTip(
-            "Maximum wall-clock seconds the MILP solver is allowed to run.\n"
-            "For large videos with many fragments, increase this value.\n"
-            "The solver returns the best solution found within the limit.\n"
-            "Recommended: 30–120 s."
-        )
-        fs_layout.addRow(
-            "ILP time limit (seconds)", self.spin_fragment_solver_ilp_time_limit
-        )
-
-        self.chk_enable_fragment_scoring = QCheckBox("Apply MILP label reassignment")
+        self.chk_enable_fragment_scoring = QCheckBox("Apply iterative label refinement")
         self.chk_enable_fragment_scoring.setChecked(True)
         self.chk_enable_fragment_scoring.setToolTip(
-            "When checked, MILP jointly optimises all fragment labels using CNN,\n"
-            "tag, spatial, and prior evidence — updating IdentityAssignedLabel.\n"
-            "Uncheck to run PELT changepoint detection only (log changepoints\n"
-            "without modifying any labels)."
+            "When checked, the iterative solver re-evaluates each fragment's\n"
+            "label against the schedule formed by the others, committing a\n"
+            "relabel only when it strictly improves the global evidence × spatial\n"
+            "× length objective. Uncheck to run PELT changepoint detection only\n"
+            "(log changepoints without modifying any labels)."
         )
         fs_layout.addRow("", self.chk_enable_fragment_scoring)
 
