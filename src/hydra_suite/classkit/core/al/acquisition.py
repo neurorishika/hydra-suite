@@ -32,6 +32,9 @@ class BatchConfig:
     min_per_class: int = (
         0  # noqa: DC01  (dataclass field) — minimum per class if imbalanced
     )
+    balance_mode: bool = (
+        False  # noqa: DC01 — replace representative slot with label-balance scoring
+    )
 
 
 class UncertaintySelector:
@@ -164,6 +167,47 @@ class RepresentativeSelector:
         return np.array(selected[:n_samples])
 
 
+class BalanceSelector:
+    """Select samples that reduce label-distribution imbalance in the labeled set.
+
+    Score = Σ_c  prob[i,c] / (labeled_count[c] + 1)
+
+    Samples predicted (softly) to belong to underrepresented classes score higher.
+    """
+
+    def select(
+        self,
+        probs: np.ndarray,
+        class_names: List[str],
+        image_labels: List[Optional[str]],
+        n_samples: int,
+        unlabeled_mask: np.ndarray,
+    ) -> np.ndarray:
+        from collections import Counter
+
+        labeled_count: Counter = Counter(
+            lbl for lbl in image_labels if lbl is not None and lbl != ""
+        )
+
+        # Build per-class inverse-frequency weight vector (shape C)
+        weights = np.array(
+            [1.0 / (labeled_count.get(name, 0) + 1) for name in class_names],
+            dtype=np.float64,
+        )
+
+        # Soft balance score: probs (N,C) @ weights (C,) → (N,)
+        scores = probs.astype(np.float64) @ weights
+        scores[~unlabeled_mask] = -np.inf
+
+        n_avail = int(unlabeled_mask.sum())
+        k = min(n_samples, n_avail)
+        if k <= 0:
+            return np.array([], dtype=int)
+
+        selected = np.argsort(scores)[-k:][::-1]
+        return selected
+
+
 class AuditSelector:
     """Select audit samples for quality assurance."""
 
@@ -236,6 +280,7 @@ class BatchAcquisition:
         self.config = config or BatchConfig()
         self.uncertainty_selector = UncertaintySelector()
         self.representative_selector = RepresentativeSelector()
+        self.balance_selector = BalanceSelector()
         self.audit_selector = AuditSelector()
 
     def select_batch(
@@ -247,6 +292,8 @@ class BatchAcquisition:
         label_coverage: Optional[Dict[int, float]] = None,
         cluster_densities: Optional[np.ndarray] = None,
         cluster_disagreements: Optional[Dict[int, float]] = None,
+        image_labels: Optional[List[Optional[str]]] = None,
+        class_names: Optional[List[str]] = None,
     ) -> Tuple[np.ndarray, Dict[str, List[int]]]:
         """
         Select a batch using the full recipe.
@@ -259,6 +306,8 @@ class BatchAcquisition:
             label_coverage: cluster_id -> fraction labeled (optional)
             cluster_densities: (K,) density per cluster (optional)
             cluster_disagreements: cluster_id -> disagreement (optional)
+            image_labels: per-sample label strings for balance mode (optional)
+            class_names: model output class names aligned with probs columns (optional)
 
         Returns:
             selected_indices: (batch_size,) selected indices
@@ -295,27 +344,42 @@ class BatchAcquisition:
                 breakdown["diversity"] = diverse.tolist()
                 selected_indices.update(diverse)
 
-        # 3. Representativeness
-        if n_representative > 0 and cluster_assignments is not None:
-            if label_coverage is None:
-                label_coverage = {}
-            if cluster_densities is None:
-                from .density import compute_cluster_densities
-
-                cluster_densities = compute_cluster_densities(
-                    embeddings, cluster_assignments
+        # 3. Representativeness / Balance
+        if n_representative > 0:
+            if (
+                cfg.balance_mode
+                and image_labels is not None
+                and class_names is not None
+            ):
+                balance = self.balance_selector.select(
+                    probs,
+                    class_names,
+                    image_labels,
+                    n_representative,
+                    unlabeled_mask,
                 )
+                breakdown["balance"] = balance.tolist()
+                selected_indices.update(balance)
+            elif cluster_assignments is not None:
+                if label_coverage is None:
+                    label_coverage = {}
+                if cluster_densities is None:
+                    from .density import compute_cluster_densities
 
-            representative = self.representative_selector.select(
-                embeddings,
-                cluster_assignments,
-                label_coverage,
-                cluster_densities,
-                n_representative,
-                unlabeled_mask,
-            )
-            breakdown["representative"] = representative.tolist()
-            selected_indices.update(representative)
+                    cluster_densities = compute_cluster_densities(
+                        embeddings, cluster_assignments
+                    )
+
+                representative = self.representative_selector.select(
+                    embeddings,
+                    cluster_assignments,
+                    label_coverage,
+                    cluster_densities,
+                    n_representative,
+                    unlabeled_mask,
+                )
+                breakdown["representative"] = representative.tolist()
+                selected_indices.update(representative)
 
         # 4. Audits
         if n_audit > 0:

@@ -1147,7 +1147,7 @@ class MainWindow(QMainWindow):
         )
         self.al_build_btn.setToolTip(
             "Select the highest-value unlabeled images for labeling —\n"
-            "40% uncertain · 35% diverse · 15% representative · 10% audit"
+            "40% uncertain · 35% diverse · 15% representative (or balance) · 10% audit"
         )
         self.al_build_btn.clicked.connect(self._build_al_batch)
         al_ctrl_row.addWidget(self.al_build_btn)
@@ -1159,6 +1159,19 @@ class MainWindow(QMainWindow):
         al_ctrl_row.addWidget(self.al_candidates_badge)
 
         al_group_layout.addLayout(al_ctrl_row)
+
+        al_balance_row = QHBoxLayout()
+        al_balance_row.setSpacing(6)
+        self.al_balance_check = QCheckBox("Balance labels")
+        self.al_balance_check.setToolTip(
+            "When enabled, the 15% representative slot prioritises unlabeled samples\n"
+            "predicted to belong to underrepresented label classes,\n"
+            "steering the labeled set toward a more uniform distribution."
+        )
+        self.al_balance_check.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        al_balance_row.addWidget(self.al_balance_check)
+        al_balance_row.addStretch(1)
+        al_group_layout.addLayout(al_balance_row)
 
         labeling_mode_row.addWidget(self.al_group, 1)
         labeling_options_layout.addLayout(labeling_mode_row)
@@ -10629,6 +10642,11 @@ class MainWindow(QMainWindow):
         batch_size = (
             self.al_batch_spin.value() if hasattr(self, "al_batch_spin") else 50
         )
+        balance_mode = (
+            self.al_balance_check.isChecked()
+            if hasattr(self, "al_balance_check")
+            else False
+        )
         labeled_mask = np.array([bool(lbl) for lbl in self.image_labels])
 
         from ..jobs.task_workers import ALBatchWorker
@@ -10639,6 +10657,15 @@ class MainWindow(QMainWindow):
             labeled_mask=labeled_mask,
             cluster_assignments=self.cluster_assignments,
             batch_size=batch_size,
+            balance_mode=balance_mode,
+            image_labels=(
+                list(self.image_labels) if self.image_labels is not None else None
+            ),
+            class_names=(
+                list(self._model_class_names)
+                if self._model_class_names is not None
+                else None
+            ),
         )
         worker.signals.success.connect(self._on_al_batch_success)
         worker.signals.error.connect(

@@ -28,6 +28,9 @@ class ALConfig:
             "audit": 0.10,
         }
     )
+    balance_mode: bool = (
+        False  # noqa: DC01 — replace representative slot with label-balance scoring
+    )
 
 
 @dataclass

@@ -1393,6 +1393,9 @@ class ALBatchWorker(QRunnable):
         labeled_mask,
         cluster_assignments=None,
         batch_size: int = 50,
+        balance_mode: bool = False,
+        image_labels=None,
+        class_names=None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -1401,6 +1404,9 @@ class ALBatchWorker(QRunnable):
         self.labeled_mask = labeled_mask
         self.cluster_assignments = cluster_assignments
         self.batch_size = batch_size
+        self.balance_mode = balance_mode
+        self.image_labels = image_labels
+        self.class_names = class_names
         self.signals = TaskSignals()
 
     @Slot()
@@ -1446,7 +1452,8 @@ class ALBatchWorker(QRunnable):
 
             self.signals.progress.emit(50, "Running batch acquisition selection...")
             cfg = BatchConfig(
-                batch_size=min(self.batch_size, int(unlabeled_mask.sum()))
+                batch_size=min(self.batch_size, int(unlabeled_mask.sum())),
+                balance_mode=self.balance_mode,
             )
             acq = BatchAcquisition(cfg)
             selected, breakdown = acq.select_batch(
@@ -1456,6 +1463,8 @@ class ALBatchWorker(QRunnable):
                 cluster_assignments=self.cluster_assignments,
                 label_coverage=label_coverage,
                 cluster_densities=cluster_densities,
+                image_labels=self.image_labels,
+                class_names=self.class_names,
             )
 
             self.signals.progress.emit(100, f"Selected {len(selected)} candidates!")
