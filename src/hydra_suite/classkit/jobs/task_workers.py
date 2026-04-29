@@ -79,7 +79,15 @@ class IngestWorker(QRunnable):
             imported_labels = {
                 str(label) for label in plan.discovered_labels if str(label).strip()
             }
-            if self.import_labels and imported_labels and project_labels:
+            # Skip validation when re-encoding: the GUI already confirmed the recoded
+            # labels fit the existing multihead scheme via _can_recode_into_existing_scheme,
+            # and project_classes may only contain factor values, not composite labels.
+            if (
+                self.import_labels
+                and imported_labels
+                and project_labels
+                and not self.label_recode
+            ):
                 missing = sorted(imported_labels - project_labels)
                 if missing:
                     raise ValueError(
