@@ -6870,8 +6870,12 @@ one trajectory at any point in time.  For each pair of trajectories with the
 same majority <code>IdentityAssignedLabel</code> and at least one shared frame, the
 lower-scoring one has its identity columns cleared and
 <code>IdentityConflictResolved</code> set to <code>True</code>.</p>
-<p>Scoring (descending priority): TagVotes sum → mean IdentityAssignedConfidence
-→ frame count → forward-pass preference.</p>
+<p>Scoring follows the same shape as the iterative fragment solver: a unary
+quality term <code>agreement × mean_conf × length_factor</code> plus an additive
+AprilTag bonus, with the forward-pass flag as the lex tiebreaker. A long
+track with consistent labels and a clear margin therefore wins over a
+short, jittery, or low-confidence one — the loser is the one that gets
+cleared to Unknown.</p>
 
     </div>
 
