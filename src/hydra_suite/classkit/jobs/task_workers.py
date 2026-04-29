@@ -33,6 +33,7 @@ class IngestWorker(QRunnable):
         db_path: Path,
         project_classes: Optional[List[str]] = None,
         import_labels: bool = True,
+        label_recode: Optional[tuple] = None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -40,6 +41,7 @@ class IngestWorker(QRunnable):
         self.db_path = db_path
         self.project_classes = list(project_classes or [])
         self.import_labels = bool(import_labels)
+        self.label_recode = label_recode  # (from_sep, to_sep) or None
         self.signals = TaskSignals()
 
     @Slot()
@@ -52,6 +54,7 @@ class IngestWorker(QRunnable):
             from ..core.data.source_import import (
                 build_source_import_plan,
                 materialize_source_import_plan,
+                recode_plan_labels,
             )
             from ..core.store.db import ClassKitDB
 
@@ -63,6 +66,11 @@ class IngestWorker(QRunnable):
             # Scan and ingest
             self.signals.progress.emit(10, f"Scanning folder: {self.source_path}...")
             plan = build_source_import_plan(self.source_path)
+
+            if self.label_recode and self.import_labels:
+                from_sep, to_sep = self.label_recode
+                plan = recode_plan_labels(plan, from_sep, to_sep)
+
             self.signals.progress.emit(40, f"Found {len(plan.image_paths):,} images")
 
             project_labels = {

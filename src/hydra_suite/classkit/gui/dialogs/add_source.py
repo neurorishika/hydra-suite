@@ -190,6 +190,8 @@ class AddSourceDialog(QDialog):
 
     def _on_filterkit_closed(self, d: Path, resolved: Path, pre_mtime) -> None:
         """Called when FilterKit exits. Auto-add folder if filtering was applied."""
+        import json as _json
+
         post_mtime = _get_transaction_mtime(d)
         if post_mtime == pre_mtime:
             reply = QMessageBox.question(
@@ -202,8 +204,20 @@ class AddSourceDialog(QDialog):
             )
             if reply != QMessageBox.Yes:
                 return
-        count = count_classkit_images(resolved)
-        self._sources.append((d, resolved, d.name))
+
+        add_path = resolved
+        tx_file = d / _FILTERKIT_TRANSACTION_FILE
+        if tx_file.exists():
+            try:
+                tx = _json.loads(tx_file.read_text(encoding="utf-8"))
+                output_path = tx.get("output_path")
+                if output_path and Path(output_path).exists():
+                    add_path = Path(output_path)
+            except Exception:
+                pass
+
+        count = count_classkit_images(add_path)
+        self._sources.append((d, add_path, d.name))
         self._list.addItem(
             QListWidgetItem(
                 f"{d.name}  \u2014  {count:,} images  (project-local standardization)\n{d}"

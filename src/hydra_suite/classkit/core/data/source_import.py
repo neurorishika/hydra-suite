@@ -510,6 +510,56 @@ def _build_class_folder_plan(root: Path) -> SourceImportPlan:
     )
 
 
+def detect_multihead_label_structure(
+    labels: list[str], separator: str = "_"
+) -> list[list[str]] | None:
+    """Return per-factor value lists if labels consistently encode multiple factors.
+
+    All labels must split into the same number of components (>= 2) and each
+    component position must have at least 2 distinct values.  Returns None when
+    the structure does not look like a multihead encoding.
+    """
+    if not labels or len(labels) < 2:
+        return None
+
+    split_labels = [label.split(separator) for label in labels]
+    n_factors = len(split_labels[0])
+    if n_factors < 2:
+        return None
+    if not all(len(parts) == n_factors for parts in split_labels):
+        return None
+
+    factor_values: list[list[str]] = []
+    for i in range(n_factors):
+        seen = list(dict.fromkeys(parts[i] for parts in split_labels))
+        if len(seen) < 2:
+            return None
+        factor_values.append(seen)
+
+    return factor_values
+
+
+def recode_plan_labels(
+    plan: SourceImportPlan, from_sep: str, to_sep: str
+) -> SourceImportPlan:
+    """Return a copy of *plan* with all label strings re-encoded from *from_sep* to *to_sep*."""
+
+    def _recode(label: str) -> str:
+        return to_sep.join(label.split(from_sep))
+
+    return SourceImportPlan(
+        source_root=plan.source_root,
+        source_kind=plan.source_kind,
+        image_paths=list(plan.image_paths),
+        label_updates={
+            path: (_recode(label), conf)
+            for path, (label, conf) in plan.label_updates.items()
+        },
+        metadata_by_path=dict(plan.metadata_by_path),
+        discovered_labels=[_recode(label) for label in plan.discovered_labels],
+    )
+
+
 def build_source_import_plan(source_root: Path) -> SourceImportPlan:
     """Build a normalized import plan for a selected ClassKit source."""
     source_root = source_root.expanduser().resolve()

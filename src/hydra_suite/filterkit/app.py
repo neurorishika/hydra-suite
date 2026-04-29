@@ -15,7 +15,7 @@ def parse_args():
         "dataset",
         nargs="?",
         default=None,
-        help="Optional dataset root containing images/ (or pass the images/ folder directly)",
+        help="Optional dataset root (flat folder, COCO JSON, YOLO OBB/detect, or class-folder dataset)",
     )
     return ap.parse_args()
 

@@ -4,6 +4,7 @@ import json
 import shutil
 from datetime import datetime
 from pathlib import Path
+from typing import Dict
 
 import cv2
 from PySide6.QtCore import QRectF, QSize, Qt, QUrl, Signal
@@ -122,7 +123,7 @@ class FilterWorker(BaseWorker):
     def _initialize_run_state(self):
         self.progress.emit(0, "Step 1/7: Loading dataset metadata")
         self.status.emit("Loading dataset...")
-        dataset = self.core.load_dataset(self.dataset_path)
+        _, dataset = self.core.load_images_from_root(self.dataset_path)
         loaded_count = len(dataset)
         self.progress.emit(10, f"Step 1/7 complete: loaded {loaded_count:,} images")
         stats = {
@@ -485,6 +486,7 @@ class FilterKitWindow(QMainWindow):
 
         self.dataset_path = None
         self.dataset_root = None
+        self._source_kind = "images"
         self.loaded_count = 0
         self.filtered_dataset = []
         self.removed_examples = []
@@ -1121,10 +1123,26 @@ class FilterKitWindow(QMainWindow):
             self.btn_rollback.setEnabled(False)
             return
 
-        dataset_root = Path(self.dataset_path).parent
-        images_path = dataset_root / "images"
-        all_images_path = dataset_root / "all_images"
-        self.btn_rollback.setEnabled(images_path.exists() and all_images_path.exists())
+        dataset_root = Path(self.dataset_path)
+        if getattr(self, "_source_kind", "images") == "images":
+            images_path = dataset_root / "images"
+            all_images_path = dataset_root / "all_images"
+            self.btn_rollback.setEnabled(
+                images_path.exists() and all_images_path.exists()
+            )
+        else:
+            tx_path = self._transaction_path(dataset_root)
+            if not tx_path.exists():
+                self.btn_rollback.setEnabled(False)
+                return
+            try:
+                tx = json.loads(tx_path.read_text(encoding="utf-8"))
+                output_path = tx.get("output_path", "")
+                self.btn_rollback.setEnabled(
+                    bool(output_path) and Path(output_path).exists()
+                )
+            except Exception:
+                self.btn_rollback.setEnabled(False)
 
     def load_dataset_dialog(self):
         from hydra_suite.paths import get_projects_dir
@@ -1138,26 +1156,38 @@ class FilterKitWindow(QMainWindow):
         self.load_dataset_root(Path(folder))
 
     def load_dataset_root(self, root: Path, show_errors: bool = True) -> bool:
-        root = Path(root)
+        root = Path(root).resolve()
         if root.name == "images" and root.is_dir():
             root = root.parent
 
-        images = root / "images"
-        if not images.exists() or not images.is_dir():
+        source_kind, items = FilterKitCore().load_images_from_root(root)
+        if not items:
             if show_errors:
                 QMessageBox.warning(
                     self,
                     "Invalid Dataset Folder",
-                    "Selected folder is missing required subfolder: images/\n\n"
-                    "Please select the dataset root that contains an images folder.",
+                    "No supported images found in the selected folder.\n\n"
+                    "Supported formats:\n"
+                    "  • Flat image folder or images/ subdirectory\n"
+                    "  • COCO JSON dataset\n"
+                    "  • YOLO OBB / detect dataset\n"
+                    "  • Train/val class-folder dataset",
                 )
             return False
 
-        self.dataset_path = str(images)
-        self.dataset_root = root
-        self.lbl_path.setText(f"{root.name}/images")
+        kind_label = {
+            "images": "flat / images/",
+            "coco": "COCO JSON",
+            "yolo_obb": "YOLO OBB/detect",
+            "class_folders": "class-folder",
+        }.get(source_kind, source_kind)
 
-        self.loaded_count = len(FilterKitCore().load_dataset(self.dataset_path))
+        self.dataset_path = str(root)
+        self.dataset_root = root
+        self._source_kind = source_kind
+        self.lbl_path.setText(f"{root.name}  —  {kind_label}")
+
+        self.loaded_count = len(items)
         self.lbl_status.setText(
             f"Dataset loaded. Found {self.loaded_count} image(s). Configure strategy and run sieve."
         )
@@ -1537,13 +1567,24 @@ class FilterKitWindow(QMainWindow):
         stats = self.pipeline_stats or {}
         selected = len(self.filtered_dataset)
         loaded = stats.get("loaded", self.loaded_count)
+        source_kind = getattr(self, "_source_kind", "images")
 
+        if source_kind == "images":
+            return (
+                "This will process your dataset with backup support:\n\n"
+                "1) Rename images/ → all_images/ (backup)\n"
+                "2) Create new images/\n"
+                f"3) Copy selected images ({selected:,}) into new images/\n"
+                "4) Write transaction log for rollback\n\n"
+                f"Loaded: {loaded:,}  |  Selected: {selected:,}\n"
+                "Continue?"
+            )
         return (
-            "This will process your dataset with backup support:\n\n"
-            "1) Rename images/ → all_images/ (backup)\n"
-            "2) Create new images/\n"
-            f"3) Copy selected images ({selected:,}) into new images/\n"
-            "4) Write transaction log for rollback\n\n"
+            "This will create a filtered subset of your dataset:\n\n"
+            "1) Create filterkit_output/images/ in the dataset root\n"
+            f"2) Copy selected images ({selected:,}) into filterkit_output/images/\n"
+            "3) Write transaction log (rollback will delete filterkit_output/)\n\n"
+            "The original dataset is NOT modified.\n\n"
             f"Loaded: {loaded:,}  |  Selected: {selected:,}\n"
             "Continue?"
         )
@@ -1565,59 +1606,122 @@ class FilterKitWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        images_path = Path(self.dataset_path)
-        dataset_root = images_path.parent
-        all_images_path = dataset_root / "all_images"
+        dataset_root = Path(self.dataset_path)
+        source_kind = getattr(self, "_source_kind", "images")
 
         try:
             self.lbl_status.setText("Processing dataset...")
             QApplication.processEvents()
 
-            if all_images_path.exists():
-                QMessageBox.warning(
+            if source_kind == "images":
+                images_path = dataset_root / "images"
+                all_images_path = dataset_root / "all_images"
+
+                if all_images_path.exists():
+                    QMessageBox.warning(
+                        self,
+                        "Cannot Process",
+                        "all_images/ already exists. Rename or remove it before processing.",
+                    )
+                    self.lbl_status.setText("Processing cancelled.")
+                    return
+
+                images_path.rename(all_images_path)
+                images_path.mkdir(exist_ok=True)
+
+                copied = 0
+                for item in self.filtered_dataset:
+                    src = all_images_path / Path(item["path"]).name
+                    dst = images_path / src.name
+                    if src.exists():
+                        shutil.copy2(src, dst)
+                        copied += 1
+
+                transaction = {
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "dataset_root": str(dataset_root),
+                    "source_kind": "images",
+                    "images_path": str(images_path),
+                    "all_images_path": str(all_images_path),
+                    "copied_count": copied,
+                    "selected_count": len(self.filtered_dataset),
+                }
+                with open(
+                    self._transaction_path(dataset_root), "w", encoding="utf-8"
+                ) as f:
+                    json.dump(transaction, f, indent=2)
+
+                QMessageBox.information(
                     self,
-                    "Cannot Process",
-                    "all_images/ already exists. Rename or remove it before processing.",
+                    "Success",
+                    (
+                        "Dataset processed successfully.\n\n"
+                        f"Backup: {all_images_path.name}/\n"
+                        f"Active: images/ ({copied:,} image(s))\n"
+                        "Rollback is available via 'Rollback Last Process'."
+                    ),
                 )
-                self.lbl_status.setText("Processing cancelled.")
-                return
+                self.lbl_status.setText(
+                    f"Processed dataset: {copied} images in images/."
+                )
+            else:
+                output_root = dataset_root / "filterkit_output"
+                output_images = output_root / "images"
 
-            images_path.rename(all_images_path)
-            images_path.mkdir(exist_ok=True)
+                if output_root.exists():
+                    QMessageBox.warning(
+                        self,
+                        "Cannot Process",
+                        "filterkit_output/ already exists. Remove it before processing.",
+                    )
+                    self.lbl_status.setText("Processing cancelled.")
+                    return
 
-            copied = 0
-            for item in self.filtered_dataset:
-                # After the rename, files now live under all_images_path.
-                # item["path"] still contains the old images/ path, so we
-                # redirect to the renamed backup folder using just the filename.
-                src = all_images_path / Path(item["path"]).name
-                dst = images_path / src.name
-                if src.exists():
-                    shutil.copy2(src, dst)
+                output_images.mkdir(parents=True, exist_ok=True)
+
+                seen_names: Dict[str, int] = {}
+                copied = 0
+                for item in self.filtered_dataset:
+                    src = Path(item["path"])
+                    if not src.exists():
+                        continue
+                    name = src.name
+                    if name in seen_names:
+                        seen_names[name] += 1
+                        name = f"{src.stem}_{seen_names[name]}{src.suffix}"
+                    else:
+                        seen_names[name] = 0
+                    shutil.copy2(src, output_images / name)
                     copied += 1
 
-            transaction = {
-                "created_at": datetime.now().isoformat(timespec="seconds"),
-                "dataset_root": str(dataset_root),
-                "images_path": str(images_path),
-                "all_images_path": str(all_images_path),
-                "copied_count": copied,
-                "selected_count": len(self.filtered_dataset),
-            }
-            with open(self._transaction_path(dataset_root), "w", encoding="utf-8") as f:
-                json.dump(transaction, f, indent=2)
+                transaction = {
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                    "dataset_root": str(dataset_root),
+                    "source_kind": source_kind,
+                    "output_path": str(output_root),
+                    "output_images_path": str(output_images),
+                    "copied_count": copied,
+                    "selected_count": len(self.filtered_dataset),
+                }
+                with open(
+                    self._transaction_path(dataset_root), "w", encoding="utf-8"
+                ) as f:
+                    json.dump(transaction, f, indent=2)
 
-            QMessageBox.information(
-                self,
-                "Success",
-                (
-                    "Dataset processed successfully.\n\n"
-                    f"Backup: {all_images_path.name}/\n"
-                    f"Active: images/ ({copied:,} image(s))\n"
-                    "Rollback is available via 'Rollback Last Process'."
-                ),
-            )
-            self.lbl_status.setText(f"Processed dataset: {copied} images in images/.")
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    (
+                        "Dataset processed successfully.\n\n"
+                        f"Output: filterkit_output/images/ ({copied:,} image(s))\n"
+                        "The original dataset is unchanged.\n"
+                        "Rollback is available via 'Rollback Last Process'."
+                    ),
+                )
+                self.lbl_status.setText(
+                    f"Processed dataset: {copied} images in filterkit_output/images/."
+                )
+
             self._update_rollback_availability()
 
         except Exception as exc:
@@ -1633,57 +1737,97 @@ class FilterKitWindow(QMainWindow):
             )
             return
 
-        dataset_root = Path(self.dataset_path).parent
-        images_folder = dataset_root / "images"
-        all_images_folder = dataset_root / "all_images"
-        if not images_folder.exists() or not all_images_folder.exists():
-            QMessageBox.information(
-                self,
-                "Rollback",
-                "Rollback is only available when both images/ and all_images/ exist in the selected dataset root.",
-            )
-            self._update_rollback_availability()
-            return
-
+        dataset_root = Path(self.dataset_path)
+        source_kind = getattr(self, "_source_kind", "images")
         transaction_file = self._transaction_path(dataset_root)
-        if not transaction_file.exists():
-            QMessageBox.information(
-                self,
-                "Rollback",
-                "No rollback transaction found in this dataset root.",
-            )
-            return
 
-        try:
-            with open(transaction_file, "r", encoding="utf-8") as f:
-                tx = json.load(f)
-
-            images_path = Path(tx["images_path"])
-            all_images_path = Path(tx["all_images_path"])
-            if not images_path.exists() or not all_images_path.exists():
-                QMessageBox.warning(
+        if source_kind == "images":
+            images_folder = dataset_root / "images"
+            all_images_folder = dataset_root / "all_images"
+            if not images_folder.exists() or not all_images_folder.exists():
+                QMessageBox.information(
                     self,
-                    "Rollback Failed",
-                    "Expected images/ and all_images/ were not found for rollback.",
+                    "Rollback",
+                    "Rollback is only available when both images/ and all_images/ exist in the selected dataset root.",
+                )
+                self._update_rollback_availability()
+                return
+
+            if not transaction_file.exists():
+                QMessageBox.information(
+                    self,
+                    "Rollback",
+                    "No rollback transaction found in this dataset root.",
                 )
                 return
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_current = images_path.parent / f"images_sieved_backup_{timestamp}"
-            images_path.rename(backup_current)
-            all_images_path.rename(images_path)
+            try:
+                with open(transaction_file, "r", encoding="utf-8") as f:
+                    tx = json.load(f)
 
-            QMessageBox.information(
-                self,
-                "Rollback Complete",
-                (
-                    "Rollback successful.\n\n"
-                    "Restored original images folder.\n"
-                    f"Current reduced set moved to: {backup_current.name}/"
-                ),
-            )
-            self.lbl_status.setText("Rollback complete: original images restored.")
-            self._update_rollback_availability()
+                images_path = Path(tx["images_path"])
+                all_images_path = Path(tx["all_images_path"])
+                if not images_path.exists() or not all_images_path.exists():
+                    QMessageBox.warning(
+                        self,
+                        "Rollback Failed",
+                        "Expected images/ and all_images/ were not found for rollback.",
+                    )
+                    return
 
-        except Exception as exc:
-            QMessageBox.critical(self, "Rollback Error", str(exc))
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_current = (
+                    images_path.parent / f"images_sieved_backup_{timestamp}"
+                )
+                images_path.rename(backup_current)
+                all_images_path.rename(images_path)
+
+                QMessageBox.information(
+                    self,
+                    "Rollback Complete",
+                    (
+                        "Rollback successful.\n\n"
+                        "Restored original images folder.\n"
+                        f"Current reduced set moved to: {backup_current.name}/"
+                    ),
+                )
+                self.lbl_status.setText("Rollback complete: original images restored.")
+                self._update_rollback_availability()
+
+            except Exception as exc:
+                QMessageBox.critical(self, "Rollback Error", str(exc))
+        else:
+            if not transaction_file.exists():
+                QMessageBox.information(
+                    self,
+                    "Rollback",
+                    "No rollback transaction found in this dataset root.",
+                )
+                return
+
+            try:
+                tx = json.loads(transaction_file.read_text(encoding="utf-8"))
+                output_path = Path(tx.get("output_path", ""))
+                if not output_path.exists():
+                    QMessageBox.information(
+                        self,
+                        "Rollback",
+                        "FilterKit output folder not found. Nothing to roll back.",
+                    )
+                    self._update_rollback_availability()
+                    return
+
+                shutil.rmtree(output_path)
+                transaction_file.unlink()
+
+                QMessageBox.information(
+                    self,
+                    "Rollback Complete",
+                    f"Removed FilterKit output folder: {output_path.name}/\n"
+                    "The original dataset is unchanged.",
+                )
+                self.lbl_status.setText("Rollback complete: FilterKit output removed.")
+                self._update_rollback_availability()
+
+            except Exception as exc:
+                QMessageBox.critical(self, "Rollback Error", str(exc))

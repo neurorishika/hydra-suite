@@ -61,12 +61,22 @@ class SourceManagerDialog(QDialog):
         header = QLabel(
             "<b>Image Sources</b><br>"
             "Manage the folders that supply images to this project. "
-            "Sources may be flat image folders, folders with an images/ subdirectory, "
-            "COCO / YOLO dataset roots, or train/val class-folder datasets. "
             "ClassKit copies accepted sources into the project's internal image store "
             "before ingesting them. "
             "Adding a folder will ingest its images; removing one will "
             "delete those images from the database."
+            "<br><br>"
+            "<b>Supported dataset formats:</b>"
+            "<ul style='margin-top:4px; margin-bottom:0;'>"
+            "<li><b>Flat image folder</b> — images directly in the selected folder "
+            "(or inside an <code>images/</code> subdirectory)</li>"
+            "<li><b>COCO JSON</b> — dataset root containing <code>annotations.json</code> "
+            "or an <code>annotations/</code> directory</li>"
+            "<li><b>YOLO OBB / Detect</b> — dataset root with train/val/test splits "
+            "and <code>.txt</code> label files</li>"
+            "<li><b>Class-folder</b> — subdirectories named after class labels, "
+            "optionally under train/val/test splits</li>"
+            "</ul>"
         )
         header.setWordWrap(True)
         layout.addWidget(header)
@@ -237,6 +247,8 @@ class SourceManagerDialog(QDialog):
 
     def _on_filterkit_closed(self, d: Path, resolved: Path, pre_mtime) -> None:
         """Called when FilterKit exits. Auto-add folder if filtering was applied."""
+        import json as _json
+
         post_mtime = _get_transaction_mtime(d)
         if post_mtime == pre_mtime:
             reply = QMessageBox.question(
@@ -249,7 +261,19 @@ class SourceManagerDialog(QDialog):
             )
             if reply != QMessageBox.Yes:
                 return
-        self._to_add.append(resolved)
+
+        add_path = resolved
+        tx_file = d / _FILTERKIT_TRANSACTION_FILE
+        if tx_file.exists():
+            try:
+                tx = _json.loads(tx_file.read_text(encoding="utf-8"))
+                output_path = tx.get("output_path")
+                if output_path and Path(output_path).exists():
+                    add_path = Path(output_path)
+            except Exception:
+                pass
+
+        self._to_add.append(add_path)
         self._rebuild_list()
 
     def _resolve_selected_source(self, dataset_root: Path) -> Path | None:

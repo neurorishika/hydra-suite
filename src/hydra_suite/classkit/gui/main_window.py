@@ -2963,15 +2963,55 @@ class MainWindow(QMainWindow):
             "training_modes": ["flat_custom", "flat_yolo"],
         }
 
-    def _replace_project_schema_from_labels(self, labels: list[str]) -> None:
-        """Replace the project classes and scheme with imported flat labels."""
+    @staticmethod
+    def _build_multihead_imported_scheme_dict(
+        factor_value_lists: list[list[str]],
+        factor_names: list[str] | None = None,
+    ) -> dict:
+        """Return a multi-factor scheme dict inferred from detected per-factor value lists."""
+        names = factor_names or [f"factor_{i}" for i in range(len(factor_value_lists))]
+        return {
+            "name": "imported_multihead_labels",
+            "description": "Multi-factor labeling scheme created from imported source labels",
+            "factors": [
+                {
+                    "name": name,
+                    "labels": list(values),
+                    "shortcut_keys": [""] * len(values),
+                }
+                for name, values in zip(names, factor_value_lists)
+            ],
+            "training_modes": ["flat_custom", "flat_yolo", "multihead"],
+        }
+
+    def _can_recode_into_existing_scheme(self, flat_labels: list[str]) -> bool:
+        """Return True if _ → | re-encoding of flat_labels fits the current project scheme."""
+        scheme = self._resolve_training_scheme()
+        if scheme is None or len(scheme.factors) < 2:
+            return False
+        valid = scheme.valid_encoded_labels()
+        recoded = {"|".join(label.split("_")) for label in flat_labels if label.strip()}
+        return bool(recoded) and recoded.issubset(valid)
+
+    def _replace_project_schema_from_labels(
+        self, labels: list[str], scheme_dict: dict | None = None
+    ) -> None:
+        """Replace the project classes and scheme with imported labels.
+
+        *scheme_dict* overrides the default single-factor scheme; pass a
+        pre-built multihead dict when importing multihead-encoded sources.
+        """
         if not labels:
             return
 
         normalized_labels = [
             str(label).strip() for label in labels if str(label).strip()
         ]
-        scheme_dict = self._build_imported_scheme_dict(normalized_labels)
+        sd = (
+            scheme_dict
+            if scheme_dict is not None
+            else self._build_imported_scheme_dict(normalized_labels)
+        )
 
         if self.project_path:
             config = self._load_project_config()
@@ -2984,7 +3024,7 @@ class MainWindow(QMainWindow):
             scheme_path = self._project_scheme_path()
             scheme_path.parent.mkdir(parents=True, exist_ok=True)
             with open(scheme_path, "w") as handle:
-                json.dump(scheme_dict, handle, indent=2)
+                json.dump(sd, handle, indent=2)
 
         self.classes = normalized_labels
         self.rebuild_label_buttons()
@@ -3006,57 +3046,109 @@ class MainWindow(QMainWindow):
         imported_labels: list[str],
         *,
         can_rewrite: bool,
+        multihead_factors: list[list[str]] | None = None,
+        can_recode_existing: bool = False,
     ) -> str:
-        """Ask how to handle imported labels that do not fit the current schema."""
+        """Ask how to handle imported labels that do not fit the current schema.
+
+        Returns one of: "rewrite", "rewrite_multihead", "recode", "images_only", "cancel".
+        """
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Warning)
-        msg.setWindowTitle("Source Labels Do Not Match Project Schema")
         imported_preview = ", ".join(imported_labels[:8]) or "(none)"
         current_preview = ", ".join((self.classes or [])[:8]) or "(none)"
         if len(imported_labels) > 8:
             imported_preview += ", ..."
         if len(self.classes or []) > 8:
             current_preview += ", ..."
-        msg.setText(
-            f"Source '{source_root.name}' contains labels that do not match the current project schema."
-        )
-        msg.setInformativeText(
-            "Imported labels: "
-            f"{imported_preview}\n"
-            "Project schema: "
-            f"{current_preview}\n\n"
-            + (
-                "This is the first source in the project, so you can replace the project schema with these imported labels, import images only, or cancel."
-                if can_rewrite
-                else "You can import the images without labels, or cancel this source import."
-            )
-        )
 
+        rewrite_multihead_button = None
+        rewrite_flat_button = None
         rewrite_button = None
-        if can_rewrite:
-            rewrite_button = msg.addButton(
-                "Rewrite Schema and Import Labels",
+        recode_button = None
+
+        if can_rewrite and multihead_factors:
+            n = len(multihead_factors)
+            factor_lines = "\n".join(
+                f"  Factor {i}: "
+                + ", ".join(vals[:5])
+                + (", ..." if len(vals) > 5 else "")
+                for i, vals in enumerate(multihead_factors)
+            )
+            msg.setWindowTitle("Multihead Label Structure Detected")
+            msg.setText(
+                f"Source '{source_root.name}' labels appear to encode "
+                f"{n} independent factors separated by underscores."
+            )
+            msg.setInformativeText(
+                f"Detected factors:\n{factor_lines}\n\n"
+                "Imported labels: "
+                f"{imported_preview}\n\n"
+                "Import as a multihead scheme (one classifier per factor), "
+                "as a flat single-class scheme, or import images only?"
+            )
+            rewrite_multihead_button = msg.addButton(
+                "Import as Multihead Scheme", QMessageBox.AcceptRole
+            )
+            rewrite_flat_button = msg.addButton(
+                "Import as Flat Scheme", QMessageBox.AcceptRole
+            )
+        else:
+            msg.setWindowTitle("Source Labels Do Not Match Project Schema")
+            msg.setText(
+                f"Source '{source_root.name}' contains labels that do not match "
+                "the current project schema."
+            )
+            msg.setInformativeText(
+                "Imported labels: "
+                f"{imported_preview}\n"
+                "Project schema: "
+                f"{current_preview}\n\n"
+                + (
+                    "This is the first source in the project, so you can replace the "
+                    "project schema with these imported labels, import images only, or cancel."
+                    if can_rewrite
+                    else "You can import the images without labels, or cancel this source import."
+                )
+            )
+            if can_rewrite:
+                rewrite_button = msg.addButton(
+                    "Rewrite Schema and Import Labels",
+                    QMessageBox.AcceptRole,
+                )
+
+        if not can_rewrite and can_recode_existing:
+            recode_button = msg.addButton(
+                "Import Labels (re-encode _ to |)",
                 QMessageBox.AcceptRole,
             )
+
         import_images_only_button = msg.addButton(
             "Import Images Only",
             QMessageBox.ActionRole,
         )
-        cancel_button = msg.addButton(QMessageBox.Cancel)
+        msg.addButton(QMessageBox.Cancel)
         msg.exec()
 
         clicked = msg.clickedButton()
+        if rewrite_multihead_button is not None and clicked == rewrite_multihead_button:
+            return "rewrite_multihead"
+        if rewrite_flat_button is not None and clicked == rewrite_flat_button:
+            return "rewrite"
         if rewrite_button is not None and clicked == rewrite_button:
             return "rewrite"
+        if recode_button is not None and clicked == recode_button:
+            return "recode"
         if clicked == import_images_only_button:
             return "images_only"
-        if clicked == cancel_button:
-            return "cancel"
         return "cancel"
 
     def _resolve_ingest_request(self, source_root: Path) -> dict | None:
         """Return the next ingest request, prompting when source labels mismatch."""
-        from ..core.data.source_import import build_source_import_plan
+        from ..core.data.source_import import (
+            build_source_import_plan,
+            detect_multihead_label_structure,
+        )
 
         plan = build_source_import_plan(source_root)
         imported_labels = [
@@ -3078,14 +3170,39 @@ class MainWindow(QMainWindow):
             return {"source_root": source_root, "import_labels": True}
 
         can_rewrite = self._project_image_count() == 0
+        multihead_factors = (
+            detect_multihead_label_structure(imported_labels) if can_rewrite else None
+        )
+        can_recode_existing = not can_rewrite and self._can_recode_into_existing_scheme(
+            imported_labels
+        )
         resolution = self._prompt_schema_mismatch_resolution(
             source_root,
             imported_labels,
             can_rewrite=can_rewrite,
+            multihead_factors=multihead_factors,
+            can_recode_existing=can_recode_existing,
         )
+        if resolution == "rewrite_multihead" and multihead_factors:
+            recoded_labels = ["|".join(l.split("_")) for l in imported_labels]
+            scheme_dict = self._build_multihead_imported_scheme_dict(multihead_factors)
+            self._replace_project_schema_from_labels(
+                recoded_labels, scheme_dict=scheme_dict
+            )
+            return {
+                "source_root": source_root,
+                "import_labels": True,
+                "label_recode": ("_", "|"),
+            }
         if resolution == "rewrite":
             self._replace_project_schema_from_labels(imported_labels)
             return {"source_root": source_root, "import_labels": True}
+        if resolution == "recode":
+            return {
+                "source_root": source_root,
+                "import_labels": True,
+                "label_recode": ("_", "|"),
+            }
         if resolution == "images_only":
             return {"source_root": source_root, "import_labels": False}
         return None
@@ -6016,6 +6133,7 @@ class MainWindow(QMainWindow):
             self.db_path,
             project_classes=self.classes,
             import_labels=bool(request.get("import_labels", True)),
+            label_recode=request.get("label_recode"),
         )
         worker.signals.started.connect(
             lambda f=folder: self.status.showMessage(f"[Step 1/5] Ingesting {f.name}…")
