@@ -151,3 +151,21 @@ def test_save_load_round_trip_preserves_head_kind(tmp_path):
         a = model(batch)
         b = loaded(batch)
     assert torch.allclose(a, b, atol=1e-5)
+
+
+def test_contracts_expose_shared_trunk_role_and_params():
+    from hydra_suite.training.contracts import CustomCNNParams, TrainingRole
+
+    assert hasattr(TrainingRole, "CLASSIFY_MULTIHEAD_CUSTOM_SHARED")
+    assert (
+        TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM_SHARED.value
+        == "classify_multihead_custom_shared"
+    )
+    p = CustomCNNParams()
+    assert p.head_kind == "flat"
+    assert p.head_hidden_dim > 0
+    assert 0.0 <= p.head_dropout < 1.0
+    p2 = CustomCNNParams(
+        head_kind="multihead_shared_trunk", head_hidden_dim=128, head_dropout=0.2
+    )
+    assert p2.head_kind == "multihead_shared_trunk"

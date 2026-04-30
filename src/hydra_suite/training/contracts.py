@@ -21,6 +21,7 @@ class TrainingRole(str, Enum):
     CLASSIFY_MULTIHEAD_TINY = "classify_multihead_tiny"
     CLASSIFY_FLAT_CUSTOM = "classify_flat_custom"
     CLASSIFY_MULTIHEAD_CUSTOM = "classify_multihead_custom"
+    CLASSIFY_MULTIHEAD_CUSTOM_SHARED = "classify_multihead_custom_shared"
 
 
 @dataclass(slots=True)
@@ -114,6 +115,10 @@ class CustomCNNParams:
     dropout: float = 0.1
     input_width: int = 128
     input_height: int = 64
+    # Shared-trunk multi-head head MLP configuration.
+    head_kind: str = "flat"  # "flat" | "multihead_shared_trunk"
+    head_hidden_dim: int = 256
+    head_dropout: float = 0.1
 
 
 @dataclass(slots=True)
