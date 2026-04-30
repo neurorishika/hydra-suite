@@ -58,7 +58,7 @@ def test_ingest_worker_imports_coco_labels_into_db(tmp_path: Path) -> None:
     db_path = tmp_path / "classkit.db"
     ClassKitDB(db_path)
 
-    worker = IngestWorker(source_root, db_path, project_classes=["ant"])
+    worker = IngestWorker(source_root, db_path, project_classes=["ant"], portable=True)
     worker.run()
 
     db = ClassKitDB(db_path)
@@ -78,6 +78,83 @@ def test_ingest_worker_imports_coco_labels_into_db(tmp_path: Path) -> None:
 
     sources = db.get_source_folders()
     assert sources == [{"folder": str(source_root.resolve()), "count": 1}]
+
+
+def test_ingest_worker_links_images_by_default(tmp_path: Path) -> None:
+    """By default ClassKit ingests in linked mode — images stay where they are."""
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+    from hydra_suite.classkit.jobs.task_workers import IngestWorker
+
+    source_root = tmp_path / "coco_dataset"
+    images_dir = source_root / "images"
+    images_dir.mkdir(parents=True)
+    image_path = images_dir / "frame001.jpg"
+    image_path.write_bytes(b"image-bytes")
+    (source_root / "annotations.json").write_text(
+        """
+        {
+          "images": [{"id": 1, "file_name": "frame001.jpg"}],
+          "annotations": [{"id": 1, "image_id": 1, "category_id": 0}],
+          "categories": [{"id": 0, "name": "ant"}]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    db_path = project_dir / "classkit.db"
+    ClassKitDB(db_path)
+
+    worker = IngestWorker(source_root, db_path, project_classes=["ant"])
+    worker.run()
+
+    db = ClassKitDB(db_path)
+    assert db.count_images() == 1
+
+    stored_path = Path(db.get_all_image_paths()[0])
+    assert stored_path.exists()
+    # Linked: stored path IS inside the original source root, not the project bundle.
+    assert source_root.resolve() in stored_path.resolve().parents
+    assert project_dir.resolve() not in stored_path.resolve().parents
+
+    sources = db.get_source_folders()
+    assert sources == [{"folder": str(source_root.resolve()), "count": 1}]
+
+
+def test_make_portable_after_linked_ingest_copies_into_bundle(tmp_path: Path) -> None:
+    """Make Portable should copy linked images into the project bundle."""
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+    from hydra_suite.classkit.gui.project import (
+        classkit_project_is_portable,
+        ensure_classkit_project_layout,
+    )
+    from hydra_suite.classkit.jobs.task_workers import IngestWorker
+
+    source_root = tmp_path / "loose_images"
+    source_root.mkdir()
+    image_path = source_root / "frame001.jpg"
+    image_path.write_bytes(b"image-bytes")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    db_path = ensure_classkit_project_layout(project_dir)
+
+    worker = IngestWorker(source_root, db_path)
+    worker.run()
+
+    db = ClassKitDB(db_path)
+    stored_path_before = Path(db.get_all_image_paths()[0])
+    assert source_root.resolve() in stored_path_before.resolve().parents
+    assert not classkit_project_is_portable(project_dir, db.get_all_image_paths())
+
+    copied = db.materialize_linked_images()
+    assert copied == 1
+
+    stored_path_after = Path(db.get_all_image_paths()[0])
+    assert stored_path_after.exists()
+    assert project_dir.resolve() in stored_path_after.resolve().parents
+    assert classkit_project_is_portable(project_dir, db.get_all_image_paths())
 
 
 def test_build_source_import_plan_for_train_val_class_folders(tmp_path: Path) -> None:
@@ -123,6 +200,7 @@ def test_ingest_worker_can_import_images_without_mismatched_labels(
         db_path,
         project_classes=["bee"],
         import_labels=False,
+        portable=True,
     )
     worker.run()
 

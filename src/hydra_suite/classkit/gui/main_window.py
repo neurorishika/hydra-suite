@@ -51,6 +51,7 @@ from hydra_suite.data.project_bundle import (
     load_project_bundle_archive_manifest,
 )
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
 from .project import (
@@ -1603,12 +1604,26 @@ class MainWindow(QMainWindow):
             )
             if destination_dir is None:
                 return
-            imported_dir = import_project_bundle_archive(
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
+
+        def _extract(set_status, _set_progress):
+            set_status("Extracting project archive…")
+            return import_project_bundle_archive(
                 archive_path,
                 destination_dir,
                 expected_kit="classkit",
             )
-        except Exception as exc:
+
+        try:
+            imported_dir = run_blocking_with_busy_dialog(
+                self,
+                _extract,
+                title="Open Project Zip",
+                message="Extracting project archive…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Open Project Zip", str(exc))
             return
 
@@ -1701,12 +1716,26 @@ class MainWindow(QMainWindow):
             worker.start()
             return True
 
-        try:
-            self.save_project()
-            from ..core.store.db import ClassKitDB
+        self.save_project()
+        from ..core.store.db import ClassKitDB
 
-            db = ClassKitDB(self.db_path)
-            copied_count = db.materialize_linked_images()
+        db_path = self.db_path
+
+        def _materialize(set_status, _set_progress):
+            set_status("Copying linked images into the project bundle…")
+            return ClassKitDB(db_path).materialize_linked_images()
+
+        try:
+            copied_count = run_blocking_with_busy_dialog(
+                self,
+                _materialize,
+                title="Make Project Portable",
+                message="Copying linked images into the project bundle…",
+            )
+        except BusyTaskError as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+        try:
             self.load_project_data()
             self.update_context_panel()
         except Exception as exc:
@@ -1761,10 +1790,24 @@ class MainWindow(QMainWindow):
             if not self.make_project_portable(interactive=False):
                 return
             self.save_project()
-            written_path = export_project_bundle_archive(
-                self.project_path, archive_path
-            )
         except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        project_path = self.project_path
+
+        def _archive(set_status, _set_progress):
+            set_status("Writing zip archive…")
+            return export_project_bundle_archive(project_path, archive_path)
+
+        try:
+            written_path = run_blocking_with_busy_dialog(
+                self,
+                _archive,
+                title="Export Project Zip",
+                message="Writing zip archive…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Export Project Zip", str(exc))
             return
 
@@ -1875,28 +1918,59 @@ class MainWindow(QMainWindow):
             self.toolbar.show()
 
     def load_project_data(self):
-        """Load project data from database."""
+        """Load project data from database (DB scans run off the UI thread)."""
         if not self.db_path:
             return
 
-        try:
-            from pathlib import Path
+        from pathlib import Path
 
-            from ..core.store.db import ClassKitDB
+        from ..core.store.db import ClassKitDB
 
-            db = ClassKitDB(self.db_path)
+        db_path = self.db_path
 
-            # Rebase project-owned bundle paths after extracting or moving a project.
+        def _scan(set_status, _set_progress):
+            db = ClassKitDB(db_path)
+            set_status("Rebasing project paths…")
             db.relocate_project_owned_paths()
-
-            # Migrate any non-resolved paths from older ingests (no-op if already resolved)
+            set_status("Migrating legacy image paths…")
             db.migrate_paths_to_resolved()
-
-            # Load image paths
+            set_status("Loading image records…")
             path_strings = db.get_all_image_paths()
-            self.image_paths = [Path(p) for p in path_strings]
+            set_status(f"Loading labels ({len(path_strings):,} images)…")
+            labels = db.get_all_labels()
+            review_status = db.get_label_review_status_by_path()
+            set_status("Loading per-image metadata…")
+            metadata_by_path = db.get_image_metadata_by_path()
+            return {
+                "path_strings": path_strings,
+                "labels": labels,
+                "review_status": review_status,
+                "metadata_by_path": metadata_by_path,
+            }
+
+        try:
+            scan_result = run_blocking_with_busy_dialog(
+                self,
+                _scan,
+                title="Loading Project",
+                message="Reading project database…",
+            )
+        except BusyTaskError as exc:
+            QMessageBox.warning(
+                self, "Load Error", f"Failed to load project data:\n{exc}"
+            )
+            return
+
+        try:
+            self.image_paths = [Path(p) for p in scan_result["path_strings"]]
             self.image_confidences = [None] * len(self.image_paths)
-            self._reload_label_state_from_db(db)
+            self.image_labels = scan_result["labels"]
+            self._image_review_status = scan_result["review_status"]
+            self._image_metadata_by_path = scan_result["metadata_by_path"]
+            self._refresh_review_candidate_indices()
+            self._invalidate_infinite_labeling_cache()
+            if len(self.image_confidences) != len(self.image_paths):
+                self.image_confidences = [None] * len(self.image_paths)
 
             config = self._load_project_config()
             if config:
@@ -1906,6 +1980,7 @@ class MainWindow(QMainWindow):
 
             self._invalidate_image_set_dependent_state()
 
+            db = ClassKitDB(self.db_path)
             self._finalize_project_load(db)
 
             self.status.showMessage(
@@ -1913,7 +1988,7 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(
-                self, "Load Error", f"Failed to load project data:\\n{e}"
+                self, "Load Error", f"Failed to load project data:\n{e}"
             )
 
     def update_context_panel(self):
@@ -6088,10 +6163,29 @@ class MainWindow(QMainWindow):
         if folders_to_remove:
             from ..core.store.db import ClassKitDB
 
-            db = ClassKitDB(self.db_path)
-            total_removed = 0
-            for folder in folders_to_remove:
-                total_removed += db.remove_images_by_folder_exact(folder)
+            db_path = self.db_path
+
+            def _remove(set_status, _set_progress):
+                db = ClassKitDB(db_path)
+                total = 0
+                for index, folder in enumerate(folders_to_remove, start=1):
+                    set_status(
+                        f"Removing source {index} of {len(folders_to_remove)}: "
+                        f"{Path(folder).name}…"
+                    )
+                    total += db.remove_images_by_folder_exact(folder)
+                return total
+
+            try:
+                total_removed = run_blocking_with_busy_dialog(
+                    self,
+                    _remove,
+                    title="Removing Sources",
+                    message="Deleting linked image records…",
+                )
+            except BusyTaskError as exc:
+                QMessageBox.warning(self, "Remove Sources", str(exc))
+                total_removed = 0
             if total_removed:
                 self.status.showMessage(
                     f"Removed {total_removed:,} images from {len(folders_to_remove)} source(s)"

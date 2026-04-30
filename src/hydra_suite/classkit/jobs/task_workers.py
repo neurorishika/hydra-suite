@@ -25,7 +25,14 @@ class TaskSignals(QObject):
 
 
 class IngestWorker(QRunnable):
-    """Worker for ingesting images from folders/videos."""
+    """Worker for ingesting images from folders/videos.
+
+    By default ClassKit ingests in *linked* mode: image paths are recorded in
+    the database pointing back to the original source folder, and no copies
+    are made. The user can later run "Make Project Portable" to copy the
+    linked images into the project bundle. Pass ``portable=True`` to copy
+    images into the bundle at ingest time.
+    """
 
     def __init__(
         self,
@@ -34,6 +41,7 @@ class IngestWorker(QRunnable):
         project_classes: Optional[List[str]] = None,
         import_labels: bool = True,
         label_recode: Optional[tuple] = None,
+        portable: bool = False,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -42,6 +50,7 @@ class IngestWorker(QRunnable):
         self.project_classes = list(project_classes or [])
         self.import_labels = bool(import_labels)
         self.label_recode = label_recode  # (from_sep, to_sep) or None
+        self.portable = bool(portable)
         self.signals = TaskSignals()
 
     @Slot()
@@ -95,11 +104,22 @@ class IngestWorker(QRunnable):
                         + ", ".join(missing)
                     )
 
-            plan = materialize_source_import_plan(
-                plan,
-                self.db_path,
-                include_labels=self.import_labels,
-            )
+            if self.portable:
+                self.signals.progress.emit(45, "Copying images into project bundle...")
+                plan = materialize_source_import_plan(
+                    plan,
+                    self.db_path,
+                    include_labels=self.import_labels,
+                )
+            elif not self.import_labels:
+                # Strip per-image label metadata so images ingest without labels.
+                from ..core.data.source_import import _strip_label_metadata
+
+                plan.metadata_by_path = {
+                    key: _strip_label_metadata(value)
+                    for key, value in plan.metadata_by_path.items()
+                }
+                plan.label_updates = {}
             image_paths = list(plan.image_paths)
 
             self.signals.progress.emit(50, "Computing image hashes...")

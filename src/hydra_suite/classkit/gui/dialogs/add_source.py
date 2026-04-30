@@ -44,8 +44,9 @@ class AddSourceDialog(QDialog):
 
     Accepted roots can be flat image folders, folders with an ``images/``
     subdirectory, COCO / YOLO dataset roots, or train/val class-folder datasets.
-    ClassKit copies accepted images into the project's internal source store
-    before ingestion.
+    ClassKit links accepted source folders by default — image files stay where
+    they are and the database records their original paths. Use
+    "Make Project Portable" later to copy them into the project bundle.
     """
 
     def __init__(
@@ -69,8 +70,9 @@ class AddSourceDialog(QDialog):
         info = QLabel(
             "Add one or more dataset root folders. Sources may be flat image folders, "
             f"folders with an <b>{CLASSKIT_IMAGES_SUBDIR}/</b> subdirectory, COCO / YOLO roots, "
-            "or train/val class-folder datasets. ClassKit will standardize every accepted "
-            "source into the project's internal image store before ingestion."
+            "or train/val class-folder datasets. ClassKit links these folders by default — "
+            "images stay where they are. Use <b>Make Project Portable</b> later to copy "
+            "them into the project bundle."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -179,9 +181,9 @@ class AddSourceDialog(QDialog):
 
         self._sources.append((d, resolved, d.name))
         usage_text = (
-            f"detected {inspection.source_kind} import"
+            f"detected {inspection.source_kind} import \u2014 linked"
             if inspection.source_kind != "images"
-            else "project-local standardization"
+            else "linked source"
         )
         item = QListWidgetItem(
             f"{d.name}  \u2014  {count:,} images  ({usage_text})\n{d}"
@@ -219,9 +221,7 @@ class AddSourceDialog(QDialog):
         count = count_classkit_images(add_path)
         self._sources.append((d, add_path, d.name))
         self._list.addItem(
-            QListWidgetItem(
-                f"{d.name}  \u2014  {count:,} images  (project-local standardization)\n{d}"
-            )
+            QListWidgetItem(f"{d.name}  \u2014  {count:,} images  (linked source)\n{d}")
         )
 
     def _resolve_selected_source(self, dataset_root: Path) -> Path | None:
