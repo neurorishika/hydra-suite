@@ -434,15 +434,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#launch-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      Launch Commands
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#local-docs-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       Local Docs Workflow
@@ -522,27 +513,6 @@
   
   <span class="md-ellipsis">
     Installation
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="getting-started/rocm/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
   </span>
   
 
@@ -1810,15 +1780,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#launch-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      Launch Commands
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#local-docs-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       Local Docs Workflow
@@ -1866,7 +1827,7 @@
 <p><a href="https://github.com/neurorishika/hydra-suite"><img alt="Source" src="https://img.shields.io/badge/source-GitHub-111827?style=flat-square&amp;logo=github" /></a>
 <a href="https://github.com/neurorishika/hydra-suite/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-15803D?style=flat-square" /></a>
 <img alt="Python versions" src="https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" />
-<img alt="Acceleration backends" src="https://img.shields.io/badge/acceleration-CPU%20%7C%20MPS%20%7C%20CUDA%20%7C%20ROCm-111827?style=flat-square" /></p>
+<img alt="Acceleration backends" src="https://img.shields.io/badge/acceleration-CPU%20%7C%20MPS%20%7C%20CUDA-111827?style=flat-square" /></p>
 <p><a href="getting-started/installation/">Install</a> |
 <a href="user-guide/overview/">User Guide</a> |
 <a href="developer-guide/architecture/">Developer Guide</a> |
@@ -1943,7 +1904,7 @@
 </li>
 </ul>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">pip</label><label for="__tabbed_1_2">Developer</label><label for="__tabbed_1_3">ROCm Note</label></div>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:3"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">pip</label><label for="__tabbed_1_2">Developer</label><label for="__tabbed_1_3">Launch</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># CPU</span>
@@ -1956,10 +1917,6 @@
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># NVIDIA CUDA</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu128
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[cuda]&quot;</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="c1"># AMD ROCm</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/rocm7.2
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;hydra-suite[rocm]&quot;</span>
 </span></code></pre></div>
 </div>
 <div class="tabbed-block">
@@ -1977,31 +1934,19 @@
 </span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>make<span class="w"> </span>setup-cuda
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-cuda
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>make<span class="w"> </span>install-cuda<span class="w"> </span><span class="nv">CUDA_MAJOR</span><span class="o">=</span><span class="m">13</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="c1"># AMD ROCm</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>make<span class="w"> </span>setup-rocm
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-rocm
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>make<span class="w"> </span>install-rocm
 </span></code></pre></div>
 </div>
 <div class="tabbed-block">
-<p>Install system ROCm before the Python packages and use the dedicated setup page:</p>
-<ul>
-<li><a href="getting-started/rocm/">ROCm Setup</a></li>
-</ul>
-</div>
-</div>
-</div>
-<h2 id="launch-commands">Launch Commands<a class="headerlink" href="#launch-commands" title="Permanent link">&para;</a></h2>
-<div class="language-text highlight"><pre><span></span><code>hydra
-
-trackerkit         # Multi-animal tracking
+<p>hydra</p>
+<p>trackerkit         # Multi-animal tracking
 posekit            # Pose labeling
 classkit           # Classification / embedding
 detectkit          # Detection model training
 filterkit          # Dataset filtering
-refinekit          # Interactive proofreading
-</code></pre></div>
+refinekit          # Interactive proofreading</p>
+</div>
+</div>
+</div>
 <h2 id="local-docs-workflow">Local Docs Workflow<a class="headerlink" href="#local-docs-workflow" title="Permanent link">&para;</a></h2>
 <div class="tabbed-set tabbed-alternate" data-tabs="2:2"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">Serve locally</label><label for="__tabbed_2_2">Strict build</label></div>
 <div class="tabbed-content">

@@ -446,27 +446,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/rocm/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../getting-started/environments/" class="md-nav__link">
         
   
@@ -1919,11 +1898,9 @@
 <li><code>cpu</code></li>
 <li><code>mps</code></li>
 <li><code>cuda</code></li>
-<li><code>rocm</code></li>
 <li><code>onnx_coreml</code></li>
 <li><code>onnx_cpu</code></li>
 <li><code>onnx_cuda</code></li>
-<li><code>onnx_rocm</code></li>
 <li><code>tensorrt</code></li>
 </ul>
 <p>The UI only shows options valid for the currently enabled pipelines.</p>
@@ -1941,10 +1918,8 @@
 <li><code>mps</code>: Apple Metal (PyTorch-native paths).</li>
 <li><code>onnx_coreml</code>: ONNX Runtime with CoreMLExecutionProvider on Apple Silicon.</li>
 <li><code>cuda</code>: PyTorch CUDA native paths.</li>
-<li><code>rocm</code>: PyTorch ROCm native paths.</li>
 <li><code>onnx_cpu</code>: ONNX Runtime with CPU provider.</li>
 <li><code>onnx_cuda</code>: ONNX Runtime with CUDA provider.</li>
-<li><code>onnx_rocm</code>: ONNX Runtime with ROCm provider. This is optional and only appears when <code>ROCMExecutionProvider</code> is actually available in the active environment.</li>
 <li><code>tensorrt</code>: TensorRT engine/runtime on NVIDIA CUDA.</li>
 </ul>
 <h2 id="auto-export-and-artifact-location">Auto Export and Artifact Location<a class="headerlink" href="#auto-export-and-artifact-location" title="Permanent link">&para;</a></h2>
@@ -1964,9 +1939,6 @@
 <li>Typically <code>mps</code>, <code>onnx_coreml</code>, and <code>onnx_cpu</code> (no TensorRT).</li>
 <li>NVIDIA CUDA:</li>
 <li><code>cuda</code>, <code>onnx_cuda</code>, and <code>tensorrt</code> when installed correctly.</li>
-<li>ROCm:</li>
-<li><code>rocm</code> by default.</li>
-<li><code>onnx_rocm</code> only when a ROCm-enabled ONNX Runtime provider is installed and detected.</li>
 </ul>
 <h2 id="behavior-during-runs">Behavior During Runs<a class="headerlink" href="#behavior-during-runs" title="Permanent link">&para;</a></h2>
 <p>Runtime controls are locked during long-running prediction/tracking tasks to prevent backend switching crashes.</p>

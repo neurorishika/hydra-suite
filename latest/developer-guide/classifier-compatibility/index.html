@@ -10,13 +10,9 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/getting-started/rocm/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/developer-guide/classifier-compatibility/">
       
       
-        <link rel="prev" href="../installation/">
-      
-      
-        <link rel="next" href="../environments/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -24,7 +20,7 @@
     
     
       
-        <title>ROCm Setup - HYDRA Suite Docs</title>
+        <title>Classifier compatibility - HYDRA Suite Docs</title>
       
     
     
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#rocm-setup" class="md-skip">
+        <a href="#classifier-compatibility" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              ROCm Setup
+              Classifier compatibility
             
           </span>
         </div>
@@ -240,13 +236,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../installation/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
           
   
   Getting Started
@@ -282,7 +276,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+        <a href="../architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -380,30 +374,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -414,7 +405,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Getting Started
@@ -428,7 +419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../installation/" class="md-nav__link">
+      <a href="../../getting-started/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -446,203 +437,10 @@
                 
   
   
-    
-  
-  
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-      </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
-    <span class="md-ellipsis">
-      Status
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#supported-host-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Supported Host Setup
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#1-install-system-rocm" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Install System ROCm
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-verify-rocm-before-installing-hydra" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Verify ROCm Before Installing HYDRA
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-optional-environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      3. Optional Environment Variables
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-create-the-hydra-rocm-environment" class="md-nav__link">
-    <span class="md-ellipsis">
-      4. Create the HYDRA ROCm Environment
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-repo-specific-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      5. Repo-Specific Notes
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-verification-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      6. Verification Commands
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      7. Troubleshooting
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="7. Troubleshooting">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#gpu-not-detected" class="md-nav__link">
-    <span class="md-ellipsis">
-      GPU Not Detected
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pytorch-does-not-see-rocm" class="md-nav__link">
-    <span class="md-ellipsis">
-      PyTorch Does Not See ROCm
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cupy-build-or-runtime-failures" class="md-nav__link">
-    <span class="md-ellipsis">
-      CuPy Build or Runtime Failures
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#performance-is-lower-than-expected" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance Is Lower Than Expected
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-related-pages" class="md-nav__link">
-    <span class="md-ellipsis">
-      8. Related Pages
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
   
   
     <li class="md-nav__item">
-      <a href="../environments/" class="md-nav__link">
+      <a href="../../getting-started/environments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -663,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../integrations/" class="md-nav__link">
+      <a href="../../getting-started/integrations/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -684,7 +482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../quickstart-hydra/" class="md-nav__link">
+      <a href="../../getting-started/quickstart-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -705,7 +503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../quickstart-posekit/" class="md-nav__link">
+      <a href="../../getting-started/quickstart-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -726,7 +524,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../platforms/" class="md-nav__link">
+      <a href="../../getting-started/platforms/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1181,7 +979,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1202,7 +1000,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/module-map/" class="md-nav__link">
+      <a href="../module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1223,7 +1021,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+      <a href="../data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1244,7 +1042,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1265,7 +1063,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+      <a href="../tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1286,7 +1084,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+      <a href="../gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1307,7 +1105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+      <a href="../runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1328,7 +1126,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+      <a href="../dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1349,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+      <a href="../performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1370,7 +1168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+      <a href="../confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1391,7 +1189,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+      <a href="../extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1412,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+      <a href="../extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1433,7 +1231,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/code-health/" class="md-nav__link">
+      <a href="../code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1454,7 +1252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/publishing/" class="md-nav__link">
+      <a href="../publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1475,7 +1273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/contributing/" class="md-nav__link">
+      <a href="../contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1866,132 +1664,36 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
+  <a href="#artifacts" class="md-nav__link">
     <span class="md-ellipsis">
-      Status
+      Artifacts
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#supported-host-setup" class="md-nav__link">
+  <a href="#registry" class="md-nav__link">
     <span class="md-ellipsis">
-      Supported Host Setup
+      Registry
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#1-install-system-rocm" class="md-nav__link">
+  <a href="#consumers" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Install System ROCm
+      Consumers
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-verify-rocm-before-installing-hydra" class="md-nav__link">
+  <a href="#compute-runtimes" class="md-nav__link">
     <span class="md-ellipsis">
-      2. Verify ROCm Before Installing HYDRA
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-optional-environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      3. Optional Environment Variables
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-create-the-hydra-rocm-environment" class="md-nav__link">
-    <span class="md-ellipsis">
-      4. Create the HYDRA ROCm Environment
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-repo-specific-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      5. Repo-Specific Notes
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-verification-commands" class="md-nav__link">
-    <span class="md-ellipsis">
-      6. Verification Commands
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      7. Troubleshooting
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="7. Troubleshooting">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#gpu-not-detected" class="md-nav__link">
-    <span class="md-ellipsis">
-      GPU Not Detected
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pytorch-does-not-see-rocm" class="md-nav__link">
-    <span class="md-ellipsis">
-      PyTorch Does Not See ROCm
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#cupy-build-or-runtime-failures" class="md-nav__link">
-    <span class="md-ellipsis">
-      CuPy Build or Runtime Failures
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#performance-is-lower-than-expected" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance Is Lower Than Expected
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-related-pages" class="md-nav__link">
-    <span class="md-ellipsis">
-      8. Related Pages
+      Compute runtimes
     </span>
   </a>
   
@@ -2012,7 +1714,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/getting-started/rocm.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/classifier-compatibility.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2020,131 +1722,91 @@
   
 
 
-<h1 id="rocm-setup">ROCm Setup<a class="headerlink" href="#rocm-setup" title="Permanent link">&para;</a></h1>
-<p>This is the canonical ROCm setup guide for HYDRA Suite.</p>
-<p>Use this page for the Linux AMD GPU path. The short installation page stays focused on package install commands; this page covers the system ROCm prerequisite, repo-specific defaults, and the failure modes that are easiest to hit in practice.</p>
-<h2 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h2>
+<h1 id="classifier-compatibility">Classifier compatibility<a class="headerlink" href="#classifier-compatibility" title="Permanent link">&para;</a></h1>
+<p>This page documents the contract between ClassKit-trained classifier
+artifacts and TrackerKit's head-tail and CNN-identity consumers.</p>
+<h2 id="artifacts">Artifacts<a class="headerlink" href="#artifacts" title="Permanent link">&para;</a></h2>
+<p>All ClassKit-trained classifier checkpoints carry <code>schema_version: 2</code> and
+these fields:</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Flat</th>
+<th>Multi-head</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schema_version</code></td>
+<td>int (== 2)</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>arch</code></td>
+<td>str</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>input_size</code></td>
+<td><code>[H, W]</code> (2-int sequence)</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>factor_names</code></td>
+<td>list[str]</td>
+<td><code>["flat"]</code></td>
+<td>length K</td>
+</tr>
+<tr>
+<td><code>class_names_per_factor</code></td>
+<td>list[list[str]]</td>
+<td><code>[[...]]</code></td>
+<td>length K</td>
+</tr>
+<tr>
+<td><code>class_names</code></td>
+<td>list[str]</td>
+<td>yes (== <code>class_names_per_factor[0]</code>)</td>
+<td>absent</td>
+</tr>
+<tr>
+<td><code>monochrome</code></td>
+<td>bool</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>Multi-head YOLO bundles are instead described by a sidecar
+<code>*.multihead.json</code> manifest; see the spec.</p>
+<h2 id="registry">Registry<a class="headerlink" href="#registry" title="Permanent link">&para;</a></h2>
+<p>The registry is stored at <code>{models_root}/model_registry.json</code> in the v2
+root shape:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="p">{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span><span class="nt">&quot;entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&quot;classification/identity/....pth&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="err">...</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Use <code>model_publish.iter_registry_entries</code> to read; never parse the JSON
+directly from UI code.</p>
+<h2 id="consumers">Consumers<a class="headerlink" href="#consumers" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Linux only.</li>
-<li>AMD's current quick-start flow uses the <code>amdgpu-install</code> package and ROCm 7.2.x.</li>
-<li>HYDRA's developer workflow uses <code>environment-rocm.yml</code>, <code>requirements-rocm.txt</code>, <code>make setup-rocm</code>, and <code>make install-rocm</code>.</li>
-<li>PyTorch ROCm is the main accelerated path in this repo.</li>
-<li>CuPy on ROCm is still experimental and is the least stable part of the stack.</li>
-<li><code>onnx_rocm</code> is optional. The default ROCm requirements install CPU <code>onnxruntime</code>; the ROCm ONNX provider only appears if your environment supplies it separately.</li>
+<li>Head-tail accepts flat classifiers whose labels normalize to a non-empty
+  subset of <code>{up, down, left, right, unknown}</code>. Any backbone.</li>
+<li>CNN identity accepts flat and multi-head artifacts. Multi-head imports
+  require a <code>scoring_mode</code> (<code>"atomic"</code> or <code>"per_head_average"</code>).</li>
 </ul>
-<h2 id="supported-host-setup">Supported Host Setup<a class="headerlink" href="#supported-host-setup" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Supported distributions are defined by AMD's ROCm documentation. At the time of writing that includes current Ubuntu LTS releases plus selected RHEL and SLES variants.</li>
-<li>Check GPU and distro support before installing: <a href="https://rocm.docs.amd.com/projects/install-on-linux/en/latest/reference/system-requirements.html">https://rocm.docs.amd.com/projects/install-on-linux/en/latest/reference/system-requirements.html</a></li>
-</ul>
-<h2 id="1-install-system-rocm">1. Install System ROCm<a class="headerlink" href="#1-install-system-rocm" title="Permanent link">&para;</a></h2>
-<p>HYDRA does not install ROCm for you. Install ROCm system-wide first using AMD's distro-specific guide.</p>
-<p>For Ubuntu 24.04, AMD's current quick-start pattern is:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>wget<span class="w"> </span>https://repo.radeon.com/amdgpu-install/7.2.1/ubuntu/noble/amdgpu-install_7.2.1.70201-1_all.deb
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>./amdgpu-install_7.2.1.70201-1_all.deb
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>sudo<span class="w"> </span>apt<span class="w"> </span>update
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;linux-headers-</span><span class="k">$(</span>uname<span class="w"> </span>-r<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="s2">&quot;linux-modules-extra-</span><span class="k">$(</span>uname<span class="w"> </span>-r<span class="k">)</span><span class="s2">&quot;</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>amdgpu-dkms<span class="w"> </span>rocm
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>sudo<span class="w"> </span>usermod<span class="w"> </span>-a<span class="w"> </span>-G<span class="w"> </span>render,video<span class="w"> </span><span class="nv">$LOGNAME</span>
-</span></code></pre></div>
-<p>Notes:</p>
-<ul>
-<li>Ubuntu 22.04 uses the <code>jammy</code> package path instead of <code>noble</code>.</li>
-<li>Reboot after driver installation.</li>
-<li>For RHEL or SLES, follow AMD's detailed distro-specific instructions instead of copying Ubuntu commands.</li>
-</ul>
-<p>Official references:</p>
-<ul>
-<li>Quick start: <a href="https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html">https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/quick-start.html</a></li>
-<li>Detailed install: <a href="https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/detailed-install.html">https://rocm.docs.amd.com/projects/install-on-linux/en/latest/install/detailed-install.html</a></li>
-<li>Radeon/Ryzen guidance: <a href="https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/index.html">https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/index.html</a></li>
-</ul>
-<h2 id="2-verify-rocm-before-installing-hydra">2. Verify ROCm Before Installing HYDRA<a class="headerlink" href="#2-verify-rocm-before-installing-hydra" title="Permanent link">&para;</a></h2>
-<p>Run these checks before creating the HYDRA environment:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>rocm-smi<span class="w"> </span>--showproductname
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>/opt/rocm/bin/hipconfig<span class="w"> </span>--version
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>rocminfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">&quot;Name:&quot;</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>groups
-</span></code></pre></div>
-<p>You want to confirm all of the following:</p>
-<ul>
-<li>Your AMD GPU is visible.</li>
-<li>HIP is installed.</li>
-<li>Your user is in the <code>render</code> and <code>video</code> groups.</li>
-</ul>
-<h2 id="3-optional-environment-variables">3. Optional Environment Variables<a class="headerlink" href="#3-optional-environment-variables" title="Permanent link">&para;</a></h2>
-<p>These are often useful for CuPy builds, multi-GPU systems, and shell sessions that do not already expose ROCm cleanly:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ROCM_HOME</span><span class="o">=</span>/opt/rocm
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">ROCM_PATH</span><span class="o">=</span><span class="nv">$ROCM_HOME</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HIP_PATH</span><span class="o">=</span><span class="nv">$ROCM_HOME</span>/hip
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="nv">$ROCM_HOME</span>/bin:<span class="nv">$PATH</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="nv">$ROCM_HOME</span>/lib:<span class="nv">$LD_LIBRARY_PATH</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HIP_VISIBLE_DEVICES</span><span class="o">=</span><span class="m">0</span>
-</span></code></pre></div>
-<p>If your system install is healthy, PyTorch ROCm often works without all of these exports. They are still worth keeping in mind when CuPy builds or runtime discovery fail.</p>
-<h2 id="4-create-the-hydra-rocm-environment">4. Create the HYDRA ROCm Environment<a class="headerlink" href="#4-create-the-hydra-rocm-environment" title="Permanent link">&para;</a></h2>
-<p>Preferred repo workflow:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>setup-rocm
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-rocm
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>make<span class="w"> </span>install-rocm
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>make<span class="w"> </span>verify-rocm
-</span></code></pre></div>
-<p>Equivalent manual flow:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>mamba<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>environment-rocm.yml
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>conda<span class="w"> </span>activate<span class="w"> </span>hydra-rocm
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-v<span class="w"> </span>-r<span class="w"> </span>requirements-rocm.txt
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>python<span class="w"> </span>verify_rocm.py
-</span></code></pre></div>
-<h2 id="5-repo-specific-notes">5. Repo-Specific Notes<a class="headerlink" href="#5-repo-specific-notes" title="Permanent link">&para;</a></h2>
-<ul>
-<li><code>requirements-rocm.txt</code> currently defaults to PyTorch ROCm 7.2 wheels.</li>
-<li>If your lab is pinned to another supported PyTorch ROCm build, change the <code>--extra-index-url</code> in <code>requirements-rocm.txt</code> to match.</li>
-<li>The default ROCm requirements install CPU <code>onnxruntime</code>, not a ROCm ONNX provider. That means <code>onnx_rocm</code> is only available when your environment exposes <code>ROCMExecutionProvider</code>.</li>
-<li>The default CuPy package in this repo is still <code>cupy-rocm-6-0</code>. If that package fails on your host, HYDRA can still run on PyTorch ROCm with CPU fallback paths for features that depend on CuPy.</li>
-</ul>
-<h2 id="6-verification-commands">6. Verification Commands<a class="headerlink" href="#6-verification-commands" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(torch.__version__); print(&#39;cuda_available=&#39;, torch.cuda.is_available()); print(&#39;hip=&#39;, getattr(torch.version, &#39;hip&#39;, None)); print(&#39;device=&#39;, torch.cuda.get_device_name(0) if torch.cuda.is_available() else &#39;none&#39;)&quot;</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import onnxruntime as ort; print(ort.get_available_providers())&quot;</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import cupy as cp; print(cp.__version__)&quot;</span>
-</span></code></pre></div>
-<p>Interpretation:</p>
-<ul>
-<li>If PyTorch reports <code>cuda_available=True</code> and a non-empty <code>torch.version.hip</code>, the ROCm torch install is healthy.</li>
-<li>If ONNX Runtime shows only <code>CPUExecutionProvider</code>, that is expected with the default repo requirements.</li>
-<li>If CuPy import or runtime checks fail, the rest of the ROCm stack may still be usable.</li>
-</ul>
-<h2 id="7-troubleshooting">7. Troubleshooting<a class="headerlink" href="#7-troubleshooting" title="Permanent link">&para;</a></h2>
-<h3 id="gpu-not-detected">GPU Not Detected<a class="headerlink" href="#gpu-not-detected" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>lsmod<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>amdgpu
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>dmesg<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>amdgpu
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>groups
-</span></code></pre></div>
-<p>If <code>render</code> or <code>video</code> is missing, re-run:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>sudo<span class="w"> </span>usermod<span class="w"> </span>-a<span class="w"> </span>-G<span class="w"> </span>render,video<span class="w"> </span><span class="nv">$LOGNAME</span>
-</span></code></pre></div>
-<p>Then log out fully or reboot.</p>
-<h3 id="pytorch-does-not-see-rocm">PyTorch Does Not See ROCm<a class="headerlink" href="#pytorch-does-not-see-rocm" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(torch.__version__); print(torch.cuda.is_available()); print(getattr(torch.version, &#39;hip&#39;, None))&quot;</span>
-</span></code></pre></div>
-<p>If the torch wheel is wrong for your stack, reinstall from the ROCm index selected in <code>requirements-rocm.txt</code>.</p>
-<h3 id="cupy-build-or-runtime-failures">CuPy Build or Runtime Failures<a class="headerlink" href="#cupy-build-or-runtime-failures" title="Permanent link">&para;</a></h3>
-<p>CuPy's own AMD guidance now calls out these ROCm libraries as the common missing pieces:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>hipblas<span class="w"> </span>hipsparse<span class="w"> </span>rocsparse<span class="w"> </span>rocrand<span class="w"> </span>hiprand<span class="w"> </span>rocthrust<span class="w"> </span>rocsolver<span class="w"> </span>rocfft<span class="w"> </span>hipfft<span class="w"> </span>hipcub<span class="w"> </span>rocprim<span class="w"> </span>rccl<span class="w"> </span>roctracer-dev
-</span></code></pre></div>
-<p>If CuPy still fails, keep the rest of the environment and treat CuPy-backed features as optional until you decide whether to pin a different CuPy/ROCm combination.</p>
-<h3 id="performance-is-lower-than-expected">Performance Is Lower Than Expected<a class="headerlink" href="#performance-is-lower-than-expected" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>rocm-smi<span class="w"> </span>--showclocks
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>rocm-smi<span class="w"> </span>--showmeminfo<span class="w"> </span>vram
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>watch<span class="w"> </span>-n<span class="w"> </span><span class="m">1</span><span class="w"> </span>rocm-smi
-</span></code></pre></div>
-<p>Also verify that the app is actually using <code>rocm</code> and not falling back to <code>cpu</code> or <code>onnx_cpu</code>.</p>
-<h2 id="8-related-pages">8. Related Pages<a class="headerlink" href="#8-related-pages" title="Permanent link">&para;</a></h2>
-<ul>
-<li><a href="../installation/">Installation</a></li>
-<li><a href="../environments/">Environments and Makefile</a></li>
-<li><a href="../platforms/">Platform Notes</a></li>
-<li><a href="../../user-guide/compute-runtimes/">Compute Runtimes</a></li>
-</ul>
+<h2 id="compute-runtimes">Compute runtimes<a class="headerlink" href="#compute-runtimes" title="Permanent link">&para;</a></h2>
+<p>Both consumers use <code>compute_runtime</code> dispatch via <code>ClassifierBackend</code>.
+<code>_pipeline_supports_runtime</code> returns the same capability set for
+<code>cnn_identity</code> and <code>head_tail</code>.</p>
 
 
 

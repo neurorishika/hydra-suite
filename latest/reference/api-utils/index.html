@@ -446,27 +446,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/rocm/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../getting-started/environments/" class="md-nav__link">
         
   
@@ -1711,6 +1690,39 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.utils.VideoEncoder" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;VideoEncoder
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" VideoEncoder">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.VideoEncoder.write" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;write
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.VideoEncoder.release" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;release
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.utils.fit_circle_to_points" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;fit_circle_to_points
@@ -1759,6 +1771,15 @@
   <a href="#hydra_suite.utils.stabilize_lighting" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;stabilize_lighting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.probe_video_backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;probe_video_backend
     </span>
   </a>
   
@@ -2410,6 +2431,39 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.utils.VideoEncoder" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;VideoEncoder
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label=" VideoEncoder">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.VideoEncoder.write" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;write
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.VideoEncoder.release" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;release
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.utils.fit_circle_to_points" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;fit_circle_to_points
@@ -2458,6 +2512,15 @@
   <a href="#hydra_suite.utils.stabilize_lighting" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;stabilize_lighting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.probe_video_backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;probe_video_backend
     </span>
   </a>
   
@@ -3172,6 +3235,92 @@ by seeking backward through the video.</p>
 
 </div>
 
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="hydra_suite.utils.VideoEncoder" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-class"></code>            <code>VideoEncoder</code>
+
+
+<a href="#hydra_suite.utils.VideoEncoder" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Frame-by-frame video encoder with automatic hardware-acceleration selection.</p>
+<p>Accepts BGR uint8 frames (same as cv2.VideoWriter).  The backend is
+auto-detected once per process and cached; pass <code>backend</code> explicitly to
+override (useful for testing or when the caller knows the environment).</p>
+<p>NVENC concurrent sessions are tracked globally; when the cap is reached new
+encoders silently fall back to libx264 software encoding.</p>
+<p>Usage::</p>
+<div class="language-text highlight"><pre><span></span><code>with VideoEncoder(path, fps=30, width=1920, height=1080) as enc:
+    for frame_bgr in frames:
+        enc.write(frame_bgr)
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.utils.VideoEncoder.write" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">write</span><span class="p">(</span><span class="n">frame_bgr</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.utils.VideoEncoder.write" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Write one BGR uint8 frame (same interface as cv2.VideoWriter.write).</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.utils.VideoEncoder.release" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">release</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.utils.VideoEncoder.release" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Flush encoder buffers and close the output file.</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
 
 <div class="doc doc-object doc-function">
 
@@ -3326,6 +3475,23 @@ angle transitions and prevent discontinuities at the 0/360 boundary.</p>
 
 </div>
 
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.utils.probe_video_backend" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">probe_video_backend</span><span class="p">()</span></code>
+
+<a href="#hydra_suite.utils.probe_video_backend" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return the best available video encoding backend (result is cached).</p>
+
+    </div>
+
+</div>
+
 
 
   </div>
@@ -3446,7 +3612,7 @@ that can be used throughout the codebase. Supports:
         <p>Return runtime options for pose inference as list[(label, value)].</p>
 <p>Values are normalized ids consumed by runtime_api, e.g.:
 - auto
-- cpu / mps / cuda / rocm
+- cpu / mps / cuda
 - onnx_coreml / onnx_cpu / onnx_cuda
 - tensorrt_cuda</p>
 

@@ -449,27 +449,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../rocm/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    ROCm Setup
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../environments/" class="md-nav__link">
         
   
@@ -612,15 +591,6 @@
   <a href="#apple-silicon-mps" class="md-nav__link">
     <span class="md-ellipsis">
       Apple Silicon (MPS)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#amd-rocm" class="md-nav__link">
-    <span class="md-ellipsis">
-      AMD ROCm
     </span>
   </a>
   
@@ -1797,15 +1767,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#amd-rocm" class="md-nav__link">
-    <span class="md-ellipsis">
-      AMD ROCm
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#cpu-only" class="md-nav__link">
     <span class="md-ellipsis">
       CPU-Only
@@ -1856,13 +1817,6 @@
 <ul>
 <li>Uses PyTorch MPS backend where available.</li>
 <li>Good convenience/performance for local labeling and medium workloads.</li>
-</ul>
-<h2 id="amd-rocm">AMD ROCm<a class="headerlink" href="#amd-rocm" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Requires system ROCm installation before Python packages are effective.</li>
-<li>Use the dedicated <a href="../rocm/">ROCm setup guide</a> for the current system install path and repo-specific notes.</li>
-<li><code>rocm</code> is supported out of the box via PyTorch ROCm; <code>onnx_rocm</code> only appears when the active environment exposes a ROCm ONNX Runtime provider.</li>
-<li>Use <code>verify_rocm.py</code> to validate runtime support.</li>
 </ul>
 <h2 id="cpu-only">CPU-Only<a class="headerlink" href="#cpu-only" title="Permanent link">&para;</a></h2>
 <ul>
