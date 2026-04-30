@@ -633,22 +633,6 @@ def emit_yolo_multihead_manifest(
     return manifest_abs
 
 
-def _try_onnx_export(model, ckpt_dict, out_ckpt, log_cb):
-    """Attempt ONNX export alongside .pth; return path or None."""
-    try:
-        from hydra_suite.training.tiny_model import export_tiny_to_onnx
-
-        _onnx_candidate = out_ckpt.with_suffix(".onnx")
-        export_tiny_to_onnx(model, ckpt_dict, _onnx_candidate)
-        _safe_log(log_cb, f"ONNX exported: {_onnx_candidate.name}")
-        return _onnx_candidate
-    except Exception as _onnx_exc:
-        _safe_log(
-            log_cb, f"ONNX export skipped ({type(_onnx_exc).__name__}: {_onnx_exc})"
-        )
-        return None
-
-
 def _load_compatible_checkpoint_weights(
     model,
     checkpoint_path: str | Path,
@@ -851,7 +835,7 @@ def _train_tiny_classify(
     if best_state is not None:
         model.load_state_dict(best_state, strict=True)
 
-    _safe_log(log_cb, "Saving checkpoint and attempting ONNX export...")
+    _safe_log(log_cb, "Saving checkpoint...")
 
     # Path derivation
     weights_dir = run_dir / "weights"
@@ -879,10 +863,6 @@ def _train_tiny_classify(
         best_val_acc=best_val_acc,
         history=history,
     )
-
-    # ONNX export
-    _ckpt_for_onnx = {"input_size": [int(input_h), int(input_w)]}
-    _onnx_path = _try_onnx_export(model, _ckpt_for_onnx, out_ckpt, log_cb)
 
     # Metrics JSON
     import json as _json
@@ -913,7 +893,7 @@ def _train_tiny_classify(
     return {
         "success": True,
         "artifact_path": str(out_ckpt),
-        "onnx_path": str(_onnx_path) if _onnx_path is not None else "",
+        "onnx_path": "",
         "metrics_path": str(metrics_path),
         "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
         "command": ["tiny_classify_inprocess"],
@@ -1231,11 +1211,9 @@ def _train_custom_classify(
     """
     from .torchvision_model import (
         build_torchvision_classifier,
-        export_torchvision_to_onnx,
         freeze_backbone,
         get_classifier_normalization_stats,
         get_layer_groups,
-        load_torchvision_classifier,
         save_torchvision_checkpoint,
     )
 
@@ -1545,21 +1523,6 @@ def _train_custom_classify(
             "task": "custom_classify",
         }
 
-    best_model, best_ckpt = load_torchvision_classifier(
-        str(best_ckpt_path), device="cpu"
-    )
-    onnx_path = best_ckpt_path.with_suffix(".onnx")
-    _safe_log(log_cb, "Exporting best checkpoint to ONNX...")
-    try:
-        export_torchvision_to_onnx(best_model, best_ckpt, onnx_path)
-        _safe_log(log_cb, f"ONNX exported: {onnx_path.name}")
-    except Exception as _onnx_exc:
-        _safe_log(
-            log_cb,
-            f"ONNX export failed ({type(_onnx_exc).__name__}: {_onnx_exc})",
-        )
-        onnx_path = Path("")
-
     _total_elapsed = _time.monotonic() - _t0
     _safe_log(
         log_cb,
@@ -1570,7 +1533,7 @@ def _train_custom_classify(
     return {
         "success": True,
         "artifact_path": str(best_ckpt_path),
-        "onnx_path": str(onnx_path) if str(onnx_path) else "",
+        "onnx_path": "",
         "metrics_path": str(metrics_path),
         "best_val_acc": best_val_acc,
         "command": ["custom_classify_inprocess"],

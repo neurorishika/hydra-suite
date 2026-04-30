@@ -340,9 +340,6 @@ class ClassKitTrainingDialog(QDialog):
             self.mode_combo, self._normalize_mode_key(settings.get("mode"))
         )
         self._set_combo_value(self.device_combo, settings.get("device"))
-        self._set_combo_value(
-            self.compute_runtime_combo, settings.get("compute_runtime")
-        )
         self._set_combo_value(self.base_model_combo, settings.get("base_model"))
         self._initial_model_path_edit.setText(
             self._normalize_path_text(settings.get("initial_model_path"))
@@ -651,7 +648,6 @@ class ClassKitTrainingDialog(QDialog):
         )
         form.addRow("<b>Training Device:</b>", self.device_combo)
 
-        self._build_compute_runtime_combo(form)
         self._build_base_model_combo(form)
         self._build_initial_model_selector(form)
         self._build_hyperparams_widgets(form)
@@ -771,50 +767,6 @@ class ClassKitTrainingDialog(QDialog):
         row_layout.addLayout(button_row)
         row_layout.addWidget(self._auto_size_helper_label)
         layout.addWidget(self._auto_size_controls)
-
-    def _build_compute_runtime_combo(self, form):
-        """Build the inference runtime combo box."""
-        self.compute_runtime_combo = QComboBox()
-        try:
-            from hydra_suite.runtime.compute_runtime import (
-                runtime_label,
-                supported_runtimes_for_pipeline,
-            )
-
-            _runtimes = supported_runtimes_for_pipeline("tiny_classify")
-            for _rt in _runtimes:
-                self.compute_runtime_combo.addItem(runtime_label(_rt), _rt)
-        except Exception:
-            self.compute_runtime_combo.addItem("CPU", "cpu")
-
-        self._select_preferred_compute_runtime()
-        self.device_combo.currentIndexChanged.connect(
-            lambda _index: self._select_preferred_compute_runtime()
-        )
-
-        self.compute_runtime_combo.setToolTip(
-            "Runtime used for Tiny CNN inference in ClassKit (and MAT integration).\n"
-            "ONNX / TensorRT runtimes use exported artifacts (auto-exported after training).\n"
-            "On Apple Silicon, ONNX (CoreML) uses ONNX Runtime's CoreMLExecutionProvider."
-        )
-        form.addRow("<b>Inference Runtime:</b>", self.compute_runtime_combo)
-
-    def _preferred_compute_runtime(self) -> str:
-        runtimes = [
-            str(self.compute_runtime_combo.itemData(index) or "")
-            for index in range(self.compute_runtime_combo.count())
-        ]
-        train_device = str(self.device_combo.currentData() or "cpu").strip().lower()
-        if train_device == "mps":
-            return "onnx_coreml" if "onnx_coreml" in runtimes else "mps"
-        if train_device == "cuda":
-            return "onnx_cuda" if "onnx_cuda" in runtimes else "cuda"
-        return "cpu"
-
-    def _select_preferred_compute_runtime(self) -> None:
-        index = self.compute_runtime_combo.findData(self._preferred_compute_runtime())
-        if index >= 0:
-            self.compute_runtime_combo.setCurrentIndex(index)
 
     def _build_base_model_combo(self, form):
         """Build the YOLO base model combo box."""
@@ -2211,7 +2163,6 @@ class ClassKitTrainingDialog(QDialog):
         contrast_value = self.contrast_spin.value()
         monochrome_value = self.monochrome_check.isChecked()
 
-        _rt = str(self.compute_runtime_combo.currentData() or "cpu")
         _train_device = str(self.device_combo.currentData() or "cpu")
 
         _mode = self.mode_combo.currentData() or ""
@@ -2222,7 +2173,6 @@ class ClassKitTrainingDialog(QDialog):
 
         return {
             "mode": self._normalize_mode_key(self.mode_combo.currentData()),
-            "compute_runtime": _rt,
             "device": _train_device,
             "base_model": self.base_model_combo.currentData(),
             "initial_model_path": self._normalize_path_text(

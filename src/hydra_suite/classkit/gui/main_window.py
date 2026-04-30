@@ -54,6 +54,7 @@ from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noq
 from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..config.schemas import MULTIHEAD_LABEL_SEPARATOR, normalize_legacy_composite_label
 from .project import (
     classkit_config_path,
     classkit_export_dir,
@@ -1531,10 +1532,10 @@ class MainWindow(QMainWindow):
                     with open(self._project_scheme_path(), "w") as f:
                         json.dump(scheme.to_dict(), f, indent=2)
 
-                self.classes = project_info.get("classes", []) or ["class_1", "class_2"]
-                self.rebuild_label_buttons()
-                self.setup_label_shortcuts()
-                self._refresh_shortcut_help()
+                # Load the freshly-created (empty) project so any stale
+                # in-memory state from a previously-open project is cleared.
+                # This drives the same ingest/finalize path as Open Project.
+                self.load_project_data()
 
                 self.update_context_panel()
                 self.status.showMessage(f"Created project: {project_info['name']}")
@@ -1934,6 +1935,8 @@ class MainWindow(QMainWindow):
             db.relocate_project_owned_paths()
             set_status("Migrating legacy image paths…")
             db.migrate_paths_to_resolved()
+            set_status("Migrating legacy composite labels…")
+            db.migrate_legacy_composite_labels()
             set_status("Loading image records…")
             path_strings = db.get_all_image_paths()
             set_status(f"Loading labels ({len(path_strings):,} images)…")
@@ -3073,13 +3076,17 @@ class MainWindow(QMainWindow):
         }
 
     def _can_recode_into_existing_scheme(self, flat_labels: list[str]) -> bool:
-        """Return True if _ → | re-encoding of flat_labels fits the current project scheme."""
+        """Return True if the imported flat labels already fit the project scheme.
+
+        Underscore-encoded composites coming from external imports are now the
+        canonical form, so this check only verifies subset membership.
+        """
         scheme = self._resolve_training_scheme()
         if scheme is None or len(scheme.factors) < 2:
             return False
         valid = scheme.valid_encoded_labels()
-        recoded = {"|".join(label.split("_")) for label in flat_labels if label.strip()}
-        return bool(recoded) and recoded.issubset(valid)
+        candidate = {label for label in flat_labels if label.strip()}
+        return bool(candidate) and candidate.issubset(valid)
 
     def _replace_project_schema_from_labels(
         self, labels: list[str], scheme_dict: dict | None = None
@@ -3246,14 +3253,11 @@ class MainWindow(QMainWindow):
 
         can_rewrite = self._project_image_count() == 0
 
-        # When the source labels, re-encoded from _ to |, exactly match the existing
-        # multihead scheme's valid labels, skip the dialog and import silently.
+        # Underscore is the canonical composite separator both externally and
+        # internally, so when imported labels fit the existing multihead
+        # scheme we can import them without any recoding.
         if not can_rewrite and self._can_recode_into_existing_scheme(imported_labels):
-            return {
-                "source_root": source_root,
-                "import_labels": True,
-                "label_recode": ("_", "|"),
-            }
+            return {"source_root": source_root, "import_labels": True}
 
         multihead_factors = (
             detect_multihead_label_structure(imported_labels) if can_rewrite else None
@@ -3265,16 +3269,11 @@ class MainWindow(QMainWindow):
             multihead_factors=multihead_factors,
         )
         if resolution == "rewrite_multihead" and multihead_factors:
-            recoded_labels = ["|".join(l.split("_")) for l in imported_labels]
             scheme_dict = self._build_multihead_imported_scheme_dict(multihead_factors)
             self._replace_project_schema_from_labels(
-                recoded_labels, scheme_dict=scheme_dict
+                imported_labels, scheme_dict=scheme_dict
             )
-            return {
-                "source_root": source_root,
-                "import_labels": True,
-                "label_recode": ("_", "|"),
-            }
+            return {"source_root": source_root, "import_labels": True}
         if resolution == "rewrite":
             self._replace_project_schema_from_labels(imported_labels)
             return {"source_root": source_root, "import_labels": True}
@@ -4895,7 +4894,9 @@ class MainWindow(QMainWindow):
                     head_labels.append(
                         self._threshold_prediction_label(label, _confidence)
                     )
-                out[i] = "|".join(head_labels) if head_labels else None
+                out[i] = (
+                    MULTIHEAD_LABEL_SEPARATOR.join(head_labels) if head_labels else None
+                )
             return out
 
         names = list(self._model_class_names or [])
@@ -4991,7 +4992,7 @@ class MainWindow(QMainWindow):
 
             return {
                 "predicted_index": None,
-                "predicted_label": "|".join(composite_labels),
+                "predicted_label": MULTIHEAD_LABEL_SEPARATOR.join(composite_labels),
                 "confidence": (
                     min(composite_confidences) if composite_confidences else None
                 ),
@@ -8241,6 +8242,8 @@ class MainWindow(QMainWindow):
                 self,
                 "Select Classifier Checkpoint",
                 str(model_dir if model_dir.exists() else self.project_path),
+                "Classifier Models (*.pt *.pth *.bundle.json);;"
+                "Multi-head Bundle Manifest (*.bundle.json);;"
                 "PyTorch Checkpoint (*.pt *.pth)",
             )
             if not file_path:
@@ -8347,14 +8350,17 @@ class MainWindow(QMainWindow):
             return bool(training_settings.get("monochrome", False))
         return bool((self._last_training_settings or {}).get("monochrome", False))
 
-    def _resolve_classifier_compute_runtime(self, path: Path) -> str:
-        """Resolve classifier inference runtime from cached training settings when available."""
+    def _resolve_classifier_device(self, path: Path) -> str:
+        """Resolve PyTorch inference device from cached training settings when available."""
         training_settings = self._cached_model_training_settings(path)
         if isinstance(training_settings, dict):
-            runtime = training_settings.get("compute_runtime")
-            if runtime:
-                return str(runtime)
-        return str((self._last_training_settings or {}).get("compute_runtime", "cpu"))
+            device = training_settings.get("device") or training_settings.get(
+                "compute_runtime"
+            )
+            if device:
+                return str(device)
+        last = self._last_training_settings or {}
+        return str(last.get("device") or last.get("compute_runtime") or "cpu")
 
     def _load_custom_cnn_checkpoint(
         self,
@@ -8533,7 +8539,10 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            from ..model_bundle import discover_multihead_model_bundle
+            from ..model_bundle import (
+                MODEL_BUNDLE_MANIFEST_SUFFIX,
+                discover_multihead_model_bundle,
+            )
 
             external_bundle = discover_multihead_model_bundle(path)
             if external_bundle is not None:
@@ -8553,6 +8562,16 @@ class MainWindow(QMainWindow):
                 self._load_model_from_cache_entry(
                     external_bundle,
                     on_success=_after_external_load,
+                )
+                return
+
+            if path.name.lower().endswith(MODEL_BUNDLE_MANIFEST_SUFFIX):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Multi-head Bundle",
+                    f"Could not load multi-head model bundle from manifest:\n{path}\n\n"
+                    "The manifest may be corrupted, target a non-multi-head mode, or "
+                    "reference artifacts that are missing from the bundle directory.",
                 )
                 return
 
@@ -9037,16 +9056,15 @@ class MainWindow(QMainWindow):
         """Run YOLO inference on all images in background and update confidences."""
         if not self.image_paths:
             return
-        compute_runtime = (self._last_training_settings or {}).get(
-            "compute_runtime", "cpu"
-        )
+        last = self._last_training_settings or {}
+        device = str(last.get("device") or last.get("compute_runtime") or "cpu")
 
         from ..jobs.task_workers import YoloInferenceWorker
 
         worker = YoloInferenceWorker(
             model_path,
             self.image_paths,
-            compute_runtime=compute_runtime,
+            device=device,
             batch_size=64,
             force_monochrome=force_monochrome,
         )
@@ -9106,7 +9124,7 @@ class MainWindow(QMainWindow):
         """Run TinyCNN inference on all images in background and update confidences."""
         if not self.image_paths:
             return
-        compute_runtime = self._resolve_classifier_compute_runtime(model_path)
+        device = self._resolve_classifier_device(model_path)
 
         from ..jobs.task_workers import TinyCNNInferenceWorker
 
@@ -9114,7 +9132,7 @@ class MainWindow(QMainWindow):
             model_path,
             self.image_paths,
             class_names,
-            compute_runtime=compute_runtime,
+            device=device,
             batch_size=64,
             force_monochrome=force_monochrome,
         )
@@ -9174,13 +9192,13 @@ class MainWindow(QMainWindow):
 
         from ..jobs.task_workers import TorchvisionInferenceWorker
 
-        rt = self._resolve_classifier_compute_runtime(model_path)
+        device = self._resolve_classifier_device(model_path)
         worker = TorchvisionInferenceWorker(
             model_path=model_path,
             image_paths=self.image_paths,
             class_names=class_names,
             input_size=input_size,
-            compute_runtime=rt,
+            device=device,
             force_monochrome=force_monochrome,
         )
 
@@ -9335,14 +9353,14 @@ class MainWindow(QMainWindow):
                 factor_name = str(getattr(scheme_factors[index], "name", "")).strip()
             if not factor_name:
                 factor_name = f"factor_{index + 1}"
-            compute_runtime = self._resolve_classifier_compute_runtime(model_path)
+            device = self._resolve_classifier_device(model_path)
 
             if arch == "tinyclassifier":
                 worker = TinyCNNInferenceWorker(
                     model_path,
                     self.image_paths,
                     class_names,
-                    compute_runtime=compute_runtime,
+                    device=device,
                     batch_size=64,
                     force_monochrome=force_monochrome,
                 )
@@ -9362,7 +9380,7 @@ class MainWindow(QMainWindow):
                     image_paths=self.image_paths,
                     class_names=class_names,
                     input_size=input_size,
-                    compute_runtime=compute_runtime,
+                    device=device,
                     batch_size=64,
                     force_monochrome=force_monochrome,
                 )
@@ -9774,8 +9792,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        normalized = normalize_legacy_composite_label(label)
         parts = [
-            str(value).strip() for value in str(label).split("|") if str(value).strip()
+            str(value).strip()
+            for value in normalized.split(MULTIHEAD_LABEL_SEPARATOR)
+            if str(value).strip()
         ]
         return parts if len(parts) == head_count else []
 

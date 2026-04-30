@@ -2,7 +2,6 @@
 Specialized worker classes for ClassKit background tasks.
 """
 
-import shutil
 import traceback
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -1119,117 +1118,58 @@ class ExportWorker(QRunnable):
                 self._expansion_tmpdir = None
 
 
+def _resolve_classkit_torch_device(device: str) -> str:
+    """Normalize a ClassKit device string to a plain PyTorch device.
+
+    ClassKit only runs PyTorch inference. Anything other than ``cuda`` or
+    ``mps`` is treated as ``cpu``. Legacy values such as ``onnx_*`` or
+    ``tensorrt`` from older project settings are silently coerced to
+    ``cpu`` so old saved settings still load.
+    """
+    rt = str(device or "cpu").strip().lower().replace("-", "_")
+    if rt in {"cuda", "mps"}:
+        return rt
+    return "cpu"
+
+
 class YoloInferenceWorker(QRunnable):
-    """Run YOLO classification inference on all images, return per-image probabilities."""
+    """Run YOLO classification inference on all images via PyTorch only."""
 
     def __init__(
         self,
         model_path: Path,
         image_paths: List[Path],
-        compute_runtime: str = "cpu",
+        device: str = "cpu",
         batch_size: int = 64,
         force_monochrome: bool = False,
-        # Deprecated — use compute_runtime instead.
-        device: str = "",
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
         self.model_path = Path(model_path)
         self.image_paths = list(image_paths)
-        if (not compute_runtime or compute_runtime == "cpu") and device not in (
-            "",
-            "cpu",
-        ):
-            compute_runtime = device
-        self.compute_runtime = str(compute_runtime or "cpu")
+        self.device = _resolve_classkit_torch_device(device)
         self.batch_size = batch_size
         self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
-
-    @staticmethod
-    def _torch_device(rt: str) -> str:
-        if rt in ("cuda", "onnx_cuda", "tensorrt"):
-            return "cuda"
-        if rt in ("mps", "onnx_coreml"):
-            return "mps"
-        if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # kept for legacy configs; ROCm is no longer supported
-        return "cpu"
 
     @staticmethod
     def _validate_model_suffix(model_path: Path) -> None:
         model_suffix = model_path.suffix.lower()
         if model_suffix == ".pth":
             raise ValueError(
-                f"YoloInferenceWorker requires a YOLO classify artifact (.pt/.onnx/.engine/.trt); got {model_path.name}. "
+                f"YoloInferenceWorker requires a YOLO .pt artifact; got {model_path.name}. "
                 "Tiny CNN (.pth) models are not supported here."
             )
-        if model_suffix not in {".pt", ".onnx", ".engine", ".trt"}:
+        if model_suffix != ".pt":
             raise ValueError(
                 f"Unsupported YOLO model artifact for inference: {model_path.name}"
             )
 
-    def _export_runtime_artifact(self, rt: str, model_path: Path):
-        from ultralytics import YOLO
-
-        use_onnx = rt.startswith("onnx_")
-        artifact_suffix = ".onnx" if use_onnx else ".engine"
-        artifact_path = model_path.with_name(
-            f"{model_path.stem}_classify_b1{artifact_suffix}"
-        )
-        needs_export = (not artifact_path.exists()) or (
-            artifact_path.stat().st_mtime_ns < model_path.stat().st_mtime_ns
-        )
-        if not needs_export:
-            return artifact_path
-
-        self.signals.progress.emit(
-            1,
-            f"Preparing YOLO classify {artifact_suffix} runtime artifact...",
-        )
-        export_model = YOLO(str(model_path), task="classify")
-        if use_onnx:
-            export_path = export_model.export(
-                format="onnx",
-                dynamic=False,
-                simplify=False,
-                opset=17,
-                batch=1,
-                verbose=False,
-            )
-        else:
-            export_device = self._torch_device(rt)
-            export_model.to(export_device)
-            export_path = export_model.export(
-                format="engine",
-                device=export_device,
-                half=True,
-                workspace=4,
-                dynamic=False,
-                batch=1,
-                verbose=False,
-            )
-        exported = Path(export_path).expanduser().resolve()
-        if not exported.exists():
-            raise RuntimeError(f"YOLO runtime export output missing: {exported}")
-        if exported != artifact_path:
-            shutil.copy2(str(exported), str(artifact_path))
-        return artifact_path
-
-    def _resolve_model_path(self, rt: str) -> Path:
-        model_path = self.model_path
-        self._validate_model_suffix(model_path)
-        use_exported_runtime = rt.startswith("onnx_") or rt == "tensorrt"
-        if model_path.suffix.lower() == ".pt" and use_exported_runtime:
-            model_path = self._export_runtime_artifact(rt, model_path)
-        self._validate_model_suffix(model_path)
-        return model_path
-
-    def _load_model(self, rt: str, model_path: Path):
+    def _load_model(self, model_path: Path):
         from ultralytics import YOLO
 
         self.signals.progress.emit(
-            0, f"Loading YOLO model ({rt}): {model_path.name}..."
+            0, f"Loading YOLO model ({self.device}): {model_path.name}..."
         )
         model = YOLO(str(model_path), task="classify")
         class_names = (
@@ -1237,15 +1177,11 @@ class YoloInferenceWorker(QRunnable):
             if hasattr(model, "names")
             else []
         )
-        predict_device = None
-        if model_path.suffix.lower() == ".pt":
-            predict_device = self._torch_device(rt)
-            try:
-                model.to(predict_device)
-                predict_device = None
-            except Exception:
-                pass
-        return model, class_names, predict_device
+        try:
+            model.to(self.device)
+        except Exception:
+            pass
+        return model, class_names
 
     @staticmethod
     def _prepare_batch_input(batch_paths, force_monochrome=False):
@@ -1265,12 +1201,12 @@ class YoloInferenceWorker(QRunnable):
             batch_input.append(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
         return batch_input
 
-    def _run_batches(self, model, class_names, predict_device):
+    def _run_batches(self, model, class_names):
         import numpy as np
 
         num_images = len(self.image_paths)
         self.signals.progress.emit(
-            5, f"Running inference on {num_images:,} images ({self.compute_runtime})..."
+            5, f"Running inference on {num_images:,} images ({self.device})..."
         )
         all_probs = []
         for batch_start in range(0, num_images, self.batch_size):
@@ -1279,10 +1215,7 @@ class YoloInferenceWorker(QRunnable):
                 batch_paths,
                 force_monochrome=self.force_monochrome,
             )
-            kwargs = {"verbose": False}
-            if predict_device is not None:
-                kwargs["device"] = predict_device
-            results = model(batch_input, **kwargs)
+            results = model(batch_input, verbose=False)
             for result in results:
                 if result.probs is not None:
                     all_probs.append(result.probs.data.cpu().numpy())
@@ -1298,13 +1231,9 @@ class YoloInferenceWorker(QRunnable):
     def run(self):
         try:
             self.signals.started.emit()
-
-            from ...runtime.compute_runtime import _normalize_runtime
-
-            rt = _normalize_runtime(self.compute_runtime)
-            model_path = self._resolve_model_path(rt)
-            model, class_names, predict_device = self._load_model(rt, model_path)
-            probs = self._run_batches(model, class_names, predict_device)
+            self._validate_model_suffix(self.model_path)
+            model, class_names = self._load_model(self.model_path)
+            probs = self._run_batches(model, class_names)
             self.signals.progress.emit(100, "Inference complete!")
             self.signals.success.emit({"probs": probs, "class_names": class_names})
 
@@ -1500,15 +1429,10 @@ class ALBatchWorker(QRunnable):
 
 
 class TinyCNNInferenceWorker(QRunnable):
-    """Run tiny CNN classification inference on all project images.
+    """Run tiny CNN classification inference on all project images via PyTorch.
 
-    Supports PyTorch (cpu/mps/cuda) and ONNX/TensorRT runtimes via the
-    canonical ``compute_runtime`` parameter (see ``runtime.compute_runtime``).
-    ONNX inference requires a ``<stem>.onnx`` sibling of the ``.pth`` model file,
-    which is auto-exported by ``runner.py`` after training.
-
-    Returns the same ``{"probs": ndarray, "class_names": list}`` contract as
-    ``YoloInferenceWorker`` so callers share a unified post-inference path.
+    Returns ``{"probs": ndarray(N, C), "class_names": list}`` via the
+    ``success`` signal, matching ``YoloInferenceWorker``'s contract.
     """
 
     def __init__(
@@ -1516,40 +1440,19 @@ class TinyCNNInferenceWorker(QRunnable):
         model_path: Path,
         image_paths: List[Path],
         class_names: List[str],
-        compute_runtime: str = "cpu",
+        device: str = "cpu",
         batch_size: int = 64,
         force_monochrome: bool = False,
-        # Deprecated — use compute_runtime instead.
-        device: str = "",
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
         self.model_path = Path(model_path)
         self.image_paths = list(image_paths)
         self.class_names = list(class_names)
-        # Backward-compat: if caller only passed the old `device` kwarg, honour it.
-        if (not compute_runtime or compute_runtime == "cpu") and device not in (
-            "",
-            "cpu",
-        ):
-            compute_runtime = device
-        self.compute_runtime = str(compute_runtime or "cpu")
+        self.device = _resolve_classkit_torch_device(device)
         self.batch_size = batch_size
         self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
-
-    # ── helpers ──────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _torch_device(rt: str) -> str:
-        """Map a canonical runtime string to a plain PyTorch device string."""
-        if rt in ("cuda", "onnx_cuda", "tensorrt"):
-            return "cuda"
-        if rt in ("mps", "onnx_coreml"):
-            return "mps"
-        if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # kept for legacy configs; ROCm is no longer supported
-        return "cpu"
 
     @staticmethod
     def _load_batch_images(batch_paths, input_w, input_h, force_monochrome=False):
@@ -1577,62 +1480,14 @@ class TinyCNNInferenceWorker(QRunnable):
             return np.stack(tensors, axis=0)
         return np.zeros((0, 3, input_h, input_w), dtype=np.float32)
 
-    def _resolve_tiny_runtime(self, rt: str) -> tuple[bool, Path]:
-        onnx_path = self.model_path.with_suffix(".onnx")
-        use_onnx = rt.startswith("onnx_") or rt == "tensorrt"
-        if use_onnx and not onnx_path.exists():
-            use_onnx = False
-        return use_onnx, onnx_path
-
-    def _run_tiny_onnx(self, rt: str, onnx_path: Path, num_images: int):
-        import torch
-
-        from ...training.tiny_model import load_tiny_onnx, run_tiny_onnx
-
-        resolved_names = list(self.class_names)
-        try:
-            ckpt = torch.load(
-                str(self.model_path), map_location="cpu", weights_only=False
-            )
-            input_w, input_h = ckpt.get("input_size", [128, 64])
-            ckpt_names = ckpt.get("class_names")
-            if ckpt_names:
-                resolved_names = list(ckpt_names)
-            force_monochrome = bool(ckpt.get("monochrome", self.force_monochrome))
-        except Exception:
-            input_w, input_h = 128, 64
-            force_monochrome = self.force_monochrome
-
-        session = load_tiny_onnx(str(onnx_path), compute_runtime=rt)
-        self.signals.progress.emit(
-            5, f"Tiny CNN ONNX inference on {num_images:,} images..."
-        )
-        all_probs = []
-        for batch_start in range(0, num_images, self.batch_size):
-            batch_paths = self.image_paths[batch_start : batch_start + self.batch_size]
-            batch_np = self._load_batch_images(
-                batch_paths,
-                input_w,
-                input_h,
-                force_monochrome=force_monochrome,
-            )
-            if batch_np.shape[0] == 0:
-                continue
-            all_probs.append(run_tiny_onnx(session, batch_np))
-            done = batch_start + len(batch_paths)
-            pct = min(95, 5 + int(90 * done / num_images))
-            self.signals.progress.emit(pct, f"Processed {done:,}/{num_images:,}")
-        return all_probs, resolved_names
-
-    def _run_tiny_torch(self, rt: str, num_images: int):
+    def _run_tiny_torch(self, num_images: int):
         import torch
         import torch.nn.functional as F
 
         from ...training.tiny_model import load_tiny_classifier
 
         resolved_names = list(self.class_names)
-        torch_device = self._torch_device(rt)
-        model, ckpt = load_tiny_classifier(str(self.model_path), device=torch_device)
+        model, ckpt = load_tiny_classifier(str(self.model_path), device=self.device)
         input_w, input_h = ckpt.get("input_size", [128, 64])
         ckpt_names = ckpt.get("class_names")
         if ckpt_names:
@@ -1651,7 +1506,7 @@ class TinyCNNInferenceWorker(QRunnable):
             )
             if batch_np.shape[0] == 0:
                 continue
-            x = torch.from_numpy(batch_np).to(torch_device)
+            x = torch.from_numpy(batch_np).to(self.device)
             with torch.no_grad():
                 logits = model(x)
                 all_probs.append(F.softmax(logits, dim=1).cpu().numpy())
@@ -1674,22 +1529,12 @@ class TinyCNNInferenceWorker(QRunnable):
         try:
             self.signals.started.emit()
 
-            from ...runtime.compute_runtime import _normalize_runtime
-
-            rt = _normalize_runtime(self.compute_runtime)
-            use_onnx, onnx_path = self._resolve_tiny_runtime(rt)
-
             self.signals.progress.emit(
-                0, f"Loading tiny CNN ({rt}): {self.model_path.name}..."
+                0, f"Loading tiny CNN ({self.device}): {self.model_path.name}..."
             )
 
             num_images = len(self.image_paths)
-            if use_onnx:
-                all_probs, resolved_names = self._run_tiny_onnx(
-                    rt, onnx_path, num_images
-                )
-            else:
-                all_probs, resolved_names = self._run_tiny_torch(rt, num_images)
+            all_probs, resolved_names = self._run_tiny_torch(num_images)
 
             result_probs = self._finalize_tiny_probs(
                 all_probs, resolved_names, num_images
@@ -1708,11 +1553,10 @@ class TinyCNNInferenceWorker(QRunnable):
 
 
 class TorchvisionInferenceWorker(QRunnable):
-    """Run torchvision Custom CNN classification inference on all project images.
+    """Run torchvision Custom CNN classification inference via PyTorch only.
 
-    Supports PyTorch (cpu/mps/cuda) and ONNX runtimes via
-    ``compute_runtime``. Output contract: same as TinyCNNInferenceWorker —
-    emits ``{"probs": ndarray(N, C), "class_names": list}`` via success signal.
+    Output contract: same as ``TinyCNNInferenceWorker`` — emits
+    ``{"probs": ndarray(N, C), "class_names": list}`` via the success signal.
     """
 
     def __init__(
@@ -1721,7 +1565,7 @@ class TorchvisionInferenceWorker(QRunnable):
         image_paths: List[Path],
         class_names: List[str],
         input_size: int = 224,
-        compute_runtime: str = "cpu",
+        device: str = "cpu",
         batch_size: int = 64,
         force_monochrome: bool = False,
     ):
@@ -1731,21 +1575,10 @@ class TorchvisionInferenceWorker(QRunnable):
         self.image_paths = list(image_paths)
         self.class_names = list(class_names)
         self.input_size = input_size
-        self.compute_runtime = str(compute_runtime or "cpu")
+        self.device = _resolve_classkit_torch_device(device)
         self.batch_size = batch_size
         self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
-
-    @staticmethod
-    def _torch_device(rt: str) -> str:
-        """Map canonical runtime to PyTorch device string."""
-        if rt in ("cuda", "onnx_cuda", "tensorrt"):
-            return "cuda"
-        if rt in ("mps", "onnx_coreml"):
-            return "mps"
-        if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # kept for legacy configs; ROCm is no longer supported
-        return "cpu"
 
     def _build_transform(self):
         from torchvision import transforms
@@ -1765,32 +1598,15 @@ class TorchvisionInferenceWorker(QRunnable):
         )
         return transforms.Compose(transform_steps)
 
-    def _create_infer_fn(self, rt: str):
+    def _create_infer_fn(self):
         import torch
-
-        use_onnx = rt.startswith("onnx_") or rt == "tensorrt"
-        onnx_path = self.model_path.with_suffix(".onnx")
-        if use_onnx and onnx_path.exists():
-            import onnxruntime as ort
-
-            from ...runtime.compute_runtime import derive_onnx_execution_providers
-
-            providers = derive_onnx_execution_providers(rt)
-            sess = ort.InferenceSession(str(onnx_path), providers=providers)
-            input_name = sess.get_inputs()[0].name
-
-            def _infer(batch_np):
-                return sess.run(None, {input_name: batch_np})[0]
-
-            return _infer
 
         from ...training.torchvision_model import load_torchvision_classifier
 
-        device = self._torch_device(rt)
-        model, _ = load_torchvision_classifier(str(self.model_path), device=device)
+        model, _ = load_torchvision_classifier(str(self.model_path), device=self.device)
 
         def _infer(batch_np):
-            t = torch.from_numpy(batch_np).to(device)
+            t = torch.from_numpy(batch_np).to(self.device)
             with torch.no_grad():
                 return model(t).cpu().numpy()
 
@@ -1854,12 +1670,9 @@ class TorchvisionInferenceWorker(QRunnable):
     def run(self) -> None:
         try:
             self.signals.started.emit()
-            from ...runtime.compute_runtime import _normalize_runtime
-
-            rt = _normalize_runtime(self.compute_runtime)
             self.force_monochrome = self._resolve_force_monochrome()
             transform = self._build_transform()
-            infer_fn = self._create_infer_fn(rt)
+            infer_fn = self._create_infer_fn()
             all_probs_np = self._run_inference_batches(infer_fn, transform)
             self.signals.success.emit(
                 {"probs": all_probs_np, "class_names": self.class_names}

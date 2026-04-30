@@ -54,9 +54,11 @@ def test_scheme_composite_label_round_trip():
         training_modes=["flat_yolo"],
     )
     composite = scheme.encode_label(["red", "green"])
-    assert composite == "red|green"
+    assert composite == "red_green"
     decoded = scheme.decode_label(composite)
     assert decoded == ["red", "green"]
+    # Legacy pipe-encoded composites must still decode for old project files.
+    assert scheme.decode_label("red|green") == ["red", "green"]
 
 
 def test_project_config_accepts_scheme():
@@ -97,7 +99,7 @@ def test_decode_label_wrong_parts_raises():
         training_modes=["flat_yolo"],
     )
     with pytest.raises(ValueError, match="Expected 2 parts"):
-        scheme.decode_label("red|blue|green")  # too many parts
+        scheme.decode_label("red_blue_green")  # too many parts
 
 
 def test_head_tail_preset():
@@ -177,9 +179,9 @@ def test_multi_factor_valid_labels_include_partial_unknown_composites():
 
     valid_labels = scheme.valid_encoded_labels()
 
-    assert "red|unknown" in valid_labels
-    assert "unknown|left" in valid_labels
-    assert "unknown|unknown" in valid_labels
+    assert "red_unknown" in valid_labels
+    assert "unknown_left" in valid_labels
+    assert "unknown_unknown" in valid_labels
 
 
 def test_color_tag_preset_invalid_n_factors_raises():
@@ -235,6 +237,35 @@ def test_save_scheme_preset_persists_in_user_config(tmp_path, monkeypatch):
     ]
     assert presets[0].is_custom is True
     assert presets[0].scheme == scheme
+
+
+def test_normalize_legacy_composite_label_converts_pipe_to_underscore():
+    from hydra_suite.classkit.config.schemas import normalize_legacy_composite_label
+
+    assert normalize_legacy_composite_label("red|green") == "red_green"
+    assert normalize_legacy_composite_label("red_green") == "red_green"
+    assert normalize_legacy_composite_label(None) == ""
+    assert normalize_legacy_composite_label("") == ""
+
+
+def test_db_migration_rewrites_pipe_encoded_labels(tmp_path):
+    """Legacy pipe-encoded composite labels should be migrated on demand."""
+    from hydra_suite.classkit.core.store.db import ClassKitDB
+
+    db_path = tmp_path / "classkit.db"
+    db = ClassKitDB(db_path)
+
+    image_path = tmp_path / "img.png"
+    image_path.write_bytes(b"x")
+    db.add_images([image_path], hashes=["dummy"])
+    db.update_labels_batch({str(image_path): "red|left"})
+
+    assert db.get_all_labels() == ["red|left"]
+
+    migrated = db.migrate_legacy_composite_labels()
+
+    assert migrated == 1
+    assert db.get_all_labels() == ["red_left"]
 
 
 def test_save_scheme_preset_requires_overwrite_for_duplicates(tmp_path, monkeypatch):

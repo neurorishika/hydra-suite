@@ -381,6 +381,34 @@ class ClassKitDB:
             )
             conn.commit()
 
+    def migrate_legacy_composite_labels(self) -> int:
+        """Rewrite legacy pipe-encoded composite labels to underscore-encoded.
+
+        ClassKit historically joined per-factor values with ``|``, but that
+        character is unsafe in many filesystem and shell contexts. The current
+        canonical separator is ``_``; this migration is a no-op for projects
+        that were created after the switch.
+        """
+        from hydra_suite.classkit.config.schemas import normalize_legacy_composite_label
+
+        updated = 0
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute(
+                "SELECT id, label FROM images WHERE label IS NOT NULL AND label LIKE '%|%'"
+            )
+            rows = c.fetchall()
+            for row_id, raw_label in rows:
+                migrated = normalize_legacy_composite_label(raw_label)
+                if migrated and migrated != raw_label:
+                    c.execute(
+                        "UPDATE images SET label = ? WHERE id = ?",
+                        (migrated, row_id),
+                    )
+                    updated += 1
+            conn.commit()
+        return updated
+
     def migrate_paths_to_resolved(self) -> int:
         """One-time migration: ensure all stored file_path values are resolved absolute paths.
 
