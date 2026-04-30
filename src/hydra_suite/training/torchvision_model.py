@@ -388,21 +388,25 @@ def save_torchvision_checkpoint(
         ckpt.update(tiny_model_checkpoint_metadata(model))
     if not is_multihead:
         ckpt["class_names"] = list(class_names_per_factor[0])
+    # Head-shape fields are managed here so they always have consistent types,
+    # not propagated raw via the trailing extra_meta copy.
+    _HEAD_FIELDS = ("head_kind", "head_hidden_dim", "head_dropout")
     head_kind = None
     if isinstance(extra_meta, dict):
         head_kind = extra_meta.get("head_kind")
     if head_kind:
         ckpt["head_kind"] = str(head_kind)
-        if "head_hidden_dim" in (extra_meta or {}):
+        if "head_hidden_dim" in extra_meta:
             ckpt["head_hidden_dim"] = int(extra_meta["head_hidden_dim"])
-        if "head_dropout" in (extra_meta or {}):
+        if "head_dropout" in extra_meta:
             ckpt["head_dropout"] = float(extra_meta["head_dropout"])
     else:
         ckpt["head_kind"] = "flat"
     if isinstance(extra_meta, dict) and extra_meta:
         for k, v in extra_meta.items():
-            if k not in ckpt:
-                ckpt[k] = v
+            if k in _HEAD_FIELDS or k in ckpt:
+                continue
+            ckpt[k] = v
     torch.save(ckpt, str(path))
     return path
 
