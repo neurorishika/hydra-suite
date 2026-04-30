@@ -136,12 +136,7 @@ def build_multihead_torchvision_classifier(
         head_hidden_dim=int(head_hidden_dim),
         head_dropout=float(head_dropout),
     )
-    if trainable_layers != -1:
-        # ``freeze_backbone`` operates on the bare torchvision model; we passed
-        # ``base`` (the backbone with Identity classifier head) so any head
-        # un-freeze it does is harmless. Then we unconditionally enable grads
-        # on our MLP heads.
-        freeze_backbone(model.backbone, backbone, trainable_layers)
+    freeze_backbone(model.backbone, backbone, trainable_layers)
     for p in model.heads.parameters():
         p.requires_grad = True
     return model

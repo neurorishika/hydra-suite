@@ -74,3 +74,29 @@ def test_freeze_unfreeze_backbone_round_trip():
     assert all(p.requires_grad for p in head_params)
     model.unfreeze_all()
     assert all(p.requires_grad for p in backbone_params)
+
+
+def test_forward_concat_equals_per_factor_slices():
+    """The concatenated logits must equal per-factor logits when split by
+    cardinality — this is what ClassifierBackend.predict_batch relies on."""
+    model = build_multihead_torchvision_classifier(
+        backbone="resnet18",
+        class_names_per_factor=[["a", "b"], ["x", "y", "z"], ["m", "n"]],
+        trainable_layers=-1,
+        head_hidden_dim=24,
+        head_dropout=0.0,
+        input_size=64,
+    )
+    model.train(False)
+    batch = torch.randn(3, 3, 64, 64)
+    with torch.no_grad():
+        concat = model(batch)
+        per_factor = model.forward_per_factor(batch)
+    widths = model.factor_widths
+    assert sum(widths) == concat.shape[-1]
+    offset = 0
+    for k, w in enumerate(widths):
+        slice_ = concat[:, offset : offset + w]
+        assert slice_.shape == per_factor[k].shape
+        assert torch.allclose(slice_, per_factor[k], atol=1e-6)
+        offset += w
