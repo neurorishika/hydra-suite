@@ -68,6 +68,7 @@ def color_tag_preset(n_factors: int, colors: list[str]) -> LabelingScheme:
             "flat_custom",
             "multihead_yolo",
             "multihead_custom",
+            "multihead_custom_shared",
         ]
 
     scheme = LabelingScheme(
