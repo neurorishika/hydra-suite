@@ -1753,6 +1753,8 @@ def _train_multihead_shared_classify(
             offset += w
         return out
 
+    has_val = val_loader is not None
+
     for epoch in range(int(params.epochs)):
         if should_cancel and should_cancel():
             _safe_log(log_cb, "Training canceled.")
@@ -1776,9 +1778,11 @@ def _train_multihead_shared_classify(
         history["train_loss"].append(avg_loss)
 
         val_acc: float | None = None
+        per_factor_acc: list[float] | None = None
         if val_loader is not None:
-            model.train(False)
+            model.eval()
             correct_all = 0
+            correct_per_factor = [0] * len(factor_widths)
             total = 0
             with torch.no_grad():
                 for batch_x, batch_y in val_loader:
@@ -1787,44 +1791,71 @@ def _train_multihead_shared_classify(
                     pf = _split_logits_per_factor(model(batch_x))
                     preds = torch.stack([p.argmax(dim=1) for p in pf], dim=1)
                     correct_all += int(((preds == batch_y).all(dim=1)).sum().item())
+                    for k in range(len(factor_widths)):
+                        correct_per_factor[k] += int(
+                            (preds[:, k] == batch_y[:, k]).sum().item()
+                        )
                     total += batch_y.size(0)
             val_acc = correct_all / max(total, 1)
+            per_factor_acc = [c / max(total, 1) for c in correct_per_factor]
         history["val_acc"].append(val_acc)
+        if per_factor_acc is not None:
+            history.setdefault("val_acc_per_factor", []).append(per_factor_acc)
         _safe_log(
             log_cb,
-            f"Epoch {epoch + 1}/{params.epochs} loss={avg_loss:.4f} val_acc={val_acc}",
+            f"Epoch {epoch + 1}/{params.epochs} loss={avg_loss:.4f} "
+            f"val_acc={val_acc} per_factor={per_factor_acc}",
         )
         if progress_cb:
             progress_cb(epoch + 1, int(params.epochs))
 
-        is_better = val_acc is not None and (
-            best_val_acc is None or val_acc > best_val_acc
-        )
-        if val_acc is None or is_better:
+        if has_val:
+            is_better = val_acc is not None and (
+                best_val_acc is None or val_acc > best_val_acc
+            )
             if is_better:
                 best_val_acc = val_acc
                 best_epoch = epoch + 1
                 patience_count = 0
-            save_torchvision_checkpoint(
-                model=model,
-                backbone=params.backbone,
-                class_names=[],
-                factor_names=list(factor_names),
-                class_names_per_factor=[list(c) for c in cnpf],
-                input_size=(sz, sz),
-                best_val_acc=best_val_acc,
-                history=history,
-                trainable_layers=int(params.trainable_layers),
-                backbone_lr_scale=float(params.backbone_lr_scale),
-                monochrome=bool(profile.monochrome),
-                extra_meta=checkpoint_extra_meta,
-                path=best_ckpt_path,
-            )
-        elif val_acc is not None:
-            patience_count += 1
-            if patience_count >= int(params.patience):
-                _safe_log(log_cb, f"Early stopping at epoch {epoch + 1}.")
-                break
+                save_torchvision_checkpoint(
+                    model=model,
+                    backbone=params.backbone,
+                    class_names=[],
+                    factor_names=list(factor_names),
+                    class_names_per_factor=[list(c) for c in cnpf],
+                    input_size=(sz, sz),
+                    best_val_acc=best_val_acc,
+                    history=history,
+                    trainable_layers=int(params.trainable_layers),
+                    backbone_lr_scale=float(params.backbone_lr_scale),
+                    monochrome=bool(profile.monochrome),
+                    extra_meta=checkpoint_extra_meta,
+                    path=best_ckpt_path,
+                )
+            elif val_acc is not None:
+                patience_count += 1
+                if patience_count >= int(params.patience):
+                    _safe_log(log_cb, f"Early stopping at epoch {epoch + 1}.")
+                    break
+
+    # After the loop: when training ran without validation, save the final state once.
+    if not has_val and history["train_loss"]:
+        save_torchvision_checkpoint(
+            model=model,
+            backbone=params.backbone,
+            class_names=[],
+            factor_names=list(factor_names),
+            class_names_per_factor=[list(c) for c in cnpf],
+            input_size=(sz, sz),
+            best_val_acc=None,
+            history=history,
+            trainable_layers=int(params.trainable_layers),
+            backbone_lr_scale=float(params.backbone_lr_scale),
+            monochrome=bool(profile.monochrome),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+        )
+        _safe_log(log_cb, "Final checkpoint saved (no validation).")
 
     elapsed = _time.monotonic() - _t0
     _safe_log(
