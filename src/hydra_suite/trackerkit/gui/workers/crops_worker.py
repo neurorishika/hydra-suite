@@ -16,6 +16,7 @@ from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerat
 from hydra_suite.core.identity.properties.export import (
     POSE_SUMMARY_COLUMNS,
     build_pose_keypoint_labels,
+    flatten_cnn_prediction_row,
     flatten_pose_keypoints_row,
     pose_wide_columns_for_labels,
 )
@@ -26,15 +27,6 @@ from hydra_suite.widgets.workers import BaseWorker
 from .merge_worker import _write_csv_artifact, _write_roi_npz
 
 logger = logging.getLogger(__name__)
-
-
-def _runtime_to_native_device(runtime: object) -> str:
-    rt = str(runtime or "cpu").strip().lower()
-    if rt in {"mps", "onnx_coreml", "onnx_mps"}:
-        return "mps"
-    if rt in {"cuda", "onnx_cuda", "tensorrt", "rocm", "onnx_rocm"}:
-        return "cuda"
-    return "cpu"
 
 
 class InterpolatedCropsWorker(BaseWorker):
@@ -205,6 +197,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 cnn_cfg = CNNIdentityConfig(
                     model_path=model_path,
                     confidence=float(cnn_cfg_dict.get("confidence", 0.5)),
+                    scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
                     batch_size=int(cnn_cfg_dict.get("batch_size", 64)),
                 )
                 try:
@@ -226,38 +219,37 @@ class InterpolatedCropsWorker(BaseWorker):
         return cnn_backends, cnn_labels
 
     def _init_headtail_analyzer(self):
-        """Initialize head-tail direction analyzer. Returns analyzer or None."""
+        """Initialize head-tail direction analyzer. Returns analyzer or None.
+
+        Raises:
+            ClassifierFormatError: if the configured model path exists but
+                cannot be loaded by any supported backend.  Callers in
+                BaseWorker.run() forward this to the ``error`` signal.
+        """
         headtail_model_path = str(self.params.get("YOLO_HEADTAIL_MODEL_PATH", ""))
         if not headtail_model_path or not os.path.exists(headtail_model_path):
             return None
-        try:
-            from hydra_suite.core.identity.classification.headtail import (
-                HeadTailAnalyzer,
-            )
+        from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-            _ht_device = _runtime_to_native_device(
-                self.params.get(
-                    "HEADTAIL_COMPUTE_RUNTIME",
-                    self.params.get("COMPUTE_RUNTIME", "cpu"),
-                )
+        _ht_runtime = str(
+            self.params.get(
+                "HEADTAIL_COMPUTE_RUNTIME",
+                self.params.get("COMPUTE_RUNTIME", "cpu"),
             )
-            analyzer = HeadTailAnalyzer(
-                model_path=headtail_model_path,
-                device=_ht_device,
-                conf_threshold=float(
-                    self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)
-                ),
-                reference_aspect_ratio=float(
-                    self.params.get("REFERENCE_ASPECT_RATIO", 2.0)
-                ),
-            )
-            if not analyzer.is_available:
-                analyzer.close()
-                return None
-            return analyzer
-        except Exception as exc:
-            logger.warning("Interpolated head-tail analysis disabled: %s", exc)
+        )
+        analyzer = HeadTailAnalyzer(
+            model_path=headtail_model_path,
+            compute_runtime=_ht_runtime,
+            conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
+            batch_size=max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64))),
+            reference_aspect_ratio=float(
+                self.params.get("REFERENCE_ASPECT_RATIO", 2.0)
+            ),
+        )
+        if not analyzer.is_available:
+            analyzer.close()
             return None
+        return analyzer
 
     def _init_interpolation_backends(self, output_dir):
         """Initialize optional analysis backends after eligible gap tasks exist."""
@@ -561,16 +553,19 @@ class InterpolatedCropsWorker(BaseWorker):
                     if _pi >= len(pending_cnn_entries):
                         break
                     _ce = pending_cnn_entries[_pi]
-                    interp_cnn_rows[_cnn_label].append(
-                        {
-                            "frame_id": int(_ce["task"]["frame_id"]),
-                            "trajectory_id": int(_ce["task"]["traj_id"]),
-                            "class_name": (
-                                _pred.class_name if _pred.class_name else ""
-                            ),
-                            "confidence": float(_pred.confidence),
-                        }
+                    row = {
+                        "frame_id": int(_ce["task"]["frame_id"]),
+                        "trajectory_id": int(_ce["task"]["traj_id"]),
+                    }
+                    row.update(
+                        flatten_cnn_prediction_row(
+                            _cnn_label,
+                            getattr(_pred, "factor_names", ("flat",)),
+                            getattr(_pred, "class_names", ()),
+                            getattr(_pred, "confidences", ()),
+                        )
                     )
+                    interp_cnn_rows[_cnn_label].append(row)
             except Exception as exc:
                 logger.warning(
                     "Interp CNN '%s' batch failed: %s",
@@ -762,9 +757,14 @@ class InterpolatedCropsWorker(BaseWorker):
         cnn_csv_paths = {}
         for _cnn_label, _cnn_rows in interp_cnn_rows.items():
             if _cnn_rows:
+                fieldnames = ["frame_id", "trajectory_id"]
+                for _cnn_row in _cnn_rows:
+                    for _key in _cnn_row:
+                        if _key not in fieldnames:
+                            fieldnames.append(_key)
                 path = _write_csv_artifact(
                     parent / f"interpolated_cnn_{_cnn_label}.csv",
-                    ["frame_id", "trajectory_id", "class_name", "confidence"],
+                    fieldnames,
                     _cnn_rows,
                 )
                 if path is not None:

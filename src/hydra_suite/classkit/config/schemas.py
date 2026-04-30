@@ -1,6 +1,7 @@
 """Typed dataclass schemas for ClassKit project, model, and active-learning configuration."""
 
 from dataclasses import dataclass, field
+from itertools import product
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -26,6 +27,9 @@ class ALConfig:
             "representativeness": 0.15,
             "audit": 0.10,
         }
+    )
+    balance_mode: bool = (
+        False  # noqa: DC01 — replace representative slot with label-balance scoring
     )
 
 
@@ -68,6 +72,23 @@ class LabelingScheme:
     training_modes: List[str]
     description: str = ""
 
+    def __post_init__(self) -> None:
+        is_multi_factor = len(self.factors) > 1
+        for factor in self.factors:
+            normalized_labels: list[str] = []
+            saw_unknown = False
+            for raw_label in factor.labels:
+                label = str(raw_label)
+                if label.strip().lower() == "unknown":
+                    if not saw_unknown:
+                        normalized_labels.append("unknown")
+                        saw_unknown = True
+                    continue
+                normalized_labels.append(label)
+            if is_multi_factor and not saw_unknown:
+                normalized_labels.append("unknown")
+            factor.labels = normalized_labels
+
     @property
     def total_classes(self) -> int:
         """Total number of unique composite class combinations (product of per-factor counts)."""
@@ -90,6 +111,15 @@ class LabelingScheme:
                 f"Expected {len(self.factors)} parts in composite label, got {len(parts)}"
             )
         return parts
+
+    def valid_encoded_labels(self) -> set[str]:
+        """Return every persisted label value allowed by this scheme."""
+        if not self.factors:
+            return set()
+        return {
+            self.encode_label(list(values))
+            for values in product(*(factor.labels for factor in self.factors))
+        }
 
     def to_dict(self) -> dict:
         return {

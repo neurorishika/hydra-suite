@@ -1,5 +1,6 @@
 # tests/test_confidence_density.py
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 from hydra_suite.core.tracking.confidence_density import (
     DensityRegion,
@@ -64,6 +65,17 @@ def test_smooth_and_binarize_shape():
     frames = np.zeros((20, 48, 64), dtype=np.float32)
     binary = smooth_and_binarize(frames, temporal_sigma=2.0, threshold=0.3)
     assert binary.shape == (20, 48, 64)
+
+
+def test_smooth_and_binarize_matches_full_volume_thresholding():
+    frames = np.random.default_rng(0).random((12, 24, 16), dtype=np.float32)
+    smoothed = gaussian_filter(frames, sigma=(1.5, 0.0, 0.0))
+    raw_threshold = 0.35 * float(smoothed.max())
+    expected = (smoothed >= raw_threshold).astype(np.uint8)
+
+    binary = smooth_and_binarize(frames, temporal_sigma=1.5, threshold=0.35)
+
+    assert np.array_equal(binary, expected)
 
 
 def test_find_regions_empty():

@@ -316,8 +316,6 @@ def _canonical_export_runtime(
     dev = str(device or "cpu").strip().lower()
     if req in {"onnx_coreml", "onnx_mps"}:
         return "onnx_coreml"
-    if req == "onnx_rocm":
-        return "onnx_rocm"
     if req == "onnx_cuda":
         return "onnx_cuda"
     if req == "onnx_cpu":
@@ -543,6 +541,65 @@ class _DirectTensorRTEngine:
             for name, tensor in output_tensors.items()
         }
 
+    def run_cuda(self, batch_cuda: Any) -> Dict[str, np.ndarray]:
+        """Like :meth:`run` but accepts a device-resident CUDA tensor.
+
+        Eliminates the ``np.ascontiguousarray`` → ``torch.as_tensor(device='cuda')``
+        host-to-device copy when the batch is already on the GPU.  The output
+        keypoint tensors are small so the final GPU→CPU transfer is negligible.
+        """
+        input_shape = tuple(int(v) for v in batch_cuda.shape)
+        if hasattr(self._context, "set_input_shape"):
+            self._context.set_input_shape(self.input_name, input_shape)
+        elif hasattr(self._context, "set_binding_shape"):
+            index = self._engine.get_binding_index(self.input_name)
+            self._context.set_binding_shape(index, input_shape)
+
+        input_dtype = self._torch_dtype(self._tensor_dtype(self.input_name))
+        input_tensor = batch_cuda.contiguous().to(dtype=input_dtype)
+
+        output_tensors: Dict[str, Any] = {}
+        if hasattr(self._context, "set_tensor_address"):
+            self._context.set_tensor_address(
+                self.input_name, int(input_tensor.data_ptr())
+            )
+            for name in self.output_names:
+                out_shape = tuple(int(v) for v in self._context.get_tensor_shape(name))
+                out_tensor = self._torch.empty(
+                    out_shape,
+                    device="cuda",
+                    dtype=self._torch_dtype(self._tensor_dtype(name)),
+                )
+                self._context.set_tensor_address(name, int(out_tensor.data_ptr()))
+                output_tensors[name] = out_tensor
+            stream = self._torch.cuda.current_stream().cuda_stream
+            ok = self._context.execute_async_v3(stream_handle=stream)
+        else:
+            bindings: List[int] = [0] * int(self._engine.num_bindings)
+            in_index = self._engine.get_binding_index(self.input_name)
+            bindings[in_index] = int(input_tensor.data_ptr())
+            for name in self.output_names:
+                out_index = self._engine.get_binding_index(name)
+                out_shape = tuple(
+                    int(v) for v in self._context.get_binding_shape(out_index)
+                )
+                out_tensor = self._torch.empty(
+                    out_shape,
+                    device="cuda",
+                    dtype=self._torch_dtype(self._tensor_dtype(name)),
+                )
+                bindings[out_index] = int(out_tensor.data_ptr())
+                output_tensors[name] = out_tensor
+            stream = self._torch.cuda.current_stream().cuda_stream
+            ok = self._context.execute_async_v2(bindings=bindings, stream_handle=stream)
+        if not ok:
+            raise RuntimeError("TensorRT inference failed.")
+        self._torch.cuda.current_stream().synchronize()
+        return {
+            name: tensor.detach().cpu().numpy()
+            for name, tensor in output_tensors.items()
+        }
+
     def close(self) -> None:
         self._context = None
         self._engine = None
@@ -661,6 +718,76 @@ class SleapExportedBackend:
             batch = np.transpose(batch, (0, 3, 1, 2))
         return np.ascontiguousarray(batch), transforms
 
+    def _prepare_batch_cuda(
+        self, crops_chw: Sequence[Any]
+    ) -> Tuple[Any, List[ExportTransform]]:
+        """GPU-native counterpart of :meth:`_prepare_batch`.
+
+        Accepts ``C×H×W`` CUDA float32 tensors (BGR channel order, pixel values
+        in ``[0, 255]``).  Returns a batched CUDA tensor ready for TensorRT
+        inference and the corresponding per-crop :class:`ExportTransform` tuples
+        (computed on CPU from integer shape arithmetic — negligible overhead).
+        """
+        import torch
+        import torch.nn.functional as F
+
+        out_h, out_w = int(self._input_hw[0]), int(self._input_hw[1])
+        n_out_ch = int(self._input_channels or 3)
+        is_float = bool(self._input_format.get("is_float", True))
+        is_nchw = self._input_format.get("layout") == "nchw"
+
+        transforms: List[ExportTransform] = []
+        padded: List[Any] = []
+
+        for crop_chw in crops_chw:
+            C_in = int(crop_chw.shape[0])
+            orig_h = int(crop_chw.shape[1])
+            orig_w = int(crop_chw.shape[2])
+
+            # ---- channel normalisation (mirrors _prepare_export_crop) ----
+            if n_out_ch == 1 and C_in != 1:
+                # Approximate BGR→Gray: same coefficients as cv2.COLOR_BGR2GRAY
+                t = crop_chw.float()
+                crop_chw = 0.114 * t[0:1] + 0.587 * t[1:2] + 0.299 * t[2:3]
+            elif n_out_ch != 1:
+                if C_in == 1:
+                    crop_chw = crop_chw.expand(3, -1, -1)
+                elif C_in >= 3:
+                    # Input is BGR (from NVDec/gpu_canonical_crop); flip to RGB
+                    crop_chw = crop_chw[:3].flip(0)
+
+            # ---- letterbox: scale/pad computed on CPU ----
+            scale = min(float(out_w) / float(orig_w), float(out_h) / float(orig_h))
+            new_w = max(1, int(round(float(orig_w) * scale)))
+            new_h = max(1, int(round(float(orig_h) * scale)))
+            pad_x = int((out_w - new_w) // 2)
+            pad_y = int((out_h - new_h) // 2)
+            transforms.append(
+                (float(scale), float(pad_x), float(pad_y), orig_w, orig_h)
+            )
+
+            # ---- GPU resize + letterbox pad ----
+            out_ch = int(crop_chw.shape[0])
+            t = F.interpolate(
+                crop_chw.float().unsqueeze(0),
+                size=(new_h, new_w),
+                mode="bilinear",
+                align_corners=False,
+            ).squeeze(0)
+            canvas = torch.zeros(out_ch, out_h, out_w, device=t.device, dtype=t.dtype)
+            canvas[:, pad_y : pad_y + new_h, pad_x : pad_x + new_w] = t
+            padded.append(canvas)
+
+        batch = torch.stack(padded, dim=0)  # (N, C, H, W)
+
+        if is_float:
+            batch = batch / 255.0
+
+        if not is_nchw:
+            batch = batch.permute(0, 2, 3, 1).contiguous()  # → (N, H, W, C)
+
+        return batch.contiguous(), transforms
+
     def predict_batch(self, crops: Sequence[np.ndarray]) -> List[PoseResult]:
         self._last_profile = {}
         if not crops:
@@ -709,6 +836,72 @@ class SleapExportedBackend:
 
         self._last_profile = {
             "pose_transport_s": total_transport_s,
+            "pose_inference_s": total_inference_s,
+            "pose_postprocess_s": total_postprocess_s,
+        }
+        return outputs
+
+    def predict_batch_cuda(self, crops: Sequence[Any]) -> List[PoseResult]:
+        """GPU-native counterpart of :meth:`predict_batch`.
+
+        Accepts a sequence of ``C×H×W`` CUDA float32 tensors (BGR, ``[0, 255]``
+        range) produced by the NVDec→:func:`~hydra_suite.core.canonicalization.crop.gpu_canonical_crop`
+        pipeline.
+
+        Only the TensorRT backend benefits from the zero-copy GPU path.  For
+        ONNX backends the crops are converted to ``H×W×C`` uint8 numpy arrays
+        and forwarded to :meth:`predict_batch` transparently.
+        """
+        if not crops:
+            return []
+
+        if not isinstance(self._runner, _DirectTensorRTEngine):
+            # ONNX has a hard numpy boundary — fall back to the CPU path.
+            cpu_crops = [
+                c.permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy() for c in crops
+            ]
+            return self.predict_batch(cpu_crops)
+
+        self._last_profile = {}
+        effective_batch = max(self.batch_size, int(self._model_min_batch or 1))
+        outputs: List[PoseResult] = []
+        total_inference_s = 0.0
+        total_postprocess_s = 0.0
+
+        for start in range(0, len(crops), effective_batch):
+            chunk = list(crops[start : start + effective_batch])
+            if not chunk:
+                continue
+            raw_count = len(chunk)
+            if raw_count < effective_batch:
+                chunk.extend([chunk[-1]] * (effective_batch - raw_count))
+
+            batch_cuda, transforms = self._prepare_batch_cuda(chunk)
+
+            infer_start = time.perf_counter()
+            raw_outputs = self._runner.run_cuda(batch_cuda)
+            total_inference_s += time.perf_counter() - infer_start
+
+            postprocess_start = time.perf_counter()
+            parsed = _coerce_export_output(raw_outputs, self._output_names, len(chunk))
+            for index in range(raw_count):
+                arr = parsed[index] if index < len(parsed) else None
+                if arr is None:
+                    outputs.append(empty_pose_result())
+                    continue
+                arr = np.asarray(arr, dtype=np.float32)
+                if arr.ndim != 2 or arr.shape[1] < 2:
+                    outputs.append(empty_pose_result())
+                    continue
+                arr = _restore_export_keypoints(arr, transforms[index])
+                if arr.shape[1] == 2:
+                    arr = np.column_stack(
+                        (arr, np.zeros((arr.shape[0],), dtype=np.float32))
+                    )
+                outputs.append(summarize_keypoints(arr[:, :3], self.min_valid_conf))
+            total_postprocess_s += time.perf_counter() - postprocess_start
+
+        self._last_profile = {
             "pose_inference_s": total_inference_s,
             "pose_postprocess_s": total_postprocess_s,
         }

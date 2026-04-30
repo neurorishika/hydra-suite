@@ -20,8 +20,6 @@ from PySide6.QtWidgets import (
 from hydra_suite.classkit.gui.dialogs.source_validation import (
     count_classkit_images,
     inspect_classkit_source_dir,
-    resolve_classkit_images_dir,
-    standardize_classkit_source_dir,
 )
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 from hydra_suite.widgets.dialogs import (
@@ -63,11 +61,22 @@ class SourceManagerDialog(QDialog):
         header = QLabel(
             "<b>Image Sources</b><br>"
             "Manage the folders that supply images to this project. "
-            "Each source folder should contain an images/ subdirectory. "
-            "If a folder contains images directly, ClassKit can standardize it "
-            "by creating images/ and copying those files first. "
+            "ClassKit copies accepted sources into the project's internal image store "
+            "before ingesting them. "
             "Adding a folder will ingest its images; removing one will "
             "delete those images from the database."
+            "<br><br>"
+            "<b>Supported dataset formats:</b>"
+            "<ul style='margin-top:4px; margin-bottom:0;'>"
+            "<li><b>Flat image folder</b> — images directly in the selected folder "
+            "(or inside an <code>images/</code> subdirectory)</li>"
+            "<li><b>COCO JSON</b> — dataset root containing <code>annotations.json</code> "
+            "or an <code>annotations/</code> directory</li>"
+            "<li><b>YOLO OBB / Detect</b> — dataset root with train/val/test splits "
+            "and <code>.txt</code> label files</li>"
+            "<li><b>Class-folder</b> — subdirectories named after class labels, "
+            "optionally under train/val/test splits</li>"
+            "</ul>"
         )
         header.setWordWrap(True)
         layout.addWidget(header)
@@ -162,6 +171,11 @@ class SourceManagerDialog(QDialog):
             f"{n_sources} source(s)  \u00b7  ~{total_images:,} images total"
         )
 
+    @staticmethod
+    def _count_images(folder: Path) -> int:
+        """Return the display count for a pending source folder."""
+        return count_classkit_images(folder)
+
     def _browse_add(self):
         path = QFileDialog.getExistingDirectory(
             self, "Select folder containing images", str(Path.home())
@@ -170,7 +184,6 @@ class SourceManagerDialog(QDialog):
             return
 
         d = Path(path).expanduser().resolve()
-
         try:
             resolved = self._resolve_selected_source(d)
         except ValueError as exc:
@@ -234,6 +247,8 @@ class SourceManagerDialog(QDialog):
 
     def _on_filterkit_closed(self, d: Path, resolved: Path, pre_mtime) -> None:
         """Called when FilterKit exits. Auto-add folder if filtering was applied."""
+        import json as _json
+
         post_mtime = _get_transaction_mtime(d)
         if post_mtime == pre_mtime:
             reply = QMessageBox.question(
@@ -246,22 +261,25 @@ class SourceManagerDialog(QDialog):
             )
             if reply != QMessageBox.Yes:
                 return
-        self._to_add.append(resolved)
+
+        add_path = resolved
+        tx_file = d / _FILTERKIT_TRANSACTION_FILE
+        if tx_file.exists():
+            try:
+                tx = _json.loads(tx_file.read_text(encoding="utf-8"))
+                output_path = tx.get("output_path")
+                if output_path and Path(output_path).exists():
+                    add_path = Path(output_path)
+            except Exception:
+                pass
+
+        self._to_add.append(add_path)
         self._rebuild_list()
 
     def _resolve_selected_source(self, dataset_root: Path) -> Path | None:
-        """Resolve or standardize a selected source folder into dataset_root/images."""
-        inspection = inspect_classkit_source_dir(dataset_root)
-        if not inspection.needs_standardization:
-            return resolve_classkit_images_dir(dataset_root)
-
-        if not self._confirm_standardization(inspection):
-            return None
-
-        try:
-            return standardize_classkit_source_dir(dataset_root)
-        except Exception as exc:
-            raise ValueError(f"Failed to standardize source folder:\n{exc}") from exc
+        """Validate a selected source folder and return its dataset root."""
+        inspect_classkit_source_dir(dataset_root)
+        return dataset_root.resolve()
 
     def _confirm_standardization(self, inspection) -> bool:
         """Ask whether a flat image folder should be converted into dataset_root/images."""

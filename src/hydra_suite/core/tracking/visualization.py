@@ -6,6 +6,7 @@ onto video frames.
 """
 
 import math
+import zlib
 
 import cv2
 import numpy as np
@@ -106,8 +107,11 @@ def _draw_yolo_obb(overlay, obb_corners, yolo_results):
         _draw_obb_from_yolo_results(overlay, yolo_results)
 
 
-def _draw_track_overlays(overlay, p, trajectories, track_states, ids, continuity):
+def _draw_track_overlays(
+    overlay, p, trajectories, track_states, ids, continuity, identity_labels=None
+):
     """Draw per-track circles, orientation arrows, trajectories, and labels."""
+    colors = p["TRAJECTORY_COLORS"]
     for i, tr in enumerate(trajectories):
         if not tr or track_states[i] == "lost":
             continue
@@ -115,9 +119,18 @@ def _draw_track_overlays(overlay, p, trajectories, track_states, ids, continuity
         if math.isnan(x):
             continue
         pt = (int(x), int(y))
-        col = tuple(
-            int(c) for c in p["TRAJECTORY_COLORS"][i % len(p["TRAJECTORY_COLORS"])]
-        )
+        # Use identity label for a stable color when available; fall back to slot index.
+        # Treat the bare "unknown" sentinel as no-identity so visualization shows trajectory ID.
+        identity_lbl = (
+            identity_labels[i] if identity_labels and i < len(identity_labels) else None
+        ) or ""
+        if identity_lbl.strip().lower() == "unknown":
+            identity_lbl = ""
+        if identity_lbl:
+            col_idx = zlib.crc32(identity_lbl.encode()) % len(colors)
+        else:
+            col_idx = i % len(colors)
+        col = tuple(int(c) for c in colors[col_idx])
         if p.get("SHOW_CIRCLES"):
             cv2.circle(overlay, pt, 8, col, -1)
         if p.get("SHOW_ORIENTATION"):
@@ -131,7 +144,14 @@ def _draw_track_overlays(overlay, p, trajectories, track_states, ids, continuity
             if len(pts) > 1:
                 cv2.polylines(overlay, [pts], isClosed=False, color=col, thickness=2)
         if p.get("SHOW_LABELS") or p.get("SHOW_STATE"):
-            label = f"T{ids[i]} C:{continuity[i]}" if p.get("SHOW_LABELS") else ""
+            if p.get("SHOW_LABELS"):
+                label = (
+                    f"{identity_lbl} C:{continuity[i]}"
+                    if identity_lbl
+                    else f"T{ids[i]} C:{continuity[i]}"
+                )
+            else:
+                label = ""
             state = f" [{track_states[i]}]" if p.get("SHOW_STATE") else ""
             cv2.putText(
                 overlay,
@@ -156,6 +176,7 @@ def draw_overlays(
     kf_manager=None,
     yolo_results=None,
     obb_corners=None,
+    identity_labels=None,
 ):
     """Draw all tracking overlays on a frame.
 
@@ -171,6 +192,10 @@ def draw_overlays(
         kf_manager: KalmanFilterManager (for uncertainty ellipses).
         yolo_results: YOLO results object (direct detection mode).
         obb_corners: OBB corners list (cached detection mode).
+        identity_labels: Per-slot identity label strings (or None). When a
+            non-empty string is provided for a slot, it is used as the display
+            label and drives a stable color assignment so the same identity
+            always renders with the same color.
     """
     if p.get("SHOW_YOLO_OBB", False):
         _draw_yolo_obb(overlay, obb_corners, yolo_results)
@@ -188,7 +213,9 @@ def draw_overlays(
             "SHOW_STATE",
         ]
     ):
-        _draw_track_overlays(overlay, p, trajectories, track_states, ids, continuity)
+        _draw_track_overlays(
+            overlay, p, trajectories, track_states, ids, continuity, identity_labels
+        )
 
     if p.get("SHOW_FG") and fg is not None:
         small_fg = cv2.resize(fg, (0, 0), fx=0.3, fy=0.3)

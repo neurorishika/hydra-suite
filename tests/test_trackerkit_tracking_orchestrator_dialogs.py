@@ -295,6 +295,95 @@ def test_open_parameter_helper_detection_prompt_uses_main_window_parent(
     )
 
 
+def test_setup_video_file_adds_recent_video_to_main_window_store(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    recent_paths: list[str] = []
+
+    class FakeLineEdit:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def setText(self, value: str) -> None:
+            self.value = value
+
+    class FakeCheckBox:
+        def __init__(self) -> None:
+            self.checked = False
+
+        def setChecked(self, value: bool) -> None:
+            self.checked = value
+
+    class FakeButton:
+        def __init__(self) -> None:
+            self.enabled = False
+
+        def setEnabled(self, value: bool) -> None:
+            self.enabled = value
+
+    class FakeSpinBox:
+        def __init__(self) -> None:
+            self.value = None
+
+        def setValue(self, value: int) -> None:
+            self.value = value
+
+    class FakeLabel:
+        def __init__(self) -> None:
+            self.text = ""
+            self.style = ""
+
+        def setText(self, value: str) -> None:
+            self.text = value
+
+        def setStyleSheet(self, value: str) -> None:
+            self.style = value
+
+    panels = SimpleNamespace(
+        setup=SimpleNamespace(
+            file_line=FakeLineEdit(),
+            csv_line=FakeLineEdit(),
+            btn_detect_fps=FakeButton(),
+            spin_start_frame=FakeSpinBox(),
+            spin_end_frame=FakeSpinBox(),
+            config_status_label=FakeLabel(),
+        ),
+        postprocess=SimpleNamespace(
+            video_out_line=FakeLineEdit(),
+            check_video_output=FakeCheckBox(),
+        ),
+    )
+    main_window = SimpleNamespace(
+        current_video_path=None,
+        current_detection_cache_path="stale-detections.npz",
+        current_individual_properties_cache_path="stale-properties.npz",
+        roi_selection_active=False,
+        btn_test_detection=FakeButton(),
+        video_total_frames=240,
+        _recents_store=SimpleNamespace(add=recent_paths.append),
+        _init_video_player=lambda path: captured.setdefault("video_path", path),
+        setWindowTitle=lambda title: captured.setdefault("window_title", title),
+        _apply_ui_state=lambda state: captured.setdefault("ui_state", state),
+        _show_workspace=lambda: captured.setdefault("workspace_shown", True),
+    )
+    orchestrator = ConfigOrchestrator(
+        main_window=main_window,
+        config=object(),
+        panels=panels,
+    )
+
+    monkeypatch.setattr(config_module.os.path, "isfile", lambda _path: False)
+
+    orchestrator._setup_video_file("/tmp/example.mp4")
+
+    assert recent_paths == ["/tmp/example.mp4"]
+    assert main_window.current_detection_cache_path is None
+    assert main_window.current_individual_properties_cache_path is None
+    assert captured["video_path"] == "/tmp/example.mp4"
+    assert captured["window_title"] == "HYDRA - example.mp4"
+    assert captured["ui_state"] == "idle"
+    assert captured["workspace_shown"] is True
+
+
 def test_start_tracking_on_video_restores_csv_and_worker_imports(
     monkeypatch,
     tmp_path: Path,
@@ -530,6 +619,106 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
     assert main_window.tracking_worker is not None
     assert captured["prepared"] is True
     assert captured["ui_state"] == "preview"
+
+
+def test_start_preview_on_video_downgrades_auxiliary_runtimes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeSignal:
+        def connect(self, _callback) -> None:
+            return None
+
+    class FakeProgress:
+        def setVisible(self, _visible: bool) -> None:
+            return None
+
+        def setValue(self, _value: int) -> None:
+            return None
+
+        def setText(self, _text: str) -> None:
+            return None
+
+    class FakeTrackingWorker:
+        def __init__(self, *args, **kwargs) -> None:
+            self.frame_signal = FakeSignal()
+            self.finished_signal = FakeSignal()
+            self.progress_signal = FakeSignal()
+            self.stats_signal = FakeSignal()
+            self.warning_signal = FakeSignal()
+            self.pose_exported_model_resolved_signal = FakeSignal()
+
+        def set_parameters(self, params) -> None:
+            captured["params"] = dict(params)
+
+        def start(self) -> None:
+            return None
+
+        def isRunning(self) -> bool:
+            return False
+
+    video_path = tmp_path / "video.mp4"
+    cache_path = tmp_path / "preview_cache.npz"
+    video_path.write_bytes(b"video")
+    cache_path.write_bytes(b"cache")
+
+    panels = SimpleNamespace(
+        setup=SimpleNamespace(file_line=SimpleNamespace(text=lambda: str(video_path)))
+    )
+
+    main_window = SimpleNamespace(
+        tracking_worker=None,
+        _stop_all_requested=False,
+        _pending_finish_after_interp=False,
+        is_playing=False,
+        _tracking_first_frame=False,
+        csv_writer_thread=None,
+        progress_bar=FakeProgress(),
+        progress_label=FakeProgress(),
+        get_parameters_dict=lambda: {
+            "COMPUTE_RUNTIME": "tensorrt",
+            "HEADTAIL_COMPUTE_RUNTIME": "onnx_coreml",
+            "CNN_COMPUTE_RUNTIME": "onnx_cuda",
+            "POSE_MODEL_TYPE": "yolo",
+        },
+        _preview_safe_runtime=lambda runtime: {
+            "onnx_cpu": "cpu",
+            "onnx_coreml": "mps",
+            "onnx_cuda": "cuda",
+            "tensorrt": "cuda",
+        }.get(runtime, runtime),
+        _find_or_plan_optimizer_cache_path=lambda *_args, **_kwargs: (
+            str(cache_path),
+            True,
+        ),
+        _prepare_tracking_display=lambda: None,
+        _apply_ui_state=lambda _state: None,
+        _stop_playback=lambda: None,
+    )
+
+    orchestrator = TrackingOrchestrator(
+        main_window=main_window,
+        config=object(),
+        panels=panels,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_validate_yolo_model_requirements",
+        lambda params, mode_label="": True,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.core.tracking.TrackingWorker",
+        FakeTrackingWorker,
+    )
+
+    orchestrator.start_preview_on_video(str(video_path))
+
+    assert captured["params"]["COMPUTE_RUNTIME"] == "cuda"
+    assert captured["params"]["HEADTAIL_COMPUTE_RUNTIME"] == "mps"
+    assert captured["params"]["CNN_COMPUTE_RUNTIME"] == "cuda"
+    assert captured["params"]["POSE_RUNTIME_FLAVOR"] == "cuda"
 
 
 def test_generate_final_media_export_uses_main_window_export_state() -> None:
@@ -788,7 +977,14 @@ def test_build_pose_augmented_dataframe_includes_detected_only_rich_exports(
     cnn_cache = CNNIdentityCache(detected_cnn_path)
     cnn_cache.save(
         1,
-        [ClassPrediction(class_name="worker", confidence=0.84, det_index=0)],
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("worker",),
+                confidences=(0.84,),
+            )
+        ],
     )
     cnn_cache.flush()
 
@@ -820,6 +1016,109 @@ def test_build_pose_augmented_dataframe_includes_detected_only_rich_exports(
     assert np.isclose(out.iloc[0]["CNN_demo_Conf"], 0.84)
 
 
+def test_build_pose_augmented_dataframe_includes_multihead_detected_rich_exports(
+    tmp_path: Path,
+) -> None:
+    final_csv_path = tmp_path / "tracks_final.csv"
+    pd.DataFrame([{"FrameID": 1, "TrajectoryID": 1, "DetectionID": 10000}]).to_csv(
+        final_csv_path, index=False
+    )
+
+    detected_cnn_path = tmp_path / "detected_cnn_multi.npz"
+    cnn_cache = CNNIdentityCache(detected_cnn_path, factor_names=("color", "shape"))
+    cnn_cache.save(
+        1,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("color", "shape"),
+                class_names=("worker", "major"),
+                confidences=(0.84, 0.72),
+            )
+        ],
+    )
+    cnn_cache.flush()
+
+    orchestrator, _main_window = _make_orchestrator()
+    orchestrator._mw = SimpleNamespace(
+        _is_pose_export_enabled=lambda: False,
+        get_parameters_dict=lambda: {},
+        current_individual_properties_cache_path=None,
+        current_detected_properties_cache_path=None,
+        current_detected_cnn_cache_paths={"demo": str(detected_cnn_path)},
+        current_interpolated_pose_csv_path=None,
+        current_interpolated_pose_df=None,
+        current_interpolated_tag_csv_path=None,
+        current_interpolated_tag_df=None,
+        current_interpolated_cnn_csv_paths={},
+        current_interpolated_cnn_dfs={},
+        current_interpolated_headtail_csv_path=None,
+        current_interpolated_headtail_df=None,
+    )
+
+    out = orchestrator._build_pose_augmented_dataframe(str(final_csv_path))
+
+    assert out is not None
+    assert out.iloc[0]["CNN_demo_color_Class"] == "worker"
+    assert np.isclose(out.iloc[0]["CNN_demo_color_Conf"], 0.84)
+    assert out.iloc[0]["CNN_demo_shape_Class"] == "major"
+    assert np.isclose(out.iloc[0]["CNN_demo_shape_Conf"], 0.72)
+
+
+def test_build_pose_augmented_dataframe_runs_identity_postprocess_stage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    final_csv_path = tmp_path / "tracks_final.csv"
+    pd.DataFrame([{"FrameID": 1, "TrajectoryID": 1, "DetectionID": 10000}]).to_csv(
+        final_csv_path, index=False
+    )
+
+    orchestrator, _main_window = _make_orchestrator()
+    orchestrator._mw = SimpleNamespace(
+        _is_pose_export_enabled=lambda: False,
+        get_parameters_dict=lambda: {"CNN_CLASSIFIERS": []},
+        current_individual_properties_cache_path=None,
+        current_detected_properties_cache_path=None,
+        current_detected_cnn_cache_paths={},
+        current_interpolated_pose_csv_path=None,
+        current_interpolated_pose_df=None,
+        current_interpolated_tag_csv_path=None,
+        current_interpolated_tag_df=None,
+        current_interpolated_cnn_csv_paths={},
+        current_interpolated_cnn_dfs={},
+        current_interpolated_headtail_csv_path=None,
+        current_interpolated_headtail_df=None,
+        current_detection_cache_path=None,
+    )
+
+    monkeypatch.setattr(
+        TrackingOrchestrator,
+        "_check_pose_export_sources",
+        lambda self: (True, "", False, "", False, None, False),
+    )
+    monkeypatch.setattr(
+        TrackingOrchestrator,
+        "_merge_pose_sources_into_df",
+        lambda self, trajectories_df, cache_path, cache_available, interp_pose_path, interp_available, interp_pose_df_mem, interp_mem_available: trajectories_df.assign(
+            CNN_demo_Class="worker",
+            CNN_demo_Conf=0.9,
+        ),
+    )
+    monkeypatch.setattr(
+        TrackingOrchestrator,
+        "_apply_identity_postprocessing_to_df",
+        lambda self, with_pose_df: with_pose_df.assign(
+            UniqueIdentityKey="cnn:demo=worker"
+        ),
+    )
+
+    out = orchestrator._build_pose_augmented_dataframe(str(final_csv_path))
+
+    assert out is not None
+    assert out.iloc[0]["UniqueIdentityKey"] == "cnn:demo=worker"
+
+
 def test_export_pose_augmented_csv_writes_only_with_individual_and_cleans_legacy_alias(
     tmp_path: Path,
 ) -> None:
@@ -841,6 +1140,32 @@ def test_export_pose_augmented_csv_writes_only_with_individual_and_cleans_legacy
     assert legacy_path.exists() is False
 
 
+def test_write_rich_export_csv_drops_fully_empty_columns(tmp_path: Path) -> None:
+    final_csv_path = tmp_path / "tracks_final.csv"
+    final_csv_path.write_text("FrameID,TrajectoryID\n1,1\n", encoding="utf-8")
+
+    orchestrator, _main_window = _make_orchestrator()
+    sample_df = pd.DataFrame(
+        [
+            {
+                "FrameID": 1,
+                "TrajectoryID": 1,
+                "DetectionID": 10000,
+                "UniqueIdentityKey": "cnn:demo=worker",
+                "IdentityAssignedLabel": np.nan,
+                "DetectedTagID": np.nan,
+            }
+        ]
+    )
+
+    out_path = orchestrator._write_rich_export_csv(sample_df, str(final_csv_path))
+    saved = pd.read_csv(out_path)
+
+    assert "UniqueIdentityKey" in saved.columns
+    assert "IdentityAssignedLabel" not in saved.columns
+    assert "DetectedTagID" not in saved.columns
+
+
 def test_load_video_trajectories_prefers_with_individual_then_legacy_alias(
     tmp_path: Path,
 ) -> None:
@@ -859,3 +1184,107 @@ def test_load_video_trajectories_prefers_with_individual_then_legacy_alias(
 
     assert chosen_path == str(rich_path)
     assert int(df.iloc[0]["FrameID"]) == 3
+
+
+def test_format_video_track_label_prefers_unique_identity_key() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+
+    assert orchestrator._format_video_track_label(7, "apriltag=12") == "Tag 12"
+    assert (
+        orchestrator._format_video_track_label(
+            7,
+            "cnn:uid:color=red|cnn:uid:shape=circle",
+        )
+        == "red / circle"
+    )
+    assert (
+        orchestrator._format_video_track_label(
+            7,
+            "cnn:uid=color:red+shape:circle",
+        )
+        == "red / circle"
+    )
+    assert orchestrator._format_video_track_label(7, np.nan) == "ID7"
+
+
+def test_preextract_traj_arrays_uses_unique_identity_labels_when_available() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+    trajectories_df = pd.DataFrame(
+        [
+            {
+                "FrameID": 1,
+                "TrajectoryID": 3,
+                "X": 10.0,
+                "Y": 20.0,
+                "Theta": 0.0,
+                "UniqueIdentityKey": "apriltag=8",
+            },
+            {
+                "FrameID": 2,
+                "TrajectoryID": 4,
+                "X": 11.0,
+                "Y": 21.0,
+                "Theta": 0.1,
+            },
+        ]
+    )
+
+    arrays = orchestrator._preextract_traj_arrays(
+        trajectories_df,
+        show_pose=False,
+        pose_column_triplets=[],
+        show_trails=False,
+    )
+
+    label_texts = arrays[4]
+    assert list(label_texts) == ["Tag 8", "ID4"]
+
+
+def test_build_video_track_color_key_array_prefers_identity_when_available() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+    trajectories_df = pd.DataFrame(
+        [
+            {
+                "FrameID": 1,
+                "TrajectoryID": 3,
+                "UniqueIdentityKey": "apriltag=8",
+            },
+            {
+                "FrameID": 2,
+                "TrajectoryID": 4,
+                "IdentityAssignedLabel": "worker_a",
+            },
+            {
+                "FrameID": 3,
+                "TrajectoryID": 9,
+            },
+        ]
+    )
+
+    color_keys = orchestrator._build_video_track_color_key_array(trajectories_df)
+
+    assert list(color_keys) == [
+        "identity:apriltag=8",
+        "identity:worker_a",
+        "trajectory:9",
+    ]
+
+
+def test_build_precomputed_color_palette_reuses_identity_colors_across_tracks() -> None:
+    orchestrator, _main_window = _make_orchestrator()
+    colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+    track_ids = np.asarray([3, 8, 2], dtype=np.int32)
+    color_keys = np.asarray(
+        ["identity:worker_a", "identity:worker_a", "trajectory:2"],
+        dtype=object,
+    )
+
+    row_colors = orchestrator._build_precomputed_color_palette(
+        colors,
+        track_ids,
+        color_keys,
+    )
+
+    assert row_colors[0] == (10, 20, 30)
+    assert row_colors[1] == (10, 20, 30)
+    assert row_colors[2] == (70, 80, 90)

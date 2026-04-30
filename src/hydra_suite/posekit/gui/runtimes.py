@@ -13,11 +13,9 @@ except Exception:
         "cpu",
         "mps",
         "cuda",
-        "rocm",
         "onnx_coreml",
         "onnx_cpu",
         "onnx_cuda",
-        "onnx_rocm",
         "tensorrt",
     ]
 
@@ -36,8 +34,6 @@ except Exception:
         if enable_tensorrt:
             return "tensorrt"
         flavor = str(pose_runtime_flavor or "").lower()
-        if flavor.startswith("onnx_rocm"):
-            return "onnx_rocm"
         if flavor.startswith("onnx_cuda"):
             return "onnx_cuda"
         if flavor.startswith("onnx_mps") or flavor.startswith("onnx_coreml"):
@@ -53,7 +49,7 @@ except Exception:
             return {"pose_runtime_flavor": "onnx_mps", "pose_sleap_device": "mps"}
         if rt == "onnx_cpu":
             return {"pose_runtime_flavor": "onnx_cpu", "pose_sleap_device": "cpu"}
-        if rt in {"onnx_cuda", "onnx_rocm"}:
+        if rt in {"onnx_cuda"}:
             return {"pose_runtime_flavor": rt, "pose_sleap_device": "cuda:0"}
         if rt == "tensorrt":
             return {

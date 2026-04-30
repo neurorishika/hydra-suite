@@ -64,10 +64,11 @@ class TinyHeadTailParams:
     weight_decay: float = 1e-2
     input_width: int = 128
     input_height: int = 64
+    tiny_preset: str = "medium"
     # Architecture params
     hidden_layers: int = 1
-    hidden_dim: int = 64
-    dropout: float = 0.2
+    hidden_dim: int = 96
+    dropout: float = 0.1
     # Early stopping
     patience: int = 10
     # Class-imbalance handling for tiny classifiers.
@@ -76,6 +77,8 @@ class TinyHeadTailParams:
     class_rebalance_power: float = 1.0
     # Label smoothing for CrossEntropyLoss in tiny multi-class training.
     label_smoothing: float = 0.0
+    # Class name treated as intentionally unlabeled during supervised loss.
+    ignore_label_name: str = "unknown"
 
 
 @dataclass(slots=True)
@@ -103,10 +106,12 @@ class CustomCNNParams:
     label_smoothing: float = 0.0
     class_rebalance_mode: str = "none"  # none, weighted_loss, weighted_sampler, both
     class_rebalance_power: float = 1.0
+    ignore_label_name: str = "unknown"
     # TinyClassifier-specific (ignored for torchvision backbones)
+    tiny_preset: str = "medium"
     hidden_layers: int = 1
-    hidden_dim: int = 64
-    dropout: float = 0.2
+    hidden_dim: int = 96
+    dropout: float = 0.1
     input_width: int = 128
     input_height: int = 64
 
@@ -117,10 +122,13 @@ class AugmentationProfile:
 
     enabled: bool = True
     flipud: float = 0.0
-    fliplr: float = 0.5
+    fliplr: float = 0.0
     rotate: float = 0.0
+    hue: float = 0.0
+    saturation: float = 0.0
     brightness: float = 0.0
     contrast: float = 0.0
+    monochrome: bool = False
     args: dict[str, Any] = field(default_factory=dict)
     # Label-switching expansion rules.
     # Maps flip axis name → {source_class_name: target_class_name}.

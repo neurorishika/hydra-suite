@@ -36,14 +36,12 @@ try:
     from hydra_suite.utils.gpu_utils import (
         CUDA_AVAILABLE,
         MPS_AVAILABLE,
-        ROCM_AVAILABLE,
         TORCH_CUDA_AVAILABLE,
     )
 except ImportError:
     CUDA_AVAILABLE = False
     MPS_AVAILABLE = False
     TORCH_CUDA_AVAILABLE = False
-    ROCM_AVAILABLE = False
 
 logger = logging.getLogger("pose_label.dialogs.utils")
 
@@ -79,7 +77,7 @@ def make_pose_infer(out_root: Path, keypoint_names: List[str]):
 def get_available_devices() -> List[str]:
     """Get list of available compute devices based on gpu_utils flags."""
     devices: List[str] = ["auto", "cpu"]
-    if CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE or ROCM_AVAILABLE:
+    if CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE:
         devices.append("cuda")
     if MPS_AVAILABLE:
         devices.append("mps")

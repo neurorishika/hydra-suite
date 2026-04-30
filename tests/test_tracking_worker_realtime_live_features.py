@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import hydra_suite.core.identity.classification.cnn as cnn_mod
 import hydra_suite.core.tracking.precompute as precompute_mod
 import hydra_suite.core.tracking.worker as worker_mod
 from hydra_suite.core.identity.classification.cnn import (
@@ -63,6 +62,15 @@ class _FakeProfiler:
         return None
 
     def set_config(self, **_kwargs):
+        return None
+
+    def discard_frame_state(self):
+        return None
+
+    def reset_interval(self):
+        return None
+
+    def notify_frame_index(self, *_args, **_kwargs):
         return None
 
 
@@ -219,42 +227,6 @@ class _FakeDetector:
         )
 
 
-class _FakeTrackTagHistory:
-    def __init__(self, n_tracks: int, window: int = 30):
-        self.n_tracks = n_tracks
-        self.window = window
-
-    def build_track_tag_id_list(self, n_tracks: int):
-        return [worker_mod.NO_TAG] * n_tracks
-
-    def resize(self, _n_tracks: int):
-        return None
-
-    def record(self, *_args, **_kwargs):
-        return None
-
-    def clear_track(self, *_args, **_kwargs):
-        return None
-
-
-class _FakeTrackCNNHistory:
-    def __init__(self, n_tracks: int, window: int = 10):
-        self.n_tracks = n_tracks
-        self.window = window
-
-    def build_track_identity_list(self, n_tracks: int):
-        return [None] * n_tracks
-
-    def resize(self, _n_tracks: int):
-        return None
-
-    def record(self, *_args, **_kwargs):
-        return None
-
-    def clear_track(self, *_args, **_kwargs):
-        return None
-
-
 class _FakeKalmanFilterManager:
     def __init__(self, n_targets: int, _params):
         self.X = np.zeros((n_targets, 5), dtype=np.float32)
@@ -334,9 +306,10 @@ class _FakeUnifiedPrecompute:
                     frame_idx,
                     [
                         ClassPrediction(
-                            class_name="alpha",
-                            confidence=0.99,
                             det_index=0,
+                            factor_names=("flat",),
+                            class_names=("alpha",),
+                            confidences=(0.99,),
                         )
                     ],
                 )
@@ -401,7 +374,14 @@ class _ArtifactWritingUnifiedPrecompute:
             "det_indices": [0],
             "hammings": [0],
         }
-        cnn_preds = [ClassPrediction(class_name="alpha", confidence=0.99, det_index=0)]
+        cnn_preds = [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("alpha",),
+                confidences=(0.99,),
+            )
+        ]
         self.pose_frames[int(frame_idx)] = (det_ids, pose_keypoints)
         self.tag_frames[int(frame_idx)] = tag_payload
         self.cnn_frames[int(frame_idx)] = cnn_preds
@@ -535,8 +515,6 @@ def test_tracking_worker_realtime_streams_live_pose_tag_and_cnn_into_assignment(
     monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
-    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
-    monkeypatch.setattr(cnn_mod, "TrackCNNHistory", _FakeTrackCNNHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         worker_mod,
@@ -660,8 +638,6 @@ def test_tracking_worker_realtime_does_not_mark_pose_directed_when_pose_is_weak(
     monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
     monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
     monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
-    monkeypatch.setattr(worker_mod, "TrackTagHistory", _FakeTrackTagHistory)
-    monkeypatch.setattr(cnn_mod, "TrackCNNHistory", _FakeTrackCNNHistory)
     monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
     monkeypatch.setattr(
         (
@@ -733,6 +709,117 @@ def test_tracking_worker_realtime_does_not_mark_pose_directed_when_pose_is_weak(
     np.testing.assert_array_equal(captured["meas_ori_directed"], [0])
 
 
+def test_tracking_worker_realtime_keeps_cnn_hints_out_of_assignment_when_online_decoder_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    captured = {}
+
+    class _CapturingAssigner:
+        def __init__(self, params, worker=None):
+            self.params = params
+
+        def compute_cost_matrix(
+            self,
+            N,
+            meas,
+            preds,
+            shapes,
+            kf_manager,
+            last_shape_info,
+            meas_ori_directed=None,
+            association_data=None,
+        ):
+            captured["association_data"] = association_data
+            raise _StopAtAssociation()
+
+    phases = [
+        _FakePhase(
+            "pose",
+            cache_path=str(tmp_path / "pose_cache.npz"),
+            finalize_metadata={"pose_keypoint_names": ["head", "tail"]},
+        ),
+        _FakePhase("apriltag", cache_path=str(tmp_path / "tag_cache.npz")),
+        _FakePhase("cnn_identity", cache_path=str(tmp_path / "cnn_cache.npz")),
+    ]
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(
+        worker_mod, "create_detector", lambda *_args, **_kwargs: _FakeDetector()
+    )
+    monkeypatch.setattr(worker_mod, "DetectionCache", _FakeDetectionCache)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
+    monkeypatch.setattr(worker_mod, "UnifiedPrecompute", _FakeUnifiedPrecompute)
+    monkeypatch.setattr(
+        worker_mod,
+        "CropConfig",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
+    monkeypatch.setattr(
+        worker_mod.TrackingWorker,
+        "_build_precompute_phases",
+        lambda self, params, detection_method, detection_cache, start_frame, end_frame: phases,
+    )
+    monkeypatch.setattr(
+        worker_mod,
+        "_pf_build_direction_overrides",
+        lambda n_det, pose_heading, pose_directed_mask, headtail_heading, headtail_directed_mask, pose_overrides_headtail=True: (
+            np.asarray(pose_heading, dtype=np.float32),
+            np.asarray(pose_directed_mask, dtype=np.uint8),
+        ),
+    )
+
+    worker = worker_mod.TrackingWorker(
+        str(tmp_path / "video.mp4"),
+        detection_cache_path=str(tmp_path / "cache.npz"),
+    )
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": True,
+            "TRACKING_WORKFLOW_MODE": "realtime",
+            "ENABLE_POSE_EXTRACTOR": True,
+            "USE_APRILTAGS": True,
+            "ENABLE_INDIVIDUAL_PIPELINE": True,
+            "ENABLE_IDENTITY_ONLINE_DECODER": True,
+            "ENABLE_LEGACY_CNN_ASSOCIATION": False,
+            "CNN_CLASSIFIERS": [
+                {"label": "cnn_identity", "window": 5, "labels": ["alpha", "beta"]}
+            ],
+            "POSE_DIRECTION_ANTERIOR_KEYPOINTS": ["head"],
+            "POSE_DIRECTION_POSTERIOR_KEYPOINTS": ["tail"],
+            "POSE_IGNORE_KEYPOINTS": [],
+            "POSE_MIN_KPT_CONF_VALID": 0.2,
+            "POSE_OVERRIDES_HEADTAIL": True,
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "SUPPRESS_FOREIGN_OBB_REGIONS": True,
+            "INDIVIDUAL_CROP_PADDING": 0.1,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+            "INFERENCE_MODEL_ID": "test-model",
+        }
+    )
+
+    with pytest.raises(_StopAtAssociation):
+        worker.run()
+
+    association_data = captured["association_data"]
+    assert association_data["detection_tag_ids"] == [42]
+    assert "cnn_phases" not in association_data
+
+
 def test_tracking_worker_realtime_ignores_existing_detection_cache(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -794,6 +881,155 @@ def test_tracking_worker_realtime_ignores_existing_detection_cache(
     assert cache_modes == ["w"]
 
 
+def test_tracking_worker_forward_yolo_without_detection_cache_still_initializes_detector(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class _StopAtDetection(RuntimeError):
+        pass
+
+    detector_calls: list[dict[str, object]] = []
+
+    class _DetectorProbe:
+        def detect_objects(self, *_args, **_kwargs):
+            raise _StopAtDetection()
+
+    def _create_detector(*_args, **_kwargs):
+        detector_calls.append({"created": True})
+        return _DetectorProbe()
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "create_detector", _create_detector)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _UnusedAssigner)
+
+    worker = worker_mod.TrackingWorker(str(tmp_path / "video.mp4"))
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": False,
+            "TRACKING_WORKFLOW_MODE": "non_realtime",
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    with pytest.raises(_StopAtDetection):
+        worker.run()
+
+    assert detector_calls == [{"created": True}]
+
+
+def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    captured = {}
+
+    class _CapturingAssigner:
+        def __init__(self, params, worker=None):
+            self.params = params
+
+        def compute_cost_matrix(
+            self,
+            N,
+            meas,
+            preds,
+            shapes,
+            kf_manager,
+            last_shape_info,
+            meas_ori_directed=None,
+            association_data=None,
+        ):
+            captured["meas"] = np.asarray(meas, dtype=np.float32)
+            raise _StopAtAssociation()
+
+    class _BackwardCacheProbe(_FakeDetectionCache):
+        def __init__(self, _path, mode="r", start_frame=None, end_frame=None):
+            super().__init__()
+            assert mode == "r"
+            self._cached_frames = {0}
+            self._frames[0] = (
+                [np.array([4.0, 4.0, 0.0], dtype=np.float32)],
+                [2.0],
+                [np.array([2.0, 1.0], dtype=np.float32)],
+                [0.95],
+                [
+                    np.array(
+                        [[3.0, 3.5], [5.0, 3.5], [5.0, 4.5], [3.0, 4.5]],
+                        dtype=np.float32,
+                    )
+                ],
+                [0],
+                [0.0],
+                [0.75],
+                [0],
+                None,
+                None,
+                None,
+            )
+
+        def covers_frame_range(self, *_args, **_kwargs):
+            return True
+
+        def get_total_frames(self):
+            return 1
+
+    cache_path = tmp_path / "cache.npz"
+    cache_path.write_bytes(b"cache")
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(
+        worker_mod,
+        "create_detector",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("backward cached run should not create a runtime detector")
+        ),
+    )
+    monkeypatch.setattr(worker_mod, "DetectionCache", _BackwardCacheProbe)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _CapturingAssigner)
+
+    worker = worker_mod.TrackingWorker(
+        str(tmp_path / "video.mp4"),
+        backward_mode=True,
+        detection_cache_path=str(cache_path),
+    )
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": False,
+            "TRACKING_WORKFLOW_MODE": "non_realtime",
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    with pytest.raises(_StopAtAssociation):
+        worker.run()
+
+    assert captured["meas"].shape == (1, 3)
+
+
 def test_tracking_worker_realtime_ignores_existing_analysis_caches(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -829,7 +1065,14 @@ def test_tracking_worker_realtime_ignores_existing_analysis_caches(
     cnn_cache = CNNIdentityCache(str(cnn_cache_path))
     cnn_cache.save(
         0,
-        [ClassPrediction(class_name="stale", confidence=0.5, det_index=0)],
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("stale",),
+                confidences=(0.5,),
+            )
+        ],
     )
     cnn_cache.flush()
 
@@ -1041,7 +1284,7 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
         cnn_cache = CNNIdentityCache(str(cnn_cache_path))
         det_classes, track_identities, frame_preds = cnn_build_association_entries(
             cnn_cache,
-            _FakeTrackCNNHistory(1),
+            None,
             0,
             1,
             1,
@@ -1097,3 +1340,121 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
     assert result.exported_videos == 1
     assert result.exported_frames == 1
     assert (dataset_dir / "oriented_videos" / "trajectory_0001.mp4").exists()
+
+
+def test_non_realtime_forward_defaults_to_streaming_individual_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    video_path = tmp_path / "source.mp4"
+    detection_cache_path = tmp_path / "detections.npz"
+    pose_cache_path = tmp_path / "pose_cache.npz"
+    tag_cache_path = tmp_path / "tag_cache.npz"
+    cnn_cache_path = tmp_path / "cnn_cache.npz"
+    model_path = tmp_path / "cnn_model.fake"
+
+    _ArtifactWritingUnifiedPrecompute.instances = []
+    _write_test_video(video_path, [(0, 0, 255)])
+    model_path.write_bytes(b"fake-model")
+
+    phases = [
+        _RealtimeArtifactPhase(
+            "pose",
+            str(pose_cache_path),
+            finalize_metadata={"pose_keypoint_names": ["head", "tail"]},
+        ),
+        _RealtimeArtifactPhase("apriltag", str(tag_cache_path)),
+        _RealtimeArtifactPhase("cnn_identity", str(cnn_cache_path)),
+    ]
+
+    def _build_phases(
+        self, params, detection_method, detection_cache, start_frame, end_frame
+    ):
+        if self.backward_mode:
+            return []
+        return phases
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(
+        worker_mod, "create_detector", lambda *_args, **_kwargs: _FakeDetector()
+    )
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _UnusedAssigner)
+    monkeypatch.setattr(
+        worker_mod, "UnifiedPrecompute", _ArtifactWritingUnifiedPrecompute
+    )
+    monkeypatch.setattr(
+        worker_mod.TrackingWorker, "_build_precompute_phases", _build_phases
+    )
+
+    worker = worker_mod.TrackingWorker(
+        str(video_path),
+        detection_cache_path=str(detection_cache_path),
+    )
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": False,
+            "TRACKING_WORKFLOW_MODE": "non_realtime",
+            "ENABLE_POSE_EXTRACTOR": True,
+            "USE_APRILTAGS": True,
+            "CNN_CLASSIFIERS": [
+                {"label": "cnn_identity", "model_path": str(model_path), "window": 5}
+            ],
+            "MIN_DETECTIONS_TO_START": 2,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "VISUALIZATION_FREE_MODE": True,
+            "SUPPRESS_FOREIGN_OBB_REGIONS": True,
+            "INDIVIDUAL_CROP_PADDING": 0.1,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    worker.run()
+
+    assert _ArtifactWritingUnifiedPrecompute.instances
+    assert _ArtifactWritingUnifiedPrecompute.instances[-1].process_calls == 1
+    assert _ArtifactWritingUnifiedPrecompute.instances[-1].run_called is False
+    assert detection_cache_path.exists()
+    assert pose_cache_path.exists()
+    assert tag_cache_path.exists()
+    assert cnn_cache_path.exists()
+
+
+def test_cnn_build_association_entries_supports_detection_only_cache_reads(tmp_path):
+    cache_path = tmp_path / "cnn_detection_only_assoc.npz"
+    cache = CNNIdentityCache(cache_path)
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("alpha",),
+                confidences=(0.91,),
+            )
+        ],
+    )
+    cache.flush()
+
+    det_classes, track_identities, frame_preds = cnn_build_association_entries(
+        CNNIdentityCache(str(cache_path)),
+        None,
+        0,
+        1,
+        2,
+    )
+
+    assert det_classes == ["alpha"]
+    assert track_identities == [None, None]
+    assert len(frame_preds) == 1

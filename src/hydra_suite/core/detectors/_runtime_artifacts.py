@@ -19,6 +19,145 @@ class RuntimeArtifactMixin:
     """Mixin supplying ONNX/TensorRT artifact caching and export helpers."""
 
     _SESSION_ONNX_CPU_FALLBACK_ARTIFACTS: set[str] = set()
+    _SESSION_TENSORRT_DISABLED_CONTEXTS: dict[str, str] = {}
+
+    def _direct_obb_execution_mode(self) -> str:
+        mode = str(self.params.get("YOLO_OBB_EXECUTION_MODE", "auto") or "auto")
+        mode = mode.strip().lower()
+        if mode in {"auto", "direct", "wrapper"}:
+            return mode
+        return "auto"
+
+    def _clear_direct_obb_executor(self) -> None:
+        self._direct_obb_executor = None
+
+    def _maybe_enable_direct_obb_executor(
+        self,
+        runtime: str,
+        artifact_path: Path,
+        imgsz: int,
+        *,
+        class_names: dict[int, str] | None = None,
+        class_count: int | None = None,
+    ) -> None:
+        self._direct_obb_executor = None
+        if self._direct_obb_execution_mode() == "wrapper":
+            return
+        if not str(getattr(self, "device", "")).startswith("cuda"):
+            return
+        try:
+            from ._direct_obb_runtime import create_direct_obb_executor
+
+            self._direct_obb_executor = create_direct_obb_executor(
+                runtime=runtime,
+                artifact_path=str(artifact_path),
+                imgsz=int(imgsz),
+                class_names=class_names,
+                class_count=class_count,
+            )
+            logger.info(
+                "Enabled direct %s OBB executor for %s",
+                runtime,
+                artifact_path.name,
+            )
+        except Exception as exc:
+            self._direct_obb_executor = None
+            logger.warning(
+                "Direct %s OBB executor unavailable for %s: %s",
+                runtime,
+                artifact_path,
+                exc,
+            )
+
+    def _maybe_enable_direct_cuda_obb_executor(
+        self,
+        pt_model,
+        imgsz: int,
+        *,
+        class_names: dict[int, str] | None = None,
+        class_count: int | None = None,
+    ) -> None:
+        """Enable a ``DirectPyTorchCUDAOBBExecutor`` for the pure CUDA runtime.
+
+        The Ultralytics predictor uses ``LetterBox(auto=True)`` for PyTorch
+        ``.pt`` models, which produces rectangular inputs for non-square frames
+        (e.g. 576×1024 for a 1920×1080 feed instead of the 1024×1024 expected
+        by TRT/ONNX artifacts).  This discrepancy causes different FPN
+        activations and inconsistent detection scores across runtimes.
+
+        Using a direct executor forces ``auto=False`` preprocessing so the model
+        always sees a square ``imgsz×imgsz`` padded input — identical to what
+        the TRT and ONNX direct executors send.
+        """
+        self._direct_obb_executor = None
+        if self._direct_obb_execution_mode() == "wrapper":
+            return
+        if not str(getattr(self, "device", "")).startswith("cuda"):
+            return
+        try:
+            from ._direct_obb_runtime import create_direct_obb_executor
+
+            self._direct_obb_executor = create_direct_obb_executor(
+                runtime="cuda",
+                artifact_path="",
+                imgsz=int(imgsz),
+                class_names=class_names,
+                class_count=class_count,
+                pt_model=pt_model,
+            )
+            logger.info(
+                "Enabled direct PyTorch CUDA OBB executor (imgsz=%d); "
+                "auto=False square letterboxing matches TRT/ONNX paths.",
+                int(imgsz),
+            )
+        except Exception as exc:
+            self._direct_obb_executor = None
+            logger.warning("Direct PyTorch CUDA OBB executor unavailable: %s", exc)
+
+    def _maybe_enable_direct_detect_executor(
+        self,
+        runtime: str,
+        artifact_path: Path,
+        imgsz: int,
+        *,
+        class_names: dict[int, str] | None = None,
+        class_count: int | None = None,
+    ) -> None:
+        """Enable a direct ONNX/TRT executor for sequential stage-1 detect.
+
+        Mirrors :meth:`_maybe_enable_direct_obb_executor` but creates a
+        :class:`DirectONNXDetectExecutor` / :class:`DirectTensorRTDetectExecutor`
+        so the detect step can run entirely on the GPU without the Ultralytics
+        wrapper overhead.
+        """
+        self._direct_detect_executor = None
+        if self._direct_obb_execution_mode() == "wrapper":
+            return
+        if not str(getattr(self, "device", "")).startswith("cuda"):
+            return
+        try:
+            from ._direct_obb_runtime import create_direct_detect_executor
+
+            self._direct_detect_executor = create_direct_detect_executor(
+                runtime=runtime,
+                artifact_path=str(artifact_path),
+                imgsz=int(imgsz),
+                class_names=class_names,
+                class_count=class_count,
+            )
+            logger.info(
+                "Enabled direct %s detect executor for %s",
+                runtime,
+                artifact_path.name,
+            )
+        except Exception as exc:
+            self._direct_detect_executor = None
+            logger.warning(
+                "Direct %s detect executor unavailable for %s: %s",
+                runtime,
+                artifact_path,
+                exc,
+            )
 
     def _is_realtime_workflow(self) -> bool:
         """Return whether the active tracking workflow is realtime."""
@@ -296,7 +435,7 @@ class RuntimeArtifactMixin:
             raw_head_tag = (
                 "_rawheadv1" if self._should_export_raw_yolo_head("obb") else ""
             )
-            runtime_profile = f"tensorrt_v2{raw_head_tag}"
+            runtime_profile = f"tensorrt_v3{raw_head_tag}"
         return hashlib.sha1(
             f"{token}|runtime={runtime_profile}|batch={int(batch_size)}".encode("utf-8")
         ).hexdigest()[:16]
@@ -337,6 +476,40 @@ class RuntimeArtifactMixin:
         except Exception:
             pass
 
+    def _tensorrt_session_context_key(self) -> str:
+        context = self._get_tensorrt_build_context()
+        return "|".join(
+            [
+                str(self.device),
+                str(context.get("gpu_name", "unknown")),
+                str(context.get("cuda_version", "unknown")),
+            ]
+        )
+
+    @classmethod
+    def _is_fatal_tensorrt_environment_error(cls, error_msg: str) -> bool:
+        text = str(error_msg or "").strip().lower()
+        if not text:
+            return False
+        fatal_markers = (
+            "cuda initialization failure",
+            "createinferbuilder",
+            "factory function returned nullptr",
+            "pybind11::init()",
+            "libnvinfer_builder_resource",
+        )
+        return any(marker in text for marker in fatal_markers)
+
+    def _get_disabled_tensorrt_reason(self) -> str:
+        return self._SESSION_TENSORRT_DISABLED_CONTEXTS.get(
+            self._tensorrt_session_context_key(), ""
+        )
+
+    def _disable_tensorrt_for_session(self, error_msg: str) -> None:
+        self._SESSION_TENSORRT_DISABLED_CONTEXTS[
+            self._tensorrt_session_context_key()
+        ] = str(error_msg or "TensorRT is unavailable in this session.").strip()
+
     def _artifact_is_fresh(self, artifact_path: Path, signature: str) -> bool:
         if not artifact_path.exists():
             return False
@@ -369,6 +542,8 @@ class RuntimeArtifactMixin:
 
     def _try_load_onnx_model(self, model_path_str):
         """Try to load or export ONNX model for CPU runtime."""
+        self.onnx_failure_reason = ""
+        self._clear_direct_obb_executor()
         try:
             from ultralytics import YOLO
 
@@ -414,6 +589,12 @@ class RuntimeArtifactMixin:
                 self.onnx_model_path = str(onnx_path)
                 self.onnx_imgsz = int(onnx_imgsz)
                 self.onnx_batch_size = int(onnx_batch_size)
+                self._maybe_enable_direct_obb_executor(
+                    "onnx",
+                    onnx_path,
+                    int(onnx_imgsz),
+                    class_names=getattr(self.model, "names", None),
+                )
                 return
             else:
                 onnx_path = resolved_model.with_name(
@@ -486,6 +667,12 @@ class RuntimeArtifactMixin:
                 self.onnx_model_path = str(onnx_path)
                 self.onnx_imgsz = onnx_imgsz
                 self.onnx_batch_size = int(onnx_batch_size)
+                self._maybe_enable_direct_obb_executor(
+                    "onnx",
+                    onnx_path,
+                    int(onnx_imgsz),
+                    class_names=getattr(self.model, "names", None),
+                )
                 return
 
             logger.info("Exporting YOLO OBB model to ONNX runtime artifact...")
@@ -501,6 +688,19 @@ class RuntimeArtifactMixin:
                     batch=int(onnx_batch_size),
                     verbose=False,
                 )
+            # Release the PyTorch export model before creating the ORT session.
+            # Keeping the PT model in GPU memory while ORT initialises its CUDA
+            # execution provider can trigger an "Invalid device id" error because
+            # both runtimes compete for the same CUDA device context.
+            del base_model
+            try:
+                import torch as _torch
+
+                if _torch.cuda.is_available():
+                    _torch.cuda.synchronize()
+                    _torch.cuda.empty_cache()
+            except Exception:
+                pass
             out_path = Path(export_path).expanduser().resolve()
             if not out_path.exists():
                 raise RuntimeError(f"ONNX export output missing: {out_path}")
@@ -518,8 +718,15 @@ class RuntimeArtifactMixin:
             self.onnx_model_path = str(onnx_path)
             self.onnx_imgsz = onnx_imgsz
             self.onnx_batch_size = int(onnx_batch_size)
+            self._maybe_enable_direct_obb_executor(
+                "onnx",
+                onnx_path,
+                int(onnx_imgsz),
+                class_names=getattr(self.model, "names", None),
+            )
             logger.info(f"ONNX model ready: {onnx_path}")
         except Exception as e:
+            self.onnx_failure_reason = str(e)
             logger.warning(f"ONNX runtime optimization failed: {e}")
             self.use_onnx = False
 
@@ -529,7 +736,20 @@ class RuntimeArtifactMixin:
 
     def _try_load_tensorrt_model(self, model_path_str):
         """Try to load or export TensorRT model for faster inference."""
+        self.tensorrt_failure_reason = ""
+        self._clear_direct_obb_executor()
         try:
+            disabled_reason = self._get_disabled_tensorrt_reason()
+            if disabled_reason:
+                self.tensorrt_failure_reason = disabled_reason
+                logger.warning(
+                    "TensorRT is disabled for this session on %s; skipping engine build. Previous failure: %s",
+                    self.device,
+                    disabled_reason,
+                )
+                self.use_tensorrt = False
+                return
+
             from ultralytics import YOLO
 
             requested_batch_size = self._runtime_build_batch_size_override(
@@ -544,6 +764,7 @@ class RuntimeArtifactMixin:
             build_context = self._get_tensorrt_build_context()
 
             resolved_model = Path(model_path_str).expanduser().resolve()
+            engine_imgsz = 0
             if resolved_model.suffix.lower() in {".engine", ".trt"}:
                 engine_path = resolved_model
                 meta = self._read_artifact_meta(engine_path)
@@ -553,10 +774,20 @@ class RuntimeArtifactMixin:
                     meta_batch = 0
                 if meta_batch > 0:
                     build_batch_size = meta_batch
+                try:
+                    engine_imgsz = int(meta.get("imgsz", 0))
+                except Exception:
+                    engine_imgsz = 0
             else:
                 engine_path = resolved_model.with_name(
                     f"{resolved_model.stem}_b{int(build_batch_size)}.engine"
                 )
+                # Defer image-size resolution: for cache hits, read from stored
+                # metadata; for rebuilds, derive from the loaded base model.
+                # This avoids loading the .pt checkpoint twice (once here and
+                # once again for the TRT export), which caused the test for
+                # fatal-builder-failure retry-disabling to observe 2 init calls.
+                engine_imgsz = 0
             signature = self._artifact_signature(
                 runtime="tensorrt", batch_size=int(build_batch_size)
             )
@@ -575,11 +806,28 @@ class RuntimeArtifactMixin:
             if self._artifact_is_fresh(engine_path, signature):
                 logger.info("TensorRT engine cache hit: reusing cached engine.")
                 try:
+                    # Read imgsz from stored metadata (avoids loading the .pt
+                    # source model just to retrieve the image size).
+                    if engine_imgsz == 0:
+                        _hit_meta = self._read_artifact_meta(engine_path)
+                        try:
+                            engine_imgsz = int(_hit_meta.get("imgsz", 0))
+                        except Exception:
+                            engine_imgsz = 0
+                        if engine_imgsz == 0:
+                            engine_imgsz = self._resolve_onnx_imgsz()
                     self.model = YOLO(str(engine_path), task="obb")
                     self.use_tensorrt = True
                     self.tensorrt_model_path = str(engine_path)
                     self.tensorrt_batch_size = (
                         build_batch_size  # Store batch size for chunking
+                    )
+                    self.tensorrt_imgsz = int(engine_imgsz or 640)
+                    self._maybe_enable_direct_obb_executor(
+                        "tensorrt",
+                        engine_path,
+                        int(self.tensorrt_imgsz),
+                        class_names=getattr(self.model, "names", None),
                     )
                     logger.info(
                         "TensorRT engine reused successfully: path=%s | build_batch=%d",
@@ -615,6 +863,18 @@ class RuntimeArtifactMixin:
             logger.info("=" * 60)
             base_model = YOLO(model_path_str)
             base_model.to(self.device)
+            # Resolve imgsz from the loaded model (avoids a separate YOLO init
+            # in _resolve_onnx_imgsz when model_path was passed there).
+            if engine_imgsz == 0:
+                try:
+                    _ov = getattr(base_model, "overrides", {}) or {}
+                    _pt_imgsz = _ov.get("imgsz")
+                    if _pt_imgsz:
+                        engine_imgsz = int(_pt_imgsz)
+                except Exception:
+                    pass
+                if engine_imgsz == 0:
+                    engine_imgsz = self._resolve_onnx_imgsz()
 
             # Try dynamic batching first, fall back to static if it fails
             logger.info(
@@ -623,19 +883,24 @@ class RuntimeArtifactMixin:
                 float(build_workspace_gb),
             )
 
-            # Export to TensorRT engine format
+            # Export to TensorRT engine format using raw head outputs.
+            # _yolo_runtime_export_profile forces head.end2end=False before
+            # calling export() so all TRT engines are built with the one2many
+            # raw CBC head (matching the CUDA DirectOBB inference path which
+            # also disables end2end per _e2e_head_ref in _run_inference).
             # Note: dynamic=False uses fixed batch size which is more compatible
             # but requires batches to exactly match max_batch_size
+            _export_kwargs: dict = dict(
+                format="engine",
+                device=self.device,
+                half=True,  # Use FP16 for faster inference
+                workspace=float(build_workspace_gb),
+                dynamic=False,  # Static shapes (more compatible)
+                batch=int(build_batch_size),  # Fixed batch size
+                verbose=False,
+            )
             with self._yolo_runtime_export_profile(base_model, task="obb"):
-                export_path = base_model.export(
-                    format="engine",
-                    device=self.device,
-                    half=True,  # Use FP16 for faster inference
-                    workspace=float(build_workspace_gb),
-                    dynamic=False,  # Static shapes (more compatible)
-                    batch=int(build_batch_size),  # Fixed batch size
-                    verbose=False,
-                )
+                export_path = base_model.export(**_export_kwargs)
 
             # Move exported engine to cache directory
             if Path(export_path).exists():
@@ -646,12 +911,14 @@ class RuntimeArtifactMixin:
                     engine_path,
                     signature,
                     batch_size=int(build_batch_size),
+                    imgsz=int(engine_imgsz or 640),
                     workspace_gb=float(build_workspace_gb),
                     gpu_name=build_context["gpu_name"],
                     cuda_version=build_context["cuda_version"],
+                    end2end=False,  # always raw CBC — _yolo_runtime_export_profile forced it
                 )
                 logger.info(
-                    "TensorRT engine rebuilt and cached: path=%s | signature=%s",
+                    "TensorRT engine rebuilt and cached: path=%s | signature=%s | end2end=False (raw head)",
                     engine_path,
                     signature,
                 )
@@ -661,6 +928,13 @@ class RuntimeArtifactMixin:
                 self.use_tensorrt = True
                 self.tensorrt_model_path = str(engine_path)
                 self.tensorrt_batch_size = build_batch_size  # Store for batching logic
+                self.tensorrt_imgsz = int(engine_imgsz or 640)
+                self._maybe_enable_direct_obb_executor(
+                    "tensorrt",
+                    engine_path,
+                    int(self.tensorrt_imgsz),
+                    class_names=getattr(self.model, "names", None),
+                )
                 logger.info("=" * 60)
                 logger.info(
                     "TENSORRT OPTIMIZATION COMPLETE (batch=%d, workspace=%.1f GB)",
@@ -673,7 +947,15 @@ class RuntimeArtifactMixin:
 
         except Exception as e:
             error_msg = str(e)
+            self.tensorrt_failure_reason = error_msg
             logger.warning(f"TensorRT optimization failed: {error_msg}")
+
+            if self._is_fatal_tensorrt_environment_error(error_msg):
+                self._disable_tensorrt_for_session(error_msg)
+                logger.warning(
+                    "Disabling TensorRT for the rest of this session on %s after a fatal builder initialization error.",
+                    self.device,
+                )
 
             # Provide helpful suggestions based on error type
             build_batch_size = self._resolve_tensorrt_build_batch_size(
@@ -748,8 +1030,6 @@ class RuntimeArtifactMixin:
             return model_path_str
 
         try:
-            from ultralytics import YOLO
-
             from hydra_suite.utils.gpu_utils import (
                 ONNXRUNTIME_AVAILABLE,
                 TENSORRT_AVAILABLE,
@@ -762,6 +1042,10 @@ class RuntimeArtifactMixin:
 
             # Make stage artifact names unambiguous when direct/crop/detect models differ.
             task_tag = str(task or "task").strip().lower().replace(" ", "_")
+
+            disabled_tensorrt_reason = self._get_disabled_tensorrt_reason()
+
+            from ultralytics import YOLO
 
             # Prefer ONNX when requested, matching primary OBB runtime preference.
             if enable_onnx_runtime and ONNXRUNTIME_AVAILABLE:
@@ -816,6 +1100,13 @@ class RuntimeArtifactMixin:
                     return str(onnx_path)
 
             if enable_tensorrt and TENSORRT_AVAILABLE:
+                if disabled_tensorrt_reason:
+                    logger.warning(
+                        "Skipping TensorRT runtime artifact build for %s model because TensorRT is disabled for this session: %s",
+                        task,
+                        disabled_tensorrt_reason,
+                    )
+                    return model_path_str
                 requested_batch_size = (
                     self.params.get("TENSORRT_MAX_BATCH_SIZE", 1)
                     if self._is_detection_runtime_task(task)
@@ -860,6 +1151,8 @@ class RuntimeArtifactMixin:
                 if engine_path.exists():
                     return str(engine_path)
         except Exception as exc:
+            if self._is_fatal_tensorrt_environment_error(str(exc)):
+                self._disable_tensorrt_for_session(str(exc))
             logger.warning(
                 "Aux runtime artifact preparation failed for %s model (%s). Using source checkpoint.",
                 task,

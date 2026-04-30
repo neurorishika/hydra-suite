@@ -1,16 +1,26 @@
-.PHONY: env-create env-create-cuda env-create-mps env-create-rocm env-update env-update-cuda env-update-mps env-update-rocm env-remove env-remove-cuda env-remove-mps env-remove-rocm install install-cuda install-mps install-rocm install-dev configure-cuda-ort setup setup-cuda setup-mps setup-rocm test pytest test-cov test-cov-html verify-rocm clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
+.PHONY: env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
 ENV_NAME_GPU = hydra-cuda
 ENV_NAME_MPS = hydra-mps
-ENV_NAME_ROCM = hydra-rocm
 CUDA_MAJOR ?= 13
 PYTEST ?= pytest
 PYTHON_BIN = $(if $(CONDA_PREFIX),$(CONDA_PREFIX)/bin/python,python)
 UV_PIP = uv pip
 UV_PIP_PYTHON = $(if $(CONDA_PREFIX),--python "$(CONDA_PREFIX)/bin/python",)
 PRE_COMMIT = $(if $(CONDA_PREFIX),env LD_LIBRARY_PATH="$(CONDA_PREFIX)/targets/x86_64-linux/lib:$(CONDA_PREFIX)/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" "$(CONDA_PREFIX)/bin/pre-commit",pre-commit)
+APRILTAG_FORK_REPO = https://github.com/Social-Evolution-and-Behavior/apriltag.git
+APRILTAG_FORK_COMMIT = c43a9b6e6b7dcfe0e7647a78eff6655a1d743c2c
+APRILTAG_FORK_REF = c43a9b6
+
+define reset_onnxruntime_packages
+	@"$(PYTHON_BIN)" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
+endef
+
+define reset_tensorrt_packages
+	@"$(PYTHON_BIN)" -m pip uninstall -y tensorrt tensorrt-cu12 tensorrt-cu12-bindings tensorrt-cu12-libs tensorrt-cu13 tensorrt-cu13-bindings tensorrt-cu13-libs >/dev/null 2>&1 || true
+endef
 
 # =============================================================================
 # ENVIRONMENT SETUP
@@ -28,10 +38,6 @@ env-create-cuda:
 env-create-mps:
 	@echo "Creating Apple Silicon (MPS) environment..."
 	mamba env create -f environment-mps.yml
-
-env-create-rocm:
-	@echo "Creating AMD GPU (ROCm) environment..."
-	mamba env create -f environment-rocm.yml
 
 
 # Step 2: Install pip packages (run after activating environment)
@@ -56,9 +62,38 @@ configure-cuda-ort:
 	@echo "Configured CUDA 12 runtime library path hook for ONNX Runtime GPU."
 	@"$(PYTHON_BIN)" verify_cuda_runtime.py
 
+install-apriltag-fork:
+	@prefix="$${CONDA_PREFIX:-$${VIRTUAL_ENV:-}}"; \
+	if [ -z "$$prefix" ]; then \
+		echo "ERROR: activate a conda environment or virtualenv before installing the apriltag fork."; \
+		exit 1; \
+	fi; \
+	python_bin="$$prefix/bin/python"; \
+	if [ ! -x "$$python_bin" ]; then \
+		echo "ERROR: expected Python interpreter at $$python_bin"; \
+		exit 1; \
+	fi; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT HUP INT TERM; \
+	echo "Installing apriltag fork $(APRILTAG_FORK_REF) into $$prefix..."; \
+	"$$python_bin" -m pip uninstall -y apriltag >/dev/null 2>&1 || true; \
+	git clone --quiet "$(APRILTAG_FORK_REPO)" "$$tmpdir/apriltag"; \
+	cd "$$tmpdir/apriltag"; \
+	git checkout --quiet --detach "$(APRILTAG_FORK_COMMIT)"; \
+	cmake -S . -B build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_PREFIX="$$prefix" \
+		-DPython3_EXECUTABLE="$$python_bin" \
+		-DPython3_ROOT_DIR="$$prefix" \
+		-DPython3_FIND_VIRTUALENV=ONLY; \
+	cmake --build build --parallel; \
+	cmake --install build; \
+	echo "Installed apriltag fork $(APRILTAG_FORK_REF)."
+
 install:
 	@echo "Installing CPU packages..."
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt
+	@$(MAKE) install-apriltag-fork
 
 install-cuda:
 	@echo "Installing NVIDIA GPU (CUDA) packages..."
@@ -66,16 +101,17 @@ install-cuda:
 		echo "ERROR: CUDA_MAJOR must be 12 or 13"; \
 		exit 1; \
 	fi
+	$(call reset_onnxruntime_packages)
+	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt
+	@$(MAKE) install-apriltag-fork
 	@$(MAKE) configure-cuda-ort
 
 install-mps:
 	@echo "Installing Apple Silicon (MPS) packages..."
+	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
-
-install-rocm:
-	@echo "Installing AMD GPU (ROCm) packages..."
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-rocm.txt
+	@$(MAKE) install-apriltag-fork
 
 # =============================================================================
 # ENVIRONMENT MAINTENANCE
@@ -86,6 +122,7 @@ env-update:
 	@echo "Updating CPU environment..."
 	mamba env update -f environment.yml --prune
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt --upgrade
+	@$(MAKE) install-apriltag-fork
 
 env-update-cuda:
 	@echo "Updating NVIDIA GPU (CUDA) environment..."
@@ -94,7 +131,10 @@ env-update-cuda:
 		echo "ERROR: CUDA_MAJOR must be 12 or 13"; \
 		exit 1; \
 	fi
+	$(call reset_onnxruntime_packages)
+	$(call reset_tensorrt_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-cuda$(CUDA_MAJOR).txt --upgrade
+	@$(MAKE) install-apriltag-fork
 	@if [ -n "$$CONDA_PREFIX" ]; then \
 		$(MAKE) configure-cuda-ort; \
 	else \
@@ -104,12 +144,9 @@ env-update-cuda:
 env-update-mps:
 	@echo "Updating Apple Silicon (MPS) environment..."
 	mamba env update -f environment-mps.yml --prune
+	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt --upgrade
-
-env-update-rocm:
-	@echo "Updating AMD GPU (ROCm) environment..."
-	mamba env update -f environment-rocm.yml --prune
-	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-rocm.txt --upgrade
+	@$(MAKE) install-apriltag-fork
 
 # Remove environments
 env-remove:
@@ -123,10 +160,6 @@ env-remove-cuda:
 env-remove-mps:
 	@echo "Removing Apple Silicon (MPS) environment..."
 	conda env remove -n $(ENV_NAME_MPS)
-
-env-remove-rocm:
-	@echo "Removing AMD GPU (ROCm) environment..."
-	conda env remove -n $(ENV_NAME_ROCM)
 
 # =============================================================================
 # TESTING & VERIFICATION
@@ -167,10 +200,6 @@ test-cov-html:
 	fi
 	$(PYTEST) --cov=src/hydra_suite --cov-report=html --cov-report=term
 	@echo "📊 Coverage report generated in htmlcov/index.html"
-
-verify-rocm:
-	@echo "🔍 Verifying ROCm installation..."
-	python verify_rocm.py
 
 # =============================================================================
 # MODEL BENCHMARKING
@@ -255,19 +284,6 @@ setup-mps:
 	@echo "📝 Next steps:"
 	@echo "   1. conda activate $(ENV_NAME_MPS)"
 	@echo "   2. make install-mps"
-
-setup-rocm:
-	@echo "📦 Setting up AMD GPU (ROCm) environment..."
-	@echo "⚠️  Note: Ensure ROCm 6.0+ is installed system-wide first!"
-	@echo "   Install guide: https://rocm.docs.amd.com/"
-	@echo ""
-	mamba env create -f environment-rocm.yml
-	@echo ""
-	@echo "✅ Conda environment created!"
-	@echo "📝 Next steps:"
-	@echo "   1. conda activate $(ENV_NAME_ROCM)"
-	@echo "   2. make install-rocm"
-	@echo "   3. make verify-rocm  # Verify ROCm installation"
 
 # =============================================================================
 # PACKAGING & PUBLISHING
@@ -473,7 +489,7 @@ dep-graph:
 		echo "Install it in your active conda environment:"; \
 		echo "  conda install -c conda-forge graphviz"; \
 		echo "Or update the environment and reinstall:"; \
-		echo "  make env-update-mps  # (or env-update / env-update-cuda / env-update-rocm)"; \
+		echo "  make env-update-mps  # (or env-update / env-update-cuda)"; \
 		echo ""; \
 		exit 1; \
 	 fi
@@ -528,23 +544,21 @@ help:
 	@echo "  make setup           - CPU / NumPy+Numba"
 	@echo "  make setup-mps       - Apple Silicon (M1/M2/M3/M4)"
 	@echo "  make setup-cuda      - NVIDIA GPU (CUDA)"
-	@echo "  make setup-rocm      - AMD GPU (ROCm)"
 	@echo ""
 	@echo "📦 INSTALL (after activating environment)"
-	@echo "  make install[-mps|-cuda|-rocm]    - Install runtime packages"
+	@echo "  make install[-mps|-cuda]          - Install runtime packages"
 	@echo "  make install-dev                  - ⭐ Install dev & audit tools"
 	@echo "  make docs-install                 - Install MkDocs dependencies"
 	@echo ""
 	@echo "🔄 ENVIRONMENT MAINTENANCE"
-	@echo "  make env-create[-mps|-cuda|-rocm] - Create conda environment"
-	@echo "  make env-update[-mps|-cuda|-rocm] - Update conda environment"
-	@echo "  make env-remove[-mps|-cuda|-rocm] - Remove conda environment"
+	@echo "  make env-create[-mps|-cuda] - Create conda environment"
+	@echo "  make env-update[-mps|-cuda] - Update conda environment"
+	@echo "  make env-remove[-mps|-cuda] - Remove conda environment"
 	@echo ""
 	@echo "🧪 TESTING"
 	@echo "  make pytest          - Run all tests"
 	@echo "  make test-cov        - Run tests with coverage report (terminal)"
 	@echo "  make test-cov-html   - Run tests with HTML coverage (htmlcov/index.html)"
-	@echo "  make verify-rocm     - Verify ROCm GPU setup"
 	@echo "  make clean           - Remove Python cache files"
 	@echo ""
 	@echo "✨ CODE QUALITY  (requires: make install-dev)"
@@ -576,6 +590,5 @@ help:
 	@echo "  make docs-check      - Build + quality metrics + terminology checks"
 	@echo ""
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-	@echo "Platform notes: CPU=everywhere  MPS=Apple M-series  CUDA=NVIDIA  ROCm=AMD"
-	@echo "ROCm requires ROCm 6.0+ installed system-wide: https://rocm.docs.amd.com/"
+	@echo "Platform notes: CPU=everywhere  MPS=Apple M-series  CUDA=NVIDIA"
 	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

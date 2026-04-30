@@ -14,7 +14,7 @@ from .schemas import Factor, LabelingScheme
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLOR_TAG_COLORS = ["red", "blue", "green", "yellow", "white"]
+DEFAULT_COLOR_TAG_COLORS = ["pink", "blue", "green", "yellow", "orange"]
 
 
 @dataclass(frozen=True)
@@ -70,13 +70,20 @@ def color_tag_preset(n_factors: int, colors: list[str]) -> LabelingScheme:
             "multihead_custom",
         ]
 
-    total = len(colors) ** n_factors
-    return LabelingScheme(
+    scheme = LabelingScheme(
         name=f"color_tags_{n_factors}factor",
         factors=factors,
         training_modes=modes,
-        description=f"{n_factors}-factor color tag: {len(colors)} colors each → {total} composites",
+        description="",
     )
+    if n_factors == 1:
+        scheme.description = f"1-factor color tag: {len(colors)} colors"
+    else:
+        scheme.description = (
+            f"{n_factors}-factor color tag: {len(colors)} colors + unknown each "
+            f"→ {scheme.total_classes} composites"
+        )
+    return scheme
 
 
 def age_preset(extra_classes: list[str] | None = None) -> LabelingScheme:
@@ -131,6 +138,9 @@ def describe_scheme(scheme: LabelingScheme | dict) -> str:
 
 def get_builtin_scheme_presets() -> list[SchemePreset]:
     """Return the built-in ClassKit labeling presets."""
+    color_tag_1 = color_tag_preset(1, DEFAULT_COLOR_TAG_COLORS)
+    color_tag_2 = color_tag_preset(2, DEFAULT_COLOR_TAG_COLORS)
+    color_tag_3 = color_tag_preset(3, DEFAULT_COLOR_TAG_COLORS)
     return [
         SchemePreset(
             key="head_tail",
@@ -142,19 +152,25 @@ def get_builtin_scheme_presets() -> list[SchemePreset]:
             key="color_tag_1",
             label="Color tag — 1 factor  (5 colors)",
             description=f"1 factor · 5 labels: {', '.join(DEFAULT_COLOR_TAG_COLORS)}.",
-            scheme=color_tag_preset(1, DEFAULT_COLOR_TAG_COLORS),
+            scheme=color_tag_1,
         ),
         SchemePreset(
             key="color_tag_2",
-            label="Color tag — 2 factors  (25 composites)",
-            description="2 factors × 5 colors = 25 composite labels.",
-            scheme=color_tag_preset(2, DEFAULT_COLOR_TAG_COLORS),
+            label=f"Color tag — 2 factors  ({color_tag_2.total_classes} composites)",
+            description=(
+                "2 factors × (5 colors + unknown) "
+                f"= {color_tag_2.total_classes} composite labels."
+            ),
+            scheme=color_tag_2,
         ),
         SchemePreset(
             key="color_tag_3",
-            label="Color tag — 3 factors  (125 composites)",
-            description="3 factors × 5 colors = 125 composite labels.",
-            scheme=color_tag_preset(3, DEFAULT_COLOR_TAG_COLORS),
+            label=f"Color tag — 3 factors  ({color_tag_3.total_classes} composites)",
+            description=(
+                "3 factors × (5 colors + unknown) "
+                f"= {color_tag_3.total_classes} composite labels."
+            ),
+            scheme=color_tag_3,
         ),
         SchemePreset(
             key="age",

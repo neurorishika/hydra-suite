@@ -9,8 +9,9 @@ torch
 torchvision
 torchaudio
 
-# TensorRT - NVIDIA inference optimization for YOLO acceleration
-tensorrt
+# TensorRT runtime wheels are selected by requirements-cuda12/13.txt.
+# Do not install the generic `tensorrt` metapackage here because it currently
+# resolves to the CUDA 13 wheel family and can contaminate CUDA 12 envs.
 
 # ONNX runtime with GPU support
 onnx
@@ -19,6 +20,9 @@ onnxscript
 # IMPORTANT: onnxruntime-gpu currently links against CUDA 12 user-space libraries.
 # Do not co-install CPU onnxruntime.
 onnxruntime-gpu==1.24.1
+
+PyNvVideoCodec
+av>=12.0
 
 # Install this package in editable mode (pulls all pyproject.toml dependencies)
 -e .

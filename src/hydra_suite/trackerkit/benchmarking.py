@@ -79,7 +79,7 @@ def _can_reuse_pose_backend(backend_family: str, runtime: str) -> bool:
     if family == "yolo":
         return rt != "tensorrt"
     if family == "sleap":
-        return rt in {"cpu", "mps", "cuda", "rocm"}
+        return rt in {"cpu", "mps", "cuda"}
     return False
 
 
@@ -338,7 +338,6 @@ def build_hardware_fingerprint() -> str:
     payload = {
         "cuda_available": bool(info.get("cuda_available")),
         "mps_available": bool(info.get("mps_available")),
-        "rocm_available": bool(info.get("rocm_available")),
         "torch_cuda_available": bool(info.get("torch_cuda_available")),
         "onnxruntime_providers": list(info.get("onnxruntime_providers", [])),
         "cuda_device_name": info.get("torch_cuda_device_name"),
@@ -460,7 +459,7 @@ def _synchronize_runtime(runtime: str) -> None:
     except Exception:
         return
     try:
-        if rt in {"cuda", "onnx_cuda", "tensorrt", "rocm", "onnx_rocm"}:
+        if rt in {"cuda", "onnx_cuda", "tensorrt"}:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
         elif rt == "mps":
@@ -480,7 +479,7 @@ def _sample_accelerator_memory_mb(runtime: str) -> float | None:
     except Exception:
         return None
     try:
-        if rt in {"cuda", "onnx_cuda", "tensorrt", "rocm", "onnx_rocm"}:
+        if rt in {"cuda", "onnx_cuda", "tensorrt"}:
             if not torch.cuda.is_available():
                 return None
             allocated = float(torch.cuda.memory_allocated())
@@ -615,12 +614,8 @@ def _canonical_runtime_from_pose_flavor(flavor: str) -> str:
         return "onnx_coreml"
     if value == "onnx_cuda":
         return "onnx_cuda"
-    if value == "onnx_rocm":
-        return "onnx_rocm"
     if value == "onnx_cpu":
         return "onnx_cpu"
-    if value == "rocm":
-        return "rocm"
     if value == "cuda":
         return "cuda"
     if value == "mps":
@@ -785,6 +780,19 @@ def collect_active_targets(
     )
     if headtail_model:
         headtail_runtimes = supported_runtimes_for_pipeline("headtail")
+        headtail_batch_widget = getattr(
+            main_window._identity_panel,
+            "spin_headtail_batch",
+            None,
+        )
+        current_headtail_batch = max(
+            1,
+            (
+                int(headtail_batch_widget.value())
+                if headtail_batch_widget is not None
+                else min(max_targets, 4)
+            ),
+        )
         targets.append(
             BenchmarkTargetSpec(
                 key="headtail",
@@ -792,10 +800,12 @@ def collect_active_targets(
                 pipeline="headtail",
                 model_path=headtail_model,
                 runtimes=headtail_runtimes or ["cpu"],
-                batch_sizes=_default_batch_sizes(max_targets, max_targets),
+                batch_sizes=_default_batch_sizes(
+                    current_headtail_batch,
+                    max(max_targets, current_headtail_batch * 2),
+                ),
                 current_runtime=main_window._selected_headtail_runtime(),
-                current_batch_size=min(max_targets, 4),
-                supports_batch_apply=False,
+                current_batch_size=current_headtail_batch,
             )
         )
     elif headtail_enabled and raw_headtail_model:
@@ -967,7 +977,7 @@ def _runtime_to_obb_params(
     enable_onnx = False
     if rt == "mps":
         device = "mps"
-    elif rt in {"cuda", "rocm"}:
+    elif rt == "cuda":
         device = "cuda:0"
     elif rt == "tensorrt":
         device = "cuda:0"
@@ -978,7 +988,7 @@ def _runtime_to_obb_params(
     elif rt == "onnx_cpu":
         device = "cpu"
         enable_onnx = True
-    elif rt in {"onnx_cuda", "onnx_rocm"}:
+    elif rt == "onnx_cuda":
         device = "cuda:0"
         enable_onnx = True
     params = {
@@ -1027,6 +1037,25 @@ def _make_detector_runtime_stub(runtime: str, model_path: str, *, batch_size: in
     return detector
 
 
+def _ensure_detector_runtime_materialized(detector: Any, runtime: str) -> None:
+    """Ensure detector initialization honored the requested accelerated runtime."""
+    rt = _normalize_runtime(runtime)
+    if rt == "tensorrt" and not bool(getattr(detector, "use_tensorrt", False)):
+        reason = str(
+            getattr(detector, "tensorrt_failure_reason", "")
+            or "TensorRT backend was requested, but detector fell back to standard inference."
+        ).strip()
+        raise RuntimeError(reason)
+    if rt in {"onnx_coreml", "onnx_cpu", "onnx_cuda"} and not bool(
+        getattr(detector, "use_onnx", False)
+    ):
+        reason = str(
+            getattr(detector, "onnx_failure_reason", "")
+            or "ONNX runtime was requested, but detector fell back to standard inference."
+        ).strip()
+        raise RuntimeError(reason)
+
+
 def bench_obb(
     model_path: str,
     runtime: str,
@@ -1059,6 +1088,7 @@ def bench_obb(
             max_targets=max_targets,
         )
         detector = YOLOOBBDetector(params)
+        _ensure_detector_runtime_materialized(detector, runtime)
         frames = [make_synthetic_frame(*frame_size) for _ in range(batch_size)]
         for _ in range(warmup):
             if batch_size == 1:
@@ -1142,6 +1172,7 @@ def bench_sequential(
             }
         )
         detector = YOLOOBBDetector(params)
+        _ensure_detector_runtime_materialized(detector, runtime)
         frames = [make_synthetic_frame(*frame_size) for _ in range(batch_size)]
         for _ in range(warmup):
             if batch_size == 1:
@@ -1221,11 +1252,9 @@ def _runtime_to_pose_flavor(runtime: str) -> tuple[str, str]:
         "cpu": ("native", "cpu"),
         "mps": ("native", "mps"),
         "cuda": ("native", "cuda:0"),
-        "rocm": ("native", "cuda:0"),
         "onnx_coreml": ("onnx", "mps"),
         "onnx_cpu": ("onnx", "cpu"),
         "onnx_cuda": ("onnx", "cuda:0"),
-        "onnx_rocm": ("onnx", "cuda:0"),
         "tensorrt": ("tensorrt", "cuda:0"),
     }
     return mapping.get(rt, ("native", "cpu"))

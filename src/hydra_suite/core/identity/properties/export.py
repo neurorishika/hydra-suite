@@ -21,13 +21,11 @@ POSE_SUMMARY_COLUMNS = [
 ]
 
 DETECTED_HEADING_COLUMNS = [
-    "ThetaRaw",
-    "ThetaResolved",
-    "HeadingSource",
-    "HeadingDirected",
-    "HeadTailHeadingRad",
-    "HeadTailConfidence",
-    "HeadTailDirected",
+    "HeadingResolved",  # final disambiguated heading angle after head-tail
+    "HeadingMethod",  # source used: "headtail", "pose", "velocity", "default"
+    "HeadingIsDirected",  # True when head-vs-tail direction was successfully resolved
+    "HeadTailAngleRad",  # angle from head-tail classifier (may differ from HeadingResolved)
+    "HeadTailClassifierConf",  # raw confidence from the head-tail model
 ]
 
 
@@ -37,6 +35,109 @@ def _pose_value_columns(df: pd.DataFrame) -> List[str]:
 
 def _cnn_value_columns(df: pd.DataFrame) -> List[str]:
     return [c for c in df.columns if str(c).startswith("CNN_")]
+
+
+def _sanitize_cnn_factor_name(name: str, idx: int) -> str:
+    token = re.sub(r"[^0-9A-Za-z]+", "_", str(name)).strip("_").lower()
+    if not token:
+        token = f"factor{idx:02d}"
+    return token
+
+
+def _sanitize_class_name(name: str, idx: int) -> str:
+    token = re.sub(r"[^0-9A-Za-z]+", "_", str(name)).strip("_").lower()
+    if not token:
+        token = f"cls{idx:02d}"
+    return token
+
+
+def build_cnn_prob_columns(
+    label: str,
+    factor_names: Sequence[str] | None,
+    class_names_per_factor: "tuple[tuple[str, ...], ...] | None",
+) -> List[Tuple[int, int, str]]:
+    """Return ``(factor_idx, class_idx, col_name)`` for per-class prob columns.
+
+    Returns empty list when *class_names_per_factor* is ``None`` or empty.
+    Single-factor → ``CNN_{label}_{class}_Prob``.
+    Multi-factor  → ``CNN_{label}_{factor}_{class}_Prob``.
+    """
+    if not class_names_per_factor:
+        return []
+    fn_tuple = tuple(str(n) for n in (factor_names or ()))
+    is_multihead = len(fn_tuple) > 1
+    specs: List[Tuple[int, int, str]] = []
+    used: dict[str, int] = {}
+    for factor_idx, class_names in enumerate(class_names_per_factor):
+        factor_tok = (
+            _sanitize_cnn_factor_name(
+                fn_tuple[factor_idx] if factor_idx < len(fn_tuple) else "",
+                factor_idx,
+            )
+            if is_multihead
+            else None
+        )
+        for class_idx, class_name in enumerate(class_names):
+            class_tok = _sanitize_class_name(class_name, class_idx)
+            base_col = (
+                f"CNN_{label}_{factor_tok}_{class_tok}_Prob"
+                if is_multihead
+                else f"CNN_{label}_{class_tok}_Prob"
+            )
+            count = used.get(base_col, 0)
+            col = base_col if count == 0 else f"{base_col}_{count}"
+            used[base_col] = count + 1
+            specs.append((factor_idx, class_idx, col))
+    return specs
+
+
+def build_cnn_output_columns(
+    label: str,
+    factor_names: Sequence[str] | None,
+) -> List[Tuple[str | None, str, str]]:
+    """Return ordered ``(factor, class_col, conf_col)`` specs for a classifier."""
+    names = tuple(str(name) for name in (factor_names or ()) if str(name).strip())
+    if len(names) <= 1:
+        return [(None, f"CNN_{label}_Class", f"CNN_{label}_Conf")]
+
+    specs: List[Tuple[str | None, str, str]] = []
+    used: dict[str, int] = {}
+    for idx, name in enumerate(names):
+        base_factor = _sanitize_cnn_factor_name(name, idx)
+        count = used.get(base_factor, 0)
+        factor = base_factor if count == 0 else f"{base_factor}_{count}"
+        used[base_factor] = count + 1
+        specs.append(
+            (
+                factor,
+                f"CNN_{label}_{factor}_Class",
+                f"CNN_{label}_{factor}_Conf",
+            )
+        )
+    return specs
+
+
+def flatten_cnn_prediction_row(
+    label: str,
+    factor_names: Sequence[str] | None,
+    class_names: Sequence[str | None] | None,
+    confidences: Sequence[float] | None,
+) -> Dict[str, Any]:
+    """Flatten one CNN prediction into export-ready columns.
+
+    Flat single-head models keep the legacy ``CNN_<label>_Class`` /
+    ``CNN_<label>_Conf`` columns. Multi-head models expand to one class/conf pair
+    per factor.
+    """
+    specs = build_cnn_output_columns(label, factor_names)
+    class_names = tuple(class_names or ())
+    confidences = tuple(confidences or ())
+    row: Dict[str, Any] = {}
+    for idx, (_factor, class_col, conf_col) in enumerate(specs):
+        class_name = class_names[idx] if idx < len(class_names) else None
+        row[class_col] = str(class_name) if class_name is not None else np.nan
+        row[conf_col] = float(confidences[idx]) if idx < len(confidences) else np.nan
+    return row
 
 
 def _detected_heading_columns(df: pd.DataFrame) -> List[str]:
@@ -417,22 +518,18 @@ def build_detected_properties_lookup_dataframe(
     for frame_idx in cache.get_cached_frames():
         frame = cache.get_frame(int(frame_idx))
         detection_ids = frame.get("detection_ids", [])
-        theta_raw = frame.get("ThetaRaw", [])
-        theta_resolved = frame.get("ThetaResolved", [])
-        heading_source = frame.get("HeadingSource", [])
-        heading_directed = frame.get("HeadingDirected", [])
-        headtail_heading = frame.get("HeadTailHeadingRad", [])
-        headtail_confidence = frame.get("HeadTailConfidence", [])
-        headtail_directed = frame.get("HeadTailDirected", [])
+        heading_resolved = frame.get("HeadingResolved", [])
+        heading_method = frame.get("HeadingMethod", [])
+        heading_is_directed = frame.get("HeadingIsDirected", [])
+        headtail_angle = frame.get("HeadTailAngleRad", [])
+        headtail_conf = frame.get("HeadTailClassifierConf", [])
         count = min(
             len(detection_ids),
-            len(theta_raw),
-            len(theta_resolved),
-            len(heading_source),
-            len(heading_directed),
-            len(headtail_heading),
-            len(headtail_confidence),
-            len(headtail_directed),
+            len(heading_resolved),
+            len(heading_method),
+            len(heading_is_directed),
+            len(headtail_angle),
+            len(headtail_conf),
         )
         for idx in range(count):
             try:
@@ -443,13 +540,11 @@ def build_detected_properties_lookup_dataframe(
                 {
                     "_detprop_frame_id": int(frame_idx),
                     "_detprop_detection_id": det_id,
-                    "ThetaRaw": theta_raw[idx],
-                    "ThetaResolved": theta_resolved[idx],
-                    "HeadingSource": heading_source[idx],
-                    "HeadingDirected": heading_directed[idx],
-                    "HeadTailHeadingRad": headtail_heading[idx],
-                    "HeadTailConfidence": headtail_confidence[idx],
-                    "HeadTailDirected": headtail_directed[idx],
+                    "HeadingResolved": heading_resolved[idx],
+                    "HeadingMethod": heading_method[idx],
+                    "HeadingIsDirected": bool(heading_is_directed[idx]),
+                    "HeadTailAngleRad": headtail_angle[idx],
+                    "HeadTailClassifierConf": headtail_conf[idx],
                 }
             )
     return pd.DataFrame(
@@ -540,25 +635,55 @@ def build_detected_cnn_lookup_dataframe(
     cache: CNNIdentityCache,
     label: str = "cnn_identity",
 ) -> pd.DataFrame:
-    """Flatten detected-frame CNN predictions into frame+detection keyed rows."""
-    col_class = f"CNN_{label}_Class"
-    col_conf = f"CNN_{label}_Conf"
+    """Flatten detected-frame CNN predictions into frame+detection keyed rows.
+
+    When the cache stores per-class probability vectors (v3 schema), one
+    ``CNN_{label}_{class}_Prob`` column is added per class per factor so that
+    the full output distribution is available in the exported CSV.
+    """
+    specs = build_cnn_output_columns(label, cache.factor_names)
+    output_cols = [
+        col for _factor, class_col, conf_col in specs for col in (class_col, conf_col)
+    ]
+    prob_specs = build_cnn_prob_columns(
+        label, cache.factor_names, cache.class_names_per_factor
+    )
+    prob_cols = [col for _fi, _ci, col in prob_specs]
+
     rows: List[Dict[str, Any]] = []
     for frame_idx in cache.get_cached_frames():
-        for pred in cache.load(int(frame_idx)):
-            rows.append(
-                {
-                    "_cnn_frame_id": int(frame_idx),
-                    "_cnn_detection_id": int(frame_idx) * 10000 + int(pred.det_index),
-                    col_class: (
-                        pred.class_name if pred.class_name is not None else np.nan
-                    ),
-                    col_conf: float(pred.confidence),
-                }
+        preds = cache.load(int(frame_idx))
+        probs_list = cache.load_probs(int(frame_idx)) if prob_specs else None
+        for pred_idx, pred in enumerate(preds):
+            row: Dict[str, Any] = {
+                "_cnn_frame_id": int(frame_idx),
+                "_cnn_detection_id": int(frame_idx) * 10000 + int(pred.det_index),
+            }
+            row.update(
+                flatten_cnn_prediction_row(
+                    label,
+                    pred.factor_names,
+                    pred.class_names,
+                    pred.confidences,
+                )
             )
+            if prob_specs:
+                per_det_probs = (
+                    probs_list[pred_idx]
+                    if probs_list is not None and pred_idx < len(probs_list)
+                    else None
+                )
+                for factor_idx, class_idx, col in prob_specs:
+                    val: float = np.nan
+                    if per_det_probs is not None and factor_idx < len(per_det_probs):
+                        fprobs = per_det_probs[factor_idx]
+                        if fprobs is not None and class_idx < len(fprobs):
+                            val = float(fprobs[class_idx])
+                    row[col] = val
+            rows.append(row)
     return pd.DataFrame(
         rows,
-        columns=["_cnn_frame_id", "_cnn_detection_id", col_class, col_conf],
+        columns=["_cnn_frame_id", "_cnn_detection_id", *output_cols, *prob_cols],
     )
 
 
@@ -568,8 +693,11 @@ def augment_trajectories_with_detected_cnn_df(
     label: str = "cnn_identity",
 ) -> pd.DataFrame:
     """Merge detected-frame CNN predictions into trajectory rows by detection."""
-    col_class = f"CNN_{label}_Class"
-    col_conf = f"CNN_{label}_Conf"
+    output_cols = (
+        _cnn_value_columns(detected_cnn_df) if detected_cnn_df is not None else []
+    )
+    if not output_cols:
+        output_cols = [f"CNN_{label}_Class", f"CNN_{label}_Conf"]
     if trajectories_df is None or trajectories_df.empty:
         return trajectories_df
     if (
@@ -580,7 +708,7 @@ def augment_trajectories_with_detected_cnn_df(
 
     out = trajectories_df.copy()
     if detected_cnn_df is None or detected_cnn_df.empty:
-        return _ensure_interp_columns(out, [col_class, col_conf])
+        return _ensure_interp_columns(out, output_cols)
 
     out["_frame_join"] = (
         pd.to_numeric(out["FrameID"], errors="coerce").round().astype("Int64")
@@ -600,7 +728,7 @@ def augment_trajectories_with_detected_cnn_df(
     )
 
     merged = out.merge(
-        lookup[["_cnn_frame_id", "_cnn_detection_id", col_class, col_conf]],
+        lookup[["_cnn_frame_id", "_cnn_detection_id", *output_cols]],
         how="left",
         left_on=["_frame_join", "_detection_join"],
         right_on=["_cnn_frame_id", "_cnn_detection_id"],
@@ -616,7 +744,7 @@ def augment_trajectories_with_detected_cnn_df(
         inplace=True,
         errors="ignore",
     )
-    return _ensure_interp_columns(merged, [col_class, col_conf])
+    return _ensure_interp_columns(merged, output_cols)
 
 
 def augment_trajectories_with_detected_cnn_cache(
@@ -630,6 +758,190 @@ def augment_trajectories_with_detected_cnn_cache(
     return augment_trajectories_with_detected_cnn_df(
         trajectories_df, lookup, label=label
     )
+
+
+# ---------------------------------------------------------------------------
+# AprilTag detection-level augmentation (mirrors CNN pattern)
+# ---------------------------------------------------------------------------
+
+_APRILTAG_OUTPUT_COLUMNS = [
+    "DetectedTagID",
+    "DetectedTagLabel",
+    "DetectedTagConf",
+    "DetectedTagHamming",
+]
+
+
+def build_detected_apriltag_lookup_dataframe(
+    cache: Any,
+    tag_labels: List[str],
+) -> pd.DataFrame:
+    """Flatten detected AprilTag observations into frame+detection keyed rows.
+
+    Parameters
+    ----------
+    cache:
+        An open :class:`~hydra_suite.data.tag_observation_cache.TagObservationCache`
+        in read mode.
+    tag_labels:
+        Ordered list of identity label strings where ``tag_labels[i]`` is the
+        catalog label for AprilTag integer ID ``i``.
+
+    Returns
+    -------
+    pd.DataFrame with columns ``_apt_frame_id``, ``_apt_detection_id`` (frame
+    index × 10 000 + local detection index) and the four output columns
+    ``DetectedTagID``, ``DetectedTagLabel``, ``DetectedTagConf``,
+    ``DetectedTagHamming``.  One row per tag observation.
+    """
+    rows: List[Dict[str, Any]] = []
+    try:
+        frame_min, frame_max = cache.get_frame_range()
+    except Exception:
+        return pd.DataFrame(
+            columns=["_apt_frame_id", "_apt_detection_id", *_APRILTAG_OUTPUT_COLUMNS]
+        )
+
+    for frame_idx in range(int(frame_min), int(frame_max) + 1):
+        try:
+            obs = cache.get_frame(frame_idx)
+        except Exception:
+            continue
+
+        tag_ids = np.asarray(
+            obs.get("tag_ids", np.array([], dtype=np.int32)), dtype=np.int32
+        )
+        det_indices = np.asarray(
+            obs.get("det_indices", np.array([], dtype=np.int32)), dtype=np.int32
+        )
+        hammings = np.asarray(
+            obs.get("hammings", np.array([], dtype=np.int32)), dtype=np.int32
+        )
+
+        if len(tag_ids) == 0:
+            continue
+
+        seen_det: Set[int] = set()
+        for k in range(len(tag_ids)):
+            det_idx = int(det_indices[k]) if k < len(det_indices) else -1
+            if det_idx < 0 or det_idx in seen_det:
+                continue
+            seen_det.add(det_idx)
+
+            tag_id = int(tag_ids[k])
+            hamming = int(hammings[k]) if k < len(hammings) else 0
+            conf = 1.0 / (1.0 + max(0, hamming))
+            label: Any = tag_labels[tag_id] if 0 <= tag_id < len(tag_labels) else np.nan
+
+            rows.append(
+                {
+                    "_apt_frame_id": int(frame_idx),
+                    "_apt_detection_id": int(frame_idx) * 10000 + det_idx,
+                    "DetectedTagID": float(tag_id),
+                    "DetectedTagLabel": label,
+                    "DetectedTagConf": float(conf),
+                    "DetectedTagHamming": float(hamming),
+                }
+            )
+
+    return pd.DataFrame(
+        rows,
+        columns=["_apt_frame_id", "_apt_detection_id", *_APRILTAG_OUTPUT_COLUMNS],
+    )
+
+
+def augment_trajectories_with_detected_apriltag_df(
+    trajectories_df: pd.DataFrame,
+    lookup_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge detected AprilTag columns into trajectory rows by detection ID.
+
+    Performs a left-join on ``(FrameID, DetectionID)`` so that each trajectory
+    row receives the ``Detected*`` tag columns from the detection that was
+    matched to that track slot on that frame.  Unmatched rows get NaN.
+    """
+    if trajectories_df is None or trajectories_df.empty:
+        return trajectories_df
+    if (
+        "FrameID" not in trajectories_df.columns
+        or "DetectionID" not in trajectories_df.columns
+    ):
+        return trajectories_df.copy()
+
+    out = trajectories_df.copy()
+
+    if lookup_df is None or lookup_df.empty:
+        for col in _APRILTAG_OUTPUT_COLUMNS:
+            if col not in out.columns:
+                out[col] = np.nan
+        return out
+
+    out["_frame_join"] = (
+        pd.to_numeric(out["FrameID"], errors="coerce").round().astype("Int64")
+    )
+    out["_detection_join"] = (
+        pd.to_numeric(out["DetectionID"], errors="coerce").round().astype("Int64")
+    )
+
+    lookup = lookup_df.copy()
+    lookup["_apt_frame_id"] = (
+        pd.to_numeric(lookup["_apt_frame_id"], errors="coerce").round().astype("Int64")
+    )
+    lookup["_apt_detection_id"] = (
+        pd.to_numeric(lookup["_apt_detection_id"], errors="coerce")
+        .round()
+        .astype("Int64")
+    )
+
+    merged = out.merge(
+        lookup[["_apt_frame_id", "_apt_detection_id", *_APRILTAG_OUTPUT_COLUMNS]],
+        how="left",
+        left_on=["_frame_join", "_detection_join"],
+        right_on=["_apt_frame_id", "_apt_detection_id"],
+        sort=False,
+    )
+    merged.drop(
+        columns=[
+            "_frame_join",
+            "_detection_join",
+            "_apt_frame_id",
+            "_apt_detection_id",
+        ],
+        inplace=True,
+        errors="ignore",
+    )
+    for col in _APRILTAG_OUTPUT_COLUMNS:
+        if col not in merged.columns:
+            merged[col] = np.nan
+    return merged
+
+
+def augment_trajectories_with_detected_apriltag_cache(
+    trajectories_df: pd.DataFrame,
+    cache_path: str,
+    tag_labels: List[str],
+) -> pd.DataFrame:
+    """Load detected AprilTag cache and merge tag columns by detection ID.
+
+    Parameters
+    ----------
+    trajectories_df:
+        Full trajectory DataFrame.
+    cache_path:
+        Path to a :class:`~hydra_suite.data.tag_observation_cache.TagObservationCache`
+        ``.npz`` file.
+    tag_labels:
+        Ordered list of identity label strings (``tag_labels[i]`` = label for
+        AprilTag ID ``i``).
+    """
+    from hydra_suite.data.tag_observation_cache import TagObservationCache
+
+    cache = TagObservationCache(cache_path, mode="r")
+    try:
+        lookup = build_detected_apriltag_lookup_dataframe(cache, tag_labels)
+    finally:
+        cache.close()
+    return augment_trajectories_with_detected_apriltag_df(trajectories_df, lookup)
 
 
 def _ensure_pose_columns(
@@ -856,28 +1168,45 @@ def merge_interpolated_cnn_df(
 ) -> pd.DataFrame:
     """Merge interpolated CNN identity predictions into final trajectories.
 
-    Each classifier label gets its own column pair: ``CNN_{label}_Class``,
-    ``CNN_{label}_Conf``.
+    Flat classifiers use ``CNN_{label}_Class`` / ``CNN_{label}_Conf``.
+    Multi-head classifiers use one class/conf pair per factor.
     """
-    col_class = f"CNN_{label}_Class"
-    col_conf = f"CNN_{label}_Conf"
-    output_cols = [col_class, col_conf]
+    interp_value_cols = (
+        _cnn_value_columns(interp_cnn_df) if interp_cnn_df is not None else []
+    )
+    uses_wide_columns = bool(interp_value_cols)
+    if uses_wide_columns:
+        output_cols = list(interp_value_cols)
+        required_cols = {"frame_id", "trajectory_id"}
+    else:
+        col_class = f"CNN_{label}_Class"
+        col_conf = f"CNN_{label}_Conf"
+        output_cols = [col_class, col_conf]
+        required_cols = {"frame_id", "trajectory_id", "class_name", "confidence"}
 
     if trajectories_df is None or trajectories_df.empty:
         return trajectories_df
-    if not _can_merge_interp(
-        trajectories_df,
-        interp_cnn_df,
-        {"frame_id", "trajectory_id", "class_name", "confidence"},
-    ):
+    if not _can_merge_interp(trajectories_df, interp_cnn_df, required_cols):
         return _ensure_interp_columns(trajectories_df, output_cols)
 
     out, interp = _prepare_interp_join_keys(trajectories_df, interp_cnn_df)
     out = _ensure_interp_columns(out, output_cols)
 
-    interp_lookup = interp[
-        ["_frame_join", "_traj_join", "class_name", "confidence"]
-    ].drop_duplicates(subset=["_frame_join", "_traj_join"], keep="first")
+    if uses_wide_columns:
+        rename_map = {col: f"{col}_icnn" for col in output_cols}
+        interp_lookup = interp[["_frame_join", "_traj_join", *output_cols]].rename(
+            columns=rename_map
+        )
+        column_map = {src_col: tgt_col for tgt_col, src_col in rename_map.items()}
+    else:
+        interp_lookup = interp[
+            ["_frame_join", "_traj_join", "class_name", "confidence"]
+        ].drop_duplicates(subset=["_frame_join", "_traj_join"], keep="first")
+        column_map = {"class_name": col_class, "confidence": col_conf}
+
+    interp_lookup = interp_lookup.drop_duplicates(
+        subset=["_frame_join", "_traj_join"], keep="first"
+    )
 
     merged = out.merge(
         interp_lookup,
@@ -887,10 +1216,7 @@ def merge_interpolated_cnn_df(
         sort=False,
     )
 
-    merged = _backfill_interp_columns(
-        merged,
-        {"class_name": col_class, "confidence": col_conf},
-    )
+    merged = _backfill_interp_columns(merged, column_map)
 
     merged.drop(
         columns=["_frame_join", "_traj_join"],

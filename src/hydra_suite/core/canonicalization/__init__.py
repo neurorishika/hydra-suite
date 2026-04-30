@@ -14,6 +14,7 @@ from hydra_suite.core.canonicalization.crop import (  # noqa: F401
     compute_native_scale_affine,
     extract_and_classify_batch,
     extract_canonical_crop,
+    gpu_canonical_crop,
     invert_keypoints,
 )
 from hydra_suite.core.canonicalization.dataset import (  # noqa: F401

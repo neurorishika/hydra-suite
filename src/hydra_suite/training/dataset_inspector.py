@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -261,6 +261,8 @@ class OBBSizeStats:
     # Image dimensions encountered.
     img_widths: list[int] = field(default_factory=list)
     img_heights: list[int] = field(default_factory=list)
+    # Per-object longest image dimension for full-image resize analysis.
+    obj_image_longest_dims: list[float] = field(default_factory=list)
 
 
 def _parse_obb_object_from_line(ln: str, w: int, h: int):
@@ -316,6 +318,7 @@ def _analyze_obb_item(
     if img is None or img.size == 0:
         return
     h, w = img.shape[:2]
+    image_longest_dim = float(max(w, h))
     stats.n_images += 1
     stats.img_widths.append(w)
     stats.img_heights.append(h)
@@ -332,6 +335,7 @@ def _analyze_obb_item(
         bw, bh = result
         stats.obj_widths.append(bw)
         stats.obj_heights.append(bh)
+        stats.obj_image_longest_dims.append(image_longest_dim)
         stats.n_objects += 1
         stats.crop_sizes.append(
             _compute_crop_size(bw, bh, pad_ratio, min_crop_size_px, enforce_square)
@@ -377,10 +381,13 @@ def analyze_obb_sizes(
 def format_size_analysis(
     stats: OBBSizeStats,
     training_imgsz: int = 160,
+    pipeline_mode: Literal["crop", "full_image"] = "crop",
 ) -> tuple[str, list[str]]:
     """Format a human-readable analysis and return (report_text, warnings).
 
     *warnings* contains actionable suggestions when settings look problematic.
+    *pipeline_mode* controls whether imgsz is compared to derived crops or to
+    full-image resize behavior.
     """
     import numpy as np
 
@@ -421,55 +428,98 @@ def format_size_analysis(
     )
     lines.append("")
 
-    lines.append("Crop sizes after padding (px, largest dimension):")
-    lines.append(
-        f"  min={crops.min():.0f}, median={np.median(crops):.0f}, "
-        f"max={crops.max():.0f}"
-    )
-    lines.append("")
-
-    # Relationship to training imgsz.
-    if training_imgsz > 0:
-        upscaled = float(np.sum(crops < training_imgsz)) / len(crops) * 100.0
-        downscaled = float(np.sum(crops > training_imgsz)) / len(crops) * 100.0
-        matched = 100.0 - upscaled - downscaled
-        lines.append(f"Relative to training imgsz={training_imgsz}:")
+    if pipeline_mode == "crop":
+        lines.append("Crop sizes after padding (px, largest dimension):")
         lines.append(
-            f"  {upscaled:.0f}% of crops will be upscaled (smaller than imgsz)"
+            f"  min={crops.min():.0f}, median={np.median(crops):.0f}, "
+            f"max={crops.max():.0f}"
         )
-        lines.append(
-            f"  {downscaled:.0f}% of crops will be downscaled (larger than imgsz)"
-        )
-        lines.append(f"  {matched:.0f}% are approximately the right size")
         lines.append("")
 
-        median_crop = float(np.median(crops))
-        scale_ratio = training_imgsz / max(1.0, median_crop)
+        if training_imgsz > 0:
+            upscaled = float(np.sum(crops < training_imgsz)) / len(crops) * 100.0
+            downscaled = float(np.sum(crops > training_imgsz)) / len(crops) * 100.0
+            matched = 100.0 - upscaled - downscaled
+            lines.append(f"Relative to training imgsz={training_imgsz}:")
+            lines.append(
+                f"  {upscaled:.0f}% of crops will be upscaled (smaller than imgsz)"
+            )
+            lines.append(
+                f"  {downscaled:.0f}% of crops will be downscaled (larger than imgsz)"
+            )
+            lines.append(f"  {matched:.0f}% are approximately the right size")
+            lines.append("")
 
-        if upscaled > 80:
-            warnings.append(
-                f"WARNING: {upscaled:.0f}% of crops are smaller than imgsz={training_imgsz} "
-                f"and will be heavily upscaled (median crop={median_crop:.0f}px). "
-                f"Consider reducing imgsz to ~{int(median_crop)} or increasing pad ratio."
+            median_crop = float(np.median(crops))
+            scale_ratio = training_imgsz / max(1.0, median_crop)
+
+            if upscaled > 80:
+                warnings.append(
+                    f"WARNING: {upscaled:.0f}% of crops are smaller than imgsz={training_imgsz} "
+                    f"and will be heavily upscaled (median crop={median_crop:.0f}px). "
+                    f"Consider reducing imgsz to ~{int(median_crop)} or increasing pad ratio."
+                )
+            if downscaled > 80:
+                warnings.append(
+                    f"WARNING: {downscaled:.0f}% of crops are larger than imgsz={training_imgsz} "
+                    f"and will lose detail when downscaled (median crop={median_crop:.0f}px). "
+                    f"Consider increasing imgsz to ~{int(median_crop)}."
+                )
+            if scale_ratio > 3.0:
+                warnings.append(
+                    f"WARNING: Median crop ({median_crop:.0f}px) is {scale_ratio:.1f}x smaller "
+                    f"than imgsz={training_imgsz}. This extreme upscaling introduces blur "
+                    f"artifacts. Strongly consider reducing imgsz."
+                )
+            if scale_ratio < 0.3:
+                warnings.append(
+                    f"WARNING: Median crop ({median_crop:.0f}px) is {1.0 / scale_ratio:.1f}x larger "
+                    f"than imgsz={training_imgsz}. Significant detail loss from downscaling. "
+                    f"Consider increasing imgsz."
+                )
+    elif pipeline_mode == "full_image":
+        if training_imgsz > 0:
+            obj_long = np.maximum(obj_w, obj_h)
+            if stats.obj_image_longest_dims:
+                image_longest = np.asarray(stats.obj_image_longest_dims, dtype=float)
+            else:
+                image_longest = np.full(
+                    len(obj_long),
+                    max(1.0, float(np.median(np.maximum(img_w, img_h)))),
+                )
+            resized_obj = (
+                obj_long * float(training_imgsz) / np.maximum(1.0, image_longest)
             )
-        if downscaled > 80:
-            warnings.append(
-                f"WARNING: {downscaled:.0f}% of crops are larger than imgsz={training_imgsz} "
-                f"and will lose detail when downscaled (median crop={median_crop:.0f}px). "
-                f"Consider increasing imgsz to ~{int(median_crop)}."
+            very_small = float(np.sum(resized_obj < 16.0)) / len(resized_obj) * 100.0
+            small = float(np.sum(resized_obj < 24.0)) / len(resized_obj) * 100.0
+            median_resized = float(np.median(resized_obj))
+
+            lines.append(f"At full-image training imgsz={training_imgsz}:")
+            lines.append(
+                "  object largest dimension after resize: "
+                f"min={resized_obj.min():.0f}px, median={median_resized:.0f}px, "
+                f"max={resized_obj.max():.0f}px"
             )
-        if scale_ratio > 3.0:
-            warnings.append(
-                f"WARNING: Median crop ({median_crop:.0f}px) is {scale_ratio:.1f}x smaller "
-                f"than imgsz={training_imgsz}. This extreme upscaling introduces blur "
-                f"artifacts. Strongly consider reducing imgsz."
+            lines.append(
+                f"  {very_small:.0f}% of objects will be under 16px after resize"
             )
-        if scale_ratio < 0.3:
-            warnings.append(
-                f"WARNING: Median crop ({median_crop:.0f}px) is {1.0 / scale_ratio:.1f}x larger "
-                f"than imgsz={training_imgsz}. Significant detail loss from downscaling. "
-                f"Consider increasing imgsz."
-            )
+            lines.append(f"  {small:.0f}% of objects will be under 24px after resize")
+            lines.append("")
+
+            if very_small > 80:
+                warnings.append(
+                    f"WARNING: {very_small:.0f}% of objects will be under 16px at imgsz={training_imgsz} "
+                    "after full-image resize. Direct OBB will likely miss fine details; "
+                    "consider increasing imgsz substantially or using sequential detection."
+                )
+            if median_resized < 16.0:
+                warnings.append(
+                    f"WARNING: Median object shrinks to {median_resized:.0f}px at imgsz={training_imgsz} "
+                    "after full-image resize. This is too small for reliable direct OBB learning; "
+                    "prefer sequential detection or a much larger imgsz."
+                )
+    else:
+        raise ValueError(f"Unsupported pipeline_mode: {pipeline_mode}")
 
     # Object-to-image ratio.
     median_obj = float(np.median(np.maximum(obj_w, obj_h)))
@@ -479,7 +529,7 @@ def format_size_analysis(
         lines.append(
             f"Object-to-image ratio: median object is {obj_frac:.1%} of image size"
         )
-        if obj_frac < 0.02:
+        if pipeline_mode == "full_image" and obj_frac < 0.02:
             warnings.append(
                 "WARNING: Objects are very small relative to images (<2%). "
                 "Sequential detection mode is strongly recommended over direct OBB."

@@ -533,6 +533,10 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
             context.get("yolo_headtail_model_path", "")
         ),
         "POSE_OVERRIDES_HEADTAIL": bool(context.get("pose_overrides_headtail", True)),
+        "HEADTAIL_COMPUTE_RUNTIME": str(
+            context.get("headtail_runtime", context.get("compute_runtime", "cpu"))
+        ),
+        "HEADTAIL_BATCH_SIZE": int(context.get("headtail_batch_size", 64)),
         "YOLO_SEQ_CROP_PAD_RATIO": float(context.get("yolo_seq_crop_pad_ratio", 0.15)),
         "YOLO_SEQ_MIN_CROP_SIZE_PX": int(context.get("yolo_seq_min_crop_size_px", 64)),
         "YOLO_SEQ_ENFORCE_SQUARE_CROP": bool(
@@ -550,6 +554,9 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
         ),
         "YOLO_HEADTAIL_CONF_THRESHOLD": float(
             context.get("yolo_headtail_conf_threshold", 0.50)
+        ),
+        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": float(
+            context.get("yolo_headtail_detect_conf_threshold", 0.25)
         ),
         "YOLO_CONFIDENCE_THRESHOLD": float(context.get("yolo_confidence", 0.5)),
         "YOLO_IOU_THRESHOLD": float(context.get("yolo_iou", 0.45)),
@@ -610,12 +617,23 @@ def _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params):
     raw_heading_confidences = []
     raw_directed_mask = []
     if raw_meas:
+        candidate_indices = detector._select_headtail_candidate_indices(
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+        )
         (
             raw_heading_hints,
             raw_heading_confidences,
             raw_directed_mask,
             _,
-        ) = detector._compute_headtail_hints(frame_to_process, raw_obb_corners)
+        ) = detector._compute_headtail_hints_for_indices(
+            frame_to_process,
+            raw_obb_corners,
+            candidate_indices,
+        )
     return (
         raw_meas,
         raw_sizes,
@@ -794,6 +812,29 @@ def _preview_run_pose_overlay(
         return None
 
 
+def _preview_format_cnn_prediction(label_name: str, prediction) -> str:
+    """Return a preview-friendly label for flat or multihead CNN predictions."""
+    factor_names = tuple(getattr(prediction, "factor_names", ()) or ())
+    class_names = tuple(getattr(prediction, "class_names", ()) or ())
+    confidences = tuple(getattr(prediction, "confidences", ()) or ())
+
+    if len(factor_names) <= 1:
+        pred_label = str(getattr(prediction, "class_name", None) or "?")
+        pred_conf = float(getattr(prediction, "confidence", 0.0))
+        return f"{label_name}: {pred_label} {pred_conf:.2f}"
+
+    parts = []
+    for idx, factor_name in enumerate(factor_names):
+        factor_label = (
+            str(class_names[idx])
+            if idx < len(class_names) and class_names[idx] is not None
+            else "unknown"
+        )
+        factor_conf = float(confidences[idx]) if idx < len(confidences) else 0.0
+        parts.append(f"{factor_name}={factor_label} {factor_conf:.2f}")
+    return f"{label_name}: " + " | ".join(parts)
+
+
 def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_stacks):
     cnn_cfgs = context.get("cnn_classifiers", []) or []
     if not filtered_corners or not cnn_cfgs:
@@ -813,7 +854,7 @@ def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_s
         if valid_cnn_entries:
             cnn_crops = [crop for _, crop in valid_cnn_entries]
             for cnn_cfg in cnn_cfgs:
-                model_path = str(cnn_cfg.get("model_path", ""))
+                model_path = str(resolve_model_path(cnn_cfg.get("model_path", "")))
                 if not model_path or not os.path.exists(model_path):
                     continue
                 label_name = str(cnn_cfg.get("label", "cnn"))
@@ -821,6 +862,7 @@ def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_s
                     CNNIdentityConfig(
                         model_path=model_path,
                         confidence=float(cnn_cfg.get("confidence", 0.5)),
+                        scoring_mode=str(cnn_cfg.get("scoring_mode", "atomic")),
                         batch_size=int(cnn_cfg.get("batch_size", 64)),
                     ),
                     model_path=model_path,
@@ -837,10 +879,8 @@ def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_s
                     if pidx >= len(cnn_predictions):
                         continue
                     prediction = cnn_predictions[pidx]
-                    pred_label = str(getattr(prediction, "class_name", None) or "?")
-                    pred_conf = float(getattr(prediction, "confidence", 0.0))
                     label_stacks[det_idx].append(
-                        f"{label_name}: {pred_label} {pred_conf:.2f}"
+                        _preview_format_cnn_prediction(label_name, prediction)
                     )
     except Exception as exc:
         logger.warning("Preview CNN overlay disabled: %s", exc)
@@ -989,6 +1029,14 @@ def _preview_draw_obb_annotations(
                     headtail_color,
                     font_scale=0.4,
                 )
+            elif float(ht_conf) > 0.0:
+                _draw_preview_label_stack(
+                    test_frame,
+                    (min(test_frame.shape[1] - 120, cx + 6), max(14, cy + 18)),
+                    [f"head abstain {float(ht_conf):.2f}"],
+                    headtail_color,
+                    font_scale=0.4,
+                )
 
 
 def _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector):
@@ -1009,7 +1057,9 @@ def _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector):
         pass
 
 
-def _preview_draw_yolo_footer(test_frame, meas, yolo_params, context):
+def _preview_draw_yolo_footer(
+    test_frame, meas, yolo_params, context, filtered_headtail=None
+):
     active_layers = []
     if str(context.get("yolo_headtail_model_path", "")).strip():
         active_layers.append("head-tail")
@@ -1022,6 +1072,28 @@ def _preview_draw_yolo_footer(test_frame, meas, yolo_params, context):
     footer = f"Detections: {len(meas)} (IOU={yolo_params['YOLO_IOU_THRESHOLD']:.2f})"
     if active_layers:
         footer += f" | preview: {', '.join(active_layers)}"
+    configured_headtail = str(
+        context.get(
+            "configured_headtail_model_path",
+            context.get("yolo_headtail_model_path", ""),
+        )
+        or ""
+    ).strip()
+    headtail_enabled = bool(
+        context.get(
+            "headtail_enabled",
+            bool(str(context.get("yolo_headtail_model_path", "")).strip()),
+        )
+    )
+    if configured_headtail and not headtail_enabled:
+        footer += " | head-tail disabled"
+    elif filtered_headtail is not None and len(filtered_headtail) > 0:
+        directed_count = sum(
+            1
+            for heading, _conf, directed in filtered_headtail
+            if int(directed) == 1 and np.isfinite(float(heading))
+        )
+        footer += f" | head-tail {directed_count}/{len(filtered_headtail)} directed"
     cv2.putText(
         test_frame,
         footer,
@@ -1079,9 +1151,9 @@ def _preview_run_yolo_branch(
         detection_confidences,
         filtered_obb_corners,
         filtered_ids,
-        _filtered_heading_hints,
-        _filtered_heading_confidences,
-        _filtered_directed_mask,
+        filtered_heading_hints,
+        filtered_heading_confidences,
+        filtered_directed_mask,
     ) = detector.filter_raw_detections(
         raw_meas,
         raw_sizes,
@@ -1108,17 +1180,22 @@ def _preview_run_yolo_branch(
         else:
             filtered_class_labels.append("cls ?")
 
-    if (
-        getattr(detector, "_headtail_analyzer", None) is not None
-        and filtered_obb_corners
-    ):
-        filtered_headtail = detector._headtail_analyzer.analyze_crops(
-            [frame_to_process], [filtered_obb_corners]
-        )[0]
-    else:
-        filtered_headtail = [
-            (float("nan"), 0.0, 0) for _ in range(len(filtered_obb_corners))
-        ]
+    filtered_headtail = []
+    for idx in range(len(filtered_obb_corners)):
+        heading = (
+            filtered_heading_hints[idx]
+            if idx < len(filtered_heading_hints)
+            else float("nan")
+        )
+        confidence = (
+            filtered_heading_confidences[idx]
+            if idx < len(filtered_heading_confidences)
+            else 0.0
+        )
+        directed = (
+            filtered_directed_mask[idx] if idx < len(filtered_directed_mask) else 0
+        )
+        filtered_headtail.append((heading, confidence, directed))
 
     detected_dimensions = []
     if yolo_mode == "sequential" and stage1_result is not None:
@@ -1180,7 +1257,13 @@ def _preview_run_yolo_branch(
         context,
     )
     _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector)
-    _preview_draw_yolo_footer(test_frame, meas, yolo_params, context)
+    _preview_draw_yolo_footer(
+        test_frame,
+        meas,
+        yolo_params,
+        context,
+        filtered_headtail=filtered_headtail,
+    )
 
     return detected_dimensions, test_frame
 

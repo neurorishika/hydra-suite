@@ -9,7 +9,7 @@ from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
-from ..core.export.splits import build_stratified_splits
+from ..core.export.splits import build_dataset_splits, build_label_expansion_split_key
 
 
 class TaskSignals(QObject):
@@ -27,11 +27,21 @@ class TaskSignals(QObject):
 class IngestWorker(QRunnable):
     """Worker for ingesting images from folders/videos."""
 
-    def __init__(self, source_path: Path, db_path: Path):
+    def __init__(
+        self,
+        source_path: Path,
+        db_path: Path,
+        project_classes: Optional[List[str]] = None,
+        import_labels: bool = True,
+        label_recode: Optional[tuple] = None,
+    ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
         self.source_path = source_path
         self.db_path = db_path
+        self.project_classes = list(project_classes or [])
+        self.import_labels = bool(import_labels)
+        self.label_recode = label_recode  # (from_sep, to_sep) or None
         self.signals = TaskSignals()
 
     @Slot()
@@ -41,6 +51,11 @@ class IngestWorker(QRunnable):
             self.signals.progress.emit(0, "Initializing ingestion...")
 
             from ..core.data.ingest import IngestWorker as Ingester
+            from ..core.data.source_import import (
+                build_source_import_plan,
+                materialize_source_import_plan,
+                recode_plan_labels,
+            )
             from ..core.store.db import ClassKitDB
 
             # Initialize
@@ -50,20 +65,67 @@ class IngestWorker(QRunnable):
 
             # Scan and ingest
             self.signals.progress.emit(10, f"Scanning folder: {self.source_path}...")
-            # Prefer images/ subdirectory when present (PoseKit convention).
-            from ..core.data.ingest import scan_images as _scan
+            plan = build_source_import_plan(self.source_path)
 
-            image_paths = list(_scan(self.source_path))
-            self.signals.progress.emit(40, f"Found {len(image_paths):,} images")
+            if self.label_recode and self.import_labels:
+                from_sep, to_sep = self.label_recode
+                plan = recode_plan_labels(plan, from_sep, to_sep)
+
+            self.signals.progress.emit(40, f"Found {len(plan.image_paths):,} images")
+
+            project_labels = {
+                str(label) for label in self.project_classes if str(label).strip()
+            }
+            imported_labels = {
+                str(label) for label in plan.discovered_labels if str(label).strip()
+            }
+            # Skip validation when re-encoding: the GUI already confirmed the recoded
+            # labels fit the existing multihead scheme via _can_recode_into_existing_scheme,
+            # and project_classes may only contain factor values, not composite labels.
+            if (
+                self.import_labels
+                and imported_labels
+                and project_labels
+                and not self.label_recode
+            ):
+                missing = sorted(imported_labels - project_labels)
+                if missing:
+                    raise ValueError(
+                        "Imported dataset labels do not match the current project classes: "
+                        + ", ".join(missing)
+                    )
+
+            plan = materialize_source_import_plan(
+                plan,
+                self.db_path,
+                include_labels=self.import_labels,
+            )
+            image_paths = list(plan.image_paths)
 
             self.signals.progress.emit(50, "Computing image hashes...")
-            ingester.ingest(image_paths)
+            ingester.ingest(image_paths, metadata_by_path=plan.metadata_by_path)
+
+            if plan.label_updates:
+                self.signals.progress.emit(80, "Applying imported labels...")
+                db.update_labels_with_confidence_batch(
+                    plan.label_updates,
+                    label_source="import",
+                    verified=True,
+                    metadata_by_path=plan.metadata_by_path,
+                )
+
             self.signals.progress.emit(90, "Writing to database...")
 
             self.signals.progress.emit(
                 100, f"Complete! Ingested {len(image_paths):,} images"
             )
-            self.signals.success.emit({"num_images": len(image_paths)})
+            self.signals.success.emit(
+                {
+                    "num_images": len(image_paths),
+                    "source_kind": plan.source_kind,
+                    "imported_labels": list(plan.discovered_labels),
+                }
+            )
 
         except Exception as e:
             self.signals.error.emit(str(e))
@@ -518,15 +580,18 @@ class ClassKitTrainingWorker(QRunnable):
 
                 def log_cb(msg: str, _i: int = i) -> None:
                     prefix = f"[factor {_i}] " if self.multi_head else ""
-                    self.signals.progress.emit(0, f"{prefix}{msg}")
+                    self.signals.progress.emit(-1, f"{prefix}{msg}")
 
                 def progress_cb(
                     current: int, total: int, _i: int = i, _n: int = n_specs
                 ) -> None:
-                    if self.multi_head:
-                        overall = int((_i * 100 + current * 100 // max(1, total)) / _n)
-                    else:
-                        overall = current * 100 // max(1, total)
+                    total = max(1, int(total))
+                    current = max(0, min(int(current), total))
+                    completed_fraction = (
+                        float(_i) + (float(current) / float(total))
+                    ) / max(1.0, float(_n))
+                    overall = int(round(completed_fraction * 100.0))
+                    overall = max(0, min(100, overall))
                     self.signals.progress.emit(overall, "")
 
                 result = run_training(
@@ -542,6 +607,7 @@ class ClassKitTrainingWorker(QRunnable):
                     self.signals.error.emit(f"Training failed for spec {i}")
                     return
 
+            self.signals.progress.emit(100, "")
             self.signals.success.emit(results)
         except Exception as exc:
             self.signals.error.emit(str(exc))
@@ -559,11 +625,15 @@ class ExportWorker(QRunnable):
         output_path: Path,
         format: str = "imagefolder",
         class_names: Optional[Dict[int, str]] = None,
+        split_strategy: str = "stratified",
         val_fraction: float = 0.2,
         test_fraction: float = 0.0,
         copy_files: bool = True,
         temp_dir: Optional[Path] = None,
         label_expansion: Optional[Dict[str, Dict[str, str]]] = None,
+        force_monochrome: bool = False,
+        preset_splits_by_path: Optional[Dict[str, str]] = None,
+        preset_expanded_splits_by_key: Optional[Dict[str, str]] = None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -572,12 +642,22 @@ class ExportWorker(QRunnable):
         self.output_path = output_path
         self.format = format
         self.class_names = class_names or {}
+        self.split_strategy = str(split_strategy or "stratified")
         self.val_fraction = float(val_fraction)
         self.test_fraction = float(test_fraction)
         self.copy_files = copy_files
         self.temp_dir = temp_dir
         # label_expansion: {"fliplr": {"left": "right", "right": "left"}, ...}
         self.label_expansion: Dict[str, Dict[str, str]] = label_expansion or {}
+        self.force_monochrome = bool(force_monochrome)
+        self.preset_splits_by_path = {
+            str(Path(path).resolve()): str(split)
+            for path, split in (preset_splits_by_path or {}).items()
+        }
+        self.preset_expanded_splits_by_key = {
+            str(key): str(split)
+            for key, split in (preset_expanded_splits_by_key or {}).items()
+        }
         self.signals = TaskSignals()
 
     def _class_name(self, label: int) -> str:
@@ -585,17 +665,18 @@ class ExportWorker(QRunnable):
         return self.class_names.get(label, f"class_{label}")
 
     def _build_splits(self, labels: Optional[List[int]] = None):
-        """Build deterministic stratified train/val/test split assignments."""
+        """Build deterministic train/val/test split assignments."""
         labels = list(self.labels if labels is None else labels)
-        return build_stratified_splits(
+        return build_dataset_splits(
             labels,
+            strategy=self.split_strategy,
             val_fraction=self.val_fraction,
             test_fraction=self.test_fraction,
         )
 
     def _prepare_export_workspace(self) -> None:
-        """Create a temporary expansion workspace when label expansion is enabled."""
-        if self.label_expansion and self.temp_dir is None:
+        """Create a temporary export workspace when helper-generated images are needed."""
+        if (self.label_expansion or self.force_monochrome) and self.temp_dir is None:
             import tempfile
 
             self._expansion_tmpdir = tempfile.mkdtemp(prefix="classkit_exp_")
@@ -617,8 +698,32 @@ class ExportWorker(QRunnable):
 
         image_paths = [item[0] for item in valid]
         labels = [item[1] for item in valid]
-        splits = self._build_splits(labels)
-        class_names = {label: self._class_name(label) for label in set(labels)}
+        if self.preset_splits_by_path:
+            splits = []
+            unmatched = 0
+            for path in image_paths:
+                key = str(Path(path).resolve())
+                split = self.preset_splits_by_path.get(key)
+                if split is None:
+                    unmatched += 1
+                    split = "train"
+                splits.append(split)
+            if unmatched:
+                self.signals.progress.emit(
+                    -1,
+                    f"WARNING: {unmatched} of {len(image_paths)} images did not match "
+                    f"any preset split key and defaulted to 'train'. "
+                    f"This may indicate a path resolution mismatch.",
+                )
+        else:
+            splits = self._build_splits(labels)
+        class_names = {
+            int(label): str(name)
+            for label, name in (self.class_names or {}).items()
+            if int(label) >= 0
+        }
+        for label in set(labels):
+            class_names.setdefault(int(label), self._class_name(int(label)))
         return image_paths, labels, splits, class_names
 
     @staticmethod
@@ -674,7 +779,7 @@ class ExportWorker(QRunnable):
             code = flip_code.get(axis)
             if code is None:
                 continue
-            axis_paths, axis_labels, skipped = self._expand_label_axis(
+            axis_paths, axis_labels, axis_splits, skipped = self._expand_label_axis(
                 axis,
                 mapping,
                 code,
@@ -690,7 +795,7 @@ class ExportWorker(QRunnable):
             )
             extra_paths.extend(axis_paths)
             extra_labels.extend(axis_labels)
-            extra_splits.extend(["train"] * len(axis_paths))
+            extra_splits.extend(axis_splits)
             n_skipped_unknown_dst += skipped
             n_exp += len(axis_paths)
 
@@ -708,6 +813,40 @@ class ExportWorker(QRunnable):
             labels + extra_labels,
             splits + extra_splits,
         )
+
+    def _apply_monochrome_mode(
+        self,
+        image_paths: List[Path],
+        labels: List[int],
+        splits: List[str],
+    ) -> tuple[List[Path], List[int], List[str]]:
+        """Materialize grayscale RGB copies of the derived dataset when requested."""
+        if not self.force_monochrome or not self.temp_dir:
+            return image_paths, labels, splits
+
+        import cv2
+
+        mono_dir = Path(self.temp_dir) / "monochrome"
+        mono_dir.mkdir(parents=True, exist_ok=True)
+
+        converted_paths: List[Path] = []
+        total = len(image_paths)
+        for index, img_path in enumerate(image_paths):
+            img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+            if img is None:
+                raise FileNotFoundError(
+                    f"Failed to read image for monochrome export: {img_path}"
+                )
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            mono = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            out_p = mono_dir / f"mono_{index}_{img_path.stem}{img_path.suffix}"
+            cv2.imwrite(str(out_p), mono)
+            converted_paths.append(out_p)
+
+        if total:
+            self.signals.progress.emit(60, f"Converted {total} images to monochrome")
+            self.copy_files = True
+        return converted_paths, labels, splits
 
     def _expand_label_axis(
         self,
@@ -727,12 +866,11 @@ class ExportWorker(QRunnable):
         """Expand one configured axis and return new samples plus skipped count."""
         extra_paths: List[Path] = []
         extra_labels: List[int] = []
+        extra_splits: List[str] = []
         n_skipped_unknown_dst = 0
         n_exp = start_index
 
         for img_path, label_int, split in zip(image_paths, labels, splits):
-            if split != "train":
-                continue
             matched_rule, dst_int = self._resolve_expanded_label(
                 mapping,
                 class_names.get(label_int, ""),
@@ -741,23 +879,33 @@ class ExportWorker(QRunnable):
             )
             if not matched_rule:
                 continue
+            if dst_int is None:
+                n_skipped_unknown_dst += 1
+                continue
+            dst_name = class_names.get(dst_int, "")
+            planned_split = None
+            if self.preset_expanded_splits_by_key:
+                planned_split = self.preset_expanded_splits_by_key.get(
+                    build_label_expansion_split_key(img_path, axis, dst_name)
+                )
+            if planned_split is None and split != "train":
+                continue
+
             img = cv2_module.imread(str(img_path), cv2_module.IMREAD_COLOR)
             if img is None:
                 raise FileNotFoundError(
                     f"Failed to read image for label expansion: {img_path}"
                 )
-            if dst_int is None:
-                n_skipped_unknown_dst += 1
-                continue
             flipped = cv2_module.flip(img, code)
             stem = f"expn_{axis}_{n_exp}_{img_path.stem}"
             out_p = exp_dir / (stem + img_path.suffix)
             cv2_module.imwrite(str(out_p), flipped)
             extra_paths.append(out_p)
             extra_labels.append(dst_int)
+            extra_splits.append(str(planned_split or "train"))
             n_exp += 1
 
-        return extra_paths, extra_labels, n_skipped_unknown_dst
+        return extra_paths, extra_labels, extra_splits, n_skipped_unknown_dst
 
     def _export_imagefolder(
         self,
@@ -844,12 +992,6 @@ class ExportWorker(QRunnable):
                 train_images.append(path)
                 train_labels.append(label)
 
-        if not val_images and train_images:
-            val_images.append(train_images[-1])
-            val_labels.append(train_labels[-1])
-            train_images = train_images[:-1]
-            train_labels = train_labels[:-1]
-
         export_ultralytics_classify(
             output_path=self.output_path,
             train_images=train_images,
@@ -884,23 +1026,61 @@ class ExportWorker(QRunnable):
     @Slot()
     def run(self):
         try:
+            import time as _time
+
+            _t0 = _time.monotonic()
             self.signals.started.emit()
             self.signals.progress.emit(0, f"Exporting to {self.format}...")
 
             self._prepare_export_workspace()
             image_paths, labels, splits, class_names = self._collect_valid_labels()
+
             image_paths, labels, splits = self._apply_label_expansion(
                 image_paths, labels, splits, class_names
             )
+            image_paths, labels, splits = self._apply_monochrome_mode(
+                image_paths, labels, splits
+            )
+
+            # Log per-class per-split statistics after deterministic expansion so
+            # the displayed split counts match the exported dataset.
+            from collections import Counter
+
+            split_class_counts: dict = {}
+            for split, label in zip(splits, labels):
+                split_class_counts.setdefault(split, Counter())[label] += 1
+            for split_name in ("train", "val", "test"):
+                counts = split_class_counts.get(split_name)
+                if not counts:
+                    continue
+                total = sum(counts.values())
+                breakdown = ", ".join(
+                    f"{class_names.get(lbl, f'class_{lbl}')}={n}"
+                    for lbl, n in sorted(counts.items())
+                )
+                self.signals.progress.emit(
+                    -1, f"Split {split_name}: {total} images ({breakdown})"
+                )
+
+            self.signals.progress.emit(
+                -1, f"Exporting {len(image_paths)} images to {self.output_path}"
+            )
             self._export_dataset(image_paths, labels, splits, class_names)
 
-            self.signals.progress.emit(100, "Complete!")
+            _elapsed = _time.monotonic() - _t0
+            self.signals.progress.emit(
+                100, f"Export complete — {len(image_paths)} images in {_elapsed:.1f}s"
+            )
             self.signals.success.emit(
                 {
                     "output_path": self.output_path,
                     "format": self.format,
                     "num_exported": len(image_paths),
                     "num_classes": len(set(labels)),
+                    "source_split_by_path": {
+                        str(Path(path).resolve()): split
+                        for path, split in zip(image_paths, splits)
+                    },
                 }
             )
 
@@ -928,6 +1108,7 @@ class YoloInferenceWorker(QRunnable):
         image_paths: List[Path],
         compute_runtime: str = "cpu",
         batch_size: int = 64,
+        force_monochrome: bool = False,
         # Deprecated — use compute_runtime instead.
         device: str = "",
     ):
@@ -942,6 +1123,7 @@ class YoloInferenceWorker(QRunnable):
             compute_runtime = device
         self.compute_runtime = str(compute_runtime or "cpu")
         self.batch_size = batch_size
+        self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
 
     @staticmethod
@@ -951,7 +1133,7 @@ class YoloInferenceWorker(QRunnable):
         if rt in ("mps", "onnx_coreml"):
             return "mps"
         if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # PyTorch uses "cuda" namespace for ROCm.
+            return "cuda"  # kept for legacy configs; ROCm is no longer supported
         return "cpu"
 
     @staticmethod
@@ -1045,6 +1227,24 @@ class YoloInferenceWorker(QRunnable):
                 pass
         return model, class_names, predict_device
 
+    @staticmethod
+    def _prepare_batch_input(batch_paths, force_monochrome=False):
+        if not force_monochrome:
+            return [str(path) for path in batch_paths]
+
+        import cv2
+        import numpy as np
+
+        batch_input = []
+        for path in batch_paths:
+            img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if img is None:
+                batch_input.append(np.zeros((8, 8, 3), dtype=np.uint8))
+                continue
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            batch_input.append(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR))
+        return batch_input
+
     def _run_batches(self, model, class_names, predict_device):
         import numpy as np
 
@@ -1055,7 +1255,10 @@ class YoloInferenceWorker(QRunnable):
         all_probs = []
         for batch_start in range(0, num_images, self.batch_size):
             batch_paths = self.image_paths[batch_start : batch_start + self.batch_size]
-            batch_input = [str(p) for p in batch_paths]
+            batch_input = self._prepare_batch_input(
+                batch_paths,
+                force_monochrome=self.force_monochrome,
+            )
             kwargs = {"verbose": False}
             if predict_device is not None:
                 kwargs["device"] = predict_device
@@ -1190,6 +1393,9 @@ class ALBatchWorker(QRunnable):
         labeled_mask,
         cluster_assignments=None,
         batch_size: int = 50,
+        balance_mode: bool = False,
+        image_labels=None,
+        class_names=None,
     ):
         super().__init__()
         self.setAutoDelete(False)  # prevent Qt from freeing C++ side before Python GC
@@ -1198,6 +1404,9 @@ class ALBatchWorker(QRunnable):
         self.labeled_mask = labeled_mask
         self.cluster_assignments = cluster_assignments
         self.batch_size = batch_size
+        self.balance_mode = balance_mode
+        self.image_labels = image_labels
+        self.class_names = class_names
         self.signals = TaskSignals()
 
     @Slot()
@@ -1243,7 +1452,8 @@ class ALBatchWorker(QRunnable):
 
             self.signals.progress.emit(50, "Running batch acquisition selection...")
             cfg = BatchConfig(
-                batch_size=min(self.batch_size, int(unlabeled_mask.sum()))
+                batch_size=min(self.batch_size, int(unlabeled_mask.sum())),
+                balance_mode=self.balance_mode,
             )
             acq = BatchAcquisition(cfg)
             selected, breakdown = acq.select_batch(
@@ -1253,6 +1463,8 @@ class ALBatchWorker(QRunnable):
                 cluster_assignments=self.cluster_assignments,
                 label_coverage=label_coverage,
                 cluster_densities=cluster_densities,
+                image_labels=self.image_labels,
+                class_names=self.class_names,
             )
 
             self.signals.progress.emit(100, f"Selected {len(selected)} candidates!")
@@ -1270,7 +1482,7 @@ class ALBatchWorker(QRunnable):
 class TinyCNNInferenceWorker(QRunnable):
     """Run tiny CNN classification inference on all project images.
 
-    Supports PyTorch (cpu/mps/cuda/rocm) and ONNX/TensorRT runtimes via the
+    Supports PyTorch (cpu/mps/cuda) and ONNX/TensorRT runtimes via the
     canonical ``compute_runtime`` parameter (see ``runtime.compute_runtime``).
     ONNX inference requires a ``<stem>.onnx`` sibling of the ``.pth`` model file,
     which is auto-exported by ``runner.py`` after training.
@@ -1286,6 +1498,7 @@ class TinyCNNInferenceWorker(QRunnable):
         class_names: List[str],
         compute_runtime: str = "cpu",
         batch_size: int = 64,
+        force_monochrome: bool = False,
         # Deprecated — use compute_runtime instead.
         device: str = "",
     ):
@@ -1302,6 +1515,7 @@ class TinyCNNInferenceWorker(QRunnable):
             compute_runtime = device
         self.compute_runtime = str(compute_runtime or "cpu")
         self.batch_size = batch_size
+        self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
 
     # ── helpers ──────────────────────────────────────────────────────────────
@@ -1314,11 +1528,11 @@ class TinyCNNInferenceWorker(QRunnable):
         if rt in ("mps", "onnx_coreml"):
             return "mps"
         if rt in ("rocm", "onnx_rocm"):
-            return "cuda"  # PyTorch uses "cuda" for ROCm
+            return "cuda"  # kept for legacy configs; ROCm is no longer supported
         return "cpu"
 
     @staticmethod
-    def _load_batch_images(batch_paths, input_w, input_h):
+    def _load_batch_images(batch_paths, input_w, input_h, force_monochrome=False):
         import cv2
         import numpy as np
 
@@ -1330,6 +1544,9 @@ class TinyCNNInferenceWorker(QRunnable):
                     tensors.append(np.zeros((3, input_h, input_w), dtype=np.float32))
                     continue
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                if force_monochrome:
+                    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+                    img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
                 img = cv2.resize(
                     img, (input_w, input_h), interpolation=cv2.INTER_LINEAR
                 )
@@ -1361,8 +1578,10 @@ class TinyCNNInferenceWorker(QRunnable):
             ckpt_names = ckpt.get("class_names")
             if ckpt_names:
                 resolved_names = list(ckpt_names)
+            force_monochrome = bool(ckpt.get("monochrome", self.force_monochrome))
         except Exception:
             input_w, input_h = 128, 64
+            force_monochrome = self.force_monochrome
 
         session = load_tiny_onnx(str(onnx_path), compute_runtime=rt)
         self.signals.progress.emit(
@@ -1371,7 +1590,12 @@ class TinyCNNInferenceWorker(QRunnable):
         all_probs = []
         for batch_start in range(0, num_images, self.batch_size):
             batch_paths = self.image_paths[batch_start : batch_start + self.batch_size]
-            batch_np = self._load_batch_images(batch_paths, input_w, input_h)
+            batch_np = self._load_batch_images(
+                batch_paths,
+                input_w,
+                input_h,
+                force_monochrome=force_monochrome,
+            )
             if batch_np.shape[0] == 0:
                 continue
             all_probs.append(run_tiny_onnx(session, batch_np))
@@ -1393,12 +1617,18 @@ class TinyCNNInferenceWorker(QRunnable):
         ckpt_names = ckpt.get("class_names")
         if ckpt_names:
             resolved_names = list(ckpt_names)
+        force_monochrome = bool(ckpt.get("monochrome", self.force_monochrome))
 
         self.signals.progress.emit(5, f"Tiny CNN inference on {num_images:,} images...")
         all_probs = []
         for batch_start in range(0, num_images, self.batch_size):
             batch_paths = self.image_paths[batch_start : batch_start + self.batch_size]
-            batch_np = self._load_batch_images(batch_paths, input_w, input_h)
+            batch_np = self._load_batch_images(
+                batch_paths,
+                input_w,
+                input_h,
+                force_monochrome=force_monochrome,
+            )
             if batch_np.shape[0] == 0:
                 continue
             x = torch.from_numpy(batch_np).to(torch_device)
@@ -1460,7 +1690,7 @@ class TinyCNNInferenceWorker(QRunnable):
 class TorchvisionInferenceWorker(QRunnable):
     """Run torchvision Custom CNN classification inference on all project images.
 
-    Supports PyTorch (cpu/mps/cuda/rocm) and ONNX runtimes via
+    Supports PyTorch (cpu/mps/cuda) and ONNX runtimes via
     ``compute_runtime``. Output contract: same as TinyCNNInferenceWorker —
     emits ``{"probs": ndarray(N, C), "class_names": list}`` via success signal.
     """
@@ -1473,6 +1703,7 @@ class TorchvisionInferenceWorker(QRunnable):
         input_size: int = 224,
         compute_runtime: str = "cpu",
         batch_size: int = 64,
+        force_monochrome: bool = False,
     ):
         super().__init__()
         self.setAutoDelete(False)
@@ -1482,6 +1713,7 @@ class TorchvisionInferenceWorker(QRunnable):
         self.input_size = input_size
         self.compute_runtime = str(compute_runtime or "cpu")
         self.batch_size = batch_size
+        self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
 
     @staticmethod
@@ -1492,22 +1724,26 @@ class TorchvisionInferenceWorker(QRunnable):
         if rt in ("mps", "onnx_coreml"):
             return "mps"
         if rt in ("rocm", "onnx_rocm"):
-            return "cuda"
+            return "cuda"  # kept for legacy configs; ROCm is no longer supported
         return "cpu"
 
     def _build_transform(self):
         from torchvision import transforms
 
+        from ...training.torchvision_model import get_classifier_normalization_stats
+
         sz = self.input_size
-        mean = [0.485, 0.456, 0.406]
-        std = [0.229, 0.224, 0.225]
-        return transforms.Compose(
+        mean, std = get_classifier_normalization_stats(monochrome=self.force_monochrome)
+        transform_steps = [transforms.Resize((sz, sz))]
+        if self.force_monochrome:
+            transform_steps.append(transforms.Grayscale(num_output_channels=3))
+        transform_steps.extend(
             [
-                transforms.Resize((sz, sz)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean, std),
             ]
         )
+        return transforms.Compose(transform_steps)
 
     def _create_infer_fn(self, rt: str):
         import torch
@@ -1549,10 +1785,25 @@ class TorchvisionInferenceWorker(QRunnable):
         for path in batch_paths:
             try:
                 img = Image.open(str(path)).convert("RGB")
+                if self.force_monochrome:
+                    img = img.convert("L").convert("RGB")
                 batch_tensors.append(transform(img).numpy())
             except Exception:
                 batch_tensors.append(np.zeros((3, sz, sz), dtype=np.float32))
         return np.stack(batch_tensors).astype(np.float32)
+
+    def _resolve_force_monochrome(self) -> bool:
+        try:
+            import torch
+
+            ckpt = torch.load(
+                str(self.model_path), map_location="cpu", weights_only=False
+            )
+            if isinstance(ckpt, dict):
+                return bool(ckpt.get("monochrome", self.force_monochrome))
+        except Exception:
+            pass
+        return self.force_monochrome
 
     @staticmethod
     def _softmax_numpy(logits):
@@ -1586,6 +1837,7 @@ class TorchvisionInferenceWorker(QRunnable):
             from ...runtime.compute_runtime import _normalize_runtime
 
             rt = _normalize_runtime(self.compute_runtime)
+            self.force_monochrome = self._resolve_force_monochrome()
             transform = self._build_transform()
             infer_fn = self._create_infer_fn(rt)
             all_probs_np = self._run_inference_batches(infer_fn, transform)
@@ -1693,4 +1945,5 @@ class AprilTagAutoLabelWorker(QRunnable):
             traceback.print_exc()
             self.signals.error.emit(str(exc))
         finally:
+            self.signals.finished.emit()
             self.signals.finished.emit()

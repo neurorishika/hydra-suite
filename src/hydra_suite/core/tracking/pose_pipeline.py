@@ -49,7 +49,7 @@ class FrameCropResult:
     frame_idx: int
     det_ids: List[int]
     n_dets: int
-    crops: List[np.ndarray]
+    crops: list  # List[np.ndarray] for CPU path; List[Tensor] for CUDA path
     crop_to_det: List[int]
     crop_offsets: Dict[int, Tuple[int, int]]
     all_obb_corners: List[np.ndarray]
@@ -296,7 +296,7 @@ class PosePipeline:
 
         # Batch accumulators
         self._pending: List[FrameCropResult] = []
-        self._flat_crops: List[np.ndarray] = []
+        self._flat_crops: list = []  # np.ndarray (CPU) or Tensor (CUDA)
         self._inflight: Optional[Future] = None
 
         # PrecomputePhase protocol state
@@ -483,7 +483,7 @@ class PosePipeline:
     def process_frame(
         self,
         frame_idx: int,
-        crops: List[np.ndarray],
+        crops: list,
         detection_ids: List[int],
         crop_det_indices: List[int],
         all_obb: List[np.ndarray],
@@ -493,13 +493,14 @@ class PosePipeline:
     ) -> None:
         """Accept pre-extracted crops and feed them into the inference pipeline.
 
-        Letterboxing is applied here if pre_resize_target > 0 (backend detail).
-        If crops is empty, this is a no-op (sparse cache — frames with no
-        detections are absent from the pose cache).
+        *crops* may contain either ``np.ndarray`` (CPU path) or CUDA
+        ``torch.Tensor`` in ``C×H×W`` layout (GPU path from NVDec +
+        :func:`~hydra_suite.core.canonicalization.crop.gpu_canonical_crop`).
 
-        canonical_affines: When provided, a parallel list of M_inverse (2x3)
-        arrays for canonical-crop-to-frame coordinate mapping.  Takes priority
-        over offset-based mapping when present.
+        Letterboxing via :func:`letterbox_crop` is applied only to CPU
+        (numpy) crops; GPU tensor crops skip this step because the backend's
+        :meth:`~hydra_suite.core.identity.pose.backends.sleap.SleapExportedBackend._prepare_batch_cuda`
+        handles letterboxing on-device.
         """
         if self._cache_hit:
             return
@@ -523,7 +524,10 @@ class PosePipeline:
         ):
             slot_idx = _require_detection_index(det_idx, fcr.n_dets)
             processed = crop
-            if self._pre_resize > 0:
+            # Skip CPU letterbox for CUDA tensors — _prepare_batch_cuda handles
+            # letterboxing on-device, so no transform to invert later.
+            _is_cuda_tensor = hasattr(crop, "is_cuda") and crop.is_cuda
+            if self._pre_resize > 0 and not _is_cuda_tensor:
                 processed, transform = letterbox_crop(
                     processed, self._pre_resize, self._bg_color
                 )
@@ -681,7 +685,16 @@ class PosePipeline:
         """
         stage_profile: Dict[str, float] = {}
         stage_profile["pose_individuals"] = float(len(flat_crops))
-        all_pred = self._backend.predict_batch(flat_crops)
+        _use_cuda = (
+            bool(flat_crops)
+            and hasattr(flat_crops[0], "is_cuda")
+            and flat_crops[0].is_cuda  # type: ignore[union-attr]
+            and hasattr(self._backend, "predict_batch_cuda")
+        )
+        if _use_cuda:
+            all_pred = self._backend.predict_batch_cuda(flat_crops)  # type: ignore[union-attr]
+        else:
+            all_pred = self._backend.predict_batch(flat_crops)
         consume_profile = getattr(self._backend, "consume_last_profile", None)
         if callable(consume_profile):
             try:

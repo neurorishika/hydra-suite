@@ -9,6 +9,7 @@ Optimizations:
 """
 
 import logging
+import math
 import re
 
 import numpy as np
@@ -224,7 +225,13 @@ def _build_frame_lookup(traj_df, require_valid_x=False):
 
     lookup = {}
     for i in valid_positions:
-        lookup[frames[i]] = {col: col_arrays[col][i] for col in columns}
+        frame_id = frames[i]
+        if frame_id in lookup:
+            logger.warning(
+                "_build_frame_lookup: duplicate FrameID %s; later row overwrites earlier.",
+                frame_id,
+            )
+        lookup[frame_id] = {col: col_arrays[col][i] for col in columns}
     return lookup
 
 
@@ -286,9 +293,79 @@ def _find_merge_candidates_python(
             agreeing_frames = int(np.count_nonzero(dist <= agreement_distance))
 
             if agreeing_frames >= min_overlap:
-                merge_candidates.append((fi, bi, agreeing_frames, len(common_frames)))
+                identity_agreeing = 0
+                if (
+                    "IdentityCommitted" in fwd.columns
+                    and "IdentityAssignedLabel" in fwd.columns
+                    and "IdentityCommitted" in bwd.columns
+                    and "IdentityAssignedLabel" in bwd.columns
+                ):
+                    fwd_c = fwd["IdentityCommitted"].values
+                    bwd_c = bwd["IdentityCommitted"].values
+                    fwd_lbl = fwd["IdentityAssignedLabel"].values
+                    bwd_lbl = bwd["IdentityAssignedLabel"].values
+                    valid_indices = np.where(valid_mask)[0]
+                    for k_valid, d in zip(valid_indices, dist):
+                        if d > agreement_distance:
+                            continue
+                        fi_k = fi_indices[k_valid]
+                        bi_k = bi_indices[k_valid]
+                        if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
+                            continue
+                        l1 = str(fwd_lbl[fi_k] or "")
+                        l2 = str(bwd_lbl[bi_k] or "")
+                        if l1 and l2 and l1 == l2:
+                            identity_agreeing += 1
+                merge_candidates.append(
+                    (fi, bi, agreeing_frames, len(common_frames), identity_agreeing)
+                )
 
     return merge_candidates
+
+
+def _enrich_candidates_with_identity(
+    candidates, forward_dfs, backward_dfs, agreement_distance
+):
+    """Append identity-agreement count to Numba-produced (fi, bi, agreeing, common) tuples."""
+    enriched = []
+    for fi, bi, agreeing, total_common in candidates:
+        fwd = forward_dfs[fi]
+        bwd = backward_dfs[bi]
+        identity_agreeing = 0
+        if (
+            "IdentityCommitted" in fwd.columns
+            and "IdentityAssignedLabel" in fwd.columns
+            and "IdentityCommitted" in bwd.columns
+            and "IdentityAssignedLabel" in bwd.columns
+        ):
+            fwd_map = {f: i for i, f in enumerate(fwd["FrameID"].values)}
+            bwd_map = {f: i for i, f in enumerate(bwd["FrameID"].values)}
+            fwd_x = fwd["X"].values
+            fwd_y = fwd["Y"].values
+            bwd_x = bwd["X"].values
+            bwd_y = bwd["Y"].values
+            fwd_c = fwd["IdentityCommitted"].values
+            bwd_c = bwd["IdentityCommitted"].values
+            fwd_lbl = fwd["IdentityAssignedLabel"].values
+            bwd_lbl = bwd["IdentityAssignedLabel"].values
+            for f, fi_k in fwd_map.items():
+                bi_k = bwd_map.get(f)
+                if bi_k is None:
+                    continue
+                if pd.isna(fwd_x[fi_k]) or pd.isna(bwd_x[bi_k]):
+                    continue
+                dx = fwd_x[fi_k] - bwd_x[bi_k]
+                dy = fwd_y[fi_k] - bwd_y[bi_k]
+                if np.sqrt(dx * dx + dy * dy) > agreement_distance:
+                    continue
+                if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
+                    continue
+                l1 = str(fwd_lbl[fi_k] or "")
+                l2 = str(bwd_lbl[bi_k] or "")
+                if l1 and l2 and l1 == l2:
+                    identity_agreeing += 1
+        enriched.append((fi, bi, agreeing, total_common, identity_agreeing))
+    return enriched
 
 
 # ============================================================================
@@ -433,8 +510,19 @@ def _split_segments_at_occlusion_gaps(
                 is_occluded.loc[run_group.index[0]]
                 and len(run_group) > max_occlusion_gap
             ):
-                split_indices.append(run_group.index[0])
-                stats["broken_occlusion"] += 1
+                # Split AFTER the occlusion gap rather than at its start.
+                # This keeps the occluded frames attached to the preceding
+                # segment (where _clean_trajectory strips them as trailing NaN
+                # rows) and ensures the following segment starts with the
+                # first active detection frame.  Splitting at the gap start
+                # was creating tiny segments whose rows are all occluded/NaN
+                # and that would be discarded by min_len, over-counting
+                # stats["broken_occlusion"].
+                run_end_pos = segment.index.get_loc(run_group.index[-1])
+                if run_end_pos + 1 < len(segment):
+                    next_frame_idx = segment.index[run_end_pos + 1]
+                    split_indices.append(next_frame_idx)
+                    stats["broken_occlusion"] += 1
 
         if not split_indices:
             final_segments.append(segment)
@@ -450,7 +538,14 @@ def _split_segments_at_occlusion_gaps(
 def _split_segments_at_spatial_jumps(
     segments, max_vel_break, min_len, new_traj_id, stats
 ):
-    """Split segments at large spatial discontinuities across NaN gaps.
+    """Split segments at large spatial discontinuities that span NaN gaps.
+
+    This is the complement to ``_break_trajectory_at_velocity``.  That function
+    uses ``diff()`` on the DataFrame, which produces NaN velocity wherever a row
+    has NaN X/Y (occluded/lost state), so it cannot detect teleportation across
+    an occlusion gap.  This function explicitly iterates over only valid (non-NaN)
+    positions and checks ``frame_gap > 1`` — i.e. it *only* fires across gaps,
+    never on consecutive frames.  The two functions together cover all cases.
 
     Returns (final_segments, new_traj_id).
     """
@@ -503,6 +598,11 @@ def _break_trajectory_at_velocity(
     stats,
 ):
     """Break a single trajectory at velocity-based break points.
+
+    Operates on frame-to-frame velocity between consecutively tracked positions.
+    NaN rows (occluded/lost state, inserted before this function is called) cause
+    ``diff()`` to produce NaN velocity at gap boundaries — those are invisible here
+    and are handled downstream by ``_split_segments_at_spatial_jumps`` instead.
 
     Returns (segments_list, new_traj_id).
     """
@@ -794,6 +894,14 @@ def process_trajectories(trajectories_full: object, params: object) -> object:
         if len(last_segment) >= min_len:
             cleaned_segments.append(last_segment)
 
+    # Drop helper columns — they are not part of the output contract and
+    # keeping them in cleaned_segments leaks transient velocity state.
+    _temp_cols = ["FrameDiff", "DistDiff", "Velocity"]
+    cleaned_segments = [
+        seg.drop(columns=[c for c in _temp_cols if c in seg.columns])
+        for seg in cleaned_segments
+    ]
+
     stats["final_count"] = len(cleaned_segments)
 
     # Convert dataframe segments back to list of tuples format
@@ -813,7 +921,7 @@ def _drop_source_column(traj_list):
 
 
 def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_overlap):
-    if NUMBA_AVAILABLE and len(forward_dfs) > 5 and len(backward_dfs) > 5:
+    if NUMBA_AVAILABLE and len(forward_dfs) > 1 and len(backward_dfs) > 1:
         logger.debug("Using Numba-accelerated merge candidate search")
         fwd_x, fwd_y, fwd_frames, fwd_starts, fwd_ends = _prepare_trajectory_arrays(
             forward_dfs
@@ -838,7 +946,10 @@ def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_ov
                     min_overlap,
                 )
             )
-            return list(zip(fi_arr, bi_arr, agreeing_arr, common_arr))
+            candidates = list(zip(fi_arr, bi_arr, agreeing_arr, common_arr))
+            return _enrich_candidates_with_identity(
+                candidates, forward_dfs, backward_dfs, agreement_distance
+            )
         except Exception as e:
             logger.warning(f"Numba acceleration failed, falling back to Python: {e}")
     return _find_merge_candidates_python(
@@ -847,23 +958,33 @@ def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_ov
 
 
 def _apply_merge_candidates(
-    merge_candidates, forward_dfs, backward_dfs, agreement_distance, min_length
+    merge_candidates,
+    forward_dfs,
+    backward_dfs,
+    agreement_distance,
+    min_length,
+    identity_disagree_min_run=5,
 ):
     used_forward = set()
     used_backward = set()
     result_trajectories = []
-    merge_candidates.sort(key=lambda x: -x[2])
-    for fi, bi, agreeing, total_common in merge_candidates:
+    merge_candidates.sort(key=lambda x: (-x[2], -x[4]))
+    for fi, bi, agreeing, total_common, identity_agreeing in merge_candidates:
         if fi in used_forward or bi in used_backward:
             continue
         used_forward.add(fi)
         used_backward.add(bi)
         logger.debug(
             f"Merging forward_{fi} with backward_{bi}: "
-            f"{agreeing}/{total_common} agreeing frames"
+            f"{agreeing}/{total_common} agreeing frames "
+            f"({identity_agreeing} identity-confirmed)"
         )
         merged_segments = _conservative_merge(
-            forward_dfs[fi], backward_dfs[bi], agreement_distance, min_length
+            forward_dfs[fi],
+            backward_dfs[bi],
+            agreement_distance,
+            min_length,
+            identity_disagree_min_run=identity_disagree_min_run,
         )
         result_trajectories.extend(merged_segments)
     for fi, fwd in enumerate(forward_dfs):
@@ -921,6 +1042,7 @@ def resolve_trajectories(
     AGREEMENT_DISTANCE = params.get("AGREEMENT_DISTANCE", 15.0)
     MIN_OVERLAP_FRAMES = params.get("MIN_OVERLAP_FRAMES", 5)
     MIN_LENGTH = params.get("MIN_TRAJECTORY_LENGTH", 5)
+    IDENTITY_DISAGREE_MIN_RUN = int(params.get("IDENTITY_DISAGREE_MIN_RUN", 5))
 
     logger.info(
         f"Starting conservative trajectory resolution with {len(forward_trajs)} forward "
@@ -979,7 +1101,12 @@ def resolve_trajectories(
 
     # Now merge candidates using conservative strategy
     result_trajectories = _apply_merge_candidates(
-        merge_candidates, forward_dfs, backward_dfs, AGREEMENT_DISTANCE, MIN_LENGTH
+        merge_candidates,
+        forward_dfs,
+        backward_dfs,
+        AGREEMENT_DISTANCE,
+        MIN_LENGTH,
+        identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
     )
 
     # Note: Filtering by MIN_LENGTH is deferred until after stitching
@@ -995,17 +1122,21 @@ def resolve_trajectories(
     # CRITICAL: Merge overlapping trajectories that agree spatially
     # This handles fragments that overlap in the middle (neither contains the other)
     result_trajectories = _merge_overlapping_agreeing_trajectories(
-        result_trajectories, AGREEMENT_DISTANCE, MIN_OVERLAP_FRAMES, MIN_LENGTH
+        result_trajectories,
+        AGREEMENT_DISTANCE,
+        MIN_OVERLAP_FRAMES,
+        MIN_LENGTH,
+        identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
     )
 
     # NEW: Stitch consecutive fragments that are spatially close
     # This fixes tracking breaks during turns or fast movements
     # Use 2x agreement distance to allow for fast movements/ambiguities across small gaps
-    # Allow larger gap (3 frames) to jump over short occlusions
+    _stitch_gap = int(params.get("STITCH_MAX_GAP_FRAMES", 3))
     result_trajectories = _stitch_broken_trajectory_fragments(
         result_trajectories,
         AGREEMENT_DISTANCE * 2,
-        max_gap=3,
+        max_gap=_stitch_gap,
     )
 
     # FINAL DEDUPLICATION: Run a second redundancy pass after all merging and stitching.
@@ -1022,6 +1153,11 @@ def resolve_trajectories(
     result_trajectories = _clean_trajectories(result_trajectories, MIN_LENGTH)
 
     # Reassign trajectory IDs and remove internal columns
+    # Enforce: only one trajectory may claim a given identity at any frame.
+    result_trajectories = resolve_simultaneous_identity_conflicts(
+        result_trajectories, params
+    )
+
     _reassign_trajectory_ids(result_trajectories)
 
     logger.info(f"Final result: {len(result_trajectories)} trajectories")
@@ -1029,7 +1165,246 @@ def resolve_trajectories(
     return result_trajectories
 
 
-def _classify_frame_pair(t1_by_frame, t2_by_frame, frame, agreement_distance):
+# ---------------------------------------------------------------------------
+# Identity conflict arbitration
+# ---------------------------------------------------------------------------
+
+_IDENTITY_LABEL_COL = "IdentityAssignedLabel"
+_IDENTITY_ID_COL = "IdentityAssignedID"
+_IDENTITY_CONF_COL = "IdentityAssignedConfidence"
+_IDENTITY_SLOT_COL = "IdentitySlotLockLabel"
+_IDENTITY_CONFLICT_COL = "IdentityConflictResolved"
+
+
+_CLAIM_TAG_WEIGHT = 1.5
+
+
+def _claim_features(df: pd.DataFrame, modal_label: str) -> tuple:
+    """Return the per-trajectory features feeding ``_claim_score``.
+
+    Components (in declaration order):
+    - tag_votes: sum of AprilTag agreements
+    - agreement: fraction of labelled rows whose label matches ``modal_label``
+    - mean_conf: mean of ``IdentityAssignedConfidence`` over labelled rows
+    - frame_count: number of rows in the trajectory
+    - is_forward: 1 when any row was contributed by the forward pass
+    """
+    tag_votes = float(df["TagVotes"].sum()) if "TagVotes" in df.columns else 0.0
+
+    label_series = (
+        df[_IDENTITY_LABEL_COL]
+        if _IDENTITY_LABEL_COL in df.columns
+        else pd.Series(dtype=object)
+    )
+    valid_label_mask = label_series.notna() & (
+        label_series.astype(str).str.strip() != ""
+    )
+    valid_count = int(valid_label_mask.sum())
+    if valid_count > 0:
+        match = (label_series.astype(str) == modal_label) & valid_label_mask
+        agreement = float(match.sum()) / float(valid_count)
+    else:
+        agreement = 0.0
+
+    mean_conf = 0.0
+    if _IDENTITY_CONF_COL in df.columns:
+        conf_series = df.loc[valid_label_mask, _IDENTITY_CONF_COL].dropna()
+        if not conf_series.empty:
+            candidate = float(conf_series.mean())
+            if np.isfinite(candidate):
+                mean_conf = max(0.0, min(1.0, candidate))
+
+    frame_count = int(len(df))
+    is_forward = int(
+        "_source" in df.columns and bool((df["_source"] == "forward").any())
+    )
+    return (tag_votes, agreement, mean_conf, frame_count, is_forward)
+
+
+def _claim_score(
+    features: tuple,
+    max_frame_count: int,
+    max_tag_votes: float,
+    tag_weight: float = _CLAIM_TAG_WEIGHT,
+) -> float:
+    """Combine claim features into a scalar score (higher = stronger claim).
+
+    Mirrors the iterative fragment-solver objective:
+    ``agreement × mean_conf × length_factor`` is the unary trajectory-quality
+    term; the tag-vote sum is a separate additive bonus so a heavily
+    tag-confirmed claim dominates over noisy long ones. Use
+    ``(_claim_score, is_forward)`` as the lexicographic ordering key — the
+    forward-pass flag breaks exact ties.
+    """
+    tag_votes, agreement, mean_conf, frame_count, _ = features
+    if max_frame_count <= 0:
+        length_factor = 1.0
+    else:
+        log_max = math.log1p(max_frame_count)
+        length_factor = math.log1p(frame_count) / log_max if log_max > 0 else 1.0
+    if max_tag_votes <= 0:
+        tag_norm = 0.0
+    else:
+        tag_norm = tag_votes / max_tag_votes
+    return float(agreement * mean_conf * length_factor + tag_weight * tag_norm)
+
+
+def _strip_identity_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if _IDENTITY_LABEL_COL in df.columns:
+        df[_IDENTITY_LABEL_COL] = np.nan
+    if _IDENTITY_ID_COL in df.columns:
+        df[_IDENTITY_ID_COL] = np.nan
+    if _IDENTITY_CONF_COL in df.columns:
+        df[_IDENTITY_CONF_COL] = 0.0
+    if _IDENTITY_SLOT_COL in df.columns:
+        df[_IDENTITY_SLOT_COL] = np.nan
+    df[_IDENTITY_CONFLICT_COL] = True
+    return df
+
+
+def resolve_simultaneous_identity_conflicts(
+    result_dfs: list,
+    params: dict | None = None,
+) -> list:
+    """Demote the weaker of two tracks that simultaneously claim the same identity.
+
+    Enforces the physical constraint that a given identity can belong to at most
+    one trajectory at any point in time.  For each pair of trajectories with the
+    same majority ``IdentityAssignedLabel`` and at least one shared frame, the
+    lower-scoring one has its identity columns cleared and
+    ``IdentityConflictResolved`` set to ``True``.
+
+    Scoring follows the same shape as the iterative fragment solver: a unary
+    quality term ``agreement × mean_conf × length_factor`` plus an additive
+    AprilTag bonus, with the forward-pass flag as the lex tiebreaker. A long
+    track with consistent labels and a clear margin therefore wins over a
+    short, jittery, or low-confidence one — the loser is the one that gets
+    cleared to Unknown.
+    """
+    if not result_dfs:
+        return result_dfs
+
+    labeled: list[tuple] = []
+    for idx, df in enumerate(result_dfs):
+        if _IDENTITY_LABEL_COL not in df.columns or "FrameID" not in df.columns:
+            continue
+        valid = df[_IDENTITY_LABEL_COL].dropna()
+        valid = valid[valid.astype(str).str.strip() != ""]
+        if valid.empty:
+            continue
+        label = str(valid.mode().iloc[0])
+        frames = frozenset(df["FrameID"].dropna().astype(int).tolist())
+        features = _claim_features(df, label)
+        labeled.append((idx, label, frames, features))
+
+    if not labeled:
+        return result_dfs
+
+    max_frame_count = max(features[3] for _, _, _, features in labeled)
+    max_tag_votes = max(features[0] for _, _, _, features in labeled)
+
+    scored: list[tuple] = []
+    for idx, label, frames, features in labeled:
+        score = _claim_score(features, max_frame_count, max_tag_votes)
+        is_forward = features[4]
+        scored.append((idx, label, frames, (score, is_forward)))
+
+    by_label: dict[str, list] = {}
+    for item in scored:
+        by_label.setdefault(item[1], []).append(item)
+
+    loser_indices: set[int] = set()
+    for candidates in by_label.values():
+        if len(candidates) < 2:
+            continue
+        for i in range(len(candidates)):
+            for j in range(i + 1, len(candidates)):
+                idx_a, _, frames_a, score_a = candidates[i]
+                idx_b, _, frames_b, score_b = candidates[j]
+                if idx_a in loser_indices or idx_b in loser_indices:
+                    continue
+                if frames_a.isdisjoint(frames_b):
+                    continue
+                loser = idx_b if score_a >= score_b else idx_a
+                loser_indices.add(loser)
+                logger.debug(
+                    "Identity conflict on label '%s': trajectory index %d wins over %d",
+                    candidates[i][1],
+                    idx_a if score_a >= score_b else idx_b,
+                    loser,
+                )
+
+    for idx in loser_indices:
+        result_dfs[idx] = _strip_identity_columns(result_dfs[idx].copy())
+
+    return result_dfs
+
+
+def _committed_identity_disagrees(r1: dict, r2: dict) -> bool:
+    """True when both rows carry committed, non-empty identity labels that differ."""
+    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+        return False
+    l1 = r1.get("IdentityAssignedLabel") or ""
+    l2 = r2.get("IdentityAssignedLabel") or ""
+    return bool(l1) and bool(l2) and l1 != l2
+
+
+def _committed_identity_agrees(r1: dict, r2: dict) -> bool:
+    """True when both rows carry committed, non-empty identity labels that are equal."""
+    if r1.get("IdentityCommitted") != 1 or r2.get("IdentityCommitted") != 1:
+        return False
+    l1 = r1.get("IdentityAssignedLabel") or ""
+    l2 = r2.get("IdentityAssignedLabel") or ""
+    return bool(l1) and bool(l2) and l1 == l2
+
+
+def _compute_identity_disagree_frames(
+    t1_by_frame: dict,
+    t2_by_frame: dict,
+    agreement_distance: float,
+    min_run: int,
+) -> frozenset:
+    """Return the set of frames that belong to a sustained identity-disagree run.
+
+    A frame qualifies when forward and backward positions agree spatially AND both
+    carry committed but conflicting identity labels.  Isolated disagreements shorter
+    than ``min_run`` consecutive frames are discarded to suppress single-frame blips.
+    Gap tolerance between consecutive candidate frames is 2 frames.
+    """
+    common = sorted(set(t1_by_frame.keys()).intersection(t2_by_frame.keys()))
+    candidates: list[int] = []
+    for frame in common:
+        r1, r2 = t1_by_frame[frame], t2_by_frame[frame]
+        x1, y1 = r1.get("X"), r1.get("Y")
+        x2, y2 = r2.get("X"), r2.get("Y")
+        if pd.isna(x1) or pd.isna(x2):
+            continue
+        dist = np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+        if dist <= agreement_distance and _committed_identity_disagrees(r1, r2):
+            candidates.append(frame)
+
+    if not candidates:
+        return frozenset()
+    if min_run <= 1:
+        return frozenset(candidates)
+
+    result: set[int] = set()
+    run_start = 0
+    for i in range(1, len(candidates) + 1):
+        if i == len(candidates) or candidates[i] - candidates[i - 1] > 2:
+            if i - run_start >= min_run:
+                result.update(candidates[run_start:i])
+            run_start = i
+    return frozenset(result)
+
+
+def _classify_frame_pair(
+    t1_by_frame,
+    t2_by_frame,
+    frame,
+    agreement_distance,
+    identity_disagree_frames=frozenset(),
+):
     in_t1 = frame in t1_by_frame
     in_t2 = frame in t2_by_frame
     if in_t1 and in_t2:
@@ -1047,6 +1422,8 @@ def _classify_frame_pair(t1_by_frame, t2_by_frame, frame, agreement_distance):
         dy = r1["Y"] - r2["Y"]
         dist = np.sqrt(dx * dx + dy * dy)
         if dist <= agreement_distance:
+            if frame in identity_disagree_frames:
+                return "disagree", (r1, r2)
             return "agree", _average_trajectory_rows(r1, r2)
         return "disagree", (r1, r2)
     if in_t1:
@@ -1156,12 +1533,15 @@ def _build_final_segments_from_rows(
     return final_segments
 
 
-def _conservative_merge(traj1, traj2, agreement_distance, min_length):
+def _conservative_merge(
+    traj1, traj2, agreement_distance, min_length, identity_disagree_min_run=5
+):
     """
     Conservatively merge two trajectories.
 
     - Agreeing frames (both exist, distance <= threshold): Average positions
     - Disagreeing frames (both exist, distance > threshold): Split into separate segments
+    - Agreeing frames where both have committed but conflicting identity: also split
     - Unique frames: Keep from whichever trajectory has them
 
     Returns list of trajectory DataFrames (may be more than input if splits occur).
@@ -1173,6 +1553,10 @@ def _conservative_merge(traj1, traj2, agreement_distance, min_length):
     frames1 = set(t1_by_frame.keys())
     frames2 = set(t2_by_frame.keys())
     all_frames = sorted(frames1.union(frames2))
+
+    identity_disagree_frames = _compute_identity_disagree_frames(
+        t1_by_frame, t2_by_frame, agreement_distance, identity_disagree_min_run
+    )
 
     # Build trajectory segments using state machine
     # State: "merged" = building single merged segment
@@ -1189,7 +1573,11 @@ def _conservative_merge(traj1, traj2, agreement_distance, min_length):
 
     for frame in all_frames:
         classification, data = _classify_frame_pair(
-            t1_by_frame, t2_by_frame, frame, agreement_distance
+            t1_by_frame,
+            t2_by_frame,
+            frame,
+            agreement_distance,
+            identity_disagree_frames,
         )
         if state == "merged":
             state, current_segment, split_t1_segment, split_t2_segment = (
@@ -1513,7 +1901,12 @@ def _count_overlap_agreement(
 
 
 def _classify_overlap_frames(
-    all_frames, lookup_a, lookup_b, has_detection_id, agreement_distance
+    all_frames,
+    lookup_a,
+    lookup_b,
+    has_detection_id,
+    agreement_distance,
+    identity_disagree_frames=frozenset(),
 ):
     """Classify each frame of the union of two trajectories as agree/disagree/single-source."""
     frame_classifications = {}
@@ -1530,8 +1923,11 @@ def _classify_overlap_frames(
             else:
                 dist = np.sqrt((ra["X"] - rb["X"]) ** 2 + (ra["Y"] - rb["Y"]) ** 2)
                 if dist <= agreement_distance:
-                    merged = _average_trajectory_rows(ra, rb)
-                    frame_classifications[frame] = ("agree", merged)
+                    if frame in identity_disagree_frames:
+                        frame_classifications[frame] = ("disagree", (ra, rb))
+                    else:
+                        merged = _average_trajectory_rows(ra, rb)
+                        frame_classifications[frame] = ("agree", merged)
                 else:
                     frame_classifications[frame] = ("disagree", (ra, rb))
         elif in_a:
@@ -1835,6 +2231,7 @@ def _try_merge_trajectory_pair(
     min_overlap,
     min_length,
     max_spatial_jump,
+    identity_disagree_min_run=5,
 ):
     """Try to merge trajectory pair (i, j). Returns merged segments list, or None if not mergeable."""
     lookup_a = traj_lookups[i]
@@ -1876,8 +2273,16 @@ def _try_merge_trajectory_pair(
         )
 
     all_frames = sorted(frames_a.union(frames_b))
+    identity_disagree_frames = _compute_identity_disagree_frames(
+        lookup_a, lookup_b, agreement_distance, identity_disagree_min_run
+    )
     frame_classifications = _classify_overlap_frames(
-        all_frames, lookup_a, lookup_b, has_detection_id, agreement_distance
+        all_frames,
+        lookup_a,
+        lookup_b,
+        has_detection_id,
+        agreement_distance,
+        identity_disagree_frames,
     )
 
     result_segments, disagree_a_obs, disagree_b_obs = (
@@ -1914,7 +2319,11 @@ def _try_merge_trajectory_pair(
 
 
 def _merge_overlapping_agreeing_trajectories(
-    trajectories, agreement_distance, min_overlap, min_length
+    trajectories,
+    agreement_distance,
+    min_overlap,
+    min_length,
+    identity_disagree_min_run=5,
 ):
     """
     Merge trajectories that overlap in time and agree spatially or share DetectionIDs.
@@ -1982,6 +2391,7 @@ def _merge_overlapping_agreeing_trajectories(
                     min_overlap,
                     min_length,
                     max_spatial_jump,
+                    identity_disagree_min_run=identity_disagree_min_run,
                 )
 
                 if result_segments is not None:
@@ -2010,6 +2420,34 @@ def _merge_overlapping_agreeing_trajectories(
     return trajectories
 
 
+def _last_committed_label(df: pd.DataFrame) -> str:
+    """Return the most recent committed identity label in df, or empty string."""
+    if (
+        "IdentityCommitted" not in df.columns
+        or "IdentityAssignedLabel" not in df.columns
+    ):
+        return ""
+    committed = df[df["IdentityCommitted"] == 1]
+    if committed.empty:
+        return ""
+    lbl = committed["IdentityAssignedLabel"].iloc[-1]
+    return str(lbl) if lbl and not pd.isna(lbl) else ""
+
+
+def _first_committed_label(df: pd.DataFrame) -> str:
+    """Return the earliest committed identity label in df, or empty string."""
+    if (
+        "IdentityCommitted" not in df.columns
+        or "IdentityAssignedLabel" not in df.columns
+    ):
+        return ""
+    committed = df[df["IdentityCommitted"] == 1]
+    if committed.empty:
+        return ""
+    lbl = committed["IdentityAssignedLabel"].iloc[0]
+    return str(lbl) if lbl and not pd.isna(lbl) else ""
+
+
 def _build_stitch_info(trajectories):
     """Build start/end frame and position lookup for stitching."""
     traj_info = {}
@@ -2021,6 +2459,8 @@ def _build_stitch_info(trajectories):
             "end_frame": df["FrameID"].iat[-1],
             "start_pos": (df["X"].iat[0], df["Y"].iat[0]),
             "end_pos": (df["X"].iat[-1], df["Y"].iat[-1]),
+            "end_identity": _last_committed_label(df),
+            "start_identity": _first_committed_label(df),
             "df": df,
         }
     sorted_indices = sorted(traj_info.keys(), key=lambda i: traj_info[i]["start_frame"])
@@ -2036,9 +2476,18 @@ def _find_best_stitch_candidate(
     agreement_distance,
     max_gap,
 ):
-    """Find the closest spatial stitch candidate within max_gap frames."""
+    """Find the best stitch candidate within max_gap frames.
+
+    Spatial proximity is the primary filter.  When multiple candidates are
+    spatially valid, committed identity agreement breaks ties.  Candidates
+    where both endpoints carry committed but conflicting identity labels are
+    blocked entirely (identity gate).
+    """
     best_idx = -1
     min_dist = float("inf")
+    best_identity_match = False
+    end_id = info_a.get("end_identity", "")
+
     for idx_next in range(idx_ptr + 1, len(sorted_indices)):
         idx_b = sorted_indices[idx_next]
         if idx_b in used:
@@ -2053,10 +2502,25 @@ def _find_best_stitch_candidate(
         bx, by = info_b["start_pos"]
         if pd.isna(ax) or pd.isna(bx):
             continue
+
+        start_id = info_b.get("start_identity", "")
+
+        # Identity gate: conflicting committed labels → skip this candidate.
+        if end_id and start_id and end_id != start_id:
+            continue
+
         dist = np.sqrt((ax - bx) ** 2 + (ay - by) ** 2)
-        if dist <= agreement_distance and dist < min_dist:
+        if dist > agreement_distance:
+            continue
+
+        identity_match = bool(end_id and start_id and end_id == start_id)
+        if dist < min_dist or (
+            dist == min_dist and identity_match and not best_identity_match
+        ):
             min_dist = dist
             best_idx = idx_b
+            best_identity_match = identity_match
+
     return best_idx, min_dist
 
 
@@ -2289,6 +2753,7 @@ def interpolate_trajectories(
     method: object = "linear",
     max_gap: object = 10,
     heading_flip_max_burst: int = 5,
+    directed_heading_posthoc: bool = False,
 ) -> object:
     """
     Interpolate missing values in trajectories using various methods.
@@ -2299,6 +2764,12 @@ def interpolate_trajectories(
         max_gap: Maximum gap size to interpolate (frames). Larger gaps are left as NaN.
         heading_flip_max_burst: Maximum length of an isolated heading-flip burst to
             correct in post-processing.  Longer segments are assumed genuine.
+            Ignored when *directed_heading_posthoc* is True.
+        directed_heading_posthoc: When True (head-tail or pose model was used),
+            apply global heading consistency via dynamic programming instead of
+            the local burst-based flip correction.  This resolves the minimum
+            number of per-frame flips needed to make the entire track
+            consistently directed.
 
     Returns:
         DataFrame with interpolated values
@@ -2352,9 +2823,14 @@ def interpolate_trajectories(
         if not has_missing_frames and not has_value_gaps:
             # Still fix heading flips even without gaps
             if "Theta" in traj_data.columns:
-                traj_data["Theta"] = _fix_heading_flips(
-                    traj_data["Theta"].values, max_burst=heading_flip_max_burst
-                )
+                if directed_heading_posthoc:
+                    traj_data["Theta"] = _fix_heading_globally(
+                        traj_data["Theta"].values
+                    )
+                else:
+                    traj_data["Theta"] = _fix_heading_flips(
+                        traj_data["Theta"].values, max_burst=heading_flip_max_burst
+                    )
             interpolated_parts.append(traj_data)
             continue
 
@@ -2380,12 +2856,14 @@ def interpolate_trajectories(
                 max_gap=max_gap,
             )
 
-        # Fix isolated 180-degree heading flips before interpolation.
-        # Must happen before _interpolate_angle so that sin/cos interpolation
-        # doesn't smooth across an artificial discontinuity.
-        traj_data["Theta"] = _fix_heading_flips(
-            traj_data["Theta"].values, max_burst=heading_flip_max_burst
-        )
+        # Fix heading ambiguities before interpolation so that sin/cos
+        # interpolation doesn't smooth across an artificial discontinuity.
+        if directed_heading_posthoc:
+            traj_data["Theta"] = _fix_heading_globally(traj_data["Theta"].values)
+        else:
+            traj_data["Theta"] = _fix_heading_flips(
+                traj_data["Theta"].values, max_burst=heading_flip_max_burst
+            )
 
         traj_data["Theta"] = _interpolate_angle(
             traj_data["FrameID"].values,
@@ -2561,6 +3039,7 @@ def _build_relink_fragment_summaries(
                 "traj_id": traj_id_int,
                 "start_frame": start_frame,
                 "end_frame": end_frame,
+                "identity_sources": _fragment_unique_identity_sources(frag_df),
                 "start_pos": np.asarray(
                     [float(start_row["X"]), float(start_row["Y"])], dtype=np.float32
                 ),
@@ -2592,6 +3071,36 @@ def _build_relink_fragment_summaries(
     return fragments, fragment_frames
 
 
+def _parse_unique_identity_key(identity_key) -> dict[str, str]:
+    token = str(identity_key).strip() if identity_key is not None else ""
+    if not token or token.lower() == "nan":
+        return {}
+    parsed = {}
+    for item in token.split("|"):
+        if "=" not in item:
+            continue
+        source, value = item.split("=", 1)
+        source = str(source).strip()
+        value = str(value).strip()
+        if source and value:
+            parsed[source] = value
+    return parsed
+
+
+def _fragment_unique_identity_sources(frag_df: pd.DataFrame) -> dict[str, str]:
+    if "UniqueIdentityKey" not in frag_df.columns:
+        return {}
+    keys = [
+        str(value).strip()
+        for value in frag_df["UniqueIdentityKey"].tolist()
+        if str(value).strip() and str(value).strip().lower() != "nan"
+    ]
+    if not keys:
+        return {}
+    dominant_key = max(set(keys), key=keys.count)
+    return _parse_unique_identity_key(dominant_key)
+
+
 def _score_relink_candidate(
     src,
     dst,
@@ -2604,6 +3113,14 @@ def _score_relink_candidate(
     min_motion_speed,
 ):
     """Score a single (src, dst) relink candidate. Returns (score, src_id, dst_id) or None if rejected."""
+    src_identity = dict(src.get("identity_sources") or {})
+    dst_identity = dict(dst.get("identity_sources") or {})
+    if src_identity and dst_identity:
+        from hydra_suite.core.post.identity_postprocess import identity_sources_conflict
+
+        if identity_sources_conflict(src_identity, dst_identity):
+            return None
+
     gap = int(dst["start_frame"] - src["end_frame"] - 1)
     if gap < 1 or gap > max_gap:
         return None
@@ -2611,7 +3128,14 @@ def _score_relink_candidate(
     delta_frames = gap + 1
 
     raw_jump = float(np.linalg.norm(dst["start_pos"] - src["end_pos"]))
-    if raw_jump > max_vel_break * float(delta_frames):
+    # Keep relinking conservative over long occlusion gaps: the destination must
+    # remain within a small absolute motion envelope, not merely a large
+    # time-scaled envelope.
+    raw_jump_limit = max(
+        agreement_distance * 2.0,
+        max_vel_break * float(min(delta_frames, 4)),
+    )
+    if raw_jump > raw_jump_limit:
         return None
 
     predicted_pos = src["end_pos"] + src["end_velocity"] * float(delta_frames)
@@ -2950,6 +3474,91 @@ def _fix_heading_flips(theta: np.ndarray, max_burst: int = 5) -> np.ndarray:
 
         if not changed:
             break
+
+    return result
+
+
+def _fix_heading_globally(theta: np.ndarray) -> np.ndarray:
+    """Globally correct 180-degree heading ambiguities using dynamic programming.
+
+    For each frame the heading can be kept as-is (state 0) or flipped by π
+    (state 1).  Dynamic programming finds the assignment that minimises the
+    total circular angular variation across the entire track — equivalent to
+    the minimum number of flips needed to make the trajectory consistently
+    directed.
+
+    This is appropriate when a head-tail or pose model provides directed
+    headings, because those models independently assign a direction to every
+    frame and therefore produce isolated 180° errors that are better resolved
+    globally than frame-by-frame with a hysteresis filter.
+
+    Parameters
+    ----------
+    theta : np.ndarray
+        Heading values in radians.  May contain NaN for missing frames.
+
+    Returns
+    -------
+    np.ndarray
+        Corrected heading array (copy).
+    """
+    two_pi = 2.0 * np.pi
+    result = theta.copy()
+    n = len(result)
+
+    valid_idx = [i for i in range(n) if not np.isnan(result[i])]
+    if len(valid_idx) < 2:
+        return result
+
+    INF = float("inf")
+
+    # dp[s] = minimum total angular variation to reach the current valid frame
+    # in state s (s=0: original, s=1: flipped by pi).
+    dp = [0.0, 0.0]
+    # parent[j][s] = state chosen at the previous valid frame that leads to the
+    # optimal cost dp[s] at valid frame j.
+    parent = [[None, None] for _ in range(len(valid_idx))]
+
+    for vi in range(1, len(valid_idx)):
+        prev_i = valid_idx[vi - 1]
+        curr_i = valid_idx[vi]
+        prev_orig = result[prev_i]
+        curr_orig = result[curr_i]
+        prev_flip = (prev_orig + np.pi) % two_pi
+        curr_flip = (curr_orig + np.pi) % two_pi
+
+        new_dp = [INF, INF]
+        new_parent = [None, None]
+
+        # Effective headings for each (prev_state, curr_state) pair:
+        # prev_state x curr_state → angular cost
+        for curr_s, curr_val in enumerate((curr_orig, curr_flip)):
+            best_cost = INF
+            best_prev_s = 0
+            for prev_s, prev_val in enumerate((prev_orig, prev_flip)):
+                diff = abs(curr_val - prev_val)
+                if diff > np.pi:
+                    diff = two_pi - diff
+                cost = dp[prev_s] + diff
+                if cost < best_cost:
+                    best_cost = cost
+                    best_prev_s = prev_s
+            new_dp[curr_s] = best_cost
+            new_parent[curr_s] = best_prev_s
+
+        dp = new_dp
+        parent[vi] = new_parent
+
+    # Back-track to find the optimal state sequence.
+    states = [None] * len(valid_idx)
+    states[-1] = 0 if dp[0] <= dp[1] else 1
+    for vi in range(len(valid_idx) - 1, 0, -1):
+        states[vi - 1] = parent[vi][states[vi]]
+
+    # Apply flips.
+    for vi, i in enumerate(valid_idx):
+        if states[vi] == 1:
+            result[i] = (result[i] + np.pi) % two_pi
 
     return result
 

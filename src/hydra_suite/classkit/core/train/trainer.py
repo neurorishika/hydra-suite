@@ -82,6 +82,7 @@ class EmbeddingHeadTrainer:
         lr: float = 0.001,
         weight_decay: float = 0.01,
         early_stop_patience: int = 10,
+        ignore_label_index: Optional[int] = None,
         verbose: bool = True,
     ) -> Dict[str, Any]:
         """
@@ -116,21 +117,32 @@ class EmbeddingHeadTrainer:
         optimizer = optim.AdamW(
             self.model.parameters(), lr=lr, weight_decay=weight_decay
         )
-        criterion = nn.CrossEntropyLoss()
+        criterion_kwargs = {}
+        if ignore_label_index is not None:
+            criterion_kwargs["ignore_index"] = int(ignore_label_index)
+        criterion = nn.CrossEntropyLoss(**criterion_kwargs)
 
         # Training loop
         history = {"train_loss": [], "val_loss": [], "val_acc": []}
         best_val_loss = float("inf")
+        best_state = None
         patience_counter = 0
 
         for epoch in range(epochs):
             # Train
             self.model.train()
             train_loss = 0.0
+            train_count = 0
 
             for embs, labels in train_loader:
                 embs = embs.to(self.device)
                 labels = labels.to(self.device)
+                if ignore_label_index is not None:
+                    active_count = int((labels != int(ignore_label_index)).sum().item())
+                    if active_count <= 0:
+                        continue
+                else:
+                    active_count = len(labels)
 
                 optimizer.zero_grad()
                 logits = self.model(embs)
@@ -138,15 +150,19 @@ class EmbeddingHeadTrainer:
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * len(labels)
+                train_loss += loss.item() * active_count
+                train_count += active_count
 
-            train_loss /= len(train_dataset)
+            train_loss /= max(1, train_count)
             history["train_loss"].append(train_loss)
 
             # Validate
             if has_val:
                 val_loss, val_acc = self._validate(
-                    val_embeddings, val_labels, criterion
+                    val_embeddings,
+                    val_labels,
+                    criterion,
+                    ignore_label_index=ignore_label_index,
                 )
                 history["val_loss"].append(val_loss)
                 history["val_acc"].append(val_acc)
@@ -159,9 +175,13 @@ class EmbeddingHeadTrainer:
                         f"val_acc: {val_acc:.4f}"
                     )
 
-                # Early stopping
+                # Early stopping with best-state checkpointing
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
+                    best_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in self.model.state_dict().items()
+                    }
                     patience_counter = 0
                 else:
                     patience_counter += 1
@@ -174,10 +194,19 @@ class EmbeddingHeadTrainer:
                 if verbose:
                     print(f"Epoch {epoch + 1}/{epochs} - train_loss: {train_loss:.4f}")
 
+        # Restore best model weights when early stopping was active
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+            self.model.to(self.device)
+
         return history
 
     def _validate(
-        self, embeddings: np.ndarray, labels: np.ndarray, criterion: nn.Module
+        self,
+        embeddings: np.ndarray,
+        labels: np.ndarray,
+        criterion: nn.Module,
+        ignore_label_index: Optional[int] = None,
     ) -> tuple:
         """Compute validation loss and accuracy."""
         self.model.eval()
@@ -190,7 +219,16 @@ class EmbeddingHeadTrainer:
             loss = criterion(logits, labels_tensor).item()
 
             preds = logits.argmax(dim=1)
-            acc = (preds == labels_tensor).float().mean().item()
+            if ignore_label_index is not None:
+                mask = labels_tensor != int(ignore_label_index)
+                if bool(mask.any().item()):
+                    preds = preds[mask]
+                    labels_tensor = labels_tensor[mask]
+                    acc = (preds == labels_tensor).float().mean().item()
+                else:
+                    acc = 0.0
+            else:
+                acc = (preds == labels_tensor).float().mean().item()
 
         return loss, acc
 

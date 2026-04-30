@@ -6,6 +6,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from hydra_suite.classkit.core.data.source_import import inspect_external_source
+
 CLASSKIT_IMAGES_SUBDIR = "images"
 CLASSKIT_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
@@ -17,6 +19,8 @@ class ClassKitSourceInspection:
     dataset_root: Path
     images_dir: Path
     images_count: int
+    source_kind: str = "images"
+    annotation_count: int = 0
     needs_standardization: bool = False
 
 
@@ -31,7 +35,14 @@ def list_classkit_images(folder: Path) -> list[Path]:
 
 def count_classkit_images(folder: Path) -> int:
     """Return the number of supported image files directly inside *folder*."""
-    return len(list_classkit_images(folder))
+    direct_images = list_classkit_images(folder)
+    if direct_images:
+        return len(direct_images)
+    try:
+        inspection = inspect_classkit_source_dir(folder)
+    except ValueError:
+        return 0
+    return inspection.images_count
 
 
 def has_classkit_images(folder: Path) -> bool:
@@ -41,12 +52,24 @@ def has_classkit_images(folder: Path) -> bool:
 
 def inspect_classkit_source_dir(dataset_root: Path) -> ClassKitSourceInspection:
     """Inspect *dataset_root* and describe whether it can be used as a source."""
+    external = inspect_external_source(dataset_root)
+    if external is not None:
+        return ClassKitSourceInspection(
+            dataset_root=dataset_root,
+            images_dir=dataset_root,
+            images_count=external.images_count,
+            source_kind=external.source_kind,
+            annotation_count=external.annotation_count,
+            needs_standardization=False,
+        )
+
     images_dir = dataset_root / CLASSKIT_IMAGES_SUBDIR
     if images_dir.is_dir() and has_classkit_images(images_dir):
         return ClassKitSourceInspection(
             dataset_root=dataset_root,
             images_dir=images_dir,
             images_count=count_classkit_images(images_dir),
+            source_kind="images",
             needs_standardization=False,
         )
 
@@ -56,12 +79,14 @@ def inspect_classkit_source_dir(dataset_root: Path) -> ClassKitSourceInspection:
             dataset_root=dataset_root,
             images_dir=images_dir,
             images_count=len(root_images),
+            source_kind="images",
             needs_standardization=True,
         )
 
     raise ValueError(
-        "Selected source folder must contain an images/ subdirectory, or the "
-        "folder itself must contain compatible .jpg / .jpeg / .png files.\n\n"
+        "Selected source folder must contain compatible .jpg / .jpeg / .png files, "
+        "an images/ subdirectory, a supported COCO or YOLO OBB/detect dataset root, "
+        "or a train/val class-folder dataset root.\n\n"
         f"{dataset_root}"
     )
 

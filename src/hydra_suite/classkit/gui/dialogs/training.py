@@ -4,7 +4,10 @@ from pathlib import Path
 from statistics import median
 from typing import List, Optional, Tuple
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -31,7 +34,14 @@ from hydra_suite.classkit.config.custom_backbones import (
     get_custom_backbone_choices,
     register_user_timm_backbones,
 )
-from hydra_suite.classkit.core.export.splits import build_stratified_splits
+from hydra_suite.classkit.core.export.splits import (
+    build_label_expansion_records,
+    build_training_dataset_splits,
+)
+from hydra_suite.training.tiny_model import (
+    describe_tiny_size_preset,
+    get_tiny_size_preset_choices,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .timm_backbone_browser import TimmBackboneBrowserDialog
@@ -39,6 +49,9 @@ from .timm_backbone_browser import TimmBackboneBrowserDialog
 
 class ClassKitTrainingDialog(QDialog):
     """Training dialog for ClassKit: flat or multi-head, tiny CNN or YOLO-classify."""
+
+    _AUTO_SIZE_SCALE_MIN = 0.25
+    _AUTO_SIZE_SCALE_MAX = 4.0
 
     def __init__(
         self,
@@ -50,6 +63,7 @@ class ClassKitTrainingDialog(QDialog):
         recent_model_paths: Optional[List[str]] = None,
         average_image_size: Optional[Tuple[float, float]] = None,
         image_paths: Optional[List[Path]] = None,
+        group_keys: Optional[List[str]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -69,6 +83,8 @@ class ClassKitTrainingDialog(QDialog):
         )
         self._average_image_size = average_image_size
         self._image_paths = [Path(path) for path in (image_paths or [])]
+        self._group_keys = list(group_keys or [])
+        self._used_split_group_fallback = False
         self._train_results = None
         self._worker = None
         self.setWindowTitle("Train Classifier")
@@ -84,7 +100,7 @@ class ClassKitTrainingDialog(QDialog):
             numeric = float(value)
         except (TypeError, ValueError):
             return 224
-        rounded = int(round(numeric / 32.0) * 32)
+        rounded = int(((numeric / 32.0) + 0.5) // 1 * 32)
         return max(32, min(512, rounded))
 
     @staticmethod
@@ -172,6 +188,19 @@ class ClassKitTrainingDialog(QDialog):
     def _normalize_path_text(value: object) -> str:
         return str(value or "").strip()
 
+    def _ensure_device_choice(self, value: object) -> None:
+        device = str(value or "").strip().lower()
+        if not device or self.device_combo.findData(device) >= 0:
+            return
+
+        labels = {
+            "cpu": "CPU",
+            "cuda": "CUDA GPU",
+            "mps": "Apple Silicon (MPS)",
+        }
+        if device in labels:
+            self.device_combo.addItem(labels[device], device)
+
     def _normalize_recent_model_paths(
         self, values: Optional[List[str]] = None
     ) -> List[str]:
@@ -244,6 +273,27 @@ class ClassKitTrainingDialog(QDialog):
         self._tiny_in_custom_height_spin.setValue(tiny_height)
         self._custom_input_size_spin.setValue(custom_input_size)
 
+    @classmethod
+    def _scale_auto_input_sizes(cls, sizes: dict, factor: object) -> dict:
+        try:
+            scale = float(factor)
+        except (TypeError, ValueError):
+            scale = 1.0
+        scale = max(cls._AUTO_SIZE_SCALE_MIN, min(cls._AUTO_SIZE_SCALE_MAX, scale))
+
+        scaled = dict(sizes)
+        scaled["tiny_width"] = cls._nearest_computer_friendly_size(
+            float(sizes["tiny_width"]) * scale
+        )
+        scaled["tiny_height"] = cls._nearest_computer_friendly_size(
+            float(sizes["tiny_height"]) * scale
+        )
+        scaled["custom_input_size"] = cls._nearest_computer_friendly_size(
+            float(sizes["custom_input_size"]) * scale
+        )
+        scaled["applied_rescale_factor"] = scale
+        return scaled
+
     def _auto_set_sizes_from_images(self) -> None:
         dimensions = self._sample_image_dimensions()
         if not dimensions:
@@ -263,13 +313,16 @@ class ClassKitTrainingDialog(QDialog):
             )
             return
 
-        self._apply_auto_input_sizes(sizes)
+        factor = self._auto_size_scale_spin.value()
+        scaled_sizes = self._scale_auto_input_sizes(sizes, factor)
+        self._apply_auto_input_sizes(scaled_sizes)
         self.append_log(
             "Auto-sized inputs from "
             f"{sizes['sample_count']:,} image(s): "
-            f"Tiny {sizes['tiny_width']}x{sizes['tiny_height']}, "
-            f"TIMM {sizes['custom_input_size']} square, "
-            f"aspect ratio {sizes['aspect_ratio']:.2f}."
+            f"Tiny {scaled_sizes['tiny_width']}x{scaled_sizes['tiny_height']}, "
+            f"TIMM {scaled_sizes['custom_input_size']} square, "
+            f"aspect ratio {sizes['aspect_ratio']:.2f}, "
+            f"rescale x{scaled_sizes['applied_rescale_factor']:.2f}."
         )
 
     def _apply_initial_settings(self) -> None:
@@ -278,9 +331,11 @@ class ClassKitTrainingDialog(QDialog):
             self._on_mode_changed()
             self._on_rebalance_mode_changed()
             self._on_custom_backbone_changed()
+            self._refresh_tiny_preset_summary()
             self._refresh_data_summary()
             return
 
+        self._ensure_device_choice(settings.get("device"))
         self._set_combo_value(
             self.mode_combo, self._normalize_mode_key(settings.get("mode"))
         )
@@ -302,17 +357,32 @@ class ClassKitTrainingDialog(QDialog):
             self._custom_fine_tune_method_combo,
             settings.get("custom_fine_tune_method"),
         )
+        self._set_spin_value(
+            self._auto_size_scale_spin, settings, "auto_size_scale_factor"
+        )
+        self._set_combo_value(
+            self.tiny_size_combo,
+            settings.get("tiny_preset", "medium"),
+        )
+        self._set_combo_value(
+            self._tiny_in_custom_size_combo,
+            settings.get("tiny_preset", "medium"),
+        )
+        self._set_combo_value(
+            self.split_strategy_combo, settings.get("split_strategy", "stratified")
+        )
 
         for widget, key in (
             (self.epochs_spin, "epochs"),
-            (self._custom_epochs_spin, "epochs"),
             (self.batch_spin, "batch"),
-            (self._custom_batch_spin, "batch"),
             (self.lr_spin, "lr"),
-            (self._custom_lr_spin, "lr"),
+            (
+                self.prediction_confidence_threshold_spin,
+                "prediction_confidence_threshold",
+            ),
             (self.val_fraction_spin, "val_fraction"),
+            (self.test_fraction_spin, "test_fraction"),
             (self.patience_spin, "patience"),
-            (self._custom_patience_spin, "patience"),
             (self.tiny_layers_spin, "tiny_layers"),
             (self.tiny_dim_spin, "tiny_dim"),
             (self.tiny_dropout_spin, "tiny_dropout"),
@@ -333,12 +403,16 @@ class ClassKitTrainingDialog(QDialog):
                 "custom_gradual_unfreeze_interval",
             ),
             (self._custom_input_size_spin, "custom_input_size"),
+            (self.hue_spin, "hue"),
+            (self.saturation_spin, "saturation"),
             (self.brightness_spin, "brightness"),
             (self.contrast_spin, "contrast"),
             (self.flip_ud_spin, "flipud"),
             (self.flip_lr_spin, "fliplr"),
         ):
             self._set_spin_value(widget, settings, key)
+        if "monochrome" in settings:
+            self.monochrome_check.setChecked(bool(settings.get("monochrome")))
 
         label_expansion = settings.get("label_expansion")
         if isinstance(label_expansion, dict) and label_expansion:
@@ -351,7 +425,34 @@ class ClassKitTrainingDialog(QDialog):
         self._on_mode_changed()
         self._on_rebalance_mode_changed()
         self._on_custom_backbone_changed()
+        self._refresh_tiny_preset_summary()
         self._refresh_data_summary()
+
+    @staticmethod
+    def _populate_tiny_size_combo(combo: QComboBox) -> None:
+        combo.clear()
+        for key, label in get_tiny_size_preset_choices():
+            combo.addItem(label, key)
+
+    def _refresh_tiny_preset_summary(self) -> None:
+        self._tiny_size_summary_label.setText(
+            describe_tiny_size_preset(self.tiny_size_combo.currentData())
+        )
+        self._tiny_in_custom_size_summary_label.setText(
+            describe_tiny_size_preset(self._tiny_in_custom_size_combo.currentData())
+        )
+
+    def _sync_tiny_preset_controls(self, source: QComboBox) -> None:
+        preset = str(source.currentData() or "medium")
+        for combo in (self.tiny_size_combo, self._tiny_in_custom_size_combo):
+            if combo is source:
+                continue
+            if str(combo.currentData() or "") == preset:
+                continue
+            combo.blockSignals(True)
+            self._set_combo_value(combo, preset)
+            combo.blockSignals(False)
+        self._refresh_tiny_preset_summary()
 
     def _resolve_class_choices(
         self, class_choices: Optional[List[str]] = None
@@ -383,14 +484,155 @@ class ClassKitTrainingDialog(QDialog):
             return "multihead_custom"
         return mode
 
+    def _fallback_mode_keys(self) -> list[str]:
+        factor_count = len(getattr(self._scheme, "factors", []) or [])
+        if factor_count > 1:
+            return [
+                "flat_custom",
+                "flat_yolo",
+                "multihead_yolo",
+                "multihead_custom",
+            ]
+        return ["flat_custom", "flat_yolo"]
+
+    def _resolved_mode_keys(self) -> list[str]:
+        if self._scheme is None:
+            return ["flat_custom", "flat_yolo"]
+
+        normalized_modes = [
+            self._normalize_mode_key(mode)
+            for mode in getattr(self._scheme, "training_modes", []) or []
+        ]
+        if not normalized_modes:
+            normalized_modes = self._fallback_mode_keys()
+
+        ordered: list[str] = []
+        seen = set()
+        for key in [
+            "flat_custom",
+            "flat_yolo",
+            "multihead_yolo",
+            "multihead_custom",
+        ]:
+            if key in normalized_modes and key not in seen:
+                ordered.append(key)
+                seen.add(key)
+        return ordered
+
+    @staticmethod
+    def _mode_parts(mode: object) -> tuple[str, str]:
+        normalized = str(mode or "").strip()
+        structure = "multihead" if normalized.startswith("multihead") else "flat"
+        family = "yolo" if "yolo" in normalized else "custom"
+        return structure, family
+
+    def _resolved_mode_structures(self) -> list[str]:
+        structures: list[str] = []
+        seen = set()
+        for key in self._resolved_mode_keys():
+            structure, _family = self._mode_parts(key)
+            if structure not in seen:
+                structures.append(structure)
+                seen.add(structure)
+        return structures
+
+    def _resolved_mode_families(self, structure: object) -> list[str]:
+        normalized_structure = str(structure or "").strip()
+        families: list[str] = []
+        seen = set()
+        for family in ["custom", "yolo"]:
+            mode_key = f"{normalized_structure}_{family}"
+            if mode_key in self._resolved_mode_keys() and family not in seen:
+                families.append(family)
+                seen.add(family)
+        return families
+
+    def _populate_mode_family_combo(self, structure: object, preferred: object) -> None:
+        current_family = str(preferred or "").strip()
+        family_labels = {
+            "custom": "Custom CNN",
+            "yolo": "YOLO-classify",
+        }
+        available_families = self._resolved_mode_families(structure)
+        selected_family = (
+            current_family if current_family in available_families else ""
+        ) or (available_families[0] if available_families else "")
+
+        self.mode_family_combo.blockSignals(True)
+        self.mode_family_combo.clear()
+        for family in available_families:
+            self.mode_family_combo.addItem(family_labels[family], family)
+        self._set_combo_value(self.mode_family_combo, selected_family)
+        self.mode_family_combo.blockSignals(False)
+
+    def _sync_mode_controls_from_mode(self, mode: object = None) -> None:
+        normalized_mode = self._normalize_mode_key(
+            mode or self.mode_combo.currentData()
+        )
+        preferred_structure, preferred_family = self._mode_parts(normalized_mode)
+        structure_labels = {
+            "flat": "Flat labels",
+            "multihead": "Multi-head per factor",
+        }
+        structures = self._resolved_mode_structures()
+        selected_structure = (
+            preferred_structure if preferred_structure in structures else ""
+        ) or (structures[0] if structures else "")
+
+        self.mode_structure_combo.blockSignals(True)
+        self.mode_structure_combo.clear()
+        for structure in structures:
+            self.mode_structure_combo.addItem(structure_labels[structure], structure)
+        self._set_combo_value(self.mode_structure_combo, selected_structure)
+        self.mode_structure_combo.blockSignals(False)
+
+        self._populate_mode_family_combo(selected_structure, preferred_family)
+
+    def _sync_mode_combo_from_controls(self) -> None:
+        structure = str(self.mode_structure_combo.currentData() or "").strip()
+        family = str(self.mode_family_combo.currentData() or "").strip()
+        if not structure or not family:
+            return
+
+        target_mode = f"{structure}_{family}"
+        index = self.mode_combo.findData(target_mode)
+        if index < 0:
+            return
+        if self.mode_combo.currentIndex() != index:
+            self.mode_combo.setCurrentIndex(index)
+
+    def _on_mode_structure_changed(self) -> None:
+        structure = self.mode_structure_combo.currentData()
+        preferred_family = self.mode_family_combo.currentData()
+        self._populate_mode_family_combo(structure, preferred_family)
+        self._sync_mode_combo_from_controls()
+
+    def _on_internal_mode_changed(self) -> None:
+        self._sync_mode_controls_from_mode()
+        self._on_mode_changed()
+
     def _build_general_tab(self):
         """Build the General settings tab and return its widget."""
         self.general_tab = QWidget()
         form = QFormLayout()
         form.setSpacing(8)
+
         self.mode_combo = QComboBox()
         self._populate_modes()
-        form.addRow("<b>Training Mode:</b>", self.mode_combo)
+        self.mode_combo.setVisible(False)
+
+        self.mode_structure_combo = QComboBox()
+        self.mode_structure_combo.setToolTip(
+            "Choose whether to train one classifier over flat labels or one classifier per scheme factor."
+        )
+        form.addRow("<b>Label Layout:</b>", self.mode_structure_combo)
+
+        self.mode_family_combo = QComboBox()
+        self.mode_family_combo.setToolTip(
+            "Choose the training backend for the selected label layout."
+        )
+        form.addRow("<b>Model Family:</b>", self.mode_family_combo)
+        self._sync_mode_controls_from_mode()
 
         self.device_combo = QComboBox()
         self.device_combo.addItem("CPU", "cpu")
@@ -398,10 +640,7 @@ class ClassKitTrainingDialog(QDialog):
             import torch
 
             if torch.cuda.is_available():
-                if getattr(torch.version, "hip", None):
-                    self.device_combo.addItem("ROCm GPU", "rocm")
-                else:
-                    self.device_combo.addItem("CUDA GPU", "cuda")
+                self.device_combo.addItem("CUDA GPU", "cuda")
             if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 self.device_combo.addItem("Apple Silicon (MPS)", "mps")
                 self.device_combo.setCurrentIndex(self.device_combo.count() - 1)
@@ -432,10 +671,59 @@ class ClassKitTrainingDialog(QDialog):
         self._data_summary_label.setStyleSheet("color:#ffffff; font-size:11px;")
         data_summary_layout.addWidget(self._data_summary_label)
 
-        layout_gen = QVBoxLayout(self.general_tab)
+        self._sample_preview_group = QGroupBox("Training Sample Preview")
+        sample_preview_layout = QVBoxLayout(self._sample_preview_group)
+        sample_preview_layout.setContentsMargins(10, 8, 10, 8)
+        self._sample_preview_note = QLabel(
+            "Representative labeled source images before augmentation. Captions show the current label, split, and filename."
+        )
+        self._sample_preview_note.setWordWrap(True)
+        self._sample_preview_note.setStyleSheet("color:#cfcfcf; font-size:11px;")
+        sample_preview_layout.addWidget(self._sample_preview_note)
+
+        preview_toggle_row = QHBoxLayout()
+        preview_toggle_row.setContentsMargins(0, 0, 0, 0)
+        self._sample_preview_monochrome_toggle = QCheckBox("Preview monochrome samples")
+        self._sample_preview_monochrome_toggle.setToolTip(
+            "When monochrome mode is enabled for training, render these sample thumbnails in grayscale so the preview matches the derived training dataset."
+        )
+        self._sample_preview_monochrome_toggle.setEnabled(False)
+        preview_toggle_row.addWidget(self._sample_preview_monochrome_toggle)
+        preview_toggle_row.addStretch()
+        sample_preview_layout.addLayout(preview_toggle_row)
+
+        self._sample_preview_scroll = QScrollArea()
+        self._sample_preview_scroll.setWidgetResizable(True)
+        self._sample_preview_scroll.setFrameShape(QFrame.NoFrame)
+        self._sample_preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._sample_preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sample_preview_scroll.setMinimumHeight(220)
+
+        self._sample_preview_container = QWidget()
+        self._sample_preview_cards_layout = QHBoxLayout(self._sample_preview_container)
+        self._sample_preview_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self._sample_preview_cards_layout.setSpacing(8)
+        self._sample_preview_scroll.setWidget(self._sample_preview_container)
+        sample_preview_layout.addWidget(self._sample_preview_scroll)
+
+        scroll_content = QWidget()
+        layout_gen = QVBoxLayout(scroll_content)
+        layout_gen.setContentsMargins(0, 0, 0, 0)
         layout_gen.addLayout(form)
         layout_gen.addWidget(self._data_summary_group)
+        layout_gen.addWidget(self._sample_preview_group)
         layout_gen.addStretch()
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(scroll_content)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        outer_layout = QVBoxLayout(self.general_tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll_area)
         return self.general_tab
 
     def _build_auto_size_row(self, layout) -> None:
@@ -462,6 +750,21 @@ class ClassKitTrainingDialog(QDialog):
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.addWidget(self._auto_size_btn)
+
+        self._auto_size_scale_label = QLabel("Rescale:")
+        self._auto_size_scale_spin = QDoubleSpinBox()
+        self._auto_size_scale_spin.setDecimals(2)
+        self._auto_size_scale_spin.setRange(
+            self._AUTO_SIZE_SCALE_MIN, self._AUTO_SIZE_SCALE_MAX
+        )
+        self._auto_size_scale_spin.setSingleStep(0.25)
+        self._auto_size_scale_spin.setValue(1.0)
+        self._auto_size_scale_spin.setSuffix("x")
+        self._auto_size_scale_spin.setToolTip(
+            "Scale the auto-detected sizes before applying them to the Tiny and custom backbone inputs."
+        )
+        button_row.addWidget(self._auto_size_scale_label)
+        button_row.addWidget(self._auto_size_scale_spin)
         button_row.addStretch()
 
         row_layout.addWidget(QLabel("<b>Input Size Helper</b>"))
@@ -481,22 +784,13 @@ class ClassKitTrainingDialog(QDialog):
             _runtimes = supported_runtimes_for_pipeline("tiny_classify")
             for _rt in _runtimes:
                 self.compute_runtime_combo.addItem(runtime_label(_rt), _rt)
-
-            _train_dev = str(self.device_combo.currentData() or "cpu").strip().lower()
-            if _train_dev == "mps":
-                _preferred_rt = "onnx_coreml" if "onnx_coreml" in _runtimes else "mps"
-            elif _train_dev == "rocm":
-                _preferred_rt = "onnx_rocm" if "onnx_rocm" in _runtimes else "rocm"
-            elif _train_dev == "cuda":
-                _preferred_rt = "onnx_cuda" if "onnx_cuda" in _runtimes else "cuda"
-            else:
-                _preferred_rt = "cpu"
-
-            _idx = self.compute_runtime_combo.findData(_preferred_rt)
-            if _idx >= 0:
-                self.compute_runtime_combo.setCurrentIndex(_idx)
         except Exception:
             self.compute_runtime_combo.addItem("CPU", "cpu")
+
+        self._select_preferred_compute_runtime()
+        self.device_combo.currentIndexChanged.connect(
+            lambda _index: self._select_preferred_compute_runtime()
+        )
 
         self.compute_runtime_combo.setToolTip(
             "Runtime used for Tiny CNN inference in ClassKit (and MAT integration).\n"
@@ -504,6 +798,23 @@ class ClassKitTrainingDialog(QDialog):
             "On Apple Silicon, ONNX (CoreML) uses ONNX Runtime's CoreMLExecutionProvider."
         )
         form.addRow("<b>Inference Runtime:</b>", self.compute_runtime_combo)
+
+    def _preferred_compute_runtime(self) -> str:
+        runtimes = [
+            str(self.compute_runtime_combo.itemData(index) or "")
+            for index in range(self.compute_runtime_combo.count())
+        ]
+        train_device = str(self.device_combo.currentData() or "cpu").strip().lower()
+        if train_device == "mps":
+            return "onnx_coreml" if "onnx_coreml" in runtimes else "mps"
+        if train_device == "cuda":
+            return "onnx_cuda" if "onnx_cuda" in runtimes else "cuda"
+        return "cpu"
+
+    def _select_preferred_compute_runtime(self) -> None:
+        index = self.compute_runtime_combo.findData(self._preferred_compute_runtime())
+        if index >= 0:
+            self.compute_runtime_combo.setCurrentIndex(index)
 
     def _build_base_model_combo(self, form):
         """Build the YOLO base model combo box."""
@@ -549,6 +860,7 @@ class ClassKitTrainingDialog(QDialog):
             lambda: self._initial_model_path_edit.clear()
         )
 
+        self._initial_model_row = row
         form.addRow(self._initial_model_row_label, row)
 
     def _compatible_initial_model_suffixes(self) -> tuple[str, ...]:
@@ -603,7 +915,7 @@ class ClassKitTrainingDialog(QDialog):
             self._initial_model_path_edit.setText(str(selected))
 
     def _build_hyperparams_widgets(self, form):
-        """Build epoch, batch, lr, val fraction, and patience widgets."""
+        """Build epoch, batch, lr, split, val fraction, and patience widgets."""
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(1, 999999)
         self.epochs_spin.setValue(50)
@@ -621,12 +933,24 @@ class ClassKitTrainingDialog(QDialog):
         self.lr_spin.setValue(0.001)
         form.addRow("<b>Learning Rate:</b>", self.lr_spin)
 
+        self.split_strategy_combo = QComboBox()
+        self.split_strategy_combo.addItem("Stratified", "stratified")
+        self.split_strategy_combo.addItem("Random", "random")
+        form.addRow("<b>Split Strategy:</b>", self.split_strategy_combo)
+
         self.val_fraction_spin = QDoubleSpinBox()
         self.val_fraction_spin.setRange(0.0, 0.5)
         self.val_fraction_spin.setSingleStep(0.05)
         self.val_fraction_spin.setDecimals(2)
         self.val_fraction_spin.setValue(0.2)
         form.addRow("<b>Val Fraction:</b>", self.val_fraction_spin)
+
+        self.test_fraction_spin = QDoubleSpinBox()
+        self.test_fraction_spin.setRange(0.0, 0.5)
+        self.test_fraction_spin.setSingleStep(0.05)
+        self.test_fraction_spin.setDecimals(2)
+        self.test_fraction_spin.setValue(0.0)
+        form.addRow("<b>Test Fraction:</b>", self.test_fraction_spin)
 
         self.patience_spin = QSpinBox()
         self.patience_spin.setRange(0, 500)
@@ -642,14 +966,39 @@ class ClassKitTrainingDialog(QDialog):
         self.lr_spin.setToolTip(
             "Initial learning rate. 0.001 is a robust default for both Tiny and YOLO."
         )
+
+        self.prediction_confidence_threshold_spin = QDoubleSpinBox()
+        self.prediction_confidence_threshold_spin.setRange(0.0, 1.0)
+        self.prediction_confidence_threshold_spin.setSingleStep(0.05)
+        self.prediction_confidence_threshold_spin.setDecimals(2)
+        self.prediction_confidence_threshold_spin.setValue(0.5)
+        self.prediction_confidence_threshold_spin.setToolTip(
+            "Inference-time abstention threshold for predictions from this model. "
+            "Predictions below this confidence are treated as unknown in ClassKit and recommended as unknown for TrackerKit consumers."
+        )
+        form.addRow(
+            "<b>Prediction Confidence Threshold:</b>",
+            self.prediction_confidence_threshold_spin,
+        )
+
+        self.split_strategy_combo.setToolTip(
+            "How to pick train and validation items. Stratified preserves class balance; Random uses a deterministic shuffled split."
+        )
         self.val_fraction_spin.setToolTip(
             "Fraction of labeled images reserved for validation (0.2 = 20%).\n"
             "Set to 0 only if you have very few labels."
+        )
+        self.test_fraction_spin.setToolTip(
+            "Optional fraction of labeled images reserved for a final test split.\n"
+            "Training still uses train/val; when test > 0, post-training metrics prefer the held-out test split."
         )
         self.patience_spin.setToolTip(
             "Early stopping: halt if val accuracy doesn't improve for N consecutive epochs.\n"
             "Set to 0 to disable early stopping."
         )
+
+    def _current_split_strategy(self) -> str:
+        return str(self.split_strategy_combo.currentData() or "stratified")
 
     @staticmethod
     def _safe_class_text(value: object) -> str:
@@ -778,7 +1127,7 @@ class ClassKitTrainingDialog(QDialog):
         exp_note = QLabel(
             "<i>Each row: source label \u2192 destination label when that flip is applied.<br>"
             "Pairs are applied to train images only; evaluation data is never flipped.<br>"
-            "When enabled, random flip augmentation is disabled; brightness and contrast jitter remain available.</i>"
+            "When enabled, random flip augmentation is disabled; hue, saturation, brightness, contrast, and monochrome settings remain available.</i>"
         )
         exp_note.setWordWrap(True)
         exp_note.setStyleSheet("color:#ffffff; font-size:11px;")
@@ -830,6 +1179,15 @@ class ClassKitTrainingDialog(QDialog):
         tiny_layout = QVBoxLayout(self.tiny_tab)
         tiny_form = QFormLayout()
 
+        self.tiny_size_combo = QComboBox()
+        self._populate_tiny_size_combo(self.tiny_size_combo)
+        tiny_form.addRow("<b>Tiny Size:</b>", self.tiny_size_combo)
+
+        self._tiny_size_summary_label = QLabel()
+        self._tiny_size_summary_label.setWordWrap(True)
+        self._tiny_size_summary_label.setStyleSheet("color: #666;")
+        tiny_form.addRow("", self._tiny_size_summary_label)
+
         self.tiny_layers_spin = QSpinBox()
         self.tiny_layers_spin.setRange(1, 10)
         self.tiny_layers_spin.setValue(1)
@@ -837,13 +1195,13 @@ class ClassKitTrainingDialog(QDialog):
 
         self.tiny_dim_spin = QSpinBox()
         self.tiny_dim_spin.setRange(16, 1024)
-        self.tiny_dim_spin.setValue(64)
+        self.tiny_dim_spin.setValue(96)
         self.tiny_dim_spin.setSingleStep(16)
         tiny_form.addRow("<b>Hidden Dim:</b>", self.tiny_dim_spin)
 
         self.tiny_dropout_spin = QDoubleSpinBox()
         self.tiny_dropout_spin.setRange(0.0, 0.9)
-        self.tiny_dropout_spin.setValue(0.2)
+        self.tiny_dropout_spin.setValue(0.1)
         self.tiny_dropout_spin.setSingleStep(0.05)
         tiny_form.addRow("<b>Dropout:</b>", self.tiny_dropout_spin)
 
@@ -882,6 +1240,10 @@ class ClassKitTrainingDialog(QDialog):
         self.tiny_label_smoothing_spin.setToolTip(
             "Cross-entropy label smoothing for Tiny CNN training (0.0 = disabled)."
         )
+        self.tiny_size_combo.setToolTip(
+            "Backbone capacity preset for the tiny classifier.\n"
+            "Tiny-S is fastest, Tiny-M is the default balance, Tiny-L is the strongest lightweight option."
+        )
 
         tiny_layout.addLayout(tiny_form)
         tiny_layout.addStretch()
@@ -919,6 +1281,18 @@ class ClassKitTrainingDialog(QDialog):
             self._tiny_in_custom_width_label, self._tiny_in_custom_width_spin
         )
 
+        self._tiny_in_custom_size_label = QLabel("Tiny size")
+        self._tiny_in_custom_size_combo = QComboBox()
+        self._populate_tiny_size_combo(self._tiny_in_custom_size_combo)
+        custom_form.addRow(
+            self._tiny_in_custom_size_label, self._tiny_in_custom_size_combo
+        )
+
+        self._tiny_in_custom_size_summary_label = QLabel()
+        self._tiny_in_custom_size_summary_label.setWordWrap(True)
+        self._tiny_in_custom_size_summary_label.setStyleSheet("color: #666;")
+        custom_form.addRow("", self._tiny_in_custom_size_summary_label)
+
         self._tiny_in_custom_height_label = QLabel("Input height")
         self._tiny_in_custom_height_spin = QSpinBox()
         self._tiny_in_custom_height_spin.setRange(32, 512)
@@ -938,7 +1312,7 @@ class ClassKitTrainingDialog(QDialog):
         self._tiny_in_custom_dim_label = QLabel("Hidden dim")
         self._tiny_in_custom_dim_spin = QSpinBox()
         self._tiny_in_custom_dim_spin.setRange(16, 512)
-        self._tiny_in_custom_dim_spin.setValue(64)
+        self._tiny_in_custom_dim_spin.setValue(96)
         custom_form.addRow(
             self._tiny_in_custom_dim_label, self._tiny_in_custom_dim_spin
         )
@@ -947,7 +1321,7 @@ class ClassKitTrainingDialog(QDialog):
         self._tiny_in_custom_dropout_spin = QDoubleSpinBox()
         self._tiny_in_custom_dropout_spin.setRange(0.0, 0.9)
         self._tiny_in_custom_dropout_spin.setSingleStep(0.05)
-        self._tiny_in_custom_dropout_spin.setValue(0.2)
+        self._tiny_in_custom_dropout_spin.setValue(0.1)
         custom_form.addRow(
             self._tiny_in_custom_dropout_label, self._tiny_in_custom_dropout_spin
         )
@@ -1031,27 +1405,14 @@ class ClassKitTrainingDialog(QDialog):
         )
         custom_form.addRow(self._custom_input_size_label, self._custom_input_size_spin)
 
-        self._custom_epochs_spin = QSpinBox()
-        self._custom_epochs_spin.setRange(1, 500)
-        self._custom_epochs_spin.setValue(50)
-        custom_form.addRow("Epochs:", self._custom_epochs_spin)
-
-        self._custom_batch_spin = QSpinBox()
-        self._custom_batch_spin.setRange(1, 256)
-        self._custom_batch_spin.setValue(32)
-        custom_form.addRow("Batch size:", self._custom_batch_spin)
-
-        self._custom_lr_spin = QDoubleSpinBox()
-        self._custom_lr_spin.setRange(1e-5, 0.1)
-        self._custom_lr_spin.setSingleStep(0.0001)
-        self._custom_lr_spin.setDecimals(5)
-        self._custom_lr_spin.setValue(1e-3)
-        custom_form.addRow("Learning rate:", self._custom_lr_spin)
-
-        self._custom_patience_spin = QSpinBox()
-        self._custom_patience_spin.setRange(1, 100)
-        self._custom_patience_spin.setValue(10)
-        custom_form.addRow("Patience:", self._custom_patience_spin)
+        self._custom_general_settings_note = QLabel(
+            "Training epochs, batch size, learning rate, and patience always come from the General tab."
+        )
+        self._custom_general_settings_note.setWordWrap(True)
+        self._custom_general_settings_note.setStyleSheet(
+            "color:#cfcfcf; font-size:11px;"
+        )
+        custom_form.addRow("", self._custom_general_settings_note)
 
         self.tiny_rebalance_combo = QComboBox()
         self.tiny_rebalance_combo.addItem("None", "none")
@@ -1080,6 +1441,14 @@ class ClassKitTrainingDialog(QDialog):
 
         self._custom_backbone_combo.activated.connect(self._on_custom_backbone_changed)
         self._custom_add_timm_btn.clicked.connect(self._on_add_timm_backbones)
+        self.tiny_size_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_tiny_preset_controls(self.tiny_size_combo)
+        )
+        self._tiny_in_custom_size_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_tiny_preset_controls(
+                self._tiny_in_custom_size_combo
+            )
+        )
         self._custom_fine_tune_method_combo.currentIndexChanged.connect(
             self._on_custom_backbone_changed
         )
@@ -1087,6 +1456,7 @@ class ClassKitTrainingDialog(QDialog):
             self._on_custom_backbone_changed
         )
         self._on_custom_backbone_changed()
+        self._refresh_tiny_preset_summary()
 
     def _reload_custom_backbone_choices(self, selected: object = None) -> None:
         current = str(selected or self._custom_backbone_combo.currentData() or "")
@@ -1159,6 +1529,31 @@ class ClassKitTrainingDialog(QDialog):
         )
         aug_form.addRow("<b>Contrast Jitter:</b>", self.contrast_spin)
 
+        self.saturation_spin = QDoubleSpinBox()
+        self.saturation_spin.setRange(0.0, 1.0)
+        self.saturation_spin.setSingleStep(0.05)
+        self.saturation_spin.setValue(0.0)
+        self.saturation_spin.setToolTip(
+            "Photometric saturation jitter. Useful when color strength varies but hue identity remains informative."
+        )
+        aug_form.addRow("<b>Saturation Jitter:</b>", self.saturation_spin)
+
+        self.hue_spin = QDoubleSpinBox()
+        self.hue_spin.setRange(0.0, 0.5)
+        self.hue_spin.setSingleStep(0.01)
+        self.hue_spin.setDecimals(2)
+        self.hue_spin.setValue(0.0)
+        self.hue_spin.setToolTip(
+            "Hue jitter fraction. Small values are recommended when color identity may shift across acquisitions."
+        )
+        aug_form.addRow("<b>Hue Jitter:</b>", self.hue_spin)
+
+        self.monochrome_check = QCheckBox("Force monochrome derived dataset")
+        self.monochrome_check.setToolTip(
+            "Convert the exported training dataset to grayscale RGB before training. This removes color information across train and validation splits."
+        )
+        aug_form.addRow("<b>Monochrome Mode:</b>", self.monochrome_check)
+
         self._exp_group = self._build_expansion_group()
         aug_layout.addWidget(self._exp_group)
         aug_layout.addStretch()
@@ -1222,11 +1617,17 @@ class ClassKitTrainingDialog(QDialog):
         self._build_action_row(layout)
 
         self.cancel_btn.clicked.connect(self._on_cancel)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self.mode_structure_combo.currentIndexChanged.connect(
+            lambda _index: self._on_mode_structure_changed()
+        )
+        self.mode_family_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_mode_combo_from_controls()
+        )
+        self.mode_combo.currentIndexChanged.connect(self._on_internal_mode_changed)
         self.tiny_rebalance_combo.currentIndexChanged.connect(
             self._on_rebalance_mode_changed
         )
-        self._on_mode_changed()
+        self._on_internal_mode_changed()
         self._on_rebalance_mode_changed()
 
         self._exp_group.toggled.connect(
@@ -1234,6 +1635,12 @@ class ClassKitTrainingDialog(QDialog):
         )
         self._sync_expansion_constraints()
         self.val_fraction_spin.valueChanged.connect(
+            lambda _value: self._refresh_data_summary()
+        )
+        self.test_fraction_spin.valueChanged.connect(
+            lambda _value: self._refresh_data_summary()
+        )
+        self.split_strategy_combo.currentIndexChanged.connect(
             lambda _value: self._refresh_data_summary()
         )
         self.flip_lr_spin.valueChanged.connect(
@@ -1248,43 +1655,46 @@ class ClassKitTrainingDialog(QDialog):
         self.contrast_spin.valueChanged.connect(
             lambda _value: self._refresh_data_summary()
         )
+        self.saturation_spin.valueChanged.connect(
+            lambda _value: self._refresh_data_summary()
+        )
+        self.hue_spin.valueChanged.connect(lambda _value: self._refresh_data_summary())
+        self.monochrome_check.toggled.connect(
+            lambda _checked: self._refresh_data_summary()
+        )
+        self.monochrome_check.toggled.connect(self._sync_sample_preview_controls)
+        self._sample_preview_monochrome_toggle.toggled.connect(
+            lambda _checked: self._refresh_sample_preview()
+        )
+        self._sync_sample_preview_controls()
         self._refresh_data_summary()
 
     def _populate_modes(self):
         self.mode_combo.clear()
-        if self._scheme is None:
-            self.mode_combo.addItem("Flat - Custom CNN", "flat_custom")
-            self.mode_combo.addItem("Flat - YOLO-classify", "flat_yolo")
-            return
         labels = {
             "flat_yolo": "Flat - YOLO-classify",
             "flat_custom": "Flat - Custom CNN",
             "multihead_yolo": "Multi-head - YOLO-classify (one model per factor)",
             "multihead_custom": "Multi-head - Custom CNN (one model per factor)",
         }
-        seen = set()
-        for key in [
-            "flat_custom",
-            "flat_yolo",
-            "multihead_yolo",
-            "multihead_custom",
-        ]:
-            normalized_modes = {
-                self._normalize_mode_key(mode)
-                for mode in getattr(self._scheme, "training_modes", [])
-            }
-            if key in normalized_modes and key not in seen:
-                self.mode_combo.addItem(labels[key], key)
-                seen.add(key)
+        for key in self._resolved_mode_keys():
+            self.mode_combo.addItem(labels[key], key)
 
     def _on_mode_changed(self):
         mode = self.mode_combo.currentData() or ""
         is_yolo = "yolo" in mode
         is_custom = "custom" in mode
+        is_multihead = mode.startswith("multihead")
 
         self.base_model_combo.setVisible(is_yolo)
         if hasattr(self, "_base_model_row_label"):
             self._base_model_row_label.setVisible(is_yolo)
+
+        if hasattr(self, "_initial_model_row"):
+            self._initial_model_row.setVisible(not is_multihead)
+            self._initial_model_row_label.setVisible(not is_multihead)
+            if is_multihead:
+                self._initial_model_path_edit.clear()
 
         expected_suffix = ".pt" if is_yolo else ".pth"
         expected_label = (
@@ -1337,6 +1747,9 @@ class ClassKitTrainingDialog(QDialog):
         method = str(self._custom_fine_tune_method_combo.currentData() or "head_only")
 
         for w in (
+            self._tiny_in_custom_size_label,
+            self._tiny_in_custom_size_combo,
+            self._tiny_in_custom_size_summary_label,
             self._tiny_in_custom_width_label,
             self._tiny_in_custom_width_spin,
             self._tiny_in_custom_height_label,
@@ -1422,90 +1835,117 @@ class ClassKitTrainingDialog(QDialog):
 
         return label_expansion
 
-    def _count_expanded_train_samples(
-        self, label_names: List[str], splits: List[str], label_expansion: dict
-    ) -> int:
-        if not label_expansion:
-            return 0
+    def _planned_training_records_with_splits(self) -> tuple[List[dict], bool]:
+        if not self._labeled_label_names:
+            return [], False
 
-        known_names = {str(name).strip() for name in self._class_choices}
-        known_names_ci = {name.lower() for name in known_names}
-        expanded = 0
-        for label_name, split in zip(label_names, splits):
-            if split != "train":
-                continue
-            src_name = str(label_name).strip()
-            src_name_ci = src_name.lower()
-            for mapping in label_expansion.values():
-                dst_name = mapping.get(src_name)
-                if dst_name is None:
-                    for key, value in mapping.items():
-                        if str(key).strip().lower() == src_name_ci:
-                            dst_name = value
-                            break
-                if dst_name is None:
-                    continue
-                if str(dst_name).strip().lower() in known_names_ci:
-                    expanded += 1
-        return expanded
+        records = build_label_expansion_records(
+            self._labeled_label_names,
+            label_expansion=self._current_label_expansion_settings(),
+            groups=(self._group_keys or None),
+            known_labels=self._class_choices,
+        )
+        planned_groups = (
+            [record.get("group") for record in records] if self._group_keys else None
+        )
+        splits, used_group_fallback = build_training_dataset_splits(
+            [str(record["label"]) for record in records],
+            strategy=self._current_split_strategy(),
+            val_fraction=self.val_fraction_spin.value(),
+            test_fraction=self.test_fraction_spin.value(),
+            groups=planned_groups,
+        )
+        planned_records = []
+        for record, split in zip(records, splits):
+            planned_record = dict(record)
+            planned_record["split"] = str(split or "train")
+            planned_records.append(planned_record)
+        return planned_records, bool(used_group_fallback)
 
     def _current_data_summary(self) -> dict:
         if self._labeled_label_names:
-            splits = build_stratified_splits(
-                self._labeled_label_names,
-                val_fraction=self.val_fraction_spin.value(),
-                test_fraction=0.0,
+            planned_records, used_group_fallback = (
+                self._planned_training_records_with_splits()
             )
-            train_count = sum(1 for split in splits if split == "train")
-            val_count = sum(1 for split in splits if split == "val")
-            expansion_count = self._count_expanded_train_samples(
-                self._labeled_label_names,
-                splits,
-                self._current_label_expansion_settings(),
+            self._used_split_group_fallback = bool(used_group_fallback)
+            train_count = sum(
+                1 for record in planned_records if record.get("split") == "train"
+            )
+            val_count = sum(
+                1 for record in planned_records if record.get("split") == "val"
+            )
+            test_count = sum(
+                1 for record in planned_records if record.get("split") == "test"
+            )
+            expansion_count = sum(
+                1 for record in planned_records if bool(record.get("is_expanded"))
             )
             return {
                 "exact": True,
                 "labeled": len(self._labeled_label_names),
                 "train": train_count,
                 "val": val_count,
+                "test": test_count,
                 "expansion": expansion_count,
-                "exported": len(self._labeled_label_names) + expansion_count,
+                "exported": len(planned_records),
+                "used_group_fallback": bool(used_group_fallback),
             }
 
+        self._used_split_group_fallback = False
         labeled = max(0, int(self._n_labeled))
         val_count = int(round(labeled * float(self.val_fraction_spin.value())))
+        test_count = int(round(labeled * float(self.test_fraction_spin.value())))
         if labeled > 1:
-            val_count = min(val_count, labeled - 1)
+            test_count = min(test_count, labeled - 1)
+        else:
+            test_count = 0
+        remaining_after_test = max(0, labeled - test_count)
+        if remaining_after_test > 1:
+            val_count = min(val_count, remaining_after_test - 1)
         else:
             val_count = 0
-        train_count = max(0, labeled - val_count)
+        train_count = max(0, labeled - val_count - test_count)
         return {
             "exact": False,
             "labeled": labeled,
             "train": train_count,
             "val": val_count,
+            "test": test_count,
             "expansion": 0,
             "exported": labeled,
+            "used_group_fallback": False,
         }
 
     def current_data_summary_text(self) -> str:
         summary = self._current_data_summary()
-        lead = "Stratified export" if summary["exact"] else "Estimated export"
+        strategy_label = (
+            "Stratified" if self._current_split_strategy() == "stratified" else "Random"
+        )
+        lead = (
+            f"{strategy_label} export"
+            if summary["exact"]
+            else f"Estimated {strategy_label.lower()} export"
+        )
         lines = [
             (
-                f"{lead}: {summary['train']:,} train / {summary['val']:,} val "
+                f"{lead}: {summary['train']:,} train / {summary['val']:,} val / {summary['test']:,} test "
                 f"from {summary['labeled']:,} labeled images."
             )
         ]
         if summary["expansion"] > 0:
             lines.append(
                 (
-                    f"Label-switching expansion adds {summary['expansion']:,} mirrored train copies, "
+                    f"Label-switching expansion adds {summary['expansion']:,} mirrored copies before splitting, "
                     f"so {summary['exported']:,} files are exported in total."
                 )
             )
         else:
             lines.append(f"Exported files: {summary['exported']:,} total.")
+
+        if summary.get("used_group_fallback"):
+            lines.append(
+                "Related-source grouping was too coarse for the requested holdout, so training falls back to item-level splitting for this export."
+            )
 
         enabled_augments = []
         if self.flip_lr_spin.value() > 0:
@@ -1516,6 +1956,12 @@ class ClassKitTrainingDialog(QDialog):
             enabled_augments.append(f"brightness {self.brightness_spin.value():.2f}")
         if self.contrast_spin.value() > 0:
             enabled_augments.append(f"contrast {self.contrast_spin.value():.2f}")
+        if self.saturation_spin.value() > 0:
+            enabled_augments.append(f"saturation {self.saturation_spin.value():.2f}")
+        if self.hue_spin.value() > 0:
+            enabled_augments.append(f"hue {self.hue_spin.value():.2f}")
+        if self.monochrome_check.isChecked():
+            enabled_augments.append("monochrome")
 
         if enabled_augments:
             lines.append(
@@ -1527,9 +1973,204 @@ class ClassKitTrainingDialog(QDialog):
             lines.append("Train-only stochastic augmentation: none.")
         return "\n".join(lines)
 
+    def _preview_records_with_splits(self) -> List[dict]:
+        planned_records, _used_group_fallback = (
+            self._planned_training_records_with_splits()
+        )
+        if not planned_records or not self._image_paths:
+            return []
+
+        records = []
+        for record in planned_records:
+            source_index = int(record["source_index"])
+            if source_index < 0 or source_index >= len(self._image_paths):
+                continue
+            path = self._image_paths[source_index]
+            if Path(path).exists():
+                records.append(
+                    {
+                        "path": Path(path),
+                        "label": str(record["label"]),
+                        "split": str(record.get("split") or "train"),
+                        "expanded": bool(record.get("is_expanded")),
+                    }
+                )
+        return records
+
+    def _current_preview_records(self, max_items: int = 8) -> List[dict]:
+        records = self._preview_records_with_splits()
+        if len(records) <= max_items:
+            return records
+
+        selected = []
+        seen_records = set()
+        for split_name in ("val", "train"):
+            for record in records:
+                record_key = (
+                    str(record["path"]),
+                    str(record["label"]),
+                    str(record["split"]),
+                    bool(record.get("expanded")),
+                )
+                if record["split"] != split_name or record_key in seen_records:
+                    continue
+                selected.append(record)
+                seen_records.add(record_key)
+                break
+            if len(selected) >= max_items:
+                return selected[:max_items]
+
+        buckets = {}
+        for record in records:
+            buckets.setdefault(record["label"], []).append(record)
+
+        for label in sorted(buckets):
+            buckets[label] = list(buckets[label])
+
+        while len(selected) < max_items:
+            added = False
+            for label in sorted(buckets):
+                bucket = buckets[label]
+                while bucket:
+                    bucket_key = (
+                        str(bucket[0]["path"]),
+                        str(bucket[0]["label"]),
+                        str(bucket[0]["split"]),
+                        bool(bucket[0].get("expanded")),
+                    )
+                    if bucket_key not in seen_records:
+                        break
+                    bucket.pop(0)
+                if not bucket:
+                    continue
+                record = bucket.pop(0)
+                selected.append(record)
+                seen_records.add(
+                    (
+                        str(record["path"]),
+                        str(record["label"]),
+                        str(record["split"]),
+                        bool(record.get("expanded")),
+                    )
+                )
+                added = True
+                if len(selected) >= max_items:
+                    break
+            if not added:
+                break
+        return selected[:max_items]
+
+    def _build_sample_preview_card(self, record: dict) -> QWidget:
+        card = QFrame()
+        card.setFrameShape(QFrame.StyledPanel)
+        card.setFixedWidth(150)
+        card.setStyleSheet(
+            "QFrame { background:#1e1e1e; border:1px solid #3e3e42; border-radius:6px; }"
+        )
+
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 8, 8, 8)
+        card_layout.setSpacing(6)
+
+        image_label = QLabel()
+        image_label.setAlignment(Qt.AlignCenter)
+        image_label.setFixedSize(132, 132)
+        image_label.setStyleSheet(
+            "background:#111111; border:1px solid #3e3e42; border-radius:4px; color:#cfcfcf;"
+        )
+        pixmap = self._sample_preview_pixmap(record["path"])
+        if pixmap.isNull():
+            image_label.setText("Preview\nunavailable")
+        else:
+            image_label.setPixmap(
+                pixmap.scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        card_layout.addWidget(image_label)
+
+        caption = QLabel(
+            f"{record['label']}\n{str(record['split']).title()} split\n{record['path'].name}"
+        )
+        caption.setTextFormat(Qt.PlainText)
+        caption.setWordWrap(True)
+        caption.setStyleSheet("color:#ffffff; font-size:11px;")
+        caption.setToolTip(
+            f"Label: {record['label']}\nSplit: {record['split']}\nPath: {record['path']}"
+        )
+        card_layout.addWidget(caption)
+
+        return card
+
+    def _sample_preview_uses_monochrome(self) -> bool:
+        return bool(
+            self.monochrome_check.isChecked()
+            and self._sample_preview_monochrome_toggle.isChecked()
+        )
+
+    def _sample_preview_pixmap(self, path: Path) -> QPixmap:
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull() or not self._sample_preview_uses_monochrome():
+            return pixmap
+
+        image = pixmap.toImage()
+        if image.isNull():
+            return pixmap
+        grayscale = image.convertToFormat(QImage.Format_Grayscale8).convertToFormat(
+            QImage.Format_RGB32
+        )
+        return QPixmap.fromImage(grayscale)
+
+    def _sync_sample_preview_controls(self) -> None:
+        monochrome_enabled = self.monochrome_check.isChecked()
+        if monochrome_enabled:
+            self._sample_preview_monochrome_toggle.setEnabled(True)
+            if not self._sample_preview_monochrome_toggle.isChecked():
+                self._sample_preview_monochrome_toggle.setChecked(True)
+            self._sample_preview_note.setText(
+                "Representative labeled source images. With monochrome training enabled, you can preview the grayscale version that will be exported into the training pipeline."
+            )
+        else:
+            if self._sample_preview_monochrome_toggle.isChecked():
+                self._sample_preview_monochrome_toggle.setChecked(False)
+            self._sample_preview_monochrome_toggle.setEnabled(False)
+            self._sample_preview_note.setText(
+                "Representative labeled source images before augmentation. Captions show the current label, split, and filename."
+            )
+
+    def _refresh_sample_preview(self) -> None:
+        if not hasattr(self, "_sample_preview_cards_layout"):
+            return
+
+        while self._sample_preview_cards_layout.count():
+            item = self._sample_preview_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        records = self._current_preview_records()
+        has_preview_data = bool(records)
+        self._sample_preview_group.setVisible(
+            has_preview_data or bool(self._image_paths and self._labeled_label_names)
+        )
+
+        if not records:
+            empty_label = QLabel(
+                "No labeled image preview available yet. Add labeled samples to inspect the training inputs here."
+            )
+            empty_label.setWordWrap(True)
+            empty_label.setStyleSheet("color:#cfcfcf; font-size:11px;")
+            self._sample_preview_cards_layout.addWidget(empty_label)
+            return
+
+        for record in records:
+            self._sample_preview_cards_layout.addWidget(
+                self._build_sample_preview_card(record)
+            )
+        self._sample_preview_cards_layout.addStretch()
+
     def _refresh_data_summary(self) -> None:
         if hasattr(self, "_data_summary_label"):
             self._data_summary_label.setText(self.current_data_summary_text())
+        self._refresh_sample_preview()
 
     def _sync_expansion_constraints(self) -> None:
         expansion_enabled = bool(self._exp_group.isChecked())
@@ -1544,11 +2185,11 @@ class ClassKitTrainingDialog(QDialog):
             self.flip_lr_spin.setValue(0.0)
             self.flip_ud_spin.setValue(0.0)
             self._exp_constraints_label.setText(
-                "Label expansion ON: random flips are disabled; brightness and contrast jitter still apply to train samples."
+                "Label expansion ON: random flips are disabled; hue, saturation, brightness, contrast, and monochrome settings still apply to train samples."
             )
         else:
             self._exp_constraints_label.setText(
-                "Label expansion OFF: choose flip and photometric augmentation probabilities freely."
+                "Label expansion OFF: choose flip, color jitter, and monochrome settings freely."
             )
         self._refresh_data_summary()
 
@@ -1564,13 +2205,14 @@ class ClassKitTrainingDialog(QDialog):
 
         flipud_value = 0.0 if expansion_enabled else self.flip_ud_spin.value()
         fliplr_value = 0.0 if expansion_enabled else self.flip_lr_spin.value()
+        hue_value = self.hue_spin.value()
+        saturation_value = self.saturation_spin.value()
         brightness_value = self.brightness_spin.value()
         contrast_value = self.contrast_spin.value()
+        monochrome_value = self.monochrome_check.isChecked()
 
         _rt = str(self.compute_runtime_combo.currentData() or "cpu")
         _train_device = str(self.device_combo.currentData() or "cpu")
-        if _train_device == "rocm":
-            _train_device = "cuda"
 
         _mode = self.mode_combo.currentData() or ""
         _is_custom = _mode in ("flat_custom", "multihead_custom")
@@ -1586,24 +2228,18 @@ class ClassKitTrainingDialog(QDialog):
             "initial_model_path": self._normalize_path_text(
                 self._initial_model_path_edit.text()
             ),
-            "epochs": (
-                self._custom_epochs_spin.value()
-                if _is_custom
-                else self.epochs_spin.value()
-            ),
-            "batch": (
-                self._custom_batch_spin.value()
-                if _is_custom
-                else self.batch_spin.value()
-            ),
-            "lr": (
-                self._custom_lr_spin.value() if _is_custom else self.lr_spin.value()
-            ),
+            "epochs": self.epochs_spin.value(),
+            "batch": self.batch_spin.value(),
+            "lr": self.lr_spin.value(),
+            "prediction_confidence_threshold": self.prediction_confidence_threshold_spin.value(),
+            "split_strategy": self._current_split_strategy(),
             "val_fraction": self.val_fraction_spin.value(),
-            "patience": (
-                self._custom_patience_spin.value()
-                if _is_custom
-                else self.patience_spin.value()
+            "test_fraction": self.test_fraction_spin.value(),
+            "patience": self.patience_spin.value(),
+            "tiny_preset": (
+                self._tiny_in_custom_size_combo.currentData()
+                if custom_is_tiny
+                else self.tiny_size_combo.currentData()
             ),
             "tiny_layers": (
                 self._tiny_in_custom_layers_spin.value()
@@ -1639,10 +2275,14 @@ class ClassKitTrainingDialog(QDialog):
             "custom_backbone_lr_scale": self._custom_backbone_lr_spin.value(),
             "custom_layerwise_lr_decay": self._custom_layerwise_decay_spin.value(),
             "custom_gradual_unfreeze_interval": self._custom_gradual_unfreeze_interval_spin.value(),
+            "auto_size_scale_factor": self._auto_size_scale_spin.value(),
             "custom_input_size": self._custom_input_size_spin.value(),
             "flipud": flipud_value,
             "fliplr": fliplr_value,
+            "hue": hue_value,
+            "saturation": saturation_value,
             "brightness": brightness_value,
             "contrast": contrast_value,
+            "monochrome": monochrome_value,
             "label_expansion": label_expansion,
         }

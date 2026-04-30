@@ -17,9 +17,10 @@ def test_cnn_identity_config_defaults():
     assert cfg.confidence == 0.5
     assert cfg.label == ""
     assert cfg.batch_size == 64
-    assert cfg.match_bonus == 20.0
-    assert cfg.mismatch_penalty == 50.0
+    assert cfg.match_bonus == 0.5
+    assert cfg.mismatch_penalty == 1.0
     assert cfg.window == 10
+    assert cfg.scoring_mode == "atomic"
 
 
 def test_cnn_identity_config_custom():
@@ -39,17 +40,28 @@ def test_cnn_identity_config_custom():
 def test_class_prediction_fields():
     from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    p = ClassPrediction(class_name="tag_3", confidence=0.92, det_index=0)
-    assert p.class_name == "tag_3"
-    assert p.confidence == pytest.approx(0.92)
-    assert p.det_index == 0
+    p = ClassPrediction(
+        det_index=2,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.9,),
+    )
+    assert p.class_name == "antA"
+    assert p.confidence == 0.9
+    assert p.det_index == 2
 
 
 def test_class_prediction_none_class_name():
     from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    p = ClassPrediction(class_name=None, confidence=0.3, det_index=2)
+    p = ClassPrediction(
+        det_index=1,
+        factor_names=("flat",),
+        class_names=(None,),
+        confidences=(0.4,),
+    )
     assert p.class_name is None
+    assert p.confidence == 0.4
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +78,15 @@ def test_cnn_identity_cache_roundtrip(tmp_path):
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
     preds = [
-        ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0),
-        ClassPrediction(class_name=None, confidence=0.3, det_index=1),
+        ClassPrediction(
+            det_index=0,
+            factor_names=("flat",),
+            class_names=("tag_0",),
+            confidences=(0.9,),
+        ),
+        ClassPrediction(
+            det_index=1, factor_names=("flat",), class_names=(None,), confidences=(0.3,)
+        ),
     ]
     cache.save(5, preds)
     cache.flush()  # required before loading from a fresh instance
@@ -90,7 +109,17 @@ def test_cnn_identity_cache_exists(tmp_path):
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
     assert not cache.exists()
-    cache.save(0, [ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0)])
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            )
+        ],
+    )
     cache.flush()
     assert cache.exists()
 
@@ -115,7 +144,17 @@ def test_cnn_identity_cache_missing_frame_returns_empty(tmp_path):
 
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
-    cache.save(0, [ClassPrediction(class_name="tag_0", confidence=0.9, det_index=0)])
+    cache.save(
+        0,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("tag_0",),
+                confidences=(0.9,),
+            )
+        ],
+    )
     loaded = cache.load(99)  # frame 99 not saved
     assert loaded == []
 
@@ -125,10 +164,8 @@ def test_cnn_identity_cache_missing_frame_returns_empty(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_backend_predict_batch_cardinality():
+def test_backend_predict_batch_cardinality(tiny_flat_headtail):
     """predict_batch() must return exactly one ClassPrediction per input crop."""
-    from unittest.mock import patch
-
     import numpy as np
 
     from hydra_suite.core.identity.classification.cnn import (
@@ -136,29 +173,21 @@ def test_backend_predict_batch_cardinality():
         CNNIdentityConfig,
     )
 
-    cfg = CNNIdentityConfig(model_path="/tmp/m.pth", confidence=0.5)
+    cfg = CNNIdentityConfig(model_path=str(tiny_flat_headtail), confidence=0.0)
     crops = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
-    backend = CNNIdentityBackend(cfg, compute_runtime="cpu")
-
-    # Mock _ensure_loaded and _infer_fn together to avoid touching disk
-    fixed_logits = np.array([[1.0, 2.0, 0.5]] * 3, dtype=np.float32)
-
-    def fake_ensure_loaded():
-        backend._loaded = True
-        backend._class_names = ["tag_0", "tag_1", "no_tag"]
-        backend._input_size = (64, 64)
-        backend._infer_fn = lambda batch_np: fixed_logits
-
-    with patch.object(backend, "_ensure_loaded", fake_ensure_loaded):
-        results = backend.predict_batch(crops)
+    backend = CNNIdentityBackend(
+        cfg, model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+    )
+    results = backend.predict_batch(crops)
+    backend.close()
 
     assert len(results) == len(crops)
+    for p in results:
+        assert p.factor_names == ("flat",)
 
 
-def test_backend_below_confidence_returns_none_class():
+def test_backend_below_confidence_returns_none_class(tiny_flat_headtail):
     """Predictions below confidence threshold return class_name=None."""
-    from unittest.mock import patch
-
     import numpy as np
 
     from hydra_suite.core.identity.classification.cnn import (
@@ -166,26 +195,17 @@ def test_backend_below_confidence_returns_none_class():
         CNNIdentityConfig,
     )
 
-    # With confidence=0.9, softmax of [1.0, 1.0, 1.0] = [0.333, 0.333, 0.333] < 0.9
-    cfg = CNNIdentityConfig(model_path="/tmp/m.pth", confidence=0.9)
+    # With confidence=0.999, random tiny-model weights should never exceed it.
+    cfg = CNNIdentityConfig(model_path=str(tiny_flat_headtail), confidence=0.999)
     crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
-    backend = CNNIdentityBackend(cfg, model_path="/tmp/m.pth", compute_runtime="cpu")
-
-    # Equal logits → max softmax = 0.333 < 0.9 threshold
-    flat_logits = np.array([[1.0, 1.0, 1.0]], dtype=np.float32)
-
-    def fake_ensure_loaded():
-        backend._loaded = True
-        backend._class_names = ["tag_0", "tag_1", "no_tag"]
-        backend._input_size = (64, 64)
-        backend._infer_fn = lambda batch_np: flat_logits
-
-    with patch.object(backend, "_ensure_loaded", fake_ensure_loaded):
-        results = backend.predict_batch(crops)
+    backend = CNNIdentityBackend(
+        cfg, model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+    )
+    results = backend.predict_batch(crops)
+    backend.close()
 
     assert len(results) == 1
     assert results[0].class_name is None
-    assert results[0].confidence == pytest.approx(1.0 / 3.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -260,131 +280,173 @@ def test_registry_entry_format_after_import(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# TrackCNNHistory tests
+# ClassPrediction multi-factor tests
 # ---------------------------------------------------------------------------
 
 
-def test_track_cnn_history_majority_vote():
-    """3 out of 5 frames predict the same class → that class is the identity."""
-    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
+def test_class_prediction_multi_factor_shape():
+    """ClassPrediction exposes factor_names, class_names, confidences as tuples."""
+    from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    hist = TrackCNNHistory(n_tracks=1, window=10)
-    hist.record(0, 1, "tag_3")
-    hist.record(0, 2, "tag_3")
-    hist.record(0, 3, "tag_3")
-    hist.record(0, 4, "tag_0")
-    hist.record(0, 5, "tag_1")
-    assert hist.majority_class(0) == "tag_3"
-
-
-def test_track_cnn_history_no_observations_returns_none():
-    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
-
-    hist = TrackCNNHistory(n_tracks=2, window=10)
-    assert hist.majority_class(0) is None
-    assert hist.majority_class(1) is None
+    p = ClassPrediction(
+        det_index=0,
+        factor_names=("color", "shape"),
+        class_names=("red", None),
+        confidences=(0.9, 0.4),
+    )
+    assert p.factor_names == ("color", "shape")
+    assert p.class_names == ("red", None)
+    assert p.confidences == (0.9, 0.4)
+    assert p.is_unknown == (False, False)
 
 
-def test_track_cnn_history_tied_returns_none():
-    """Exact tie in majority vote → no clear identity."""
-    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
+def test_class_prediction_flat_convenience_accessors():
+    """Flat (K=1) predictions expose class_name / confidence shortcuts."""
+    from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    hist = TrackCNNHistory(n_tracks=1, window=10)
-    hist.record(0, 1, "tag_0")
-    hist.record(0, 2, "tag_1")
-    # Tied: no majority → returns None
-    assert hist.majority_class(0) is None
+    p = ClassPrediction(
+        det_index=3,
+        factor_names=("flat",),
+        class_names=("antA",),
+        confidences=(0.75,),
+    )
+    assert p.class_name == "antA"
+    assert p.confidence == 0.75
 
-
-def test_track_cnn_history_window_drops_old():
-    """Observations outside the window are not counted."""
-    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
-
-    hist = TrackCNNHistory(n_tracks=1, window=3)
-    # Old observations (frames 0-2): tag_0 wins
-    hist.record(0, 0, "tag_0")
-    hist.record(0, 1, "tag_0")
-    hist.record(0, 2, "tag_0")
-    # New observations (frames 3-5): tag_1 wins; frame 0-2 drop out
-    hist.record(0, 3, "tag_1")
-    hist.record(0, 4, "tag_1")
-    hist.record(0, 5, "tag_1")
-    assert hist.majority_class(0) == "tag_1"
+    q = ClassPrediction(
+        det_index=3,
+        factor_names=("flat",),
+        class_names=(None,),
+        confidences=(0.2,),
+    )
+    assert q.class_name is None
+    assert q.confidence == 0.2
 
 
-def test_track_cnn_history_build_list():
-    from hydra_suite.core.identity.classification.cnn import TrackCNNHistory
+def test_class_prediction_flat_accessors_error_on_multi_factor():
+    from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
-    hist = TrackCNNHistory(n_tracks=3, window=10)
-    hist.record(0, 1, "tag_0")
-    hist.record(0, 2, "tag_0")
-    hist.record(2, 1, "no_tag")
-    identity_list = hist.build_track_identity_list(3)
-    assert identity_list[0] == "tag_0"
-    assert identity_list[1] is None
-    assert identity_list[2] == "no_tag"
+    p = ClassPrediction(
+        det_index=0,
+        factor_names=("a", "b"),
+        class_names=("x", "y"),
+        confidences=(0.5, 0.5),
+    )
+    with pytest.raises(ValueError):
+        _ = p.class_name
+    with pytest.raises(ValueError):
+        _ = p.confidence
+
+
+def test_cnn_identity_config_scoring_mode_default():
+    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+
+    cfg = CNNIdentityConfig()
+    assert cfg.scoring_mode == "atomic"
+
+
+def test_cnn_identity_config_accepts_per_head_average():
+    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+
+    cfg = CNNIdentityConfig(scoring_mode="per_head_average")
+    assert cfg.scoring_mode == "per_head_average"
 
 
 # ---------------------------------------------------------------------------
-# Hungarian cost adjustment tests
+# CNNIdentityBackend (real model) tests
 # ---------------------------------------------------------------------------
 
 
-def test_hungarian_cnn_match_bonus_applied():
-    """When detection class == track identity, cost decreases by match_bonus."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class="tag_3",
-        track_identity="tag_3",
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+def test_cnn_identity_backend_flat_predict(tiny_flat_headtail):
+    """CNNIdentityBackend returns one ClassPrediction per crop for a flat tiny model."""
+    from hydra_suite.core.identity.classification.cnn import (
+        CNNIdentityBackend,
+        CNNIdentityConfig,
     )
-    assert adjusted == pytest.approx(50.0 - 20.0)
 
-
-def test_hungarian_cnn_mismatch_penalty_applied():
-    """When detection class != track identity, cost increases by mismatch_penalty."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class="tag_0",
-        track_identity="tag_3",
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+    cfg = CNNIdentityConfig(model_path=str(tiny_flat_headtail), confidence=0.0)
+    backend = CNNIdentityBackend(
+        cfg, model_path=str(tiny_flat_headtail), compute_runtime="cpu"
     )
-    assert adjusted == pytest.approx(50.0 + 50.0)
+    import numpy as _np
+
+    crops = [_np.zeros((32, 32, 3), dtype=_np.uint8) for _ in range(3)]
+    preds = backend.predict_batch(crops)
+    assert len(preds) == 3
+    for i, p in enumerate(preds):
+        assert p.det_index == i
+        assert p.factor_names == ("flat",)
+        assert len(p.class_names) == 1
+        assert len(p.confidences) == 1
+    backend.close()
 
 
-def test_hungarian_cnn_no_adjustment_when_det_none():
-    """No cost adjustment when det_class is None (low confidence)."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class=None,
-        track_identity="tag_3",
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+def test_cnn_identity_backend_multihead_predict(tiny_multi_identity):
+    from hydra_suite.core.identity.classification.cnn import (
+        CNNIdentityBackend,
+        CNNIdentityConfig,
     )
-    assert adjusted == pytest.approx(50.0)
 
-
-def test_hungarian_cnn_no_adjustment_when_track_identity_none():
-    """No cost adjustment when track identity is None (unassigned)."""
-    from hydra_suite.core.identity.classification.cnn import apply_cnn_identity_cost
-
-    cost = 50.0
-    adjusted = apply_cnn_identity_cost(
-        cost=cost,
-        det_class="tag_3",
-        track_identity=None,
-        match_bonus=20.0,
-        mismatch_penalty=50.0,
+    cfg = CNNIdentityConfig(
+        model_path=str(tiny_multi_identity),
+        confidence=0.0,
+        scoring_mode="per_head_average",
     )
-    assert adjusted == pytest.approx(50.0)
+    backend = CNNIdentityBackend(
+        cfg, model_path=str(tiny_multi_identity), compute_runtime="cpu"
+    )
+    import numpy as _np
+
+    crops = [_np.zeros((32, 32, 3), dtype=_np.uint8) for _ in range(2)]
+    preds = backend.predict_batch(crops)
+    assert len(preds) == 2
+    for p in preds:
+        assert p.factor_names == ("color", "shape")
+        assert len(p.class_names) == 2
+        assert len(p.confidences) == 2
+    backend.close()
+
+
+def test_cnn_identity_backend_rejects_multihead_without_scoring_mode(
+    tiny_multi_identity,
+):
+    from hydra_suite.core.identity.classification.cnn import (
+        CNNIdentityBackend,
+        CNNIdentityConfig,
+    )
+    from hydra_suite.core.identity.classification.errors import ClassifierConfigError
+
+    # Default scoring_mode == "atomic" is permissible for flat; for multi-head the
+    # registry would have stored the mode explicitly. Construct with an explicit
+    # empty string to simulate a missing value and assert the backend rejects it.
+    cfg = CNNIdentityConfig(model_path=str(tiny_multi_identity), scoring_mode="")
+    with pytest.raises(ClassifierConfigError):
+        CNNIdentityBackend(
+            cfg, model_path=str(tiny_multi_identity), compute_runtime="cpu"
+        )
+
+
+def test_cnn_identity_backend_per_factor_threshold(tiny_multi_identity):
+    """Per-factor confidence threshold: a below-threshold head reports None."""
+    from hydra_suite.core.identity.classification.cnn import (
+        CNNIdentityBackend,
+        CNNIdentityConfig,
+    )
+
+    # Set threshold high so random weights never meet it.
+    cfg = CNNIdentityConfig(
+        model_path=str(tiny_multi_identity),
+        confidence=0.999,
+        scoring_mode="atomic",
+    )
+    backend = CNNIdentityBackend(
+        cfg, model_path=str(tiny_multi_identity), compute_runtime="cpu"
+    )
+    import numpy as _np
+
+    preds = backend.predict_batch([_np.zeros((32, 32, 3), dtype=_np.uint8)])
+    p = preds[0]
+    # Each head below threshold -> None
+    for name in p.class_names:
+        assert name is None
+    backend.close()

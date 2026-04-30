@@ -19,18 +19,14 @@ from hydra_suite.widgets.dialogs import (
     HYDRA_DIALOG_STYLE,
 )
 
-_PLUS_KEY = QKeySequence(Qt.Key.Key_Plus).toString()
-_MINUS_KEY = QKeySequence(Qt.Key.Key_Minus).toString()
+_PLUS_KEY = QKeySequence(Qt.Key.Key_Y).toString()
+_MINUS_KEY = QKeySequence(Qt.Key.Key_N).toString()
 
 
 class ShortcutEditorDialog(QDialog):
     """Edit keyboard shortcut assignments for non-label global actions."""
 
     DEFAULT_SHORTCUTS = [
-        ("Explore mode", "E"),
-        ("Labeling mode", "L"),
-        ("Predictions mode", "P"),
-        ("Review mode", "V"),
         ("Approve review label", _PLUS_KEY),
         ("Reject review label", _MINUS_KEY),
         ("Sample next candidates", "Space"),
@@ -52,7 +48,7 @@ class ShortcutEditorDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
 
-        hdr = QLabel("<b>Global Navigation Shortcuts</b>")
+        hdr = QLabel("<b>Global Labeling Shortcuts</b>")
         layout.addWidget(hdr)
 
         info = QLabel(

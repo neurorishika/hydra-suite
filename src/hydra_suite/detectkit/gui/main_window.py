@@ -3,34 +3,52 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QStackedWidget,
     QStatusBar,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 
+from hydra_suite.data.project_bundle import (
+    export_project_bundle_archive,
+    import_project_bundle_archive,
+    load_project_bundle_archive_manifest,
+)
 from hydra_suite.detectkit.config.schemas import DetectKitConfig
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
+from .evaluation import open_quick_test_dialog
 from .models import DetectKitProject
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
+from .prediction_preview import predict_preview_detections
 from .project import (
     create_project,
     default_project_parent_dir,
+    detectkit_model_path_is_previewable,
+    detectkit_project_is_portable,
+    detectkit_project_linked_reference_counts,
+    detectkit_project_preview_model_paths,
+    make_detectkit_project_portable,
     open_project,
     project_exists,
     save_project,
@@ -39,36 +57,315 @@ from .utils import find_label_for_image, parse_obb_label, source_class_id_map
 
 logger = logging.getLogger(__name__)
 
-_DATASET_PANEL_MIN_WIDTH = 220
-_DATASET_PANEL_MAX_WIDTH = 360
+
+class _DetectKitPortableWorker(BaseWorker):
+    """Background worker that localizes linked DetectKit sources and artifacts."""
+
+    success = Signal(dict)
+
+    def __init__(self, project_dir: Path):
+        super().__init__()
+        self._project_dir = Path(project_dir)
+
+    def execute(self) -> None:
+        self.status.emit(
+            "Copying linked sources and project artifacts into the bundle..."
+        )
+        project = open_project(self._project_dir)
+        if project is None:
+            raise RuntimeError(
+                f"Could not reopen DetectKit project: {self._project_dir}"
+            )
+        before_counts = detectkit_project_linked_reference_counts(project)
+        after_counts = make_detectkit_project_portable(project)
+        self.progress.emit(100)
+        self.success.emit({"before": before_counts, "after": after_counts})
+
+
+_DATASET_PANEL_MIN_WIDTH = 360
+_DATASET_PANEL_MAX_WIDTH = 420
 _CANVAS_MIN_WIDTH = 480
-_WORKSPACE_MIN_HEIGHT = 700
-_WORKSPACE_MIN_WIDTH = _DATASET_PANEL_MIN_WIDTH + _CANVAS_MIN_WIDTH + 280 + 24
+_TOOLS_PANEL_WIDTH = 280
+_WORKSPACE_MIN_HEIGHT = 760
+_WORKSPACE_MIN_WIDTH = 1320
 
 _DARK_STYLESHEET = """
-QMainWindow { background-color: #1e1e1e; }
-QWidget { background-color: #1e1e1e; color: #ddd; }
-QMenuBar { background-color: #252526; color: #ddd; }
-QMenuBar::item:selected { background-color: #094771; }
-QMenu { background-color: #252526; color: #ddd; }
-QMenu::item:selected { background-color: #094771; }
-QPushButton { background-color: #0e639c; color: white; border: none;
-              padding: 6px 14px; border-radius: 4px; }
-QPushButton:hover { background-color: #1177bb; }
-QPushButton:disabled { background-color: #444; color: #888; }
-QListWidget { background-color: #252526; border: 1px solid #333; color: #ddd; }
-QListWidget::item:selected { background-color: #094771; }
-QSplitter::handle { background-color: #333; width: 2px; }
-QStatusBar { background-color: #007acc; color: white; }
-QScrollArea { border: none; }
-QGroupBox { border: 1px solid #444; border-radius: 4px;
-            margin-top: 8px; padding-top: 12px; color: #ddd; }
-QGroupBox::title { padding: 0 4px; }
-QToolBar { background-color: #252526; border-bottom: 1px solid #333; spacing: 4px; }
-QToolBar QToolButton { color: #ddd; padding: 4px 8px; }
-QToolBar QToolButton:hover { background-color: #094771; border-radius: 3px; }
-QComboBox { background-color: #3c3c3c; border: 1px solid #555; color: #ddd;
-            padding: 2px 6px; border-radius: 3px; }
+QMainWindow {
+    background-color: #1e1e1e;
+}
+QWidget {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    font-family: "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 11px;
+}
+QWidget[detectkitRole="panelShell"] {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 8px;
+}
+QWidget[detectkitRole="canvasShell"] {
+    background-color: #202224;
+    border: 1px solid #3e3e42;
+    border-radius: 8px;
+}
+QWidget[detectkitRole="sectionCard"] {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 6px;
+}
+QLabel[detectkitRole="sectionTitle"] {
+    color: #9cdcfe;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+}
+QLabel[detectkitRole="sectionHint"] {
+    color: #9f9f9f;
+    font-size: 11px;
+}
+QLabel[detectkitRole="compactInfo"] {
+    color: #cfcfcf;
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 6px 8px;
+}
+QMenuBar {
+    background-color: #252526;
+    color: #cccccc;
+    border-bottom: 1px solid #3e3e42;
+    padding: 4px;
+}
+QMenuBar::item {
+    padding: 6px 12px;
+    background-color: transparent;
+}
+QMenuBar::item:selected {
+    background-color: #2a2d2e;
+}
+QMenu {
+    background-color: #252526;
+    color: #cccccc;
+    border: 1px solid #3e3e42;
+}
+QMenu::item {
+    padding: 8px 24px;
+}
+QMenu::item:selected {
+    background-color: #094771;
+}
+QPushButton {
+    background-color: #0e639c;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #1177bb;
+}
+QPushButton:pressed {
+    background-color: #0d5a8f;
+}
+QPushButton:disabled {
+    background-color: #3e3e42;
+    color: #888888;
+}
+QPushButton[detectkitVariant="secondary"] {
+    background-color: #3e3e42;
+    color: #e0e0e0;
+}
+QPushButton[detectkitVariant="secondary"]:hover {
+    background-color: #555558;
+}
+QPushButton[detectkitVariant="quiet"] {
+    background-color: transparent;
+    border: 1px solid #3e3e42;
+    color: #cccccc;
+}
+QPushButton[detectkitVariant="quiet"]:hover {
+    background-color: #2a2d2e;
+    border-color: #0e639c;
+}
+QGroupBox {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding: 8px;
+    font-weight: 600;
+    color: #cccccc;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 8px;
+    padding: 1px 6px;
+    background-color: #1e1e1e;
+    color: #9cdcfe;
+    border-radius: 3px;
+}
+QListWidget,
+QTextEdit,
+QPlainTextEdit {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 4px;
+    color: #e0e0e0;
+}
+QListWidget::item {
+    padding: 8px 10px;
+    border-radius: 4px;
+    margin: 1px 0px;
+}
+QListWidget::item:selected {
+    background-color: #094771;
+    color: #ffffff;
+}
+QListWidget::item:hover:!selected {
+    background-color: #2a2d2e;
+}
+QComboBox,
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox {
+    background-color: #3c3c3c;
+    border: 1px solid #3e3e42;
+    color: #e0e0e0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    min-height: 22px;
+}
+QComboBox:hover,
+QLineEdit:hover,
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QTextEdit:hover,
+QPlainTextEdit:hover,
+QListWidget:hover {
+    border-color: #0e639c;
+}
+QComboBox:focus,
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QTextEdit:focus,
+QPlainTextEdit:focus,
+QListWidget:focus {
+    border-color: #007acc;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #3e3e42;
+    background-color: #4a4a4a;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+QComboBox QAbstractItemView {
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    selection-background-color: #094771;
+    selection-color: #ffffff;
+    color: #e0e0e0;
+}
+QCheckBox {
+    color: #d6d6d6;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid #3e3e42;
+    background-color: #3c3c3c;
+    border-radius: 3px;
+}
+QCheckBox::indicator:checked {
+    background-color: #0e639c;
+    border-color: #007acc;
+}
+QProgressBar {
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    text-align: center;
+    background-color: #1f1f1f;
+    color: #ffffff;
+    min-height: 18px;
+}
+QProgressBar::chunk {
+    background-color: #0e639c;
+    border-radius: 3px;
+}
+QSlider::groove:horizontal {
+    border: 1px solid #3e3e42;
+    height: 4px;
+    background: #2a2d2e;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #0e639c;
+    border: 1px solid #0e639c;
+    width: 14px;
+    margin: -6px 0;
+    border-radius: 7px;
+}
+QSplitter::handle {
+    background-color: #3e3e42;
+    width: 6px;
+}
+QToolBar {
+    background-color: #252526;
+    border-bottom: 1px solid #3e3e42;
+    spacing: 8px;
+    padding: 6px;
+}
+QToolBar QToolButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 12px;
+    color: #cccccc;
+}
+QToolBar QToolButton:hover {
+    background-color: #2a2d2e;
+}
+QToolBar QToolButton:pressed {
+    background-color: #094771;
+}
+QStatusBar {
+    background-color: #007acc;
+    color: #ffffff;
+    border-top: 1px solid #0098ff;
+    font-weight: 500;
+}
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+QScrollBar:vertical {
+    background-color: #252526;
+    width: 10px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background-color: #5a5a5a;
+    border-radius: 5px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #007acc;
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0px;
+    height: 0px;
+}
 """
 
 
@@ -83,6 +380,11 @@ class DetectKitMainWindow(QMainWindow):
 
         self.config = DetectKitConfig()
         self._project: Optional[DetectKitProject] = None
+        self._current_source_path = ""
+        self._current_image_path = ""
+        self._last_prediction_request: tuple[str, str, float] | None = None
+        self._portable_worker = None
+        self._portable_progress_dialog = None
 
         # Build workspace panels first (toolbar actions need them)
         self._dataset_panel = DatasetPanel()
@@ -111,10 +413,11 @@ class DetectKitMainWindow(QMainWindow):
         # Connect ToolsPanel signals
         self._dataset_panel.manage_sources_requested.connect(self._open_source_manager)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
+        self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
         self._tools_panel.prev_requested.connect(self._dataset_panel.navigate_prev)
         self._tools_panel.next_requested.connect(self._dataset_panel.navigate_next)
         self._tools_panel.train_requested.connect(self._open_training_dialog)
-        self._tools_panel.evaluate_requested.connect(self._open_evaluation_dialog)
+        self._tools_panel.evaluate_requested.connect(self._evaluate_active_model)
         self._tools_panel.history_requested.connect(self._open_history_dialog)
 
     # ------------------------------------------------------------------
@@ -124,6 +427,7 @@ class DetectKitMainWindow(QMainWindow):
     def _build_toolbar(self) -> QToolBar:
         tb = QToolBar("Main Toolbar")
         tb.setMovable(False)
+        tb.setObjectName("detectkitToolbar")
 
         act_new = QAction("New", self)
         act_new.triggered.connect(self.new_project)
@@ -136,6 +440,14 @@ class DetectKitMainWindow(QMainWindow):
         act_save = QAction("Save", self)
         act_save.triggered.connect(self._save_current_project)
         tb.addAction(act_save)
+
+        act_make_portable = QAction("Make Portable", self)
+        act_make_portable.triggered.connect(self.make_project_portable)
+        tb.addAction(act_make_portable)
+
+        act_export_zip = QAction("Export Zip", self)
+        act_export_zip.triggered.connect(self.export_project_zip)
+        tb.addAction(act_export_zip)
 
         tb.addSeparator()
 
@@ -159,8 +471,12 @@ class DetectKitMainWindow(QMainWindow):
         act_train.triggered.connect(self._open_training_dialog)
         tb.addAction(act_train)
 
+        act_run_inference = QAction("Run Inference", self)
+        act_run_inference.triggered.connect(self._run_inference_overlay)
+        tb.addAction(act_run_inference)
+
         act_evaluate = QAction("Evaluate", self)
-        act_evaluate.triggered.connect(self._open_evaluation_dialog)
+        act_evaluate.triggered.connect(self._evaluate_active_model)
         tb.addAction(act_evaluate)
 
         act_history = QAction("History", self)
@@ -196,6 +512,10 @@ class DetectKitMainWindow(QMainWindow):
             buttons=[
                 ButtonDef(label="New Project", callback=self.new_project),
                 ButtonDef(label="Open Project", callback=self.open_project_dialog),
+                ButtonDef(
+                    label="Open Project Zip",
+                    callback=self.open_project_zip_dialog,
+                ),
             ],
             recents_label="Recent Projects",
             recents_store=store,
@@ -231,30 +551,59 @@ class DetectKitMainWindow(QMainWindow):
 
     def _build_workspace_page(self) -> None:
         page = QWidget()
+        page.setObjectName("detectkitWorkspace")
         layout = QHBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(4)
         splitter.setChildrenCollapsible(False)
         self.splitter = splitter
 
+        self._dataset_panel.setProperty("detectkitRole", "panelShell")
         self._dataset_panel.setMinimumWidth(_DATASET_PANEL_MIN_WIDTH)
         self._dataset_panel.setMaximumWidth(_DATASET_PANEL_MAX_WIDTH)
-        splitter.addWidget(self._dataset_panel)
+        splitter.addWidget(self._dataset_panel)  # index 0
+
+        canvas_shell = QWidget()
+        canvas_shell.setProperty("detectkitRole", "canvasShell")
+        canvas_layout = QVBoxLayout(canvas_shell)
+        canvas_layout.setContentsMargins(10, 10, 10, 10)
+        canvas_layout.setSpacing(8)
+
+        canvas_title = QLabel("Annotation Preview")
+        canvas_title.setProperty("detectkitRole", "sectionTitle")
+        canvas_layout.addWidget(canvas_title)
+
+        canvas_hint = QLabel(
+            "Review imported labels, compare model overlays, and inspect oriented boxes before training."
+        )
+        canvas_hint.setWordWrap(True)
+        canvas_hint.setProperty("detectkitRole", "sectionHint")
+        canvas_layout.addWidget(canvas_hint)
 
         self._canvas.setMinimumWidth(_CANVAS_MIN_WIDTH)
-        splitter.addWidget(self._canvas)
+        canvas_layout.addWidget(self._canvas, 1)
+        canvas_shell.setMinimumWidth(_CANVAS_MIN_WIDTH)
+        splitter.addWidget(canvas_shell)  # index 1
+        self._right_tabs = canvas_shell
 
+        self._tools_panel.setProperty("detectkitRole", "panelShell")
+        self._tools_panel.setFixedWidth(_TOOLS_PANEL_WIDTH)
+        splitter.addWidget(self._tools_panel)  # index 2
+
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, False)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_DATASET_PANEL_MIN_WIDTH, _CANVAS_MIN_WIDTH + 200])
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes(
+            [_DATASET_PANEL_MIN_WIDTH, _CANVAS_MIN_WIDTH + 220, _TOOLS_PANEL_WIDTH]
+        )
 
-        layout.addWidget(splitter)
-
-        self._tools_panel.setFixedWidth(280)
-        layout.addWidget(self._tools_panel)
+        layout.addWidget(splitter, 1)
 
         self._stack.addWidget(page)  # index 1
 
@@ -274,6 +623,10 @@ class DetectKitMainWindow(QMainWindow):
         act_open.triggered.connect(self.open_project_dialog)
         file_menu.addAction(act_open)
 
+        act_open_zip = QAction("Open Project Zip...", self)
+        act_open_zip.triggered.connect(self.open_project_zip_dialog)
+        file_menu.addAction(act_open_zip)
+
         self._recent_menu = QMenu("Recent Projects", self)
         file_menu.addMenu(self._recent_menu)
         self._refresh_recent_menu()
@@ -283,6 +636,14 @@ class DetectKitMainWindow(QMainWindow):
         act_save = QAction("Save Project", self)
         act_save.triggered.connect(self._save_current_project)
         file_menu.addAction(act_save)
+
+        act_make_portable = QAction("Make Project Portable", self)
+        act_make_portable.triggered.connect(self.make_project_portable)
+        file_menu.addAction(act_make_portable)
+
+        act_export_zip = QAction("Export Project Zip...", self)
+        act_export_zip.triggered.connect(self.export_project_zip)
+        file_menu.addAction(act_export_zip)
 
         file_menu.addSeparator()
 
@@ -347,6 +708,62 @@ class DetectKitMainWindow(QMainWindow):
         )
         self._load_project(proj)
 
+    @staticmethod
+    def _next_available_project_dir(parent_dir: Path, base_name: str) -> Path:
+        cleaned = re.sub(r"[\\/]+", "_", str(base_name or "").strip())
+        cleaned = cleaned.strip() or "DetectKit Project"
+        candidate = parent_dir / cleaned
+        counter = 1
+        while candidate.exists():
+            candidate = parent_dir / f"{cleaned}_{counter}"
+            counter += 1
+        return candidate
+
+    @staticmethod
+    def _sanitize_project_folder_name(name: str, *, fallback: str) -> str:
+        cleaned = re.sub(r"[\\/]+", "_", str(name or "").strip())
+        return cleaned.strip() or fallback
+
+    def _choose_project_zip_destination(
+        self,
+        archive_path: str | Path,
+        suggested_name: str,
+    ) -> Path | None:
+        parent_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose DetectKit Project Extraction Folder",
+            str(default_project_parent_dir()),
+            QFileDialog.ShowDirsOnly,
+        )
+        if not parent_dir:
+            return None
+
+        folder_name, accepted = QInputDialog.getText(
+            self,
+            "Project Folder Name",
+            "Extract project into folder:",
+            text=self._sanitize_project_folder_name(
+                suggested_name,
+                fallback=Path(archive_path).stem,
+            ),
+        )
+        if not accepted:
+            return None
+
+        cleaned_name = self._sanitize_project_folder_name(
+            folder_name,
+            fallback=Path(archive_path).stem,
+        )
+        destination_dir = Path(parent_dir) / cleaned_name
+        if destination_dir.exists() and any(destination_dir.iterdir()):
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Destination folder is not empty:\n{destination_dir}",
+            )
+            return None
+        return destination_dir
+
     def open_project_dialog(self) -> None:
         directory = QFileDialog.getExistingDirectory(
             self, "Open DetectKit Project", str(default_project_parent_dir())
@@ -361,12 +778,66 @@ class DetectKitMainWindow(QMainWindow):
                 self, "Open Failed", f"No DetectKit project found in:\n{directory}"
             )
 
+    def open_project_zip_dialog(self) -> None:
+        archive_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open DetectKit Project Zip",
+            str(default_project_parent_dir()),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            manifest = load_project_bundle_archive_manifest(archive_path, strict=True)
+            destination_dir = self._choose_project_zip_destination(
+                archive_path,
+                manifest.display_name or Path(archive_path).stem,
+            )
+            if destination_dir is None:
+                return
+            imported_dir = import_project_bundle_archive(
+                archive_path,
+                destination_dir,
+                expected_kit="detectkit",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
+
+        proj = open_project(imported_dir)
+        if proj is not None:
+            self._load_project(proj)
+        else:
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Imported project could not be opened:\n{imported_dir}",
+            )
+
     def _load_project(self, proj: DetectKitProject) -> None:
         """Activate proj: wire panels, show toolbar, switch to workspace."""
         self._project = proj
+        self._current_source_path = ""
+        self._current_image_path = ""
+        self._last_prediction_request = None
+
+        linked_counts = detectkit_project_linked_reference_counts(proj)
+        portability_status = (
+            "Portable" if detectkit_project_is_portable(proj) else "Linked"
+        )
+
+        preview_paths = detectkit_project_preview_model_paths(proj)
+        if preview_paths and not detectkit_model_path_is_previewable(
+            proj, proj.active_model_path
+        ):
+            proj.active_model_path = preview_paths[0]
 
         self._dataset_panel.set_project(proj, self)
+        self._dataset_panel.set_portability_status(portability_status, linked_counts)
         self._tools_panel.set_project(proj)
+        self._tools_panel.set_portability_status(portability_status, linked_counts)
+        self._tools_panel.refresh_model_selector(preview_paths)
 
         self._toolbar.setVisible(True)
         self._stack.setCurrentIndex(1)
@@ -386,6 +857,143 @@ class DetectKitMainWindow(QMainWindow):
         self._dataset_panel.collect_state(self._project)
         save_project(self._project)
         self.statusBar().showMessage("Project saved.", 3000)
+
+    def make_project_portable(self, *, interactive: bool = True) -> bool:
+        if self._project is None:
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    "Open a DetectKit project before making it portable.",
+                )
+            return False
+
+        before_counts = detectkit_project_linked_reference_counts(self._project)
+        if not any(before_counts.values()):
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    "This DetectKit project is already portable.",
+                )
+            self.statusBar().showMessage("Project already portable.", 3000)
+            return True
+
+        if interactive:
+            self._save_current_project()
+            progress = QProgressDialog(
+                "Copying linked sources and project artifacts into the bundle...",
+                None,
+                0,
+                0,
+                self,
+            )
+            progress.setWindowTitle("Make Project Portable")
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+
+            worker = _DetectKitPortableWorker(self._project.project_dir)
+            worker.status.connect(progress.setLabelText)
+            worker.error.connect(
+                lambda msg: QMessageBox.warning(self, "Make Project Portable", msg)
+            )
+
+            def _finish_portable_run() -> None:
+                progress.close()
+                self._portable_worker = None
+                self._portable_progress_dialog = None
+
+            def _handle_portable_success(result: dict) -> None:
+                reloaded_project = open_project(self._project.project_dir)
+                if reloaded_project is not None:
+                    self._load_project(reloaded_project)
+                before = result.get("before", {}) if isinstance(result, dict) else {}
+                after = result.get("after", {}) if isinstance(result, dict) else {}
+                if any(int(value or 0) for value in after.values()):
+                    QMessageBox.warning(
+                        self,
+                        "Make Project Portable",
+                        "Some linked sources or artifact references remain outside the project bundle.",
+                    )
+                    return
+                copied_sources = max(0, int(before.get("sources", 0)))
+                copied_artifacts = max(0, int(before.get("artifacts", 0)))
+                summary = f"Localized {copied_sources:,} source(s) and {copied_artifacts:,} artifact reference(s) into the project bundle."
+                self.statusBar().showMessage(summary, 5000)
+                QMessageBox.information(self, "Make Project Portable", summary)
+
+            worker.success.connect(_handle_portable_success)
+            worker.finished.connect(_finish_portable_run)
+            self._portable_worker = worker
+            self._portable_progress_dialog = progress
+            worker.start()
+            return True
+
+        try:
+            self._save_current_project()
+            after_counts = make_detectkit_project_portable(self._project)
+        except Exception as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+
+        reloaded_project = open_project(self._project.project_dir)
+        if reloaded_project is not None:
+            self._load_project(reloaded_project)
+        else:
+            self._load_project(self._project)
+
+        if any(after_counts.values()):
+            QMessageBox.warning(
+                self,
+                "Make Project Portable",
+                "Some linked sources or artifact references remain outside the project bundle.",
+            )
+            return False
+
+        copied_sources = max(0, int(before_counts.get("sources", 0)))
+        copied_artifacts = max(0, int(before_counts.get("artifacts", 0)))
+        summary = f"Localized {copied_sources:,} source(s) and {copied_artifacts:,} artifact reference(s) into the project bundle."
+        self.statusBar().showMessage(summary, 5000)
+        if interactive:
+            QMessageBox.information(self, "Make Project Portable", summary)
+        return True
+
+    def export_project_zip(self) -> None:
+        if self._project is None:
+            QMessageBox.information(
+                self,
+                "Export Project Zip",
+                "Open a DetectKit project before exporting a portable zip.",
+            )
+            return
+
+        default_archive = (
+            self._project.project_dir.parent / f"{self._project.project_dir.name}.zip"
+        )
+        archive_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export DetectKit Project Zip",
+            str(default_archive),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            if not self.make_project_portable(interactive=False):
+                return
+            self._save_current_project()
+            written_path = export_project_bundle_archive(
+                self._project.project_dir,
+                archive_path,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        self.statusBar().showMessage(f"Exported project zip: {written_path}", 5000)
 
     # ------------------------------------------------------------------
     # Dialog launchers
@@ -411,12 +1019,13 @@ class DetectKitMainWindow(QMainWindow):
         dlg.exec()
 
     def _open_evaluation_dialog(self) -> None:
+        """Backward-compatible alias for the active-model evaluation flow."""
+        self._evaluate_active_model()
+
+    def _evaluate_active_model(self) -> None:
         if self._project is None:
             return
-        from .dialogs.evaluation_dialog import EvaluationDialog
-
-        dlg = EvaluationDialog(self._project, parent=self)
-        dlg.exec()
+        open_quick_test_dialog(self._project, parent=self)
 
     def _open_history_dialog(self) -> None:
         if self._project is None:
@@ -426,31 +1035,130 @@ class DetectKitMainWindow(QMainWindow):
         dlg = HistoryDialog(self._project, parent=self)
         result = dlg.exec()
         if result == dlg.DialogCode.Accepted:
-            model_paths = (
-                [self._project.active_model_path]
-                if self._project.active_model_path
-                else []
+            self._tools_panel.refresh_model_selector(
+                detectkit_project_preview_model_paths(self._project)
             )
-            self._tools_panel.refresh_model_selector(model_paths)
+            self._refresh_prediction_overlay(force=True)
 
     def _on_training_completed(self, results: list) -> None:
-        model_paths = [
-            r.get("published_model_path", "")
-            for r in results
-            if r.get("published_model_path")
-        ]
-        self._tools_panel.refresh_model_selector(model_paths)
+        if self._project is None:
+            return
+        self._tools_panel.refresh_model_selector(
+            detectkit_project_preview_model_paths(self._project)
+        )
+        self._refresh_prediction_overlay(force=True)
         self._save_current_project()
 
     def _export_stub(self) -> None:
-        QMessageBox.information(
-            self, "Export", "Export is not yet implemented in this release."
-        )
+        self._open_history_dialog()
 
     def _on_overlay_changed(self) -> None:
         settings = self._tools_panel.get_overlay_settings()
+        if self._project is not None:
+            self._project.active_model_path = settings.active_model_path
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
+
+        request = self._prediction_request(settings)
+        if request is None:
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            return
+
+        if self._project is not None and not detectkit_model_path_is_previewable(
+            self._project,
+            request[1],
+        ):
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                "Selected model does not support direct preview overlays.",
+                4000,
+            )
+            return
+
+        if (
+            self._last_prediction_request is not None
+            and request != self._last_prediction_request
+        ):
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                "Inference settings changed. Click Run Inference to refresh overlay predictions.",
+                4000,
+            )
+
+    def _prediction_request(self, settings=None) -> tuple[str, str, float] | None:
+        """Return the current prediction request tuple, or None if not runnable."""
+        if self._project is None or not self._current_image_path:
+            return None
+
+        if settings is None:
+            settings = self._tools_panel.get_overlay_settings()
+
+        model_path = str(settings.active_model_path or "").strip()
+        if not model_path:
+            return None
+
+        return (
+            self._current_image_path,
+            model_path,
+            round(float(settings.confidence_threshold), 4),
+        )
+
+    def _run_inference_overlay(self) -> None:
+        """Run preview inference for the current image using the selected overlay settings."""
+        self._refresh_prediction_overlay(force=True)
+
+    def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
+        if self._project is None or not self._current_image_path:
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            return
+
+        settings = self._tools_panel.get_overlay_settings()
+        request = self._prediction_request(settings)
+        if request is None:
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            return
+
+        model_path = request[1]
+
+        if not detectkit_model_path_is_previewable(self._project, model_path):
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                "Selected model does not support direct preview overlays.",
+                4000,
+            )
+            return
+
+        if not force and request == self._last_prediction_request:
+            return
+
+        try:
+            detections = predict_preview_detections(
+                self._current_image_path,
+                model_path,
+                device_preference=self._project.device or "auto",
+                confidence_threshold=settings.confidence_threshold,
+            )
+        except Exception as exc:
+            logger.warning("DetectKit preview inference failed", exc_info=True)
+            self._canvas.clear_pred_detections()
+            self._last_prediction_request = None
+            self.statusBar().showMessage(
+                f"Prediction preview failed: {exc}",
+                5000,
+            )
+            return
+
+        self._canvas.set_pred_detections(
+            detections,
+            class_names=self._project.class_names,
+        )
+        self._last_prediction_request = request
 
     # ------------------------------------------------------------------
     # Image display
@@ -458,6 +1166,9 @@ class DetectKitMainWindow(QMainWindow):
 
     def show_image(self, source_path: str, image_path: str) -> None:
         """Load an image and overlay GT labels."""
+        self._current_source_path = str(source_path or "")
+        self._current_image_path = str(image_path or "")
+        self._last_prediction_request = None
         self._canvas.clear_gt_detections()
         self._canvas.clear_pred_detections()
         ok = self._canvas.load_image(image_path)
@@ -488,6 +1199,14 @@ class DetectKitMainWindow(QMainWindow):
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
                 self._canvas.set_gt_detections(dets, class_names=class_names)
 
+        if (
+            self._project is not None
+            and str(self._project.active_model_path or "").strip()
+        ):
+            self.statusBar().showMessage(
+                "Image loaded. Click Run Inference to refresh overlay predictions.",
+                3000,
+            )
         self._canvas.fit_in_view()
 
     # ------------------------------------------------------------------

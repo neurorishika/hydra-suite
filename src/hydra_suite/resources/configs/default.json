@@ -58,7 +58,6 @@
   "yolo_manual_batch_size": 16,
   "max_targets": 25,
   "max_assignment_distance_multiplier": 2.0,
-  "recovery_search_distance_multiplier": 0.2,
   "enable_backward_tracking": true,
   "kalman_process_noise": 0.03,
   "kalman_measurement_noise": 0.1,
@@ -119,6 +118,7 @@
   "dataset_probabilistic_sampling": true,
   "metric_low_confidence": true,
   "metric_count_mismatch": true,
+  "metric_fragmented_detections": true,
   "metric_high_assignment_cost": true,
   "metric_track_loss": true,
   "metric_high_uncertainty": true,
@@ -135,8 +135,6 @@
   "cnn_classifier_confidence": 0.5,
   "cnn_classifier_label": "",
   "cnn_classifier_batch_size": 64,
-  "cnn_classifier_match_bonus": 20.0,
-  "cnn_classifier_mismatch_penalty": 50.0,
   "cnn_classifier_window": 10,
   "apriltag_family": "tag36h11",
   "apriltag_decimate": 1.0,
@@ -166,5 +164,5 @@
   "density_min_frame_duration": 3,
   "density_min_area_bodies": 0.25,
   "density_downsample_factor": 8,
-  "export_confidence_density_video": true
+  "export_confidence_density_video": false
 }

@@ -298,6 +298,39 @@ class OBBGeometryMixin:
         angle_deg = np.where(swap_mask, (angle_deg + 90.0) % 180.0, angle_deg)
         angle_rad_fixed = np.deg2rad(angle_deg).astype(np.float32)
 
+        # Drop invalid detections early so NaN/Inf does not propagate into
+        # assignment costs or Kalman updates.
+        valid_mask = (
+            np.isfinite(cx)
+            & np.isfinite(cy)
+            & np.isfinite(major)
+            & np.isfinite(minor)
+            & np.isfinite(angle_rad_fixed)
+            & np.isfinite(conf_scores)
+            & (major > 0)
+            & (minor > 0)
+        )
+        if not np.all(valid_mask):
+            dropped = int(len(valid_mask) - np.count_nonzero(valid_mask))
+            if dropped > 0:
+                logger.warning(
+                    "Dropping %d invalid OBB detections with non-finite or non-positive geometry.",
+                    dropped,
+                )
+            cx = cx[valid_mask]
+            cy = cy[valid_mask]
+            major = major[valid_mask]
+            minor = minor[valid_mask]
+            angle_rad_fixed = angle_rad_fixed[valid_mask]
+            conf_scores = conf_scores[valid_mask]
+            if return_class_ids:
+                class_ids = class_ids[valid_mask]
+
+        if cx.size == 0:
+            if return_class_ids:
+                return [], [], [], [], [], []
+            return [], [], [], [], []
+
         sizes = (major * minor).astype(np.float32)
         ellipse_area = (np.pi * (major / 2.0) * (minor / 2.0)).astype(np.float32)
         aspect_ratio = np.divide(

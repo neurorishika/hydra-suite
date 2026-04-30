@@ -23,6 +23,7 @@ class TestFrameQualityScorer:
             "METRIC_HIGH_ASSIGNMENT_COST": True,
             "METRIC_TRACK_LOSS": True,
             "METRIC_HIGH_UNCERTAINTY": False,
+            "METRIC_FRAGMENTED_DETECTIONS": True,
         }
 
         scorer = FrameQualityScorer(params)
@@ -311,6 +312,87 @@ def test_export_dataset_writes_active_learning_metadata(tmp_path: Path):
     assert "obb_corners_px" not in ann
 
 
+def test_measurements_to_detections_scales_back_raw_obb_corners() -> None:
+    import hydra_suite.data.dataset_generation as dg
+
+    detections = dg._measurements_to_detections(
+        [np.array([25.0, 25.0, 0.0], dtype=np.float32)],
+        [(100.0, 1.0)],
+        0.5,
+        obb_corners=[
+            np.array(
+                [[20.0, 20.0], [30.0, 20.0], [30.0, 30.0], [20.0, 30.0]],
+                dtype=np.float32,
+            )
+        ],
+    )
+
+    match = detections[(50.0, 50.0)]
+    assert match["corners"] is not None
+    assert np.allclose(
+        match["corners"],
+        np.array(
+            [[40.0, 40.0], [60.0, 40.0], [60.0, 60.0], [40.0, 60.0]],
+            dtype=np.float32,
+        ),
+    )
+
+
+def test_write_frame_annotations_prefers_matched_detector_corners(tmp_path: Path):
+    import hydra_suite.data.dataset_generation as dg
+
+    images_dir = tmp_path / "images"
+    labels_dir = tmp_path / "labels"
+    images_dir.mkdir()
+    labels_dir.mkdir()
+
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    df = pd.DataFrame(
+        [
+            {
+                "FrameID": 0,
+                "X": 50.0,
+                "Y": 50.0,
+                "Theta": 0.0,
+                "TrackID": 3,
+                "State": "tracked",
+            }
+        ]
+    )
+    matched_corners = np.array(
+        [[45.0, 25.0], [75.0, 45.0], [55.0, 75.0], [25.0, 55.0]],
+        dtype=np.float32,
+    )
+    yolo_detections = {
+        (50.0, 50.0): {
+            "width": 40.0,
+            "height": 20.0,
+            "theta": 1.0,
+            "corners": matched_corners,
+        }
+    }
+
+    _image_filename, label_filename, annotations = dg._write_frame_annotations(
+        0,
+        frame,
+        df,
+        yolo_detections,
+        {"REFERENCE_BODY_SIZE": 10.0},
+        images_dir,
+        labels_dir,
+        100,
+        100,
+        1.0,
+    )
+
+    text = (labels_dir / label_filename).read_text(encoding="utf-8")
+    assert (
+        text
+        == "0 0.450000 0.250000 0.750000 0.450000 0.550000 0.750000 0.250000 0.550000\n"
+    )
+    assert annotations[0]["dimension_source"] == "yolo_match"
+
+
 def test_score_frame_zero_count():
     """Test scoring when no objects detected."""
     params = {
@@ -422,3 +504,98 @@ def test_low_confidence_uses_frame_average_not_minimum():
     score = scorer.score_frame(frame_id=0, detection_data=detection_data)
 
     assert score == 0.0
+
+
+def _ellipse_shape(width: float, height: float) -> tuple[float, float]:
+    area = np.pi * (width / 2.0) * (height / 2.0)
+    aspect_ratio = width / max(height, 1e-6)
+    return area, aspect_ratio
+
+
+def test_score_frame_uses_assignment_confidence_when_costs_missing():
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "METRIC_LOW_CONFIDENCE": False,
+        "METRIC_COUNT_MISMATCH": False,
+        "METRIC_HIGH_ASSIGNMENT_COST": True,
+        "METRIC_TRACK_LOSS": False,
+    }
+
+    scorer = FrameQualityScorer(params)
+    score = scorer.score_frame(
+        frame_id=0,
+        tracking_data={"assignment_confidences": [0.15, 0.25, 0.35]},
+    )
+
+    assert score > 0.0
+    assert (
+        scorer.frame_scores[0]["metrics"]["high_assignment_cost"]["source"]
+        == "assignment_confidence"
+    )
+
+
+def test_score_frame_prioritizes_split_detections_over_clean_overcount():
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "METRIC_LOW_CONFIDENCE": False,
+        "METRIC_COUNT_MISMATCH": True,
+        "METRIC_FRAGMENTED_DETECTIONS": True,
+        "METRIC_HIGH_ASSIGNMENT_COST": False,
+        "METRIC_TRACK_LOSS": False,
+    }
+
+    scorer = FrameQualityScorer(params)
+
+    normal_shape = _ellipse_shape(20.0, 8.0)
+    split_shape = _ellipse_shape(8.0, 4.0)
+
+    split_score = scorer.score_frame(
+        frame_id=0,
+        detection_data={
+            "confidences": [0.9] * 5,
+            "count": 5,
+            "measurements": [
+                np.array([20.0, 20.0, 0.0], dtype=np.float32),
+                np.array([80.0, 20.0, 0.0], dtype=np.float32),
+                np.array([20.0, 80.0, 0.0], dtype=np.float32),
+                np.array([48.0, 48.0, 0.0], dtype=np.float32),
+                np.array([54.0, 50.0, 0.0], dtype=np.float32),
+            ],
+            "shapes": [
+                normal_shape,
+                normal_shape,
+                normal_shape,
+                split_shape,
+                split_shape,
+            ],
+            "obb_corners": [],
+        },
+    )
+
+    clean_overcount_score = scorer.score_frame(
+        frame_id=1,
+        detection_data={
+            "confidences": [0.9] * 5,
+            "count": 5,
+            "measurements": [
+                np.array([20.0, 20.0, 0.0], dtype=np.float32),
+                np.array([80.0, 20.0, 0.0], dtype=np.float32),
+                np.array([20.0, 80.0, 0.0], dtype=np.float32),
+                np.array([80.0, 80.0, 0.0], dtype=np.float32),
+                np.array([50.0, 50.0, 0.0], dtype=np.float32),
+            ],
+            "shapes": [
+                normal_shape,
+                normal_shape,
+                normal_shape,
+                normal_shape,
+                normal_shape,
+            ],
+            "obb_corners": [],
+        },
+    )
+
+    assert split_score > clean_overcount_score
+    assert "fragmented_detections" in scorer.frame_scores[0]["metrics"]

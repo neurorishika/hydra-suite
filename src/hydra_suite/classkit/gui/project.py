@@ -144,6 +144,29 @@ def project_exists(project_dir: Path) -> bool:
     )
 
 
+def classkit_project_linked_image_count(
+    project_dir: Path,
+    image_paths: list[Path | str],
+) -> int:
+    """Return how many ingested images still point outside the project bundle."""
+    project_root = Path(project_dir).expanduser().resolve()
+    linked_count = 0
+    for image_path in image_paths:
+        try:
+            Path(image_path).expanduser().resolve().relative_to(project_root)
+        except Exception:
+            linked_count += 1
+    return linked_count
+
+
+def classkit_project_is_portable(
+    project_dir: Path,
+    image_paths: list[Path | str],
+) -> bool:
+    """Return whether all ingested images are owned by the project bundle."""
+    return classkit_project_linked_image_count(project_dir, image_paths) == 0
+
+
 def prepare_project_directory(project_dir: Path) -> Path:
     """Migrate any legacy ClassKit root files into the canonical bundle layout."""
     project_dir = Path(project_dir).expanduser().resolve()

@@ -2,7 +2,7 @@
 
 import hashlib
 from pathlib import Path
-from typing import Generator, List, Union
+from typing import Any, Dict, Generator, List, Union
 
 
 def compute_image_hash(path: Path) -> str:
@@ -68,7 +68,12 @@ class IngestWorker:
         """
         self.db = db
 
-    def ingest(self, image_paths: List[Path], compute_hashes: bool = True):
+    def ingest(
+        self,
+        image_paths: List[Path],
+        compute_hashes: bool = True,
+        metadata_by_path: Dict[str, Dict[str, Any]] | None = None,
+    ):
         """Ingest images into database.
 
         Args:
@@ -80,4 +85,4 @@ class IngestWorker:
         else:
             hashes = None
 
-        self.db.add_images(image_paths, hashes)
+        self.db.add_images(image_paths, hashes, metadata_by_path=metadata_by_path)

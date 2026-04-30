@@ -55,8 +55,9 @@ class _CollapsibleSection(QWidget):
         self._toggle_btn.setCheckable(True)
         self._toggle_btn.setChecked(False)
         self._toggle_btn.setFlat(True)
+        self._toggle_btn.setProperty("detectkitVariant", "quiet")
         self._toggle_btn.setStyleSheet(
-            "QPushButton { text-align: left; font-weight: bold; padding: 4px; }"
+            "QPushButton { text-align: left; font-weight: 600; padding: 6px 8px; }"
         )
         self._toggle_btn.clicked.connect(self._on_toggle)
         layout.addWidget(self._toggle_btn)
@@ -96,6 +97,7 @@ class ToolsPanel(QWidget):
     """Fixed-width right panel with Dataset Overview, Analysis, Overlay, Navigation."""
 
     overlay_settings_changed = Signal()
+    run_inference_requested = Signal()
     prev_requested = Signal()
     next_requested = Signal()
     train_requested = Signal()
@@ -106,7 +108,10 @@ class ToolsPanel(QWidget):
         super().__init__(parent)
         self._proj = None
         self._class_checkboxes: list[QCheckBox] = []
+        self._portability_status = "Unknown"
+        self._linked_counts: dict[str, int] = {}
         self.setFixedWidth(_PANEL_WIDTH)
+        self.setProperty("detectkitRole", "panelShell")
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -115,8 +120,19 @@ class ToolsPanel(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
-        outer.setSpacing(6)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(10)
+
+        header = QLabel("Workspace Tools")
+        header.setProperty("detectkitRole", "sectionTitle")
+        outer.addWidget(header)
+
+        intro = QLabel(
+            "Track dataset readiness, inspect recent metrics, and control preview overlays from a single workspace rail."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("detectkitRole", "sectionHint")
+        outer.addWidget(intro)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -148,6 +164,11 @@ class ToolsPanel(QWidget):
         self._overview_progress.setFormat("0 / 0 labeled")
         v.addWidget(self._overview_progress)
 
+        self._overview_portability = QLabel("Project portability: unknown")
+        self._overview_portability.setWordWrap(True)
+        self._overview_portability.setProperty("detectkitRole", "compactInfo")
+        v.addWidget(self._overview_portability)
+
         self._overview_sources_layout = QVBoxLayout()
         self._overview_sources_layout.setSpacing(2)
         v.addLayout(self._overview_sources_layout)
@@ -167,6 +188,7 @@ class ToolsPanel(QWidget):
         v.addWidget(self._metrics_view)
 
         self._analysis_section.set_content(content)
+        self._analysis_section.toggle()
         return self._analysis_section
 
     def _build_overlay_group(self) -> QGroupBox:
@@ -183,6 +205,13 @@ class ToolsPanel(QWidget):
         self._chk_show_pred.setChecked(True)
         self._chk_show_pred.stateChanged.connect(self._emit_overlay_changed)
         v.addWidget(self._chk_show_pred)
+
+        overlay_hint = QLabel(
+            "Choose a model and threshold, then run inference on the current image when you want to refresh predictions."
+        )
+        overlay_hint.setWordWrap(True)
+        overlay_hint.setProperty("detectkitRole", "sectionHint")
+        v.addWidget(overlay_hint)
 
         v.addWidget(QLabel("Model:"))
         self._model_combo = QComboBox()
@@ -212,6 +241,16 @@ class ToolsPanel(QWidget):
         self._class_checkboxes_layout.setSpacing(2)
         v.addWidget(self._class_checkboxes_widget)
 
+        overlay_actions = QHBoxLayout()
+        self._btn_run_inference = QPushButton("Run Inference")
+        self._btn_overlay_evaluate = QPushButton("Evaluate...")
+        self._btn_overlay_evaluate.setProperty("detectkitVariant", "secondary")
+        self._btn_run_inference.clicked.connect(self.run_inference_requested)
+        self._btn_overlay_evaluate.clicked.connect(self.evaluate_requested)
+        overlay_actions.addWidget(self._btn_run_inference)
+        overlay_actions.addWidget(self._btn_overlay_evaluate)
+        v.addLayout(overlay_actions)
+
         return box
 
     def _build_navigation_group(self) -> QGroupBox:
@@ -221,6 +260,8 @@ class ToolsPanel(QWidget):
         nav_row = QHBoxLayout()
         self._btn_prev = QPushButton("◀ Prev")
         self._btn_next = QPushButton("Next ▶")
+        self._btn_prev.setProperty("detectkitVariant", "secondary")
+        self._btn_next.setProperty("detectkitVariant", "secondary")
         self._btn_prev.clicked.connect(self.prev_requested)
         self._btn_next.clicked.connect(self.next_requested)
         nav_row.addWidget(self._btn_prev)
@@ -232,13 +273,11 @@ class ToolsPanel(QWidget):
         v.addWidget(self._counter_label)
 
         self._btn_train = QPushButton("Train…")
-        self._btn_evaluate = QPushButton("Evaluate…")
         self._btn_history = QPushButton("History…")
+        self._btn_history.setProperty("detectkitVariant", "secondary")
         self._btn_train.clicked.connect(self.train_requested)
-        self._btn_evaluate.clicked.connect(self.evaluate_requested)
         self._btn_history.clicked.connect(self.history_requested)
         v.addWidget(self._btn_train)
-        v.addWidget(self._btn_evaluate)
         v.addWidget(self._btn_history)
 
         return box
@@ -265,14 +304,44 @@ class ToolsPanel(QWidget):
 
         sources = self._proj.sources or []
 
+        if self._portability_status == "Portable":
+            self._overview_portability.setText("Project portability: Portable")
+        else:
+            source_count = int(self._linked_counts.get("sources", 0) or 0)
+            artifact_count = int(self._linked_counts.get("artifacts", 0) or 0)
+            details: list[str] = []
+            if source_count:
+                details.append(f"{source_count} linked source(s)")
+            if artifact_count:
+                details.append(f"{artifact_count} linked artifact(s)")
+            suffix = f" ({', '.join(details)})" if details else ""
+            self._overview_portability.setText(f"Project portability: Linked{suffix}")
+
+        self._overview_progress.setRange(0, max(1, len(sources)))
+        self._overview_progress.setValue(len(sources))
+
         for src in sources:
-            row_lbl = QLabel(f"  {src.name or src.path}: —")
+            descriptor = src.name or src.path
+            if getattr(src, "imported", False) and getattr(src, "source_kind", ""):
+                descriptor = f"{descriptor} - imported {src.source_kind}"
+            row_lbl = QLabel(descriptor)
             row_lbl.setWordWrap(True)
+            row_lbl.setProperty("detectkitRole", "compactInfo")
             self._overview_sources_layout.addWidget(row_lbl)
 
         n_src = len(sources)
-        self._overview_progress.setFormat(f"{n_src} source(s) configured")
-        self._overview_progress.setValue(min(100, n_src * 10))
+        self._overview_progress.setFormat(f"{n_src} source(s) connected")
+
+    def set_portability_status(
+        self,
+        status: str,
+        linked_counts: dict[str, int] | None = None,
+    ) -> None:
+        """Update the overview portability state for the bound project."""
+        self._portability_status = str(status or "Unknown")
+        self._linked_counts = dict(linked_counts or {})
+        if self._proj is not None:
+            self.refresh_overview()
 
     def set_image_counter(self, current: int, total: int) -> None:
         """Update the navigation counter label."""
@@ -284,11 +353,14 @@ class ToolsPanel(QWidget):
         self._model_combo.clear()
         for path in model_paths:
             self._model_combo.addItem(path)
+        if model_paths and self._model_combo.currentIndex() < 0:
+            self._model_combo.setCurrentIndex(0)
         self._model_combo.blockSignals(False)
 
     def update_model_metrics(self, metrics: dict) -> None:
         """Display model metrics in the Analysis section."""
         if not metrics:
+            self._metrics_view.setPlainText("No model metrics available yet.")
             return
         lines = [f"{k}: {v}" for k, v in metrics.items()]
         self._metrics_view.setPlainText("\n".join(lines))

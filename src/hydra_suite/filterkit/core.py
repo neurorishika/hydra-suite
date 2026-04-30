@@ -5,13 +5,131 @@ Includes perceptual hashing, duplicate removal, and diversity sampling.
 
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 
 from hydra_suite.core.identity.dataset.naming import parse_identity_image_filename
+
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
+
+
+def _iter_images_in_dir(directory: Path) -> List[Path]:
+    return sorted(
+        p
+        for p in directory.iterdir()
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+    )
+
+
+def _collect_coco_images(root: Path) -> Optional[List[Path]]:
+    """Return resolved image paths from a COCO dataset root, or None if not detected."""
+    preferred_names = (
+        "annotations.json",
+        "instances.json",
+        "instances_train.json",
+        "instances_val.json",
+    )
+    candidates: List[Path] = []
+    for name in preferred_names:
+        p = root / name
+        if p.is_file():
+            candidates.append(p)
+    ann_dir = root / "annotations"
+    if ann_dir.is_dir():
+        candidates.extend(sorted(ann_dir.glob("*.json")))
+    candidates.extend(sorted(root.glob("*.coco.json")))
+    candidates.extend(sorted(root.glob("*.json")))
+
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not (
+            isinstance(payload, dict)
+            and all(
+                isinstance(payload.get(k), list)
+                for k in ("images", "annotations", "categories")
+            )
+        ):
+            continue
+        paths: List[Path] = []
+        for img_entry in payload.get("images", []):
+            file_name = img_entry.get("file_name")
+            if not file_name:
+                continue
+            raw = Path(str(file_name))
+            for cand_path in (
+                root / raw,
+                root / "images" / raw,
+                root / raw.name,
+                root / "images" / raw.name,
+            ):
+                if cand_path.exists():
+                    paths.append(cand_path.resolve())
+                    break
+        if paths:
+            return paths
+    return None
+
+
+def _collect_yolo_images(root: Path) -> Optional[List[Path]]:
+    """Return resolved image paths from a YOLO OBB/detect dataset root, or None."""
+    try:
+        from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
+
+        inspection = inspect_obb_or_detect_dataset(root)
+        paths = [
+            Path(item.image_path).resolve()
+            for split_items in inspection.splits.values()
+            for item in split_items
+        ]
+        return paths or None
+    except Exception:
+        return None
+
+
+def collect_images_for_root(root: Path) -> Tuple[str, List[Path]]:
+    """
+    Detect dataset format under *root* and return (source_kind, image_paths).
+
+    Detection priority: class_folders → coco → yolo_obb → images/ subdir → flat root.
+    """
+    root = Path(root).expanduser().resolve()
+
+    # 1. Class-folder (train/val/test splits with per-class subdirs)
+    split_dirs = [root / s for s in ("train", "val", "test") if (root / s).is_dir()]
+    if split_dirs:
+        paths: List[Path] = []
+        for split_dir in split_dirs:
+            for class_dir in sorted(split_dir.iterdir()):
+                if class_dir.is_dir():
+                    paths.extend(_iter_images_in_dir(class_dir))
+        if paths:
+            return "class_folders", paths
+
+    # 2. COCO JSON
+    coco = _collect_coco_images(root)
+    if coco:
+        return "coco", coco
+
+    # 3. YOLO OBB / detect
+    yolo = _collect_yolo_images(root)
+    if yolo:
+        return "yolo_obb", yolo
+
+    # 4. Standard images/ subdirectory (MAT / ClassKit standard)
+    images_dir = root / "images"
+    if images_dir.is_dir():
+        paths = _iter_images_in_dir(images_dir)
+        if paths:
+            return "images", paths
+
+    # 5. Flat root fallback
+    return "images", _iter_images_in_dir(root)
 
 
 class _HashBKTreeNode:
@@ -473,6 +591,27 @@ class FilterKitCore:
     def hamming_distance(self, hash1: int, hash2: int) -> int:
         """Compute Hamming distance between two 64-bit hashes."""
         return int((hash1 ^ hash2) & ((1 << 64) - 1)).bit_count()
+
+    def load_images_from_root(
+        self, root: "str | Path"
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """Load images from any supported dataset format, returning (source_kind, items)."""
+        source_kind, image_paths = collect_images_for_root(Path(root))
+        items: List[Dict[str, Any]] = []
+        for idx, path in enumerate(image_paths):
+            items.append(
+                {
+                    "path": str(path),
+                    "filename": path.name,
+                    "det_id": idx,
+                    "frame_idx": idx,
+                    "det_idx": 0,
+                    "annotations": [],
+                    "source_type": source_kind,
+                    "interpolated": False,
+                }
+            )
+        return source_kind, items
 
     def load_dataset(self, folder_path: str) -> List[Dict[str, Any]]:
         """

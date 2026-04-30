@@ -528,6 +528,8 @@ def test_bench_obb_does_not_override_imgsz_with_frame_size(
     class FakeDetector:
         def __init__(self, params):
             captured.update(params)
+            self.use_onnx = True
+            self.use_tensorrt = False
 
         def detect_objects(self, _frame, frame_count=0):
             return []
@@ -558,6 +560,37 @@ def test_bench_obb_does_not_override_imgsz_with_frame_size(
     assert "YOLO_IMGSZ" not in captured
 
 
+def test_bench_obb_fails_when_tensorrt_request_falls_back_to_pytorch(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class FakeDetector:
+        def __init__(self, _params):
+            self.use_tensorrt = False
+            self.use_onnx = False
+            self.tensorrt_failure_reason = (
+                "TensorRT build failed during benchmark setup"
+            )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hydra_suite.core.detectors",
+        types.SimpleNamespace(YOLOOBBDetector=FakeDetector),
+    )
+
+    result = benchmarking.bench_obb(
+        str(tmp_path / "model.pt"),
+        runtime="tensorrt",
+        warmup=0,
+        iterations=1,
+        batch_size=1,
+        frame_size=(640, 640),
+    )
+
+    assert result.success is False
+    assert "TensorRT build failed during benchmark setup" in result.error
+
+
 def test_bench_sequential_does_not_force_stage1_detect_imgsz_to_frame_size(
     monkeypatch,
     tmp_path: Path,
@@ -569,6 +602,8 @@ def test_bench_sequential_does_not_force_stage1_detect_imgsz_to_frame_size(
         def __init__(self, params):
             captured.update(params)
             self.params = dict(params)
+            self.use_onnx = True
+            self.use_tensorrt = False
 
         def detect_objects(self, _frame, frame_count=0):
             batched_calls.append(("single", frame_count, 1))
@@ -849,6 +884,7 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
         ),
         _identity_panel=SimpleNamespace(
             spin_pose_batch=SimpleNamespace(value=lambda: 4),
+            spin_headtail_batch=SimpleNamespace(value=lambda: 32),
             _get_selected_yolo_headtail_model_path=lambda: "classification/orientation/model.onnx",
         ),
         _setup_panel=SimpleNamespace(spin_max_targets=SimpleNamespace(value=lambda: 8)),
@@ -880,3 +916,5 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
         "tensorrt",
     ]
     assert headtail_targets[0].current_runtime == "onnx_coreml"
+    assert headtail_targets[0].current_batch_size == 32
+    assert headtail_targets[0].supports_batch_apply is True

@@ -56,7 +56,14 @@ def test_live_tag_observation_store_exposes_cache_like_frame_view() -> None:
 
 def test_live_cnn_identity_store_exposes_cache_like_load() -> None:
     store = LiveCNNIdentityStore()
-    predictions = [ClassPrediction(class_name="alpha", confidence=0.95, det_index=2)]
+    predictions = [
+        ClassPrediction(
+            det_index=2,
+            factor_names=("flat",),
+            class_names=("alpha",),
+            confidences=(0.95,),
+        )
+    ]
     store.update_frame(9, predictions)
 
     loaded = store.load(9)

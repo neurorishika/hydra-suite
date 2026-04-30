@@ -98,3 +98,19 @@ def test_classify_cache_id_changes_with_inference_model() -> None:
     id1 = mod.compute_classify_cache_id("/tmp/m.pth", "cpu", "det_a")
     id2 = mod.compute_classify_cache_id("/tmp/m.pth", "cpu", "det_b")
     assert id1 != id2
+
+
+def test_classify_cache_id_changes_with_calibration_signature() -> None:
+    id1 = mod.compute_classify_cache_id(
+        "/tmp/m.pth",
+        "cpu",
+        "det_a",
+        calibration_signature="temp:1.25",
+    )
+    id2 = mod.compute_classify_cache_id(
+        "/tmp/m.pth",
+        "cpu",
+        "det_a",
+        calibration_signature="temp:1.75",
+    )
+    assert id1 != id2

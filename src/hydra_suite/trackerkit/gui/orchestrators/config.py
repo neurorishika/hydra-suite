@@ -36,6 +36,7 @@ from hydra_suite.trackerkit.benchmarking import (
     lookup_cached_recommendation,
 )
 from hydra_suite.trackerkit.gui.model_utils import (
+    _normalize_usage_role,
     _sanitize_model_token,
     get_pose_models_directory,
     get_yolo_model_metadata,
@@ -311,12 +312,6 @@ class ConfigOrchestrator:
             default=yolo_direct_model,
         )
         yolo_headtail_model = get_cfg("yolo_headtail_model_path", default="")
-        yolo_headtail_model_type = str(
-            get_cfg(
-                "yolo_headtail_model_type",
-                default=self._mw._infer_yolo_headtail_model_type(yolo_headtail_model),
-            )
-        ).strip()
 
         from hydra_suite.trackerkit.gui.main_window import resolve_model_path
 
@@ -365,15 +360,6 @@ class ConfigOrchestrator:
             preferred_model_path=yolo_crop_obb_model
         )
         self._mw._set_yolo_crop_obb_model_selection(resolved_yolo_crop_obb)
-        headtail_type_idx = (
-            self._panels.identity.combo_yolo_headtail_model_type.findText(
-                "tiny" if yolo_headtail_model_type.lower() == "tiny" else "YOLO"
-            )
-        )
-        if headtail_type_idx >= 0:
-            self._panels.identity.combo_yolo_headtail_model_type.setCurrentIndex(
-                headtail_type_idx
-            )
         self._panels.identity._refresh_yolo_headtail_model_combo(
             preferred_model_path=yolo_headtail_model
         )
@@ -412,6 +398,19 @@ class ConfigOrchestrator:
         )
         self._panels.identity.spin_yolo_headtail_conf.setValue(
             float(get_cfg("yolo_headtail_conf_threshold", default=0.50))
+        )
+        self._panels.identity.spin_yolo_headtail_detect_conf.setValue(
+            float(get_cfg("yolo_headtail_detect_conf_threshold", default=0.25))
+        )
+        self._panels.identity.spin_headtail_batch.setValue(
+            int(
+                get_cfg(
+                    "headtail_batch_size",
+                    default=int(
+                        self._mw.advanced_config.get("headtail_batch_size", 64)
+                    ),
+                )
+            )
         )
         self._panels.detection.spin_reference_aspect_ratio.setValue(
             float(get_cfg("reference_aspect_ratio", default=2.0))
@@ -513,13 +512,6 @@ class ConfigOrchestrator:
                 "max_assignment_distance_multiplier",
                 "max_dist_multiplier",
                 default=1.5,
-            )
-        )
-        self._panels.tracking.spin_continuity_thresh.setValue(
-            get_cfg(
-                "recovery_search_distance_multiplier",
-                "continuity_threshold_multiplier",
-                default=0.5,
             )
         )
         self._panels.tracking.chk_enable_backward.setChecked(
@@ -693,6 +685,12 @@ class ConfigOrchestrator:
         self._panels.postprocess.enable_postprocessing.setChecked(
             get_cfg("enable_postprocessing", default=True)
         )
+        _saved_mode = get_cfg("identity_postprocess_mode", default=None)
+        if _saved_mode is None:
+            _saved_mode = "Fragment Solver"
+        self._panels.postprocess.cmb_identity_postprocess_mode.setCurrentText(
+            str(_saved_mode)
+        )
         self._panels.postprocess.chk_prompt_open_refinekit.setChecked(
             bool(get_cfg("prompt_open_refinekit_on_tracking_complete", default=False))
         )
@@ -762,7 +760,7 @@ class ConfigOrchestrator:
             int(get_cfg("density_downsample_factor", default=8))
         )
         self._panels.tracking.chk_export_confidence_density_video.setChecked(
-            get_cfg("export_confidence_density_video", default=True)
+            get_cfg("export_confidence_density_video", default=False)
         )
         self._mw._on_confidence_density_map_toggled(
             self._panels.tracking.chk_enable_confidence_density_map.checkState()
@@ -793,6 +791,36 @@ class ConfigOrchestrator:
                 default_seconds=0.33,
             )
         )
+        self._panels.postprocess.spin_changepoint_penalty.setValue(
+            float(get_cfg("changepoint_penalty", default=3.0))
+        )
+        self._panels.postprocess.spin_fragment_cnn_weight.setValue(
+            float(get_cfg("fragment_cnn_weight", default=0.40))
+        )
+        self._panels.postprocess.spin_fragment_tag_weight.setValue(
+            float(get_cfg("fragment_tag_weight", default=0.15))
+        )
+        self._panels.postprocess.spin_online_prior_weight.setValue(
+            float(get_cfg("online_prior_weight", default=0.25))
+        )
+        self._panels.postprocess.spin_fragment_length_weight.setValue(
+            float(get_cfg("fragment_length_weight", default=0.60))
+        )
+        self._panels.postprocess.spin_assignment_margin_threshold.setValue(
+            float(get_cfg("assignment_margin_threshold", default=0.10))
+        )
+        self._panels.postprocess.spin_min_fragment_frames.setValue(
+            int(get_cfg("min_fragment_frames", default=5))
+        )
+        self._panels.postprocess.cmb_pelt_model.setCurrentText(
+            str(get_cfg("pelt_model", default="rbf"))
+        )
+        self._panels.postprocess.chk_enable_fragment_scoring.setChecked(
+            bool(get_cfg("enable_fragment_scoring", default=True))
+        )
+        self._panels.postprocess.chk_enable_pelt_splitting.setChecked(
+            bool(get_cfg("enable_pelt_splitting", default=False))
+        )
         self._panels.postprocess.spin_heading_flip_max_burst.setValue(
             int(get_cfg("heading_flip_max_burst", default=5))
         )
@@ -804,6 +832,9 @@ class ConfigOrchestrator:
         )
         self._panels.postprocess.spin_min_overlap_frames.setValue(
             get_cfg("min_overlap_frames", default=5)
+        )
+        self._panels.postprocess.spin_identity_disagree_min_run.setValue(
+            get_cfg("identity_disagree_min_run", default=5)
         )
 
     def _load_config_visualization(self, get_cfg):
@@ -952,6 +983,9 @@ class ConfigOrchestrator:
         self._panels.dataset.chk_metric_count_mismatch.setChecked(
             get_cfg("metric_count_mismatch", default=True)
         )
+        self._panels.dataset.chk_metric_fragmented_detections.setChecked(
+            get_cfg("metric_fragmented_detections", default=True)
+        )
         self._panels.dataset.chk_metric_high_assignment_cost.setChecked(
             get_cfg("metric_high_assignment_cost", default=True)
         )
@@ -997,43 +1031,37 @@ class ConfigOrchestrator:
                                 get_cfg("cnn_classifier_confidence", default=0.5)
                             ),
                             "window": int(get_cfg("cnn_classifier_window", default=10)),
-                            "match_bonus": float(
-                                get_cfg(
-                                    "cnn_classifier_match_bonus",
-                                    "identity_match_bonus",
-                                    default=20.0,
-                                )
-                            ),
-                            "mismatch_penalty": float(
-                                get_cfg(
-                                    "cnn_classifier_mismatch_penalty",
-                                    "identity_mismatch_penalty",
-                                    default=50.0,
-                                )
-                            ),
+                            "unique_identifier": False,
                         }
                     )
 
-        # Shared identity cost settings
-        self._panels.identity.spin_identity_match_bonus.setValue(
-            float(
-                get_cfg(
-                    "identity_match_bonus",
-                    "tag_match_bonus",
-                    "cnn_classifier_match_bonus",
-                    default=20.0,
-                )
-            )
+        # Identity decoder settings (tracking panel)
+        self._panels.tracking.chk_enable_identity_in_tracking.setChecked(
+            bool(get_cfg("enable_identity_in_tracking", default=True))
         )
-        self._panels.identity.spin_identity_mismatch_penalty.setValue(
-            float(
-                get_cfg(
-                    "identity_mismatch_penalty",
-                    "tag_mismatch_penalty",
-                    "cnn_classifier_mismatch_penalty",
-                    default=50.0,
-                )
-            )
+        self._panels.tracking._on_identity_in_tracking_toggled(
+            self._panels.tracking.chk_enable_identity_in_tracking.isChecked()
+        )
+        self._panels.tracking.chk_enable_identity_online_decoder.setChecked(
+            bool(get_cfg("enable_identity_online_decoder", default=False))
+        )
+        self._panels.tracking.spin_identity_weight.setValue(
+            float(get_cfg("identity_weight", default=1.0))
+        )
+        self._panels.tracking.spin_identity_commit_threshold.setValue(
+            float(get_cfg("identity_commit_threshold", default=0.85))
+        )
+        self._panels.tracking.spin_identity_display_threshold.setValue(
+            float(get_cfg("identity_display_threshold", default=0.6))
+        )
+        self._panels.tracking.spin_identity_transition_epsilon.setValue(
+            float(get_cfg("identity_transition_epsilon", default=0.02))
+        )
+        self._panels.tracking.spin_identity_unknown_prior.setValue(
+            float(get_cfg("identity_unknown_prior", default=0.05))
+        )
+        self._panels.tracking.spin_identity_rejoin_threshold.setValue(
+            float(get_cfg("identity_rejoin_threshold", default=0.5))
         )
         apriltag_family = get_cfg("apriltag_family", default="tag36h11")
         idx = self._panels.identity.combo_apriltag_family.findText(apriltag_family)
@@ -1482,7 +1510,6 @@ class ConfigOrchestrator:
                     yolo_headtail_path
                 ),
                 "enable_headtail_orientation": self._panels.identity.g_headtail.isChecked(),
-                "yolo_headtail_model_type": self._panels.identity.combo_yolo_headtail_model_type.currentText(),
                 "pose_overrides_headtail": self._panels.identity.chk_pose_overrides_headtail.isChecked(),
                 "yolo_seq_crop_pad_ratio": self._panels.detection.spin_yolo_seq_crop_pad.value(),
                 "yolo_seq_min_crop_size_px": self._panels.detection.spin_yolo_seq_min_crop_px.value(),
@@ -1492,6 +1519,8 @@ class ConfigOrchestrator:
                 "yolo_seq_stage2_pow2_pad": self._panels.detection.chk_yolo_seq_stage2_pow2_pad.isChecked(),
                 "yolo_seq_detect_conf_threshold": self._panels.detection.spin_yolo_seq_detect_conf.value(),
                 "yolo_headtail_conf_threshold": self._panels.identity.spin_yolo_headtail_conf.value(),
+                "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
+                "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
                 "headtail_runtime": self._mw._selected_headtail_runtime(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
@@ -1556,7 +1585,6 @@ class ConfigOrchestrator:
                 # === CORE TRACKING ===
                 "max_targets": self._panels.setup.spin_max_targets.value(),
                 "max_assignment_distance_multiplier": self._panels.tracking.spin_max_dist.value(),
-                "recovery_search_distance_multiplier": self._panels.tracking.spin_continuity_thresh.value(),
                 "enable_backward_tracking": self._panels.tracking.chk_enable_backward.isChecked(),
                 # === KALMAN FILTER ===
                 "kalman_process_noise": self._panels.tracking.spin_kalman_noise.value(),
@@ -1603,6 +1631,7 @@ class ConfigOrchestrator:
                 "min_track_seconds": self._panels.tracking.spin_min_track.value(),
                 # === POST-PROCESSING ===
                 "enable_postprocessing": self._panels.postprocess.enable_postprocessing.isChecked(),
+                "identity_postprocess_mode": self._panels.postprocess.cmb_identity_postprocess_mode.currentText(),
                 "min_trajectory_length_seconds": self._panels.postprocess.spin_min_trajectory_length.value(),
                 "max_velocity_break": self._panels.postprocess.spin_max_velocity_break.value(),
                 "max_occlusion_gap_seconds": self._panels.postprocess.spin_max_occlusion_gap.value(),
@@ -1627,12 +1656,23 @@ class ConfigOrchestrator:
                 "velocity_zscore_min_velocity": self._panels.postprocess.spin_velocity_zscore_min_vel.value(),
                 "interpolation_method": self._panels.postprocess.combo_interpolation_method.currentText(),
                 "interpolation_max_gap_seconds": self._panels.postprocess.spin_interpolation_max_gap.value(),
+                "changepoint_penalty": self._panels.postprocess.spin_changepoint_penalty.value(),
+                "fragment_cnn_weight": self._panels.postprocess.spin_fragment_cnn_weight.value(),
+                "fragment_tag_weight": self._panels.postprocess.spin_fragment_tag_weight.value(),
+                "online_prior_weight": self._panels.postprocess.spin_online_prior_weight.value(),
+                "fragment_length_weight": self._panels.postprocess.spin_fragment_length_weight.value(),
+                "assignment_margin_threshold": self._panels.postprocess.spin_assignment_margin_threshold.value(),
+                "min_fragment_frames": self._panels.postprocess.spin_min_fragment_frames.value(),
+                "pelt_model": self._panels.postprocess.cmb_pelt_model.currentText(),
+                "enable_fragment_scoring": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
+                "enable_pelt_splitting": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
                 "heading_flip_max_burst": self._panels.postprocess.spin_heading_flip_max_burst.value(),
                 "cleanup_temp_files": self._panels.postprocess.chk_cleanup_temp_files.isChecked(),
                 # === TRAJECTORY MERGING (Conservative Strategy) ===
                 # Agreement distance and min overlap frames for conservative merging
                 "merge_agreement_distance_multiplier": self._panels.postprocess.spin_merge_overlap_multiplier.value(),
                 "min_overlap_frames": self._panels.postprocess.spin_min_overlap_frames.value(),
+                "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
@@ -1696,6 +1736,7 @@ class ConfigOrchestrator:
                 "dataset_probabilistic_sampling": self._panels.dataset.chk_dataset_probabilistic.isChecked(),
                 "metric_low_confidence": self._panels.dataset.chk_metric_low_confidence.isChecked(),
                 "metric_count_mismatch": self._panels.dataset.chk_metric_count_mismatch.isChecked(),
+                "metric_fragmented_detections": self._panels.dataset.chk_metric_fragmented_detections.isChecked(),
                 "metric_high_assignment_cost": self._panels.dataset.chk_metric_high_assignment_cost.isChecked(),
                 "metric_track_loss": self._panels.dataset.chk_metric_track_loss.isChecked(),
                 "metric_high_uncertainty": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),
@@ -1711,10 +1752,14 @@ class ConfigOrchestrator:
                 ),
                 # Legacy CNN Classifier settings (for backward compat on load)
                 "cnn_classifier_confidence": self._panels.identity.spin_cnn_confidence.value(),
-                "identity_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
-                "identity_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
-                "cnn_classifier_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
-                "cnn_classifier_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
+                "enable_identity_in_tracking": self._panels.tracking.chk_enable_identity_in_tracking.isChecked(),
+                "enable_identity_online_decoder": self._panels.tracking.chk_enable_identity_online_decoder.isChecked(),
+                "identity_weight": self._panels.tracking.spin_identity_weight.value(),
+                "identity_commit_threshold": self._panels.tracking.spin_identity_commit_threshold.value(),
+                "identity_display_threshold": self._panels.tracking.spin_identity_display_threshold.value(),
+                "identity_transition_epsilon": self._panels.tracking.spin_identity_transition_epsilon.value(),
+                "identity_unknown_prior": self._panels.tracking.spin_identity_unknown_prior.value(),
+                "identity_rejoin_threshold": self._panels.tracking.spin_identity_rejoin_threshold.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
                 "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
@@ -1724,8 +1769,6 @@ class ConfigOrchestrator:
             {
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
-                "tag_match_bonus": self._panels.identity.spin_identity_match_bonus.value(),
-                "tag_mismatch_penalty": self._panels.identity.spin_identity_mismatch_penalty.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),
                 "pose_model_type": self._panels.identity.combo_pose_model_type.currentText()
                 .strip()
@@ -1888,9 +1931,6 @@ class ConfigOrchestrator:
         max_distance_pixels = (
             self._panels.tracking.spin_max_dist.value() * scaled_body_size
         )
-        recovery_search_distance_pixels = (
-            self._panels.tracking.spin_continuity_thresh.value() * scaled_body_size
-        )
         min_respawn_distance_pixels = (
             self._panels.tracking.spin_min_respawn_distance.value() * scaled_body_size
         )
@@ -1989,7 +2029,6 @@ class ConfigOrchestrator:
         advanced_config["max_aspect_ratio_multiplier"] = (
             self._panels.detection.spin_max_ar_multiplier.value()
         )
-
         individual_pipeline_enabled = self._mw._is_individual_pipeline_enabled()
         final_canonical_image_export_enabled = (
             self._mw._is_individual_image_save_enabled()
@@ -2027,7 +2066,6 @@ class ConfigOrchestrator:
             "onnx_coreml": "onnx_coreml",
             "onnx_cpu": "onnx_cpu",
             "onnx_cuda": "onnx_cuda",
-            "onnx_rocm": "onnx_rocm",
             "tensorrt_cuda": "tensorrt",
         }.get(selected_pose_runtime, selected_pose_runtime)
         runtime_pose = derive_pose_runtime_settings(
@@ -2058,6 +2096,8 @@ class ConfigOrchestrator:
             "YOLO_SEQ_STAGE2_POW2_PAD": self._panels.detection.chk_yolo_seq_stage2_pow2_pad.isChecked(),
             "YOLO_SEQ_DETECT_CONF_THRESHOLD": self._panels.detection.spin_yolo_seq_detect_conf.value(),
             "YOLO_HEADTAIL_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_conf.value(),
+            "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
+            "HEADTAIL_BATCH_SIZE": self._panels.identity.spin_headtail_batch.value(),
             "HEADTAIL_COMPUTE_RUNTIME": headtail_runtime,
             "YOLO_CONFIDENCE_THRESHOLD": self._panels.detection.spin_yolo_confidence.value(),
             "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
@@ -2097,10 +2137,21 @@ class ConfigOrchestrator:
             "POSE_TEMPORAL_OUTLIER_ZSCORE": self._panels.postprocess.spin_pose_temporal_outlier_zscore.value(),
             "MAX_VELOCITY_ZSCORE": self._panels.postprocess.spin_max_velocity_zscore.value(),
             "VELOCITY_ZSCORE_WINDOW": velocity_zscore_window,
+            "CHANGEPOINT_PENALTY": self._panels.postprocess.spin_changepoint_penalty.value(),
+            "FRAGMENT_CNN_WEIGHT": self._panels.postprocess.spin_fragment_cnn_weight.value(),
+            "FRAGMENT_TAG_WEIGHT": self._panels.postprocess.spin_fragment_tag_weight.value(),
+            "ONLINE_PRIOR_WEIGHT": self._panels.postprocess.spin_online_prior_weight.value(),
+            "FRAGMENT_LENGTH_WEIGHT": self._panels.postprocess.spin_fragment_length_weight.value(),
+            "ASSIGNMENT_MARGIN_THRESHOLD": self._panels.postprocess.spin_assignment_margin_threshold.value(),
+            "MAX_BRIDGE_GAP_FRAMES": self._panels.postprocess.spin_max_bridge_gap_frames.value(),
+            "FRAGMENT_SPATIAL_VETO_THRESHOLD": self._panels.postprocess.spin_fragment_spatial_veto_threshold.value(),
+            "MIN_FRAGMENT_FRAMES": self._panels.postprocess.spin_min_fragment_frames.value(),
+            "PELT_MODEL": self._panels.postprocess.cmb_pelt_model.currentText(),
+            "ENABLE_FRAGMENT_SCORING": self._panels.postprocess.chk_enable_fragment_scoring.isChecked(),
+            "ENABLE_PELT_SPLITTING": self._panels.postprocess.chk_enable_pelt_splitting.isChecked(),
             "VELOCITY_ZSCORE_MIN_VELOCITY": self._panels.postprocess.spin_velocity_zscore_min_vel.value()
             * scaled_body_size
             / fps,
-            "CONTINUITY_THRESHOLD": recovery_search_distance_pixels,
             "MIN_RESPAWN_DISTANCE": min_respawn_distance_pixels,
             "MIN_DETECTION_COUNTS": min_detection_counts,
             "MIN_DETECTIONS_TO_START": min_detections_to_start,
@@ -2144,6 +2195,12 @@ class ConfigOrchestrator:
             "DIRECTED_ORIENT_SMOOTHING": self._panels.tracking.chk_directed_orient_smoothing.isChecked(),
             "DIRECTED_ORIENT_FLIP_CONFIDENCE": self._panels.tracking.spin_directed_orient_flip_conf.value(),
             "DIRECTED_ORIENT_FLIP_PERSISTENCE": self._panels.tracking.spin_directed_orient_flip_persist.value(),
+            # Post-hoc mode: when a directed heading source (head-tail or pose
+            # model) is active, skip the online flip-hysteresis check and instead
+            # resolve all heading ambiguities globally in post-processing.
+            "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": bool(
+                str(yolo_headtail_path or "").strip() or pose_extractor_enabled
+            ),
             "LOST_THRESHOLD_FRAMES": lost_threshold_frames,
             "W_POSITION": self._panels.tracking.spin_Wp.value(),
             "W_ORIENTATION": self._panels.tracking.spin_Wo.value(),
@@ -2187,6 +2244,7 @@ class ConfigOrchestrator:
             "AGREEMENT_DISTANCE": self._panels.postprocess.spin_merge_overlap_multiplier.value()
             * scaled_body_size,
             "MIN_OVERLAP_FRAMES": self._panels.postprocess.spin_min_overlap_frames.value(),
+            "IDENTITY_DISAGREE_MIN_RUN": self._panels.postprocess.spin_identity_disagree_min_run.value(),
             # Dataset generation parameters
             "ENABLE_DATASET_GENERATION": self._panels.dataset.chk_enable_dataset_gen.isChecked(),
             "DATASET_NAME": "",
@@ -2214,6 +2272,7 @@ class ConfigOrchestrator:
             "DATASET_PROBABILISTIC_SAMPLING": self._panels.dataset.chk_dataset_probabilistic.isChecked(),
             "METRIC_LOW_CONFIDENCE": self._panels.dataset.chk_metric_low_confidence.isChecked(),
             "METRIC_COUNT_MISMATCH": self._panels.dataset.chk_metric_count_mismatch.isChecked(),
+            "METRIC_FRAGMENTED_DETECTIONS": self._panels.dataset.chk_metric_fragmented_detections.isChecked(),
             "METRIC_HIGH_ASSIGNMENT_COST": self._panels.dataset.chk_metric_high_assignment_cost.isChecked(),
             "METRIC_TRACK_LOSS": self._panels.dataset.chk_metric_track_loss.isChecked(),
             "METRIC_HIGH_UNCERTAINTY": self._panels.dataset.chk_metric_high_uncertainty.isChecked(),
@@ -2233,15 +2292,30 @@ class ConfigOrchestrator:
                 if identity_cfg.get("cnn_classifiers")
                 else 64
             ),
-            "IDENTITY_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
-            "IDENTITY_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
-            "CNN_CLASSIFIER_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
-            "CNN_CLASSIFIER_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
+            "ENABLE_IDENTITY_IN_TRACKING": self._panels.tracking.chk_enable_identity_in_tracking.isChecked(),
+            "ENABLE_IDENTITY_ONLINE_DECODER": (
+                self._panels.tracking.chk_enable_identity_in_tracking.isChecked()
+                and self._panels.tracking.chk_enable_identity_online_decoder.isChecked()
+            ),
+            "IDENTITY_POSTPROCESS_MODE": (
+                self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
+                if self._panels.postprocess.enable_postprocessing.isChecked()
+                else "None"
+            ),
+            "ENABLE_IDENTITY_FRAGMENT_SOLVER": (
+                self._panels.postprocess.enable_postprocessing.isChecked()
+                and self._panels.postprocess.cmb_identity_postprocess_mode.currentText()
+                == "Fragment Solver"
+            ),
+            "ASSOCIATION_IDENTITY_HINT_SCALE": self._panels.tracking.spin_identity_weight.value(),
+            "IDENTITY_COMMIT_THRESHOLD": self._panels.tracking.spin_identity_commit_threshold.value(),
+            "IDENTITY_DISPLAY_THRESHOLD": self._panels.tracking.spin_identity_display_threshold.value(),
+            "IDENTITY_TRANSITION_EPSILON": self._panels.tracking.spin_identity_transition_epsilon.value(),
+            "IDENTITY_UNKNOWN_PRIOR": self._panels.tracking.spin_identity_unknown_prior.value(),
+            "IDENTITY_REJOIN_THRESHOLD": self._panels.tracking.spin_identity_rejoin_threshold.value(),
             "CNN_CLASSIFIER_WINDOW": 10,
             "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
-            "TAG_MATCH_BONUS": self._panels.identity.spin_identity_match_bonus.value(),
-            "TAG_MISMATCH_PENALTY": self._panels.identity.spin_identity_mismatch_penalty.value(),
             "ENABLE_POSE_EXTRACTOR": pose_extractor_enabled,
             "POSE_MODEL_TYPE": self._panels.identity.combo_pose_model_type.currentText()
             .strip()
@@ -2575,6 +2649,10 @@ class ConfigOrchestrator:
             "cuda_memory_fraction": 0.7,  # 70% of VRAM for CUDA (NVIDIA GPUs)
             "tensorrt_build_workspace_gb": 4.0,  # TensorRT builder workspace limit in GB
             "tensorrt_build_batch_size": None,  # Optional fixed TensorRT build batch override
+            "yolo_headtail_detect_conf_threshold": 0.25,  # Minimum detection confidence before head-tail inference runs; lower-confidence detections remain unknown
+            "headtail_batch_size": 64,  # Canonical crop batch size for head-tail classifier inference
+            "realtime_visualization_emit_stride": 1,  # Emit GUI overlays every Nth frame during realtime tracking while preserving full-speed tracking/video output
+            "visualization_emit_stride": 1,  # Optional GUI overlay decimation for non-realtime runs
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
             "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
             "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review
@@ -2690,7 +2768,7 @@ class ConfigOrchestrator:
 
         # Enable controls
         self._mw._apply_ui_state("idle")
-        if hasattr(self, "_recents_store"):
+        if hasattr(self._mw, "_recents_store"):
             self._mw._recents_store.add(fp)
         self._mw._show_workspace()
 
@@ -3231,9 +3309,11 @@ class ConfigOrchestrator:
             self._panels.setup.spin_start_frame.value(),
             self._panels.setup.spin_end_frame.value(),
         )
-        self._mw._cache_builder_worker.progress_signal.connect(self.on_progress_update)
+        self._mw._cache_builder_worker.progress_signal.connect(
+            self._mw.on_progress_update
+        )
         self._mw._cache_builder_worker.finished_signal.connect(
-            self._on_optimizer_cache_built
+            self._mw._on_optimizer_cache_built
         )
         self._mw.progress_bar.setVisible(True)
         self._mw.progress_label.setVisible(True)
@@ -3574,6 +3654,16 @@ class ConfigOrchestrator:
         headtail = recommendations.get("headtail")
         if headtail is not None:
             _set_combo_data(self._panels.setup.combo_headtail_runtime, headtail.runtime)
+            if hasattr(self._panels, "identity") and hasattr(
+                self._panels.identity, "combo_headtail_runtime"
+            ):
+                _set_combo_data(
+                    self._panels.identity.combo_headtail_runtime, headtail.runtime
+                )
+            if hasattr(self._panels.identity, "spin_headtail_batch"):
+                self._panels.identity.spin_headtail_batch.setValue(
+                    int(headtail.batch_size)
+                )
 
         pose = recommendations.get(f"pose_{self._mw._current_pose_backend_key()}")
         if pose is not None:
@@ -3676,7 +3766,8 @@ class ConfigOrchestrator:
         if not isinstance(metadata, dict):
             return True
         meta_task = str(metadata.get("task_family", "")).strip().lower()
-        meta_role = str(metadata.get("usage_role", "")).strip().lower()
+        meta_role = _normalize_usage_role(metadata.get("usage_role", ""))
+        usage_role = _normalize_usage_role(usage_role)
         if not meta_task and not meta_role:
             return True
         if task_family and meta_task and meta_task != task_family:
@@ -3939,15 +4030,6 @@ class ConfigOrchestrator:
         register_yolo_model(rel_path, metadata)
         logger.info(f"Imported model to repository: {dest_path}")
         return rel_path
-
-    @staticmethod
-    def _infer_yolo_headtail_model_type(model_path):
-        """Infer the head-tail model family from its stored path."""
-        normalized = str(make_model_path_relative(model_path or "")).replace("\\", "/")
-        normalized_lower = f"/{normalized.lower().strip('/')}" if normalized else ""
-        if "/tiny/" in normalized_lower:
-            return "tiny"
-        return "YOLO"
 
     def _populate_pose_model_combo(self, combo, backend, preferred_model_path=None):
         """Populate the pose model combo for the given backend."""

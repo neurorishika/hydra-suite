@@ -46,16 +46,23 @@ def _compute_cost_matrix_numba(
     Wo,
     Wa,
     Wasp,
-    cull_threshold,
+    per_track_gates,
     meas_ori_directed,
 ):
-    """Numba kernel using pre-calculated batch Inverse Covariances."""
+    """Numba kernel using pre-calculated batch Inverse Covariances.
+
+    ``per_track_gates`` is a float32 array of shape (N,) providing each
+    track's individual spatial cull distance.  This replaces the former
+    scalar ``cull_threshold`` so that young/uncertain tracks get an
+    appropriately expanded gate while established tracks keep a tight one.
+    """
     cost = np.zeros((N, M), dtype=np.float32)
 
     for i in range(N):
         # Extract pre-calculated 2x2 inverse position covariance from the 3x3 S_inv
         # (This avoids N*M matrix inversions inside the loop)
         inv_S_pos = S_inv_batch[i, :2, :2]
+        gate_i = per_track_gates[i]
 
         for j in range(M):
             diff = meas_pos[j] - pred_pos[i]
@@ -63,15 +70,19 @@ def _compute_cost_matrix_numba(
             # 1. Position Cost
             if use_maha:
                 # Mahalanobis: sqrt(d^T * S_inv * d)
-                pos_dist = np.sqrt(
-                    diff[0] * (diff[0] * inv_S_pos[0, 0] + diff[1] * inv_S_pos[1, 0])
-                    + diff[1] * (diff[0] * inv_S_pos[0, 1] + diff[1] * inv_S_pos[1, 1])
-                )
+                maha_sq = diff[0] * (
+                    diff[0] * inv_S_pos[0, 0] + diff[1] * inv_S_pos[1, 0]
+                ) + diff[1] * (diff[0] * inv_S_pos[0, 1] + diff[1] * inv_S_pos[1, 1])
+                if maha_sq < 0.0:
+                    maha_sq = 0.0
+                pos_dist = np.sqrt(maha_sq)
             else:
                 pos_dist = np.sqrt(diff[0] ** 2 + diff[1] ** 2)
 
-            # Spatial Culling
-            if pos_dist > cull_threshold:
+            # Spatial culling: each track uses its own adaptive gate so that
+            # young/uncertain tracks are not unfairly blocked by the smallest
+            # established-track gate.
+            if pos_dist > gate_i:
                 cost[i, j] = 1e6  # Large penalty
                 continue
 
@@ -209,93 +220,55 @@ class TrackAssigner:
         has_protos = protos is not None and any(p is not None for p in protos)
         return has_kpts or has_protos
 
-    def _normalize_cnn_phases(self, association_data) -> list[dict[str, Any]]:
-        if not association_data:
-            return []
-        cnn_phases = association_data.get("cnn_phases", None)
-        if cnn_phases is not None:
-            return list(cnn_phases)
-        return []
-
-    def _identity_scale(self, association_data, cnn_phases) -> float:
-        det_tag_ids = (
-            association_data.get("detection_tag_ids", []) if association_data else []
-        )
-        track_tag_ids = (
-            association_data.get("track_last_tag_ids", []) if association_data else []
-        )
-
-        def _has_valid_tag(values) -> bool:
-            return any(value is not None and int(value) != -1 for value in values)
-
-        has_tag_factor = _has_valid_tag(det_tag_ids) and _has_valid_tag(track_tag_ids)
-        n_identity_factors = (1 if has_tag_factor else 0) + len(cnn_phases)
-        return 1.0 / n_identity_factors if n_identity_factors > 1 else 1.0
-
-    def _apply_tag_identity_overlay(
+    def _apply_bayesian_identity_cost(
         self,
         cost: np.ndarray,
         association_data: Dict[str, Any] | None,
-        identity_scale: float,
     ) -> None:
-        if not association_data:
+        """Add a soft Bayesian identity cost term to the assignment cost matrix.
+
+        For each (track i, detection j) pair:
+            identity_cost[i,j] = -logsumexp(track_log_posterior[i] + det_log_likelihood[j])
+
+        This is the log-compatibility between the track's identity belief and
+        the detection's identity evidence.  When the track is uncertain (uniform
+        posterior), the term is constant across all detection columns and
+        contributes nothing to the cost differential — giving a natural cold-start
+        fallback without any special-casing.
+        """
+        if not self.params.get("ENABLE_IDENTITY_ONLINE_DECODER", False):
             return
-        det_tag_ids = association_data.get("detection_tag_ids", [])
-        track_tag_ids = association_data.get("track_last_tag_ids", [])
-        if not det_tag_ids or not track_tag_ids:
+        alpha = float(self.params.get("ASSOCIATION_IDENTITY_HINT_SCALE", 1.0))
+        if alpha <= 0.0 or not association_data:
             return
 
-        n_tracks, n_dets = cost.shape
-        det_arr = np.full(n_dets, -1, dtype=np.int32)
-        trk_arr = np.full(n_tracks, -1, dtype=np.int32)
-        det_limit = min(n_dets, len(det_tag_ids))
-        trk_limit = min(n_tracks, len(track_tag_ids))
-        if det_limit > 0:
-            det_arr[:det_limit] = np.asarray(det_tag_ids[:det_limit], dtype=np.int32)
-        if trk_limit > 0:
-            trk_arr[:trk_limit] = np.asarray(track_tag_ids[:trk_limit], dtype=np.int32)
-
-        valid = (trk_arr[:, None] != -1) & (det_arr[None, :] != -1)
-        if not np.any(valid):
-            return
-        match = valid & (trk_arr[:, None] == det_arr[None, :])
-        mismatch = valid & ~match
-        cost[match] -= float(self.params.get("TAG_MATCH_BONUS", 20.0)) * identity_scale
-        cost[mismatch] += (
-            float(self.params.get("TAG_MISMATCH_PENALTY", 50.0)) * identity_scale
+        track_log_posts: dict = association_data.get(
+            "identity_track_log_posteriors", {}
         )
-
-    def _apply_cnn_identity_overlays(
-        self,
-        cost: np.ndarray,
-        cnn_phases: list[dict[str, Any]],
-        identity_scale: float,
-    ) -> None:
-        if not cnn_phases:
+        det_log_likes: list = association_data.get(
+            "identity_detection_log_likelihoods", []
+        )
+        if not track_log_posts or not det_log_likes:
             return
 
+        max_dist = float(self.params.get("MAX_DISTANCE_THRESHOLD", 1000.0))
         n_tracks, n_dets = cost.shape
-        for phase in cnn_phases:
-            det_classes = np.asarray(
-                list(phase.get("detection_classes", []))[:n_dets], dtype=object
-            )
-            track_classes = np.asarray(
-                list(phase.get("track_identities", []))[:n_tracks], dtype=object
-            )
-            if det_classes.size == 0 or track_classes.size == 0:
+        for i in range(n_tracks):
+            log_post_i = track_log_posts.get(i)
+            if log_post_i is None:
                 continue
-
-            track_valid = np.not_equal(track_classes[:, None], None)
-            det_valid = np.not_equal(det_classes[None, :], None)
-            valid = track_valid & det_valid
-            if not np.any(valid):
-                continue
-            match = valid & (track_classes[:, None] == det_classes[None, :])
-            mismatch = valid & ~match
-            cost[match] -= float(phase.get("match_bonus", 20.0)) * identity_scale
-            cost[mismatch] += (
-                float(phase.get("mismatch_penalty", 50.0)) * identity_scale
-            )
+            for j in range(min(n_dets, len(det_log_likes))):
+                log_like_j = det_log_likes[j]
+                if log_like_j is None:
+                    continue
+                log_compat = float(np.logaddexp.reduce(log_post_i + log_like_j))
+                addon = alpha * (-log_compat)
+                # Cap: identity can reorder preferences but must never block a
+                # geometrically-valid match by pushing cost above max_dist.
+                if cost[i, j] < max_dist:
+                    cost[i, j] = min(cost[i, j] + addon, max_dist - 1e-3)
+                else:
+                    cost[i, j] += addon
 
     @staticmethod
     def _apply_candidate_gate(
@@ -398,7 +371,9 @@ class TrackAssigner:
         diff = meas_pos[None, :, :] - pred_pos[:, None, :]  # (N, M, 2)
         if p["USE_MAHALANOBIS"]:
             S_inv_2x2 = S_inv_batch[:, :2, :2]  # (N, 2, 2)
-            pos_dist = np.sqrt(np.einsum("nmd,nde,nme->nm", diff, S_inv_2x2, diff))
+            maha_sq = np.einsum("nmd,nde,nme->nm", diff, S_inv_2x2, diff)
+            np.maximum(maha_sq, 0.0, out=maha_sq)
+            pos_dist = np.sqrt(maha_sq)
         else:
             pos_dist = np.linalg.norm(diff, axis=2)  # (N, M)
 
@@ -474,6 +449,13 @@ class TrackAssigner:
         # Get pre-calculated Inverse Innovation Covariances from Manager
         S_inv_batch = kf_manager.get_mahalanobis_matrices()
 
+        # Diagnostic guard: assignment requires finite numeric inputs.
+        if not np.isfinite(S_inv_batch).all():
+            bad = int(np.size(S_inv_batch) - np.count_nonzero(np.isfinite(S_inv_batch)))
+            raise ValueError(
+                f"non-finite Kalman S_inv entries ({bad}) before cost construction"
+            )
+
         # Pre-extract arrays for Numba (Avoids attribute access in loop)
         meas_pos = np.array([m[:2] for m in measurements], dtype=np.float32)
         meas_ori = np.array([m[2] for m in measurements], dtype=np.float32)
@@ -490,6 +472,19 @@ class TrackAssigner:
                 meas_ori_directed_arr = np.zeros(M, dtype=np.uint8)
         pred_pos = predictions[:, :2]  # Predictions are already (N, 3)
         pred_ori = predictions[:, 2]
+
+        if not np.isfinite(meas_pos).all() or not np.isfinite(meas_ori).all():
+            bad_pos = int(np.size(meas_pos) - np.count_nonzero(np.isfinite(meas_pos)))
+            bad_ori = int(np.size(meas_ori) - np.count_nonzero(np.isfinite(meas_ori)))
+            raise ValueError(
+                f"non-finite detection measurement entries (pos={bad_pos}, ori={bad_ori})"
+            )
+        if not np.isfinite(pred_pos).all() or not np.isfinite(pred_ori).all():
+            bad_pos = int(np.size(pred_pos) - np.count_nonzero(np.isfinite(pred_pos)))
+            bad_ori = int(np.size(pred_ori) - np.count_nonzero(np.isfinite(pred_ori)))
+            raise ValueError(
+                f"non-finite Kalman prediction entries (pos={bad_pos}, ori={bad_ori})"
+            )
 
         # Override meas_ori with the directed heading where headtail or
         # high-confidence pose supplies a reliable direction.
@@ -528,23 +523,31 @@ class TrackAssigner:
         local_gates = None
         track_uncertainty = None
         track_avg_step = None
+        # Always compute per-track adaptive gates (not only for pose data).
+        # Young and high-uncertainty tracks get an expanded search radius so
+        # they are not incorrectly blocked by the established-track gate.
+        track_uncertainty = (
+            np.asarray(kf_manager.get_position_uncertainties(), dtype=np.float32)
+            if hasattr(kf_manager, "get_position_uncertainties")
+            else np.trace(kf_manager.P[:N, :2, :2], axis1=1, axis2=2).astype(np.float32)
+        )
+        track_avg_step_arr = np.asarray(
+            (
+                association_data.get("track_avg_step", np.zeros(N))
+                if association_data is not None
+                else np.zeros(N)
+            ),
+            dtype=np.float32,
+        )
+        local_gates = self._compute_local_motion_gates(
+            track_uncertainty,
+            track_avg_step_arr,
+            cull_threshold,
+        )
         if has_pose_data:
-            track_uncertainty = (
-                np.asarray(kf_manager.get_position_uncertainties(), dtype=np.float32)
-                if hasattr(kf_manager, "get_position_uncertainties")
-                else np.trace(kf_manager.P[:, :2, :2], axis1=1, axis2=2).astype(
-                    np.float32
-                )
-            )
-            track_avg_step = np.asarray(
-                association_data.get("track_avg_step", np.zeros(N)),
-                dtype=np.float32,
-            )
-            local_gates = self._compute_local_motion_gates(
-                track_uncertainty,
-                track_avg_step,
-                cull_threshold,
-            )
+            # local_gates and track_uncertainty are already computed above.
+            # track_avg_step_arr is also available; alias it for _compute_stage1_gate.
+            track_avg_step = track_avg_step_arr
             pose_candidates = self._compute_stage1_gate(
                 N,
                 M,
@@ -620,19 +623,12 @@ class TrackAssigner:
                 p["W_ORIENTATION"],
                 p["W_AREA"],
                 p["W_ASPECT"],
-                (
-                    max(cull_threshold, float(np.max(local_gates)))
-                    if local_gates is not None and len(local_gates) > 0
-                    else cull_threshold
-                ),
+                local_gates,
                 meas_ori_directed_arr,
             )
 
         if association_data:
-            cnn_phases = self._normalize_cnn_phases(association_data)
-            identity_scale = self._identity_scale(association_data, cnn_phases)
-            self._apply_tag_identity_overlay(cost, association_data, identity_scale)
-            self._apply_cnn_identity_overlays(cost, cnn_phases, identity_scale)
+            self._apply_bayesian_identity_cost(cost, association_data)
 
             if has_pose_data:
                 self._apply_candidate_gate(cost, pose_candidates)
@@ -701,12 +697,29 @@ class TrackAssigner:
     def _assign_established_hungarian(
         self, est, cost, raw_dist_mat, MAX_DIST, VEL_GATE
     ):
-        """Phase 1 Hungarian assignment for established tracks."""
+        """Phase 1 Hungarian assignment for established tracks.
+
+        ``est`` is always built from ``for i in range(N) if ...`` so it is
+        monotonically increasing.  ``linear_sum_assignment(cost[est, :])``
+        returns row indices 0..len(est)-1 into the submatrix; ``est[r_idx]``
+        maps each back to the original track index.  Making the sort explicit
+        here documents and enforces this invariant so that the mapping is safe
+        even if the calling code ever builds ``est`` differently.
+        """
+        if not est:
+            return [], set()
+        est_sorted = sorted(est)
         assignments = []
         assigned_dets = set()
-        rows, cols = linear_sum_assignment(cost[est, :])
+        cost_sub = cost[est_sorted, :]
+        if not np.isfinite(cost_sub).all():
+            bad = int(np.size(cost_sub) - np.count_nonzero(np.isfinite(cost_sub)))
+            raise ValueError(
+                f"assignment submatrix contains non-finite values (bad={bad}, tracks={len(est_sorted)}, dets={cost_sub.shape[1]})"
+            )
+        rows, cols = linear_sum_assignment(cost_sub)
         for r_idx, c in zip(rows, cols):
-            r = est[r_idx]
+            r = est_sorted[r_idx]
             if cost[r, c] < MAX_DIST and raw_dist_mat[r, c] < VEL_GATE:
                 assignments.append((r, c))
                 assigned_dets.add(c)
@@ -731,6 +744,10 @@ class TrackAssigner:
             if not avail:
                 break
             best_c = avail[np.argmin(cost[r, avail])]
+            # Skip if the cheapest candidate is still beyond the cost sentinel
+            # (all remaining detections are blocked by a hard gate).
+            if cost[r, best_c] >= 1e6:
+                continue
             raw_dist = float(
                 np.linalg.norm(np.asarray(meas[best_c][:2]) - kf_manager.X[r, :2])
             )
@@ -741,53 +758,119 @@ class TrackAssigner:
 
     def _assign_respawn(
         self,
-        lost,
-        M,
-        meas,
+        cost: np.ndarray,
+        N: int,
+        meas: list,
+        track_states: list,
+        tracking_continuity: list,
         kf_manager,
-        track_states,
-        N,
-        trajectory_ids,
-        next_trajectory_id,
-        MAX_DIST,
-        assigned_dets,
-    ):
-        """Phase 3: respawn lost tracks with unassigned detections."""
+        spatial_candidates: dict | None = None,
+        association_data: dict | None = None,
+        committed_slot_identities: dict | None = None,
+        _lost=None,
+        _M=None,
+        _MAX_DIST=None,
+        _assigned_dets=None,
+    ) -> tuple:
+        """Phase 3: respawn lost tracks with unassigned detections.
+
+        Returns ``(rows, cols, identity_rejoin_pairs)`` where
+        ``identity_rejoin_pairs`` is a list of ``(slot_index, det_index)``
+        tuples matched via identity evidence for committed-lost slots.
+        """
         p = self.params
-        unassigned = [j for j in range(M) if j not in assigned_dets]
-        respawn_dist_limit = p.get("MIN_RESPAWN_DISTANCE", MAX_DIST * 0.8)
-        non_lost_positions = [
-            np.asarray(kf_manager.X[r, :2], dtype=np.float32)
-            for r in range(N)
-            if track_states[r] != "lost"
-        ]
-        assignments = []
-        for c in unassigned:
-            if not lost:
-                break
-            min_dist_non_lost = (
-                min(
-                    np.linalg.norm(meas[c][:2] - track_pos)
-                    for track_pos in non_lost_positions
-                )
-                if non_lost_positions
-                else 1e6
+
+        lost = (
+            list(_lost)
+            if _lost is not None
+            else [i for i in range(N) if track_states[i] == "lost"]
+        )
+        M = _M if _M is not None else cost.shape[1]
+        MAX_DIST = _MAX_DIST if _MAX_DIST is not None else p["MAX_DISTANCE_THRESHOLD"]
+        assigned_dets: set = _assigned_dets if _assigned_dets is not None else set()
+
+        # Split lost slots into committed vs. uncommitted
+        if committed_slot_identities:
+            committed_lost = [s for s in lost if s in committed_slot_identities]
+            uncommitted_lost = [s for s in lost if s not in committed_slot_identities]
+        else:
+            committed_lost = []
+            uncommitted_lost = lost
+
+        # Identity-only rejoin for committed lost slots
+        identity_rejoin_pairs: list = []
+        identity_claimed_dets: set = set()
+        if committed_lost and association_data:
+            det_log_likes = association_data.get(
+                "identity_detection_log_likelihoods", []
             )
-            if min_dist_non_lost < respawn_dist_limit:
-                continue
+            track_log_posts = association_data.get("identity_track_log_posteriors", {})
+            rejoin_threshold = float(p.get("IDENTITY_REJOIN_THRESHOLD", 0.5))
+            log_threshold = np.log(max(rejoin_threshold, 1e-10))
+
+            # Build best (score, det_idx) for each committed slot
+            slot_best: dict = {}
+            for slot in committed_lost:
+                log_post = track_log_posts.get(slot)
+                if log_post is None:
+                    continue
+                log_post_arr = np.asarray(log_post, dtype=np.float64)
+                for j, log_like in enumerate(det_log_likes):
+                    if j in assigned_dets or log_like is None:
+                        continue
+                    log_like_arr = np.asarray(log_like, dtype=np.float64)
+                    score = float(np.logaddexp.reduce(log_post_arr + log_like_arr))
+                    if score > log_threshold:
+                        if slot not in slot_best or score > slot_best[slot][0]:
+                            slot_best[slot] = (score, j)
+
+            # Resolve conflicts: highest score wins when two slots want same det
+            det_best: dict = {}
+            for slot, (score, det_j) in slot_best.items():
+                if det_j not in det_best or score > det_best[det_j][0]:
+                    det_best[det_j] = (score, slot)
+
+            for det_j, (score, slot) in det_best.items():
+                identity_rejoin_pairs.append((slot, det_j))
+                identity_claimed_dets.add(det_j)
+
+            # Committed-lost slots that got no identity match fall back to the
+            # proximity path so they are not permanently stranded.
+            identity_rejoined_slots = {s for s, _ in identity_rejoin_pairs}
+            for slot in committed_lost:
+                if slot not in identity_rejoined_slots:
+                    uncommitted_lost.append(slot)
+
+        # Proximity-based respawn for uncommitted lost slots.
+        # No proximity-to-active guard: in dense colonies every detection is
+        # near some active track, so any such guard would silently block all
+        # phase-3 respawns.  The MAX_DIST ceiling on best_c_val below is the
+        # only gate needed — if the detection is genuinely close to an active
+        # track it will have been matched in phases 1-2 and won't appear here.
+        unassigned = [
+            j
+            for j in range(M)
+            if j not in assigned_dets and j not in identity_claimed_dets
+        ]
+        rows: list = []
+        cols: list = []
+        remaining_uncommitted = list(uncommitted_lost)
+        for c in unassigned:
+            if not remaining_uncommitted:
+                break
             best_r, best_c_val = None, 1e6
-            for r in lost:
+            for r in remaining_uncommitted:
                 last_pos = kf_manager.X[r, :2]
-                dist = np.linalg.norm(meas[c][:2] - last_pos)
+                dist = float(np.linalg.norm(meas[c][:2] - last_pos))
                 if dist < best_c_val:
                     best_c_val, best_r = dist, r
             if best_r is not None and best_c_val < MAX_DIST:
-                assignments.append((best_r, c))
+                rows.append(best_r)
+                cols.append(c)
                 assigned_dets.add(c)
-                lost.remove(best_r)
-                trajectory_ids[best_r] = next_trajectory_id
-                next_trajectory_id += 1
-        return assignments, next_trajectory_id
+                remaining_uncommitted.remove(best_r)
+
+        return rows, cols, identity_rejoin_pairs
 
     def assign_tracks(
         self: object,
@@ -798,18 +881,21 @@ class TrackAssigner:
         track_states: object,
         tracking_continuity: object,
         kf_manager: object,
-        trajectory_ids: object,
-        next_trajectory_id: object,
         spatial_candidates: object = None,
         association_data: Dict[str, Any] | None = None,
+        committed_slot_identities: Dict[int, str] | None = None,
     ) -> object:
         """
         Drop-in replacement for track assignment logic.
         Compatible with kf_manager.X state access.
+
+        Returns ``(rows, cols, free_dets, identity_rejoin_pairs)`` where
+        ``identity_rejoin_pairs`` is a list of ``(slot_index, det_index)``
+        tuples from the identity-only rejoin path for committed-lost slots.
         """
         p = self.params
         if M == 0:
-            return [], [], [], next_trajectory_id, []
+            return [], [], [], []
 
         THRESH = p.get("KALMAN_MATURITY_AGE", 10)
         MAX_DIST = p["MAX_DISTANCE_THRESHOLD"]
@@ -878,27 +964,30 @@ class TrackAssigner:
         )
         all_assignments.extend(ph2)
 
-        # Phase 3: Respawn Lost Tracks
-        ph3, next_trajectory_id = self._assign_respawn(
-            lost,
-            M,
-            meas,
-            kf_manager,
-            track_states,
-            N,
-            trajectory_ids,
-            next_trajectory_id,
-            MAX_DIST,
-            assigned_dets,
+        # Phase 3: Respawn Lost Tracks (split-path: committed vs. uncommitted)
+        ph3_rows, ph3_cols, identity_rejoin_pairs = self._assign_respawn(
+            cost=cost,
+            N=N,
+            meas=meas,
+            track_states=track_states,
+            tracking_continuity=tracking_continuity,
+            kf_manager=kf_manager,
+            spatial_candidates=spatial_candidates,
+            association_data=association_data,
+            committed_slot_identities=committed_slot_identities,
+            _lost=lost,
+            _M=M,
+            _MAX_DIST=MAX_DIST,
+            _assigned_dets=assigned_dets,
         )
-        all_assignments.extend(ph3)
+        all_assignments.extend(zip(ph3_rows, ph3_cols))
 
         if not all_assignments:
-            return [], [], list(range(M)), next_trajectory_id, []
+            return [], [], list(range(M)), identity_rejoin_pairs
 
         final_r, final_c = zip(*all_assignments)
         free_dets = list(set(range(M)) - set(final_c))
-        return list(final_r), list(final_c), free_dets, next_trajectory_id, []
+        return list(final_r), list(final_c), free_dets, identity_rejoin_pairs
 
     def _compute_cost_python_fallback(
         self,
@@ -930,11 +1019,12 @@ class TrackAssigner:
             inv_S = S_inv[r, :2, :2]
             for c in det_indices:
                 diff = meas_pos[c] - pred_pos[r]
-                pos_c = (
-                    np.sqrt(diff @ inv_S @ diff)
-                    if p["USE_MAHALANOBIS"]
-                    else np.linalg.norm(diff)
-                )
+                if p["USE_MAHALANOBIS"]:
+                    maha_sq = float(diff @ inv_S @ diff)
+                    maha_sq = max(maha_sq, 0.0)
+                    pos_c = np.sqrt(maha_sq)
+                else:
+                    pos_c = np.linalg.norm(diff)
 
                 odiff = abs(pred_ori[r] - meas_ori[c])
                 if odiff > np.pi:

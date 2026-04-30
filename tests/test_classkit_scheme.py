@@ -39,7 +39,9 @@ def test_scheme_two_factor_cartesian():
         ],
         training_modes=["flat_yolo", "multihead_yolo"],
     )
-    assert scheme.total_classes == 9
+    assert scheme.total_classes == 16
+    assert scheme.factors[0].labels == ["red", "blue", "green", "unknown"]
+    assert scheme.factors[1].labels == ["red", "blue", "green", "unknown"]
 
 
 def test_scheme_composite_label_round_trip():
@@ -118,10 +120,12 @@ def test_color_tag_preset_1factor():
 def test_color_tag_preset_2factor():
     colors = ["red", "blue", "green", "yellow", "white"]
     scheme = color_tag_preset(n_factors=2, colors=colors)
-    assert scheme.total_classes == 25
+    assert scheme.total_classes == 36
     assert len(scheme.factors) == 2
     assert scheme.factors[0].name == "tag_1"
     assert scheme.factors[1].name == "tag_2"
+    assert scheme.factors[0].labels[-1] == "unknown"
+    assert scheme.factors[1].labels[-1] == "unknown"
     assert scheme.training_modes == [
         "flat_yolo",
         "flat_custom",
@@ -133,7 +137,7 @@ def test_color_tag_preset_2factor():
 def test_color_tag_preset_3factor():
     colors = ["red", "blue", "green", "yellow", "white"]
     scheme = color_tag_preset(n_factors=3, colors=colors)
-    assert scheme.total_classes == 125
+    assert scheme.total_classes == 216
     assert scheme.training_modes == [
         "flat_yolo",
         "flat_custom",
@@ -158,7 +162,24 @@ def test_age_preset_extra_classes():
 
 def test_color_tag_preset_custom_colors():
     scheme = color_tag_preset(n_factors=2, colors=["a", "b", "c"])
-    assert scheme.total_classes == 9
+    assert scheme.total_classes == 16
+
+
+def test_multi_factor_valid_labels_include_partial_unknown_composites():
+    scheme = LabelingScheme(
+        name="color2",
+        factors=[
+            Factor(name="tag_1", labels=["red", "blue"]),
+            Factor(name="tag_2", labels=["left", "right"]),
+        ],
+        training_modes=["multihead_custom"],
+    )
+
+    valid_labels = scheme.valid_encoded_labels()
+
+    assert "red|unknown" in valid_labels
+    assert "unknown|left" in valid_labels
+    assert "unknown|unknown" in valid_labels
 
 
 def test_color_tag_preset_invalid_n_factors_raises():

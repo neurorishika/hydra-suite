@@ -255,6 +255,7 @@ def compute_classify_cache_id(
     model_path: str,
     compute_runtime: str,
     inference_model_id: str,
+    calibration_signature: str = "",
 ) -> str:
     """Compute a settings hash for the CNN classification cache.
 
@@ -268,6 +269,7 @@ def compute_classify_cache_id(
         "inference_model_id": str(inference_model_id or ""),
         "model": _file_fingerprint(model_path),
         "compute_runtime": str(compute_runtime or "cpu").strip().lower(),
+        "calibration_signature": str(calibration_signature or ""),
     }
     return _hash_payload(payload)
 

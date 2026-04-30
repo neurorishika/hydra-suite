@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from hydra_suite.trackerkit.benchmarking import BenchmarkRecommendation
 from hydra_suite.trackerkit.gui.main_window import MainWindow
 from hydra_suite.trackerkit.gui.orchestrators import session as session_module
+from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
 
 @pytest.fixture(scope="module")
@@ -206,18 +208,27 @@ def _seed_trackerkit_model_repository(
     add_dir("pose/SLEAP/sleap_keep")
 
     registry_path = models_root / "model_registry.json"
-    registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    registry_path.write_text(
+        json.dumps({"schema_version": 2, "entries": registry}, indent=2),
+        encoding="utf-8",
+    )
     return models_root
 
 
-def test_headtail_model_type_roundtrip_preserves_tiny_selection(
+def _load_seeded_model_registry(models_root: Path) -> dict[str, object]:
+    payload = json.loads(
+        (models_root / "model_registry.json").read_text(encoding="utf-8")
+    )
+    return dict(payload.get("entries") or {})
+
+
+def test_headtail_model_roundtrip_preserves_selection(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
     window = _make_main_window(monkeypatch)
     window._identity_panel.g_headtail.setChecked(True)
-    window._identity_panel.combo_yolo_headtail_model_type.setCurrentText("tiny")
     window._identity_panel._refresh_yolo_headtail_model_combo()
 
     selected_model = _select_first_model_with_suffix(
@@ -230,16 +241,12 @@ def test_headtail_model_type_roundtrip_preserves_tiny_selection(
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved_cfg["enable_headtail_orientation"] is True
-    assert saved_cfg["yolo_headtail_model_type"] == "tiny"
+    assert "yolo_headtail_model_type" not in saved_cfg
     window.close()
 
     reloaded_window = _make_main_window(monkeypatch)
     reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
 
-    assert (
-        reloaded_window._identity_panel.combo_yolo_headtail_model_type.currentText()
-        == "tiny"
-    )
     assert reloaded_window._identity_panel.g_headtail.isChecked() is True
     assert (
         reloaded_window._identity_panel._get_selected_yolo_headtail_model_path()
@@ -281,6 +288,99 @@ def test_headtail_toggle_roundtrip_preserves_selection_but_disables_runtime_use(
     reloaded_window.close()
 
 
+def test_headtail_batch_size_roundtrip_preserves_runtime_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    window = _make_main_window(monkeypatch)
+    window._identity_panel.g_headtail.setChecked(True)
+    window._identity_panel.spin_headtail_batch.setValue(48)
+
+    config_path = tmp_path / "headtail_batch_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert saved_cfg["headtail_batch_size"] == 48
+    assert window.get_parameters_dict()["HEADTAIL_BATCH_SIZE"] == 48
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert reloaded_window._identity_panel.spin_headtail_batch.value() == 48
+    assert reloaded_window.get_parameters_dict()["HEADTAIL_BATCH_SIZE"] == 48
+    reloaded_window.close()
+
+
+def test_headtail_detection_confidence_roundtrip_preserves_runtime_parameter(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    window = _make_main_window(monkeypatch)
+    window._identity_panel.g_headtail.setChecked(True)
+    window._identity_panel.spin_yolo_headtail_detect_conf.setValue(0.72)
+
+    config_path = tmp_path / "headtail_detect_conf_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert saved_cfg["yolo_headtail_detect_conf_threshold"] == pytest.approx(0.72)
+    assert window.get_parameters_dict()[
+        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD"
+    ] == pytest.approx(0.72)
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert (
+        reloaded_window._identity_panel.spin_yolo_headtail_detect_conf.value()
+        == pytest.approx(0.72)
+    )
+    assert reloaded_window.get_parameters_dict()[
+        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD"
+    ] == pytest.approx(0.72)
+    reloaded_window.close()
+
+
+def test_headtail_combo_includes_registry_annotated_classkit_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+    tiny_flat_headtail: Path,
+) -> None:
+    from hydra_suite.training.model_publish import import_classifier_artifact
+
+    models_root = _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+    rel_path = "tiny-classify/scheme/discovered_headtail.pth"
+    artifact_path = models_root / rel_path
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(tiny_flat_headtail), str(artifact_path))
+
+    registered_path = import_classifier_artifact(
+        source_path=artifact_path,
+        usage_role="head_tail",
+        species="ant",
+        description="annotated external headtail",
+    )
+
+    window = _make_main_window(monkeypatch)
+    window._identity_panel.g_headtail.setChecked(True)
+    window._identity_panel._refresh_yolo_headtail_model_combo(
+        preferred_model_path=registered_path
+    )
+
+    combo = window._identity_panel.combo_yolo_headtail_model
+    assert combo.findData(registered_path) >= 0
+    assert (
+        window._identity_panel._get_configured_yolo_headtail_model_path()
+        == registered_path
+    )
+    window.close()
+
+
 def test_refinekit_prompt_toggle_roundtrip_and_batch_mode_clears_it(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
@@ -315,7 +415,7 @@ def test_refinekit_prompt_toggle_roundtrip_and_batch_mode_clears_it(
     reloaded_window.close()
 
 
-def test_video_autoload_restores_pose_keypoint_groups_and_headtail_type(
+def test_video_autoload_restores_pose_keypoint_groups_and_headtail_model(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
@@ -337,12 +437,12 @@ def test_video_autoload_restores_pose_keypoint_groups_and_headtail_type(
     window.current_video_path = str(video_path)
     window._setup_panel.file_line.setText(str(video_path))
     window._identity_panel.g_headtail.setChecked(True)
-    window._identity_panel.combo_yolo_headtail_model_type.setCurrentText("tiny")
     window._identity_panel._refresh_yolo_headtail_model_combo()
-    _select_first_model_with_suffix(
+    selected_model = _select_first_model_with_suffix(
         window._identity_panel.combo_yolo_headtail_model,
         ".pth",
     )
+    assert selected_model
     window._identity_panel.chk_enable_pose_extractor.setChecked(True)
     window._identity_panel.line_pose_skeleton_file.setText(str(skeleton_path))
     window._identity_panel._refresh_pose_direction_keypoint_lists()
@@ -377,8 +477,8 @@ def test_video_autoload_restores_pose_keypoint_groups_and_headtail_type(
     reloaded_window._setup_video_file(str(video_path))
 
     assert (
-        reloaded_window._identity_panel.combo_yolo_headtail_model_type.currentText()
-        == "tiny"
+        reloaded_window._identity_panel._get_configured_yolo_headtail_model_path()
+        == selected_model
     )
     assert reloaded_window._parse_pose_direction_anterior_keypoints() == [
         "head",
@@ -407,9 +507,7 @@ def test_remove_buttons_delete_only_the_selected_tracker_models(
     window._set_yolo_model_selection("obb/direct_remove.pt")
     window._detection_panel.btn_remove_yolo_model.click()
 
-    registry = json.loads(
-        (models_root / "model_registry.json").read_text(encoding="utf-8")
-    )
+    registry = _load_seeded_model_registry(models_root)
     assert not (models_root / "obb/direct_remove.pt").exists()
     assert "obb/direct_remove.pt" not in registry
     assert (models_root / "obb/direct_keep.pt").exists()
@@ -417,31 +515,24 @@ def test_remove_buttons_delete_only_the_selected_tracker_models(
 
     window._set_yolo_detect_model_selection("detection/seq_detect_remove.pt")
     window._detection_panel.btn_remove_yolo_detect_model.click()
-    registry = json.loads(
-        (models_root / "model_registry.json").read_text(encoding="utf-8")
-    )
+    registry = _load_seeded_model_registry(models_root)
     assert not (models_root / "detection/seq_detect_remove.pt").exists()
     assert "detection/seq_detect_remove.pt" not in registry
     assert (models_root / "detection/seq_detect_keep.pt").exists()
 
     window._set_yolo_crop_obb_model_selection("obb/cropped/seq_crop_remove.pt")
     window._detection_panel.btn_remove_yolo_crop_obb_model.click()
-    registry = json.loads(
-        (models_root / "model_registry.json").read_text(encoding="utf-8")
-    )
+    registry = _load_seeded_model_registry(models_root)
     assert not (models_root / "obb/cropped/seq_crop_remove.pt").exists()
     assert "obb/cropped/seq_crop_remove.pt" not in registry
     assert (models_root / "obb/cropped/seq_crop_keep.pt").exists()
 
     window._identity_panel.g_headtail.setChecked(True)
-    window._identity_panel.combo_yolo_headtail_model_type.setCurrentText("YOLO")
     window._set_yolo_headtail_model_selection(
         "classification/orientation/YOLO/headtail_remove.pt"
     )
     window._identity_panel.btn_remove_yolo_headtail_model.click()
-    registry = json.loads(
-        (models_root / "model_registry.json").read_text(encoding="utf-8")
-    )
+    registry = _load_seeded_model_registry(models_root)
     assert not (
         models_root / "classification/orientation/YOLO/headtail_remove.pt"
     ).exists()
@@ -515,9 +606,7 @@ def test_remove_button_deletes_only_selected_cnn_identity_model(
     assert row.btn_remove_model.isEnabled() is True
     row.btn_remove_model.click()
 
-    registry = json.loads(
-        (models_root / "model_registry.json").read_text(encoding="utf-8")
-    )
+    registry = _load_seeded_model_registry(models_root)
     assert not (models_root / "classification/identity/cnn_remove.pt").exists()
     assert "classification/identity/cnn_remove.pt" not in registry
     assert (models_root / "classification/identity/cnn_keep.pt").exists()
@@ -735,19 +824,21 @@ def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
     monkeypatch.setattr(
         session_module,
         "supported_runtimes_for_pipeline",
         lambda pipeline: (
             ["cpu", "mps", "onnx_coreml", "onnx_cpu"]
-            if pipeline == "headtail"
+            if pipeline == "head_tail"
             else ["cpu", "mps", "onnx_cpu"]
         ),
     )
 
     window._identity_panel.g_identity.setChecked(True)
     window._identity_panel.g_headtail.setChecked(True)
+    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
     window._identity_panel._add_cnn_classifier_row()
     window._populate_headtail_runtime_options(preferred="onnx_coreml")
     window._populate_cnn_runtime_options(preferred="onnx_cpu")
@@ -767,13 +858,53 @@ def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
     window.close()
 
 
+def test_headtail_runtime_selectors_stay_synchronized(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+    window = _make_main_window(monkeypatch)
+    monkeypatch.setattr(
+        session_module,
+        "supported_runtimes_for_pipeline",
+        lambda pipeline: (
+            ["cpu", "onnx_coreml", "onnx_cpu"] if pipeline == "head_tail" else ["cpu"]
+        ),
+    )
+
+    window._identity_panel.g_identity.setChecked(True)
+    window._identity_panel.g_headtail.setChecked(True)
+    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
+    window._populate_headtail_runtime_options(preferred="cpu")
+
+    identity_combo = window._identity_panel.combo_headtail_runtime
+    setup_combo = window._setup_panel.combo_headtail_runtime
+
+    identity_idx = identity_combo.findData("onnx_coreml")
+    setup_idx = setup_combo.findData("onnx_cpu")
+    assert identity_idx >= 0
+    assert setup_idx >= 0
+
+    identity_combo.setCurrentIndex(identity_idx)
+    assert setup_combo.currentData() == "onnx_coreml"
+
+    setup_combo.setCurrentIndex(setup_idx)
+    assert identity_combo.currentData() == "onnx_cpu"
+    window.close()
+
+
 def test_pose_video_overlay_customization_controls_remain_visible(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
+    tmp_path: Path,
 ) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
     window._detection_panel.combo_detection_method.setCurrentIndex(1)
     window._identity_panel.chk_enable_pose_extractor.setChecked(True)
+    window._identity_panel.combo_pose_model_type.setCurrentText("YOLO")
+    _select_first_nonempty_model(window._identity_panel.combo_pose_model)
     window._postprocess_panel.check_video_output.setChecked(True)
     window._postprocess_panel.check_video_show_pose.setChecked(True)
 
@@ -796,7 +927,7 @@ def test_confidence_density_toggle_roundtrip_updates_visibility(
 
     assert not window._tracking_panel.g_density.isHidden()
     assert (
-        window._tracking_panel.chk_export_confidence_density_video.isChecked() is True
+        window._tracking_panel.chk_export_confidence_density_video.isChecked() is False
     )
 
     window._tracking_panel.chk_enable_confidence_density_map.setChecked(False)
@@ -1035,6 +1166,72 @@ def test_realtime_sequential_mode_keeps_crop_batch_setting_visible(
     window.close()
 
 
+def test_realtime_direct_mode_exposes_micro_batch_controls(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.combo_detection_method.setCurrentIndex(1)
+    window._setup_panel.chk_realtime_mode.setChecked(True)
+
+    assert (
+        window._detection_panel.chk_enable_realtime_yolo_micro_batching.isEnabled()
+        is True
+    )
+    assert (
+        window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is False
+    )
+
+    window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
+    window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(4)
+    window._detection_panel._sync_batch_policy_controls()
+
+    assert (
+        window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is True
+    )
+    assert (
+        "queues up to 4 frame(s)"
+        in window._detection_panel.lbl_batch_policy_notice.text()
+    )
+    window.close()
+
+
+def test_realtime_micro_batch_roundtrip_persists(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.combo_detection_method.setCurrentIndex(1)
+    window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
+    window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(3)
+
+    config_path = tmp_path / "realtime_micro_batch_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_cfg["enable_realtime_yolo_micro_batching"] is True
+    assert saved_cfg["realtime_yolo_micro_batch_size"] == 3
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert (
+        reloaded_window._detection_panel.chk_enable_realtime_yolo_micro_batching.isChecked()
+        is True
+    )
+    assert (
+        reloaded_window._detection_panel.spin_realtime_yolo_micro_batch_size.value()
+        == 3
+    )
+    reloaded_window.close()
+
+
 def test_sequential_crop_batch_roundtrip_persists(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
@@ -1182,6 +1379,165 @@ def test_get_parameters_dict_commits_pending_frame_range_edit(
     assert params["START_FRAME"] == 25
     assert params["END_FRAME"] == 25
     window.close()
+
+
+def test_advanced_config_defaults_include_identity_decoder_tuning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    advanced_path = tmp_path / "advanced_config.json"
+
+    monkeypatch.setattr(
+        "hydra_suite.paths.get_advanced_config_path",
+        lambda: advanced_path,
+    )
+
+    advanced = ConfigOrchestrator._load_advanced_config(object())
+
+    assert advanced["identity_offline_split_trajectories"] is False
+    assert advanced["identity_offline_split_min_conf"] == pytest.approx(0.75)
+    assert advanced["identity_offline_split_min_margin"] == pytest.approx(0.2)
+    assert advanced["identity_offline_split_min_frames"] == 3
+    assert advanced["identity_offline_split_max_bridge_frames"] == 6
+    assert advanced["identity_offline_ilp_time_limit"] == pytest.approx(30.0)
+    assert advanced["identity_offline_ilp_rel_gap"] == pytest.approx(1e-6)
+    assert advanced["identity_respawn_prior_strength"] == pytest.approx(0.75)
+    assert advanced["identity_respawn_prior_decay"] == pytest.approx(0.97)
+    assert advanced["identity_respawn_prior_max_gap"] == 120
+
+    saved = json.loads(advanced_path.read_text(encoding="utf-8"))
+    assert saved["identity_offline_split_trajectories"] is False
+    assert saved["identity_offline_split_min_conf"] == pytest.approx(0.75)
+    assert saved["identity_respawn_prior_max_gap"] == 120
+
+
+def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "identity_offline_split_trajectories": True,
+            "identity_offline_split_min_conf": 0.81,
+            "identity_offline_split_min_margin": 0.27,
+            "identity_offline_split_min_frames": 5,
+            "identity_offline_split_max_bridge_frames": 8,
+            "identity_offline_ilp_time_limit": 12.5,
+            "identity_offline_ilp_rel_gap": 1e-4,
+            "identity_respawn_prior_strength": 0.62,
+            "identity_respawn_prior_decay": 0.93,
+            "identity_respawn_prior_max_gap": 44,
+        },
+    )
+
+    params = window.get_parameters_dict()
+
+    assert params["IDENTITY_OFFLINE_SPLIT_TRAJECTORIES"] is True
+    assert params["IDENTITY_OFFLINE_SPLIT_MIN_CONF"] == pytest.approx(0.81)
+    assert params["IDENTITY_OFFLINE_SPLIT_MIN_MARGIN"] == pytest.approx(0.27)
+    assert params["IDENTITY_OFFLINE_SPLIT_MIN_FRAMES"] == 5
+    assert params["IDENTITY_OFFLINE_SPLIT_MAX_BRIDGE_FRAMES"] == 8
+    assert params["IDENTITY_OFFLINE_ILP_TIME_LIMIT"] == pytest.approx(12.5)
+    assert params["IDENTITY_OFFLINE_ILP_REL_GAP"] == pytest.approx(1e-4)
+    assert params["IDENTITY_RESPAWN_PRIOR_STRENGTH"] == pytest.approx(0.62)
+    assert params["IDENTITY_RESPAWN_PRIOR_DECAY"] == pytest.approx(0.93)
+    assert params["IDENTITY_RESPAWN_PRIOR_MAX_GAP"] == 44
+    assert params["ADVANCED_CONFIG"]["identity_respawn_prior_max_gap"] == 44
+    window.close()
+
+
+def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "identity_offline_split_trajectories": True,
+            "identity_offline_split_min_conf": 0.82,
+            "identity_respawn_prior_max_gap": 77,
+        },
+    )
+
+    assert window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
+    assert (
+        window._identity_panel.spin_identity_offline_split_min_conf.value()
+        == pytest.approx(0.82)
+    )
+    assert window._identity_panel.spin_identity_respawn_prior_max_gap.value() == 77
+
+    window._identity_panel.chk_identity_offline_split_trajectories.setChecked(False)
+    window._identity_panel.spin_identity_offline_split_min_conf.setValue(0.79)
+    window._identity_panel.spin_identity_offline_split_min_margin.setValue(0.24)
+    window._identity_panel.spin_identity_offline_split_min_frames.setValue(4)
+    window._identity_panel.spin_identity_offline_split_max_bridge_frames.setValue(9)
+    window._identity_panel.spin_identity_offline_ilp_time_limit.setValue(15.0)
+    window._identity_panel.spin_identity_offline_ilp_rel_gap.setValue(0.0025)
+    window._identity_panel.spin_identity_respawn_prior_strength.setValue(0.66)
+    window._identity_panel.spin_identity_respawn_prior_decay.setValue(0.91)
+    window._identity_panel.spin_identity_respawn_prior_max_gap.setValue(42)
+
+    config_path = tmp_path / "identity_decoder_tuning_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert saved_cfg["identity_offline_split_trajectories"] is False
+    assert saved_cfg["identity_offline_split_min_conf"] == pytest.approx(0.79)
+    assert saved_cfg["identity_offline_split_min_margin"] == pytest.approx(0.24)
+    assert saved_cfg["identity_offline_split_min_frames"] == 4
+    assert saved_cfg["identity_offline_split_max_bridge_frames"] == 9
+    assert saved_cfg["identity_offline_ilp_time_limit"] == pytest.approx(15.0)
+    assert saved_cfg["identity_offline_ilp_rel_gap"] == pytest.approx(0.0025)
+    assert saved_cfg["identity_respawn_prior_strength"] == pytest.approx(0.66)
+    assert saved_cfg["identity_respawn_prior_decay"] == pytest.approx(0.91)
+    assert saved_cfg["identity_respawn_prior_max_gap"] == 42
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert (
+        not reloaded_window._identity_panel.chk_identity_offline_split_trajectories.isChecked()
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_min_conf.value()
+        == pytest.approx(0.79)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_min_margin.value()
+        == pytest.approx(0.24)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_min_frames.value()
+        == 4
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_split_max_bridge_frames.value()
+        == 9
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_ilp_time_limit.value()
+        == pytest.approx(15.0)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_offline_ilp_rel_gap.value()
+        == pytest.approx(0.0025)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_respawn_prior_strength.value()
+        == pytest.approx(0.66)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_respawn_prior_decay.value()
+        == pytest.approx(0.91)
+    )
+    assert (
+        reloaded_window._identity_panel.spin_identity_respawn_prior_max_gap.value()
+        == 42
+    )
+    reloaded_window.close()
 
 
 def test_trail_history_special_values_update_overlay_toggle_and_clamp(

@@ -34,11 +34,9 @@ Core public helpers:
 - `cpu`
 - `mps`
 - `cuda`
-- `rocm`
 - `onnx_coreml`
 - `onnx_cpu`
 - `onnx_cuda`
-- `onnx_rocm`
 - `tensorrt`
 
 ## Integration Checklist (Required)
@@ -52,6 +50,8 @@ Current examples:
 - `yolo_obb_detection`
 - `yolo_pose`
 - `sleap_pose`
+- `cnn_identity`
+- `head_tail`
 
 For future additions, use names like:
 

@@ -49,3 +49,17 @@ def test_project_to_dict_includes_active_model_path():
     assert "active_model_path" in d
     assert d["active_model_path"] == "weights/best.pt"
     assert d["active_model_path"] == "weights/best.pt"
+
+
+def test_project_training_history_persists(tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    proj = DetectKitProject(project_dir=tmp_path)
+    proj.training_history = [{"run_id": "run_001", "project_model_path": "model.pt"}]
+    save_path = tmp_path / "project.json"
+    proj.save(save_path)
+
+    loaded = DetectKitProject.load(save_path)
+    assert loaded.training_history == [
+        {"run_id": "run_001", "project_model_path": "model.pt"}
+    ]

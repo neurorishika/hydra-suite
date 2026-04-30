@@ -130,6 +130,7 @@ def test_postprocess_panel_wired_in_main_window(main_window):
     assert isinstance(main_window._postprocess_panel, PostProcessPanel)
     assert hasattr(main_window._postprocess_panel, "enable_postprocessing")
     assert hasattr(main_window._postprocess_panel, "combo_interpolation_method")
+    assert hasattr(main_window._postprocess_panel, "spin_changepoint_penalty")
     assert hasattr(main_window._postprocess_panel, "g_refinekit")
     assert hasattr(main_window._postprocess_panel, "chk_prompt_open_refinekit")
 
@@ -142,9 +143,18 @@ def test_identity_panel_wired_in_main_window(main_window):
     assert isinstance(main_window._identity_panel, IdentityPanel)
     assert hasattr(main_window._identity_panel, "g_headtail")
     assert hasattr(main_window._identity_panel, "combo_yolo_headtail_model")
-    assert hasattr(main_window._identity_panel, "combo_yolo_headtail_model_type")
     assert hasattr(main_window._identity_panel, "btn_remove_yolo_headtail_model")
     assert hasattr(main_window._identity_panel, "btn_remove_pose_model")
+
+
+def test_identity_panel_cnn_row_exposes_unique_identifier_toggle(main_window):
+    """Each CNN classifier row exposes the unique-identifier toggle."""
+    row = main_window._identity_panel._add_cnn_classifier_row()
+    try:
+        assert hasattr(row, "chk_unique_identifier")
+        assert row.chk_unique_identifier.isChecked() is False
+    finally:
+        main_window._identity_panel._remove_cnn_classifier_row(row)
 
 
 def test_detection_panel_wired_in_main_window(main_window):
@@ -158,3 +168,51 @@ def test_detection_panel_wired_in_main_window(main_window):
     assert hasattr(main_window._detection_panel, "btn_remove_yolo_model")
     assert hasattr(main_window._detection_panel, "btn_remove_yolo_detect_model")
     assert hasattr(main_window._detection_panel, "btn_remove_yolo_crop_obb_model")
+
+
+def test_preview_detection_context_keeps_identity_overlays_without_master_toggle(
+    main_window,
+    monkeypatch,
+):
+    """Preview detection should include configured CNN/AprilTag overlays in YOLO mode."""
+    detection_panel = main_window._detection_panel
+    identity_panel = main_window._identity_panel
+
+    original_detection_index = detection_panel.combo_detection_method.currentIndex()
+    original_identity_enabled = identity_panel.g_identity.isChecked()
+    original_apriltags_enabled = identity_panel.g_apriltags.isChecked()
+
+    detection_panel.combo_detection_method.setCurrentIndex(1)
+    identity_panel.g_identity.setChecked(False)
+    identity_panel.g_apriltags.setChecked(True)
+
+    row = identity_panel._add_cnn_classifier_row()
+    monkeypatch.setattr(
+        row,
+        "to_config",
+        lambda: {
+            "model_path": "/tmp/cnn_identity.onnx",
+            "label": "cnn_identity",
+            "confidence": 0.61,
+            "window": 5,
+            "batch_size": 16,
+            "scoring_mode": "atomic",
+        },
+    )
+
+    try:
+        runtime_cfg = detection_panel._identity_config()
+        preview_cfg = detection_panel._preview_identity_config()
+        preview_context = detection_panel._collect_preview_detection_context()
+
+        assert runtime_cfg == {"use_apriltags": False, "cnn_classifiers": []}
+        assert preview_cfg["use_apriltags"] is True
+        assert len(preview_cfg["cnn_classifiers"]) == 1
+        assert preview_context["use_apriltags"] is True
+        assert len(preview_context["cnn_classifiers"]) == 1
+        assert preview_context["cnn_classifiers"][0]["label"] == "cnn_identity"
+    finally:
+        identity_panel._remove_cnn_classifier_row(row)
+        identity_panel.g_apriltags.setChecked(original_apriltags_enabled)
+        identity_panel.g_identity.setChecked(original_identity_enabled)
+        detection_panel.combo_detection_method.setCurrentIndex(original_detection_index)

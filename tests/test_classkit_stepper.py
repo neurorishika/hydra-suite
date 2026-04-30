@@ -104,3 +104,33 @@ def test_stepper_pick_when_complete_raises():
     state.pick("a")
     with pytest.raises(RuntimeError, match="already picked"):
         state.pick("a")
+
+
+def test_stepper_allows_unknown_for_one_factor_only():
+    from hydra_suite.classkit.gui.widgets.factor_stepper import StepperState
+
+    scheme = make_scheme([["red", "blue"], ["left", "right"]])
+    state = StepperState(scheme)
+
+    state.pick("unknown")
+    state.pick("left")
+
+    assert state.composite_label == "unknown|left"
+
+
+def test_stepper_zero_shortcut_routes_to_current_factor_unknown():
+    from hydra_suite.classkit.gui.widgets.factor_stepper import _qt_stepper_handle_key
+
+    calls: list[str] = []
+
+    class DummyStepper:
+        def __init__(self) -> None:
+            self._shortcut_map = {}
+
+        def _on_unknown(self) -> None:
+            calls.append("unknown")
+
+    stepper = DummyStepper()
+
+    assert _qt_stepper_handle_key(stepper, "0") is True
+    assert calls == ["unknown"]

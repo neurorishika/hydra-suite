@@ -530,13 +530,15 @@ class MainWindow(QMainWindow):
 
         # Video Area
         self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setStyleSheet("background-color: #121212; border: none;")
         self.scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.video_label = QLabel("")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
-        self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.video_label.setMinimumSize(320, 240)
         self.scroll.setWidget(self.video_label)
         self._show_video_logo_placeholder()
 
@@ -1416,6 +1418,11 @@ class MainWindow(QMainWindow):
             return self._session_orch._selected_headtail_runtime()
         return self._selected_compute_runtime()
 
+    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
+        """Keep duplicated head-tail runtime selectors synchronized."""
+        if hasattr(self, "_session_orch"):
+            self._session_orch._sync_headtail_runtime_selection(source_combo)
+
     def _cnn_runtime_options(self):
         """Return (label, value) pairs for the CNN runtime combo."""
         if hasattr(self, "_session_orch"):
@@ -1449,8 +1456,6 @@ class MainWindow(QMainWindow):
             return "mps"
         if rt in ("onnx_cuda", "tensorrt"):
             return "cuda"
-        if rt == "onnx_rocm":
-            return "rocm"
         return rt
 
     def _on_runtime_context_changed(self, *_args):
@@ -2105,13 +2110,6 @@ class MainWindow(QMainWindow):
             repository_dir=repository_dir,
         )
 
-    @staticmethod
-    def _infer_yolo_headtail_model_type(model_path):
-        """Infer the head-tail model family from its stored path."""
-        from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
-
-        return ConfigOrchestrator._infer_yolo_headtail_model_type(model_path)
-
     def _populate_pose_model_combo(self, combo, backend, preferred_model_path=None):
         """Populate the pose model combo for the given backend."""
         self._config_orch._populate_pose_model_combo(
@@ -2184,11 +2182,6 @@ class MainWindow(QMainWindow):
             model_path,
         )
 
-    def _on_headtail_model_type_changed(self, _index: object = None) -> None:
-        """Refresh the head-tail model combo when the user switches YOLO ↔ tiny."""
-        if hasattr(self, "_identity_panel"):
-            self._identity_panel._refresh_yolo_headtail_model_combo()
-
     def _update_obb_mode_warning(self) -> None:
         """Show a performance hint when device/mode is a suboptimal combination."""
         if hasattr(self, "_session_orch"):
@@ -2228,34 +2221,129 @@ class MainWindow(QMainWindow):
             )
 
     def on_yolo_headtail_model_changed(self: object, index: object) -> object:
-        """Handle head/tail classification model combo-box changes, opening the add-model dialog when the sentinel item is selected."""
-        if (
-            self._identity_panel.combo_yolo_headtail_model.itemData(index, Qt.UserRole)
-            == "__add_new__"
-        ):
-            ht_type = getattr(
-                self._identity_panel, "combo_yolo_headtail_model_type", None
-            )
-            subdir = ht_type.currentText() if ht_type else "YOLO"
-            repo_dir = os.path.join(
-                get_yolo_model_repository_directory(
-                    task_family="classify", usage_role="headtail"
-                ),
-                subdir,
-            )
-            os.makedirs(repo_dir, exist_ok=True)
-            self._handle_add_new_yolo_model(
-                combo=self._identity_panel.combo_yolo_headtail_model,
-                refresh_callback=self._identity_panel._refresh_yolo_headtail_model_combo,
-                selection_callback=self._set_yolo_headtail_model_selection,
-                task_family="classify",
-                usage_role="headtail",
-                dialog_title="Add Head-Tail Classifier",
-                repository_dir=repo_dir,
-            )
+        """Handle head/tail classification model combo-box changes.
+
+        Handles three cases:
+        1. ``__add_new__`` sentinel — opens the add-model file dialog.
+        2. Discovered (unannotated) classkit entry — opens the annotation dialog.
+        3. Normal registered entry — syncs analysis mode UI.
+        """
+        combo = self._identity_panel.combo_yolo_headtail_model
+        rel_path = combo.itemData(index, Qt.UserRole)
+        if rel_path == "__add_new__":
+            self._handle_add_new_headtail_model()
+            return
+        if rel_path and self._headtail_is_discovered_entry(rel_path):
+            self._annotate_discovered_headtail_model(rel_path)
             return
         if hasattr(self, "_detection_panel"):
             self._detection_panel._on_yolo_mode_changed(index)
+        self._sync_individual_analysis_mode_ui()
+
+    def _headtail_is_discovered_entry(self, rel_path: str) -> bool:
+        """Return True if rel_path is not yet annotated as head_tail in the registry."""
+        from hydra_suite.training.model_publish import iter_registry_entries
+
+        return all(
+            not (key == rel_path and meta.get("usage_role") == "head_tail")
+            for key, meta in iter_registry_entries()
+        )
+
+    def _handle_add_new_headtail_model(self) -> None:
+        """Import a head-tail classifier through the dedicated validation dialog."""
+        from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
+
+        from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
+            HeadTailImportDialog,
+            describe_headtail_candidate,
+            import_headtail_candidate,
+        )
+
+        combo = self._identity_panel.combo_yolo_headtail_model
+        prev_data = combo.currentData(Qt.UserRole)
+        src_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Add Head-Tail Classifier",
+            get_yolo_model_repository_directory(
+                task_family="classify", usage_role="headtail"
+            ),
+            "Head-Tail Classifier Files (*.pth *.pt *.multihead.json);;All Files (*)",
+        )
+        if not src_path:
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            return
+
+        try:
+            summary = describe_headtail_candidate(src_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Cannot read head-tail model:\n{exc}"
+            )
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            return
+
+        dlg = HeadTailImportDialog(summary, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            self._identity_panel._refresh_yolo_headtail_model_combo()
+            return
+
+        try:
+            rel_path = import_headtail_candidate(
+                model_path=src_path,
+                species=dlg.species(),
+                description=dlg.description(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Could not import model:\n{exc}"
+            )
+            idx = combo.findData(prev_data)
+            combo.setCurrentIndex(max(idx, 0))
+            return
+
+        self._identity_panel._refresh_yolo_headtail_model_combo()
+        idx = combo.findData(rel_path)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        self._sync_individual_analysis_mode_ui()
+
+    def _annotate_discovered_headtail_model(self, rel_path: str) -> None:
+        """Open the head-tail import dialog for a discovered classkit-published model."""
+        from PySide6.QtWidgets import QDialog, QMessageBox
+
+        from hydra_suite.trackerkit.gui.dialogs.headtail_import_dialog import (
+            HeadTailImportDialog,
+            describe_headtail_candidate,
+            import_headtail_candidate,
+        )
+
+        abs_path = os.path.join(get_models_root_directory(), rel_path)
+        try:
+            summary = describe_headtail_candidate(abs_path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Import Error", f"Cannot read head-tail model: {exc}"
+            )
+            return
+
+        dlg = HeadTailImportDialog(summary, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            self._identity_panel._refresh_yolo_headtail_model_combo()
+            return
+        rel_path = import_headtail_candidate(
+            model_path=abs_path,
+            species=dlg.species(),
+            description=dlg.description(),
+        )
+        self._identity_panel._refresh_yolo_headtail_model_combo()
+        combo = self._identity_panel.combo_yolo_headtail_model
+        idx = combo.findData(rel_path)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
         self._sync_individual_analysis_mode_ui()
 
     def _handle_add_new_yolo_model(
@@ -2390,8 +2478,27 @@ class MainWindow(QMainWindow):
             self._session_orch._show_video_logo_placeholder()
             return
         # Fallback during early init before orchestrators exist
+        self._set_video_message("HYDRA\n\nLoad a video to begin...")
+
+    def _set_video_pixmap(self, pixmap: QPixmap):
+        """Display a pixmap and resize the video label to match it."""
+        self.video_label.setText("")
+        self.video_label.setPixmap(pixmap)
+        if pixmap is not None and not pixmap.isNull():
+            self.video_label.resize(pixmap.width(), pixmap.height())
+
+    def _set_video_message(
+        self, text: str, minimum_width: int = 320, minimum_height: int = 240
+    ):
+        """Display centered text in the video area with a stable minimum size."""
         self.video_label.setPixmap(QPixmap())
-        self.video_label.setText("HYDRA\n\nLoad a video to begin...")
+        self.video_label.setText(text)
+        width_hint = self.video_label.sizeHint().width()
+        height_hint = self.video_label.sizeHint().height()
+        self.video_label.resize(
+            max(minimum_width, width_hint),
+            max(minimum_height, height_hint),
+        )
 
     def _is_visualization_enabled(self) -> bool:
         # Preview should always render frames regardless of visualization-free toggle

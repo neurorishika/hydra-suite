@@ -207,6 +207,14 @@ class DatasetPanel(QWidget):
         self.chk_metric_count_mismatch.setToolTip(
             "Flag frames where detected count doesn't match expected number of animals."
         )
+        self.chk_metric_fragmented_detections = QCheckBox(
+            "Flag suspicious split or duplicate detections"
+        )
+        self.chk_metric_fragmented_detections.setChecked(True)
+        self.chk_metric_fragmented_detections.setToolTip(
+            "Flag frames where detections overlap or cluster tightly enough to suggest one animal "
+            "was split into multiple detections."
+        )
         self.chk_metric_high_assignment_cost = QCheckBox(
             "Flag uncertain track assignment"
         )
@@ -228,10 +236,13 @@ class DatasetPanel(QWidget):
         _m_row1.addWidget(self.chk_metric_low_confidence)
         _m_row1.addWidget(self.chk_metric_count_mismatch)
         _m_row2 = QHBoxLayout()
+        _m_row2.addWidget(self.chk_metric_fragmented_detections)
         _m_row2.addWidget(self.chk_metric_high_assignment_cost)
-        _m_row2.addWidget(self.chk_metric_track_loss)
+        _m_row3 = QHBoxLayout()
+        _m_row3.addWidget(self.chk_metric_track_loss)
         v_metrics.addLayout(_m_row1)
         v_metrics.addLayout(_m_row2)
+        v_metrics.addLayout(_m_row3)
         v_metrics.addWidget(self.chk_metric_high_uncertainty)
 
         vl_content.addWidget(self.g_quality_metrics)

@@ -18,6 +18,7 @@ def _smooth_directed_heading(
     position_deques,
     orient_confidence,
     heading_flip_counters,
+    motion_is_reversed=False,
 ):
     """Smooth a directed (pose/head-tail) heading with flip hysteresis."""
     if old is None:
@@ -41,6 +42,7 @@ def _smooth_directed_heading(
             position_deques,
             orient_confidence,
             flip_conf_thresh,
+            motion_is_reversed=motion_is_reversed,
         )
         new_deg = _apply_flip_hysteresis(
             r,
@@ -65,12 +67,23 @@ def _is_flip_motion_supported(
     position_deques,
     orient_confidence,
     flip_conf_thresh,
+    motion_is_reversed=False,
 ):
-    """Check if track motion supports an orientation flip."""
+    """Check if track motion supports an orientation flip.
+
+    ``motion_is_reversed`` should be True when the per-track ``position_deques``
+    record positions in reverse-time (e.g. the backward tracking pass).  In that
+    case the displacement vector is negated before its angle is compared against
+    the old/new headings so that the comparison uses the *true* (head-first)
+    motion direction.
+    """
     if speed < p["VELOCITY_THRESHOLD"] or len(position_deques[r]) != 2:
         return False
     (x1, y1, _), (x2, y2, _) = position_deques[r]
-    ang_deg = math.degrees(math.atan2(y2 - y1, x2 - x1))
+    dx, dy = (x2 - x1, y2 - y1)
+    if motion_is_reversed:
+        dx, dy = -dx, -dy
+    ang_deg = math.degrees(math.atan2(dy, dx))
     motion_favors_new = abs(wrap_angle_degs(new_deg - ang_deg)) < abs(
         wrap_angle_degs(old_deg - ang_deg)
     )
@@ -103,6 +116,7 @@ def smooth_orientation(
     directed_heading=False,
     orient_confidence=1.0,
     heading_flip_counters=None,
+    motion_is_reversed=False,
 ):
     """Smooth a track's orientation over time.
 
@@ -112,17 +126,32 @@ def smooth_orientation(
         speed: Track speed estimate.
         p: Parameter dict (needs VELOCITY_THRESHOLD, MAX_ORIENT_DELTA_STOPPED,
            INSTANT_FLIP_ORIENTATION, DIRECTED_ORIENT_SMOOTHING,
-           DIRECTED_ORIENT_FLIP_CONFIDENCE, DIRECTED_ORIENT_FLIP_PERSISTENCE).
+           DIRECTED_ORIENT_FLIP_CONFIDENCE, DIRECTED_ORIENT_FLIP_PERSISTENCE,
+           DIRECTED_ORIENT_POSTHOC_CONSISTENCY).
         orientation_last: List of last committed theta per track (mutated).
         position_deques: Per-track deques of (x, y, frame) positions.
         directed_heading: Whether this heading comes from a directed source.
         orient_confidence: Confidence in the heading estimate [0, 1].
         heading_flip_counters: Per-track flip hysteresis counters (mutated).
+        motion_is_reversed: True when ``position_deques`` records positions in
+            reverse-time order (e.g. the backward tracking pass).  Negates the
+            displacement vector before motion-direction comparisons so that the
+            "does motion favour this heading?" tests use head-first motion.
 
     Returns:
-        Smoothed theta in radians.
+        Smoothed theta in radians.  When DIRECTED_ORIENT_POSTHOC_CONSISTENCY is
+        True and directed_heading is True, the raw theta is returned unchanged so
+        that global heading consistency can be resolved in post-processing.
     """
     old = orientation_last[r]
+
+    if directed_heading and p.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False):
+        # Post-hoc mode: accept the raw directed heading without any online flip
+        # check.  Global heading consistency will be resolved per-track in the
+        # post-processing step instead.
+        if old is None and heading_flip_counters is not None:
+            heading_flip_counters[r] = 0
+        return theta
 
     if directed_heading and p.get("DIRECTED_ORIENT_SMOOTHING", True):
         return _smooth_directed_heading(
@@ -134,6 +163,7 @@ def smooth_orientation(
             position_deques,
             orient_confidence,
             heading_flip_counters,
+            motion_is_reversed=motion_is_reversed,
         )
 
     # --- Original undirected smoothing (axis-only, no direction signal) ---
@@ -148,7 +178,10 @@ def smooth_orientation(
         final_theta = math.radians(new_deg)
     elif speed >= p["VELOCITY_THRESHOLD"] and p["INSTANT_FLIP_ORIENTATION"]:
         (x1, y1, _), (x2, y2, _) = position_deques[r]
-        ang = math.atan2(y2 - y1, x2 - x1)
+        dx, dy = (x2 - x1, y2 - y1)
+        if motion_is_reversed:
+            dx, dy = -dx, -dy
+        ang = math.atan2(dy, dx)
         diff = (ang - theta + math.pi) % (2 * math.pi) - math.pi
         if abs(diff) > math.pi / 2:
             final_theta = (theta + math.pi) % (2 * math.pi)

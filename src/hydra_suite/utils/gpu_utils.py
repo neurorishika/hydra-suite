@@ -35,7 +35,7 @@ except ImportError:
     cp = None
     cupy_ndimage = None
 
-# PyTorch for MPS GPU acceleration (Apple Silicon) and CUDA/ROCm
+# PyTorch for MPS GPU acceleration (Apple Silicon) and CUDA
 try:
     import torch
     import torch.nn.functional as F
@@ -44,23 +44,10 @@ try:
     MPS_AVAILABLE = torch.backends.mps.is_available()
     TORCH_CUDA_AVAILABLE = torch.cuda.is_available()
 
-    # Detect ROCm backend (AMD GPUs)
-    ROCM_AVAILABLE = False
-    if TORCH_CUDA_AVAILABLE:
-        try:
-            # ROCm identifies itself in torch.version.hip or via device name
-            if hasattr(torch.version, "hip") and torch.version.hip is not None:
-                ROCM_AVAILABLE = True
-            elif "gfx" in torch.cuda.get_device_name(0).lower():  # AMD GCN architecture
-                ROCM_AVAILABLE = True
-        except Exception:
-            pass
-
 except ImportError:
     TORCH_AVAILABLE = False
     MPS_AVAILABLE = False
     TORCH_CUDA_AVAILABLE = False
-    ROCM_AVAILABLE = False
     torch = None
     F = None
 
@@ -106,9 +93,6 @@ ONNXRUNTIME_CUDA_AVAILABLE = ONNXRUNTIME_AVAILABLE and any(
 )
 ONNXRUNTIME_COREML_AVAILABLE = ONNXRUNTIME_AVAILABLE and (
     "CoreMLExecutionProvider" in ONNXRUNTIME_PROVIDERS
-)
-ONNXRUNTIME_ROCM_AVAILABLE = ONNXRUNTIME_AVAILABLE and (
-    "ROCMExecutionProvider" in ONNXRUNTIME_PROVIDERS
 )
 
 
@@ -188,13 +172,7 @@ def _collect_device_details(info: dict) -> None:
         _safe_assign(
             info, "torch_cuda_device_name", lambda: torch.cuda.get_device_name(0)
         )
-
-        if ROCM_AVAILABLE:
-            if hasattr(torch.version, "hip"):
-                _safe_assign(info, "rocm_version", lambda: torch.version.hip)
-            info["backend"] = "ROCm (AMD GPU)"
-        else:
-            info["backend"] = "CUDA (NVIDIA GPU)"
+        info["backend"] = "CUDA (NVIDIA GPU)"
 
 
 def get_device_info() -> object:
@@ -207,7 +185,6 @@ def get_device_info() -> object:
     info = {
         "cuda_available": CUDA_AVAILABLE,
         "mps_available": MPS_AVAILABLE,
-        "rocm_available": ROCM_AVAILABLE,
         "torch_available": TORCH_AVAILABLE,
         "torch_cuda_available": TORCH_CUDA_AVAILABLE,
         "tensorrt_available": TENSORRT_AVAILABLE,
@@ -216,7 +193,6 @@ def get_device_info() -> object:
         "onnxruntime_cpu_available": ONNXRUNTIME_CPU_AVAILABLE,
         "onnxruntime_cuda_available": ONNXRUNTIME_CUDA_AVAILABLE,
         "onnxruntime_coreml_available": ONNXRUNTIME_COREML_AVAILABLE,
-        "onnxruntime_rocm_available": ONNXRUNTIME_ROCM_AVAILABLE,
         "sleap_nn_export_available": SLEAP_NN_EXPORT_AVAILABLE,
         "sleap_runtime_onnx_available": SLEAP_RUNTIME_ONNX_AVAILABLE,
         "sleap_runtime_tensorrt_available": SLEAP_RUNTIME_TENSORRT_AVAILABLE,
@@ -251,12 +227,7 @@ def _torch_cuda_log_details(info: dict) -> list[str]:
     details = []
     if "torch_cuda_device_name" in info:
         details.append(f"Device: {info['torch_cuda_device_name']}")
-    if info.get("rocm_available"):
-        details.append("Backend: ROCm (AMD GPU)")
-        if "rocm_version" in info:
-            details.append(f"ROCm Version: {info['rocm_version']}")
-    else:
-        details.append("Backend: CUDA (NVIDIA GPU)")
+    details.append("Backend: CUDA (NVIDIA GPU)")
     return details
 
 
@@ -343,17 +314,13 @@ def _add_linux_pose_runtime_options(
 ) -> None:
     _append_runtime_option(options, "CPU", "cpu")
 
-    if TORCH_CUDA_AVAILABLE and not ROCM_AVAILABLE:
+    if TORCH_CUDA_AVAILABLE:
         _append_runtime_option(options, "CUDA", "cuda")
-    if ROCM_AVAILABLE:
-        _append_runtime_option(options, "ROCm", "rocm")
 
     if supports_onnx:
         _append_runtime_option(options, "ONNX (CPU)", "onnx_cpu")
-        if ONNXRUNTIME_CUDA_AVAILABLE and TORCH_CUDA_AVAILABLE and not ROCM_AVAILABLE:
+        if ONNXRUNTIME_CUDA_AVAILABLE and TORCH_CUDA_AVAILABLE:
             _append_runtime_option(options, "ONNX (CUDA)", "onnx_cuda")
-        if ONNXRUNTIME_ROCM_AVAILABLE and ROCM_AVAILABLE:
-            _append_runtime_option(options, "ONNX (ROCm)", "onnx_rocm")
 
     if supports_tensorrt and cuda_like:
         _append_runtime_option(options, "TensorRT (CUDA)", "tensorrt_cuda")
@@ -408,7 +375,7 @@ def get_pose_runtime_options(backend_family: str = "yolo"):
 
     Values are normalized ids consumed by runtime_api, e.g.:
     - auto
-    - cpu / mps / cuda / rocm
+    - cpu / mps / cuda
     - onnx_coreml / onnx_cpu / onnx_cuda
     - tensorrt_cuda
     """
@@ -445,7 +412,6 @@ __all__ = [
     # Flags
     "CUDA_AVAILABLE",
     "MPS_AVAILABLE",
-    "ROCM_AVAILABLE",
     "TORCH_CUDA_AVAILABLE",
     "CUPY_AVAILABLE",
     "TORCH_AVAILABLE",
@@ -455,7 +421,6 @@ __all__ = [
     "ONNXRUNTIME_CPU_AVAILABLE",
     "ONNXRUNTIME_CUDA_AVAILABLE",
     "ONNXRUNTIME_COREML_AVAILABLE",
-    "ONNXRUNTIME_ROCM_AVAILABLE",
     "SLEAP_NN_EXPORT_AVAILABLE",
     "SLEAP_RUNTIME_ONNX_AVAILABLE",
     "SLEAP_RUNTIME_TENSORRT_AVAILABLE",

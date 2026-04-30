@@ -5,6 +5,7 @@ acceleration and head-tail orientation classification.
 """
 
 import logging
+import time
 from pathlib import Path
 
 import cv2
@@ -14,6 +15,12 @@ from ._obb_geometry import OBBGeometryMixin
 from ._runtime_artifacts import RuntimeArtifactMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _empty_batched_detection_result(return_raw: bool):
+    if return_raw:
+        return ([], [], [], [], [], [], [], [], None)
+    return ([], [], [], [], [])
 
 
 class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
@@ -30,6 +37,9 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         self._onnx_predict_device = None
         self.obb_predict_device = None
         self.detect_predict_device = None
+        self._direct_detect_executor = (
+            None  # Direct GPU executor for sequential stage-1
+        )
         self.device = self._detect_device()
         self.use_tensorrt = False
         self.use_onnx = False
@@ -97,6 +107,20 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
     # Model loading
     # ------------------------------------------------------------------
 
+    def _current_obb_mode(self) -> str:
+        """Return the active OBB mode even for partially initialized instances."""
+        mode = (
+            str(
+                getattr(self, "obb_mode", self.params.get("YOLO_OBB_MODE", "direct"))
+                or "direct"
+            )
+            .strip()
+            .lower()
+        )
+        if mode not in {"direct", "sequential"}:
+            return "direct"
+        return mode
+
     def _load_model(self):
         """Load the YOLO OBB model with optional TensorRT optimization."""
         try:
@@ -158,6 +182,16 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 logger.info(
                     f"YOLO OBB model loaded successfully: {model_path_str} on device: {self.device}"
                 )
+                # Enable direct CUDA executor to ensure auto=False square
+                # letterboxing (matches TRT/ONNX paths for non-square frames).
+                if self.device.startswith("cuda"):
+                    _ov = getattr(self.model, "overrides", {}) or {}
+                    _pt_imgsz = _ov.get("imgsz") or self._resolve_onnx_imgsz()
+                    self._maybe_enable_direct_cuda_obb_executor(
+                        self.model,
+                        int(_pt_imgsz),
+                        class_names=getattr(self.model, "names", None),
+                    )
                 return
             except Exception as e:
                 logger.error(f"Failed to load YOLO model '{model_path_str}': {e}")
@@ -184,6 +218,18 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             logger.info(
                 f"YOLO OBB model loaded successfully from {model_path} on device: {self.device}"
             )
+            # Enable direct CUDA executor to ensure auto=False square
+            # letterboxing (matches TRT/ONNX paths for non-square frames).
+            if self.device.startswith("cuda"):
+                _ov = getattr(self.model, "overrides", {}) or {}
+                _pt_imgsz = _ov.get("imgsz") or self._resolve_onnx_imgsz(
+                    model_path=model_path
+                )
+                self._maybe_enable_direct_cuda_obb_executor(
+                    self.model,
+                    int(_pt_imgsz),
+                    class_names=getattr(self.model, "names", None),
+                )
         except Exception as e:
             logger.error(f"Failed to load YOLO model from '{model_path}': {e}")
             raise
@@ -232,14 +278,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         return model, predict_device
 
     def _load_headtail_model(self, model_path_str: str):
-        """Load optional head-tail model via HeadTailAnalyzer.
-
-        Tiny / classkit_tiny checkpoints are loaded directly by
-        HeadTailAnalyzer.  YOLO classify models are loaded through
-        ``_load_model_for_task`` (which handles ONNX / TensorRT export
-        and explicit device placement) and then injected via
-        ``HeadTailAnalyzer.from_components``.
-        """
+        """Load optional head-tail model via HeadTailAnalyzer."""
         from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
         ref_ar = float(self._advanced_config_value("reference_aspect_ratio", 2.0))
@@ -247,58 +286,39 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             self._advanced_config_value("yolo_headtail_canonical_margin", 1.3)
         )
         conf_threshold = float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.50))
+        batch_size = max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64)))
+        headtail_runtime = str(
+            self.params.get(
+                "HEADTAIL_COMPUTE_RUNTIME",
+                self.params.get("COMPUTE_RUNTIME", self.device),
+            )
+            or self.device
+        )
 
-        # Try tiny / classkit_tiny first (inherent to HeadTailAnalyzer)
         analyzer = HeadTailAnalyzer(
             model_path=model_path_str,
-            device=str(self.device),
+            compute_runtime=headtail_runtime,
             conf_threshold=conf_threshold,
+            batch_size=batch_size,
             reference_aspect_ratio=ref_ar,
             canonical_margin=margin,
         )
-        if analyzer.is_available:
-            # Validate class names strictly for engine context
-            if analyzer.class_names:
-                HeadTailAnalyzer._validate_class_names(
-                    analyzer.class_names,
-                    strict=True,
-                    source=f"head-tail checkpoint {Path(model_path_str).name}",
-                )
-            self._headtail_analyzer = analyzer
-            logger.info(
-                "Loaded %s head-tail classifier from %s.",
-                analyzer.backend,
-                Path(model_path_str).name,
+        if analyzer.class_names:
+            HeadTailAnalyzer._validate_class_names(
+                analyzer.class_names,
+                strict=True,
+                source=f"head-tail checkpoint {Path(model_path_str).name}",
             )
-            return
-
-        # Tiny loading failed — try YOLO classify via engine's runtime loader
-        model, predict_device = self._load_model_for_task(
-            model_path_str, task="classify"
-        )
-        model_names = getattr(model, "names", None)
-        if model_names is None:
-            model_names = getattr(getattr(model, "model", None), "names", None)
-        validated_names = HeadTailAnalyzer._validate_class_names(
-            model_names,
-            strict=True,
-            source=f"head-tail model {Path(model_path_str).name}",
-        )
-        self._headtail_analyzer = HeadTailAnalyzer.from_components(
-            model=model,
-            backend="yolo",
-            class_names=validated_names,
-            input_size=None,
-            device=str(self.device),
-            conf_threshold=conf_threshold,
-            reference_aspect_ratio=ref_ar,
-            canonical_margin=margin,
-            predict_device=str(predict_device) if predict_device is not None else None,
+        self._headtail_analyzer = analyzer
+        logger.info(
+            "Loaded %s head-tail classifier from %s.",
+            analyzer.backend,
+            Path(model_path_str).name,
         )
 
     def _load_aux_models(self):
         """Load optional sequential + head-tail models."""
-        if self.obb_mode == "sequential":
+        if self._current_obb_mode() == "sequential":
             if not self.detect_model_path:
                 raise ValueError(
                     "Sequential YOLO OBB mode requires YOLO_DETECT_MODEL_PATH."
@@ -307,6 +327,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 self.detect_model_path, task="detect"
             )
             logger.info("YOLO detect model loaded for sequential mode.")
+            self._maybe_enable_direct_detect_executor_from_model()
 
         if self.headtail_model_path:
             self._load_headtail_model(self.headtail_model_path)
@@ -319,6 +340,42 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                     )
                 else:
                     logger.info("YOLO head-tail classify model loaded.")
+
+    def _maybe_enable_direct_detect_executor_from_model(self) -> None:
+        """Enable a direct ONNX/TRT detect executor from the loaded detect model.
+
+        Reads the runtime artifact path attached to ``self.detect_model`` by
+        :meth:`_load_model_for_task` / :meth:`_prepare_runtime_artifact_for_task`
+        and delegates to :meth:`_maybe_enable_direct_detect_executor`.  A no-op
+        when the detect model is a plain ``.pt`` file (no runtime artifact) or
+        when the device is not CUDA.
+        """
+        self._direct_detect_executor = None
+        if self.detect_model is None:
+            return
+        artifact_path = getattr(self.detect_model, "_hydra_runtime_artifact_path", None)
+        if not artifact_path:
+            return
+        path = Path(str(artifact_path))
+        suffix = path.suffix.lower()
+        if suffix == ".onnx":
+            runtime = "onnx"
+        elif suffix in {".engine", ".trt"}:
+            runtime = "tensorrt"
+        else:
+            return
+        # Use the detect-specific ONNX imgsz when explicitly configured;
+        # otherwise fall back to reading from ONNX model metadata.
+        seq_detect_imgsz = int(self.params.get("YOLO_SEQ_DETECT_IMGSZ", 0))
+        if seq_detect_imgsz <= 0:
+            seq_detect_imgsz = self._resolve_onnx_imgsz(model_path=path)
+        class_names = getattr(self.detect_model, "names", None)
+        self._maybe_enable_direct_detect_executor(
+            runtime,
+            path,
+            seq_detect_imgsz,
+            class_names=class_names,
+        )
 
     # ------------------------------------------------------------------
     # Inference helpers
@@ -382,6 +439,30 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         self, source, target_classes, raw_conf_floor, max_det, imgsz=None
     ):
         """Run OBB model prediction with backend-specific constraints."""
+        execution_mode = self._direct_obb_execution_mode()
+        direct_executor = None
+        if execution_mode != "wrapper":
+            direct_executor = getattr(self, "_direct_obb_executor", None)
+        if direct_executor is not None:
+            direct_source = source if isinstance(source, list) else [source]
+            try:
+                direct_results = direct_executor.predict(
+                    direct_source,
+                    conf_thres=raw_conf_floor,
+                    classes=target_classes,
+                    max_det=max_det,
+                )
+                if not isinstance(source, list):
+                    return direct_results[:1]
+                return direct_results
+            except Exception as exc:
+                logger.warning(
+                    "Direct OBB runtime execution failed for %s; falling back to Ultralytics wrapper: %s",
+                    getattr(self, "device", "unknown"),
+                    exc,
+                )
+                self._direct_obb_executor = None
+
         fixed_batch = self._runtime_fixed_batch_size()
         # obb_predict_device is None when the model was placed via .to(device).
         # Always fall back to self.device so the explicit device= argument is always
@@ -512,12 +593,157 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         single-frame and multi-frame paths share the same logic.
         """
         results = self._compute_headtail_hints_cross_frame(
-            [frame], [obb_corners_list], profiler=profiler
+            [frame],
+            [obb_corners_list],
+            profiler=profiler,
         )
         return results[0]
 
+    def _should_compute_canonical_affines(self):
+        """Return whether native-scale canonical affines are needed downstream."""
+        params = self.params or {}
+        return bool(
+            params.get("ENABLE_POSE_EXTRACTOR", False)
+            or params.get("ENABLE_INDIVIDUAL_DATASET", False)
+            or params.get("ENABLE_INDIVIDUAL_IMAGE_SAVE", False)
+            or params.get("EXPORT_FINAL_CANONICAL_IMAGES", False)
+            or params.get("FINAL_MEDIA_EXPORT_VIDEOS_ENABLED", False)
+            or params.get("GENERATE_ORIENTED_TRACK_VIDEOS", False)
+        )
+
+    def _select_headtail_candidate_indices(
+        self,
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        *,
+        roi_mask=None,
+    ):
+        """Return raw detection indices worth sending through head-tail.
+
+        Realtime tracking already runs the full detector filter once later in the
+        worker after raw detections are returned. This selector intentionally uses
+        only the cheap vectorized gates (confidence, size, aspect ratio, ROI, and
+        head-tail confidence floor) so we do not repeat OBB NMS/IOU suppression
+        just to choose head-tail candidates.
+        """
+        if not raw_meas:
+            return []
+        conf_threshold = float(self.params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
+        detect_conf_threshold = float(
+            self.params.get(
+                "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD",
+                self.params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25),
+            )
+        )
+        meas_arr = np.ascontiguousarray(np.asarray(raw_meas, dtype=np.float32))
+        sizes_arr = np.ascontiguousarray(np.asarray(raw_sizes, dtype=np.float32))
+        shapes_arr = np.ascontiguousarray(np.asarray(raw_shapes, dtype=np.float32))
+        conf_arr = np.ascontiguousarray(np.asarray(raw_confidences, dtype=np.float32))
+
+        n = min(len(meas_arr), len(sizes_arr), len(shapes_arr), len(conf_arr))
+        if raw_obb_corners:
+            n = min(n, len(raw_obb_corners))
+        if n <= 0:
+            return []
+
+        meas_arr = meas_arr[:n]
+        sizes_arr = sizes_arr[:n]
+        shapes_arr = shapes_arr[:n]
+        conf_arr = conf_arr[:n]
+
+        keep_mask = conf_arr >= conf_threshold
+
+        if self.params.get("ENABLE_SIZE_FILTERING", False):
+            min_size = float(self.params.get("MIN_OBJECT_SIZE", 0))
+            max_size = float(self.params.get("MAX_OBJECT_SIZE", float("inf")))
+            ellipse_area_arr = shapes_arr[:, 0] if shapes_arr.ndim == 2 else sizes_arr
+            keep_mask &= (ellipse_area_arr >= min_size) & (ellipse_area_arr <= max_size)
+
+        if self._advanced_config_value("enable_aspect_ratio_filtering", False):
+            ref_ar = float(self._advanced_config_value("reference_aspect_ratio", 2.0))
+            min_ar_mult = float(
+                self._advanced_config_value("min_aspect_ratio_multiplier", 0.5)
+            )
+            max_ar_mult = float(
+                self._advanced_config_value("max_aspect_ratio_multiplier", 2.0)
+            )
+            min_ar = ref_ar * min_ar_mult
+            max_ar = ref_ar * max_ar_mult
+            ar_arr = (
+                shapes_arr[:, 1] if shapes_arr.ndim == 2 else np.ones(len(sizes_arr))
+            )
+            keep_mask &= (ar_arr >= min_ar) & (ar_arr <= max_ar)
+
+        if roi_mask is not None and len(meas_arr) > 0:
+            h, w = roi_mask.shape[:2]
+            cx = meas_arr[:, 0].astype(np.int32)
+            cy = meas_arr[:, 1].astype(np.int32)
+            in_bounds = (cx >= 0) & (cx < w) & (cy >= 0) & (cy < h)
+            cx_safe = np.clip(cx, 0, max(0, w - 1))
+            cy_safe = np.clip(cy, 0, max(0, h - 1))
+            in_roi = roi_mask[cy_safe, cx_safe] > 0
+            keep_mask &= in_bounds & in_roi
+
+        if detect_conf_threshold > 0.0:
+            keep_mask &= conf_arr >= detect_conf_threshold
+
+        return [int(idx) for idx in np.flatnonzero(keep_mask)]
+
+    def _compute_headtail_hints_for_indices(
+        self,
+        frame,
+        raw_obb_corners,
+        candidate_indices,
+        *,
+        include_canonical_affines=True,
+        profiler=None,
+    ):
+        """Run head-tail inference on a subset of detections and scatter back."""
+        total = len(raw_obb_corners)
+        heading_hints = [float("nan")] * total
+        heading_confidences = [0.0] * total
+        directed_mask = [0] * total
+        canonical_affines = [None] * total if include_canonical_affines else None
+
+        if not candidate_indices:
+            return heading_hints, heading_confidences, directed_mask, canonical_affines
+
+        selected_corners = [raw_obb_corners[idx] for idx in candidate_indices]
+        (
+            selected_hints,
+            selected_confidences,
+            selected_directed,
+            selected_affines,
+        ) = self._compute_headtail_hints(
+            frame,
+            selected_corners,
+            profiler=profiler,
+        )
+
+        for slot, raw_idx in enumerate(candidate_indices):
+            if raw_idx >= total:
+                continue
+            if slot < len(selected_hints):
+                heading_hints[raw_idx] = selected_hints[slot]
+            if slot < len(selected_confidences):
+                heading_confidences[raw_idx] = float(selected_confidences[slot])
+            if slot < len(selected_directed):
+                directed_mask[raw_idx] = int(selected_directed[slot])
+            if canonical_affines is not None and slot < len(selected_affines):
+                canonical_affines[raw_idx] = selected_affines[slot]
+
+        return heading_hints, heading_confidences, directed_mask, canonical_affines
+
     def _compute_headtail_hints_cross_frame(
-        self, frames, per_frame_obb_corners, profiler=None
+        self,
+        frames,
+        per_frame_obb_corners,
+        *,
+        include_canonical_affines=True,
+        profiler=None,
     ):
         """Batch head-tail classification across multiple frames in one GPU call.
 
@@ -543,7 +769,12 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         for corners in per_frame_obb_corners:
             n = len(corners)
             results_per_frame.append(
-                ([float("nan")] * n, [0.0] * n, [0] * n, [None] * n)
+                (
+                    [float("nan")] * n,
+                    [0.0] * n,
+                    [0] * n,
+                    ([None] * n if include_canonical_affines else None),
+                )
             )
 
         analyzer = self._headtail_analyzer
@@ -551,9 +782,28 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             return results_per_frame
 
         # ----- Phases 1-3: delegate to HeadTailAnalyzer --------------------
-        ht_results = analyzer.analyze_crops(
-            frames, per_frame_obb_corners, profiler=profiler
-        )
+        # ----- Phases 1-3: delegate to HeadTailAnalyzer --------------------
+        # Dispatch to the GPU-native path when frames are CUDA tensors; fall
+        # back to the CPU numpy path otherwise.
+        try:
+            import torch as _torch
+
+            _cuda_frames = (
+                bool(frames)
+                and isinstance(frames[0], _torch.Tensor)
+                and frames[0].is_cuda
+            )
+        except Exception:
+            _cuda_frames = False
+
+        if _cuda_frames:
+            ht_results = analyzer.analyze_crops_cuda(
+                frames, per_frame_obb_corners, profiler=profiler, input_is_bgr=False
+            )
+        else:
+            ht_results = analyzer.analyze_crops(
+                frames, per_frame_obb_corners, profiler=profiler
+            )
 
         # Unpack (heading, confidence, directed_flag) tuples into result arrays
         for fi in range(n_frames):
@@ -561,6 +811,9 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 results_per_frame[fi][0][di] = heading
                 results_per_frame[fi][1][di] = float(conf)
                 results_per_frame[fi][2][di] = directed
+
+        if not include_canonical_affines:
+            return results_per_frame
 
         # ----- Phase 4: replace stored affines with native-scale variants --
         # Head-tail used a fixed-size canvas (e.g. 128px) for batched GPU
@@ -617,6 +870,110 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         return results_per_frame
 
     # ------------------------------------------------------------------
+    # Head-tail pre-filter helpers
+    # ------------------------------------------------------------------
+
+    def _prefilter_headtail_per_frame(self, per_frame_raw, roi_mask_per_frame=None):
+        """Select candidate detection indices for head-tail inference per frame.
+
+        Applies the same cheap gates as ``_select_headtail_candidate_indices``
+        (conf threshold, size, aspect ratio, ROI) to each frame's raw detections
+        *before* passing corners to ``_compute_headtail_hints_cross_frame``.
+        This avoids running the GPU classifier on detections that will be
+        discarded by ``filter_raw_detections`` afterwards.
+
+        Args:
+            per_frame_raw: List of per-frame raw tuples
+                ``(meas, sizes, shapes, confs, corners)`` or ``None``.
+            roi_mask_per_frame: Optional list of per-frame ROI masks.
+
+        Returns:
+            Tuple of:
+              - per_frame_candidate_indices: List[List[int]] — surviving raw
+                indices per frame.
+              - per_frame_candidate_corners: List[List[np.ndarray]] — the
+                corresponding OBB corner arrays (compact, for HT inference).
+        """
+        per_frame_candidate_indices = []
+        per_frame_candidate_corners = []
+        for fi, raw in enumerate(per_frame_raw):
+            if raw is None:
+                per_frame_candidate_indices.append([])
+                per_frame_candidate_corners.append([])
+                continue
+            raw_meas, raw_sizes, raw_shapes, raw_confs, raw_corners = raw
+            roi = (
+                roi_mask_per_frame[fi]
+                if roi_mask_per_frame is not None and fi < len(roi_mask_per_frame)
+                else None
+            )
+            indices = self._select_headtail_candidate_indices(
+                raw_meas, raw_sizes, raw_shapes, raw_confs, raw_corners, roi_mask=roi
+            )
+            per_frame_candidate_indices.append(indices)
+            per_frame_candidate_corners.append([raw_corners[i] for i in indices])
+        return per_frame_candidate_indices, per_frame_candidate_corners
+
+    def _scatter_headtail_to_raw(
+        self,
+        ht_compact,
+        per_frame_n,
+        per_frame_candidate_indices,
+        include_affines,
+    ):
+        """Scatter compact head-tail results back to full raw-detection lists.
+
+        ``_compute_headtail_hints_cross_frame`` returns results indexed to the
+        *compact* candidate subset.  This method expands them to the original
+        raw-detection count, inserting ``nan``/``0.0``/``0``/``None`` for
+        non-candidate slots so the existing cache and worker consumption code
+        is unchanged.
+
+        Args:
+            ht_compact: Output of ``_compute_headtail_hints_cross_frame`` on
+                the compact corner lists — indexed to candidates.
+            per_frame_n: List[int] — number of raw detections per frame.
+            per_frame_candidate_indices: List[List[int]] — raw indices that
+                were passed to HT inference (from ``_prefilter_headtail_per_frame``).
+            include_affines: bool — whether affine arrays were requested.
+
+        Returns:
+            List of per-frame ``(hints, confs, directed, affines)`` tuples
+            with the same structure as ``_compute_headtail_hints_cross_frame``.
+        """
+        results = []
+        for fi, (n, indices) in enumerate(
+            zip(per_frame_n, per_frame_candidate_indices)
+        ):
+            hints = [float("nan")] * n
+            confs = [0.0] * n
+            directed = [0] * n
+            affines = ([None] * n) if include_affines else None
+
+            if ht_compact is not None and fi < len(ht_compact) and indices:
+                compact_hints, compact_confs, compact_directed, compact_affines = (
+                    ht_compact[fi]
+                )
+                for slot, raw_idx in enumerate(indices):
+                    if raw_idx >= n:
+                        continue
+                    if slot < len(compact_hints):
+                        hints[raw_idx] = compact_hints[slot]
+                    if slot < len(compact_confs):
+                        confs[raw_idx] = float(compact_confs[slot])
+                    if slot < len(compact_directed):
+                        directed[raw_idx] = int(compact_directed[slot])
+                    if (
+                        affines is not None
+                        and compact_affines is not None
+                        and slot < len(compact_affines)
+                    ):
+                        affines[raw_idx] = compact_affines[slot]
+
+            results.append((hints, confs, directed, affines))
+        return results
+
+    # ------------------------------------------------------------------
     # Raw detection runners (direct / sequential)
     # ------------------------------------------------------------------
 
@@ -627,10 +984,18 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         raw_conf_floor,
         max_det,
         return_class_ids: bool = False,
+        profiler=None,
     ):
+        model_started = time.perf_counter()
         results = self._predict_obb_results(
             frame, target_classes, raw_conf_floor, max_det
         )
+        if profiler is not None:
+            profiler.add_phase_time(
+                "yolo_obb_model_execute",
+                time.perf_counter() - model_started,
+                work_units=1,
+            )
         if len(results) == 0:
             if return_class_ids:
                 return [], [], [], [], [], [], None
@@ -640,6 +1005,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             if return_class_ids:
                 return [], [], [], [], [], [], result0
             return [], [], [], [], [], result0
+        extract_started = time.perf_counter()
         if return_class_ids:
             (
                 raw_meas,
@@ -649,6 +1015,12 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 raw_obb_corners,
                 raw_class_ids,
             ) = self._extract_raw_detections(result0.obb, return_class_ids=True)
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_extract_raw",
+                    time.perf_counter() - extract_started,
+                    work_units=1,
+                )
             return (
                 raw_meas,
                 raw_sizes,
@@ -678,6 +1050,27 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             self.params.get("YOLO_SEQ_DETECT_CONF_THRESHOLD", raw_conf_floor)
         )
         seq_detect_conf = max(1e-4, seq_detect_conf)
+
+        # Fast path: bypass the Ultralytics wrapper entirely when a direct
+        # ONNX/TRT detect executor is available.  This handles both plain numpy
+        # BGR frames (standard path) and CUDA RGB tensors from NVDec.
+        direct_exec = getattr(self, "_direct_detect_executor", None)
+        if direct_exec is not None:
+            source = list(frame) if isinstance(frame, (list, tuple)) else [frame]
+            try:
+                return direct_exec.predict(
+                    source,
+                    conf_thres=seq_detect_conf,
+                    classes=detect_target_classes,
+                    max_det=max_det,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Direct detect executor failed; falling back to Ultralytics wrapper: %s",
+                    exc,
+                )
+                self._direct_detect_executor = None
+
         detect_kwargs = dict(
             source=frame,
             conf=seq_detect_conf,
@@ -778,6 +1171,107 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             crop_offsets.append(offset)
         return crops, crop_offsets, crop_original_sizes
 
+    def _seq_build_gpu_crops(self, frame_cuda, xyxy_cpu, order, max_det, stage2_imgsz):
+        """Build stage-2 crops entirely on the GPU from a CUDA frame.
+
+        Replicates the padding/square/clip logic of :meth:`_build_sequential_crop`
+        but operates on a CUDA HWC uint8 RGB tensor (as output by NVDec) and
+        returns crops already resized to ``stage2_imgsz × stage2_imgsz``.  No
+        CPU↔GPU copy is performed: slicing and bilinear resize run on device.
+
+        Parameters
+        ----------
+        frame_cuda:
+            CUDA ``(H, W, 3)`` uint8 RGB tensor decoded by PyNvVideoCodec.
+        xyxy_cpu:
+            Float32 numpy array ``[N, 4]`` of stage-1 xyxy detections in
+            original-frame pixel coordinates (already on CPU).
+        order:
+            1-D index array ordering detections by descending confidence, as
+            returned by ``np.argsort(conf)[::-1]``.
+        max_det:
+            Maximum number of crops to produce.
+        stage2_imgsz:
+            Target square crop side length (pixels) for stage-2 OBB input.
+
+        Returns
+        -------
+        crops : list[torch.Tensor]
+            CUDA ``(stage2_imgsz, stage2_imgsz, 3)`` uint8 tensors, one per detection.
+        offsets : list[tuple[float, float]]
+            ``(x0, y0)`` top-left pixel offset of each crop in the original frame.
+        original_sizes : list[tuple[int, int]]
+            ``(w, h)`` of each crop *before* resize, used for coordinate scaling in
+            :meth:`_seq_accumulate_crop_detections`.
+        """
+        import torch
+        import torch.nn.functional as F
+
+        H = int(frame_cuda.shape[0])
+        W = int(frame_cuda.shape[1])
+
+        pad_ratio = float(self.params.get("YOLO_SEQ_CROP_PAD_RATIO", 0.15))
+        min_crop_size = float(self.params.get("YOLO_SEQ_MIN_CROP_SIZE_PX", 64))
+        enforce_square = bool(self.params.get("YOLO_SEQ_ENFORCE_SQUARE_CROP", True))
+
+        crops = []
+        offsets = []
+        original_sizes = []
+
+        for idx in order[:max_det]:
+            x1, y1, x2, y2 = [float(v) for v in xyxy_cpu[idx]]
+            bw = max(1.0, x2 - x1)
+            bh = max(1.0, y2 - y1)
+            cx = (x1 + x2) * 0.5
+            cy = (y1 + y2) * 0.5
+
+            crop_w = bw * (1.0 + 2.0 * max(0.0, pad_ratio))
+            crop_h = bh * (1.0 + 2.0 * max(0.0, pad_ratio))
+            if enforce_square:
+                side = max(crop_w, crop_h)
+                crop_w = side
+                crop_h = side
+            crop_w = max(min_crop_size, crop_w)
+            crop_h = max(min_crop_size, crop_h)
+
+            xx1 = cx - crop_w * 0.5
+            yy1 = cy - crop_h * 0.5
+            xx2 = cx + crop_w * 0.5
+            yy2 = cy + crop_h * 0.5
+
+            # Replicate _clip_crop_box integer clipping.
+            import math
+
+            xi1 = int(math.floor(max(0.0, xx1)))
+            yi1 = int(math.floor(max(0.0, yy1)))
+            xi2 = int(math.ceil(min(float(W), xx2)))
+            yi2 = int(math.ceil(min(float(H), yy2)))
+            if xi2 <= xi1 or yi2 <= yi1:
+                continue
+
+            # GPU tensor slice — shares device memory until resized (safe: NVDec
+            # buffer was already cloned before this call).
+            crop = frame_cuda[yi1:yi2, xi1:xi2, :]
+            orig_h = yi2 - yi1
+            orig_w = xi2 - xi1
+
+            if orig_h != stage2_imgsz or orig_w != stage2_imgsz:
+                # HWC→NCHW float32, bilinear resize, back to HWC uint8.
+                t = crop.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
+                t = F.interpolate(
+                    t,
+                    size=(stage2_imgsz, stage2_imgsz),
+                    mode="bilinear",
+                    align_corners=False,
+                )
+                crop = t.squeeze(0).permute(1, 2, 0).to(torch.uint8)
+
+            crops.append(crop)
+            offsets.append((float(xi1), float(yi1)))
+            original_sizes.append((orig_w, orig_h))
+
+        return crops, offsets, original_sizes
+
     def _seq_resize_crops_for_stage2(self, crops):
         stage2_imgsz = int(self.params.get("YOLO_SEQ_STAGE2_IMGSZ", 160))
         if stage2_imgsz <= 0:
@@ -807,8 +1301,25 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         while p2 < n_real:
             p2 *= 2
         if p2 > n_real:
-            pad_img = np.zeros((predict_imgsz, predict_imgsz, 3), dtype=np.uint8)
-            crops_for_stage2 = list(crops_for_stage2) + [pad_img] * (p2 - n_real)
+            # Use a CUDA zero tensor when the crops are already on device so that
+            # the stage-2 OBB executor receives a homogeneous list.
+            first_crop = crops_for_stage2[0]
+            try:
+                import torch
+
+                if isinstance(first_crop, torch.Tensor) and first_crop.is_cuda:
+                    pad_item = torch.zeros(
+                        (predict_imgsz, predict_imgsz, 3),
+                        dtype=torch.uint8,
+                        device=first_crop.device,
+                    )
+                else:
+                    pad_item = np.zeros(
+                        (predict_imgsz, predict_imgsz, 3), dtype=np.uint8
+                    )
+            except Exception:
+                pad_item = np.zeros((predict_imgsz, predict_imgsz, 3), dtype=np.uint8)
+            crops_for_stage2 = list(crops_for_stage2) + [pad_item] * (p2 - n_real)
         return crops_for_stage2, n_real
 
     def _seq_individual_batch_size(self) -> int | None:
@@ -1041,20 +1552,42 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         if len(order) > max_det:
             order = order[:max_det]
 
+        # Decide whether to build crops on GPU (NVDec frame + direct OBB executor)
+        # or on CPU (standard numpy path).
+        stage2_imgsz_cfg = int(self.params.get("YOLO_SEQ_STAGE2_IMGSZ", 160))
+        try:
+            import torch as _torch
+
+            _frame_is_cuda = (
+                isinstance(frame, _torch.Tensor)
+                and frame.is_cuda
+                and stage2_imgsz_cfg > 0
+                and getattr(self, "_direct_obb_executor", None) is not None
+            )
+        except Exception:
+            _frame_is_cuda = False
+
         if profiler is not None:
             profiler.phase_start("sequential_obb_crop")
-        crops, crop_offsets, crop_original_sizes = self._seq_build_crops(
-            frame, xyxy, order, max_det
-        )
+        if _frame_is_cuda:
+            crops, crop_offsets, crop_original_sizes = self._seq_build_gpu_crops(
+                frame, xyxy, order, max_det, stage2_imgsz_cfg
+            )
+            crops_for_stage2 = crops
+            predict_imgsz = stage2_imgsz_cfg
+        else:
+            crops, crop_offsets, crop_original_sizes = self._seq_build_crops(
+                frame, xyxy, order, max_det
+            )
+            crops_for_stage2, predict_imgsz = self._seq_resize_crops_for_stage2(crops)
         if profiler is not None:
-            profiler.phase_end("sequential_obb_crop", work_units=len(crops))
+            profiler.phase_end("sequential_obb_crop", work_units=len(crops_for_stage2))
 
-        if not crops:
+        if not crops_for_stage2:
             if return_class_ids:
                 return [], [], [], [], [], [], det0
             return [], [], [], [], [], det0
 
-        crops_for_stage2, predict_imgsz = self._seq_resize_crops_for_stage2(crops)
         n_real_crops = len(crops_for_stage2)
 
         if profiler is not None:
@@ -1133,8 +1666,10 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         raw_conf_floor = max(1e-4, float(p.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3)))
         max_det = self._raw_detection_cap()
 
+        if profiler is not None:
+            profiler.phase_start("yolo_obb_inference")
         try:
-            if self.obb_mode == "sequential":
+            if self._current_obb_mode() == "sequential":
                 (
                     raw_meas,
                     raw_sizes,
@@ -1162,12 +1697,16 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                     target_classes=target_classes,
                     raw_conf_floor=raw_conf_floor,
                     max_det=max_det,
+                    profiler=profiler,
                 )
         except Exception as e:
             logger.error(f"YOLO inference failed on frame {frame_count}: {e}")
             if return_raw:
                 return [], [], [], None, [], [], [], [], [], None
             return [], [], [], None, []
+        finally:
+            if profiler is not None:
+                profiler.phase_end("yolo_obb_inference")
 
         if not raw_meas:
             raw_heading_hints, raw_heading_confidences, raw_directed_mask = [], [], []
@@ -1186,8 +1725,30 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 )
             return [], [], [], yolo_results, []
 
-        raw_heading_hints, raw_heading_confidences, raw_directed_mask, _raw_affines = (
-            self._compute_headtail_hints(frame, raw_obb_corners, profiler=profiler)
+        include_canonical_affines = bool(
+            return_raw and self._should_compute_canonical_affines()
+        )
+        # Pre-filter: apply conf/size/AR/ROI gates before GPU classifier call,
+        # regardless of realtime mode.  This avoids classifying low-confidence
+        # raw detections that filter_raw_detections will discard afterwards.
+        candidate_indices = self._select_headtail_candidate_indices(
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+        )
+        (
+            raw_heading_hints,
+            raw_heading_confidences,
+            raw_directed_mask,
+            _raw_affines,
+        ) = self._compute_headtail_hints_for_indices(
+            frame,
+            raw_obb_corners,
+            candidate_indices,
+            include_canonical_affines=include_canonical_affines,
+            profiler=profiler,
         )
 
         if return_raw:
@@ -1248,6 +1809,24 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         raw_conf_floor = max(1e-4, float(p.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3)))
         max_det = self._raw_detection_cap()
 
+        # Determine whether to use the GPU crop path.  This is active when NVDec
+        # has decoded frames directly to CUDA tensors and both the detect *and* OBB
+        # direct executors are available — the entire sequential pipeline then stays
+        # on device without any CPU↔GPU copies for frame data.
+        stage2_imgsz_cfg = int(p.get("YOLO_SEQ_STAGE2_IMGSZ", 160))
+        try:
+            import torch as _torch
+
+            use_gpu_crops = (
+                stage2_imgsz_cfg > 0
+                and bool(frames)
+                and isinstance(frames[0], _torch.Tensor)
+                and frames[0].is_cuda
+                and getattr(self, "_direct_obb_executor", None) is not None
+            )
+        except Exception:
+            use_gpu_crops = False
+
         if profiler is not None:
             profiler.phase_start("yolo_seq_stage1_inference")
         try:
@@ -1297,9 +1876,14 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             order = np.argsort(det_conf)[::-1]
             if len(order) > max_det:
                 order = order[:max_det]
-            crops, crop_offsets, crop_original_sizes = self._seq_build_crops(
-                frames[idx], xyxy, order, max_det
-            )
+            if use_gpu_crops:
+                crops, crop_offsets, crop_original_sizes = self._seq_build_gpu_crops(
+                    frames[idx], xyxy, order, max_det, stage2_imgsz_cfg
+                )
+            else:
+                crops, crop_offsets, crop_original_sizes = self._seq_build_crops(
+                    frames[idx], xyxy, order, max_det
+                )
             for crop, crop_offset, crop_size in zip(
                 crops, crop_offsets, crop_original_sizes
             ):
@@ -1311,9 +1895,14 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             profiler.phase_end("sequential_obb_crop", work_units=len(all_crops))
 
         if all_crops:
-            crops_for_stage2, predict_imgsz = self._seq_resize_crops_for_stage2(
-                all_crops
-            )
+            if use_gpu_crops:
+                # GPU crops are already at stage2_imgsz — no CPU resize needed.
+                crops_for_stage2 = all_crops
+                predict_imgsz = stage2_imgsz_cfg
+            else:
+                crops_for_stage2, predict_imgsz = self._seq_resize_crops_for_stage2(
+                    all_crops
+                )
             if profiler is not None:
                 profiler.phase_start("sequential_obb_inference")
             stage2_results = self._seq_run_stage2_obb_batched(
@@ -1388,11 +1977,24 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             )
 
         if self._headtail_analyzer is not None and self._headtail_analyzer.is_available:
-            per_frame_corners = [
-                raw[4] if raw is not None else [] for raw in per_frame_raw
+            include_canonical_affines = bool(
+                return_raw and self._should_compute_canonical_affines()
+            )
+            # Pre-filter: only run HT on candidate detections, scatter back.
+            candidate_indices, candidate_corners = self._prefilter_headtail_per_frame(
+                per_frame_raw
+            )
+            ht_compact = self._compute_headtail_hints_cross_frame(
+                frames[:actual_frame_count],
+                candidate_corners,
+                include_canonical_affines=include_canonical_affines,
+                profiler=profiler,
+            )
+            per_frame_n = [
+                len(raw[0]) if raw is not None else 0 for raw in per_frame_raw
             ]
-            headtail_per_frame = self._compute_headtail_hints_cross_frame(
-                frames[:actual_frame_count], per_frame_corners, profiler=profiler
+            headtail_per_frame = self._scatter_headtail_to_raw(
+                ht_compact, per_frame_n, candidate_indices, include_canonical_affines
             )
         else:
             headtail_per_frame = None
@@ -1620,7 +2222,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         return_raw,
     ):
         if raw is None:
-            return ([], [], [], [], [])
+            return _empty_batched_detection_result(return_raw)
         raw_meas, raw_sizes, raw_shapes, raw_confidences, raw_obb_corners = raw
         if headtail_per_frame is not None:
             (
@@ -1697,16 +2299,20 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         """
         if self.model is None:
             logger.error("YOLO model not initialized")
-            return [([], [], [], [], []) for _ in frames]
+            return [_empty_batched_detection_result(return_raw) for _ in frames]
 
         p = self.params
         target_classes = p.get("YOLO_TARGET_CLASSES", None)
         raw_conf_floor = max(1e-4, float(p.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3)))
         max_det = self._raw_detection_cap()
 
+        # Clear per-batch timing from any previous call so detection_phase.py
+        # can always safely read self._batch_timings after this returns.
+        self._batch_timings: dict = {}
+
         # Sequential mode requires per-frame OBB processing because each frame
         # generates variable crop counts for the stage-2 OBB model.
-        if self.obb_mode == "sequential":
+        if self._current_obb_mode() == "sequential":
             return self._batched_sequential_mode(
                 frames, start_frame_idx, return_raw, progress_callback, profiler
             )
@@ -1720,11 +2326,31 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
 
         actual_frame_count = len(frames)
         fixed_batch_size, fixed_backend = self._resolve_fixed_batch_params()
+        _bt_obb_start = time.perf_counter()
 
         if profiler is not None:
             profiler.phase_start("yolo_obb_inference")
 
-        if fixed_batch_size is not None:
+        # When the direct executor is active, route through _predict_obb_results()
+        # which dispatches to the executor and handles its own chunking.  This path
+        # accepts both numpy frames (standard) and CUDA tensors (NVDec GPU-decode).
+        _direct_exec = getattr(self, "_direct_obb_executor", None)
+        if _direct_exec is not None:
+            execute_started = time.perf_counter()
+            results_batch = self._predict_obb_results(
+                list(frames[:actual_frame_count]),
+                target_classes,
+                raw_conf_floor,
+                max_det,
+            )
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_model_execute",
+                    time.perf_counter() - execute_started,
+                    work_units=actual_frame_count,
+                )
+        elif fixed_batch_size is not None:
+            execute_started = time.perf_counter()
             results_batch = self._run_fixed_batch_obb_inference(
                 frames,
                 actual_frame_count,
@@ -1734,35 +2360,83 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 raw_conf_floor,
                 max_det,
             )
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_model_execute",
+                    time.perf_counter() - execute_started,
+                    work_units=actual_frame_count,
+                )
         else:
             # Standard PyTorch inference - no chunking needed
+            execute_started = time.perf_counter()
             results_batch = self._run_standard_obb_batch_inference(
                 frames, start_frame_idx, target_classes, raw_conf_floor, max_det
             )
+            if profiler is not None:
+                profiler.add_phase_time(
+                    "yolo_obb_model_execute",
+                    time.perf_counter() - execute_started,
+                    work_units=actual_frame_count,
+                )
             if results_batch is None:
-                return [([], [], [], [], []) for _ in frames]
+                return [_empty_batched_detection_result(return_raw) for _ in frames]
 
         if profiler is not None:
             profiler.phase_end("yolo_obb_inference")
+        _bt_obb_s = time.perf_counter() - _bt_obb_start
 
         # ===================================================================
         # Post-process: extract raw detections, cross-frame head-tail, assemble
         # ===================================================================
 
         # Phase 1 — extract raw detections from each frame's OBB result
+        extract_started = time.perf_counter()
         per_frame_raw = self._extract_per_frame_raw(results_batch, actual_frame_count)
+        if profiler is not None:
+            profiler.add_phase_time(
+                "yolo_obb_extract_raw",
+                time.perf_counter() - extract_started,
+                work_units=actual_frame_count,
+            )
+        _bt_nms_s = time.perf_counter() - extract_started
 
         # Phase 2 — cross-frame head-tail classification (single GPU call
         # batching canonical crops from ALL frames together).
+        # _compute_headtail_hints_cross_frame dispatches to the GPU-native
+        # analyze_crops_cuda path when frames are CUDA tensors (NVDec), or to
+        # the CPU numpy analyze_crops path otherwise.
+        #
+        # Pre-filter: only run HT inference on detections that survive the
+        # application-level confidence/size/ROI gates, then scatter results
+        # back to the full raw-detection index space.  This avoids classifying
+        # the many low-confidence raw detections that will be discarded by
+        # filter_raw_detections afterwards.
+
+        _bt_ht_start = time.perf_counter()
+        _bt_n_ht_crops = 0
         if self._headtail_analyzer is not None and self._headtail_analyzer.is_available:
-            per_frame_corners = [
-                raw[4] if raw is not None else [] for raw in per_frame_raw
+            include_canonical_affines = bool(
+                return_raw and self._should_compute_canonical_affines()
+            )
+            candidate_indices, candidate_corners = self._prefilter_headtail_per_frame(
+                per_frame_raw
+            )
+            _bt_n_ht_crops = sum(len(c) for c in candidate_corners)
+            ht_compact = self._compute_headtail_hints_cross_frame(
+                frames[:actual_frame_count],
+                candidate_corners,
+                include_canonical_affines=include_canonical_affines,
+                profiler=profiler,
+            )
+            per_frame_n = [
+                len(raw[0]) if raw is not None else 0 for raw in per_frame_raw
             ]
-            headtail_per_frame = self._compute_headtail_hints_cross_frame(
-                frames[:actual_frame_count], per_frame_corners, profiler=profiler
+            headtail_per_frame = self._scatter_headtail_to_raw(
+                ht_compact, per_frame_n, candidate_indices, include_canonical_affines
             )
         else:
             headtail_per_frame = None
+        _bt_ht_s = time.perf_counter() - _bt_ht_start
 
         # Phase 3 — assemble final batch detections
         batch_detections = []
@@ -1779,6 +2453,13 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                     f"Processing batch frame {idx + 1}/{actual_frame_count}",
                 )
 
+        self._batch_timings = {
+            "obb_s": _bt_obb_s,
+            "nms_s": _bt_nms_s,
+            "ht_s": _bt_ht_s,
+            "n_ht_crops": _bt_n_ht_crops,
+            "n_frames": actual_frame_count,
+        }
         return batch_detections
 
     def apply_conservative_split(self, fg_mask, gray=None, background=None):

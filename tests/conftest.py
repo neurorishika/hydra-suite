@@ -10,3 +10,6 @@ if str(SRC_DIR) not in sys.path:
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+# Fixture helpers for classifier backend tests
+pytest_plugins = ["tests.test_classifier_fixtures"]

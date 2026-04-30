@@ -13,9 +13,13 @@ from hydra_suite.core.identity.properties.detected_cache import DetectedProperti
 from hydra_suite.core.identity.properties.export import (
     DETECTED_HEADING_COLUMNS,
     POSE_SUMMARY_COLUMNS,
+    augment_trajectories_with_detected_apriltag_cache,
+    augment_trajectories_with_detected_apriltag_df,
     augment_trajectories_with_detected_cnn_cache,
     augment_trajectories_with_detected_properties_cache,
     augment_trajectories_with_pose_cache,
+    build_detected_apriltag_lookup_dataframe,
+    merge_interpolated_cnn_df,
     merge_interpolated_pose_df,
 )
 
@@ -293,8 +297,18 @@ def test_augment_trajectories_with_detected_cnn_cache_merges_by_detection(tmp_pa
     cache.save(
         5,
         [
-            ClassPrediction(class_name="alpha", confidence=0.83, det_index=0),
-            ClassPrediction(class_name=None, confidence=0.1, det_index=2),
+            ClassPrediction(
+                det_index=0,
+                factor_names=("flat",),
+                class_names=("alpha",),
+                confidences=(0.83,),
+            ),
+            ClassPrediction(
+                det_index=2,
+                factor_names=("flat",),
+                class_names=(None,),
+                confidences=(0.1,),
+            ),
         ],
     )
     cache.flush()
@@ -315,3 +329,226 @@ def test_augment_trajectories_with_detected_cnn_cache_merges_by_detection(tmp_pa
     assert pd.isna(out.iloc[1]["CNN_idA_Class"])
     assert out.iloc[1]["CNN_idA_Conf"] == pytest.approx(0.1)
     assert pd.isna(out.iloc[2]["CNN_idA_Class"])
+
+
+def test_augment_trajectories_with_detected_cnn_cache_expands_multihead_columns(
+    tmp_path,
+):
+    cache_path = tmp_path / "cnn_cache_multi.npz"
+    cache = CNNIdentityCache(cache_path, factor_names=("color", "side"))
+    cache.save(
+        5,
+        [
+            ClassPrediction(
+                det_index=0,
+                factor_names=("color", "side"),
+                class_names=("red", "left"),
+                confidences=(0.83, 0.74),
+            ),
+            ClassPrediction(
+                det_index=1,
+                factor_names=("color", "side"),
+                class_names=(None, "right"),
+                confidences=(0.1, 0.91),
+            ),
+        ],
+    )
+    cache.flush()
+
+    trajectories = pd.DataFrame(
+        [
+            {"FrameID": 5, "DetectionID": 50000, "TrajectoryID": 1},
+            {"FrameID": 5, "DetectionID": 50001, "TrajectoryID": 2},
+            {"FrameID": 6, "DetectionID": 60000, "TrajectoryID": 3},
+        ]
+    )
+    out = augment_trajectories_with_detected_cnn_cache(
+        trajectories, str(cache_path), label="idA"
+    )
+
+    assert out.iloc[0]["CNN_idA_color_Class"] == "red"
+    assert out.iloc[0]["CNN_idA_color_Conf"] == pytest.approx(0.83)
+    assert out.iloc[0]["CNN_idA_side_Class"] == "left"
+    assert out.iloc[0]["CNN_idA_side_Conf"] == pytest.approx(0.74)
+    assert pd.isna(out.iloc[1]["CNN_idA_color_Class"])
+    assert out.iloc[1]["CNN_idA_color_Conf"] == pytest.approx(0.1)
+    assert out.iloc[1]["CNN_idA_side_Class"] == "right"
+    assert out.iloc[1]["CNN_idA_side_Conf"] == pytest.approx(0.91)
+    assert pd.isna(out.iloc[2]["CNN_idA_color_Class"])
+    assert pd.isna(out.iloc[2]["CNN_idA_side_Class"])
+
+
+def test_merge_interpolated_cnn_df_backfills_multihead_columns():
+    trajectories = pd.DataFrame(
+        [
+            {"FrameID": 7, "TrajectoryID": 3},
+            {"FrameID": 8, "TrajectoryID": 4},
+        ]
+    )
+    interp = pd.DataFrame(
+        [
+            {
+                "frame_id": 7,
+                "trajectory_id": 3,
+                "CNN_idA_color_Class": "red",
+                "CNN_idA_color_Conf": 0.92,
+                "CNN_idA_side_Class": "left",
+                "CNN_idA_side_Conf": 0.81,
+            }
+        ]
+    )
+
+    out = merge_interpolated_cnn_df(trajectories, interp, label="idA")
+
+    assert out.iloc[0]["CNN_idA_color_Class"] == "red"
+    assert out.iloc[0]["CNN_idA_color_Conf"] == pytest.approx(0.92)
+    assert out.iloc[0]["CNN_idA_side_Class"] == "left"
+    assert out.iloc[0]["CNN_idA_side_Conf"] == pytest.approx(0.81)
+    assert pd.isna(out.iloc[1]["CNN_idA_color_Class"])
+    assert pd.isna(out.iloc[1]["CNN_idA_side_Class"])
+
+
+# ---------------------------------------------------------------------------
+# AprilTag detection-level augmentation
+# ---------------------------------------------------------------------------
+
+
+class FakeTagObservationCache:
+    """Minimal fake for TagObservationCache in read mode."""
+
+    def __init__(self, data: dict):
+        self._data = data
+
+    def get_frame(self, frame_idx: int) -> dict:
+        empty = {
+            "tag_ids": np.array([], dtype=np.int32),
+            "det_indices": np.array([], dtype=np.int32),
+            "hammings": np.array([], dtype=np.int32),
+        }
+        return self._data.get(frame_idx, empty)
+
+    def get_frame_range(self):
+        if not self._data:
+            return (0, 0)
+        frames = list(self._data.keys())
+        return (min(frames), max(frames))
+
+    def close(self):
+        pass
+
+
+def _make_tag_cache(data: dict) -> FakeTagObservationCache:
+    return FakeTagObservationCache(data)
+
+
+def test_build_detected_apriltag_lookup_dataframe_basic():
+    cache = _make_tag_cache(
+        {
+            5: {
+                "tag_ids": np.array([0, 1], dtype=np.int32),
+                "det_indices": np.array([0, 2], dtype=np.int32),
+                "hammings": np.array([0, 1], dtype=np.int32),
+            }
+        }
+    )
+    tag_labels = ["ant1", "ant2"]
+    df = build_detected_apriltag_lookup_dataframe(cache, tag_labels)
+
+    assert len(df) == 2
+    assert set(df.columns) >= {
+        "_apt_frame_id",
+        "_apt_detection_id",
+        "DetectedTagID",
+        "DetectedTagLabel",
+        "DetectedTagConf",
+        "DetectedTagHamming",
+    }
+
+    row0 = df[df["_apt_detection_id"] == 5 * 10000 + 0].iloc[0]
+    assert row0["DetectedTagID"] == pytest.approx(0.0)
+    assert row0["DetectedTagLabel"] == "ant1"
+    assert row0["DetectedTagConf"] == pytest.approx(1.0)
+    assert row0["DetectedTagHamming"] == pytest.approx(0.0)
+
+    row2 = df[df["_apt_detection_id"] == 5 * 10000 + 2].iloc[0]
+    assert row2["DetectedTagID"] == pytest.approx(1.0)
+    assert row2["DetectedTagLabel"] == "ant2"
+    assert row2["DetectedTagConf"] == pytest.approx(1.0 / 2.0)
+    assert row2["DetectedTagHamming"] == pytest.approx(1.0)
+
+
+def test_build_detected_apriltag_lookup_dataframe_empty_cache():
+    cache = _make_tag_cache({})
+    df = build_detected_apriltag_lookup_dataframe(cache, ["ant1"])
+    assert df.empty
+
+
+def test_augment_trajectories_with_detected_apriltag_df_join():
+    lookup = pd.DataFrame(
+        [
+            {
+                "_apt_frame_id": 10,
+                "_apt_detection_id": 10 * 10000 + 1,
+                "DetectedTagID": 0.0,
+                "DetectedTagLabel": "ant1",
+                "DetectedTagConf": 1.0,
+                "DetectedTagHamming": 0.0,
+            }
+        ]
+    )
+    trajectories = pd.DataFrame(
+        [
+            {"FrameID": 10, "DetectionID": 10 * 10000 + 1, "TrajectoryID": 1},
+            {"FrameID": 10, "DetectionID": 10 * 10000 + 3, "TrajectoryID": 2},
+            {"FrameID": 11, "DetectionID": 11 * 10000 + 0, "TrajectoryID": 3},
+        ]
+    )
+    out = augment_trajectories_with_detected_apriltag_df(trajectories, lookup)
+
+    # Row matched to the tag
+    matched = out[out["TrajectoryID"] == 1].iloc[0]
+    assert matched["DetectedTagID"] == pytest.approx(0.0)
+    assert matched["DetectedTagLabel"] == "ant1"
+    assert matched["DetectedTagConf"] == pytest.approx(1.0)
+    assert matched["DetectedTagHamming"] == pytest.approx(0.0)
+
+    # Row not matched — all NaN
+    unmatched = out[out["TrajectoryID"] == 2].iloc[0]
+    assert pd.isna(unmatched["DetectedTagID"])
+    assert pd.isna(unmatched["DetectedTagLabel"])
+
+
+def test_augment_trajectories_with_detected_apriltag_cache(tmp_path):
+    from hydra_suite.data.tag_observation_cache import TagObservationCache
+
+    cache_path = tmp_path / "tags.npz"
+    cache = TagObservationCache(str(cache_path), mode="w")
+    cache.add_frame(
+        3,
+        tag_ids=[0],
+        centers_xy=np.array([[50.0, 60.0]], dtype=np.float32),
+        corners=np.zeros((1, 4, 2), dtype=np.float32),
+        det_indices=[2],
+        hammings=[0],
+    )
+    cache.save()
+    cache.close()
+
+    trajectories = pd.DataFrame(
+        [
+            {"FrameID": 3, "DetectionID": 3 * 10000 + 2, "TrajectoryID": 1},
+            {"FrameID": 3, "DetectionID": 3 * 10000 + 5, "TrajectoryID": 2},
+        ]
+    )
+    out = augment_trajectories_with_detected_apriltag_cache(
+        trajectories, str(cache_path), tag_labels=["ant1", "ant2"]
+    )
+
+    matched = out[out["TrajectoryID"] == 1].iloc[0]
+    assert matched["DetectedTagID"] == pytest.approx(0.0)
+    assert matched["DetectedTagLabel"] == "ant1"
+    assert matched["DetectedTagConf"] == pytest.approx(1.0)
+    assert matched["DetectedTagHamming"] == pytest.approx(0.0)
+
+    unmatched = out[out["TrajectoryID"] == 2].iloc[0]
+    assert pd.isna(unmatched["DetectedTagID"])

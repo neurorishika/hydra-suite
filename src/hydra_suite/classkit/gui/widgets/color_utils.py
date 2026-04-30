@@ -60,10 +60,27 @@ def _sort_key(category: str) -> tuple[int, float | str]:
         return (1, category.lower())
 
 
-def build_category_color_map(values: Iterable[Any]) -> dict[str, QColor]:
+def build_category_color_map(
+    values: Iterable[Any],
+    *,
+    category_order: Iterable[Any] | None = None,
+) -> dict[str, QColor]:
     """Build deterministic category->QColor mapping from observed values."""
     categories = {c for c in (_normalize_category(v) for v in values) if c is not None}
-    ordered = sorted(categories, key=_sort_key)
+
+    ordered: list[str] = []
+    if category_order is not None:
+        seen: set[str] = set()
+        for value in category_order:
+            category = _normalize_category(value)
+            if category is None or category in seen or category not in categories:
+                continue
+            ordered.append(category)
+            seen.add(category)
+        remaining = [category for category in categories if category not in seen]
+        ordered.extend(sorted(remaining, key=_sort_key))
+    else:
+        ordered = sorted(categories, key=_sort_key)
 
     color_map: dict[str, QColor] = {}
     n_palette = len(_COLORBLIND_PALETTE_HEX)

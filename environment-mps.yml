@@ -17,6 +17,7 @@ dependencies:
 - umap-learn
 - scikit-learn
 - pyyaml
+- ruptures
 
   # Visualization
 - matplotlib
@@ -46,6 +47,7 @@ dependencies:
 - pip
 - setuptools
 - wheel
+- cmake
 
   # Dev tools are managed separately; after activating this env run:
   #   make install-dev

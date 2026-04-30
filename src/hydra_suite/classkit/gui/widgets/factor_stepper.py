@@ -91,7 +91,7 @@ def _qt_stepper_build_ui(self):  # pragma: no cover
     self._unknown_btn = QPushButton("[0] Unknown")
     self._unknown_btn.setFixedWidth(100)
     self._unknown_btn.setStyleSheet("color: #aaa;")
-    self._unknown_btn.clicked.connect(lambda: self.label_committed.emit("unknown"))
+    self._unknown_btn.clicked.connect(self._on_unknown)
 
     self._skip_btn = QPushButton("Skip >")
     self._skip_btn.setFixedWidth(80)
@@ -126,6 +126,8 @@ def _qt_stepper_refresh(self):  # pragma: no cover
     )
 
     for i, label in enumerate(factor.labels):
+        if str(label).strip() == "unknown":
+            continue
         btn = QPushButton(label.capitalize())
         btn.setStyleSheet(
             "QPushButton { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555; "
@@ -160,6 +162,10 @@ def _qt_stepper_on_back(self):  # pragma: no cover
     self._refresh()
 
 
+def _qt_stepper_on_unknown(self):  # pragma: no cover
+    self._on_pick("unknown")
+
+
 def _qt_stepper_reset(self):  # pragma: no cover
     self._state.reset()
     self._refresh()
@@ -168,7 +174,7 @@ def _qt_stepper_reset(self):  # pragma: no cover
 def _qt_stepper_handle_key(self, key: str) -> bool:  # pragma: no cover
     """Call from parent keyPressEvent. Returns True if key was consumed."""
     if key == "0":
-        self.label_committed.emit("unknown")
+        self._on_unknown()
         return True
     label = (
         self._shortcut_map.get(key)
@@ -210,6 +216,7 @@ def _build_qt_widget(scheme: LabelingScheme):  # pragma: no cover
     FactorStepperWidget._refresh = _qt_stepper_refresh
     FactorStepperWidget._on_pick = _qt_stepper_on_pick
     FactorStepperWidget._on_back = _qt_stepper_on_back
+    FactorStepperWidget._on_unknown = _qt_stepper_on_unknown
     FactorStepperWidget.reset = _qt_stepper_reset
     FactorStepperWidget.handle_key = _qt_stepper_handle_key
     return FactorStepperWidget

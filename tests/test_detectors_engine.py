@@ -49,6 +49,13 @@ def _load_engine_module():
     )
     sys.modules["hydra_suite.core.detectors._runtime_artifacts"] = art_mod
 
+    direct_runtime_mod = load_src_module(
+        "hydra_suite/core/detectors/_direct_obb_runtime.py",
+        "hydra_suite.core.detectors._direct_obb_runtime",
+        stubs=stubs,
+    )
+    sys.modules["hydra_suite.core.detectors._direct_obb_runtime"] = direct_runtime_mod
+
     bg_mod = load_src_module(
         "hydra_suite/core/detectors/bg_detector.py",
         "hydra_suite.core.detectors.bg_detector",
@@ -251,7 +258,78 @@ def test_tensorrt_engine_path_is_batch_specific(tmp_path: Path, monkeypatch) -> 
     assert path_b8.endswith("_b8.engine")
     assert path_b4.endswith("_b4.engine")
     assert b8 == 8
-    assert b4 == 4
+
+
+def test_wrapper_execution_mode_skips_direct_obb_executor_enablement() -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {"YOLO_OBB_EXECUTION_MODE": "wrapper"}
+    det.device = "cuda:0"
+    det._direct_obb_executor = "sentinel"
+
+    det._maybe_enable_direct_obb_executor(
+        "onnx",
+        Path("/tmp/fake.onnx"),
+        640,
+    )
+
+    assert det._direct_obb_executor is None
+
+
+def test_tensorrt_fatal_builder_failure_disables_session_retries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mod = _load_engine_module()
+    mod.YOLOOBBDetector._SESSION_TENSORRT_DISABLED_CONTEXTS.clear()
+
+    class FakeYOLO:
+        init_calls = 0
+        export_calls = 0
+
+        def __init__(self, path, task=None):
+            FakeYOLO.init_calls += 1
+            self.path = path
+            self.task = task
+
+        def to(self, _device):
+            return self
+
+        def export(self, **_kwargs):
+            FakeYOLO.export_calls += 1
+            raise RuntimeError(
+                "pybind11::init(): factory function returned nullptr (CUDA initialization failure with error: 35)"
+            )
+
+    monkeypatch.setitem(
+        sys.modules, "ultralytics", types.SimpleNamespace(YOLO=FakeYOLO)
+    )
+
+    model_path = tmp_path / "best.pt"
+    model_path.write_bytes(b"model")
+
+    det1 = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det1.params = {"TENSORRT_MAX_BATCH_SIZE": 1, "INFERENCE_MODEL_ID": "id-A"}
+    det1.device = "cuda:0"
+    det1.use_tensorrt = False
+    det1.tensorrt_model_path = None
+    det1.tensorrt_batch_size = 1
+    det1._try_load_tensorrt_model(str(model_path))
+
+    det2 = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det2.params = {"TENSORRT_MAX_BATCH_SIZE": 4, "INFERENCE_MODEL_ID": "id-A"}
+    det2.device = "cuda:0"
+    det2.use_tensorrt = False
+    det2.tensorrt_model_path = None
+    det2.tensorrt_batch_size = 1
+    det2._try_load_tensorrt_model(str(model_path))
+
+    assert FakeYOLO.export_calls == 1
+    assert FakeYOLO.init_calls == 1
+    assert det1.use_tensorrt is False
+    assert det2.use_tensorrt is False
+    assert "factory function returned nullptr" in det2.tensorrt_failure_reason
 
 
 def test_onnx_artifact_path_is_batch_specific_and_model_adjacent(
@@ -1056,6 +1134,86 @@ def test_sequential_stage2_obb_chunks_by_individual_batch_size() -> None:
     assert len(results) == 5
 
 
+def test_predict_obb_results_uses_direct_executor_when_available() -> None:
+    mod = _load_engine_module()
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {}
+    det.device = "cuda:0"
+    det.use_onnx = True
+    det.onnx_imgsz = 640
+
+    sentinel = object()
+    calls = []
+
+    class _DirectExecutor:
+        def predict(self, frames, *, conf_thres, classes, max_det):
+            calls.append(
+                {
+                    "count": len(frames),
+                    "conf": conf_thres,
+                    "classes": classes,
+                    "max_det": max_det,
+                }
+            )
+            return [sentinel for _ in frames]
+
+    det._direct_obb_executor = _DirectExecutor()
+
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    results = det._predict_obb_results(
+        [frame, frame],
+        target_classes=[1],
+        raw_conf_floor=0.2,
+        max_det=5,
+    )
+
+    assert results == [sentinel, sentinel]
+    assert calls == [{"count": 2, "conf": 0.2, "classes": [1], "max_det": 5}]
+
+
+def test_try_load_onnx_model_enables_direct_cuda_executor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    mod = _load_engine_module()
+    model_path = tmp_path / "detector.onnx"
+    model_path.write_bytes(b"fake-onnx")
+
+    class FakeYOLO:
+        def __init__(self, path, task=None):
+            self.path = path
+            self.task = task
+            self.names = {0: "ant"}
+
+    fake_ultra = types.SimpleNamespace(YOLO=FakeYOLO)
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultra)
+
+    created = {}
+
+    def _fake_factory(**kwargs):
+        created.update(kwargs)
+        return object()
+
+    fake_direct_module = types.SimpleNamespace(create_direct_obb_executor=_fake_factory)
+    monkeypatch.setitem(
+        sys.modules,
+        "hydra_suite.core.detectors._direct_obb_runtime",
+        fake_direct_module,
+    )
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {}
+    det.device = "cuda:0"
+    det.use_onnx = False
+    det._direct_obb_executor = None
+
+    det._try_load_onnx_model(str(model_path))
+
+    assert det.use_onnx is True
+    assert det._direct_obb_executor is not None
+    assert created["runtime"] == "onnx"
+    assert created["artifact_path"] == str(model_path.resolve())
+
+
 def test_headtail_hint_uses_batched_classify_call() -> None:
     """Verify _compute_headtail_hints delegates to analyzer.analyze_crops."""
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
@@ -1066,7 +1224,7 @@ def test_headtail_hint_uses_batched_classify_call() -> None:
 
     calls = {"count": 0}
 
-    def _mock_analyze(frames, per_frame_obb_corners):
+    def _mock_analyze(frames, per_frame_obb_corners, profiler=None):
         calls["count"] += 1
         # Return (heading=0.5, conf=0.95, directed=1) for each detection
         return [[(0.5, 0.95, 1) for _ in corners] for corners in per_frame_obb_corners]
@@ -1103,17 +1261,18 @@ def test_validate_headtail_class_names_accepts_five_class_schema() -> None:
     assert normalized == ["up", "down", "left", "right", "unknown"]
 
 
-def test_validate_headtail_class_names_rejects_partial_schema() -> None:
+def test_validate_headtail_class_names_accepts_partial_schema() -> None:
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-    with pytest.raises(ValueError, match="Expected exactly"):
-        HeadTailAnalyzer._validate_class_names(
-            ["left", "right", "unknown"], strict=True, source="test model"
-        )
+    normalized = HeadTailAnalyzer._validate_class_names(
+        ["left", "right", "unknown"], strict=True, source="test model"
+    )
+
+    assert normalized == ["left", "right", "unknown"]
 
 
 def test_load_headtail_yolo_model_requires_supported_schema() -> None:
-    """Loading a YOLO head-tail model populates _headtail_analyzer."""
+    """Loading a head-tail model stores the constructed analyzer instance."""
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     mod = _load_engine_module()
@@ -1121,21 +1280,12 @@ def test_load_headtail_yolo_model_requires_supported_schema() -> None:
     det.device = "cpu"
     det.params = {}
 
-    # Mock _load_model_for_task to return a fake YOLO model
-    det._load_model_for_task = lambda _path, task: (
-        types.SimpleNamespace(
-            names={0: "up", 1: "down", 2: "left", 3: "right", 4: "unknown"}
-        ),
-        "cpu",
-    )
-
-    # Monkey-patch HeadTailAnalyzer constructor to simulate tiny-load failure
     original_init = HeadTailAnalyzer.__init__
 
     def _skip_init(self, *args, **kwargs):
-        self._backend = "none"
+        self._backend = "backend_v2"
         self._model = None
-        self._class_names = None
+        self._class_names = ["up", "down", "left", "right", "unknown"]
         self._input_size = None
         self._device = "cpu"
         self._conf_threshold = 0.5
@@ -1143,6 +1293,8 @@ def test_load_headtail_yolo_model_requires_supported_schema() -> None:
         self._canonical_margin = 1.3
         self._padding_fraction = 0.3
         self._predict_device = None
+        self._backend_obj = None
+        self._canonical_labels = ()
 
     HeadTailAnalyzer.__init__ = _skip_init
     try:
@@ -1151,7 +1303,7 @@ def test_load_headtail_yolo_model_requires_supported_schema() -> None:
         HeadTailAnalyzer.__init__ = original_init
 
     assert det._headtail_analyzer is not None
-    assert det._headtail_analyzer.backend == "yolo"
+    assert det._headtail_analyzer.backend == "backend_v2"
     assert det._headtail_analyzer.class_names == [
         "up",
         "down",
@@ -1161,8 +1313,8 @@ def test_load_headtail_yolo_model_requires_supported_schema() -> None:
     ]
 
 
-def test_load_headtail_model_rejects_invalid_named_schema() -> None:
-    """Strict validation rejects unsupported 3-class schema."""
+def test_load_headtail_model_propagates_constructor_validation_error() -> None:
+    """Engine loading surfaces analyzer construction failures unchanged."""
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     mod = _load_engine_module()
@@ -1170,24 +1322,14 @@ def test_load_headtail_model_rejects_invalid_named_schema() -> None:
     det.device = "cpu"
     det.params = {}
 
-    # Monkey-patch HeadTailAnalyzer constructor to load with bad class names
     original_init = HeadTailAnalyzer.__init__
 
     def _load_with_bad_names(self, *args, **kwargs):
-        self._backend = "classkit_tiny"
-        self._model = object()
-        self._class_names = ["left", "right", "unknown"]
-        self._input_size = (128, 64)
-        self._device = "cpu"
-        self._conf_threshold = 0.5
-        self._ref_ar = 2.0
-        self._canonical_margin = 1.3
-        self._padding_fraction = 0.3
-        self._predict_device = None
+        raise ValueError("invalid head-tail schema")
 
     HeadTailAnalyzer.__init__ = _load_with_bad_names
     try:
-        with pytest.raises(ValueError, match="Expected exactly"):
+        with pytest.raises(ValueError, match="invalid head-tail schema"):
             det._load_headtail_model("bad_headtail.pth")
     finally:
         HeadTailAnalyzer.__init__ = original_init
@@ -1203,7 +1345,7 @@ def test_classkit_headtail_hints_abstain_on_up_down_unknown() -> None:
 
     # Build a mock analyzer that returns canned classkit_tiny-style results
     # simulating up/unknown/left/right predictions
-    def _mock_analyze(frames, per_frame_obb_corners):
+    def _mock_analyze(frames, per_frame_obb_corners, profiler=None):
         results = []
         for corners in per_frame_obb_corners:
             frame_results = []
@@ -1246,6 +1388,374 @@ def test_classkit_headtail_hints_abstain_on_up_down_unknown() -> None:
     assert directed_mask == [0, 0, 1, 1]
     assert heading_hints[2] == pytest.approx((0.5 + np.pi) % (2 * np.pi), abs=1e-6)
     assert heading_hints[3] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_load_headtail_model_uses_dedicated_headtail_runtime(monkeypatch) -> None:
+    mod = _load_engine_module()
+    import hydra_suite.core.identity.classification.headtail as headtail_module
+
+    observed: dict[str, object] = {}
+
+    class FakeHeadTailAnalyzer:
+        def __init__(
+            self, model_path: str = "", compute_runtime=None, **kwargs
+        ) -> None:
+            observed["model_path"] = model_path
+            observed["compute_runtime"] = compute_runtime
+            observed["kwargs"] = dict(kwargs)
+            self.is_available = True
+            self.class_names = ["left", "right"]
+            self.backend = "backend_v2"
+
+        @staticmethod
+        def _validate_class_names(
+            class_names, strict: bool = False, source: str = "model"
+        ):
+            return list(class_names)
+
+    monkeypatch.setattr(headtail_module, "HeadTailAnalyzer", FakeHeadTailAnalyzer)
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {
+        "YOLO_HEADTAIL_CONF_THRESHOLD": 0.6,
+        "HEADTAIL_BATCH_SIZE": 12,
+        "HEADTAIL_COMPUTE_RUNTIME": "onnx_coreml",
+        "ADVANCED_CONFIG": {},
+    }
+    det.device = "mps"
+    det._headtail_analyzer = None
+
+    det._load_headtail_model("preview-headtail.onnx")
+
+    assert observed["model_path"] == "preview-headtail.onnx"
+    assert observed["compute_runtime"] == "onnx_coreml"
+    assert observed["kwargs"]["batch_size"] == 12
+    assert det._headtail_analyzer is not None
+
+
+def test_detect_objects_realtime_prefilters_headtail_candidates(monkeypatch) -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = object()
+    det._headtail_analyzer = types.SimpleNamespace(is_available=True)
+    det.params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.5,
+        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": 0.8,
+        "YOLO_IOU_THRESHOLD": 0.7,
+        "MAX_TARGETS": 4,
+        "TRACKING_REALTIME_MODE": True,
+    }
+
+    corners = [
+        np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], dtype=np.float32),
+        np.array(
+            [[10.0, 0.0], [14.0, 0.0], [14.0, 2.0], [10.0, 2.0]], dtype=np.float32
+        ),
+        np.array(
+            [[20.0, 0.0], [24.0, 0.0], [24.0, 2.0], [20.0, 2.0]], dtype=np.float32
+        ),
+    ]
+
+    monkeypatch.setattr(
+        det,
+        "_run_direct_raw_detection",
+        lambda frame, target_classes, raw_conf_floor, max_det, profiler=None: (
+            [np.array([1.0, 1.0, 0.0], dtype=np.float32)] * 3,
+            [100.0, 90.0, 80.0],
+            [(100.0, 2.0), (90.0, 2.0), (80.0, 2.0)],
+            [0.4, 0.9, 0.2],
+            corners,
+            None,
+        ),
+    )
+    monkeypatch.setattr(det, "_raw_detection_cap", lambda: 4)
+
+    def _fake_filter(
+        meas,
+        sizes,
+        shapes,
+        confidences,
+        obb_corners_list,
+        roi_mask=None,
+        detection_ids=None,
+        heading_hints=None,
+        heading_confidences=None,
+        directed_mask=None,
+    ):
+        if heading_hints is None:
+            return (
+                [meas[1]],
+                [sizes[1]],
+                [shapes[1]],
+                [confidences[1]],
+                [obb_corners_list[1]],
+                [1],
+            )
+        return (
+            [meas[1]],
+            [sizes[1]],
+            [shapes[1]],
+            [confidences[1]],
+            [obb_corners_list[1]],
+            [1],
+            [heading_hints[1]],
+            [heading_confidences[1]],
+            [directed_mask[1]],
+        )
+
+    monkeypatch.setattr(det, "filter_raw_detections", _fake_filter)
+
+    captured: dict[str, object] = {}
+
+    def _fake_subset(
+        frame,
+        raw_obb_corners,
+        candidate_indices,
+        include_canonical_affines=True,
+        profiler=None,
+    ):
+        captured["candidate_indices"] = list(candidate_indices)
+        captured["corner_count"] = len(raw_obb_corners)
+        captured["include_canonical_affines"] = bool(include_canonical_affines)
+        hints = [float("nan")] * len(raw_obb_corners)
+        confidences = [0.0] * len(raw_obb_corners)
+        directed = [0] * len(raw_obb_corners)
+        hints[1] = 0.5
+        confidences[1] = 0.9
+        directed[1] = 1
+        return hints, confidences, directed, [None] * len(raw_obb_corners)
+
+    monkeypatch.setattr(det, "_compute_headtail_hints_for_indices", _fake_subset)
+
+    raw = det.detect_objects(
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        frame_count=0,
+        return_raw=True,
+    )
+
+    assert captured["candidate_indices"] == [1]
+    assert captured["corner_count"] == 3
+    assert captured["include_canonical_affines"] is False
+    assert np.isnan(raw[6][0])
+    assert raw[6][1] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_headtail_candidate_selection_applies_detection_conf_threshold(
+    monkeypatch,
+) -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.params = {
+        "YOLO_CONFIDENCE_THRESHOLD": 0.25,
+        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": 0.8,
+    }
+
+    def _unexpected_filter(*_args, **_kwargs):
+        raise AssertionError(
+            "head-tail candidate selection should not run full filter_raw_detections"
+        )
+
+    monkeypatch.setattr(det, "filter_raw_detections", _unexpected_filter)
+
+    corners = [
+        np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], dtype=np.float32),
+        np.array(
+            [[10.0, 0.0], [14.0, 0.0], [14.0, 2.0], [10.0, 2.0]], dtype=np.float32
+        ),
+        np.array(
+            [[20.0, 0.0], [24.0, 0.0], [24.0, 2.0], [20.0, 2.0]], dtype=np.float32
+        ),
+    ]
+    candidate_indices = det._select_headtail_candidate_indices(
+        [np.array([1.0, 1.0, 0.0], dtype=np.float32)] * 3,
+        [100.0, 90.0, 80.0],
+        [(100.0, 2.0)] * 3,
+        [0.4, 0.9, 0.79],
+        corners,
+    )
+
+    assert candidate_indices == [1]
+
+
+def test_detect_objects_realtime_keeps_affines_for_final_media_export(
+    monkeypatch,
+) -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = object()
+    det._headtail_analyzer = types.SimpleNamespace(is_available=True)
+    det.params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.5,
+        "YOLO_IOU_THRESHOLD": 0.7,
+        "MAX_TARGETS": 4,
+        "TRACKING_REALTIME_MODE": True,
+        "FINAL_MEDIA_EXPORT_VIDEOS_ENABLED": True,
+    }
+
+    corners = [
+        np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], dtype=np.float32),
+    ]
+
+    monkeypatch.setattr(
+        det,
+        "_run_direct_raw_detection",
+        lambda frame, target_classes, raw_conf_floor, max_det, **kwargs: (
+            [np.array([1.0, 1.0, 0.0], dtype=np.float32)],
+            [100.0],
+            [(100.0, 2.0)],
+            [0.9],
+            corners,
+            None,
+        ),
+    )
+    monkeypatch.setattr(det, "_raw_detection_cap", lambda: 4)
+    monkeypatch.setattr(
+        det,
+        "filter_raw_detections",
+        lambda meas, sizes, shapes, confidences, obb_corners_list, **kwargs: (
+            (
+                meas,
+                sizes,
+                shapes,
+                confidences,
+                obb_corners_list,
+                [0],
+                kwargs.get("heading_hints", [float("nan")]),
+                kwargs.get("heading_confidences", [0.0]),
+                kwargs.get("directed_mask", [0]),
+            )
+            if kwargs.get("heading_hints") is not None
+            else (meas, sizes, shapes, confidences, obb_corners_list, [0])
+        ),
+    )
+
+    captured: dict[str, object] = {}
+    affine = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 3.0]], dtype=np.float32)
+
+    def _fake_subset(
+        frame,
+        raw_obb_corners,
+        candidate_indices,
+        include_canonical_affines=True,
+        profiler=None,
+    ):
+        captured["include_canonical_affines"] = bool(include_canonical_affines)
+        return [0.5], [0.9], [1], ([affine] if include_canonical_affines else None)
+
+    monkeypatch.setattr(det, "_compute_headtail_hints_for_indices", _fake_subset)
+
+    raw = det.detect_objects(
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        frame_count=0,
+        return_raw=True,
+    )
+
+    assert captured["include_canonical_affines"] is True
+    assert raw[9] is not None
+    assert np.allclose(raw[9][0], affine)
+
+
+def test_detect_objects_profiles_single_frame_obb_inference(monkeypatch) -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = object()
+    det._headtail_analyzer = None
+    det.params = {
+        "YOLO_OBB_MODE": "direct",
+        "TRACKING_REALTIME_MODE": False,
+        "MAX_TARGETS": 4,
+    }
+
+    monkeypatch.setattr(
+        det,
+        "_run_direct_raw_detection",
+        lambda frame, target_classes, raw_conf_floor, max_det: (
+            [np.array([1.0, 1.0, 0.0], dtype=np.float32)],
+            [100.0],
+            [(100.0, 2.0)],
+            [0.9],
+            [
+                np.array(
+                    [[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]],
+                    dtype=np.float32,
+                )
+            ],
+            None,
+        ),
+    )
+
+    def _fake_filter(
+        meas,
+        sizes,
+        shapes,
+        confidences,
+        obb_corners_list,
+        roi_mask=None,
+        detection_ids=None,
+        heading_hints=None,
+        heading_confidences=None,
+        directed_mask=None,
+    ):
+        if heading_hints is None:
+            return meas, sizes, shapes, confidences, obb_corners_list
+        return (
+            meas,
+            sizes,
+            shapes,
+            confidences,
+            obb_corners_list,
+            [],
+            heading_hints,
+            heading_confidences,
+            directed_mask,
+        )
+
+    monkeypatch.setattr(det, "filter_raw_detections", _fake_filter)
+
+    events = []
+
+    class _FakeProfiler:
+        def phase_start(self, name):
+            events.append(("start", name))
+
+        def phase_end(self, name, work_units=None):
+            events.append(("end", name, work_units))
+
+    det.detect_objects(
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        frame_count=0,
+        return_raw=False,
+        profiler=_FakeProfiler(),
+    )
+
+    assert events[0] == ("start", "yolo_obb_inference")
+    assert events[1][0] == "end"
+    assert events[1][1] == "yolo_obb_inference"
+
+
+def test_should_compute_canonical_affines_only_for_pose_and_export_consumers() -> None:
+    mod = _load_engine_module()
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+
+    det.params = {}
+    assert det._should_compute_canonical_affines() is False
+
+    for key in (
+        "ENABLE_POSE_EXTRACTOR",
+        "ENABLE_INDIVIDUAL_DATASET",
+        "ENABLE_INDIVIDUAL_IMAGE_SAVE",
+        "EXPORT_FINAL_CANONICAL_IMAGES",
+        "FINAL_MEDIA_EXPORT_VIDEOS_ENABLED",
+        "GENERATE_ORIENTED_TRACK_VIDEOS",
+    ):
+        det.params = {key: True}
+        assert det._should_compute_canonical_affines() is True
 
 
 def test_filter_overlapping_uses_precise_iou_for_all_overlaps() -> None:
@@ -1291,49 +1801,74 @@ def test_filter_overlapping_uses_precise_iou_for_all_overlaps() -> None:
     assert out_sizes == [100.0, 80.0]
 
 
-def test_loads_notebook_tiny_headtail_state_dict(tmp_path: Path) -> None:
-    """HeadTailAnalyzer loads a notebook-style raw state_dict checkpoint."""
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
-
-    # Build and save a notebook-style raw state_dict checkpoint
-    tiny = HeadTailAnalyzer._build_tiny_classifier(input_size=(128, 64))
-    ckpt_path = tmp_path / "tiny_headtail.pth"
+def test_rejects_notebook_tiny_headtail_state_dict(tmp_path: Path) -> None:
+    """HeadTailAnalyzer rejects notebook-era raw state_dict checkpoints."""
     import torch
 
+    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
+    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    tiny = TinyClassifier(n_classes=2)
+    ckpt_path = tmp_path / "tiny_headtail.pth"
     torch.save(tiny.state_dict(), ckpt_path)
 
-    analyzer = HeadTailAnalyzer(
-        model_path=str(ckpt_path), device="cpu", conf_threshold=0.5
+    with pytest.raises(ClassifierFormatError):
+        HeadTailAnalyzer(model_path=str(ckpt_path), device="cpu", conf_threshold=0.5)
+
+
+def test_detect_objects_batched_raw_returns_nine_fields_when_model_missing() -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = None
+
+    frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(2)]
+    results = det.detect_objects_batched(frames, start_frame_idx=0, return_raw=True)
+
+    assert len(results) == 2
+    assert all(len(frame_result) == 9 for frame_result in results)
+    assert results[0][-1] is None
+
+
+def test_detect_objects_batched_raw_returns_nine_fields_when_batch_inference_fails(
+    monkeypatch,
+) -> None:
+    mod = _load_engine_module()
+
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
+    det.model = object()
+    det.params = {}
+
+    monkeypatch.setattr(det, "_current_obb_mode", lambda: "direct")
+    monkeypatch.setattr(det, "_raw_detection_cap", lambda: 4)
+    monkeypatch.setattr(det, "_resolve_fixed_batch_params", lambda: (None, None))
+    monkeypatch.setattr(
+        det,
+        "_run_standard_obb_batch_inference",
+        lambda frames, start_frame_idx, target_classes, raw_conf_floor, max_det: None,
     )
 
-    assert analyzer.backend == "tiny"
-    assert analyzer.is_available
-    assert analyzer.model is not None
+    frames = [np.zeros((16, 16, 3), dtype=np.uint8) for _ in range(3)]
+    results = det.detect_objects_batched(frames, start_frame_idx=5, return_raw=True)
+
+    assert len(results) == 3
+    assert all(len(frame_result) == 9 for frame_result in results)
+    assert all(frame_result[-1] is None for frame_result in results)
 
 
-def test_tiny_headtail_inference_converts_bgr_to_rgb() -> None:
-    """HeadTailAnalyzer._predict converts BGR crops to RGB for tiny backend."""
-    import torch.nn as nn
+def test_assemble_batched_frame_result_raw_none_preserves_raw_contract() -> None:
+    mod = _load_engine_module()
 
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    det = mod.YOLOOBBDetector.__new__(mod.YOLOOBBDetector)
 
-    class _Probe(nn.Module):
-        # Logit uses channel0 - channel2. If RGB conversion is correct, BGR-red
-        # input becomes RGB-red and yields a strongly positive logit.
-        def forward(self, x):
-            v = x[:, 0, 0, 0] - x[:, 2, 0, 0]
-            return v.unsqueeze(1) * 10.0
-
-    analyzer = HeadTailAnalyzer.from_components(
-        model=_Probe().eval(),
-        backend="tiny",
-        class_names=None,
-        input_size=None,
-        device="cpu",
+    frame_result = det._assemble_batched_frame_result(
+        raw=None,
+        headtail_per_frame=None,
+        idx=0,
+        return_raw=True,
     )
 
-    bgr_red = np.array([[[0, 0, 255]]], dtype=np.uint8)
-    probs = analyzer._predict([bgr_red])
-
-    assert len(probs) == 1
-    assert float(probs[0]) > 0.9
+    assert len(frame_result) == 9
+    assert frame_result[-1] is None

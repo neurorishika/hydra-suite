@@ -1205,32 +1205,32 @@ class DetectionPanel(QWidget):
             return "cnn_classifier"  # multi-method: report as cnn_classifier for compat
         return "none_disabled"
 
-    def _identity_config(self) -> dict:
-        """Return use_apriltags + cnn_classifiers config dict."""
-        if not self._is_identity_analysis_enabled():
+    def _build_identity_config(self, *, require_enabled_gate: bool) -> dict:
+        """Collect AprilTag/CNN identity config from the identity panel."""
+        if require_enabled_gate and not self._is_identity_analysis_enabled():
+            return {"use_apriltags": False, "cnn_classifiers": []}
+        if not self._is_yolo_detection_mode():
             return {"use_apriltags": False, "cnn_classifiers": []}
         ip = getattr(self._main_window, "_identity_panel", None)
         use_apriltags = ip is not None and ip.g_apriltags.isChecked()
-        match_bonus = float(
-            ip.spin_identity_match_bonus.value() if ip is not None else 20.0
-        )
-        mismatch_penalty = float(
-            ip.spin_identity_mismatch_penalty.value() if ip is not None else 50.0
-        )
         cnn_classifiers = []
         if ip is not None:
             for row in ip._cnn_classifier_rows():
                 cfg = row.to_config()
                 if cfg is not None:
-                    cfg["match_bonus"] = match_bonus
-                    cfg["mismatch_penalty"] = mismatch_penalty
                     cnn_classifiers.append(cfg)
         return {
             "use_apriltags": use_apriltags,
             "cnn_classifiers": cnn_classifiers,
-            "match_bonus": match_bonus,
-            "mismatch_penalty": mismatch_penalty,
         }
+
+    def _identity_config(self) -> dict:
+        """Return use_apriltags + cnn_classifiers config dict."""
+        return self._build_identity_config(require_enabled_gate=True)
+
+    def _preview_identity_config(self) -> dict:
+        """Return preview-only identity overlays without requiring the master gate."""
+        return self._build_identity_config(require_enabled_gate=False)
 
     # =========================================================================
     # YOLO BATCHING / TENSORRT HANDLERS (moved from MainWindow)
@@ -1271,6 +1271,9 @@ class DetectionPanel(QWidget):
                 )(),
             )
         fixed_runtime = self._main_window._runtime_requires_fixed_yolo_batch()
+        if not hasattr(self, "chk_enable_yolo_batching"):
+            return
+        sequential = self.combo_yolo_obb_mode.currentIndex() == 1
 
         if fixed_runtime and self.combo_yolo_batch_mode.currentIndex() != 1:
             self.combo_yolo_batch_mode.blockSignals(True)
@@ -1301,7 +1304,6 @@ class DetectionPanel(QWidget):
             self.spin_yolo_batch_size.setEnabled(False)
             self.spin_tensorrt_batch.setEnabled(False)
             self.lbl_tensorrt_batch.setEnabled(tensorrt_enabled)
-            sequential = self.combo_yolo_obb_mode.currentIndex() == 1
             if sequential:
                 message = "Realtime tracking fixes the frame batch to 1. Sequential stage-2 crop batching still uses the Stage-2 crop batch setting."
             else:
@@ -1390,6 +1392,25 @@ class DetectionPanel(QWidget):
         """Handle zoom slider change."""
         zoom_val = value / 100.0
         self._main_window.label_zoom_val.setText(f"{zoom_val:.2f}x")
+
+        # If tracking is active, re-render from the last received frame so that
+        # zoom does not flash a stale detection-test or preview image.
+        tracking_worker = getattr(self._main_window, "tracking_worker", None)
+        if tracking_worker is not None and tracking_worker.isRunning():
+            last_rgb = getattr(self._main_window, "_last_tracking_frame_rgb", None)
+            if last_rgb is not None:
+                from PySide6.QtCore import Qt
+                from PySide6.QtGui import QImage, QPixmap
+
+                z = max(value / 100.0, 0.1)
+                h, w, _ = last_rgb.shape
+                qimg = QImage(last_rgb.data, w, h, w * 3, QImage.Format_RGB888)
+                scaled = qimg.scaled(
+                    int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                self._main_window._set_video_pixmap(QPixmap.fromImage(scaled))
+            return
+
         if self._main_window.detection_test_result is not None:
             self._redisplay_detection_test()
         elif getattr(self._main_window, "roi_base_frame", None) is not None and getattr(
@@ -1540,7 +1561,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window.video_label.setPixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap)
 
     def _redisplay_detection_test(self):
         """Redisplay the stored detection test result with current zoom."""
@@ -1563,7 +1584,7 @@ class DetectionPanel(QWidget):
             )
 
         pixmap = QPixmap.fromImage(qimg)
-        self._main_window.video_label.setPixmap(pixmap)
+        self._main_window._set_video_pixmap(pixmap)
 
     # =========================================================================
     # PREVIEW DETECTION TEST (moved from MainWindow)
@@ -1665,7 +1686,7 @@ class DetectionPanel(QWidget):
             self._main_window._selected_compute_runtime()
         )
         runtime_detection = derive_detection_runtime_settings(selected_runtime)
-        identity_cfg = self._identity_config()
+        identity_cfg = self._preview_identity_config()
         ip = getattr(self._main_window, "_identity_panel", None)
         pose_backend_family = (
             ip.combo_pose_model_type.currentText().strip().lower()
@@ -1737,11 +1758,20 @@ class DetectionPanel(QWidget):
             "yolo_obb_direct_model_path": self._main_window._get_selected_yolo_model_path(),
             "yolo_detect_model_path": self._main_window._get_selected_yolo_detect_model_path(),
             "yolo_crop_obb_model_path": self._main_window._get_selected_yolo_crop_obb_model_path(),
+            "headtail_enabled": (
+                ip.g_headtail.isChecked() if ip is not None else False
+            ),
+            "configured_headtail_model_path": (
+                ip._get_configured_yolo_headtail_model_path() if ip is not None else ""
+            ),
             "yolo_headtail_model_path": (
                 ip._get_selected_yolo_headtail_model_path() if ip is not None else ""
             ),
             "pose_overrides_headtail": (
                 ip.chk_pose_overrides_headtail.isChecked() if ip is not None else False
+            ),
+            "headtail_batch_size": (
+                ip.spin_headtail_batch.value() if ip is not None else 64
             ),
             "yolo_seq_crop_pad_ratio": self.spin_yolo_seq_crop_pad.value(),
             "yolo_seq_min_crop_size_px": self.spin_yolo_seq_min_crop_px.value(),
@@ -1752,6 +1782,9 @@ class DetectionPanel(QWidget):
             "yolo_seq_detect_conf_threshold": self.spin_yolo_seq_detect_conf.value(),
             "yolo_headtail_conf_threshold": (
                 ip.spin_yolo_headtail_conf.value() if ip is not None else 0.25
+            ),
+            "yolo_headtail_detect_conf_threshold": (
+                ip.spin_yolo_headtail_detect_conf.value() if ip is not None else 0.25
             ),
             "yolo_confidence": self.spin_yolo_confidence.value(),
             "yolo_iou": self.spin_yolo_iou.value(),
@@ -1829,7 +1862,7 @@ class DetectionPanel(QWidget):
             qimg = qimg.scaled(
                 scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
-        self._main_window.video_label.setPixmap(QPixmap.fromImage(qimg))
+        self._main_window._set_video_pixmap(QPixmap.fromImage(qimg))
         self._main_window._fit_image_to_screen()
         logger.info("Detection test completed on preview frame")
 
@@ -1978,6 +2011,7 @@ class DetectionPanel(QWidget):
                 bool(ip._get_selected_yolo_headtail_model_path().strip())
             )
         self._main_window._update_obb_mode_warning()
+        self._sync_batch_policy_controls()
 
     # =========================================================================
     # YOLO MODEL CHANGED (moved from MainWindow)

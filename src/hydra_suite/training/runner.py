@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .contracts import CustomCNNParams, TrainingRole, TrainingRunSpec
 
@@ -98,16 +98,27 @@ def _ultralytics_task_for_role(role: TrainingRole) -> str:
     raise RuntimeError(f"Role {role.value} does not map to ultralytics CLI task")
 
 
+def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
+    """Resolve the `data=` argument expected by Ultralytics for a training run."""
+    dataset_ref = Path(spec.derived_dataset_dir).expanduser()
+    if task in {"detect", "obb"} and dataset_ref.is_dir():
+        yaml_path = dataset_ref / "dataset.yaml"
+        if yaml_path.exists():
+            return str(yaml_path.resolve())
+    return str(spec.derived_dataset_dir)
+
+
 def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> list[str]:
     """Build deterministic Ultralytics train command for a role."""
 
     task = _ultralytics_task_for_role(spec.role)
     run_dir = Path(run_dir).expanduser().resolve()
+    data_arg = _resolve_ultralytics_data_arg(spec, task)
 
     args = [
         task,
         "train",
-        f"data={spec.derived_dataset_dir}",
+        f"data={data_arg}",
         f"model={spec.base_model}",
         f"epochs={int(spec.hyperparams.epochs)}",
         f"imgsz={int(spec.hyperparams.imgsz)}",
@@ -226,22 +237,55 @@ def _parse_tiny_rebalance_params(spec):
     return rebalance_mode, rebalance_power, label_smoothing
 
 
-def _compute_class_weights(train_samples, num_classes, rebalance_mode, rebalance_power):
+def _resolve_ignore_label_index(
+    class_to_idx: dict[str, int],
+    ignore_label_name: object,
+) -> int | None:
+    """Return the class index for an ignored supervision label, if present."""
+    normalized = str(ignore_label_name or "").strip().lower()
+    if not normalized:
+        return None
+    for class_name, class_index in class_to_idx.items():
+        if str(class_name).strip().lower() == normalized:
+            return int(class_index)
+    return None
+
+
+def _compute_class_weights(
+    train_samples,
+    num_classes,
+    rebalance_mode,
+    rebalance_power,
+    ignored_class_indices: set[int] | None = None,
+):
     """Compute inverse-frequency class weights for rebalancing."""
+    ignored = {int(index) for index in (ignored_class_indices or set())}
     class_counts = [0] * num_classes
     for _p, lbl in train_samples:
-        if 0 <= int(lbl) < num_classes:
-            class_counts[int(lbl)] += 1
+        label_index = int(lbl)
+        if label_index in ignored:
+            continue
+        if 0 <= label_index < num_classes:
+            class_counts[label_index] += 1
 
     class_weight_values = [1.0] * num_classes
     if rebalance_mode in {"weighted_loss", "weighted_sampler", "both"}:
-        max_count = max(class_counts) if class_counts else 1
+        usable_counts = [
+            count for index, count in enumerate(class_counts) if index not in ignored
+        ]
+        max_count = max(usable_counts) if usable_counts else 1
         for idx in range(num_classes):
+            if idx in ignored:
+                class_weight_values[idx] = 0.0
+                continue
             count = max(1, class_counts[idx])
             class_weight_values[idx] = float(max_count / count) ** rebalance_power
         mean_w = sum(class_weight_values) / max(1, len(class_weight_values))
         if mean_w > 0:
             class_weight_values = [w / mean_w for w in class_weight_values]
+    for idx in ignored:
+        if 0 <= idx < len(class_weight_values):
+            class_weight_values[idx] = 0.0
     return class_weight_values
 
 
@@ -304,6 +348,20 @@ def _apply_tiny_augmentation(img, augment, profile):
         img = np.clip((img.astype(np.float32) - mean) * factor + mean, 0, 255).astype(
             np.uint8
         )
+    if profile.saturation > 0 or profile.hue > 0:
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
+        if profile.saturation > 0:
+            sat_factor = random.uniform(
+                max(0.0, 1.0 - profile.saturation), 1.0 + profile.saturation
+            )
+            hsv[..., 1] = np.clip(hsv[..., 1] * sat_factor, 0, 255)
+        if profile.hue > 0:
+            hue_delta = random.uniform(-profile.hue, profile.hue) * 179.0
+            hsv[..., 0] = (hsv[..., 0] + hue_delta) % 180.0
+        img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    if getattr(profile, "monochrome", False):
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
     return img
 
 
@@ -354,15 +412,21 @@ def _run_tiny_training_loop(
     log_cb,
     progress_cb,
     should_cancel,
+    ignore_index=None,
 ):
     """Run the training/validation loop.
 
     Returns (best_state, best_val_acc, history).
     """
-    best_val_acc = -1.0
+    import time as _time
+
+    best_val_acc = None
     best_state = None
+    best_epoch = 0
     patience_counter = 0
     history = []
+    has_validation = bool(val_loader)
+    _t0 = _time.monotonic()
 
     for epoch in range(epochs):
         if should_cancel and should_cancel():
@@ -372,121 +436,201 @@ def _run_tiny_training_loop(
         train_loss, train_n = 0.0, 0
         for xs, ys in train_loader:
             xs, ys = xs.to(device), ys.to(device)
+            if ignore_index is not None:
+                active_count = int((ys != int(ignore_index)).sum().item())
+                if active_count <= 0:
+                    continue
+            else:
+                active_count = len(ys)
             opt.zero_grad()
             loss = criterion(model(xs), ys)
             loss.backward()
             opt.step()
-            train_loss += float(loss.item()) * len(ys)
-            train_n += len(ys)
+            train_loss += float(loss.item()) * active_count
+            train_n += active_count
 
-        val_acc = _run_tiny_validation(model, val_loader, device)
+        val_acc = _run_tiny_validation(
+            model,
+            val_loader,
+            device,
+            ignore_index=ignore_index,
+        )
 
         mean_loss = train_loss / max(1, train_n)
         history.append(
             {"epoch": epoch + 1, "train_loss": mean_loss, "val_acc": val_acc}
         )
 
-        if val_acc >= best_val_acc:
-            best_val_acc = val_acc
+        if has_validation:
+            if best_val_acc is None or (
+                val_acc is not None and val_acc >= best_val_acc
+            ):
+                best_val_acc = val_acc
+                best_epoch = epoch + 1
+                best_state = {
+                    k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+                }
+                patience_counter = 0
+                _safe_log(
+                    log_cb,
+                    f"  * new best val_acc={val_acc:.4f} at epoch {epoch + 1} — checkpoint saved",
+                )
+            else:
+                patience_counter += 1
+        else:
             best_state = {
                 k: v.detach().cpu().clone() for k, v in model.state_dict().items()
             }
-            patience_counter = 0
-        else:
-            patience_counter += 1
 
         _safe_log(
             log_cb,
-            f"epoch {epoch + 1}/{epochs} loss={mean_loss:.4f} val_acc={val_acc:.4f}",
+            (
+                f"epoch {epoch + 1}/{epochs} loss={mean_loss:.4f} val_acc={val_acc:.4f}"
+                if val_acc is not None
+                else f"epoch {epoch + 1}/{epochs} loss={mean_loss:.4f} val_acc=n/a"
+            ),
         )
         if progress_cb:
             progress_cb(epoch + 1, epochs)
 
-        if val_loader and patience_counter >= patience:
+        if has_validation and patience_counter >= patience:
             _safe_log(log_cb, f"Early stopping triggered at epoch {epoch + 1}")
             break
+
+    _elapsed = _time.monotonic() - _t0
+    _final_epoch = min(epoch + 1, epochs) if epochs > 0 else 0
+    if has_validation and best_val_acc is not None:
+        _safe_log(
+            log_cb,
+            f"Training loop done: best_val_acc={best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
+            f"wall_time={_elapsed:.1f}s",
+        )
+    else:
+        _safe_log(
+            log_cb,
+            f"Training loop done: {_final_epoch} epochs, wall_time={_elapsed:.1f}s",
+        )
 
     return best_state, best_val_acc, history
 
 
-def _run_tiny_validation(model, val_loader, device):
+def _run_tiny_validation(model, val_loader, device, ignore_index=None):
     """Evaluate model on validation set and return accuracy."""
     import torch
 
     if not val_loader:
-        return 0.0
+        return None
     model.eval()
     correct, total = 0, 0
     with torch.inference_mode():
         for xs, ys in val_loader:
             xs, ys = xs.to(device), ys.to(device)
+            if ignore_index is not None:
+                mask = ys != int(ignore_index)
+                if not bool(mask.any().item()):
+                    continue
+            else:
+                mask = None
             preds = model(xs).argmax(dim=1)
+            if mask is not None:
+                preds = preds[mask]
+                ys = ys[mask]
             correct += int((preds == ys).sum().item())
             total += len(ys)
     return correct / max(1, total)
 
 
 def _save_tiny_checkpoint(
+    *,
     model,
-    spec,
-    run_dir,
-    class_to_idx,
-    num_classes,
-    input_w,
-    input_h,
+    save_path: str,
+    class_names: list,
+    input_size: tuple,
+    monochrome: bool,
+    hidden_layers: int,
+    hidden_dim: int,
+    dropout: float,
     best_val_acc,
     history,
-    log_cb,
-):
-    """Save .pth checkpoint, attempt ONNX export, and write metrics JSON.
+) -> None:
+    """Save a TinyClassifier checkpoint in the v2 classifier-artifact format.
 
-    Returns (artifact_path, onnx_path, metrics_path).
+    ``input_size`` is serialised as ``[H, W]``. ``class_names_per_factor`` is
+    a length-1 list of the flat class list; ``class_names`` is kept for
+    readability. ``schema_version`` is pinned at 2.
+
+    ``history`` may be a list of per-epoch dicts (from the tiny training loop)
+    or a plain dict; it is stored as-is.
+    """
+    import torch as _torch
+
+    from hydra_suite.training.tiny_model import tiny_model_checkpoint_metadata
+
+    h, w = int(input_size[0]), int(input_size[1])
+    ckpt_dict = {
+        "schema_version": 2,
+        "arch": "tinyclassifier",
+        "input_size": [h, w],
+        "factor_names": ["flat"],
+        "class_names_per_factor": [list(class_names)],
+        "class_names": list(class_names),
+        "num_classes": len(class_names),
+        "monochrome": bool(monochrome),
+        "hidden_layers": int(hidden_layers),
+        "hidden_dim": int(hidden_dim),
+        "dropout": float(dropout),
+        "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
+        "history": history if history is not None else [],
+        "model_state_dict": model.state_dict(),
+    }
+    ckpt_dict.update(tiny_model_checkpoint_metadata(model))
+    _torch.save(ckpt_dict, str(save_path))
+
+
+def emit_yolo_multihead_manifest(
+    *,
+    manifest_path: str,
+    factors: list[tuple[str, Path, list[str]]],
+    input_size: tuple[int, int],
+    monochrome: bool,
+) -> Path:
+    """Write a .multihead.json manifest for a multi-head YOLO bundle.
+
+    ``factors`` is a list of ``(factor_name, pt_path, class_names)`` tuples.
+    Per-factor .pt paths are stored relative to the manifest location.
     """
     import json as _json
 
-    import torch
+    manifest_abs = Path(manifest_path).expanduser().resolve()
+    manifest_abs.parent.mkdir(parents=True, exist_ok=True)
 
-    weights_dir = run_dir / "weights"
-    weights_dir.mkdir(parents=True, exist_ok=True)
+    factor_names: list[str] = []
+    factor_entries: list[dict[str, Any]] = []
+    for factor_name, pt_path, class_names in factors:
+        pt_abs = Path(pt_path).expanduser().resolve()
+        try:
+            rel = pt_abs.relative_to(manifest_abs.parent).as_posix()
+        except ValueError:
+            rel = str(pt_abs)
+        factor_names.append(str(factor_name))
+        factor_entries.append(
+            {
+                "factor": str(factor_name),
+                "path": rel,
+                "class_names": [str(c) for c in class_names],
+            }
+        )
 
-    _role_slug = (
-        spec.role.value.replace("classify_", "")
-        .replace("_tiny", "_tiny")
-        .replace("_yolo", "_yolo")
-    )
-    sorted_class_items = sorted(class_to_idx.items(), key=lambda kv: int(kv[1]))
-    _class_slug = "-".join(name for name, _idx in sorted_class_items)
-    if len(_class_slug) > 48:
-        _class_slug = f"{num_classes}cls"
-    _run_stem = run_dir.parent.name
-    _model_filename = f"classkit_{_role_slug}_{_class_slug}_{_run_stem}.pth"
-    out_ckpt = weights_dir / _model_filename
-
-    _ckpt_dict = {
-        "model_state_dict": model.state_dict(),
-        "arch": "tinyclassifier",
-        "input_size": [input_w, input_h],
-        "num_classes": num_classes,
-        "class_names": [name for name, _idx in sorted_class_items],
-        "best_val_acc": float(best_val_acc),
-        "history": history,
-        "hidden_layers": int(spec.tiny_params.hidden_layers),
-        "hidden_dim": int(spec.tiny_params.hidden_dim),
-        "dropout": float(spec.tiny_params.dropout),
+    payload = {
+        "schema_version": 2,
+        "kind": "yolo_multihead_bundle",
+        "factor_names": factor_names,
+        "factor_models": factor_entries,
+        "input_size": [int(input_size[0]), int(input_size[1])],
+        "monochrome": bool(monochrome),
     }
-    torch.save(_ckpt_dict, out_ckpt)
-
-    _onnx_path = _try_onnx_export(model, _ckpt_dict, out_ckpt, log_cb)
-
-    metrics_path = run_dir / "tiny_metrics.json"
-    metrics_path.write_text(
-        _json.dumps(
-            {"best_val_acc": float(best_val_acc), "history": history}, indent=2
-        ),
-        encoding="utf-8",
-    )
-
-    return out_ckpt, _onnx_path, metrics_path
+    manifest_abs.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+    return manifest_abs
 
 
 def _try_onnx_export(model, ckpt_dict, out_ckpt, log_cb):
@@ -571,6 +715,10 @@ def _train_tiny_classify(
     except Exception as exc:
         raise RuntimeError(f"Tiny classify training requires torch/cv2: {exc}") from exc
 
+    import time as _time
+
+    _t0 = _time.monotonic()
+
     dataset_dir = Path(spec.derived_dataset_dir).expanduser().resolve()
     device = _pick_torch_device(spec.device)
     _safe_log(log_cb, f"Tiny classify device: {device}")
@@ -580,20 +728,44 @@ def _train_tiny_classify(
     val_samples = list(_iter_classify_samples(dataset_dir, "val", class_to_idx))
     num_classes = _validate_tiny_samples(class_to_idx, train_samples)
 
+    _safe_log(
+        log_cb,
+        f"Dataset: {len(train_samples)} train, {len(val_samples)} val, "
+        f"{num_classes} classes",
+    )
+    idx_to_class = {v: k for k, v in class_to_idx.items()}
+    ignore_label_name = getattr(spec.tiny_params, "ignore_label_name", "unknown")
+    ignore_label_idx = _resolve_ignore_label_index(class_to_idx, ignore_label_name)
+    for cls_idx in sorted(idx_to_class):
+        n_train = sum(1 for _, lbl in train_samples if lbl == cls_idx)
+        n_val = sum(1 for _, lbl in val_samples if lbl == cls_idx)
+        _safe_log(
+            log_cb,
+            f"  class {cls_idx} ({idx_to_class[cls_idx]}): train={n_train}, val={n_val}",
+        )
+
     input_w = int(spec.tiny_params.input_width)
     input_h = int(spec.tiny_params.input_height)
     rebalance_mode, rebalance_power, label_smoothing = _parse_tiny_rebalance_params(
         spec
     )
     class_weight_values = _compute_class_weights(
-        train_samples, num_classes, rebalance_mode, rebalance_power
+        train_samples,
+        num_classes,
+        rebalance_mode,
+        rebalance_power,
+        ignored_class_indices=(
+            {ignore_label_idx} if ignore_label_idx is not None else None
+        ),
     )
 
     _safe_log(
         log_cb,
         "tiny classify options: "
         f"rebalance={rebalance_mode}, power={rebalance_power:.2f}, "
-        f"label_smoothing={label_smoothing:.2f}",
+        f"label_smoothing={label_smoothing:.2f}, "
+        f"ignore_label={str(ignore_label_name)!r}"
+        + (f" (idx={ignore_label_idx})" if ignore_label_idx is not None else ""),
     )
 
     TinyDataset = _build_tiny_dataset_class(input_w, input_h)
@@ -614,6 +786,12 @@ def _train_tiny_classify(
             )
 
     model = _TinyClassifierCompat(num_classes, spec.tiny_params).to(device)
+    _n_params = sum(p.numel() for p in model.parameters())
+    _n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    _safe_log(
+        log_cb,
+        f"Model: TinyClassifier — {_n_params:,} params ({_n_trainable:,} trainable)",
+    )
 
     if spec.resume_from:
         _load_compatible_checkpoint_weights(
@@ -645,6 +823,11 @@ def _train_tiny_classify(
     criterion = nn.CrossEntropyLoss(
         weight=class_weight_tensor,
         label_smoothing=label_smoothing,
+        **(
+            {"ignore_index": int(ignore_label_idx)}
+            if ignore_label_idx is not None
+            else {}
+        ),
     )
 
     epochs = max(1, int(spec.tiny_params.epochs))
@@ -662,22 +845,69 @@ def _train_tiny_classify(
         log_cb,
         progress_cb,
         should_cancel,
+        ignore_index=ignore_label_idx,
     )
 
     if best_state is not None:
         model.load_state_dict(best_state, strict=True)
 
-    out_ckpt, _onnx_path, metrics_path = _save_tiny_checkpoint(
-        model,
-        spec,
-        run_dir,
-        class_to_idx,
-        num_classes,
-        input_w,
-        input_h,
-        best_val_acc,
-        history,
+    _safe_log(log_cb, "Saving checkpoint and attempting ONNX export...")
+
+    # Path derivation
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    sorted_class_items = sorted(class_to_idx.items(), key=lambda kv: int(kv[1]))
+    _role_slug = spec.role.value.replace("classify_", "")
+    _class_slug = "-".join(name for name, _idx in sorted_class_items)
+    if len(_class_slug) > 48:
+        _class_slug = f"{num_classes}cls"
+    _run_stem = run_dir.parent.name
+    _model_filename = f"classkit_{_role_slug}_{_class_slug}_{_run_stem}.pth"
+    out_ckpt = weights_dir / _model_filename
+
+    class_names_list = [name for name, _idx in sorted_class_items]
+
+    _save_tiny_checkpoint(
+        model=model,
+        save_path=str(out_ckpt),
+        class_names=class_names_list,
+        input_size=(int(input_h), int(input_w)),
+        monochrome=bool(getattr(spec.augmentation_profile, "monochrome", False)),
+        hidden_layers=int(spec.tiny_params.hidden_layers),
+        hidden_dim=int(spec.tiny_params.hidden_dim),
+        dropout=float(spec.tiny_params.dropout),
+        best_val_acc=best_val_acc,
+        history=history,
+    )
+
+    # ONNX export
+    _ckpt_for_onnx = {"input_size": [int(input_h), int(input_w)]}
+    _onnx_path = _try_onnx_export(model, _ckpt_for_onnx, out_ckpt, log_cb)
+
+    # Metrics JSON
+    import json as _json
+
+    metrics_path = run_dir / "tiny_metrics.json"
+    metrics_path.write_text(
+        _json.dumps(
+            {
+                "best_val_acc": (
+                    float(best_val_acc) if best_val_acc is not None else None
+                ),
+                "history": history,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    _safe_log(log_cb, f"Checkpoint saved: {out_ckpt.name}")
+
+    _total_elapsed = _time.monotonic() - _t0
+    _safe_log(
         log_cb,
+        f"Tiny classify complete — total wall_time={_total_elapsed:.1f}s"
+        + (f", best_val_acc={best_val_acc:.4f}" if best_val_acc is not None else ""),
     )
 
     return {
@@ -685,7 +915,7 @@ def _train_tiny_classify(
         "artifact_path": str(out_ckpt),
         "onnx_path": str(_onnx_path) if _onnx_path is not None else "",
         "metrics_path": str(metrics_path),
-        "best_val_acc": float(best_val_acc),
+        "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
         "command": ["tiny_classify_inprocess"],
         "task": "tiny_classify",
     }
@@ -814,21 +1044,28 @@ def _run_torchvision_training_loop(
     get_layer_groups_fn,
     best_ckpt_path,
     class_names,
+    checkpoint_extra_meta,
     log_cb,
     progress_cb,
     should_cancel,
+    ignore_index=None,
 ):
     """Run training/validation epochs for a torchvision model.
 
     Returns (best_val_acc, history).
     """
+    import time as _time
+
     import torch
 
     sz = params.input_size
-    best_val_acc = 0.0
+    best_val_acc = None
+    best_epoch = 0
     patience_count = 0
     history: dict = {"train_loss": [], "val_acc": []}
+    has_validation = bool(val_loader)
     current_unfrozen_groups = 0
+    _t0 = _time.monotonic()
     total_groups = 0
     if backbone != "tinyclassifier":
         try:
@@ -866,63 +1103,116 @@ def _run_torchvision_training_loop(
 
         model.train()
         total_loss = 0.0
+        total_examples = 0
         for batch_x, batch_y in train_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+            if ignore_index is not None:
+                active_count = int((batch_y != int(ignore_index)).sum().item())
+                if active_count <= 0:
+                    continue
+            else:
+                active_count = len(batch_y)
             optimizer.zero_grad()
             loss = criterion(model(batch_x), batch_y)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / max(len(train_loader), 1)
+            total_loss += float(loss.item()) * active_count
+            total_examples += active_count
+        avg_loss = total_loss / max(total_examples, 1)
         history["train_loss"].append(avg_loss)
 
-        model.eval()
-        correct = total = 0
-        with torch.no_grad():
-            for batch_x, batch_y in val_loader:
-                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-                preds = model(batch_x).argmax(dim=1)
-                correct += (preds == batch_y).sum().item()
-                total += len(batch_y)
-        val_acc = correct / max(total, 1)
+        val_acc = None
+        if has_validation:
+            model.eval()
+            correct = total = 0
+            with torch.no_grad():
+                for batch_x, batch_y in val_loader:
+                    batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                    if ignore_index is not None:
+                        mask = batch_y != int(ignore_index)
+                        if not bool(mask.any().item()):
+                            continue
+                    else:
+                        mask = None
+                    preds = model(batch_x).argmax(dim=1)
+                    if mask is not None:
+                        preds = preds[mask]
+                        batch_y = batch_y[mask]
+                    correct += (preds == batch_y).sum().item()
+                    total += len(batch_y)
+            val_acc = correct / max(total, 1)
         history["val_acc"].append(val_acc)
 
         _safe_log(
             log_cb,
-            f"Epoch {epoch + 1}/{params.epochs}  loss={avg_loss:.4f}  val_acc={val_acc:.4f}",
+            (
+                f"Epoch {epoch + 1}/{params.epochs}  loss={avg_loss:.4f}  val_acc={val_acc:.4f}"
+                if val_acc is not None
+                else f"Epoch {epoch + 1}/{params.epochs}  loss={avg_loss:.4f}  val_acc=n/a"
+            ),
         )
         if progress_cb:
             progress_cb(epoch + 1, params.epochs)
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            patience_count = 0
-            save_torchvision_checkpoint_fn(
-                model=model,
-                backbone=backbone,
-                class_names=class_names,
-                factor_names=[],
-                input_size=(sz, sz),
-                best_val_acc=best_val_acc,
-                history=history,
-                trainable_layers=params.trainable_layers,
-                backbone_lr_scale=params.backbone_lr_scale,
-                extra_meta={
-                    "fine_tune_method": getattr(
-                        params, "fine_tune_method", "head_only"
-                    ),
-                    "layerwise_lr_decay": getattr(params, "layerwise_lr_decay", 0.75),
-                    "gradual_unfreeze_interval": getattr(
-                        params, "gradual_unfreeze_interval", 5
-                    ),
-                },
-                path=best_ckpt_path,
-            )
-        else:
-            patience_count += 1
-            if patience_count >= params.patience:
-                _safe_log(log_cb, f"Early stopping at epoch {epoch + 1}.")
-                break
+        if has_validation and val_acc is not None:
+            if best_val_acc is None or val_acc > best_val_acc:
+                best_val_acc = val_acc
+                best_epoch = epoch + 1
+                patience_count = 0
+                save_torchvision_checkpoint_fn(
+                    model=model,
+                    backbone=backbone,
+                    class_names=class_names,
+                    factor_names=[],
+                    input_size=(sz, sz),
+                    best_val_acc=best_val_acc,
+                    history=history,
+                    trainable_layers=params.trainable_layers,
+                    backbone_lr_scale=params.backbone_lr_scale,
+                    monochrome=bool(checkpoint_extra_meta.get("monochrome", False)),
+                    extra_meta=checkpoint_extra_meta,
+                    path=best_ckpt_path,
+                )
+                _safe_log(
+                    log_cb,
+                    f"  * new best val_acc={val_acc:.4f} at epoch {epoch + 1} — checkpoint saved",
+                )
+            else:
+                patience_count += 1
+                if patience_count >= params.patience:
+                    _safe_log(log_cb, f"Early stopping at epoch {epoch + 1}.")
+                    break
+
+    if not has_validation and history["train_loss"]:
+        save_torchvision_checkpoint_fn(
+            model=model,
+            backbone=backbone,
+            class_names=class_names,
+            factor_names=[],
+            input_size=(sz, sz),
+            best_val_acc=None,
+            history=history,
+            trainable_layers=params.trainable_layers,
+            backbone_lr_scale=params.backbone_lr_scale,
+            monochrome=bool(checkpoint_extra_meta.get("monochrome", False)),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+        )
+        _safe_log(log_cb, "Final checkpoint saved (no validation).")
+
+    _elapsed = _time.monotonic() - _t0
+    _final_epoch = min(epoch + 1, params.epochs) if params.epochs > 0 else 0
+    if has_validation and best_val_acc is not None:
+        _safe_log(
+            log_cb,
+            f"Training loop done: best_val_acc={best_val_acc:.4f} @ epoch {best_epoch}/{_final_epoch}, "
+            f"wall_time={_elapsed:.1f}s",
+        )
+    else:
+        _safe_log(
+            log_cb,
+            f"Training loop done: {_final_epoch} epochs, wall_time={_elapsed:.1f}s",
+        )
 
     return best_val_acc, history
 
@@ -943,6 +1233,7 @@ def _train_custom_classify(
         build_torchvision_classifier,
         export_torchvision_to_onnx,
         freeze_backbone,
+        get_classifier_normalization_stats,
         get_layer_groups,
         load_torchvision_classifier,
         save_torchvision_checkpoint,
@@ -951,38 +1242,78 @@ def _train_custom_classify(
     params: CustomCNNParams = spec.custom_params or CustomCNNParams()
 
     if params.backbone == "tinyclassifier":
-        return _train_tiny_classify(spec, run_dir, log_cb, progress_cb, should_cancel)
+        translated_spec = dataclasses.replace(
+            spec,
+            tiny_params=dataclasses.replace(
+                spec.tiny_params,
+                epochs=int(params.epochs),
+                batch=int(params.batch),
+                lr=float(params.lr),
+                weight_decay=float(params.weight_decay),
+                input_width=int(params.input_width),
+                input_height=int(params.input_height),
+                tiny_preset=str(params.tiny_preset or "medium"),
+                hidden_layers=int(params.hidden_layers),
+                hidden_dim=int(params.hidden_dim),
+                dropout=float(params.dropout),
+                patience=int(params.patience),
+                class_rebalance_mode=str(params.class_rebalance_mode),
+                class_rebalance_power=float(params.class_rebalance_power),
+                label_smoothing=float(params.label_smoothing),
+                ignore_label_name=str(params.ignore_label_name),
+            ),
+        )
+        return _train_tiny_classify(
+            translated_spec,
+            run_dir,
+            log_cb,
+            progress_cb,
+            should_cancel,
+        )
 
     # --- Torchvision training path ---
     import json
+    import time as _time
 
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader
     from torchvision import datasets, transforms
 
+    _t0 = _time.monotonic()
+
     run_dir = Path(run_dir)
     weights_dir = run_dir / "weights"
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_dir = Path(spec.derived_dataset_dir)
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
     sz = params.input_size
 
     profile = spec.augmentation_profile
+    mean, std = get_classifier_normalization_stats(
+        monochrome=bool(getattr(profile, "monochrome", False))
+    )
     train_transforms = [transforms.Resize((sz, sz))]
     if profile.fliplr > 0:
         train_transforms.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
         train_transforms.append(transforms.RandomVerticalFlip(p=profile.flipud))
-    if profile.brightness > 0 or profile.contrast > 0:
+    if (
+        profile.brightness > 0
+        or profile.contrast > 0
+        or getattr(profile, "saturation", 0.0) > 0
+        or getattr(profile, "hue", 0.0) > 0
+    ):
         train_transforms.append(
             transforms.ColorJitter(
                 brightness=float(profile.brightness),
                 contrast=float(profile.contrast),
+                saturation=float(getattr(profile, "saturation", 0.0)),
+                hue=float(getattr(profile, "hue", 0.0)),
             )
         )
+    if getattr(profile, "monochrome", False):
+        train_transforms.append(transforms.Grayscale(num_output_channels=3))
     train_transforms.extend(
         [
             transforms.ToTensor(),
@@ -993,14 +1324,79 @@ def _train_custom_classify(
     val_tf = transforms.Compose(
         [
             transforms.Resize((sz, sz)),
+            *(
+                [transforms.Grayscale(num_output_channels=3)]
+                if getattr(profile, "monochrome", False)
+                else []
+            ),
             transforms.ToTensor(),
             transforms.Normalize(mean, std),
         ]
     )
 
+    # Build a shared class→index mapping across all splits so that indices
+    # are consistent even when a class is absent from the validation split.
+    # Without this, ImageFolder assigns indices independently per split,
+    # silently corrupting validation labels when a class is missing from val.
+    shared_class_to_idx = _build_class_to_idx(dataset_dir)
+    class_names = sorted(shared_class_to_idx.keys())
+
     train_ds = datasets.ImageFolder(str(dataset_dir / "train"), transform=train_tf)
-    val_ds = datasets.ImageFolder(str(dataset_dir / "val"), transform=val_tf)
-    class_names = train_ds.classes
+    val_dir = dataset_dir / "val"
+    has_validation = val_dir.exists() and any(
+        path.is_file() for path in val_dir.rglob("*")
+    )
+    val_ds = (
+        datasets.ImageFolder(str(val_dir), transform=val_tf) if has_validation else None
+    )
+
+    for ds in [train_ds] + ([val_ds] if val_ds else []):
+        if ds.class_to_idx != shared_class_to_idx:
+            old_to_name = {v: k for k, v in ds.class_to_idx.items()}
+            remap = {
+                old_idx: shared_class_to_idx[name]
+                for old_idx, name in old_to_name.items()
+            }
+            ds.samples = [(p, remap[t]) for p, t in ds.samples]
+            ds.targets = [remap[t] for t in ds.targets]
+            ds.imgs = ds.samples
+            ds.class_to_idx = shared_class_to_idx
+            ds.classes = class_names
+    ignore_label_idx = _resolve_ignore_label_index(
+        shared_class_to_idx,
+        getattr(params, "ignore_label_name", "unknown"),
+    )
+    checkpoint_extra_meta = {
+        "fine_tune_method": getattr(params, "fine_tune_method", "head_only"),
+        "layerwise_lr_decay": getattr(params, "layerwise_lr_decay", 0.75),
+        "gradual_unfreeze_interval": getattr(params, "gradual_unfreeze_interval", 5),
+        "monochrome": bool(getattr(profile, "monochrome", False)),
+        "ignore_label_name": str(getattr(params, "ignore_label_name", "unknown")),
+    }
+
+    _n_train = len(train_ds)
+    _n_val = len(val_ds) if val_ds else 0
+    _safe_log(
+        log_cb,
+        f"Dataset: {_n_train} train, {_n_val} val, {len(class_names)} classes",
+    )
+    from collections import Counter as _Counter
+
+    _train_dist = _Counter(train_ds.targets)
+    _val_dist = _Counter(val_ds.targets) if val_ds else {}
+    for cls_name in class_names:
+        cls_idx = shared_class_to_idx[cls_name]
+        _safe_log(
+            log_cb,
+            f"  class {cls_idx} ({cls_name}): "
+            f"train={_train_dist.get(cls_idx, 0)}, val={_val_dist.get(cls_idx, 0)}",
+        )
+
+    if not has_validation:
+        _safe_log(
+            log_cb,
+            "No validation split found; training without held-out validation.",
+        )
 
     rebalance_mode = (
         str(getattr(params, "class_rebalance_mode", "none") or "none").strip().lower()
@@ -1012,6 +1408,9 @@ def _train_custom_classify(
         len(class_names),
         rebalance_mode,
         rebalance_power,
+        ignored_class_indices=(
+            {ignore_label_idx} if ignore_label_idx is not None else None
+        ),
     )
 
     from torch.utils.data import WeightedRandomSampler
@@ -1032,20 +1431,37 @@ def _train_custom_classify(
         num_workers=0,
         pin_memory=True,
     )
-    val_loader = DataLoader(
-        val_ds, batch_size=params.batch, shuffle=False, num_workers=0, pin_memory=True
+    val_loader = (
+        DataLoader(
+            val_ds,
+            batch_size=params.batch,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=True,
+        )
+        if val_ds is not None
+        else None
     )
 
     device = _pick_torch_device(spec.device)
+    _safe_log(log_cb, f"Custom CNN device: {device}, backbone: {params.backbone}")
     model = build_torchvision_classifier(
         params.backbone,
         len(class_names),
         -1,
+        tiny_preset=str(getattr(params, "tiny_preset", "medium") or "medium"),
         hidden_layers=params.hidden_layers,
         hidden_dim=params.hidden_dim,
         dropout=params.dropout,
         input_width=params.input_width,
         input_height=params.input_height,
+        input_size=params.input_size,
+    )
+    _n_params = sum(p.numel() for p in model.parameters())
+    _n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    _safe_log(
+        log_cb,
+        f"Model: {params.backbone} — {_n_params:,} params ({_n_trainable:,} trainable)",
     )
     if spec.resume_from:
         _load_compatible_checkpoint_weights(
@@ -1078,6 +1494,11 @@ def _train_custom_classify(
             else None
         ),
         label_smoothing=params.label_smoothing,
+        **(
+            {"ignore_index": int(ignore_label_idx)}
+            if ignore_label_idx is not None
+            else {}
+        ),
     )
 
     best_ckpt_path = (
@@ -1098,9 +1519,11 @@ def _train_custom_classify(
         get_layer_groups,
         best_ckpt_path,
         class_names,
+        checkpoint_extra_meta,
         log_cb,
         progress_cb,
         should_cancel,
+        ignore_index=ignore_label_idx,
     )
 
     metrics_path = run_dir / "custom_metrics.json"
@@ -1126,14 +1549,28 @@ def _train_custom_classify(
         str(best_ckpt_path), device="cpu"
     )
     onnx_path = best_ckpt_path.with_suffix(".onnx")
-    export_torchvision_to_onnx(best_model, best_ckpt, onnx_path)
+    _safe_log(log_cb, "Exporting best checkpoint to ONNX...")
+    try:
+        export_torchvision_to_onnx(best_model, best_ckpt, onnx_path)
+        _safe_log(log_cb, f"ONNX exported: {onnx_path.name}")
+    except Exception as _onnx_exc:
+        _safe_log(
+            log_cb,
+            f"ONNX export failed ({type(_onnx_exc).__name__}: {_onnx_exc})",
+        )
+        onnx_path = Path("")
 
-    _safe_log(log_cb, f"Training complete. Best val acc: {best_val_acc:.4f}")
+    _total_elapsed = _time.monotonic() - _t0
+    _safe_log(
+        log_cb,
+        f"Custom CNN training complete — total wall_time={_total_elapsed:.1f}s"
+        + (f", best_val_acc={best_val_acc:.4f}" if best_val_acc is not None else ""),
+    )
 
     return {
         "success": True,
         "artifact_path": str(best_ckpt_path),
-        "onnx_path": str(onnx_path),
+        "onnx_path": str(onnx_path) if str(onnx_path) else "",
         "metrics_path": str(metrics_path),
         "best_val_acc": best_val_acc,
         "command": ["custom_classify_inprocess"],
@@ -1176,8 +1613,21 @@ def _stream_ultralytics_output(proc, log_cb, progress_cb, should_cancel, command
     """
     assert proc.stdout is not None
     ansi_re = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-    progress_re_1 = re.compile(r"Epoch\s+(\d+)\s*/\s*(\d+)")
-    progress_re_2 = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s")
+
+    def _extract_progress(msg: str) -> tuple[int, int] | None:
+        progress_patterns = (
+            re.compile(r"Epoch\s+(\d+)\s*/\s*(\d+)", re.IGNORECASE),
+            re.compile(r"Epoch\s+(\d+)\s+of\s+(\d+)", re.IGNORECASE),
+            re.compile(r"^\s*(\d+)\s*/\s*(\d+)(?:\s|$)"),
+            re.compile(
+                r"\bepoch\s*[=:]\s*(\d+)\b.*\btotal\s*[=:]\s*(\d+)\b", re.IGNORECASE
+            ),
+        )
+        for regex in progress_patterns:
+            match = regex.search(msg)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+        return None
 
     for line in proc.stdout:
         if should_cancel and should_cancel():
@@ -1186,14 +1636,12 @@ def _stream_ultralytics_output(proc, log_cb, progress_cb, should_cancel, command
         msg = ansi_re.sub("", line).rstrip()
         if msg:
             _safe_log(log_cb, msg)
-        for regex in (progress_re_1, progress_re_2):
-            m = regex.search(msg)
-            if m and progress_cb is not None:
-                try:
-                    progress_cb(int(m.group(1)), int(m.group(2)))
-                except Exception:
-                    pass
-                break
+        parsed_progress = _extract_progress(msg)
+        if parsed_progress is not None and progress_cb is not None:
+            try:
+                progress_cb(*parsed_progress)
+            except Exception as exc:
+                _safe_log(log_cb, f"Progress callback failed: {exc}")
     return None
 
 
@@ -1242,6 +1690,7 @@ def run_training(
 
     rc = proc.wait()
     if rc != 0:
+        _safe_log(log_cb, f"YOLO process exited with code {rc}")
         return {
             "success": False,
             "exit_code": int(rc),
@@ -1254,9 +1703,15 @@ def run_training(
     best = weights_dir / "best.pt"
     last = weights_dir / "last.pt"
     artifact = best if best.exists() else last if last.exists() else None
+    if artifact is not None:
+        _safe_log(log_cb, f"YOLO artifact selected: {artifact.name}")
+    else:
+        _safe_log(log_cb, "WARNING: No YOLO checkpoint found in weights directory")
 
     metrics_path = run_dir / "results.csv"
     best_val_acc = _extract_best_val_acc_from_results_csv(metrics_path)
+    if best_val_acc is not None:
+        _safe_log(log_cb, f"YOLO best val accuracy: {best_val_acc:.4f}")
     return {
         "success": artifact is not None,
         "artifact_path": str(artifact) if artifact is not None else "",

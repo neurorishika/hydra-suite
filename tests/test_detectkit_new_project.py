@@ -17,7 +17,10 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from hydra_suite.detectkit.gui.dialogs import NewProjectDialog  # noqa: E402
 from hydra_suite.detectkit.gui.main_window import MainWindow  # noqa: E402
-from hydra_suite.detectkit.gui.project import create_project  # noqa: E402
+from hydra_suite.detectkit.gui.project import (  # noqa: E402
+    create_project,
+    project_file_path,
+)
 
 
 @pytest.fixture()
@@ -117,7 +120,7 @@ def test_detectkit_main_window_new_project_creates_project_from_dialog(
     window.new_project()
 
     assert project_path.exists()
-    assert (project_path / "detectkit_project.json").exists()
+    assert project_file_path(project_path).exists()
     assert loaded_projects
     assert loaded_projects[0].project_dir == project_path
     assert loaded_projects[0].class_name == "ant"
@@ -182,6 +185,9 @@ def test_detectkit_main_window_side_panels_keep_readable_minimum_widths(qapp):
     assert window.splitter.childrenCollapsible() is False
     assert window.splitter.isCollapsible(0) is False
     assert window.splitter.isCollapsible(1) is False
+    assert window.splitter.isCollapsible(2) is False
+
+    window.close()
     assert window.splitter.isCollapsible(2) is False
 
     window.close()

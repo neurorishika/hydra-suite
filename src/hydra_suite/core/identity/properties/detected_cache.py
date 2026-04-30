@@ -185,21 +185,16 @@ class DetectedPropertiesCache:
         if self._loaded_data is None:
             return {
                 "detection_ids": [],
-                "ThetaRaw": [],
-                "ThetaResolved": [],
-                "HeadingSource": [],
-                "HeadingDirected": [],
-                "HeadTailHeadingRad": [],
-                "HeadTailConfidence": [],
-                "HeadTailDirected": [],
+                "HeadingResolved": [],
+                "HeadingMethod": [],
+                "HeadingIsDirected": [],
+                "HeadTailAngleRad": [],
+                "HeadTailClassifierConf": [],
             }
 
         frame_key = f"frame_{int(frame_idx):06d}"
         det_ids = _normalize_detection_ids(
             self._loaded_data.get(f"{frame_key}_detection_ids", _empty_int_array())
-        )
-        theta_raw = self._loaded_data.get(
-            f"{frame_key}_theta_raw", _empty_float_array()
         )
         theta_resolved = self._loaded_data.get(
             f"{frame_key}_theta_resolved", _empty_float_array()
@@ -225,23 +220,37 @@ class DetectedPropertiesCache:
             text = str(raw)
             heading_source.append(np.nan if text == _STRING_SENTINEL_NAN else text)
 
+        heading_directed_arr = np.asarray(heading_directed, dtype=np.uint8).reshape(-1)
+        headtail_directed_arr = np.asarray(headtail_directed, dtype=np.uint8).reshape(
+            -1
+        )
+        # Merge both directed flags: heading is directed if either the resolved
+        # heading or the head-tail classifier specifically succeeded.
+        is_directed = np.logical_or(
+            heading_directed_arr.astype(bool),
+            headtail_directed_arr.astype(bool),
+        ).tolist()
+
         return {
             "detection_ids": det_ids,
-            "ThetaRaw": np.asarray(theta_raw, dtype=np.float32).reshape(-1).tolist(),
-            "ThetaResolved": np.asarray(theta_resolved, dtype=np.float32)
+            # HeadingResolved: final disambiguated heading angle (post head-tail).
+            # ThetaRaw (= Theta in the tracking CSV) is omitted as redundant.
+            "HeadingResolved": np.asarray(theta_resolved, dtype=np.float32)
             .reshape(-1)
             .tolist(),
-            "HeadingSource": heading_source,
-            "HeadingDirected": np.asarray(heading_directed, dtype=np.uint8)
+            # HeadingMethod: which source produced the resolved heading
+            # ("headtail", "pose", "velocity", "default", …).
+            "HeadingMethod": heading_source,
+            # HeadingIsDirected: True when the resolved heading has a known
+            # head-vs-tail direction (from any source).
+            "HeadingIsDirected": is_directed,
+            # HeadTailAngleRad: angle from the head-tail classifier specifically,
+            # regardless of whether it was used as the final resolved heading.
+            "HeadTailAngleRad": np.asarray(headtail_heading, dtype=np.float32)
             .reshape(-1)
             .tolist(),
-            "HeadTailHeadingRad": np.asarray(headtail_heading, dtype=np.float32)
-            .reshape(-1)
-            .tolist(),
-            "HeadTailConfidence": np.asarray(headtail_confidence, dtype=np.float32)
-            .reshape(-1)
-            .tolist(),
-            "HeadTailDirected": np.asarray(headtail_directed, dtype=np.uint8)
+            # HeadTailClassifierConf: raw confidence score from the head-tail model.
+            "HeadTailClassifierConf": np.asarray(headtail_confidence, dtype=np.float32)
             .reshape(-1)
             .tolist(),
         }

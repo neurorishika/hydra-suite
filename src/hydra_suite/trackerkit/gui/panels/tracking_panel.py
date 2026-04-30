@@ -90,22 +90,6 @@ class TrackingPanel(QWidget):
         )
         f_core.addRow("Max movement (body lengths)", self.spin_max_dist)
 
-        self.spin_continuity_thresh = QDoubleSpinBox()
-        self.spin_continuity_thresh.setRange(0.1, 10.0)
-        self.spin_continuity_thresh.setSingleStep(0.1)
-        self.spin_continuity_thresh.setDecimals(2)
-        self.spin_continuity_thresh.setValue(0.5)
-        self.spin_continuity_thresh.setToolTip(
-            "Search radius for recovering lost tracks (×body size).\n"
-            "When a track is lost, looks backward within this distance.\n"
-            "Smaller = more conservative recovery (fewer false merges).\n"
-            "Recommended: 0.3-1.0×"
-        )
-        f_core.addRow(
-            "Recovery search distance (body lengths)",
-            self.spin_continuity_thresh,
-        )
-
         self.spin_kalman_max_velocity = QDoubleSpinBox()
         self.spin_kalman_max_velocity.setRange(0.5, 10.0)
         self.spin_kalman_max_velocity.setSingleStep(0.1)
@@ -523,6 +507,135 @@ class TrackingPanel(QWidget):
             "tracking.assignment_solver", g_solver
         )
 
+        # Identity Decoder
+        g_identity_decoder = CollapsibleGroupBox(
+            "How should identity guide assignment?"
+        )
+        self.tracking_accordion.addCollapsible(g_identity_decoder)
+        vl_identity_decoder = QVBoxLayout()
+        vl_identity_decoder.addWidget(
+            self._main_window._create_help_label(
+                "When identity classification is configured, the Bayesian online decoder integrates "
+                "CNN and AprilTag evidence into a per-track probability distribution and uses it "
+                "as a soft cost term during assignment. The decoder is uncertain in early frames, "
+                "so identity influence starts near zero and grows as evidence accumulates."
+            )
+        )
+        f_identity_decoder = QFormLayout(None)
+        f_identity_decoder.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
+        self.chk_enable_identity_in_tracking = QCheckBox(
+            "Use identity to influence tracking"
+        )
+        self.chk_enable_identity_in_tracking.setChecked(True)
+        self.chk_enable_identity_in_tracking.setToolTip(
+            "Master switch for identity influence on tracking.\n"
+            "When OFF, identity has zero effect on tracking: no online decoder is built,\n"
+            "no Bayesian cost term is added, no identity-based rejoin or commit logic runs.\n"
+            "Identity classification still runs and labels are still written to the\n"
+            "*_with_individual.csv (and offline post-processing such as the fragment\n"
+            "solver still works), but the live tracking pipeline is purely geometric."
+        )
+        self.chk_enable_identity_in_tracking.toggled.connect(
+            self._on_identity_in_tracking_toggled
+        )
+        f_identity_decoder.addRow(self.chk_enable_identity_in_tracking)
+
+        self.chk_enable_identity_online_decoder = QCheckBox(
+            "Enable online identity decoder (Bayesian cost term)"
+        )
+        self.chk_enable_identity_online_decoder.setChecked(False)
+        self.chk_enable_identity_online_decoder.setToolTip(
+            "Activates the Bayesian online decoder that integrates CNN and AprilTag evidence\n"
+            "into the assignment cost as a soft probability term.\n"
+            "Requires identity classification to be configured in the Individual Analysis tab\n"
+            "AND the master 'Use identity to influence tracking' switch above to be ON."
+        )
+        f_identity_decoder.addRow(self.chk_enable_identity_online_decoder)
+
+        self.spin_identity_weight = QDoubleSpinBox()
+        self.spin_identity_weight.setRange(0.0, 2.0)
+        self.spin_identity_weight.setSingleStep(0.05)
+        self.spin_identity_weight.setDecimals(2)
+        self.spin_identity_weight.setValue(1.0)
+        self.spin_identity_weight.setToolTip(
+            "Relative weight of the identity cost term vs. the geometric cost.\n"
+            "0.0 = identity has no influence on assignment.\n"
+            "1.0 = balanced with geometry.\n"
+            "When the decoder is uncertain (early frames), this term is near-zero automatically."
+        )
+        f_identity_decoder.addRow("Identity weight", self.spin_identity_weight)
+
+        self.spin_identity_commit_threshold = QDoubleSpinBox()
+        self.spin_identity_commit_threshold.setRange(0.5, 1.0)
+        self.spin_identity_commit_threshold.setSingleStep(0.01)
+        self.spin_identity_commit_threshold.setDecimals(2)
+        self.spin_identity_commit_threshold.setValue(0.85)
+        self.spin_identity_commit_threshold.setToolTip(
+            "Posterior confidence required before a track slot commits to an identity.\n"
+            "Higher = fewer but more certain identity assignments."
+        )
+        f_identity_decoder.addRow(
+            "Commit threshold", self.spin_identity_commit_threshold
+        )
+
+        self.spin_identity_display_threshold = QDoubleSpinBox()
+        self.spin_identity_display_threshold.setRange(0.0, 1.0)
+        self.spin_identity_display_threshold.setSingleStep(0.05)
+        self.spin_identity_display_threshold.setDecimals(2)
+        self.spin_identity_display_threshold.setValue(0.6)
+        self.spin_identity_display_threshold.setToolTip(
+            "Minimum posterior confidence before an identity label is shown in the tracking overlay."
+        )
+        f_identity_decoder.addRow(
+            "Display threshold", self.spin_identity_display_threshold
+        )
+
+        self.spin_identity_transition_epsilon = QDoubleSpinBox()
+        self.spin_identity_transition_epsilon.setRange(0.0, 0.1)
+        self.spin_identity_transition_epsilon.setSingleStep(0.005)
+        self.spin_identity_transition_epsilon.setDecimals(3)
+        self.spin_identity_transition_epsilon.setValue(0.02)
+        self.spin_identity_transition_epsilon.setToolTip(
+            "Off-diagonal probability in the identity Markov transition.\n"
+            "Lower = identity is assumed more stable between frames.\n"
+            "Higher = allows faster identity switching."
+        )
+        f_identity_decoder.addRow(
+            "Transition epsilon", self.spin_identity_transition_epsilon
+        )
+
+        self.spin_identity_unknown_prior = QDoubleSpinBox()
+        self.spin_identity_unknown_prior.setRange(0.0, 0.2)
+        self.spin_identity_unknown_prior.setSingleStep(0.005)
+        self.spin_identity_unknown_prior.setDecimals(3)
+        self.spin_identity_unknown_prior.setValue(0.05)
+        self.spin_identity_unknown_prior.setToolTip(
+            "Prior probability mass reserved for the 'unknown' identity state.\n"
+            "Higher = more uncertainty about whether any known identity applies."
+        )
+        f_identity_decoder.addRow("Unknown prior", self.spin_identity_unknown_prior)
+
+        self.spin_identity_rejoin_threshold = QDoubleSpinBox()
+        self.spin_identity_rejoin_threshold.setRange(0.0, 1.0)
+        self.spin_identity_rejoin_threshold.setSingleStep(0.05)
+        self.spin_identity_rejoin_threshold.setDecimals(2)
+        self.spin_identity_rejoin_threshold.setValue(0.5)
+        self.spin_identity_rejoin_threshold.setToolTip(
+            "Minimum identity score (probability) for a committed-lost slot to rejoin "
+            "a detection via identity evidence alone, bypassing the geometric gate."
+        )
+        f_identity_decoder.addRow(
+            "Rejoin threshold", self.spin_identity_rejoin_threshold
+        )
+
+        vl_identity_decoder.addLayout(f_identity_decoder)
+        g_identity_decoder.setContentLayout(vl_identity_decoder)
+        vbox.addWidget(g_identity_decoder)
+        self._main_window._remember_collapsible_state(
+            "tracking.identity_decoder", g_identity_decoder
+        )
+
         # Orientation & Lifecycle
         g_misc = CollapsibleGroupBox("How should track direction be updated?")
         self.tracking_accordion.addCollapsible(g_misc)
@@ -610,6 +723,24 @@ class TrackingPanel(QWidget):
         f_misc.addRow(
             "Directed-flip persistence (frames)", self.spin_directed_orient_flip_persist
         )
+
+        # Group the three online consistency controls so they can be shown/hidden
+        # together when the post-hoc mode is toggled on/off.
+        self._directed_orient_online_widgets = [
+            self.chk_directed_orient_smoothing,
+            self.spin_directed_orient_flip_conf,
+            self.spin_directed_orient_flip_persist,
+        ]
+
+        # Note shown in place of the online controls when post-hoc mode is active.
+        self.lbl_directed_orient_posthoc_note = self._main_window._create_help_label(
+            "Post-hoc global heading consistency is active (head-tail or pose model "
+            "detected). Online flip checks are disabled — heading ambiguities are "
+            "resolved globally per track in post-processing using a minimum-flips "
+            "dynamic-programming algorithm."
+        )
+        self.lbl_directed_orient_posthoc_note.setVisible(False)
+        vl_misc.addWidget(self.lbl_directed_orient_posthoc_note)
 
         vl_misc.addLayout(f_misc)
         g_misc.setContentLayout(vl_misc)
@@ -844,12 +975,12 @@ class TrackingPanel(QWidget):
         self.chk_export_confidence_density_video = QCheckBox(
             "Export density diagnostic video"
         )
-        self.chk_export_confidence_density_video.setChecked(True)
+        self.chk_export_confidence_density_video.setChecked(False)
         self.chk_export_confidence_density_video.setToolTip(
             "Write a reduced-resolution confidence-density visualization video\n"
             "next to the source video after density-map computation completes.\n"
-            "Disable to keep density-aware matching active without exporting\n"
-            "the diagnostic visualization file."
+            "Leave disabled unless you need the diagnostic visualization,\n"
+            "because exporting it adds a full extra video write pass."
         )
         f_density.addRow("", self.chk_export_confidence_density_video)
 
@@ -879,3 +1010,33 @@ class TrackingPanel(QWidget):
         enabled = self.chk_enable_confidence_density_map.isChecked()
         self.g_density.setVisible(enabled)
         self.g_density.setEnabled(enabled)
+
+    def _on_identity_in_tracking_toggled(self, _checked):
+        """Disable identity-decoder controls when the master switch is OFF."""
+        enabled = self.chk_enable_identity_in_tracking.isChecked()
+        for widget in (
+            self.chk_enable_identity_online_decoder,
+            self.spin_identity_weight,
+            self.spin_identity_commit_threshold,
+            self.spin_identity_display_threshold,
+            self.spin_identity_transition_epsilon,
+            self.spin_identity_unknown_prior,
+            self.spin_identity_rejoin_threshold,
+        ):
+            widget.setEnabled(enabled)
+
+    def sync_directed_orient_posthoc_ui(self, posthoc_active: bool) -> None:
+        """Toggle between online-consistency controls and the post-hoc note.
+
+        Called whenever the head-tail / pose model configuration changes so the
+        Direction Updates section stays consistent with the active pipeline.
+
+        Args:
+            posthoc_active: True when a head-tail or pose model is configured,
+                meaning online flip hysteresis is bypassed in favour of the
+                global DP step at post-processing time.
+        """
+        for w in self._directed_orient_online_widgets:
+            w.setVisible(not posthoc_active)
+            w.setEnabled(not posthoc_active)
+        self.lbl_directed_orient_posthoc_note.setVisible(posthoc_active)

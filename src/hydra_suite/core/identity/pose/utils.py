@@ -18,7 +18,6 @@ from hydra_suite.utils.gpu_utils import (
     CUDA_AVAILABLE,
     MPS_AVAILABLE,
     ONNXRUNTIME_AVAILABLE,
-    ROCM_AVAILABLE,
     SLEAP_RUNTIME_ONNX_AVAILABLE,
     SLEAP_RUNTIME_TENSORRT_AVAILABLE,
     TENSORRT_AVAILABLE,
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 def resolve_device(requested: str, backend_family: str) -> str:
     """Resolve device string to actual device identifier."""
     req = str(requested or "auto").strip().lower()
-    cuda_like_available = CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE or ROCM_AVAILABLE
+    cuda_like_available = CUDA_AVAILABLE or TORCH_CUDA_AVAILABLE
     if req in ("", "auto"):
         if cuda_like_available:
             return "cuda:0"
@@ -44,11 +43,11 @@ def resolve_device(requested: str, backend_family: str) -> str:
             return "mps"
         return "cpu"
 
-    if req in ("cuda", "gpu", "rocm"):
+    if req in ("cuda", "gpu"):
         req = "cuda:0"
     if req.startswith("cuda") and not cuda_like_available:
         logger.warning(
-            "Requested CUDA/ROCm for %s runtime but no compatible torch CUDA backend is available. Falling back to CPU.",
+            "Requested CUDA for %s runtime but no compatible torch CUDA backend is available. Falling back to CPU.",
             backend_family,
         )
         return "cpu"
@@ -341,7 +340,7 @@ def parse_runtime_request(requested: str) -> Tuple[str, Optional[str]]:
             suffix = req[len(token) :]
             if suffix in {"cpu", "mps"}:
                 return prefix, suffix
-            if suffix in {"cuda", "rocm"}:
+            if suffix in {"cuda"}:
                 return prefix, "cuda:0"
             return prefix, None
 

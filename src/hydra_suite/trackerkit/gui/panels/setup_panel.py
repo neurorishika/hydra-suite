@@ -617,6 +617,11 @@ class SetupPanel(QWidget):
             "Head-tail runtime for oriented crop classification.\n"
             "Visible only when head-tail analysis is enabled."
         )
+        self.combo_headtail_runtime.currentIndexChanged.connect(
+            lambda _index: self._main_window._sync_headtail_runtime_selection(
+                self.combo_headtail_runtime
+            )
+        )
         self._register_optional_performance_control(
             self.combo_headtail_runtime,
             "Head-tail runtime",

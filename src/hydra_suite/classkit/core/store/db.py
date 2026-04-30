@@ -2,13 +2,26 @@
 
 import csv
 import json
+import re
+import shutil
 import sqlite3
+from hashlib import sha1
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from hydra_suite.data.project_bundle import ensure_bundle_state_subdirectory
+from hydra_suite.data.project_bundle import (
+    bundle_root_for_path,
+    ensure_bundle_state_subdirectory,
+    ensure_bundle_subdirectory,
+)
+
+_PROJECT_ARTIFACT_PREFIXES = {
+    ("artifacts", "exports"),
+    ("artifacts", "imported_sources"),
+    ("artifacts", "models"),
+}
 
 
 class ClassKitDB:
@@ -26,6 +39,127 @@ class ClassKitDB:
     def _cache_dir(self, cache_name: str) -> Path:
         """Return the canonical bundle-aware cache directory for *cache_name*."""
         return ensure_bundle_state_subdirectory(self.db_path, cache_name)
+
+    @staticmethod
+    def _project_owned_suffix(path_value: Path) -> Optional[Path]:
+        parts = path_value.parts
+        if not parts:
+            return None
+
+        if parts[0] == "state" or parts[0] == "history":
+            return Path(*parts)
+        if len(parts) >= 2 and tuple(parts[:2]) in _PROJECT_ARTIFACT_PREFIXES:
+            return Path(*parts)
+
+        for index, part in enumerate(parts):
+            suffix = parts[index:]
+            if not suffix:
+                continue
+            if suffix[0] == "state" or suffix[0] == "history":
+                return Path(*suffix)
+            if len(suffix) >= 2 and tuple(suffix[:2]) in _PROJECT_ARTIFACT_PREFIXES:
+                return Path(*suffix)
+        return None
+
+    def _rebase_project_owned_path(self, path_value: str) -> str:
+        text = str(path_value or "").strip()
+        if not text:
+            return text
+
+        project_root = bundle_root_for_path(self.db_path)
+        candidate = Path(text).expanduser()
+        suffix = self._project_owned_suffix(candidate)
+        if suffix is None:
+            return text
+        return str((project_root / suffix).resolve())
+
+    @staticmethod
+    def _slugify_portable_name(value: object) -> str:
+        text = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-._")
+        return text or "source"
+
+    @staticmethod
+    def _path_is_within_project(project_root: Path, candidate: str | Path) -> bool:
+        try:
+            Path(candidate).expanduser().resolve().relative_to(project_root.resolve())
+        except Exception:
+            return False
+        return True
+
+    def _portable_source_dir(self, source_root: str | Path) -> Path:
+        project_root = bundle_root_for_path(self.db_path)
+        imported_root = ensure_bundle_subdirectory(
+            project_root, "artifacts/imported_sources"
+        )
+        anchor = Path(str(source_root or "source")).expanduser()
+        try:
+            anchor_key = str(anchor.resolve())
+        except Exception:
+            anchor_key = str(anchor)
+        digest = sha1(anchor_key.encode("utf-8")).hexdigest()[:10]
+        folder_name = f"{self._slugify_portable_name(anchor.name)}-{digest}"
+        return ensure_bundle_subdirectory(
+            imported_root,
+            folder_name,
+        )
+
+    def materialize_linked_images(self) -> int:
+        """Copy externally linked project images into the bundle and rewrite paths."""
+        updated = 0
+        project_root = bundle_root_for_path(self.db_path).resolve()
+
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT id, file_path, meta_json FROM images ORDER BY id ASC")
+            image_rows = c.fetchall()
+            for row_id, stored_path, meta_json in image_rows:
+                source_path = Path(str(stored_path or "")).expanduser()
+                try:
+                    resolved_source = source_path.resolve()
+                except Exception:
+                    resolved_source = source_path
+
+                if self._path_is_within_project(project_root, resolved_source):
+                    continue
+                if not resolved_source.exists():
+                    raise FileNotFoundError(
+                        f"Linked image not found: {resolved_source}"
+                    )
+
+                metadata = self._decode_meta_json(meta_json)
+                source_root = str(metadata.get("source_root") or "").strip()
+                if not source_root:
+                    source_root = str(resolved_source.parent)
+                    metadata["source_root"] = source_root
+
+                dest_root = self._portable_source_dir(source_root)
+                images_root = dest_root / "images"
+                images_root.mkdir(parents=True, exist_ok=True)
+                file_stem = self._slugify_portable_name(resolved_source.stem)[:48]
+                dest_path = (
+                    images_root
+                    / f"{int(row_id):06d}_{file_stem}{resolved_source.suffix.lower()}"
+                ).resolve()
+                shutil.copy2(resolved_source, dest_path)
+
+                metadata["original_image_path"] = str(
+                    metadata.get("original_image_path") or resolved_source
+                )
+                metadata["standardized_source_dir"] = str(dest_root.resolve())
+
+                c.execute(
+                    "UPDATE images SET file_path = ?, meta_json = ? WHERE id = ?",
+                    (
+                        str(dest_path),
+                        json.dumps(metadata) if metadata else None,
+                        row_id,
+                    ),
+                )
+                updated += 1
+
+            conn.commit()
+
+        return updated
 
     def _init_db(self):
         """Create tables if not exist."""
@@ -215,18 +349,34 @@ class ClassKitDB:
             """)
         conn.commit()
 
-    def add_images(self, paths: List[Path], hashes: List[str] = None):
+    def add_images(
+        self,
+        paths: List[Path],
+        hashes: List[str] = None,
+        metadata_by_path: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         """Batch insert images, storing resolved absolute paths."""
         if hashes is None:
             hashes = [None] * len(paths)
+        metadata_by_path = metadata_by_path or {}
 
         with sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
             # Resolve paths to canonical absolute form to prevent duplicates
             # caused by symlinks or relative path representations.
-            data = [(str(Path(p).resolve()), h) for p, h in zip(paths, hashes)]
+            data = []
+            for p, h in zip(paths, hashes):
+                resolved_path = str(Path(p).resolve())
+                payload = metadata_by_path.get(resolved_path)
+                data.append(
+                    (
+                        resolved_path,
+                        h,
+                        json.dumps(payload) if payload is not None else None,
+                    )
+                )
             c.executemany(
-                "INSERT OR IGNORE INTO images (file_path, file_hash) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO images (file_path, file_hash, meta_json) VALUES (?, ?, ?)",
                 data,
             )
             conn.commit()
@@ -254,6 +404,99 @@ class ClassKitDB:
                         (resolved, row_id),
                     )
                     updated += 1
+            conn.commit()
+        return updated
+
+    def relocate_project_owned_paths(self) -> int:
+        """Rebase bundle-owned DB paths onto the current project root.
+
+        This keeps copied/imported bundle assets portable after extracting the
+        project into a different filesystem location.
+        """
+        updated = 0
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+
+            c.execute("SELECT id, file_path, meta_json FROM images")
+            image_rows = c.fetchall()
+            for row_id, stored_path, meta_json in image_rows:
+                new_path = self._rebase_project_owned_path(stored_path)
+                metadata = self._decode_meta_json(meta_json)
+                metadata_changed = False
+                standardized_dir = metadata.get("standardized_source_dir")
+                if standardized_dir:
+                    new_standardized_dir = self._rebase_project_owned_path(
+                        str(standardized_dir)
+                    )
+                    if new_standardized_dir != str(standardized_dir):
+                        metadata["standardized_source_dir"] = new_standardized_dir
+                        metadata_changed = True
+
+                if new_path != str(stored_path) or metadata_changed:
+                    c.execute(
+                        "UPDATE images SET file_path = ?, meta_json = ? WHERE id = ?",
+                        (
+                            new_path,
+                            json.dumps(metadata) if metadata else None,
+                            row_id,
+                        ),
+                    )
+                    updated += 1
+
+            def _update_path_table(
+                table_name: str,
+                columns: tuple[str, ...],
+            ) -> None:
+                nonlocal updated
+                select_columns = ", ".join(("id",) + columns)
+                c.execute(f"SELECT {select_columns} FROM {table_name}")  # noqa: S608
+                for row in c.fetchall():
+                    row_id = int(row[0])
+                    values = list(row[1:])
+                    changed = False
+                    for index, value in enumerate(values):
+                        if not value:
+                            continue
+                        rebased = self._rebase_project_owned_path(str(value))
+                        if rebased != str(value):
+                            values[index] = rebased
+                            changed = True
+                    if changed:
+                        assignments = ", ".join(f"{column} = ?" for column in columns)
+                        c.execute(
+                            f"UPDATE {table_name} SET {assignments} WHERE id = ?",  # noqa: S608
+                            tuple(values) + (row_id,),
+                        )
+                        updated += 1
+
+            _update_path_table("embeddings", ("file_path",))
+            _update_path_table("cluster_cache", ("assignments_path", "centers_path"))
+            _update_path_table("umap_cache", ("coords_path",))
+            _update_path_table(
+                "infinite_label_cache",
+                ("distance_path", "cluster_counts_path"),
+            )
+            _update_path_table("prediction_cache", ("probs_path",))
+
+            c.execute("SELECT id, artifact_paths_json FROM model_cache")
+            for row_id, paths_json in c.fetchall():
+                try:
+                    artifact_paths = json.loads(paths_json)
+                except Exception:
+                    continue
+                if not isinstance(artifact_paths, list):
+                    continue
+                rebased_paths = [
+                    self._rebase_project_owned_path(str(path))
+                    for path in artifact_paths
+                ]
+                if rebased_paths != artifact_paths:
+                    c.execute(
+                        "UPDATE model_cache SET artifact_paths_json = ? WHERE id = ?",
+                        (json.dumps(rebased_paths), row_id),
+                    )
+                    updated += 1
+
             conn.commit()
         return updated
 
@@ -353,6 +596,34 @@ class ClassKitDB:
                 """)
             conn.commit()
 
+    def clear_labels_not_in_set(self, valid_labels: set) -> int:
+        """Null out labels whose value is not in *valid_labels*.
+
+        Returns the number of rows affected.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT DISTINCT label FROM images WHERE label IS NOT NULL")
+            stale = [row[0] for row in c.fetchall() if row[0] not in valid_labels]
+            if not stale:
+                return 0
+            placeholders = ",".join("?" * len(stale))
+            c.execute(
+                f"""
+                UPDATE images
+                SET label = NULL,
+                    confidence = NULL,
+                    label_source = NULL,
+                    verified = 0,
+                    verified_at = NULL,
+                    auto_label_metadata_json = NULL
+                WHERE label IN ({placeholders})
+                """,
+                stale,
+            )
+            conn.commit()
+            return c.rowcount
+
     def get_all_labels(self) -> List[Optional[str]]:
         """Return the label for every image, ordered by insertion ID.
 
@@ -434,6 +705,28 @@ class ClassKitDB:
             conn.commit()
         return updated_count
 
+    def mark_labels_unverified(self, paths: List[Path | str]) -> int:
+        """Mark existing labels as pending review without changing label metadata."""
+        if not paths:
+            return 0
+
+        updated_count = 0
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            for path in paths:
+                c.execute(
+                    """
+                    UPDATE images
+                    SET verified = 0,
+                        verified_at = NULL
+                    WHERE file_path = ? AND label IS NOT NULL
+                    """,
+                    (self._resolve_path_string(path),),
+                )
+                updated_count += c.rowcount
+            conn.commit()
+        return updated_count
+
     def count_images(self) -> int:
         """Return the total number of images registered in the database."""
         with sqlite3.connect(self.db_path) as conn:
@@ -448,6 +741,17 @@ class ClassKitDB:
             c = conn.cursor()
             c.execute("SELECT file_path FROM images ORDER BY id")
             return [r[0] for r in c.fetchall()]
+
+    def get_image_metadata_by_path(self) -> Dict[str, Dict[str, Any]]:
+        """Return decoded image metadata keyed by canonical file path."""
+        with sqlite3.connect(self.db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT file_path, meta_json FROM images ORDER BY id")
+            rows = c.fetchall()
+        return {
+            str(file_path): self._decode_meta_json(meta_json)
+            for file_path, meta_json in rows
+        }
 
     @staticmethod
     def _resolve_path_string(path: Path | str) -> str:
@@ -1454,13 +1758,21 @@ class ClassKitDB:
         """
         with sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
-            c.execute("SELECT file_path FROM images ORDER BY id")
+            c.execute("SELECT file_path, meta_json FROM images ORDER BY id")
             rows = c.fetchall()
 
         folder_counts: Dict[str, int] = {}
-        for (fp,) in rows:
-            parent = str(Path(fp).parent)
-            folder_counts[parent] = folder_counts.get(parent, 0) + 1
+        for fp, meta_json in rows:
+            metadata = self._decode_meta_json(meta_json)
+            source_root = metadata.get("source_root")
+            if source_root:
+                try:
+                    folder = str(Path(str(source_root)).resolve())
+                except Exception:
+                    folder = str(source_root)
+            else:
+                folder = str(Path(fp).parent)
+            folder_counts[folder] = folder_counts.get(folder, 0) + 1
 
         return sorted(
             [{"folder": f, "count": n} for f, n in folder_counts.items()],
@@ -1506,11 +1818,26 @@ class ClassKitDB:
         with sqlite3.connect(self.db_path) as conn:
             c = conn.cursor()
             # Fetch ids to delete (SQLite doesn't have dirname())
-            c.execute("SELECT id, file_path FROM images")
+            c.execute("SELECT id, file_path, meta_json FROM images")
             ids_to_delete = []
-            for row_id, fp in c.fetchall():
+            standardized_dirs_to_delete: set[Path] = set()
+            for row_id, fp, meta_json in c.fetchall():
+                metadata = self._decode_meta_json(meta_json)
+                source_root = metadata.get("source_root")
+                if (
+                    source_root
+                    and str(Path(str(source_root)).resolve()) == folder_resolved
+                ):
+                    ids_to_delete.append(row_id)
+                    standardized_dir = metadata.get("standardized_source_dir")
+                    if standardized_dir:
+                        standardized_dirs_to_delete.add(Path(str(standardized_dir)))
+                    continue
                 if str(Path(fp).parent) == folder_resolved:
                     ids_to_delete.append(row_id)
+                    standardized_dir = metadata.get("standardized_source_dir")
+                    if standardized_dir:
+                        standardized_dirs_to_delete.add(Path(str(standardized_dir)))
 
             if ids_to_delete:
                 placeholders = ",".join("?" for _ in ids_to_delete)
@@ -1519,4 +1846,10 @@ class ClassKitDB:
                     ids_to_delete,
                 )
             conn.commit()
+
+        for standardized_dir in standardized_dirs_to_delete:
+            try:
+                shutil.rmtree(standardized_dir, ignore_errors=True)
+            except Exception:
+                continue
         return len(ids_to_delete)

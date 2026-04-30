@@ -185,6 +185,27 @@ def test_classify_cache_path_uses_video_cache_subdirectory(tmp_path: Path) -> No
     )
 
 
+def test_classify_cache_path_does_not_nest_when_base_is_existing_cache_dir(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "clip.mp4"
+    cache_dir = tmp_path / "clip_caches"
+    cache_dir.mkdir()
+
+    cache_path = mod.build_classify_cache_path(
+        str(video_path),
+        "cl_hash456",
+        "individual_id",
+        0,
+        100,
+        artifact_base_dir=cache_dir,
+    )
+
+    assert cache_path == (
+        cache_dir / "clip_classify_cache_individual_id_cl_hash456_0_100.npz"
+    )
+
+
 def test_find_existing_classify_cache_path(tmp_path: Path) -> None:
     video_path = tmp_path / "clip.mp4"
     artifact_root = tmp_path / "artifacts"

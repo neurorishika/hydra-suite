@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import numpy as np
+
 from hydra_suite.training.contracts import (
     AugmentationProfile,
     TrainingHyperParams,
     TrainingRole,
     TrainingRunSpec,
 )
-from hydra_suite.training.runner import build_ultralytics_command
+from hydra_suite.training.runner import (
+    _apply_tiny_augmentation,
+    build_ultralytics_command,
+)
 
 
 def test_augmentation_args_passed_to_command():
@@ -45,3 +50,23 @@ def test_augmentation_disabled_skips_args():
     cmd = build_ultralytics_command(spec, "/tmp/run")
     cmd_str = " ".join(cmd)
     assert "flipud" not in cmd_str
+
+
+def test_tiny_augmentation_monochrome_enforces_equal_channels():
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    img[..., 0] = 220
+    img[..., 1] = 80
+    img[..., 2] = 20
+
+    out = _apply_tiny_augmentation(
+        img,
+        augment=True,
+        profile=AugmentationProfile(enabled=True, monochrome=True),
+    )
+
+    assert out.shape == img.shape
+    assert np.array_equal(out[..., 0], out[..., 1])
+    assert np.array_equal(out[..., 1], out[..., 2])
+    assert out.shape == img.shape
+    assert np.array_equal(out[..., 0], out[..., 1])
+    assert np.array_equal(out[..., 1], out[..., 2])

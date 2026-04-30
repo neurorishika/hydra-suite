@@ -20,6 +20,8 @@ import torchvision.models as tvm
 
 TORCHVISION_BACKBONES: list[str] = [
     "tinyclassifier",
+    "mobilenet_v3_small",
+    "shufflenet_v2_x1_0",
     "convnext_tiny",
     "convnext_small",
     "efficientnet_b0",
@@ -31,6 +33,8 @@ TORCHVISION_BACKBONES: list[str] = [
 # Human-readable labels for the GUI
 BACKBONE_DISPLAY_NAMES: dict[str, str] = {
     "tinyclassifier": "TinyClassifier",
+    "mobilenet_v3_small": "MobileNet-V3-Small",
+    "shufflenet_v2_x1_0": "ShuffleNet-V2 x1.0",
     "convnext_tiny": "ConvNeXt-Tiny",
     "convnext_small": "ConvNeXt-Small",
     "efficientnet_b0": "EfficientNet-B0",
@@ -48,6 +52,25 @@ HEAD_MODULE_NAMES = {
     "fc_norm",
 }
 
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD = [0.229, 0.224, 0.225]
+
+
+def get_classifier_normalization_stats(
+    monochrome: bool = False,
+) -> tuple[list[float], list[float]]:
+    """Return normalization stats for ClassKit torchvision classifiers.
+
+    Monochrome mode should preserve identical channels after normalization,
+    so grayscale inputs use the same mean/std in all three channels.
+    """
+    if not monochrome:
+        return list(IMAGENET_MEAN), list(IMAGENET_STD)
+
+    mono_mean = float(sum(IMAGENET_MEAN) / len(IMAGENET_MEAN))
+    mono_std = float(sum(IMAGENET_STD) / len(IMAGENET_STD))
+    return [mono_mean, mono_mean, mono_mean], [mono_std, mono_std, mono_std]
+
 
 def is_timm_backbone(backbone: str) -> bool:
     """Return True when the backbone key refers to a TIMM model."""
@@ -58,7 +81,29 @@ def _strip_timm_prefix(backbone: str) -> str:
     return str(backbone).split("/", 1)[1] if is_timm_backbone(backbone) else backbone
 
 
-def _load_pretrained(backbone: str) -> nn.Module:
+def _normalize_timm_img_size(input_size: Any) -> int | tuple[int, int] | None:
+    """Return a TIMM-compatible img_size value or None when not specified."""
+    if input_size is None:
+        return None
+    if isinstance(input_size, int):
+        return int(input_size) if int(input_size) > 0 else None
+    if isinstance(input_size, (list, tuple)) and len(input_size) == 2:
+        try:
+            height = int(input_size[0])
+            width = int(input_size[1])
+        except (TypeError, ValueError):
+            return None
+        if height <= 0 or width <= 0:
+            return None
+        return height if height == width else (height, width)
+    return None
+
+
+def _load_pretrained(
+    backbone: str,
+    *,
+    input_size: Any = None,
+) -> nn.Module:
     """Load a pretrained torchvision model by backbone key."""
     if is_timm_backbone(backbone):
         try:
@@ -69,9 +114,17 @@ def _load_pretrained(backbone: str) -> nn.Module:
             ) from exc
 
         model_name = _strip_timm_prefix(backbone)
+        img_size = _normalize_timm_img_size(input_size)
+        if img_size is not None:
+            try:
+                return timm.create_model(model_name, pretrained=True, img_size=img_size)
+            except TypeError:
+                pass
         return timm.create_model(model_name, pretrained=True)
 
     weights_map = {
+        "mobilenet_v3_small": tvm.MobileNet_V3_Small_Weights.IMAGENET1K_V1,
+        "shufflenet_v2_x1_0": tvm.ShuffleNet_V2_X1_0_Weights.IMAGENET1K_V1,
         "convnext_tiny": tvm.ConvNeXt_Tiny_Weights.IMAGENET1K_V1,
         "convnext_small": tvm.ConvNeXt_Small_Weights.IMAGENET1K_V1,
         "efficientnet_b0": tvm.EfficientNet_B0_Weights.IMAGENET1K_V1,
@@ -96,9 +149,15 @@ def _replace_head(model: nn.Module, backbone: str, num_classes: int) -> nn.Modul
     if backbone.startswith("convnext"):
         in_features = model.classifier[-1].in_features
         model.classifier[-1] = nn.Linear(in_features, num_classes)
+    elif backbone.startswith("mobilenet"):
+        in_features = model.classifier[-1].in_features
+        model.classifier[-1] = nn.Linear(in_features, num_classes)
     elif backbone.startswith("efficientnet"):
         in_features = model.classifier[-1].in_features
         model.classifier[-1] = nn.Linear(in_features, num_classes)
+    elif backbone.startswith("shufflenet"):
+        in_features = model.fc.in_features
+        model.fc = nn.Linear(in_features, num_classes)
     elif backbone.startswith("resnet"):
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, num_classes)
@@ -147,8 +206,12 @@ def get_layer_groups(model: nn.Module, backbone: str) -> list[nn.Module]:
         # stage blocks so that trainable_layers=N unfreezes the last N stages,
         # skipping the lightweight transition layers.
         return [model.features[i] for i in [1, 3, 5, 7]]
+    elif backbone.startswith("mobilenet"):
+        return list(model.features)
     elif backbone.startswith("resnet"):
         return [model.layer1, model.layer2, model.layer3, model.layer4]
+    elif backbone.startswith("shufflenet"):
+        return [model.stage2, model.stage3, model.stage4, model.conv5]
     elif backbone.startswith("efficientnet"):
         # features is a Sequential; expose as individual blocks
         return list(model.features)
@@ -169,7 +232,9 @@ def _get_head_module(model: nn.Module, backbone: str) -> nn.Module | None:
 
     if backbone.startswith("convnext") or backbone.startswith("efficientnet"):
         return model.classifier
-    if backbone.startswith("resnet"):
+    if backbone.startswith("mobilenet"):
+        return model.classifier
+    if backbone.startswith("resnet") or backbone.startswith("shufflenet"):
         return model.fc
     if backbone == "vit_b_16":
         return model.heads
@@ -210,11 +275,13 @@ def build_torchvision_classifier(
     num_classes: int,
     trainable_layers: int,
     *,
+    tiny_preset: str = "medium",
     hidden_layers: int = 1,
-    hidden_dim: int = 64,
-    dropout: float = 0.2,
+    hidden_dim: int = 96,
+    dropout: float = 0.1,
     input_width: int = 128,
     input_height: int = 64,
+    input_size: int | tuple[int, int] | None = None,
 ) -> nn.Module:
     """Build a pretrained torchvision classifier with a new head.
 
@@ -246,11 +313,12 @@ def build_torchvision_classifier(
         TinyClassifier = _build_tiny_classifier_class()
         return TinyClassifier(
             n_classes=num_classes,
+            tiny_preset=tiny_preset,
             hidden_layers=hidden_layers,
             hidden_dim=hidden_dim,
             dropout=dropout,
         )
-    model = _load_pretrained(backbone)
+    model = _load_pretrained(backbone, input_size=input_size)
     model = _replace_head(model, backbone, num_classes)
     freeze_backbone(model, backbone, trainable_layers)
     return model
@@ -263,30 +331,67 @@ def save_torchvision_checkpoint(
     class_names: list[str],
     factor_names: list[str],
     input_size: tuple[int, int],
-    best_val_acc: float,
+    best_val_acc: float | None,
     history: dict[str, Any],
     trainable_layers: int,
     backbone_lr_scale: float,
+    monochrome: bool,
+    class_names_per_factor: list[list[str]] | None = None,
     extra_meta: dict[str, Any] | None = None,
     path: str | Path,
 ) -> Path:
-    """Save a torchvision model checkpoint in the unified ClassKit .pth format."""
+    """Save a torchvision model checkpoint in the v2 classifier-artifact format.
+
+    Flat checkpoints pass ``class_names`` and may omit ``class_names_per_factor``
+    (it will be synthesised as ``[class_names]``). Multi-head checkpoints must
+    pass ``class_names_per_factor`` explicitly and leave ``class_names`` empty;
+    ``class_names`` is then omitted from the saved checkpoint.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    ckpt = {
+
+    factor_names = list(factor_names or ["flat"])
+    is_multihead = len(factor_names) > 1
+
+    if class_names_per_factor is None:
+        if is_multihead:
+            raise ValueError("multi-head checkpoint requires class_names_per_factor")
+        class_names_per_factor = [list(class_names)]
+    else:
+        class_names_per_factor = [list(inner) for inner in class_names_per_factor]
+
+    if len(class_names_per_factor) != len(factor_names):
+        raise ValueError(
+            "factor_names and class_names_per_factor must have the same length"
+        )
+
+    h, w = int(input_size[0]), int(input_size[1])
+    num_classes = sum(len(inner) for inner in class_names_per_factor)
+
+    ckpt: dict[str, Any] = {
+        "schema_version": 2,
         "arch": backbone,
-        "class_names": class_names,
         "factor_names": factor_names,
-        "input_size": input_size,
-        "num_classes": len(class_names),
+        "class_names_per_factor": class_names_per_factor,
+        "input_size": [h, w],
+        "num_classes": num_classes,
+        "monochrome": bool(monochrome),
         "model_state_dict": model.state_dict(),
         "best_val_acc": best_val_acc,
         "history": history,
         "trainable_layers": trainable_layers,
         "backbone_lr_scale": backbone_lr_scale,
     }
+    if backbone == "tinyclassifier":
+        from hydra_suite.training.tiny_model import tiny_model_checkpoint_metadata
+
+        ckpt.update(tiny_model_checkpoint_metadata(model))
+    if not is_multihead:
+        ckpt["class_names"] = list(class_names_per_factor[0])
     if isinstance(extra_meta, dict) and extra_meta:
-        ckpt.update(extra_meta)
+        for k, v in extra_meta.items():
+            if k not in ckpt:
+                ckpt[k] = v
     torch.save(ckpt, str(path))
     return path
 
@@ -307,7 +412,12 @@ def load_torchvision_classifier(
     num_classes = ckpt["num_classes"]
     # Reconstruct with trainable_layers=-1 (all), then load state — freezing
     # state is irrelevant after loading weights for inference.
-    model = build_torchvision_classifier(arch, num_classes, trainable_layers=-1)
+    model = build_torchvision_classifier(
+        arch,
+        num_classes,
+        trainable_layers=-1,
+        input_size=ckpt.get("input_size"),
+    )
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
     model.eval()

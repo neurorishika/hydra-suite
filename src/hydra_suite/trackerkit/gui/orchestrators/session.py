@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 HEADTAIL_RUNTIME_TOOLTIP = (
     "Head-tail runtime for oriented crop classification.\n"
     "Visible only when head-tail analysis is enabled.\n"
-    "Exported ONNX/TensorRT runtimes are shown when available."
+    "Exported ONNX/TensorRT runtimes are shown when available.\n"
+    "When a .pth classifier requests an exported accelerator runtime but the matching ONNX provider is unavailable, HYDRA falls back to the native device runtime for that platform."
 )
 
 CNN_RUNTIME_TOOLTIP = (
@@ -234,6 +235,9 @@ class SessionOrchestrator:
     def _prepare_tracking_display(self):
         """Clear any stale frame before tracking starts."""
         self._mw.video_label.clear()
+        # Clear stale detection-test result so zoom events don't re-render old frames
+        self._mw.detection_test_result = None
+        self._mw._last_tracking_frame_rgb = None
         if self._mw._is_visualization_enabled():
             self._mw.video_label.setText("")
             self._mw.video_label.setStyleSheet("color: #6a6a6a; font-size: 16px;")
@@ -290,13 +294,11 @@ class SessionOrchestrator:
                 painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
                 renderer.render(painter, QRectF(x, y, logo_w, logo_h))
                 painter.end()
-                self._mw.video_label.setPixmap(canvas)
-                self._mw.video_label.setText("")
+                self._mw._set_video_pixmap(canvas)
                 return
         except Exception:
             pass
-        self._mw.video_label.setPixmap(QPixmap())
-        self._mw.video_label.setText("HYDRA\n\nLoad a video to begin...")
+            self._mw._set_video_message("HYDRA\n\nLoad a video to begin...")
 
     # =========================================================================
     # PROGRESS VISIBILITY
@@ -1002,6 +1004,12 @@ class SessionOrchestrator:
             self._mw._setup_panel.combo_headtail_runtime.setToolTip(
                 HEADTAIL_RUNTIME_TOOLTIP
             )
+        if hasattr(self._mw, "_identity_panel") and hasattr(
+            self._mw._identity_panel, "combo_headtail_runtime"
+        ):
+            self._mw._identity_panel.combo_headtail_runtime.setToolTip(
+                HEADTAIL_RUNTIME_TOOLTIP
+            )
         if hasattr(self._mw._setup_panel, "combo_cnn_runtime"):
             self._mw._setup_panel.combo_cnn_runtime.setToolTip(CNN_RUNTIME_TOOLTIP)
         if hasattr(self._mw._setup_panel, "combo_pose_runtime_flavor"):
@@ -1011,7 +1019,7 @@ class SessionOrchestrator:
 
     def _headtail_runtime_options(self):
         """Return (label, value) pairs for the head-tail runtime combo."""
-        allowed = supported_runtimes_for_pipeline("headtail")
+        allowed = supported_runtimes_for_pipeline("head_tail")
         if not allowed:
             allowed = ["cpu"]
         recommended = None
@@ -1028,12 +1036,7 @@ class SessionOrchestrator:
         ]
 
     def _populate_headtail_runtime_options(self, preferred=None):
-        """Populate the head-tail runtime combo with native runtime options."""
-        if not hasattr(self._mw, "_setup_panel") or not hasattr(
-            self._mw._setup_panel, "combo_headtail_runtime"
-        ):
-            return
-        combo = self._mw._setup_panel.combo_headtail_runtime
+        """Populate the head-tail runtime combo(s) with native runtime options."""
         selected = (
             str(
                 preferred
@@ -1047,16 +1050,47 @@ class SessionOrchestrator:
         values = [value for _label, value in options]
         if selected not in values:
             selected = values[0] if values else "cpu"
-        combo.blockSignals(True)
-        combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.blockSignals(False)
+
+        # Populate identity panel combo (primary location).
+        if hasattr(self._mw, "_identity_panel") and hasattr(
+            self._mw._identity_panel, "combo_headtail_runtime"
+        ):
+            combo = self._mw._identity_panel.combo_headtail_runtime
+            combo.blockSignals(True)
+            combo.clear()
+            for label, value in options:
+                combo.addItem(label, value)
+            idx = combo.findData(selected)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
+
+        # Also populate setup panel combo (performance section, secondary).
+        if hasattr(self._mw, "_setup_panel") and hasattr(
+            self._mw._setup_panel, "combo_headtail_runtime"
+        ):
+            combo = self._mw._setup_panel.combo_headtail_runtime
+            combo.blockSignals(True)
+            combo.clear()
+            for label, value in options:
+                combo.addItem(label, value)
+            idx = combo.findData(selected)
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+            combo.blockSignals(False)
 
     def _selected_headtail_runtime(self) -> str:
-        """Return the currently selected head-tail runtime key."""
+        """Return the currently selected head-tail runtime key.
+
+        Prefers the identity panel combo (co-located with the head-tail
+        model and confidence settings).  Falls back to the setup panel
+        performance combo for backward compatibility, then to the main
+        compute runtime.
+        """
+        if hasattr(self._mw, "_identity_panel") and hasattr(
+            self._mw._identity_panel, "combo_headtail_runtime"
+        ):
+            data = self._mw._identity_panel.combo_headtail_runtime.currentData()
+            if data:
+                return str(data).strip().lower()
         if hasattr(self._mw, "_setup_panel") and hasattr(
             self._mw._setup_panel, "combo_headtail_runtime"
         ):
@@ -1064,6 +1098,35 @@ class SessionOrchestrator:
             if data:
                 return str(data).strip().lower()
         return self._selected_compute_runtime()
+
+    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
+        """Mirror head-tail runtime changes across the duplicated UI selectors."""
+        if source_combo is not None:
+            data = source_combo.currentData()
+            selected = (
+                str(data).strip().lower() if data else self._selected_compute_runtime()
+            )
+        else:
+            selected = self._selected_headtail_runtime()
+
+        for combo in (
+            getattr(
+                getattr(self._mw, "_identity_panel", None),
+                "combo_headtail_runtime",
+                None,
+            ),
+            getattr(
+                getattr(self._mw, "_setup_panel", None), "combo_headtail_runtime", None
+            ),
+        ):
+            if combo is None or combo is source_combo:
+                continue
+            index = combo.findData(selected)
+            if index < 0 or combo.currentIndex() == index:
+                continue
+            combo.blockSignals(True)
+            combo.setCurrentIndex(index)
+            combo.blockSignals(False)
 
     def _cnn_runtime_options(self):
         """Return (label, value) pairs for the CNN runtime combo."""
@@ -1158,8 +1221,6 @@ class SessionOrchestrator:
             return "mps"
         if rt in ("onnx_cuda", "tensorrt"):
             return "cuda"
-        if rt == "onnx_rocm":
-            return "rocm"
         return rt
 
     def _on_runtime_context_changed(self, *_args):
@@ -1381,6 +1442,26 @@ class SessionOrchestrator:
                 )
         self._sync_video_pose_overlay_controls()
         self._mw._on_runtime_context_changed()
+        self._sync_directed_orient_posthoc_ui()
+
+    def _sync_directed_orient_posthoc_ui(self) -> None:
+        """Update tracking and postprocess panels when head-tail/pose model changes.
+
+        Hides the online flip-hysteresis controls and shows a note when a
+        directed heading source (head-tail or pose model) is active, since the
+        pipeline then uses global post-hoc heading consistency instead.
+        """
+        posthoc_active = bool(self._is_headtail_compute_enabled()) or bool(
+            self._is_pose_inference_enabled()
+        )
+        if hasattr(self._mw, "_tracking_panel") and hasattr(
+            self._mw._tracking_panel, "sync_directed_orient_posthoc_ui"
+        ):
+            self._mw._tracking_panel.sync_directed_orient_posthoc_ui(posthoc_active)
+        if hasattr(self._mw, "_postprocess_panel") and hasattr(
+            self._mw._postprocess_panel, "sync_heading_flip_posthoc_ui"
+        ):
+            self._mw._postprocess_panel.sync_heading_flip_posthoc_ui(posthoc_active)
 
     def _select_individual_background_color(self):
         """Open color picker for individual dataset background color."""
@@ -1507,6 +1588,7 @@ class SessionOrchestrator:
 
         self._mw.video_current_frame_idx = 0
         self._mw._display_current_frame()
+        QTimer.singleShot(0, self._mw._fit_image_to_screen)
         self._update_range_info()
         logger.info(f"Video player initialized: {self._mw.video_total_frames} frames")
 
@@ -1801,7 +1883,7 @@ class SessionOrchestrator:
             self._mw._fit_image_to_screen()
 
     def _handle_video_wheel(self, evt):
-        """Handle mouse wheel - zoom in/out."""
+        """Handle mouse wheel - zoom in/out, anchored to the cursor position."""
         if not self._mw._video_interactions_enabled:
             evt.ignore()
             return
@@ -1813,10 +1895,71 @@ class SessionOrchestrator:
             current_zoom = self._mw.slider_zoom.value()
             zoom_change = 10 if delta > 0 else -10
             new_zoom = max(10, min(400, current_zoom + zoom_change))
+
+            if new_zoom == current_zoom:
+                evt.accept()
+                return
+
+            # --- Cursor-anchored zoom (parameter-helper pattern) ---
+            # Map cursor from video_label coordinates to viewport coordinates.
+            viewport = self._mw.scroll.viewport()
+            label_pos = evt.position().toPoint()
+            viewport_pos = viewport.mapFromGlobal(
+                self._mw.video_label.mapToGlobal(label_pos)
+            )
+            self._capture_video_zoom_anchor(viewport_pos)
+
+            # Apply zoom — _on_zoom_changed sets the new pixmap synchronously.
             self._mw.slider_zoom.setValue(new_zoom)
+
+            self._restore_video_zoom_anchor()
             evt.accept()
         else:
             evt.ignore()
+
+    def _capture_video_zoom_anchor(self, viewport_pos=None):
+        """Store cursor-relative anchor before a zoom change."""
+        viewport = self._mw.scroll.viewport()
+        if viewport_pos is None:
+            viewport_pos = viewport.rect().center()
+        vp_x = max(0, min(viewport.width(), viewport_pos.x()))
+        vp_y = max(0, min(viewport.height(), viewport_pos.y()))
+        hbar = self._mw.scroll.horizontalScrollBar()
+        vbar = self._mw.scroll.verticalScrollBar()
+        label_w = max(self._mw.video_label.width(), 1)
+        label_h = max(self._mw.video_label.height(), 1)
+        # offset from scroll-area origin to label origin (when label is centered)
+        offset_x = max((viewport.width() - label_w) // 2, 0)
+        offset_y = max((viewport.height() - label_h) // 2, 0)
+        local_x = hbar.value() + vp_x - offset_x
+        local_y = vbar.value() + vp_y - offset_y
+        local_x = max(0, min(label_w, local_x))
+        local_y = max(0, min(label_h, local_y))
+        self._mw._video_zoom_anchor = (
+            vp_x,
+            vp_y,
+            local_x / label_w,
+            local_y / label_h,
+        )
+
+    def _restore_video_zoom_anchor(self):
+        """Restore scrollbars so the anchored image point stays under the cursor."""
+        anchor = getattr(self._mw, "_video_zoom_anchor", None)
+        if anchor is None:
+            return
+        self._mw._video_zoom_anchor = None
+        vp_x, vp_y, rel_x, rel_y = anchor
+        viewport = self._mw.scroll.viewport()
+        label_w = max(self._mw.video_label.width(), 1)
+        label_h = max(self._mw.video_label.height(), 1)
+        offset_x = max((viewport.width() - label_w) // 2, 0)
+        offset_y = max((viewport.height() - label_h) // 2, 0)
+        target_x = int(round(rel_x * label_w - vp_x + offset_x))
+        target_y = int(round(rel_y * label_h - vp_y + offset_y))
+        hbar = self._mw.scroll.horizontalScrollBar()
+        vbar = self._mw.scroll.verticalScrollBar()
+        hbar.setValue(max(0, min(hbar.maximum(), target_x)))
+        vbar.setValue(max(0, min(vbar.maximum(), target_y)))
 
     def _handle_video_event(self, evt):
         """Handle video events including pinch gestures."""
@@ -1861,7 +2004,7 @@ class SessionOrchestrator:
                 scaled_w, scaled_h, Qt.KeepAspectRatio, Qt.SmoothTransformation
             )
         pixmap = QPixmap.fromImage(qimg_masked)
-        self._mw.video_label.setPixmap(pixmap)
+        self._mw._set_video_pixmap(pixmap)
 
     def _fit_image_to_screen(self):
         """Fit the image to the available screen space."""
@@ -2017,7 +2160,7 @@ class SessionOrchestrator:
 
         self._mw.btn_finish_roi.setEnabled(can_finish)
         painter.end()
-        self._mw.video_label.setPixmap(QPixmap.fromImage(pix))
+        self._mw._set_video_pixmap(QPixmap.fromImage(pix))
 
     def start_roi_selection(self):
         """Start an ROI shape selection session."""
@@ -2202,13 +2345,11 @@ class SessionOrchestrator:
             )
             if self._mw.roi_base_frame:
                 qimg_masked = self._mw._apply_roi_mask_to_image(self._mw.roi_base_frame)
-                self._mw.video_label.setPixmap(QPixmap.fromImage(qimg_masked))
+                self._mw._set_video_pixmap(QPixmap.fromImage(qimg_masked))
         else:
             self._mw.roi_status_label.setText("No ROI")
             if self._mw.roi_base_frame:
-                self._mw.video_label.setPixmap(
-                    QPixmap.fromImage(self._mw.roi_base_frame)
-                )
+                self._mw._set_video_pixmap(QPixmap.fromImage(self._mw.roi_base_frame))
         self._mw.update_roi_preview()
 
     def clear_roi(self):

@@ -1,0 +1,293 @@
+"""Test fixtures — build minimal classifier artifacts for backend tests.
+
+Artifacts are cached under pytest's tmp_path_factory fixture so the first run
+pays the build cost and subsequent runs reuse the files.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+
+@pytest.fixture(scope="session")
+def fixtures_dir(tmp_path_factory) -> Path:
+    return tmp_path_factory.mktemp("classifier_fixtures", numbered=False)
+
+
+@pytest.fixture(scope="session")
+def tiny_flat_headtail(fixtures_dir: Path) -> Path:
+    """TinyClassifier v2 checkpoint with head-tail labels."""
+    import torch
+
+    path = fixtures_dir / "tiny_flat_headtail.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    model = TinyClassifier(n_classes=5, hidden_layers=1, hidden_dim=32, dropout=0.1)
+    ckpt: dict[str, Any] = {
+        "schema_version": 2,
+        "arch": "tinyclassifier",
+        "input_size": [64, 64],
+        "factor_names": ["flat"],
+        "class_names_per_factor": [["up", "down", "left", "right", "unknown"]],
+        "class_names": ["up", "down", "left", "right", "unknown"],
+        "num_classes": 5,
+        "monochrome": False,
+        "model_state_dict": model.state_dict(),
+        "hidden_layers": 1,
+        "hidden_dim": 32,
+        "dropout": 0.1,
+    }
+    torch.save(ckpt, str(path))
+    return path
+
+
+@pytest.fixture(scope="session")
+def tiny_flat_subset(fixtures_dir: Path) -> Path:
+    """TinyClassifier v2 checkpoint with only {left, right}."""
+    import torch
+
+    path = fixtures_dir / "tiny_flat_subset.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    model = TinyClassifier(n_classes=2, hidden_layers=1, hidden_dim=32, dropout=0.0)
+    ckpt: dict[str, Any] = {
+        "schema_version": 2,
+        "arch": "tinyclassifier",
+        "input_size": [64, 64],
+        "factor_names": ["flat"],
+        "class_names_per_factor": [["left", "right"]],
+        "class_names": ["left", "right"],
+        "num_classes": 2,
+        "monochrome": False,
+        "model_state_dict": model.state_dict(),
+        "hidden_layers": 1,
+        "hidden_dim": 32,
+        "dropout": 0.0,
+    }
+    torch.save(ckpt, str(path))
+    return path
+
+
+@pytest.fixture(scope="session")
+def tiny_flat_nonsquare(fixtures_dir: Path) -> Path:
+    """TinyClassifier v2 with non-square input size to catch [H, W] serialization bugs."""
+    import torch
+
+    path = fixtures_dir / "tiny_flat_nonsquare.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    model = TinyClassifier(n_classes=3, hidden_layers=1, hidden_dim=16, dropout=0.0)
+    ckpt: dict[str, Any] = {
+        "schema_version": 2,
+        "arch": "tinyclassifier",
+        "input_size": [256, 192],  # H=256, W=192
+        "factor_names": ["flat"],
+        "class_names_per_factor": [["a", "b", "c"]],
+        "class_names": ["a", "b", "c"],
+        "num_classes": 3,
+        "monochrome": False,
+        "model_state_dict": model.state_dict(),
+        "hidden_layers": 1,
+        "hidden_dim": 16,
+        "dropout": 0.0,
+    }
+    torch.save(ckpt, str(path))
+    return path
+
+
+@pytest.fixture(scope="session")
+def yolo_flat_headtail(fixtures_dir: Path) -> Path:
+    """YOLO classify flat model mapping 5 head-tail classes.
+
+    Uses the smallest available ultralytics model. The classifier head is
+    replaced with a 5-output Linear layer so that inference genuinely emits
+    5-class probability vectors — we skip actual training since only the
+    shape/metadata contracts are under test.
+    """
+    path = fixtures_dir / "yolo_flat_headtail.pt"
+    if path.exists():
+        return path
+    pytest.importorskip("ultralytics")
+    import torch
+    from ultralytics import YOLO
+
+    model = YOLO("yolov8n-cls.pt")  # pretrained download on first run
+    # Replace the final Linear layer so inference outputs 5 classes, not 1000
+    old_linear = model.model.model[9].linear
+    model.model.model[9].linear = torch.nn.Linear(old_linear.in_features, 5)
+    model.model.names = {0: "up", 1: "down", 2: "left", 3: "right", 4: "unknown"}
+    model.save(str(path))
+    return path
+
+
+@pytest.fixture(scope="session")
+def torchvision_flat_identity(fixtures_dir: Path) -> Path:
+    """resnet18 v2 flat checkpoint with 3 identity classes."""
+    path = fixtures_dir / "torchvision_flat_identity.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    model = build_torchvision_classifier("resnet18", num_classes=3, trainable_layers=-1)
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="resnet18",
+        class_names=["antA", "antB", "antC"],
+        factor_names=["flat"],
+        input_size=(64, 64),
+        best_val_acc=None,
+        history={},
+        trainable_layers=-1,
+        backbone_lr_scale=1.0,
+        monochrome=False,
+        path=str(path),
+    )
+    return path
+
+
+@pytest.fixture(scope="session")
+def legacy_torchvision_flat_headtail(fixtures_dir: Path) -> Path:
+    """Legacy flat torchvision checkpoint without schema_version metadata."""
+    import torch
+
+    path = fixtures_dir / "legacy_torchvision_flat_headtail.pth"
+    if path.exists():
+        return path
+
+    from hydra_suite.training.torchvision_model import build_torchvision_classifier
+
+    model = build_torchvision_classifier("resnet18", num_classes=4, trainable_layers=-1)
+    ckpt: dict[str, Any] = {
+        "arch": "resnet18",
+        "class_names": ["left", "right", "unknown", "up"],
+        "factor_names": [],
+        "input_size": (96, 80),
+        "num_classes": 4,
+        "monochrome": False,
+        "model_state_dict": model.state_dict(),
+        "trainable_layers": -1,
+        "backbone_lr_scale": 1.0,
+        "history": {},
+        "best_val_acc": None,
+    }
+    torch.save(ckpt, str(path))
+    return path
+
+
+@pytest.fixture(scope="session")
+def tiny_multi_identity(fixtures_dir: Path) -> Path:
+    """TinyClassifier-backed multi-head v2 checkpoint: 3×2 output (color × shape)."""
+    path = fixtures_dir / "tiny_multi_identity.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.torchvision_model import (
+        build_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    # build_torchvision_classifier accepts 'tinyclassifier' and returns a
+    # flat-output model. For the purposes of schema testing we do not need a
+    # truly multi-headed architecture — the backend splits the flat logit
+    # tensor according to class_names_per_factor cardinalities.
+    total = 3 + 2
+    model = build_torchvision_classifier(
+        "tinyclassifier", num_classes=total, trainable_layers=-1
+    )
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="tinyclassifier",
+        class_names=[],
+        class_names_per_factor=[["r", "g", "b"], ["sq", "ci"]],
+        factor_names=["color", "shape"],
+        input_size=(64, 64),
+        best_val_acc=None,
+        history={},
+        trainable_layers=-1,
+        backbone_lr_scale=1.0,
+        monochrome=False,
+        path=str(path),
+    )
+    return path
+
+
+@pytest.fixture(scope="session")
+def yolo_multihead_bundle(fixtures_dir: Path) -> Path:
+    """Two per-factor YOLO classify models with a .multihead.json manifest."""
+    bundle_dir = fixtures_dir / "yolo_bundle"
+    manifest = bundle_dir / "bundle.multihead.json"
+    if manifest.exists():
+        return manifest
+    pytest.importorskip("ultralytics")
+    import torch
+    from ultralytics import YOLO
+
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    factor_specs = [
+        ("color", ["r", "g", "b"]),
+        ("shape", ["sq", "ci"]),
+    ]
+    factors = []
+    for factor_name, classes in factor_specs:
+        fdir = bundle_dir / factor_name
+        fdir.mkdir(exist_ok=True)
+        pt = fdir / "best.pt"
+        model = YOLO("yolov8n-cls.pt")
+        # Replace the final Linear layer so inference outputs the correct number
+        # of classes for this factor, not 1000 (ImageNet default).
+        old_linear = model.model.model[9].linear
+        n_classes = len(classes)
+        model.model.model[9].linear = torch.nn.Linear(old_linear.in_features, n_classes)
+        model.model.names = {i: c for i, c in enumerate(classes)}
+        model.save(str(pt))
+        factors.append((factor_name, pt, classes))
+
+    from hydra_suite.training.runner import emit_yolo_multihead_manifest
+
+    emit_yolo_multihead_manifest(
+        manifest_path=str(manifest),
+        factors=factors,
+        input_size=(224, 224),
+        monochrome=False,
+    )
+    return manifest
+
+
+@pytest.fixture(scope="session")
+def tiny_flat_monochrome(fixtures_dir: Path) -> Path:
+    """Tiny flat v2 checkpoint with monochrome=True — exercises averaged ImageNet stats."""
+    path = fixtures_dir / "tiny_flat_monochrome.pth"
+    if path.exists():
+        return path
+    from hydra_suite.training.runner import _save_tiny_checkpoint
+    from hydra_suite.training.tiny_model import _build_tiny_classifier_class
+
+    TinyClassifier = _build_tiny_classifier_class()
+    model = TinyClassifier(n_classes=3, hidden_layers=1, hidden_dim=16, dropout=0.0)
+    _save_tiny_checkpoint(
+        model=model,
+        save_path=str(path),
+        class_names=["a", "b", "c"],
+        input_size=(64, 64),
+        monochrome=True,
+        hidden_layers=1,
+        hidden_dim=16,
+        dropout=0.0,
+        best_val_acc=None,
+        history={},
+    )
+    return path

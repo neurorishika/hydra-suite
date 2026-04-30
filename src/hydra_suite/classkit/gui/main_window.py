@@ -4,13 +4,16 @@ ClassKit Main Window - Polished and feature-complete UI
 
 import hashlib
 import json
+import re
 import time
+from html import escape
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -19,38 +22,68 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QStackedWidget,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
+from hydra_suite.data.project_bundle import (
+    export_project_bundle_archive,
+    import_project_bundle_archive,
+    load_project_bundle_archive_manifest,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.workers import BaseWorker
 
 from .project import (
     classkit_config_path,
     classkit_export_dir,
     classkit_model_dir,
+    classkit_project_is_portable,
+    classkit_project_linked_image_count,
     classkit_scheme_path,
+    default_project_parent_dir,
     ensure_classkit_project_layout,
     prepare_project_directory,
     project_exists,
 )
 from .widgets.color_utils import best_text_color, build_category_color_map, to_hex
+
+
+class _ClassKitPortableWorker(BaseWorker):
+    """Background worker that copies linked ClassKit images into the bundle."""
+
+    success = Signal(int)
+
+    def __init__(self, db_path: Path):
+        super().__init__()
+        self._db_path = Path(db_path)
+
+    def execute(self) -> None:
+        from ..core.store.db import ClassKitDB
+
+        self.status.emit("Copying linked images into the project bundle...")
+        copied_count = ClassKitDB(self._db_path).materialize_linked_images()
+        self.progress.emit(100)
+        self.success.emit(int(copied_count))
 
 
 class MainWindow(QMainWindow):
@@ -71,6 +104,7 @@ class MainWindow(QMainWindow):
         self.image_labels = []
         self.image_confidences = []
         self._image_review_status = {}
+        self._image_metadata_by_path = {}
         self._review_candidate_indices = []
         self.classes = ["class_1", "class_2"]
         self.selected_point_index = None
@@ -85,10 +119,12 @@ class MainWindow(QMainWindow):
         self.hover_locked = False
         self._label_shortcuts = []
         self.label_history = []
+        self.review_history = []
         self.last_assigned_stack = []
         self.last_umap_params = {"n_neighbors": 15, "min_dist": 0.1}
         self.last_preview_index = None
         self._history_icon_cache = {}
+        self._review_history_icon_cache = {}
         self._history_thumb_load_budget = 2
         self._command_busy = False
         self._command_block_until = 0.0
@@ -103,17 +139,28 @@ class MainWindow(QMainWindow):
         self._yolo_model_path = None  # Path to loaded YOLO classification model
         self._model_probs = None  # (N, C) per-image class probabilities
         self._model_class_names = None  # class names from (YOLO/tiny) model
+        self._model_prediction_heads = None  # ordered multi-head slices + factor names
+        self._model_prediction_confidence_threshold = None
         self.umap_model_coords = None  # UMAP computed in model logits space
         self.pca_model_coords = None  # PCA computed in model logits/probability space
         self._show_model_umap = False  # Explorer toggle: embedding vs model UMAP
         self._show_model_pca = False  # Explorer toggle: embedding vs model PCA
         self._al_candidates = None  # np.ndarray of selected AL batch indices
-        self._active_model_mode = None  # "yolo", "tiny", or None
+        self._prepared_candidate_indices = []
+        self._prepared_candidate_source = None
+        self._prepared_candidate_reason_map = {}
+        self._active_model_mode = None  # "yolo", "yolo_multihead", "tiny", "custom_cnn", "custom_cnn_multihead", or None
         self._heldout_validation_summary = None  # training-time held-out metric
+        self._active_evaluation_paths = None
+        self._active_evaluation_split_name = ""
+        self._split_membership_paths = {}
         self._current_knn_neighbors = []
         self._stepper = None
         self._custom_shortcuts: dict = {}  # action_name → key sequence string
         self._outline_threshold = 0.60
+        self._marker_size_multiplier = 1.0
+        self._portable_worker = None
+        self._portable_progress_dialog = None
 
         # Display enhancement settings (sync with PoseKit)
         self.clahe_clip = 2.0
@@ -133,6 +180,13 @@ class MainWindow(QMainWindow):
         self._history_refresh_timer.setSingleShot(True)
         self._history_refresh_timer.setInterval(40)
         self._history_refresh_timer.timeout.connect(self.refresh_label_history_strip)
+
+        self._review_history_refresh_timer = QTimer(self)
+        self._review_history_refresh_timer.setSingleShot(True)
+        self._review_history_refresh_timer.setInterval(40)
+        self._review_history_refresh_timer.timeout.connect(
+            self.refresh_review_history_strip
+        )
 
         self._plot_refresh_pending = False
         self._plot_refresh_force_fit = False
@@ -302,10 +356,22 @@ class MainWindow(QMainWindow):
         open_project.triggered.connect(self.open_project)
         file_menu.addAction(open_project)
 
+        open_project_zip = QAction("Open Project &Zip...", self)
+        open_project_zip.triggered.connect(self.open_project_zip)
+        file_menu.addAction(open_project_zip)
+
         save_project = QAction("&Save Project", self)
         save_project.setShortcut("Ctrl+S")
         save_project.triggered.connect(self.save_project)
         file_menu.addAction(save_project)
+
+        make_portable = QAction("Make Project Portable", self)
+        make_portable.triggered.connect(self.make_project_portable)
+        file_menu.addAction(make_portable)
+
+        export_project_zip = QAction("Export Project Zip...", self)
+        export_project_zip.triggered.connect(self.export_project_zip)
+        file_menu.addAction(export_project_zip)
 
         file_menu.addSeparator()
 
@@ -456,6 +522,16 @@ class MainWindow(QMainWindow):
         save_btn.triggered.connect(self.save_project)
         toolbar.addAction(save_btn)
 
+        portable_btn = QAction("Make Portable", self)
+        portable_btn.setStatusTip("Copy linked images into the project bundle")
+        portable_btn.triggered.connect(self.make_project_portable)
+        toolbar.addAction(portable_btn)
+
+        export_zip_btn = QAction("Export Zip", self)
+        export_zip_btn.setStatusTip("Make the project portable and export it as a zip")
+        export_zip_btn.triggered.connect(self.export_project_zip)
+        toolbar.addAction(export_zip_btn)
+
         toolbar.addSeparator()
 
         # Data section
@@ -528,6 +604,9 @@ class MainWindow(QMainWindow):
             buttons=[
                 ButtonDef(label="New Project\u2026", callback=self.new_project),
                 ButtonDef(label="Open Project\u2026", callback=self.open_project),
+                ButtonDef(
+                    label="Open Project Zip\u2026", callback=self.open_project_zip
+                ),
                 ButtonDef(label="Quit", callback=self.close),
             ],
             recents_label="Recent Projects",
@@ -539,38 +618,111 @@ class MainWindow(QMainWindow):
 
     def _open_recent_project(self, path: str):
         """Open a project from the recent items list."""
-        from pathlib import Path
-
         self._flush_pending_label_updates(force=True)
         project_path = Path(path)
         if project_path.exists():
-            self.project_path = project_path
-            self.db_path = prepare_project_directory(project_path)
-            if self.db_path.exists():
-                self.load_project_data()
-                self.update_context_panel()
-                self.status.showMessage(f"Opened project: {self.project_path.name}")
-            else:
-                from PySide6.QtWidgets import QMessageBox
-
-                QMessageBox.warning(
-                    self,
-                    "Invalid Project",
-                    "This directory does not contain a valid ClassKit project.\n\n"
-                    "Expected file: classkit.db",
-                )
+            if not self._open_project_directory(
+                project_path, show_invalid_warning=True
+            ):
                 if hasattr(self, "_recents_store"):
                     self._recents_store.remove(path)
                     if hasattr(self, "_welcome_page"):
                         self._welcome_page.refresh_recents()
         else:
-            from PySide6.QtWidgets import QMessageBox
-
             QMessageBox.warning(self, "Not Found", f"Project not found:\n{path}")
             if hasattr(self, "_recents_store"):
                 self._recents_store.remove(path)
                 if hasattr(self, "_welcome_page"):
                     self._welcome_page.refresh_recents()
+
+    @staticmethod
+    def _next_available_project_dir(parent_dir: Path, base_name: str) -> Path:
+        cleaned = re.sub(r"[\\/]+", "_", str(base_name or "").strip())
+        cleaned = cleaned.strip() or "ClassKit Project"
+        candidate = parent_dir / cleaned
+        counter = 1
+        while candidate.exists():
+            candidate = parent_dir / f"{cleaned}_{counter}"
+            counter += 1
+        return candidate
+
+    def _open_project_directory(
+        self,
+        project_dir: Path,
+        *,
+        show_invalid_warning: bool = False,
+    ) -> bool:
+        project_dir = Path(project_dir)
+        self.project_path = project_dir
+        if not project_exists(self.project_path):
+            if show_invalid_warning:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Project",
+                    "This directory does not contain a valid ClassKit project.",
+                )
+            return False
+
+        self.db_path = prepare_project_directory(self.project_path)
+        if not self.db_path.exists():
+            if show_invalid_warning:
+                QMessageBox.warning(
+                    self,
+                    "Invalid Project",
+                    "This directory does not contain a valid ClassKit project.",
+                )
+            return False
+
+        self.load_project_data()
+        self.update_context_panel()
+        self.status.showMessage(f"Opened project: {self.project_path.name}")
+        QTimer.singleShot(200, self._guide_to_next_step)
+        return True
+
+    @staticmethod
+    def _sanitize_project_folder_name(name: str, *, fallback: str) -> str:
+        cleaned = re.sub(r"[\\/]+", "_", str(name or "").strip())
+        return cleaned.strip() or fallback
+
+    def _choose_project_zip_destination(
+        self,
+        archive_path: str | Path,
+        suggested_name: str,
+    ) -> Path | None:
+        parent_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Choose ClassKit Project Extraction Folder",
+            str(default_project_parent_dir()),
+            QFileDialog.ShowDirsOnly,
+        )
+        if not parent_dir:
+            return None
+
+        folder_name, accepted = QInputDialog.getText(
+            self,
+            "Project Folder Name",
+            "Extract project into folder:",
+            text=self._sanitize_project_folder_name(
+                suggested_name,
+                fallback=Path(archive_path).stem,
+            ),
+        )
+        if not accepted:
+            return None
+
+        cleaned_name = self._sanitize_project_folder_name(
+            folder_name,
+            fallback=Path(archive_path).stem,
+        )
+        destination_dir = Path(parent_dir) / cleaned_name
+        if destination_dir.exists() and any(destination_dir.iterdir()):
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Destination folder is not empty:\n{destination_dir}",
+            )
+            return None
+        return destination_dir
 
     def setup_central_widget(self):
         """Setup main UI layout for UMAP exploration and fast labeling."""
@@ -600,24 +752,65 @@ class MainWindow(QMainWindow):
         # ── Group 1: Project Info ─────────────────────────────────────
         group_info = QGroupBox("Project Info")
         layout_info = QVBoxLayout(group_info)
+        layout_info.setContentsMargins(12, 10, 12, 12)
+        layout_info.setSpacing(8)
+        group_info.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
 
         self.context_info = QLabel("No project loaded.")
         self.context_info.setWordWrap(True)
+        self.context_info.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
+        self.context_info.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
         self.context_info.setStyleSheet(
-            "color: #cccccc; font-size: 12px; line-height: 1.5;"
+            "color: #cccccc; font-size: 11px; line-height: 1.3;"
         )
         layout_info.addWidget(self.context_info)
 
         autosave_row = QHBoxLayout()
-        autosave_row.addWidget(QLabel("Autosave (s):"))
+        autosave_row.setContentsMargins(0, 2, 0, 0)
+        autosave_row.setSpacing(8)
+        autosave_label = QLabel("Autosave")
+        autosave_label.setStyleSheet("color: #9a9a9a; font-size: 11px;")
+        autosave_row.addWidget(autosave_label)
+        autosave_row.addStretch(1)
         self.autosave_spin = QSpinBox()
         self.autosave_spin.setRange(1, 300)
         self.autosave_spin.setValue(max(1, self._autosave_interval_ms // 1000))
+        self.autosave_spin.setSuffix(" s")
+        self.autosave_spin.setFixedWidth(82)
         self.autosave_spin.valueChanged.connect(self.on_autosave_interval_changed)
         autosave_row.addWidget(self.autosave_spin)
         layout_info.addLayout(autosave_row)
 
+        marker_size_row = QHBoxLayout()
+        marker_size_row.addWidget(QLabel("Marker size:"))
+        self.marker_size_spin = QDoubleSpinBox()
+        self.marker_size_spin.setRange(0.5, 3.0)
+        self.marker_size_spin.setSingleStep(0.1)
+        self.marker_size_spin.setDecimals(1)
+        self.marker_size_spin.setValue(self._marker_size_multiplier)
+        self.marker_size_spin.setToolTip(
+            "Scale explorer marker sizes for denser or sparser projections."
+        )
+        self.marker_size_spin.valueChanged.connect(self.on_marker_size_changed)
+        marker_size_row.addWidget(self.marker_size_spin)
+        layout_info.addLayout(marker_size_row)
+
         self.context_layout.addWidget(group_info)
+
+        # ── Mode hint banner ───────────────────────────────────────
+        self.mode_hint_label = QLabel()
+        self.mode_hint_label.setWordWrap(True)
+        self.mode_hint_label.setVisible(False)
+        self.mode_hint_label.setTextFormat(Qt.RichText)
+        self.context_layout.addWidget(self.mode_hint_label)
 
         # ── Group 2: Selection & Neighbors ────────────────────────────
         group_selection = QGroupBox("Selection & Neighbors")
@@ -651,12 +844,24 @@ class MainWindow(QMainWindow):
         self.context_layout.addWidget(group_selection)
 
         # ── Group 3: Labeling ─────────────────────────────────────────
-        group_labeling = QGroupBox("Labeling")
-        layout_labeling = QVBoxLayout(group_labeling)
+        self.group_labeling = QGroupBox("Assign Labels")
+        self.group_labeling.setVisible(False)
+        layout_labeling = QVBoxLayout(self.group_labeling)
+        layout_labeling.setSpacing(8)
+
+        # Brief how-to hint
+        self.labeling_hint_label = QLabel(
+            "📌 Select a point on the map, then click its class or press the shortcut key."
+        )
+        self.labeling_hint_label.setWordWrap(True)
+        self.labeling_hint_label.setStyleSheet(
+            "color: #9ec8e0; font-size: 11px; padding: 4px 0 2px 0;"
+        )
+        layout_labeling.addWidget(self.labeling_hint_label)
 
         # Search / Filter classes
         self.class_search = QLineEdit()
-        self.class_search.setPlaceholderText("Filter classes...")
+        self.class_search.setPlaceholderText("🔍  Filter classes...")
         self.class_search.textChanged.connect(self.filter_label_buttons)
         layout_labeling.addWidget(self.class_search)
 
@@ -666,18 +871,31 @@ class MainWindow(QMainWindow):
         layout_labeling.addWidget(self.label_buttons_container)
 
         nav_row = QHBoxLayout()
-        self.prev_btn = QPushButton("← Prev")
+        nav_row.setSpacing(6)
+        self.prev_btn = QPushButton("←  Prev unlabeled")
+        self.prev_btn.setToolTip("Go to previous unlabeled image in the candidate set")
         self.prev_btn.clicked.connect(self.on_prev_image)
-        self.next_btn = QPushButton("Next →")
+        self.next_btn = QPushButton("Next unlabeled  →")
+        self.next_btn.setToolTip("Go to next unlabeled image in the candidate set")
         self.next_btn.clicked.connect(self.on_next_image)
         nav_row.addWidget(self.prev_btn)
         nav_row.addWidget(self.next_btn)
         layout_labeling.addLayout(nav_row)
 
-        self.context_layout.addWidget(group_labeling)
+        # Shortcut reference inside labeling group
+        self.shortcut_help = QLabel()
+        self.shortcut_help.setWordWrap(True)
+        self.shortcut_help.setStyleSheet(
+            "font-size: 11px; color: #777; padding: 4px 2px 0 2px; border-top: 1px solid #333; margin-top: 4px;"
+        )
+        layout_labeling.addWidget(self.shortcut_help)
+        self._refresh_shortcut_help()
 
-        group_review = QGroupBox("Review Queue")
-        layout_review = QVBoxLayout(group_review)
+        self.context_layout.addWidget(self.group_labeling)
+
+        self.group_review = QGroupBox("Review Queue")
+        self.group_review.setVisible(False)
+        layout_review = QVBoxLayout(self.group_review)
 
         self.review_info = QLabel("No machine review items yet.")
         self.review_info.setWordWrap(True)
@@ -696,16 +914,6 @@ class MainWindow(QMainWindow):
         review_actions = QHBoxLayout()
         review_actions.setSpacing(8)
 
-        self.review_selected_btn = QPushButton("Approve")
-        self.review_selected_btn.clicked.connect(self.approve_selected_review_label)
-        self.review_selected_btn.setEnabled(False)
-        review_actions.addWidget(self.review_selected_btn)
-
-        self.review_reject_btn = QPushButton("Reject")
-        self.review_reject_btn.clicked.connect(self.reject_selected_review_label)
-        self.review_reject_btn.setEnabled(False)
-        review_actions.addWidget(self.review_reject_btn)
-
         self.review_clear_unverified_btn = QPushButton("Clear All Unverified")
         self.review_clear_unverified_btn.clicked.connect(
             self.clear_all_unverified_machine_labels
@@ -715,7 +923,7 @@ class MainWindow(QMainWindow):
 
         layout_review.addLayout(review_actions)
 
-        self.context_layout.addWidget(group_review)
+        self.context_layout.addWidget(self.group_review)
 
         # ── Actions ───────────────────────────────────────────────────
         edit_row = QHBoxLayout()
@@ -729,12 +937,6 @@ class MainWindow(QMainWindow):
         btn_edit_shortcuts.setStyleSheet("background: #3a3a1a; padding: 5px;")
         edit_row.addWidget(btn_edit_shortcuts)
         self.context_layout.addLayout(edit_row)
-
-        self.shortcut_help = QLabel()
-        self.shortcut_help.setWordWrap(True)
-        self.shortcut_help.setStyleSheet("font-size: 11px; color: #888; padding: 4px;")
-        self.context_layout.addWidget(self.shortcut_help)
-        self._refresh_shortcut_help()
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
@@ -767,6 +969,7 @@ class MainWindow(QMainWindow):
 
         self.explorer = ExplorerView()
         self.explorer.set_uncertainty_outline_threshold(self._outline_threshold)
+        self.explorer.set_marker_size_multiplier(self._marker_size_multiplier)
         self.explorer.point_clicked.connect(self.on_explorer_point_clicked)
         self.explorer.point_hovered.connect(self.on_explorer_point_hovered)
         self.explorer.empty_hovered.connect(self.on_explorer_empty_hover)
@@ -789,6 +992,26 @@ class MainWindow(QMainWindow):
         top_controls_row.addWidget(self.view_mode_combo)
 
         top_controls_row.addSpacing(12)
+        self.outline_threshold_label = QLabel("Outline confidence <")
+        top_controls_row.addWidget(self.outline_threshold_label)
+        self.outline_threshold_spin = QDoubleSpinBox()
+        self.outline_threshold_spin.setRange(0.0, 1.0)
+        self.outline_threshold_spin.setSingleStep(0.05)
+        self.outline_threshold_spin.setDecimals(2)
+        self.outline_threshold_spin.setValue(self._outline_threshold)
+        self.outline_threshold_spin.setFixedWidth(72)
+        self.outline_threshold_spin.setToolTip(
+            "Confidence threshold for white uncertainty outlines in Predictions mode.\n"
+            "Set to 0 to disable uncertainty outlines."
+        )
+        self.outline_threshold_spin.valueChanged.connect(
+            self.on_outline_threshold_changed
+        )
+        top_controls_row.addWidget(self.outline_threshold_spin)
+        self.outline_threshold_label.setVisible(False)
+        self.outline_threshold_spin.setVisible(False)
+
+        top_controls_row.addStretch(1)
         top_controls_row.addWidget(QLabel("<b>Projection:</b>"))
         self.btn_umap_embedding = QPushButton("Embeddings")
         self.btn_umap_embedding.setCheckable(True)
@@ -802,6 +1025,7 @@ class MainWindow(QMainWindow):
         self.btn_umap_model.setCheckable(True)
         self.btn_umap_model.setChecked(False)
         self.btn_umap_model.setEnabled(False)
+        self.btn_umap_model.setVisible(False)
         self.btn_umap_model.setFixedWidth(110)
         self.btn_umap_model.setToolTip(
             "Switch explorer to UMAP of trained model predictions (computed automatically after checkpoint load)"
@@ -815,6 +1039,7 @@ class MainWindow(QMainWindow):
         self.btn_pca_model.setCheckable(True)
         self.btn_pca_model.setChecked(False)
         self.btn_pca_model.setEnabled(False)
+        self.btn_pca_model.setVisible(False)
         self.btn_pca_model.setFixedWidth(110)
         self.btn_pca_model.setToolTip(
             "Switch explorer to PCA of model predictions (computed on demand)"
@@ -824,14 +1049,38 @@ class MainWindow(QMainWindow):
         )
         top_controls_row.addWidget(self.btn_pca_model)
 
-        top_controls_row.addStretch(1)
         explorer_layout.addLayout(top_controls_row)
         explorer_layout.addWidget(self.explorer, 1)
 
-        # Labeling controls row
+        # Labeling controls
+        self.labeling_options_group = QGroupBox("Labeling Options")
+        self.labeling_options_group.setVisible(False)
+        labeling_options_layout = QVBoxLayout(self.labeling_options_group)
+        labeling_options_layout.setContentsMargins(10, 10, 10, 10)
+        labeling_options_layout.setSpacing(8)
+
+        self.labeling_options_hint = QLabel(
+            "Build a random or active-learning candidate set, review it, then start labeling."
+        )
+        self.labeling_options_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        labeling_options_layout.addWidget(self.labeling_options_hint)
+
+        labeling_mode_row = QHBoxLayout()
+        labeling_mode_row.setSpacing(12)
+
+        self.random_group = QGroupBox("Random Labeling")
+        random_group_layout = QVBoxLayout(self.random_group)
+        random_group_layout.setContentsMargins(10, 10, 10, 10)
+        random_group_layout.setSpacing(8)
+
+        random_hint = QLabel(
+            "Sample a lightweight batch from each cluster before starting labeling."
+        )
+        random_hint.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        random_group_layout.addWidget(random_hint)
+
         self.label_controls_row = QHBoxLayout()
         self.label_controls_row.setSpacing(12)
-
         self.label_controls_row.addWidget(QLabel("<b>Set:</b>"))
         self.sample_spin = QSpinBox()
         self.sample_spin.setRange(1, 100)
@@ -846,48 +1095,34 @@ class MainWindow(QMainWindow):
         self.btn_sample_next.clicked.connect(self.on_sample_next_triggered)
         self.label_controls_row.addWidget(self.btn_sample_next)
 
-        self.btn_clear_candidates = QPushButton("Clear Candidates")
-        self.btn_clear_candidates.setStyleSheet(
-            "background: #3e3e42; padding: 6px 12px;"
-        )
-        self.btn_clear_candidates.clicked.connect(self.on_clear_candidates_triggered)
-        self.label_controls_row.addWidget(self.btn_clear_candidates)
-
         self.label_controls_row.addStretch(1)
-
-        self.label_controls_row.addSpacing(8)
-        self.outline_threshold_label = QLabel("outline = confidence <")
-        self.label_controls_row.addWidget(self.outline_threshold_label)
-        self.outline_threshold_spin = QDoubleSpinBox()
-        self.outline_threshold_spin.setRange(0.0, 1.0)
-        self.outline_threshold_spin.setSingleStep(0.05)
-        self.outline_threshold_spin.setDecimals(2)
-        self.outline_threshold_spin.setValue(self._outline_threshold)
-        self.outline_threshold_spin.setFixedWidth(72)
-        self.outline_threshold_spin.setToolTip(
-            "Confidence threshold for white uncertainty outlines in Explorer mode.\n"
-            "Set to 0 to disable uncertainty outlines."
-        )
-        self.outline_threshold_spin.valueChanged.connect(
-            self.on_outline_threshold_changed
-        )
-        self.label_controls_row.addWidget(self.outline_threshold_spin)
-        self.outline_threshold_label.setVisible(False)
-        self.outline_threshold_spin.setVisible(False)
-
-        explorer_layout.addLayout(self.label_controls_row)
+        random_group_layout.addLayout(self.label_controls_row)
+        labeling_mode_row.addWidget(self.random_group, 1)
 
         # ── Inline Active Learning panel ────────────────────────────────
 
-        al_group = QGroupBox("Active Learning")
-        al_group.setStyleSheet("""
+        self.al_group = QGroupBox("Active Learning")
+        self.al_group.setStyleSheet("""
             QGroupBox { color: #777; border: 1px solid #3e3e42; border-radius: 4px;
                         margin-top: 8px; font-size: 11px; padding-top: 2px; }
             QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
         """)
-        al_group_layout = QVBoxLayout(al_group)
-        al_group_layout.setContentsMargins(8, 4, 8, 6)
-        al_group_layout.setSpacing(4)
+        al_group_layout = QVBoxLayout(self.al_group)
+        al_group_layout.setContentsMargins(10, 10, 10, 10)
+        al_group_layout.setSpacing(8)
+
+        self.al_hint_label = QLabel(
+            "Use model predictions to build a higher-value labeling batch."
+        )
+        self.al_hint_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        al_group_layout.addWidget(self.al_hint_label)
+
+        self.al_disabled_label = QLabel(
+            "Load a trained model to enable active-learning batch building."
+        )
+        self.al_disabled_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.al_disabled_label.hide()
+        al_group_layout.addWidget(self.al_disabled_label)
 
         al_ctrl_row = QHBoxLayout()
         al_ctrl_row.setSpacing(8)
@@ -912,7 +1147,7 @@ class MainWindow(QMainWindow):
         )
         self.al_build_btn.setToolTip(
             "Select the highest-value unlabeled images for labeling —\n"
-            "40% uncertain · 35% diverse · 15% representative · 10% audit"
+            "40% uncertain · 35% diverse · 15% representative (or balance) · 10% audit"
         )
         self.al_build_btn.clicked.connect(self._build_al_batch)
         al_ctrl_row.addWidget(self.al_build_btn)
@@ -923,46 +1158,98 @@ class MainWindow(QMainWindow):
         )
         al_ctrl_row.addWidget(self.al_candidates_badge)
 
-        self.al_start_btn = QPushButton("▶  Label")
-        self.al_start_btn.setStyleSheet(
-            "background: #28a745; color: white; font-weight: bold; padding: 4px 12px;"
-        )
-        self.al_start_btn.setEnabled(False)
-        self.al_start_btn.setToolTip(
-            "Switch to Labeling mode with AL candidates as the active set"
-        )
-        self.al_start_btn.clicked.connect(self._start_labeling_al_batch)
-        al_ctrl_row.addWidget(self.al_start_btn)
-
-        self.al_highlight_btn = QPushButton("◆ Highlight")
-        self.al_highlight_btn.setStyleSheet("background: #3e3e42; padding: 4px 10px;")
-        self.al_highlight_btn.setEnabled(False)
-        self.al_highlight_btn.setToolTip(
-            "Show AL candidates highlighted on the UMAP without entering Labeling mode"
-        )
-        self.al_highlight_btn.clicked.connect(self._highlight_al_batch_on_map)
-        al_ctrl_row.addWidget(self.al_highlight_btn)
-
         al_group_layout.addLayout(al_ctrl_row)
 
-        # Candidate list — hidden until a batch is built
-        self.al_candidate_list = QListWidget()
-        self.al_candidate_list.setFixedHeight(100)
-        self.al_candidate_list.setStyleSheet(
-            "background: #1a1a1a; color: #ccc; font-size: 11px; font-family: monospace;"
+        al_balance_row = QHBoxLayout()
+        al_balance_row.setSpacing(6)
+        self.al_balance_check = QCheckBox("Balance labels")
+        self.al_balance_check.setToolTip(
+            "When enabled, the 15% representative slot prioritises unlabeled samples\n"
+            "predicted to belong to underrepresented label classes,\n"
+            "steering the labeled set toward a more uniform distribution."
         )
-        self.al_candidate_list.setAlternatingRowColors(True)
-        self.al_candidate_list.itemDoubleClicked.connect(self._al_candidate_goto)
-        self.al_candidate_list.hide()
-        al_group_layout.addWidget(self.al_candidate_list)
+        self.al_balance_check.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        al_balance_row.addWidget(self.al_balance_check)
+        al_balance_row.addStretch(1)
+        al_group_layout.addLayout(al_balance_row)
 
-        explorer_layout.addWidget(al_group)
+        labeling_mode_row.addWidget(self.al_group, 1)
+        labeling_options_layout.addLayout(labeling_mode_row)
+
+        self.prepared_candidates_group = QGroupBox("Prepared Candidate Set")
+        prepared_layout = QVBoxLayout(self.prepared_candidates_group)
+        prepared_layout.setContentsMargins(10, 10, 10, 10)
+        prepared_layout.setSpacing(8)
+
+        self.prepared_candidates_summary = QLabel(
+            "No candidate set prepared yet. Build one from Random Labeling or Active Learning."
+        )
+        self.prepared_candidates_summary.setStyleSheet(
+            "color: #aaaaaa; font-size: 11px;"
+        )
+        prepared_layout.addWidget(self.prepared_candidates_summary)
+
+        self.candidate_table = QTableWidget(0, 4)
+        self.candidate_table.setHorizontalHeaderLabels(
+            ["Source", "Index", "File", "Details"]
+        )
+        self.candidate_table.verticalHeader().setVisible(False)
+        self.candidate_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.candidate_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.candidate_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.candidate_table.setAlternatingRowColors(True)
+        self.candidate_table.setShowGrid(False)
+        self.candidate_table.setMinimumHeight(140)
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeToContents
+        )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeToContents
+        )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.Stretch
+        )
+        self.candidate_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.Stretch
+        )
+        self.candidate_table.setStyleSheet(
+            "QTableWidget { background:#1a1a1a; color:#d0d0d0; font-size:11px; }"
+        )
+        self.candidate_table.itemDoubleClicked.connect(self._prepared_candidate_goto)
+        self.candidate_table.hide()
+        prepared_layout.addWidget(self.candidate_table)
+
+        prepared_actions = QHBoxLayout()
+        prepared_actions.setSpacing(12)
+
+        self.btn_start_labeling = QPushButton("▶  Start Labeling")
+        self.btn_start_labeling.setStyleSheet(
+            "background: #28a745; color: white; font-weight: bold; padding: 6px 12px;"
+        )
+        self.btn_start_labeling.setEnabled(False)
+        self.btn_start_labeling.clicked.connect(self._start_prepared_labeling_batch)
+        prepared_actions.addWidget(self.btn_start_labeling)
+
+        self.btn_clear_candidates = QPushButton("Clear Candidates")
+        self.btn_clear_candidates.setStyleSheet(
+            "background: #3e3e42; padding: 6px 12px;"
+        )
+        self.btn_clear_candidates.clicked.connect(self.on_clear_candidates_triggered)
+        prepared_actions.addWidget(self.btn_clear_candidates)
+        prepared_actions.addStretch(1)
+        prepared_layout.addLayout(prepared_actions)
+
+        labeling_options_layout.addWidget(self.prepared_candidates_group)
+
+        explorer_layout.addWidget(self.labeling_options_group)
         # ──────────────────────────────────────────────────────────────────
 
         self.history_title = QLabel("<b>Recent Labels (click to undo + relabel)</b>")
+        self.history_title.setVisible(False)
         explorer_layout.addWidget(self.history_title)
 
         self.history_scroll = QScrollArea()
+        self.history_scroll.setVisible(False)
         self.history_scroll.setWidgetResizable(True)
         self.history_scroll.setFixedHeight(140)
         self.history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -1007,6 +1294,64 @@ class MainWindow(QMainWindow):
         self.history_scroll.setWidget(self.history_scroll_content)
         explorer_layout.addWidget(self.history_scroll)
 
+        # ──────────────────────────────────────────────────────────────────
+        # Recently-reviewed strip (visible only in review mode)
+        # ──────────────────────────────────────────────────────────────────
+
+        self.review_history_title = QLabel(
+            "<b>Recently Reviewed (click to revisit)</b>"
+        )
+        self.review_history_title.setVisible(False)
+        explorer_layout.addWidget(self.review_history_title)
+
+        self.review_history_scroll = QScrollArea()
+        self.review_history_scroll.setVisible(False)
+        self.review_history_scroll.setWidgetResizable(True)
+        self.review_history_scroll.setFixedHeight(140)
+        self.review_history_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.review_history_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.review_history_scroll_content = QWidget()
+        self.review_history_scroll_layout = QHBoxLayout(
+            self.review_history_scroll_content
+        )
+        self.review_history_scroll_layout.setContentsMargins(8, 8, 8, 8)
+        self.review_history_scroll_layout.setSpacing(8)
+        self._review_history_slots = []
+        for _ in range(24):
+            card = QFrame()
+            card.setFixedSize(110, 110)
+            card.setToolTip("")
+            card.setStyleSheet(
+                "padding: 4px; border: 1px solid #3e3e42; border-radius: 6px;"
+            )
+            card.setProperty("review_history_index", None)
+            card.installEventFilter(self)
+
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(4, 4, 4, 4)
+            card_layout.setSpacing(4)
+
+            thumb = QLabel()
+            thumb.setFixedSize(72, 72)
+            thumb.setAlignment(Qt.AlignCenter)
+            thumb.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+            caption = QLabel("")
+            caption.setAlignment(Qt.AlignCenter)
+            caption.setWordWrap(True)
+            caption.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+
+            card_layout.addWidget(thumb, 0, Qt.AlignCenter)
+            card_layout.addWidget(caption, 0, Qt.AlignCenter)
+            card.hide()
+
+            self._review_history_slots.append((card, thumb, caption))
+            self.review_history_scroll_layout.addWidget(card)
+
+        self.review_history_scroll_layout.addStretch(1)
+        self.review_history_scroll.setWidget(self.review_history_scroll_content)
+        explorer_layout.addWidget(self.review_history_scroll)
+
         self.tabs.addTab(self.explorer_page, "Explorer")
 
         # Tab 2: Metrics
@@ -1024,27 +1369,24 @@ class MainWindow(QMainWindow):
         )
         metrics_layout.addWidget(self.metrics_validation_label)
 
+        # Split-tabbed metrics display (train / val / test / all tabs)
+        self.metrics_split_tabs = QTabWidget()
+        self.metrics_split_tabs.setTabPosition(QTabWidget.North)
+        self.metrics_split_tabs.setStyleSheet(
+            "QTabBar::tab { min-width: 70px; padding: 4px 10px; }"
+        )
+        _placeholder = QLabel("Train a model to see evaluation metrics here.")
+        _placeholder.setAlignment(Qt.AlignCenter)
+        _placeholder.setStyleSheet("color: #555; font-size: 13px; background: #111;")
+        self.metrics_split_tabs.addTab(_placeholder, "—")
+        metrics_layout.addWidget(self.metrics_split_tabs, 1)
+
+        # Legacy hidden widgets kept for API / test compatibility
         self.metrics_view = QTextEdit()
         self.metrics_view.setReadOnly(True)
-        self.metrics_view.setMaximumHeight(180)
-        self.metrics_view.setPlaceholderText(
-            "Train a model to see evaluation metrics here."
-        )
-        self.metrics_view.setStyleSheet(
-            "font-family: 'SF Mono', 'Roboto Mono', monospace; font-size: 12px; background: #111;"
-        )
-        metrics_layout.addWidget(self.metrics_view)
-
-        # Matplotlib figure area (confusion matrix + per-class bars)
-        self.metrics_figure_label = QLabel("(Train a model to see visualizations)")
-        self.metrics_figure_label.setAlignment(Qt.AlignCenter)
-        self.metrics_figure_label.setStyleSheet(
-            "background: #111; color: #555; border-radius: 4px; padding: 20px;"
-        )
-        metrics_figure_scroll = QScrollArea()
-        metrics_figure_scroll.setWidgetResizable(True)
-        metrics_figure_scroll.setWidget(self.metrics_figure_label)
-        metrics_layout.addWidget(metrics_figure_scroll, 1)
+        self.metrics_view.setVisible(False)
+        self.metrics_figure_label = QLabel()
+        self.metrics_figure_label.setVisible(False)
 
         self.tabs.addTab(self.metrics_page, "Metrics")
 
@@ -1096,6 +1438,28 @@ class MainWindow(QMainWindow):
             "padding: 10px; background-color: #252526; border-radius: 6px;"
         )
         preview_layout.addWidget(self.preview_info)
+
+        preview_review_actions = QHBoxLayout()
+        preview_review_actions.setSpacing(8)
+
+        self.review_selected_btn = QPushButton("Approve")
+        self.review_selected_btn.clicked.connect(self.approve_selected_review_label)
+        self.review_selected_btn.setEnabled(False)
+        preview_review_actions.addWidget(self.review_selected_btn)
+
+        self.review_reject_btn = QPushButton("Reject")
+        self.review_reject_btn.clicked.connect(self.reject_selected_review_label)
+        self.review_reject_btn.setEnabled(False)
+        preview_review_actions.addWidget(self.review_reject_btn)
+
+        preview_layout.addLayout(preview_review_actions)
+
+        self.preview_review_hint = QLabel(
+            "Use Approve / Reject here to expand labels while reviewing model predictions."
+        )
+        self.preview_review_hint.setWordWrap(True)
+        self.preview_review_hint.setStyleSheet("color:#9a9a9a; font-size:11px;")
+        preview_layout.addWidget(self.preview_review_hint)
 
         self.splitter.addWidget(self.context_panel)
         self.splitter.addWidget(self.center_tabs)
@@ -1155,6 +1519,7 @@ class MainWindow(QMainWindow):
                     "version": "1.0",
                     "classes": project_info.get("classes", []),
                     "autosave_interval_ms": self._autosave_interval_ms,
+                    "marker_size_multiplier": self._marker_size_multiplier,
                 }
                 with open(self._project_config_path(), "w") as f:
                     json.dump(config, f, indent=2)
@@ -1217,29 +1582,193 @@ class MainWindow(QMainWindow):
         )
 
         if project_dir:
-            self.project_path = Path(project_dir)
-            if not project_exists(self.project_path):
-                QMessageBox.warning(
-                    self,
-                    "Invalid Project",
-                    "This directory does not contain a valid ClassKit project.",
-                )
+            self._open_project_directory(Path(project_dir), show_invalid_warning=True)
+
+    def open_project_zip(self):
+        """Import a zipped ClassKit project bundle and open the extracted project."""
+        archive_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open ClassKit Project Zip",
+            str(default_project_parent_dir()),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            manifest = load_project_bundle_archive_manifest(archive_path, strict=True)
+            destination_dir = self._choose_project_zip_destination(
+                archive_path,
+                manifest.display_name or Path(archive_path).stem,
+            )
+            if destination_dir is None:
                 return
+            imported_dir = import_project_bundle_archive(
+                archive_path,
+                destination_dir,
+                expected_kit="classkit",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
 
-            self.db_path = prepare_project_directory(self.project_path)
+        if not self._open_project_directory(imported_dir, show_invalid_warning=True):
+            QMessageBox.warning(
+                self,
+                "Open Project Zip",
+                f"Imported project could not be opened:\n{imported_dir}",
+            )
 
-            if not self.db_path.exists():
-                QMessageBox.warning(
+    def make_project_portable(self, *, interactive: bool = True) -> bool:
+        """Copy linked ClassKit images into the project bundle."""
+        if not self.project_path or not self.db_path:
+            if interactive:
+                QMessageBox.information(
                     self,
-                    "Invalid Project",
-                    "This directory does not contain a valid ClassKit project.",
+                    "Make Project Portable",
+                    "Open a ClassKit project before making it portable.",
                 )
-                return
+            return False
 
+        before_count = classkit_project_linked_image_count(
+            self.project_path,
+            self.image_paths,
+        )
+        if before_count == 0:
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    "This ClassKit project is already portable.",
+                )
+            self.status.showMessage("Project already portable", 3000)
+            return True
+
+        if interactive:
+            self.save_project()
+            progress = QProgressDialog(
+                "Copying linked images into the project bundle...",
+                None,
+                0,
+                0,
+                self,
+            )
+            progress.setWindowTitle("Make Project Portable")
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.show()
+
+            worker = _ClassKitPortableWorker(self.db_path)
+            worker.status.connect(progress.setLabelText)
+            worker.error.connect(
+                lambda msg: QMessageBox.warning(self, "Make Project Portable", msg)
+            )
+
+            def _finish_portable_run() -> None:
+                progress.close()
+                self._portable_worker = None
+                self._portable_progress_dialog = None
+
+            def _handle_portable_success(copied_count: int) -> None:
+                self.load_project_data()
+                self.update_context_panel()
+                after_count = classkit_project_linked_image_count(
+                    self.project_path,
+                    self.image_paths,
+                )
+                if after_count != 0:
+                    QMessageBox.warning(
+                        self,
+                        "Make Project Portable",
+                        f"{after_count:,} linked image(s) still remain outside the project bundle.",
+                    )
+                    return
+                self.status.showMessage(
+                    f"Copied {copied_count:,} linked image(s) into the project bundle",
+                    5000,
+                )
+                QMessageBox.information(
+                    self,
+                    "Make Project Portable",
+                    f"Copied {copied_count:,} linked image(s) into the project bundle.",
+                )
+
+            worker.success.connect(_handle_portable_success)
+            worker.finished.connect(_finish_portable_run)
+            self._portable_worker = worker
+            self._portable_progress_dialog = progress
+            worker.start()
+            return True
+
+        try:
+            self.save_project()
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+            copied_count = db.materialize_linked_images()
             self.load_project_data()
             self.update_context_panel()
-            self.status.showMessage(f"Opened project: {self.project_path.name}")
-            QTimer.singleShot(200, self._guide_to_next_step)
+        except Exception as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+
+        after_count = classkit_project_linked_image_count(
+            self.project_path,
+            self.image_paths,
+        )
+        if after_count != 0:
+            QMessageBox.warning(
+                self,
+                "Make Project Portable",
+                f"{after_count:,} linked image(s) still remain outside the project bundle.",
+            )
+            return False
+
+        self.status.showMessage(
+            f"Copied {copied_count:,} linked image(s) into the project bundle",
+            5000,
+        )
+        if interactive:
+            QMessageBox.information(
+                self,
+                "Make Project Portable",
+                f"Copied {copied_count:,} linked image(s) into the project bundle.",
+            )
+        return True
+
+    def export_project_zip(self):
+        """Write the current ClassKit project bundle as a portable zip archive."""
+        if not self.project_path:
+            QMessageBox.information(
+                self,
+                "Export Project Zip",
+                "Open a ClassKit project before exporting a portable zip.",
+            )
+            return
+
+        default_archive = self.project_path.parent / f"{self.project_path.name}.zip"
+        archive_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export ClassKit Project Zip",
+            str(default_archive),
+            "Zip Files (*.zip)",
+        )
+        if not archive_path:
+            return
+
+        try:
+            if not self.make_project_portable(interactive=False):
+                return
+            self.save_project()
+            written_path = export_project_bundle_archive(
+                self.project_path, archive_path
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        self.status.showMessage(f"Exported project zip: {written_path}", 5000)
 
     def save_project(self):
         """Force immediate flush of all pending label updates."""
@@ -1284,9 +1813,20 @@ class MainWindow(QMainWindow):
             self.autosave_spin.setValue(self._autosave_interval_ms // 1000)
             self.autosave_spin.blockSignals(False)
 
+        self._marker_size_multiplier = float(
+            config.get("marker_size_multiplier", self._marker_size_multiplier)
+        )
+        self._marker_size_multiplier = max(0.5, min(3.0, self._marker_size_multiplier))
+        if hasattr(self, "marker_size_spin"):
+            self.marker_size_spin.blockSignals(True)
+            self.marker_size_spin.setValue(self._marker_size_multiplier)
+            self.marker_size_spin.blockSignals(False)
+        if hasattr(self, "explorer") and self.explorer is not None:
+            self.explorer.set_marker_size_multiplier(self._marker_size_multiplier)
+
         saved_shortcuts = config.get("custom_shortcuts", {})
         if isinstance(saved_shortcuts, dict):
-            self._custom_shortcuts = saved_shortcuts
+            self._custom_shortcuts = self._sanitize_custom_shortcuts(saved_shortcuts)
 
         self.clahe_clip = float(config.get("clahe_clip", 2.0))
         self.clahe_grid = tuple(config.get("clahe_grid", [8, 8]))
@@ -1305,6 +1845,7 @@ class MainWindow(QMainWindow):
     def _finalize_project_load(self, db) -> None:
         """Refresh derived UI state after database-backed project data loads."""
         self.label_history = []
+        self.review_history = []
         self.last_assigned_stack = []
         self.selected_point_index = None
         self.hover_locked = False
@@ -1314,6 +1855,8 @@ class MainWindow(QMainWindow):
         self.setup_label_shortcuts()
         self._refresh_shortcut_help()
         self.request_refresh_label_history_strip()
+        self._review_history_icon_cache.clear()
+        self.request_refresh_review_history_strip()
         self._pending_label_updates = {}
         self._autosave_last_save_time = None
         self._update_autosave_heartbeat_text()
@@ -1342,6 +1885,9 @@ class MainWindow(QMainWindow):
             from ..core.store.db import ClassKitDB
 
             db = ClassKitDB(self.db_path)
+
+            # Rebase project-owned bundle paths after extracting or moving a project.
+            db.relocate_project_owned_paths()
 
             # Migrate any non-resolved paths from older ingests (no-op if already resolved)
             db.migrate_paths_to_resolved()
@@ -1374,11 +1920,9 @@ class MainWindow(QMainWindow):
         """Update context panel with project info."""
         if not self.project_path:
             self.context_info.setText(
-                "<div style='line-height: 1.65;'>"
-                "No project loaded.<br><br>"
-                "Get started:<br>"
-                "• <b>File → New Project</b> to create<br>"
-                "• <b>File → Open Project</b> to load<br>"
+                "<div style='line-height:1.35;'>"
+                "<div style='color:#f2f2f2; font-size:13px; font-weight:600; margin-bottom:4px;'>No project loaded</div>"
+                "<div style='color:#8d8d8d;'>File -> New Project or File -> Open Project</div>"
                 "</div>"
             )
             if hasattr(self, "review_info"):
@@ -1394,61 +1938,111 @@ class MainWindow(QMainWindow):
             if self.cluster_assignments is not None
             else 0
         )
+        scheme = self._resolve_training_scheme()
 
-        info_html = "<div style='line-height: 1.7;'>"
-        info_html += f"<b style='color: #ffffff; font-size: 15px;'>{self.project_path.name}</b><br>"
-        info_html += f"<span style='color: #888888; font-size: 11px;'>{self.project_path}</span><br><br>"
-        info_html += f"<b>Database:</b> {'Connected' if self.db_path and self.db_path.exists() else 'Not ready'}<br>"
-        info_html += f"<b>Total Images:</b> {total_count:,}<br>"
-        info_html += f"<b>Labeled:</b> {labeled_count:,}<br>"
-        info_html += f"<b>Unlabeled:</b> {unlabeled_count:,}<br>"
-        info_html += f"<b>Classes:</b> {len(self.classes)} ({', '.join(self.classes[:5])}{'...' if len(self.classes) > 5 else ''})<br>"
-        info_html += f"<b>Embeddings:</b> {'ready' if self.embeddings is not None else 'not computed'}<br>"
-        info_html += (
-            f"<b>Clusters:</b> {n_clusters if n_clusters else 'not clustered'}<br>"
-        )
-        info_html += f"<b>UMAP:</b> {'ready' if self.umap_coords is not None else 'not computed'}<br>"
-        info_html += (
-            f"<b>Current Mode:</b> {self._mode_display_name(self.explorer_mode)}<br>"
-        )
-        info_html += (
-            f"<b>Candidate Set:</b> {len(self.candidate_indices)} points"
+        classes_preview = ", ".join(escape(name) for name in self.classes[:4])
+        if len(self.classes) > 4:
+            classes_preview += ", ..."
+
+        candidate_text = (
+            f"{len(self.candidate_indices):,} points"
             if self.candidate_indices
-            else "<b>Candidate Set:</b> none sampled"
+            else "none"
         )
-        info_html += "</div>"
+        db_state = (
+            "Connected" if self.db_path and self.db_path.exists() else "Not ready"
+        )
+        linked_image_count = classkit_project_linked_image_count(
+            self.project_path,
+            self.image_paths,
+        )
+        portability_state = (
+            "Portable"
+            if classkit_project_is_portable(self.project_path, self.image_paths)
+            else f"Linked ({linked_image_count:,} external image(s))"
+        )
+        embedding_state = "Ready" if self.embeddings is not None else "Pending"
+        cluster_state = f"{n_clusters:,}" if n_clusters else "Pending"
+        umap_state = "Ready" if self.umap_coords is not None else "Pending"
+
+        info_rows = [
+            ("DB", db_state),
+            ("Project", portability_state),
+            ("Images", f"{total_count:,}"),
+            ("Labeled", f"{labeled_count:,}"),
+            ("Open", f"{unlabeled_count:,}"),
+            (
+                "Classes",
+                (
+                    f"{len(self.classes):,} ({classes_preview})"
+                    if classes_preview
+                    else f"{len(self.classes):,}"
+                ),
+            ),
+            ("Embeddings", embedding_state),
+            ("Clusters", cluster_state),
+            ("UMAP", umap_state),
+            ("Mode", self._mode_display_name(self.explorer_mode)),
+            ("Candidates", candidate_text),
+        ]
+        if scheme is not None and len(getattr(scheme, "factors", []) or []) > 1:
+            info_rows.insert(
+                5,
+                (
+                    "Scheme",
+                    f"{len(scheme.factors)} factors / {scheme.total_classes:,} composites",
+                ),
+            )
+
+        info_html = "<div style='line-height:1.3;'>"
+        info_html += f"<div style='color:#ffffff; font-size:14px; font-weight:600;'>{escape(self.project_path.name)}</div>"
+        info_html += f"<div style='color:#7f7f7f; font-size:10px; margin:2px 0 8px 0;'>{escape(str(self.project_path))}</div>"
+        info_html += (
+            "<table cellspacing='0' cellpadding='0' "
+            "style='width:100%; color:#cfcfcf; font-size:11px;'>"
+        )
+        for label, value in info_rows:
+            info_html += (
+                "<tr>"
+                f"<td style='color:#8d8d8d; padding:2px 10px 2px 0; vertical-align:top; white-space:nowrap;'>{label}</td>"
+                f"<td style='color:#f1f1f1; padding:2px 0; vertical-align:top;'>{value}</td>"
+                "</tr>"
+            )
+        info_html += "</table>"
 
         # ── Next Step guidance ──────────────────────────────────────────
         next_step = ""
         if total_count == 0:
-            next_step = "• <b>File → Source Manager</b>"
+            next_step = "File -> Source Manager"
         elif self.embeddings is None:
-            next_step = "• <b>Actions → Compute Embeddings</b>"
+            next_step = "Actions -> Compute Embeddings"
         elif self.cluster_assignments is None:
-            next_step = "• <b>Actions → Cluster Embeddings</b>"
+            next_step = "Actions -> Cluster Embeddings"
         elif self.umap_coords is None:
-            next_step = "• <b>Actions → Compute UMAP</b>"
-        elif labeled_count < 10:
-            next_step = "• <b>Labeling → Sample Randomly</b>"
+            next_step = "Actions -> Compute UMAP"
         elif len(self.candidate_indices) == 0:
-            next_step = "• <b>Labeling → Sample next candidates</b>"
+            next_step = "Labeling -> Sample next candidates"
         else:
-            next_step = "• <b>Labeling → Enter Labeling Mode (L)</b>"
+            next_step = "Labeling -> Enter Labeling Mode"
 
-        info_html += "<div style='margin-top:16px; padding:10px; background:#2d2d2d; border-radius:6px; border-left:3px solid #0e639c;'>"
-        info_html += "<b style='color:#0e639c; font-size:11px; text-transform:uppercase;'>Suggested Next Step:</b><br>"
-        info_html += f"<span style='color:#ffffff; font-size:12px;'>{next_step}</span>"
+        info_html += (
+            "<div style='margin-top:8px; padding-top:8px; border-top:1px solid #2f2f2f;'>"
+            "<span style='color:#5ea6da; font-size:10px; font-weight:600; text-transform:uppercase;'>Next</span>"
+            f"<div style='color:#f3f3f3; font-size:11px; margin-top:2px;'>{next_step}</div>"
+        )
         info_html += "</div>"
 
         self.context_info.setText(info_html)
         self._update_review_panel()
         self._update_labeling_progress_indicator()
+        self._update_al_status()
 
     def _reload_label_state_from_db(self, db=None) -> None:
         """Refresh labels and review metadata from the project DB."""
         if not self.db_path:
             self.image_labels = []
             self._image_review_status = {}
+            self._image_metadata_by_path = {}
             self._review_candidate_indices = []
             self._invalidate_infinite_labeling_cache()
             return
@@ -1460,6 +2054,7 @@ class MainWindow(QMainWindow):
 
         self.image_labels = db.get_all_labels()
         self._image_review_status = db.get_label_review_status_by_path()
+        self._image_metadata_by_path = db.get_image_metadata_by_path()
         self._refresh_review_candidate_indices()
         self._invalidate_infinite_labeling_cache()
         if len(self.image_confidences) != len(self.image_paths):
@@ -1472,6 +2067,140 @@ class MainWindow(QMainWindow):
         if index is None or index < 0 or index >= len(self.image_paths):
             return {}
         return self._review_status_for_path(self.image_paths[index])
+
+    @staticmethod
+    def _resolved_path_key(path: Path | str) -> str:
+        return str(Path(path).resolve())
+
+    def _derive_training_group_key(self, path: Path | str) -> str:
+        resolved_path = self._resolved_path_key(path)
+        metadata = self._image_metadata_by_path.get(resolved_path, {})
+
+        original_path_text = metadata.get("original_image_path")
+        try:
+            original_path = (
+                Path(str(original_path_text)).expanduser().resolve()
+                if original_path_text
+                else Path(resolved_path)
+            )
+        except Exception:
+            original_path = Path(resolved_path)
+
+        source_root = None
+        source_root_text = metadata.get("source_root")
+        if source_root_text:
+            try:
+                source_root = Path(str(source_root_text)).expanduser().resolve()
+            except Exception:
+                source_root = None
+
+        try:
+            relative_path = original_path.relative_to(source_root)
+        except Exception:
+            relative_path = original_path
+
+        parent_parts = [str(part).lower() for part in relative_path.parts[:-1]]
+        if parent_parts and parent_parts[0] in {"train", "val", "test"}:
+            parent_parts = parent_parts[1:]
+
+        class_folder = str(metadata.get("class_folder") or "").strip().lower()
+        if class_folder and parent_parts and parent_parts[-1] == class_folder:
+            parent_parts = parent_parts[:-1]
+
+        stem = original_path.stem.lower()
+        stem_group = re.sub(
+            r"(?i)(?:[_-]?(?:frame|img|image))?[_-]?\d{2,}$",
+            "",
+            stem,
+        ).strip("_-")
+        if not stem_group:
+            stem_group = (
+                stem or hashlib.sha1(resolved_path.encode("utf-8")).hexdigest()[:12]
+            )
+
+        source_bucket = str(source_root or original_path.parent)
+        parent_bucket = "/".join(parent_parts) if parent_parts else "."
+        return f"{source_bucket}::{parent_bucket}::{stem_group}"
+
+    def _training_group_keys_for_paths(self, paths: list[Path]) -> list[str]:
+        return [self._derive_training_group_key(path) for path in paths]
+
+    def _set_active_evaluation_selection(
+        self,
+        paths: list[str] | None,
+        split_name: str = "",
+        split_paths: dict[str, list[str]] | None = None,
+    ) -> None:
+        normalized = [self._resolved_path_key(path) for path in (paths or []) if path]
+        self._active_evaluation_paths = set(normalized) if normalized else None
+        self._active_evaluation_split_name = str(split_name or "").strip()
+        normalized_split_paths: dict[str, set[str]] = {}
+        for raw_name, raw_paths in (split_paths or {}).items():
+            split_key = str(raw_name or "").strip().lower()
+            if not split_key:
+                continue
+            split_members = {
+                self._resolved_path_key(path) for path in (raw_paths or []) if path
+            }
+            if split_members:
+                normalized_split_paths[split_key] = split_members
+        self._split_membership_paths = normalized_split_paths
+
+    def _set_active_evaluation_from_meta(self, meta) -> None:
+        evaluation = meta.get("evaluation") if isinstance(meta, dict) else None
+        if not isinstance(evaluation, dict):
+            self._set_active_evaluation_selection(None)
+            return
+        split_paths = evaluation.get("split_paths")
+        if not isinstance(split_paths, dict):
+            split_name = str(evaluation.get("split_name") or "").strip().lower()
+            split_values = evaluation.get("paths") or []
+            split_paths = (
+                {split_name: split_values} if split_name and split_values else {}
+            )
+        self._set_active_evaluation_selection(
+            evaluation.get("paths") or [],
+            str(evaluation.get("split_name") or "").strip(),
+            split_paths=split_paths,
+        )
+
+    def _cached_model_evaluation_info(self, path: Path):
+        if not self.db_path:
+            return None
+        try:
+            from ..core.store.db import ClassKitDB as _CKDb
+
+            resolved = self._resolved_path_key(path)
+            for entry in _CKDb(self.db_path).list_model_caches():
+                artifact_paths = {
+                    self._resolved_path_key(artifact)
+                    for artifact in entry.get("artifact_paths", [])
+                }
+                if resolved in artifact_paths:
+                    meta = entry.get("meta")
+                    return meta if isinstance(meta, dict) else None
+        except Exception:
+            return None
+        return None
+
+    def _cached_model_cache_entry(self, path: Path):
+        """Return the cached model entry containing *path* as an artifact."""
+        if not self.db_path:
+            return None
+        try:
+            from ..core.store.db import ClassKitDB as _CKDb
+
+            resolved = self._resolved_path_key(path)
+            for entry in _CKDb(self.db_path).list_model_caches():
+                artifact_paths = {
+                    self._resolved_path_key(artifact)
+                    for artifact in entry.get("artifact_paths", [])
+                }
+                if resolved in artifact_paths:
+                    return entry
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _review_source_label(raw_source: object) -> str:
@@ -1513,6 +2242,25 @@ class MainWindow(QMainWindow):
         }
         self._refresh_review_candidate_indices()
 
+    @staticmethod
+    def _review_candidate_sort_components(
+        confidence: float | None,
+    ) -> tuple[int, float]:
+        try:
+            score = float(confidence) if confidence is not None else None
+        except Exception:
+            score = None
+        if score is None or not np.isfinite(score):
+            return (1, 0.0)
+        return (0, -score)
+
+    def _review_candidate_sort_key(self, index: int) -> tuple[int, float, int]:
+        status = self._review_status_for_index(index)
+        missing_confidence, neg_confidence = self._review_candidate_sort_components(
+            status.get("confidence")
+        )
+        return (missing_confidence, neg_confidence, index)
+
     def _refresh_review_candidate_indices(self) -> None:
         self._review_candidate_indices = [
             index
@@ -1520,6 +2268,110 @@ class MainWindow(QMainWindow):
             if self._image_review_status.get(str(path), {}).get("label")
             and not self._image_review_status.get(str(path), {}).get("verified")
         ]
+        self._review_candidate_indices.sort(key=self._review_candidate_sort_key)
+
+    def _review_candidate_position(self, index: int) -> int:
+        try:
+            return self._review_candidate_indices.index(index)
+        except ValueError:
+            return 0
+
+    def _advance_review_selection_after_resolution(self, old_pos: int) -> None:
+        if self.explorer_mode != "review":
+            self.update_context_panel()
+            if self.selected_point_index is not None:
+                self.load_preview_for_index(
+                    self.selected_point_index, source="selection"
+                )
+            return
+
+        if self._review_candidate_indices:
+            next_pos = min(max(old_pos, 0), len(self._review_candidate_indices) - 1)
+            next_index = int(self._review_candidate_indices[next_pos])
+            self.selected_point_index = next_index
+            self.hover_locked = True
+            self.request_preview_for_index(next_index, source="next-unreviewed")
+            self.request_update_explorer_selection(next_index)
+            self.update_context_panel()
+            self.load_preview_for_index(next_index, source="selection")
+            return
+
+        self.selected_point_index = None
+        self.set_explorer_mode("explore")
+        self.clear_preview_display()
+        QMessageBox.information(
+            self,
+            "Review Complete",
+            "All machine labels have been reviewed.",
+        )
+
+    def _restore_review_label_from_history(self, index: int) -> bool:
+        if index < 0 or index >= len(self.image_paths):
+            return False
+
+        path = self.image_paths[index]
+        status = self._review_status_for_index(index)
+        if not status.get("label"):
+            QMessageBox.information(
+                self,
+                "No Label To Review",
+                "This image no longer has a label that can be returned to the review queue.",
+            )
+            return False
+
+        refreshed = dict(status)
+        if status.get("verified") and self.db_path:
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+            db.mark_labels_unverified([path])
+            refreshed = db.get_label_review_status_by_path().get(str(path), status)
+            self.image_labels = db.get_all_labels()
+
+        refreshed["verified"] = False
+        refreshed["verified_at"] = None
+        self._mark_local_review_state(
+            path,
+            label=refreshed.get("label"),
+            label_source=refreshed.get("label_source"),
+            verified=False,
+            confidence=refreshed.get("confidence"),
+            auto_label_metadata=refreshed.get("auto_label_metadata"),
+            verified_at=None,
+        )
+
+        self.selected_point_index = int(index)
+        self.hover_locked = True
+        if self.explorer_mode != "review":
+            self.set_explorer_mode("review")
+        self.request_preview_for_index(self.selected_point_index, source="selection")
+        self.request_update_explorer_selection(self.selected_point_index)
+        self.update_context_panel()
+        self.update_explorer_plot()
+        self.status.showMessage(f"Returned {Path(path).name} to the review queue", 4000)
+        return True
+
+    def _prompt_review_relabel_choice(self, status: dict) -> str | None:
+        from ..gui.dialogs import ReviewRelabelDialog
+
+        scheme = self._resolve_training_scheme()
+        dialog = ReviewRelabelDialog(
+            classes=self.classes,
+            scheme=scheme,
+            initial_label=str(status.get("label") or "").strip() or None,
+            parent=self,
+        )
+        if not dialog.exec():
+            return None
+        replacement_label = dialog.selected_label().strip()
+        if not replacement_label:
+            QMessageBox.information(
+                self,
+                "No Label Selected",
+                "Choose a replacement label to reject the machine prediction.",
+            )
+            return None
+        return replacement_label
 
     def _update_review_panel(self) -> None:
         pending = self._pending_machine_review_count()
@@ -2043,6 +2895,7 @@ class MainWindow(QMainWindow):
         self._invalidate_embedding_downstream_state(persist_candidates=True)
         self._model_probs = None
         self._model_class_names = None
+        self._model_prediction_heads = None
         self.umap_model_coords = None
         self.pca_model_coords = None
         self._al_candidates = None
@@ -2088,9 +2941,271 @@ class MainWindow(QMainWindow):
             with open(project_config_path, "r") as f:
                 config = json.load(f)
         config["autosave_interval_ms"] = int(self._autosave_interval_ms)
+        config["marker_size_multiplier"] = float(self._marker_size_multiplier)
         project_config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(project_config_path, "w") as f:
             json.dump(config, f, indent=2)
+
+    def _save_project_classes(self, classes: list[str]) -> None:
+        """Persist the current project class list into project config."""
+        if not self.project_path:
+            return
+        project_config_path = self._project_config_path()
+        config = {}
+        if project_config_path.exists():
+            with open(project_config_path, "r") as f:
+                config = json.load(f)
+        config["classes"] = list(classes)
+        project_config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(project_config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+    @staticmethod
+    def _build_imported_scheme_dict(labels: list[str]) -> dict:
+        """Return a single-factor scheme dictionary for imported class labels."""
+        return {
+            "name": "imported_labels",
+            "description": "Single-factor labeling scheme created from imported source labels",
+            "factors": [
+                {
+                    "name": "class",
+                    "labels": list(labels),
+                    "shortcut_keys": [""] * len(labels),
+                }
+            ],
+            "training_modes": ["flat_custom", "flat_yolo"],
+        }
+
+    @staticmethod
+    def _build_multihead_imported_scheme_dict(
+        factor_value_lists: list[list[str]],
+        factor_names: list[str] | None = None,
+    ) -> dict:
+        """Return a multi-factor scheme dict inferred from detected per-factor value lists."""
+        names = factor_names or [f"factor_{i}" for i in range(len(factor_value_lists))]
+        return {
+            "name": "imported_multihead_labels",
+            "description": "Multi-factor labeling scheme created from imported source labels",
+            "factors": [
+                {
+                    "name": name,
+                    "labels": list(values),
+                    "shortcut_keys": [""] * len(values),
+                }
+                for name, values in zip(names, factor_value_lists)
+            ],
+            "training_modes": ["flat_custom", "flat_yolo", "multihead"],
+        }
+
+    def _can_recode_into_existing_scheme(self, flat_labels: list[str]) -> bool:
+        """Return True if _ → | re-encoding of flat_labels fits the current project scheme."""
+        scheme = self._resolve_training_scheme()
+        if scheme is None or len(scheme.factors) < 2:
+            return False
+        valid = scheme.valid_encoded_labels()
+        recoded = {"|".join(label.split("_")) for label in flat_labels if label.strip()}
+        return bool(recoded) and recoded.issubset(valid)
+
+    def _replace_project_schema_from_labels(
+        self, labels: list[str], scheme_dict: dict | None = None
+    ) -> None:
+        """Replace the project classes and scheme with imported labels.
+
+        *scheme_dict* overrides the default single-factor scheme; pass a
+        pre-built multihead dict when importing multihead-encoded sources.
+        """
+        if not labels:
+            return
+
+        normalized_labels = [
+            str(label).strip() for label in labels if str(label).strip()
+        ]
+        sd = (
+            scheme_dict
+            if scheme_dict is not None
+            else self._build_imported_scheme_dict(normalized_labels)
+        )
+
+        if self.project_path:
+            config = self._load_project_config()
+            config["classes"] = normalized_labels
+            config_path = self._project_config_path()
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "w") as handle:
+                json.dump(config, handle, indent=2)
+
+            scheme_path = self._project_scheme_path()
+            scheme_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(scheme_path, "w") as handle:
+                json.dump(sd, handle, indent=2)
+
+        self.classes = normalized_labels
+        self.rebuild_label_buttons()
+        self.setup_label_shortcuts()
+        self._refresh_shortcut_help()
+        self.update_context_panel()
+
+    def _project_image_count(self) -> int:
+        """Return the number of images currently registered in the project DB."""
+        if not self.db_path:
+            return len(self.image_paths or [])
+        from ..core.store.db import ClassKitDB
+
+        return ClassKitDB(self.db_path).count_images()
+
+    def _prompt_schema_mismatch_resolution(
+        self,
+        source_root: Path,
+        imported_labels: list[str],
+        *,
+        can_rewrite: bool,
+        multihead_factors: list[list[str]] | None = None,
+    ) -> str:
+        """Ask how to handle imported labels that do not fit the current schema.
+
+        Returns one of: "rewrite", "rewrite_multihead", "images_only", "cancel".
+        """
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        imported_preview = ", ".join(imported_labels[:8]) or "(none)"
+        current_preview = ", ".join((self.classes or [])[:8]) or "(none)"
+        if len(imported_labels) > 8:
+            imported_preview += ", ..."
+        if len(self.classes or []) > 8:
+            current_preview += ", ..."
+
+        rewrite_multihead_button = None
+        rewrite_flat_button = None
+        rewrite_button = None
+
+        if can_rewrite and multihead_factors:
+            n = len(multihead_factors)
+            factor_lines = "\n".join(
+                f"  Factor {i}: "
+                + ", ".join(vals[:5])
+                + (", ..." if len(vals) > 5 else "")
+                for i, vals in enumerate(multihead_factors)
+            )
+            msg.setWindowTitle("Multihead Label Structure Detected")
+            msg.setText(
+                f"Source '{source_root.name}' labels appear to encode "
+                f"{n} independent factors separated by underscores."
+            )
+            msg.setInformativeText(
+                f"Detected factors:\n{factor_lines}\n\n"
+                f"Imported labels: {imported_preview}\n\n"
+                "Import as a multihead scheme (one classifier per factor), "
+                "as a flat single-class scheme, or import images only?"
+            )
+            rewrite_multihead_button = msg.addButton(
+                "Import as Multihead Scheme", QMessageBox.AcceptRole
+            )
+            rewrite_flat_button = msg.addButton(
+                "Import as Flat Scheme", QMessageBox.AcceptRole
+            )
+        else:
+            msg.setWindowTitle("Source Labels Do Not Match Project Schema")
+            msg.setText(
+                f"Source '{source_root.name}' contains labels that do not match "
+                "the current project schema."
+            )
+            msg.setInformativeText(
+                f"Imported labels: {imported_preview}\n"
+                f"Project schema: {current_preview}\n\n"
+                + (
+                    "This is the first source in the project, so you can replace the "
+                    "project schema with these imported labels, import images only, or cancel."
+                    if can_rewrite
+                    else "You can import the images without labels, or cancel this source import."
+                )
+            )
+            if can_rewrite:
+                rewrite_button = msg.addButton(
+                    "Rewrite Schema and Import Labels",
+                    QMessageBox.AcceptRole,
+                )
+
+        import_images_only_button = msg.addButton(
+            "Import Images Only",
+            QMessageBox.ActionRole,
+        )
+        msg.addButton(QMessageBox.Cancel)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if rewrite_multihead_button is not None and clicked == rewrite_multihead_button:
+            return "rewrite_multihead"
+        if rewrite_flat_button is not None and clicked == rewrite_flat_button:
+            return "rewrite"
+        if rewrite_button is not None and clicked == rewrite_button:
+            return "rewrite"
+        if clicked == import_images_only_button:
+            return "images_only"
+        return "cancel"
+
+    def _resolve_ingest_request(self, source_root: Path) -> dict | None:
+        """Return the next ingest request, prompting when source labels mismatch."""
+        from ..core.data.source_import import (
+            build_source_import_plan,
+            detect_multihead_label_structure,
+        )
+
+        plan = build_source_import_plan(source_root)
+        imported_labels = [
+            str(label).strip() for label in plan.discovered_labels if str(label).strip()
+        ]
+        project_labels = [
+            str(label).strip() for label in (self.classes or []) if str(label).strip()
+        ]
+        placeholder_labels = ["class_1", "class_2"]
+        project_label_set = set(project_labels)
+        imported_label_set = set(imported_labels)
+        mismatch = bool(imported_labels) and (
+            not project_labels
+            or project_labels == placeholder_labels
+            or not imported_label_set.issubset(project_label_set)
+        )
+
+        if not mismatch:
+            return {"source_root": source_root, "import_labels": True}
+
+        can_rewrite = self._project_image_count() == 0
+
+        # When the source labels, re-encoded from _ to |, exactly match the existing
+        # multihead scheme's valid labels, skip the dialog and import silently.
+        if not can_rewrite and self._can_recode_into_existing_scheme(imported_labels):
+            return {
+                "source_root": source_root,
+                "import_labels": True,
+                "label_recode": ("_", "|"),
+            }
+
+        multihead_factors = (
+            detect_multihead_label_structure(imported_labels) if can_rewrite else None
+        )
+        resolution = self._prompt_schema_mismatch_resolution(
+            source_root,
+            imported_labels,
+            can_rewrite=can_rewrite,
+            multihead_factors=multihead_factors,
+        )
+        if resolution == "rewrite_multihead" and multihead_factors:
+            recoded_labels = ["|".join(l.split("_")) for l in imported_labels]
+            scheme_dict = self._build_multihead_imported_scheme_dict(multihead_factors)
+            self._replace_project_schema_from_labels(
+                recoded_labels, scheme_dict=scheme_dict
+            )
+            return {
+                "source_root": source_root,
+                "import_labels": True,
+                "label_recode": ("_", "|"),
+            }
+        if resolution == "rewrite":
+            self._replace_project_schema_from_labels(imported_labels)
+            return {"source_root": source_root, "import_labels": True}
+        if resolution == "images_only":
+            return {"source_root": source_root, "import_labels": False}
+        return None
 
     def _save_last_training_settings(self) -> None:
         """Persist the most recent training dialog settings into the project config."""
@@ -2161,6 +3276,7 @@ class MainWindow(QMainWindow):
             "custom_input_size": self._nearest_computer_friendly_size(
                 (avg_width + avg_height) / 2.0
             ),
+            "prediction_confidence_threshold": 0.5,
         }
 
     def _get_recent_project_training_settings(self) -> dict:
@@ -2258,6 +3374,17 @@ class MainWindow(QMainWindow):
         self._save_project_runtime_settings()
         self._update_autosave_heartbeat_text()
         self.status.showMessage(f"Autosave interval set to {seconds}s")
+
+    def on_marker_size_changed(self, value: float) -> None:
+        """Apply a global marker-size multiplier to the explorer."""
+        self._marker_size_multiplier = max(0.5, min(3.0, float(value)))
+        if hasattr(self, "explorer") and self.explorer is not None:
+            self.explorer.set_marker_size_multiplier(self._marker_size_multiplier)
+            self.request_update_explorer_plot()
+        self._save_project_runtime_settings()
+        self.status.showMessage(
+            f"Marker size set to {self._marker_size_multiplier:.1f}x"
+        )
 
     def _flush_pending_label_updates(self, force: bool = False):
         """Persist buffered label updates to DB on autosave cadence or forced flush."""
@@ -2366,10 +3493,21 @@ class MainWindow(QMainWindow):
 
         self.candidate_indices = restored_candidates
         self.round_labeled_indices = restored_labeled
+        self._prepared_candidate_source = "current"
+        self._prepared_candidate_indices = [int(i) for i in restored_candidates]
+        self._prepared_candidate_reason_map = {}
+        self._refresh_prepared_candidate_table(
+            f"Current candidate set: {len(restored_candidates):,} items restored"
+            if restored_candidates
+            else None
+        )
 
     def _apply_cached_predictions(self, cached_preds, db):
         """Apply cached prediction data and restore model-space projections."""
         summary = None
+        cached_prediction_threshold = self._normalize_prediction_confidence_threshold(
+            cached_preds.get("recommended_confidence_threshold")
+        )
         get_recent_model = getattr(db, "get_most_recent_model_cache", None)
         if callable(get_recent_model):
             try:
@@ -2377,15 +3515,33 @@ class MainWindow(QMainWindow):
             except Exception:
                 recent_model = None
             if isinstance(recent_model, dict):
-                summary = self._validation_summary_from_value(
+                recent_meta = recent_model.get("meta") or {}
+                if cached_prediction_threshold is None:
+                    training_settings = recent_meta.get("training_settings")
+                    if isinstance(training_settings, dict):
+                        cached_prediction_threshold = (
+                            self._normalize_prediction_confidence_threshold(
+                                training_settings.get("prediction_confidence_threshold")
+                            )
+                        )
+                summary = self._validation_summary_from_results(
+                    recent_meta.get("factor_validation"),
+                    factor_names=recent_meta.get("factor_names"),
+                ) or self._validation_summary_from_value(
                     recent_model.get("best_val_acc"),
                     prefix="Saved held-out validation accuracy",
                 )
+                self._set_active_evaluation_from_meta(recent_model.get("meta"))
+        if cached_preds.get("evaluation"):
+            self._set_active_evaluation_from_meta(cached_preds)
         self._set_heldout_validation_summary(summary)
-        self._model_probs = cached_preds["probs"]
-        self._model_class_names = cached_preds["class_names"]
-        self._active_model_mode = cached_preds.get("active_model_mode", "yolo")
-        self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
+        self._set_model_prediction_state(
+            cached_preds["probs"],
+            cached_preds["class_names"],
+            active_model_mode=cached_preds.get("active_model_mode", "yolo"),
+            prediction_heads=cached_preds.get("prediction_heads"),
+            prediction_confidence_threshold=cached_prediction_threshold,
+        )
         self._set_model_projection_buttons_enabled(True)
         self._update_al_status()
         cached_mumap = db.get_most_recent_umap_cache(kind="model")
@@ -2468,6 +3624,10 @@ class MainWindow(QMainWindow):
             200,
             lambda p=yolo_ckpt: self._run_yolo_inference(
                 p,
+                force_monochrome=self._resolve_yolo_force_monochrome(p),
+                prediction_confidence_threshold=self._resolve_prediction_confidence_threshold_for_path(
+                    p
+                ),
                 on_success=lambda _result: self._activate_predictions_view_if_available(),
             ),
         )
@@ -2526,6 +3686,7 @@ class MainWindow(QMainWindow):
     def _clear_label_shortcuts(self) -> None:
         """Remove existing shortcut objects before rebuilding bindings."""
         for shortcut in self._label_shortcuts:
+            shortcut.setEnabled(False)
             shortcut.setParent(None)
         self._label_shortcuts = []
 
@@ -2560,11 +3721,13 @@ class MainWindow(QMainWindow):
         self._label_shortcuts.append(shortcut)
 
     def _install_label_assignment_shortcuts(
-        self, scheme_shortcuts: dict[str, str]
+        self, scheme_shortcuts: dict[str, str], blocked_keys: set[str] | None = None
     ) -> None:
         """Install class-label shortcuts when not using the multi-factor stepper."""
         if self._stepper is not None:
             return
+
+        _blocked = {k.upper() for k in (blocked_keys or set())}
 
         for i, class_name in enumerate(self.classes[:9], start=1):
             if class_name not in scheme_shortcuts:
@@ -2573,6 +3736,8 @@ class MainWindow(QMainWindow):
                 )
 
         for label, key in scheme_shortcuts.items():
+            if QKeySequence(key).toString().upper() in _blocked:
+                continue
             self._register_label_shortcut(
                 key, lambda c=label: self.assign_label_to_selected(c)
             )
@@ -2582,39 +3747,92 @@ class MainWindow(QMainWindow):
         )
 
     def _install_global_navigation_shortcuts(
-        self, active: dict, defaults: dict
+        self, active: dict, defaults: dict, blocked_keys: set[str] | None = None
     ) -> None:
-        """Install mode and navigation shortcuts shared across labeling modes."""
+        """Install non-label global shortcuts shared across ClassKit workflows."""
 
         def _key(action: str) -> QKeySequence:
             return QKeySequence(active.get(action, defaults.get(action, "")))
 
-        shortcut_actions = [
-            ("Explore mode", lambda: self.set_explorer_mode("explore")),
-            ("Labeling mode", lambda: self.set_explorer_mode("labeling")),
-            ("Review mode", self.enter_review_mode),
-            ("Predictions mode", lambda: self.set_explorer_mode("predictions")),
+        _blocked = {k.upper() for k in (blocked_keys or set())}
+
+        # Approve/reject are only meaningful in review mode.  Registering them in
+        # other modes creates QShortcut ambiguity conflicts if the same key is also
+        # a scheme label shortcut, causing Qt to fire neither shortcut.
+        review_only_actions = [
             ("Approve review label", self.approve_selected_review_label),
             ("Reject review label", self.reject_selected_review_label),
+        ]
+        always_actions = [
             ("Sample next candidates", self.on_sample_next_triggered),
             ("Previous unlabeled", self.on_prev_image),
             ("Next unlabeled", self.on_next_image),
             ("Undo last label (Ctrl+Z)", self.undo_last_assignment),
         ]
-        for action_name, callback in shortcut_actions:
-            self._register_label_shortcut(_key(action_name), callback)
+        if self.explorer_mode == "review":
+            for action_name, callback in review_only_actions:
+                self._register_label_shortcut(_key(action_name), callback)
+        for action_name, callback in always_actions:
+            seq = _key(action_name)
+            if seq.toString().upper() not in _blocked:
+                self._register_label_shortcut(seq, callback)
+
+    def _sanitize_custom_shortcuts(self, shortcuts: dict | None) -> dict[str, str]:
+        """Keep only supported custom shortcut bindings and normalize values."""
+        if not isinstance(shortcuts, dict):
+            return {}
+
+        from .dialogs import ShortcutEditorDialog
+
+        allowed_actions = {name for name, _ in ShortcutEditorDialog.DEFAULT_SHORTCUTS}
+        sanitized: dict[str, str] = {}
+        for action_name, sequence in shortcuts.items():
+            if action_name not in allowed_actions or sequence in (None, ""):
+                continue
+            sanitized[str(action_name)] = str(sequence)
+        return sanitized
 
     def setup_label_shortcuts(self):
-        """Create keyboard shortcuts for labeling and mode switching."""
+        """Create keyboard shortcuts for labeling and non-mode global actions."""
         self._clear_label_shortcuts()
 
         from .dialogs import ShortcutEditorDialog
 
         defaults = dict(ShortcutEditorDialog.DEFAULT_SHORTCUTS)
-        active = {**defaults, **self._custom_shortcuts}
+        active = {**defaults, **self._sanitize_custom_shortcuts(self._custom_shortcuts)}
         scheme_shortcuts = self._load_scheme_shortcuts()
-        self._install_label_assignment_shortcuts(scheme_shortcuts)
-        self._install_global_navigation_shortcuts(active, defaults)
+
+        # In review mode, approve/reject keys take exclusive ownership of their keys
+        # so that scheme label shortcuts for the same keys don't cause Qt ambiguity.
+        # In labeling mode (and other non-review modes), approve/reject are not
+        # registered, so scheme shortcuts have free use of those keys.
+        if self.explorer_mode == "review":
+            review_keys = {
+                QKeySequence(active.get(a, defaults.get(a, ""))).toString()
+                for a in ("Approve review label", "Reject review label")
+            }
+        else:
+            review_keys = set()
+
+        # Scheme shortcuts that conflict with always-navigation keys are skipped
+        # to prevent ambiguity on any mode.
+        nav_keys = {
+            QKeySequence(active.get(a, defaults.get(a, ""))).toString()
+            for a in (
+                "Sample next candidates",
+                "Previous unlabeled",
+                "Next unlabeled",
+                "Undo last label (Ctrl+Z)",
+            )
+        }
+        scheme_blocked = review_keys | nav_keys
+
+        self._install_label_assignment_shortcuts(
+            scheme_shortcuts, blocked_keys=scheme_blocked
+        )
+        self._install_global_navigation_shortcuts(
+            active, defaults, blocked_keys={k for k in scheme_shortcuts.values() if k}
+        )
 
     def _begin_command(self) -> bool:
         """Return False when command input should be ignored during active/cooldown windows."""
@@ -2813,6 +4031,68 @@ class MainWindow(QMainWindow):
         """Coalesce strip rebuilds to avoid repeated widget churn during rapid labeling."""
         self._history_refresh_timer.start()
 
+    def refresh_review_history_strip(self):
+        """Refresh the recently-reviewed strip shown at the bottom of review mode."""
+        recent = list(reversed(self.review_history[-24:]))
+        allow_thumbnail_load = (not self._command_busy) and (
+            time.monotonic() >= self._command_block_until
+        )
+        loads_remaining = self._history_thumb_load_budget
+        pending_uncached = False
+
+        for slot_idx, slot in enumerate(self._review_history_slots):
+            card, thumb, caption = slot
+            if slot_idx >= len(recent):
+                card.setProperty("review_history_index", None)
+                card.setToolTip("")
+                thumb.clear()
+                caption.clear()
+                card.hide()
+                continue
+
+            entry = recent[slot_idx]
+            index = entry["index"]
+            label = entry["label"]
+            approved = entry.get("approved", True)
+            image_path = (
+                self.image_paths[index] if index < len(self.image_paths) else None
+            )
+
+            card.setProperty("review_history_index", int(index))
+            action_word = "Approved" if approved else "Rejected"
+            card.setToolTip(f"Click to revisit: {label} ({action_word})")
+            border_color = "#3a7a3a" if approved else "#7a3a3a"
+            card.setStyleSheet(
+                f"padding: 4px; border: 1px solid {border_color}; border-radius: 6px;"
+            )
+            caption.setText(f"{label}\n#{index}")
+            thumb.clear()
+
+            if image_path and image_path.exists():
+                icon_key = str(image_path)
+                pixmap = self._review_history_icon_cache.get(icon_key)
+                if pixmap is None and allow_thumbnail_load and loads_remaining > 0:
+                    pixmap = QPixmap(str(image_path))
+                    if not pixmap.isNull():
+                        pixmap = pixmap.scaled(
+                            72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                        )
+                        self._review_history_icon_cache[icon_key] = pixmap
+                    loads_remaining -= 1
+                elif pixmap is None:
+                    pending_uncached = True
+                if pixmap is not None and not pixmap.isNull():
+                    thumb.setPixmap(pixmap)
+
+            card.show()
+
+        if pending_uncached and not self._review_history_refresh_timer.isActive():
+            self._review_history_refresh_timer.start(80)
+
+    def request_refresh_review_history_strip(self):
+        """Coalesce review strip rebuilds to avoid widget churn during rapid reviewing."""
+        self._review_history_refresh_timer.start()
+
     def keyPressEvent(self, event) -> None:
         """Route digit keys to stepper when in multi-factor labeling mode."""
         if self._stepper is not None:
@@ -2825,10 +4105,17 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched, event) -> bool:
         """Handle clicks on history cards without QPushButton construction."""
         if event.type() == QEvent.MouseButtonRelease:
-            index = watched.property("history_index") if watched is not None else None
-            if index is not None:
-                self.undo_label_from_history(int(index))
-                return True
+            if watched is not None:
+                # Label history card — undo + relabel
+                index = watched.property("history_index")
+                if index is not None:
+                    self.undo_label_from_history(int(index))
+                    return True
+                # Review history card — navigate back to that image
+                review_index = watched.property("review_history_index")
+                if review_index is not None:
+                    self._restore_review_label_from_history(int(review_index))
+                    return True
         return super().eventFilter(watched, event)
 
     def _remove_history_for_index(self, index: int):
@@ -3059,10 +4346,41 @@ class MainWindow(QMainWindow):
             bg = class_color_map.get("unknown")
         return bg
 
+    def _schema_category_order(
+        self, extra_categories: list[str] | None = None
+    ) -> list[str]:
+        """Return the canonical schema-first category order used for ClassKit colors."""
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for raw_value in [*(self.classes or []), "unknown", *(extra_categories or [])]:
+            category = str(raw_value).strip()
+            if not category or category in seen:
+                continue
+            seen.add(category)
+            ordered.append(category)
+        return ordered
+
+    def _schema_category_color_map(self, extra_categories: list[str] | None = None):
+        """Return the shared category color map for buttons, explorer points, and tags."""
+        order = self._schema_category_order(extra_categories=extra_categories)
+        return build_category_color_map(order, category_order=order)
+
+    def _label_tag_html(self, label: str | None, *, class_color_map) -> str:
+        """Render a label as a colored chip using the shared schema color map."""
+        if not label:
+            return "unlabeled"
+        bg = self._resolve_class_button_color(class_color_map, str(label))
+        fg = best_text_color(bg)
+        return (
+            "<span style='display:inline-block; padding:1px 7px; border-radius:9px; "
+            f"background-color:{to_hex(bg)}; color:{to_hex(fg)}; border:1px solid #2f2f2f;'>"
+            f"{escape(str(label))}</span>"
+        )
+
     def _build_flat_label_buttons(self, scheme_shortcuts: dict[str, str]) -> None:
         """Build one button per class plus the unknown class button."""
         self._stepper = None
-        class_color_map = build_category_color_map([*self.classes, "unknown"])
+        class_color_map = self._schema_category_color_map()
 
         for i, class_name in enumerate(self.classes):
             shortcut = self._resolve_label_button_shortcut(
@@ -3136,6 +4454,337 @@ class MainWindow(QMainWindow):
             "predictions": "Predictions",
         }.get(str(mode), str(mode))
 
+    @staticmethod
+    def _normalize_prediction_heads(prediction_heads) -> list[dict[str, object]]:
+        """Normalize persisted or runtime multi-head prediction metadata."""
+        normalized: list[dict[str, object]] = []
+        offset = 0
+        for raw_head in prediction_heads or []:
+            if not isinstance(raw_head, dict):
+                continue
+            class_names = [
+                str(name).strip()
+                for name in (raw_head.get("class_names") or [])
+                if str(name).strip()
+            ]
+            if not class_names:
+                continue
+            try:
+                start = int(raw_head.get("start", offset))
+            except Exception:
+                start = offset
+            try:
+                end = int(raw_head.get("end", start + len(class_names)))
+            except Exception:
+                end = start + len(class_names)
+            if end <= start or (end - start) != len(class_names):
+                end = start + len(class_names)
+            factor_name = str(
+                raw_head.get("factor")
+                or raw_head.get("factor_name")
+                or f"factor_{len(normalized) + 1}"
+            ).strip()
+            normalized.append(
+                {
+                    "factor": factor_name,
+                    "class_names": class_names,
+                    "start": start,
+                    "end": end,
+                }
+            )
+            offset = end
+        return normalized
+
+    def _derive_prediction_heads_from_scheme(
+        self,
+        class_names: list[str] | None = None,
+        *,
+        active_model_mode: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Infer multi-head slices from the active project scheme when metadata is absent."""
+        mode = str(active_model_mode or self._active_model_mode or "").strip()
+        if "multihead" not in mode:
+            return []
+
+        scheme = self._resolve_training_scheme()
+        factors = getattr(scheme, "factors", []) or []
+        if len(factors) <= 1:
+            return []
+
+        ordered_names = [
+            str(name).strip() for name in (class_names or []) if str(name).strip()
+        ]
+        heads: list[dict[str, object]] = []
+        offset = 0
+        for index, factor in enumerate(factors):
+            label_count = len(getattr(factor, "labels", []) or [])
+            if label_count <= 0:
+                continue
+            end = offset + label_count
+            if ordered_names and end > len(ordered_names):
+                return []
+            factor_class_names = (
+                ordered_names[offset:end]
+                if ordered_names
+                else [
+                    str(name).strip()
+                    for name in (getattr(factor, "labels", []) or [])
+                    if str(name).strip()
+                ]
+            )
+            heads.append(
+                {
+                    "factor": str(getattr(factor, "name", "") or f"factor_{index + 1}"),
+                    "class_names": factor_class_names,
+                    "start": offset,
+                    "end": offset + len(factor_class_names),
+                }
+            )
+            offset += len(factor_class_names)
+
+        if ordered_names and offset != len(ordered_names):
+            return []
+        return heads
+
+    def _current_prediction_heads(self) -> list[dict[str, object]]:
+        """Return ordered multi-head prediction metadata for the active model output."""
+        probs = np.asarray(self._model_probs) if self._model_probs is not None else None
+        normalized = self._normalize_prediction_heads(self._model_prediction_heads)
+        if (
+            normalized
+            and probs is not None
+            and probs.ndim == 2
+            and int(normalized[-1]["end"]) <= probs.shape[1]
+        ):
+            self._model_prediction_heads = normalized
+            return normalized
+
+        derived = self._derive_prediction_heads_from_scheme(
+            list(self._model_class_names or []),
+            active_model_mode=self._active_model_mode,
+        )
+        self._model_prediction_heads = derived or None
+        return derived
+
+    @staticmethod
+    def _normalize_prediction_confidence_threshold(
+        raw_value: object,
+    ) -> float | None:
+        try:
+            numeric = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(numeric):
+            return None
+        return min(1.0, max(0.0, numeric))
+
+    def _default_prediction_confidence_threshold(self) -> float:
+        settings = self._last_training_settings or {}
+        threshold = self._normalize_prediction_confidence_threshold(
+            settings.get("prediction_confidence_threshold")
+        )
+        return threshold if threshold is not None else 0.5
+
+    def _current_prediction_confidence_threshold(self) -> float:
+        threshold = self._normalize_prediction_confidence_threshold(
+            self._model_prediction_confidence_threshold
+        )
+        return (
+            threshold
+            if threshold is not None
+            else self._default_prediction_confidence_threshold()
+        )
+
+    def _artifact_prediction_confidence_threshold(self, path: Path) -> float | None:
+        training_settings = self._cached_model_training_settings(path)
+        if isinstance(training_settings, dict):
+            threshold = self._normalize_prediction_confidence_threshold(
+                training_settings.get("prediction_confidence_threshold")
+            )
+            if threshold is not None:
+                return threshold
+        try:
+            from ...training.model_publish import classifier_metadata_for_artifact
+
+            meta = classifier_metadata_for_artifact(path)
+        except Exception:
+            return None
+        if isinstance(meta, dict):
+            return self._normalize_prediction_confidence_threshold(
+                meta.get("recommended_confidence_threshold")
+            )
+        return None
+
+    def _resolve_prediction_confidence_threshold_for_path(self, path: Path) -> float:
+        threshold = self._artifact_prediction_confidence_threshold(path)
+        return (
+            threshold
+            if threshold is not None
+            else self._default_prediction_confidence_threshold()
+        )
+
+    def _resolve_multihead_prediction_confidence_threshold(
+        self, paths: list[Path]
+    ) -> float:
+        thresholds = [
+            threshold
+            for threshold in (
+                self._artifact_prediction_confidence_threshold(path)
+                for path in (paths or [])
+            )
+            if threshold is not None
+        ]
+        if thresholds:
+            return max(thresholds)
+        return self._default_prediction_confidence_threshold()
+
+    def _threshold_prediction_label(
+        self,
+        label: str,
+        confidence: float | None,
+    ) -> str:
+        normalized_label = str(label or "").strip()
+        if not normalized_label:
+            return "unknown"
+        if normalized_label == "unknown":
+            return normalized_label
+        try:
+            numeric_confidence = (
+                float(confidence) if confidence is not None else float("-inf")
+            )
+        except Exception:
+            numeric_confidence = float("-inf")
+        return (
+            normalized_label
+            if numeric_confidence >= self._current_prediction_confidence_threshold()
+            else "unknown"
+        )
+
+    def _prediction_confidences_from_probs(
+        self,
+        probs,
+        *,
+        prediction_heads=None,
+        class_names: list[str] | None = None,
+        active_model_mode: str | None = None,
+    ):
+        """Return one scalar confidence per image, preserving multi-head uncertainty."""
+        probs_arr = np.asarray(probs)
+        if probs_arr.ndim != 2 or probs_arr.size == 0:
+            return np.asarray([], dtype=float)
+
+        heads = self._normalize_prediction_heads(prediction_heads)
+        if not heads:
+            heads = self._derive_prediction_heads_from_scheme(
+                list(class_names or []),
+                active_model_mode=active_model_mode,
+            )
+
+        if len(heads) > 1:
+            per_head_confidences = []
+            for head in heads:
+                start = int(head["start"])
+                end = int(head["end"])
+                if start < 0 or end > probs_arr.shape[1] or end <= start:
+                    continue
+                head_slice = np.nan_to_num(
+                    probs_arr[:, start:end],
+                    nan=-np.inf,
+                    neginf=-np.inf,
+                    posinf=np.inf,
+                )
+                if head_slice.size == 0:
+                    continue
+                per_head_confidences.append(head_slice.max(axis=1))
+            if per_head_confidences:
+                return np.min(np.stack(per_head_confidences, axis=1), axis=1).astype(
+                    float
+                )
+
+        return (
+            np.nan_to_num(
+                probs_arr,
+                nan=-np.inf,
+                neginf=-np.inf,
+                posinf=np.inf,
+            )
+            .max(axis=1)
+            .astype(float)
+        )
+
+    def _set_model_prediction_state(
+        self,
+        probs,
+        class_names: list,
+        *,
+        active_model_mode: str,
+        prediction_heads=None,
+        prediction_confidence_threshold: float | None = None,
+    ) -> None:
+        """Apply model outputs and normalize any multi-head metadata for UI consumers."""
+        self._model_probs = probs
+        self._model_class_names = list(class_names or [])
+        self._active_model_mode = str(active_model_mode or "")
+        self._model_prediction_confidence_threshold = (
+            self._normalize_prediction_confidence_threshold(
+                prediction_confidence_threshold
+            )
+        )
+        normalized_heads = self._normalize_prediction_heads(prediction_heads)
+        if not normalized_heads:
+            normalized_heads = self._derive_prediction_heads_from_scheme(
+                self._model_class_names,
+                active_model_mode=self._active_model_mode,
+            )
+        self._model_prediction_heads = normalized_heads or None
+        self.image_confidences = list(
+            self._prediction_confidences_from_probs(
+                probs,
+                prediction_heads=self._model_prediction_heads,
+                class_names=self._model_class_names,
+                active_model_mode=self._active_model_mode,
+            )
+        )
+
+    @staticmethod
+    def _prediction_label_from_head_slice(
+        row: np.ndarray,
+        class_names: list[str],
+        start: int,
+    ) -> tuple[str, float, np.ndarray]:
+        finite_row = np.nan_to_num(row, nan=-np.inf, neginf=-np.inf, posinf=np.inf)
+        pred_local = int(np.argmax(finite_row))
+        label = (
+            str(class_names[pred_local])
+            if 0 <= pred_local < len(class_names)
+            else f"pred_{start + pred_local}"
+        )
+        return label, float(row[pred_local]), finite_row
+
+    def _prediction_extra_categories(
+        self,
+        color_values: list[str] | None = None,
+        summary: dict | None = None,
+        current_label: str | None = None,
+    ) -> list[str]:
+        """Return extra categories that should receive stable colors in prediction UIs."""
+        extras = []
+        if color_values:
+            extras.extend(
+                str(value).strip() for value in color_values if str(value).strip()
+            )
+        if current_label:
+            extras.append(str(current_label).strip())
+        if isinstance(summary, dict):
+            extras.append(str(summary.get("predicted_label") or "").strip())
+            for item in summary.get("top_predictions") or []:
+                extras.append(str(item.get("label") or "").strip())
+            for head in summary.get("head_predictions") or []:
+                extras.append(str(head.get("predicted_label") or "").strip())
+                for item in head.get("top_predictions") or []:
+                    extras.append(str(item.get("label") or "").strip())
+        return [value for value in extras if value]
+
     def _prediction_labels_for_plot(self) -> list:
         """Return per-image predicted class labels for prediction-colored explorer mode."""
         if self._model_probs is None:
@@ -3148,15 +4797,319 @@ class MainWindow(QMainWindow):
         num_images = len(self.image_paths)
         out = [None] * num_images
         eval_n = min(num_images, probs.shape[0])
+        heads = self._current_prediction_heads()
+
+        if len(heads) > 1:
+            for i in range(eval_n):
+                head_labels: list[str] = []
+                for head in heads:
+                    start = int(head["start"])
+                    end = int(head["end"])
+                    if start < 0 or end > probs.shape[1] or end <= start:
+                        continue
+                    head_row = np.asarray(probs[i, start:end], dtype=float).reshape(-1)
+                    if head_row.size == 0:
+                        continue
+                    label, _confidence, _finite = (
+                        self._prediction_label_from_head_slice(
+                            head_row,
+                            list(head.get("class_names") or []),
+                            start,
+                        )
+                    )
+                    head_labels.append(
+                        self._threshold_prediction_label(label, _confidence)
+                    )
+                out[i] = "|".join(head_labels) if head_labels else None
+            return out
 
         names = list(self._model_class_names or [])
         for i in range(eval_n):
             pred_idx = int(np.argmax(probs[i]))
             if 0 <= pred_idx < len(names):
-                out[i] = names[pred_idx]
+                out[i] = self._threshold_prediction_label(
+                    names[pred_idx], float(probs[i][pred_idx])
+                )
             else:
-                out[i] = f"pred_{pred_idx}"
+                out[i] = self._threshold_prediction_label(
+                    f"pred_{pred_idx}", float(probs[i][pred_idx])
+                )
         return out
+
+    @staticmethod
+    def _format_prediction_confidence(value: float | None) -> str:
+        """Format prediction confidence for compact panel and tooltip display."""
+        if value is None:
+            return "n/a"
+        try:
+            numeric = float(value)
+        except Exception:
+            return "n/a"
+        if 0.0 <= numeric <= 1.0:
+            return f"{numeric:.1%}"
+        return f"{numeric:.3f}"
+
+    def _prediction_summary_for_index(
+        self, index: int, *, top_k: int = 3
+    ) -> dict | None:
+        """Return predicted class details for one point in the current model output."""
+        if index is None or index < 0 or self._model_probs is None:
+            return None
+
+        probs = np.asarray(self._model_probs)
+        if probs.ndim != 2 or index >= probs.shape[0]:
+            return None
+
+        row = np.asarray(probs[index], dtype=float).reshape(-1)
+        if row.size == 0:
+            return None
+
+        heads = self._current_prediction_heads()
+        if len(heads) > 1:
+            head_predictions = []
+            composite_labels: list[str] = []
+            composite_confidences: list[float] = []
+            for head in heads:
+                start = int(head["start"])
+                end = int(head["end"])
+                if start < 0 or end > row.size or end <= start:
+                    continue
+                head_row = np.asarray(row[start:end], dtype=float).reshape(-1)
+                if head_row.size == 0:
+                    continue
+                class_names = list(head.get("class_names") or [])
+                label, confidence, finite_row = self._prediction_label_from_head_slice(
+                    head_row,
+                    class_names,
+                    start,
+                )
+                thresholded_label = self._threshold_prediction_label(label, confidence)
+                top_count = max(1, min(int(top_k), finite_row.size))
+                top_indices = np.argsort(finite_row)[::-1][:top_count]
+                top_predictions = [
+                    {
+                        "index": start + int(class_index),
+                        "label": (
+                            str(class_names[int(class_index)])
+                            if 0 <= int(class_index) < len(class_names)
+                            else f"pred_{start + int(class_index)}"
+                        ),
+                        "confidence": float(head_row[int(class_index)]),
+                    }
+                    for class_index in top_indices
+                ]
+                head_predictions.append(
+                    {
+                        "factor": str(
+                            head.get("factor") or f"factor_{len(head_predictions) + 1}"
+                        ),
+                        "predicted_label": thresholded_label,
+                        "confidence": confidence,
+                        "top_predictions": top_predictions,
+                    }
+                )
+                composite_labels.append(thresholded_label)
+                composite_confidences.append(confidence)
+
+            if not head_predictions:
+                return None
+
+            return {
+                "predicted_index": None,
+                "predicted_label": "|".join(composite_labels),
+                "confidence": (
+                    min(composite_confidences) if composite_confidences else None
+                ),
+                "top_predictions": [],
+                "head_predictions": head_predictions,
+            }
+
+        finite_row = np.nan_to_num(row, nan=-np.inf, neginf=-np.inf, posinf=np.inf)
+        pred_idx = int(np.argmax(finite_row))
+        class_names = list(self._model_class_names or [])
+
+        def _label_for(class_index: int) -> str:
+            if 0 <= class_index < len(class_names):
+                return str(class_names[class_index])
+            return f"pred_{class_index}"
+
+        top_count = max(1, min(int(top_k), finite_row.size))
+        top_indices = np.argsort(finite_row)[::-1][:top_count]
+        top_predictions = [
+            {
+                "index": int(class_index),
+                "label": _label_for(int(class_index)),
+                "confidence": float(row[int(class_index)]),
+            }
+            for class_index in top_indices
+        ]
+
+        return {
+            "predicted_index": pred_idx,
+            "predicted_label": self._threshold_prediction_label(
+                _label_for(pred_idx),
+                float(row[pred_idx]),
+            ),
+            "confidence": float(row[pred_idx]),
+            "top_predictions": top_predictions,
+        }
+
+    def _is_review_prediction_label_valid(
+        self,
+        predicted_label: str,
+        *,
+        summary: dict | None = None,
+    ) -> bool:
+        """Return whether a predicted label can be written into the current project."""
+        normalized_label = str(predicted_label or "").strip()
+        if not normalized_label:
+            return False
+        if normalized_label == "unknown":
+            return True
+
+        scheme = self._resolve_training_scheme()
+        if scheme is not None:
+            try:
+                valid_labels = {
+                    str(value).strip()
+                    for value in scheme.valid_encoded_labels()
+                    if str(value).strip()
+                }
+                if valid_labels:
+                    return normalized_label in valid_labels
+            except Exception:
+                pass
+
+        if summary and summary.get("head_predictions"):
+            return True
+
+        return normalized_label in {
+            str(value).strip() for value in self.classes if str(value).strip()
+        }
+
+    def _review_prediction_for_index(self, index: int) -> dict | None:
+        """Return the structured label/confidence payload used for machine review."""
+        summary = self._prediction_summary_for_index(index, top_k=1)
+        if summary is None:
+            return None
+
+        predicted_label = str(summary.get("predicted_label") or "").strip()
+        if not self._is_review_prediction_label_valid(
+            predicted_label,
+            summary=summary,
+        ):
+            return None
+
+        raw_confidence = summary.get("confidence")
+        try:
+            confidence = float(raw_confidence) if raw_confidence is not None else 0.0
+        except Exception:
+            confidence = 0.0
+
+        metadata = {
+            "active_model_mode": self._active_model_mode,
+            "predicted_label": predicted_label,
+            "prediction_confidence_threshold": self._current_prediction_confidence_threshold(),
+        }
+        predicted_index = summary.get("predicted_index")
+        if predicted_index is not None:
+            metadata["predicted_index"] = int(predicted_index)
+
+        head_predictions = []
+        for head in summary.get("head_predictions") or []:
+            head_payload = {
+                "factor": str(head.get("factor") or "").strip(),
+                "predicted_label": str(head.get("predicted_label") or "").strip(),
+            }
+            head_confidence = head.get("confidence")
+            try:
+                if head_confidence is not None:
+                    head_payload["confidence"] = float(head_confidence)
+            except Exception:
+                pass
+            head_predictions.append(head_payload)
+        if head_predictions:
+            metadata["prediction_heads"] = head_predictions
+
+        return {
+            "label": predicted_label,
+            "confidence": confidence,
+            "metadata": metadata,
+            "summary": summary,
+        }
+
+    def _prediction_tooltips_for_plot(self, *, top_k: int = 3) -> list[str | None]:
+        """Return per-point tooltip strings used in prediction mode."""
+        tooltips: list[str | None] = [None] * len(self.image_paths)
+        for index in range(len(tooltips)):
+            summary = self._prediction_summary_for_index(index, top_k=top_k)
+            if summary is None:
+                continue
+            lines = [
+                f"Prediction: {summary['predicted_label']} ({self._format_prediction_confidence(summary['confidence'])})"
+            ]
+            if summary.get("head_predictions"):
+                lines.append("By factor:")
+                for head in summary["head_predictions"]:
+                    lines.append(
+                        f"  {head['factor']}: {head['predicted_label']} ({self._format_prediction_confidence(head['confidence'])})"
+                    )
+            elif summary["top_predictions"]:
+                lines.append("Top predictions:")
+                for item in summary["top_predictions"]:
+                    lines.append(
+                        f"  {item['label']}: {self._format_prediction_confidence(item['confidence'])}"
+                    )
+            tooltips[index] = "\n".join(lines)
+        return tooltips
+
+    def _prediction_details_html(self, index: int, *, top_k: int = 3) -> str:
+        """Return formatted prediction details for preview-side panels."""
+        summary = self._prediction_summary_for_index(index, top_k=top_k)
+        if summary is None:
+            return "<b>Prediction:</b> unavailable"
+
+        class_color_map = self._schema_category_color_map(
+            extra_categories=self._prediction_extra_categories(summary=summary)
+        )
+
+        if summary.get("head_predictions"):
+            head_html = []
+            for head in summary["head_predictions"]:
+                top_predictions = head.get("top_predictions") or []
+                alternatives = "<br>".join(
+                    f"&nbsp;&nbsp;{rank}. {self._label_tag_html(item['label'], class_color_map=class_color_map)} "
+                    f"({self._format_prediction_confidence(item['confidence'])})"
+                    for rank, item in enumerate(top_predictions, start=1)
+                )
+                if alternatives:
+                    alternatives = f"<br><span style='color:#9e9e9e;'>Top-{len(top_predictions)}</span><br>{alternatives}"
+                head_html.append(
+                    f"<br><b>{escape(str(head['factor']))}:</b> "
+                    f"{self._label_tag_html(head['predicted_label'], class_color_map=class_color_map)} "
+                    f"({self._format_prediction_confidence(head['confidence'])})"
+                    f"{alternatives}"
+                )
+            return (
+                f"<b>Composite Prediction:</b> {self._label_tag_html(summary['predicted_label'], class_color_map=class_color_map)} "
+                f"({self._format_prediction_confidence(summary['confidence'])})"
+                f"{''.join(head_html)}"
+            )
+
+        top_html = "<br>".join(
+            f"&nbsp;&nbsp;{rank}. {self._label_tag_html(item['label'], class_color_map=class_color_map)} "
+            f"({self._format_prediction_confidence(item['confidence'])})"
+            for rank, item in enumerate(summary["top_predictions"], start=1)
+        )
+        if top_html:
+            top_html = (
+                f"<br><b>Top-{len(summary['top_predictions'])}:</b><br>{top_html}"
+            )
+        return (
+            f"<b>Prediction:</b> {self._label_tag_html(summary['predicted_label'], class_color_map=class_color_map)} "
+            f"({self._format_prediction_confidence(summary['confidence'])})"
+            f"{top_html}"
+        )
 
     def set_explorer_mode(self, mode: str):
         """Set explorer mode to cluster, labeling, or prediction coloring."""
@@ -3195,11 +5148,66 @@ class MainWindow(QMainWindow):
 
         # Label assignment is only allowed in labeling mode.
         labels_enabled = mode == "labeling"
+        review_enabled = mode == "review"
         outlines_enabled = mode == "predictions"
         for i in range(self.label_buttons_layout.count()):
             widget = self.label_buttons_layout.itemAt(i).widget()
             if widget is not None:
                 widget.setEnabled(labels_enabled)
+
+        if hasattr(self, "labeling_options_group"):
+            self.labeling_options_group.setVisible(labels_enabled)
+
+        if hasattr(self, "al_group"):
+            self.al_group.setVisible(labels_enabled)
+
+        if hasattr(self, "group_labeling"):
+            self.group_labeling.setVisible(labels_enabled)
+
+        if hasattr(self, "group_review"):
+            self.group_review.setVisible(review_enabled)
+
+        if hasattr(self, "history_title"):
+            self.history_title.setVisible(labels_enabled)
+        if hasattr(self, "history_scroll"):
+            self.history_scroll.setVisible(labels_enabled)
+        if hasattr(self, "review_history_title"):
+            self.review_history_title.setVisible(review_enabled)
+        if hasattr(self, "review_history_scroll"):
+            self.review_history_scroll.setVisible(review_enabled)
+
+        # Update the mode hint banner
+        if hasattr(self, "mode_hint_label"):
+            _hint_cfg = {
+                "explore": (
+                    "#1a2a1a",
+                    "#7ec87e",
+                    "Explore — click any point to preview it. Switch to <b>Labeling</b> to assign class labels.",
+                ),
+                "labeling": (
+                    "#1a2233",
+                    "#7eb8e8",
+                    "Labeling — click a point on the map, then press a shortcut key or click a class button below.",
+                ),
+                "review": (
+                    "#2a1f12",
+                    "#e8c07e",
+                    "Review — use <b>Y</b> / <b>N</b> to approve or reject machine labels. Navigate with <b>← →</b>.",
+                ),
+                "predictions": (
+                    "#1a1a2a",
+                    "#a07ee8",
+                    "Predictions — map colored by model confidence. Outlined points are low-confidence and may need labels.",
+                ),
+            }
+            bg, fg, text = _hint_cfg.get(mode, ("#222", "#aaa", ""))
+            self.mode_hint_label.setStyleSheet(
+                f"background:{bg}; color:{fg}; font-size:11px; padding:6px 8px;"
+                " border-radius:4px; border-left:3px solid;"
+                f" border-color:{fg};"
+            )
+            self.mode_hint_label.setText(text)
+            self.mode_hint_label.setVisible(True)
 
         if hasattr(self, "outline_threshold_label"):
             self.outline_threshold_label.setVisible(outlines_enabled)
@@ -3221,6 +5229,10 @@ class MainWindow(QMainWindow):
                 )
 
         self._set_view_mode_combo_value(mode)
+
+        # Reinstall shortcuts so review-only bindings (Y/N) are only active in
+        # review mode, preventing QShortcut ambiguity with scheme label keys.
+        self.setup_label_shortcuts()
 
         self.request_update_explorer_plot()
         self.update_knn_panel(self.selected_point_index)
@@ -3270,6 +5282,11 @@ class MainWindow(QMainWindow):
         self.candidate_indices = []
         self.round_labeled_indices = []
         self._labeling_flow_mode = "batch"
+        self._prepared_candidate_indices = []
+        self._prepared_candidate_source = None
+        self._prepared_candidate_reason_map = {}
+        self._al_candidates = None
+        self._refresh_prepared_candidate_table()
 
         if self.db_path:
             try:
@@ -3544,24 +5561,18 @@ class MainWindow(QMainWindow):
             return int(next_index), None
         return None, self._prompt_after_label_set_complete()
 
-    def _apply_sampled_candidates(self, assignments) -> None:
+    def _apply_sampled_candidates(self, assignments, candidate_indices) -> None:
         """Update UI state after sampling a new labeling candidate set."""
-        if self.candidate_indices:
-            self._labeling_flow_mode = "batch"
-            self._labeling_navigation_scope = "pool"
+        if candidate_indices:
             self.set_explorer_mode("labeling")
-            self.selected_point_index = None
-            self.hover_locked = False
-            self.selection_info.setText(
-                "<div style='line-height:1.5;'>"
-                "<b>Selected Point:</b> none<br>"
-                "<b>Hovered Point:</b> none<br>"
-                "<b>Current Label:</b> unlabeled<br>"
-                "Hover over candidate points to preview, then click to select one for labeling."
-                "</div>"
+            self._prepared_candidate_source = "random"
+            self._prepared_candidate_indices = [int(i) for i in candidate_indices]
+            self._prepared_candidate_reason_map = {}
+            self._refresh_prepared_candidate_table(
+                f"Random labeling batch ready: {len(self._prepared_candidate_indices):,} candidates across {len(set(assignments))} clusters"
             )
             self.status.showMessage(
-                f"Sampled {len(self.candidate_indices):,} unlabeled candidates across {len(set(assignments))} clusters"
+                f"Random batch ready: {len(self._prepared_candidate_indices):,} candidates across {len(set(assignments))} clusters"
             )
             return
         self.status.showMessage("No unlabeled points left in current clusters")
@@ -3579,9 +5590,8 @@ class MainWindow(QMainWindow):
             labels = self.image_labels
 
             sampled = self._sample_cluster_candidates(assignments, labels, per_cluster)
-            self.candidate_indices = self._merge_labeled_candidates(sampled, labels)
-            self._persist_candidate_indices()
-            self._apply_sampled_candidates(assignments)
+            staged_candidates = self._merge_labeled_candidates(sampled, labels)
+            self._apply_sampled_candidates(assignments, staged_candidates)
 
             self.request_update_explorer_plot()
             self.request_update_context_panel()
@@ -3609,14 +5619,27 @@ class MainWindow(QMainWindow):
             self.cluster_assignments
         ):
             cluster_id = self.cluster_assignments[index]
+        prediction_summary = self._prediction_summary_for_index(index, top_k=3)
+        prediction_html = self._prediction_details_html(index, top_k=3)
+        class_color_map = self._schema_category_color_map(
+            extra_categories=self._prediction_extra_categories(
+                summary=prediction_summary,
+                current_label=current_label if current_label else None,
+            )
+        )
+        current_label_html = self._label_tag_html(
+            current_label if current_label else None,
+            class_color_map=class_color_map,
+        )
 
         self.preview_info.setText(
             "<div style='line-height:1.55;'>"
             f"<b>Point:</b> {index}<br>"
             f"<b>Cluster:</b> {cluster_id if cluster_id is not None else 'n/a'}<br>"
-            f"<b>Label:</b> {current_label if current_label else 'unlabeled'}<br>"
+            f"<b>Label:</b> {current_label_html}<br>"
+            f"{prediction_html}<br>"
             f"<b>Source:</b> {source}<br>"
-            f"<span style='color:#9e9e9e; font-size:11px;'>{image_path.name}</span>"
+            f"<span style='color:#9e9e9e; font-size:11px;'>{escape(image_path.name)}</span>"
             "</div>"
         )
 
@@ -3624,7 +5647,8 @@ class MainWindow(QMainWindow):
             "<div style='line-height:1.5;'>"
             f"<b>Selected Point:</b> {self.selected_point_index if self.selected_point_index is not None else 'none'}<br>"
             f"<b>Hovered Point:</b> {index}<br>"
-            f"<b>Current Label:</b> {current_label if current_label else 'unlabeled'}<br>"
+            f"<b>Current Label:</b> {current_label_html}<br>"
+            f"{prediction_html}<br>"
             "Assign using number keys 1-9 or class buttons."
             "</div>"
         )
@@ -3901,14 +5925,30 @@ class MainWindow(QMainWindow):
         self.request_refresh_label_history_strip()
 
     def _next_unlabeled_candidate_index(self, current_index: int) -> int | None:
-        """Remove the labeled item from the candidate pool and return the next unlabeled one."""
+        """Remove the labeled item from the candidate pool and return the next unlabeled one.
+
+        Advances from the position of ``current_index`` in the pool (wrapping around)
+        so that navigation after a label assignment is consistent with arrow-key
+        navigation from ``_advance_unlabeled_pool``.
+        """
+        # Record position before removal so we can advance from there.
+        try:
+            current_pos = self.candidate_indices.index(current_index)
+        except ValueError:
+            current_pos = -1
+
         self.candidate_indices = [
             i for i in self.candidate_indices if i != current_index
         ]
+        if not self.candidate_indices:
+            return None
+
         labels = self.image_labels or []
-        for index in self.candidate_indices:
-            if index >= len(labels) or not labels[index]:
-                return index
+        n = len(self.candidate_indices)
+        for offset in range(n):
+            idx = self.candidate_indices[(current_pos + offset) % n]
+            if idx >= len(labels) or not labels[idx]:
+                return idx
         return None
 
     def _prompt_after_label_set_complete(self) -> str | None:
@@ -3952,6 +5992,10 @@ class MainWindow(QMainWindow):
         if coords is None:
             return
 
+        category_order = None
+        category_colors = None
+        point_tooltips = None
+
         if self.explorer_mode == "explore":
             color_values = self.cluster_assignments
             candidate_indices = []
@@ -3960,6 +6004,7 @@ class MainWindow(QMainWindow):
             seeded_labels.extend(list(self.classes or []))
             seeded_labels.append("unknown")
             color_values = seeded_labels
+            category_colors = self._schema_category_color_map()
             candidate_indices = self.candidate_indices
         elif self.explorer_mode == "review":
             review_labels = [
@@ -3969,11 +6014,23 @@ class MainWindow(QMainWindow):
             review_labels.extend(list(self.classes or []))
             review_labels.append("unknown")
             color_values = review_labels
+            category_colors = self._schema_category_color_map()
             candidate_indices = self._review_candidate_indices
         else:
-            seeded_preds = self._prediction_labels_for_plot()
-            seeded_preds.extend(list(self._model_class_names or []))
-            color_values = seeded_preds
+            color_values = self._prediction_labels_for_plot()
+            prediction_categories = [
+                str(value).strip() for value in color_values if str(value).strip()
+            ]
+            extra_categories = self._prediction_extra_categories(
+                color_values=prediction_categories
+            )
+            category_order = self._schema_category_order(
+                extra_categories=extra_categories
+            )
+            category_colors = self._schema_category_color_map(
+                extra_categories=extra_categories
+            )
+            point_tooltips = self._prediction_tooltips_for_plot(top_k=3)
             candidate_indices = []
 
         if not force_fit and self.explorer.update_state(
@@ -3984,6 +6041,9 @@ class MainWindow(QMainWindow):
             selected_index=self.selected_point_index,
             labeling_mode=(self.explorer_mode in {"labeling", "review"}),
             prediction_mode=(self.explorer_mode == "predictions"),
+            category_order=category_order,
+            category_colors=category_colors,
+            point_tooltips=point_tooltips,
         ):
             return
 
@@ -3996,6 +6056,9 @@ class MainWindow(QMainWindow):
             selected_index=self.selected_point_index,
             labeling_mode=(self.explorer_mode in {"labeling", "review"}),
             prediction_mode=(self.explorer_mode == "predictions"),
+            category_order=category_order,
+            category_colors=category_colors,
+            point_tooltips=point_tooltips,
             preserve_view=(not force_fit),
         )
 
@@ -4056,10 +6119,22 @@ class MainWindow(QMainWindow):
         if not self._ingest_queue:
             return
         folder = self._ingest_queue[0]
+        request = self._resolve_ingest_request(folder)
+        if request is None:
+            self._ingest_queue = []
+            self.progress_bar.setVisible(False)
+            self.status.showMessage("Source import cancelled")
+            return
 
         from ..jobs.task_workers import IngestWorker
 
-        worker = IngestWorker(folder, self.db_path)
+        worker = IngestWorker(
+            request["source_root"],
+            self.db_path,
+            project_classes=self.classes,
+            import_labels=bool(request.get("import_labels", True)),
+            label_recode=request.get("label_recode"),
+        )
         worker.signals.started.connect(
             lambda f=folder: self.status.showMessage(f"[Step 1/5] Ingesting {f.name}…")
         )
@@ -4577,6 +6652,7 @@ class MainWindow(QMainWindow):
 
         new_scheme = dlg.get_scheme_dict()
         flat_classes = dlg.flat_classes
+        cleared_labels = 0
 
         # Persist to project
         if self.project_path:
@@ -4598,11 +6674,24 @@ class MainWindow(QMainWindow):
                 with open(scheme_path, "w") as _f:
                     _json.dump(new_scheme, _f, indent=2)
 
+                from ..config.schemas import LabelingScheme
+
+                cleared_labels = self._prune_invalid_project_labels(
+                    LabelingScheme.from_dict(new_scheme)
+                )
+
         self.classes = flat_classes
         self.rebuild_label_buttons()
         self.setup_label_shortcuts()
+        if cleared_labels:
+            self.update_explorer_plot()
         self.update_context_panel()
-        self.status.showMessage(f"Classes updated ({len(self.classes)})")
+        if cleared_labels:
+            self.status.showMessage(
+                f"Classes updated ({len(self.classes)}); cleared {cleared_labels} stale labels"
+            )
+        else:
+            self.status.showMessage(f"Classes updated ({len(self.classes)})")
 
     # ── shortcut editor ──────────────────────────────────────────────────
 
@@ -4614,7 +6703,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() != ShortcutEditorDialog.Accepted:
             return
 
-        self._custom_shortcuts = dlg.get_shortcuts()
+        self._custom_shortcuts = self._sanitize_custom_shortcuts(dlg.get_shortcuts())
         self.setup_label_shortcuts()
         self._refresh_shortcut_help()
 
@@ -4708,7 +6797,7 @@ class MainWindow(QMainWindow):
         from .dialogs import ShortcutEditorDialog
 
         defaults = dict(ShortcutEditorDialog.DEFAULT_SHORTCUTS)
-        active = {**defaults, **self._custom_shortcuts}
+        active = {**defaults, **self._sanitize_custom_shortcuts(self._custom_shortcuts)}
 
         label_instr = "1–9 (fallback)"
         if self._stepper is not None:
@@ -4732,7 +6821,6 @@ class MainWindow(QMainWindow):
         lines = [
             "<div style='line-height:1.5; color:#bcbcbc;'>",
             "<b>Controls:</b><br>",
-            f"• <b>{active.get('Explore mode', 'E')}</b> / <b>{active.get('Labeling mode', 'L')}</b> / <b>{active.get('Review mode', 'V')}</b> / <b>{active.get('Predictions mode', 'P')}</b>: set mode<br>",
             f"• <b>{label_instr}</b>: assign class<br>",
             "• <b>0</b>: mark as unknown<br>",
             f"• <b>{active.get('Approve review label', '+')}</b> / <b>{active.get('Reject review label', '-')}</b>: approve or reject selected machine label<br>",
@@ -4937,6 +7025,29 @@ class MainWindow(QMainWindow):
             )
         return None
 
+    def _prune_invalid_project_labels(self, scheme=None, db=None) -> int:
+        """Clear stored labels that no longer exist in the active scheme."""
+        if not self.db_path:
+            return 0
+
+        scheme = scheme or self._resolve_training_scheme()
+        if scheme is None:
+            return 0
+
+        valid_labels = scheme.valid_encoded_labels()
+        if not valid_labels:
+            return 0
+
+        if db is None:
+            from ..core.store.db import ClassKitDB
+
+            db = ClassKitDB(self.db_path)
+
+        cleared = db.clear_labels_not_in_set(valid_labels)
+        if cleared:
+            self._reload_label_state_from_db(db)
+        return cleared
+
     def _make_training_spec(self, settings, role, mode, is_yolo, dataset_dir):
         """Build a TrainingRunSpec from dialog settings."""
         import dataclasses
@@ -4952,16 +7063,20 @@ class MainWindow(QMainWindow):
         aug = AugmentationProfile(
             enabled=True,
             flipud=settings.get("flipud", 0.0),
-            fliplr=settings.get("fliplr", 0.5),
+            fliplr=settings.get("fliplr", 0.0),
+            hue=settings.get("hue", 0.0),
+            saturation=settings.get("saturation", 0.0),
             brightness=settings.get("brightness", 0.0),
             contrast=settings.get("contrast", 0.0),
+            monochrome=bool(settings.get("monochrome", False)),
             args={
                 key: value
                 for key, value in {
                     "flipud": settings.get("flipud", 0.0),
-                    "fliplr": settings.get("fliplr", 0.5),
+                    "fliplr": settings.get("fliplr", 0.0),
+                    "hsv_h": settings.get("hue", 0.0),
+                    "hsv_s": settings.get("saturation", 0.0),
                     "hsv_v": settings.get("brightness", 0.0),
-                    "hsv_s": settings.get("contrast", 0.0),
                 }.items()
                 if float(value) > 0.0
             },
@@ -4988,14 +7103,18 @@ class MainWindow(QMainWindow):
                 batch=settings.get("batch", 32),
                 lr=settings.get("lr", 0.001),
                 patience=settings.get("patience", 10),
+                tiny_preset=settings.get("tiny_preset", "medium"),
                 hidden_layers=settings.get("tiny_layers", 1),
-                hidden_dim=settings.get("tiny_dim", 64),
-                dropout=settings.get("tiny_dropout", 0.2),
+                hidden_dim=settings.get("tiny_dim", 96),
+                dropout=settings.get("tiny_dropout", 0.1),
                 input_width=settings.get("tiny_width", 128),
                 input_height=settings.get("tiny_height", 64),
                 class_rebalance_mode=settings.get("tiny_rebalance_mode", "none"),
                 class_rebalance_power=settings.get("tiny_rebalance_power", 1.0),
                 label_smoothing=settings.get("tiny_label_smoothing", 0.0),
+                ignore_label_name=str(
+                    settings.get("ignore_label_name", "unknown") or "unknown"
+                ),
             ),
             device=settings.get("device", "cpu"),
             training_space="original",
@@ -5011,22 +7130,47 @@ class MainWindow(QMainWindow):
                 spec,
                 custom_params=CustomCNNParams(
                     backbone=settings.get("custom_backbone", "tinyclassifier"),
+                    fine_tune_method=settings.get(
+                        "custom_fine_tune_method", "head_only"
+                    ),
                     trainable_layers=settings.get("custom_trainable_layers", 0),
                     backbone_lr_scale=settings.get("custom_backbone_lr_scale", 0.1),
+                    layerwise_lr_decay=settings.get("custom_layerwise_lr_decay", 0.75),
+                    gradual_unfreeze_interval=settings.get(
+                        "custom_gradual_unfreeze_interval", 5
+                    ),
                     input_size=settings.get("custom_input_size", 224),
                     epochs=settings.get("epochs", 50),
                     batch=settings.get("batch", 32),
                     lr=settings.get("lr", 1e-3),
                     patience=settings.get("patience", 10),
                     weight_decay=1e-2,
+                    tiny_preset=settings.get("tiny_preset", "medium"),
+                    hidden_layers=settings.get("tiny_layers", 1),
+                    hidden_dim=settings.get("tiny_dim", 96),
+                    dropout=settings.get("tiny_dropout", 0.1),
+                    input_width=settings.get("tiny_width", 128),
+                    input_height=settings.get("tiny_height", 64),
                     label_smoothing=settings.get("tiny_label_smoothing", 0.0),
                     class_rebalance_mode=settings.get("tiny_rebalance_mode", "none"),
                     class_rebalance_power=settings.get("tiny_rebalance_power", 1.0),
+                    ignore_label_name=str(
+                        settings.get("ignore_label_name", "unknown") or "unknown"
+                    ),
                 ),
             )
         return spec
 
-    def _save_training_results_to_db(self, results, mode, labels_str):
+    def _save_training_results_to_db(
+        self,
+        results,
+        mode,
+        labels_str,
+        *,
+        evaluation_paths=None,
+        evaluation_split_name: str = "",
+        split_paths: dict[str, list[str]] | None = None,
+    ):
         """Persist training results to the project model cache DB."""
         if not self.db_path or not results:
             return
@@ -5043,12 +7187,37 @@ class MainWindow(QMainWindow):
                 return
             all_classes = sorted(set(labels_str))
             acc_values = []
+            factor_names = []
+            if str(mode).startswith("multihead"):
+                scheme = self._resolve_training_scheme()
+                factor_names = [
+                    str(getattr(factor, "name", "") or f"factor_{index + 1}")
+                    for index, factor in enumerate(getattr(scheme, "factors", []) or [])
+                ]
+            factor_validation = []
             for r in results:
                 value = r.get("best_val_acc")
                 if value is None:
                     continue
                 try:
                     acc_values.append(float(value))
+                except Exception:
+                    continue
+            for index, result in enumerate(results):
+                value = result.get("best_val_acc") if isinstance(result, dict) else None
+                if value is None:
+                    continue
+                try:
+                    factor_validation.append(
+                        {
+                            "factor_name": (
+                                factor_names[index]
+                                if index < len(factor_names)
+                                else f"factor_{index + 1}"
+                            ),
+                            "best_val_acc": float(value),
+                        }
+                    )
                 except Exception:
                     continue
             best_acc = max(acc_values) if acc_values else None
@@ -5058,7 +7227,28 @@ class MainWindow(QMainWindow):
                 class_names=all_classes,
                 best_val_acc=best_acc,
                 num_classes=len(all_classes),
-                meta={"training_settings": dict(self._last_training_settings or {})},
+                meta={
+                    "training_settings": dict(self._last_training_settings or {}),
+                    "factor_names": factor_names,
+                    "factor_validation": factor_validation,
+                    "evaluation": {
+                        "split_name": str(evaluation_split_name or ""),
+                        "paths": [
+                            self._resolved_path_key(path)
+                            for path in (evaluation_paths or [])
+                            if path
+                        ],
+                        "split_paths": {
+                            str(name): [
+                                self._resolved_path_key(path)
+                                for path in (paths or [])
+                                if path
+                            ]
+                            for name, paths in (split_paths or {}).items()
+                            if str(name).strip()
+                        },
+                    },
+                },
             )
         except Exception:
             pass  # non-fatal
@@ -5072,6 +7262,13 @@ class MainWindow(QMainWindow):
         artifact = results[0].get("artifact_path", "")
         if not artifact or not Path(artifact).exists():
             return
+        prediction_confidence_threshold = (
+            self._normalize_prediction_confidence_threshold(
+                (self._last_training_settings or {}).get(
+                    "prediction_confidence_threshold"
+                )
+            )
+        )
 
         if is_yolo:
             if multi_head:
@@ -5084,45 +7281,87 @@ class MainWindow(QMainWindow):
                 dialog.append_log(
                     f"Running multi-head YOLO inference ({len(all_artifacts)} models)..."
                 )
-                self._run_multihead_yolo_inference(all_artifacts, on_success=on_done)
+                self._run_multihead_yolo_inference(
+                    all_artifacts,
+                    on_success=on_done,
+                    force_monochrome=bool(
+                        (self._last_training_settings or {}).get("monochrome", False)
+                    ),
+                    prediction_confidence_threshold=prediction_confidence_threshold,
+                )
             else:
                 self._yolo_model_path = Path(artifact)
                 self._active_model_mode = "yolo"
                 dialog.append_log(f"Running YOLO inference: {Path(artifact).name}...")
-                self._run_yolo_inference(Path(artifact), on_success=on_done)
+                self._run_yolo_inference(
+                    Path(artifact),
+                    on_success=on_done,
+                    force_monochrome=bool(
+                        (self._last_training_settings or {}).get("monochrome", False)
+                    ),
+                    prediction_confidence_threshold=prediction_confidence_threshold,
+                )
         else:
             # Custom CNN or Tiny CNN .pth -- dispatch based on arch field
             import torch as _torch
 
-            _ckpt = _torch.load(str(artifact), map_location="cpu", weights_only=False)
-            _arch = (
-                _ckpt.get("arch", "tinyclassifier")
-                if isinstance(_ckpt, dict)
-                else "tinyclassifier"
-            )
-            _class_names = _ckpt.get("class_names") or sorted(set(labels_str))
-            self._active_model_mode = "tiny"
-            if _arch != "tinyclassifier":
-                _sz = _ckpt.get("input_size", (224, 224))
-                _sz = _sz[0] if isinstance(_sz, (list, tuple)) else int(_sz)
+            if multi_head:
+                all_artifacts = [
+                    Path(r["artifact_path"])
+                    for r in results
+                    if r.get("artifact_path") and Path(r["artifact_path"]).exists()
+                ]
+                self._active_model_mode = "custom_cnn_multihead"
                 dialog.append_log(
-                    f"Running Custom CNN inference ({_arch}): {Path(artifact).name}..."
+                    f"Running multi-head Custom CNN inference ({len(all_artifacts)} models)..."
                 )
-                self._run_torchvision_inference(
-                    Path(artifact),
-                    class_names=_class_names,
-                    input_size=_sz,
+                self._run_multihead_custom_inference(
+                    all_artifacts,
                     on_success=on_done,
+                    prediction_confidence_threshold=prediction_confidence_threshold,
                 )
             else:
+                _ckpt = _torch.load(
+                    str(artifact), map_location="cpu", weights_only=False
+                )
+                _arch = (
+                    _ckpt.get("arch", "tinyclassifier")
+                    if isinstance(_ckpt, dict)
+                    else "tinyclassifier"
+                )
+                _class_names = _ckpt.get("class_names") or sorted(set(labels_str))
                 dialog.append_log(
-                    f"Running tiny CNN inference: {Path(artifact).name}..."
+                    (
+                        f"Running Custom CNN inference ({_arch}): {Path(artifact).name}..."
+                        if _arch != "tinyclassifier"
+                        else f"Running tiny CNN inference: {Path(artifact).name}..."
+                    )
                 )
-                self._run_tiny_inference(
-                    Path(artifact),
-                    class_names=_class_names,
-                    on_success=on_done,
+                self._active_model_mode = (
+                    "tiny" if _arch == "tinyclassifier" else "custom_cnn"
                 )
+                if _arch != "tinyclassifier":
+                    _sz = _ckpt.get("input_size", (224, 224))
+                    _sz = _sz[0] if isinstance(_sz, (list, tuple)) else int(_sz)
+                    self._run_torchvision_inference(
+                        Path(artifact),
+                        class_names=_class_names,
+                        input_size=_sz,
+                        on_success=on_done,
+                        force_monochrome=(
+                            bool(_ckpt.get("monochrome", False))
+                            if isinstance(_ckpt, dict)
+                            else False
+                        ),
+                        prediction_confidence_threshold=prediction_confidence_threshold,
+                    )
+                else:
+                    self._run_tiny_inference(
+                        Path(artifact),
+                        class_names=_class_names,
+                        on_success=on_done,
+                        prediction_confidence_threshold=prediction_confidence_threshold,
+                    )
 
     def _publish_training_results(self, dialog, scheme, scheme_name):
         """Publish trained model artifacts to the models directory."""
@@ -5140,16 +7379,49 @@ class MainWindow(QMainWindow):
             "multihead_custom": "classify_multihead_custom",
         }
         from ...training.contracts import TrainingRole
-        from ...training.model_publish import publish_trained_model
+        from ...training.model_publish import (
+            classifier_metadata_for_artifact,
+            publish_trained_model,
+            write_classifier_multihead_manifest,
+        )
+
+        fallback_input_size: tuple[int, int] | None = None
+        if "yolo" in mode:
+            fallback_input_size = (640, 640)
+        elif settings.get("custom_backbone") != "tinyclassifier" and "custom" in mode:
+            size = int(settings.get("custom_input_size", 224) or 224)
+            fallback_input_size = (size, size)
+        fallback_monochrome = bool(settings.get("monochrome", False))
 
         role_val = role_map.get(mode, "classify_flat_custom")
         role = TrainingRole(role_val)
+        published_paths: list[Path] = []
+        published_factor_entries: list[dict[str, object]] = []
+        bundle_input_size: tuple[int, int] | None = None
+        bundle_monochrome = fallback_monochrome
         for fi, result in enumerate(results):
             artifact = result.get("artifact_path", "")
             if not artifact:
                 continue
             try:
-                publish_trained_model(
+                classifier_v2_meta = classifier_metadata_for_artifact(
+                    artifact,
+                    fallback_input_size=fallback_input_size,
+                    fallback_monochrome=fallback_monochrome,
+                )
+                recommended_confidence_threshold = (
+                    self._normalize_prediction_confidence_threshold(
+                        settings.get("prediction_confidence_threshold")
+                    )
+                )
+                if (
+                    isinstance(classifier_v2_meta, dict)
+                    and recommended_confidence_threshold is not None
+                ):
+                    classifier_v2_meta["recommended_confidence_threshold"] = (
+                        recommended_confidence_threshold
+                    )
+                _published_key, published_path = publish_trained_model(
                     role=role,
                     artifact_path=artifact,
                     size="tiny" if "tiny" in mode else "n",
@@ -5165,6 +7437,38 @@ class MainWindow(QMainWindow):
                     factor_name=(
                         scheme.factors[fi].name if (multi_head and scheme) else None
                     ),
+                    classifier_v2_meta=classifier_v2_meta,
+                )
+                published_paths.append(Path(published_path))
+                input_size_list = classifier_v2_meta.get("input_size") or [224, 224]
+                if bundle_input_size is None:
+                    bundle_input_size = (
+                        int(input_size_list[0]),
+                        int(input_size_list[1]),
+                    )
+                bundle_monochrome = bool(
+                    classifier_v2_meta.get("monochrome", bundle_monochrome)
+                )
+                factor_name = (
+                    scheme.factors[fi].name
+                    if (multi_head and scheme and fi < len(scheme.factors))
+                    else str(
+                        (
+                            classifier_v2_meta.get("factor_names")
+                            or [f"factor_{fi + 1}"]
+                        )[0]
+                    )
+                )
+                published_factor_entries.append(
+                    {
+                        "factor": factor_name,
+                        "path": Path(published_path),
+                        "class_names": list(
+                            (classifier_v2_meta.get("class_names_per_factor") or [[]])[
+                                0
+                            ]
+                        ),
+                    }
                 )
                 from pathlib import Path as _Path
 
@@ -5186,6 +7490,37 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 dialog.append_log(f"Publish error: {exc}")
 
+        if multi_head and len(published_paths) > 1:
+            try:
+                from hydra_suite.classkit.model_bundle import (
+                    write_model_bundle_manifest,
+                )
+
+                manifest_path = published_paths[0].with_suffix(".bundle.json")
+                write_model_bundle_manifest(
+                    manifest_path,
+                    mode=str(mode),
+                    artifact_paths=published_paths,
+                    class_names=list(self.classes or []),
+                )
+                dialog.append_log(f"Published bundle manifest: {manifest_path.name}")
+
+                trackerkit_manifest = published_paths[0].with_suffix(".multihead.json")
+                write_classifier_multihead_manifest(
+                    trackerkit_manifest,
+                    factor_entries=published_factor_entries,
+                    input_size=bundle_input_size or fallback_input_size or (224, 224),
+                    monochrome=bundle_monochrome,
+                    recommended_confidence_threshold=self._normalize_prediction_confidence_threshold(
+                        settings.get("prediction_confidence_threshold")
+                    ),
+                )
+                dialog.append_log(
+                    f"Published TrackerKit manifest: {trackerkit_manifest.name}"
+                )
+            except Exception as exc:
+                dialog.append_log(f"Publish manifest warning: {exc}")
+
     def _validate_training_pairs(self):
         """Return labeled training pairs when training preconditions are satisfied."""
         if self.embeddings is None:
@@ -5195,6 +7530,12 @@ class MainWindow(QMainWindow):
                 "Compute embeddings before training.",
             )
             return None
+
+        cleared_labels = self._prune_invalid_project_labels()
+        if cleared_labels:
+            self.status.showMessage(
+                f"Cleared {cleared_labels} labels that are no longer part of the active scheme."
+            )
 
         labeled_pairs = [
             (p, l) for p, l in zip(self.image_paths, self.image_labels) if l
@@ -5240,6 +7581,12 @@ class MainWindow(QMainWindow):
         """Build the immutable context used across export, train, and inference."""
         from pathlib import Path
 
+        from ..core.export.splits import (
+            build_label_expansion_records,
+            build_label_expansion_split_key,
+            build_training_dataset_splits,
+        )
+
         settings = dict(settings or dialog.get_settings())
         self._last_training_settings = dict(settings)
         self._save_last_training_settings()
@@ -5252,17 +7599,84 @@ class MainWindow(QMainWindow):
         images, labels_str, int_labels, class_names_int = self._prepare_training_labels(
             labeled_pairs
         )
+        group_keys = self._training_group_keys_for_paths(images)
+        label_expansion = settings.get("label_expansion") or {}
+        planned_records = build_label_expansion_records(
+            labels_str,
+            label_expansion=label_expansion,
+            groups=(group_keys or None),
+            known_labels=list(class_names_int.values()),
+        )
+        planned_labels = [str(record["label"]) for record in planned_records]
+        planned_groups = (
+            [record.get("group") for record in planned_records] if group_keys else None
+        )
+        planned_splits, used_group_fallback = build_training_dataset_splits(
+            planned_labels,
+            strategy=settings.get("split_strategy", "stratified"),
+            val_fraction=float(settings.get("val_fraction", 0.2)),
+            test_fraction=float(settings.get("test_fraction", 0.0)),
+            groups=planned_groups,
+        )
+        source_splits: list[str] = []
+        source_split_by_path: dict[str, str] = {}
+        expanded_split_by_key: dict[str, str] = {}
+        for record, split in zip(planned_records, planned_splits):
+            source_path = images[int(record["source_index"])]
+            if bool(record.get("is_expanded")):
+                expanded_key = build_label_expansion_split_key(
+                    source_path,
+                    str(record.get("axis") or ""),
+                    str(record["label"]),
+                )
+                expanded_split_by_key[expanded_key] = str(split)
+                continue
+            source_splits.append(str(split))
+            source_split_by_path[self._resolved_path_key(source_path)] = str(split)
+
+        evaluation_split_name = ""
+        if "test" in source_splits:
+            evaluation_split_name = "test"
+        elif "val" in source_splits:
+            evaluation_split_name = "val"
+        evaluation_paths = [
+            self._resolved_path_key(path)
+            for path, split in zip(images, source_splits)
+            if split == evaluation_split_name
+        ]
+        split_paths = {
+            split_name: [
+                self._resolved_path_key(path)
+                for path, split in zip(images, source_splits)
+                if split == split_name
+            ]
+            for split_name in ("train", "val", "test")
+        }
         return {
             "settings": settings,
             "mode": mode,
             "is_yolo": "yolo" in mode,
             "multi_head": mode.startswith("multihead"),
+            "factor_names": [
+                str(getattr(factor, "name", "") or f"factor_{index + 1}")
+                for index, factor in enumerate(
+                    getattr(self._resolve_training_scheme(), "factors", []) or []
+                )
+            ],
             "role": self._training_role_for_mode(mode),
             "run_dir": run_dir,
             "images": images,
             "labels_str": labels_str,
             "int_labels": int_labels,
             "class_names_int": class_names_int,
+            "group_keys": group_keys,
+            "source_splits": source_splits,
+            "source_split_by_path": source_split_by_path,
+            "expanded_split_by_key": expanded_split_by_key,
+            "used_group_fallback": bool(used_group_fallback),
+            "evaluation_split_name": evaluation_split_name,
+            "evaluation_paths": evaluation_paths,
+            "split_paths": split_paths,
         }
 
     def _validate_training_start_model(self, settings: dict) -> bool:
@@ -5337,7 +7751,8 @@ class MainWindow(QMainWindow):
     def _after_training_inference(self, dialog, _result=None) -> None:
         """Refresh metrics and model-space plots after post-training inference."""
         self._evaluate_model_on_labeled()
-        dialog.append_log("Inference complete — Metrics tab updated.")
+        self.tabs.setCurrentWidget(self.metrics_page)
+        dialog.progress_bar.setValue(100)
         dialog.append_log("Auto-computing model-space UMAP...")
         QTimer.singleShot(
             100,
@@ -5347,20 +7762,34 @@ class MainWindow(QMainWindow):
                 log_callback=dialog.append_log,
             ),
         )
+        dialog.append_log("Training Complete. Metrics tab updated.")
 
     def _on_training_success(self, dialog, context, results: list) -> None:
         """Handle successful training completion before post-training inference."""
         self._set_heldout_validation_summary(
-            self._validation_summary_from_results(results)
+            self._validation_summary_from_results(
+                results,
+                factor_names=context.get("factor_names"),
+            )
+        )
+        self._set_active_evaluation_selection(
+            context.get("evaluation_paths"),
+            context.get("evaluation_split_name", ""),
+            split_paths=context.get("split_paths"),
         )
         dialog._train_results = results
         dialog.publish_btn.setEnabled(True)
-        dialog.append_log("Training complete.")
+        dialog.append_log("Training finished. Refreshing predictions and metrics...")
         dialog.start_btn.setEnabled(True)
         dialog.cancel_btn.setEnabled(False)
 
         self._save_training_results_to_db(
-            results, context["mode"], context["labels_str"]
+            results,
+            context["mode"],
+            context["labels_str"],
+            evaluation_paths=context.get("evaluation_paths"),
+            evaluation_split_name=context.get("evaluation_split_name", ""),
+            split_paths=context.get("split_paths"),
         )
         self._run_post_training_inference(
             results,
@@ -5373,26 +7802,31 @@ class MainWindow(QMainWindow):
 
     def _on_training_export_success(self, dialog, context, scheme, _result) -> None:
         """Start the actual training worker after dataset export finishes."""
-        from ..jobs.task_workers import ClassKitTrainingWorker
+        try:
+            from ..jobs.task_workers import ClassKitTrainingWorker
 
-        specs = self._build_training_specs(context, scheme)
-        train_worker = ClassKitTrainingWorker(
-            role=context["role"],
-            specs=specs,
-            run_dir=str(context["run_dir"]),
-            multi_head=context["multi_head"],
-        )
-        dialog._worker = train_worker
-        train_worker.signals.progress.connect(
-            lambda pct, msg: self._on_training_progress(dialog, pct, msg)
-        )
-        train_worker.signals.success.connect(
-            lambda results: self._on_training_success(dialog, context, results)
-        )
-        train_worker.signals.error.connect(
-            lambda err: self._on_training_error(dialog, err)
-        )
-        self._threadpool_start(train_worker)
+            dialog.append_log("Dataset export finished. Building training specs...")
+            specs = self._build_training_specs(context, scheme)
+            dialog.append_log(f"Starting training worker ({len(specs)} spec(s))...")
+            train_worker = ClassKitTrainingWorker(
+                role=context["role"],
+                specs=specs,
+                run_dir=str(context["run_dir"]),
+                multi_head=context["multi_head"],
+            )
+            dialog._worker = train_worker
+            train_worker.signals.progress.connect(
+                lambda pct, msg: self._on_training_progress(dialog, pct, msg)
+            )
+            train_worker.signals.success.connect(
+                lambda results: self._on_training_success(dialog, context, results)
+            )
+            train_worker.signals.error.connect(
+                lambda err: self._on_training_error(dialog, err)
+            )
+            self._threadpool_start(train_worker)
+        except Exception as exc:
+            self._on_training_error(dialog, f"Failed to start training: {exc}")
 
     @staticmethod
     def _decode_factor_labels(scheme, labels_str, factor_index: int) -> list[str]:
@@ -5407,6 +7841,9 @@ class MainWindow(QMainWindow):
 
         outer_self = self
         exp_label_expansion = context["settings"].get("label_expansion") or {}
+        ignored_label_name = str(
+            context["settings"].get("ignore_label_name", "unknown") or "unknown"
+        ).strip()
 
         class MultiHeadExportWorker(ExportWorker):
             def __init__(self, *args, **kwargs) -> None:
@@ -5423,20 +7860,45 @@ class MainWindow(QMainWindow):
                         factor_labels = outer_self._decode_factor_labels(
                             self.scheme, self.labels_str, fi
                         )
-                        unique = sorted(set(factor_labels))
+                        kept_indices = [
+                            index
+                            for index, label in enumerate(factor_labels)
+                            if str(label).strip() != ignored_label_name
+                        ]
+                        if not kept_indices:
+                            factor_name = str(
+                                getattr(self.scheme.factors[fi], "name", "")
+                                or f"factor_{fi + 1}"
+                            )
+                            raise ValueError(
+                                f"Factor '{factor_name}' has no labeled samples after filtering '{ignored_label_name}'."
+                            )
+                        filtered_labels = [
+                            factor_labels[index] for index in kept_indices
+                        ]
+                        unique = sorted(set(filtered_labels))
                         label_map = {label: i for i, label in enumerate(unique)}
-                        factor_int = [label_map[label] for label in factor_labels]
+                        factor_int = [label_map[label] for label in filtered_labels]
                         factor_names = {i: label for label, i in label_map.items()}
+                        factor_images = [
+                            self.image_paths[index] for index in kept_indices
+                        ]
 
                         factor_dir = _Path(self.output_path) / f"export_f{fi}"
                         sub_worker = ExportWorker(
-                            image_paths=self.image_paths,
+                            image_paths=factor_images,
                             labels=factor_int,
                             output_path=factor_dir,
                             format="ultralytics",
                             class_names=factor_names,
+                            split_strategy=self.split_strategy,
                             val_fraction=self.val_fraction,
+                            test_fraction=self.test_fraction,
                             label_expansion=exp_label_expansion,
+                            preset_splits_by_path=context["source_split_by_path"],
+                            preset_expanded_splits_by_key=context.get(
+                                "expanded_split_by_key"
+                            ),
                         )
                         sub_worker.run()
 
@@ -5451,7 +7913,12 @@ class MainWindow(QMainWindow):
             labels=[0] * len(context["images"]),
             output_path=context["run_dir"],
             format="ultralytics",
+            split_strategy=context["settings"].get("split_strategy", "stratified"),
             val_fraction=context["settings"].get("val_fraction", 0.2),
+            test_fraction=context["settings"].get("test_fraction", 0.0),
+            force_monochrome=bool(context["settings"].get("monochrome", False)),
+            preset_splits_by_path=context["source_split_by_path"],
+            preset_expanded_splits_by_key=context.get("expanded_split_by_key"),
             scheme=scheme,
             labels_str=context["labels_str"],
         )
@@ -5468,8 +7935,13 @@ class MainWindow(QMainWindow):
             output_path=context["run_dir"] / "export",
             format="ultralytics",
             class_names=context["class_names_int"],
+            split_strategy=context["settings"].get("split_strategy", "stratified"),
             val_fraction=context["settings"].get("val_fraction", 0.2),
+            test_fraction=context["settings"].get("test_fraction", 0.0),
+            force_monochrome=bool(context["settings"].get("monochrome", False)),
             label_expansion=context["settings"].get("label_expansion") or {},
+            preset_splits_by_path=context["source_split_by_path"],
+            preset_expanded_splits_by_key=context.get("expanded_split_by_key"),
         )
 
     def _start_training_from_dialog(self, dialog, labeled_pairs, scheme) -> None:
@@ -5493,7 +7965,36 @@ class MainWindow(QMainWindow):
 
         dialog.start_btn.setEnabled(False)
         dialog.cancel_btn.setEnabled(True)
+
+        # Log a full settings snapshot for debugging
+        _s = settings
+        _mode = _s.get("mode", "?")
+        _backbone = _s.get("backbone", _s.get("base_model", "?"))
+        _device = _s.get("device", "?")
+        _epochs = _s.get("epochs", "?")
+        _lr = _s.get("lr", "?")
+        _batch = _s.get("batch_size", _s.get("batch", "?"))
+        _patience = _s.get("patience", "?")
+        _split = _s.get("split_strategy", "?")
+        _val_frac = _s.get("val_fraction", "?")
+        _test_frac = _s.get("test_fraction", "?")
+        dialog.append_log(
+            f"Training config: mode={_mode}, backbone={_backbone}, "
+            f"device={_device}, epochs={_epochs}, lr={_lr}, batch={_batch}, "
+            f"patience={_patience}"
+        )
+        dialog.append_log(
+            f"Split: strategy={_split}, val_fraction={_val_frac}, "
+            f"test_fraction={_test_frac}"
+        )
+        if _s.get("initial_model_path"):
+            dialog.append_log(f"Warm-start from: {_s['initial_model_path']}")
+
         dialog.append_log("Starting dataset export...")
+        if context.get("used_group_fallback"):
+            dialog.append_log(
+                "Grouped source holdout was too coarse for the requested split; using item-level train/val/test fallback for this training export."
+            )
         dialog.append_log(dialog.current_data_summary_text())
         self._threadpool_start(worker)
 
@@ -5521,6 +8022,10 @@ class MainWindow(QMainWindow):
             initial_settings=self._get_recent_project_training_settings(),
             recent_model_paths=self._list_recent_trainable_model_paths(),
             average_image_size=self._estimate_average_image_dimensions(),
+            image_paths=[path for path, _ in labeled_pairs],
+            group_keys=self._training_group_keys_for_paths(
+                [path for path, _ in labeled_pairs]
+            ),
             parent=self,
         )
 
@@ -5555,10 +8060,17 @@ class MainWindow(QMainWindow):
 
         settings = dialog.get_settings()
 
-        label_to_index = {name: idx for idx, name in enumerate(self.classes)}
-        class_names = {idx: name for idx, name in enumerate(self.classes)}
+        export_class_order = list(self.classes)
+        for raw_label in self.image_labels:
+            label_name = str(raw_label).strip() if raw_label is not None else ""
+            if not label_name or label_name in export_class_order:
+                continue
+            export_class_order.append(label_name)
+
+        label_to_index = {name: idx for idx, name in enumerate(export_class_order)}
+        class_names = {idx: name for idx, name in enumerate(export_class_order)}
         include_unlabeled = settings.get("include_unlabeled", False)
-        unlabeled_index = len(self.classes)
+        unlabeled_index = len(export_class_order)
         if include_unlabeled:
             class_names[unlabeled_index] = "unlabeled"
 
@@ -5667,11 +8179,18 @@ class MainWindow(QMainWindow):
         trainer.load(path)
         self._trained_classifier = trainer
         self.status.showMessage(f"Loaded embedding head: {path.name}")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         if self.embeddings is not None:
             probs = trainer.predict_proba(self.embeddings, calibrated=True)
-            self._model_probs = probs
-            self._model_class_names = list(self.classes)
+            self._set_model_prediction_state(
+                probs,
+                list(self.classes),
+                active_model_mode="embedding_head",
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -5680,7 +8199,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(probs.max(axis=1).astype(float))
             self.update_explorer_plot()
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
@@ -5708,6 +8226,42 @@ class MainWindow(QMainWindow):
             return None
         return None
 
+    def _cached_model_training_settings(self, path: Path):
+        """Look up training settings stored alongside a cached model artifact."""
+        if not self.db_path:
+            return None
+        try:
+            from ..core.store.db import ClassKitDB as _CKDb
+
+            for entry in _CKDb(self.db_path).list_model_caches():
+                if str(path) not in entry.get("artifact_paths", []):
+                    continue
+                meta = entry.get("meta")
+                training_settings = (
+                    meta.get("training_settings") if isinstance(meta, dict) else None
+                )
+                if isinstance(training_settings, dict):
+                    return training_settings
+        except Exception:
+            return None
+        return None
+
+    def _resolve_yolo_force_monochrome(self, path: Path) -> bool:
+        """Resolve monochrome inference for YOLO models from cache or project state."""
+        training_settings = self._cached_model_training_settings(path)
+        if isinstance(training_settings, dict) and "monochrome" in training_settings:
+            return bool(training_settings.get("monochrome", False))
+        return bool((self._last_training_settings or {}).get("monochrome", False))
+
+    def _resolve_classifier_compute_runtime(self, path: Path) -> str:
+        """Resolve classifier inference runtime from cached training settings when available."""
+        training_settings = self._cached_model_training_settings(path)
+        if isinstance(training_settings, dict):
+            runtime = training_settings.get("compute_runtime")
+            if runtime:
+                return str(runtime)
+        return str((self._last_training_settings or {}).get("compute_runtime", "cpu"))
+
     def _load_custom_cnn_checkpoint(
         self,
         path: Path,
@@ -5717,6 +8271,7 @@ class MainWindow(QMainWindow):
         show_message_box: bool = True,
     ) -> None:
         """Load a torchvision custom CNN checkpoint and run inference."""
+        self._set_active_evaluation_from_meta(self._cached_model_evaluation_info(path))
         self._set_heldout_validation_summary(
             self._validation_summary_from_value(
                 ckpt.get("best_val_acc") if isinstance(ckpt, dict) else None,
@@ -5736,6 +8291,9 @@ class MainWindow(QMainWindow):
         resolved = ckpt_names or list(self.classes)
         self._active_model_mode = "custom_cnn"
         self.status.showMessage(f"Loading Custom CNN ({arch}): {path.name}...")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -5756,6 +8314,10 @@ class MainWindow(QMainWindow):
             class_names=resolved,
             input_size=size,
             on_success=_after_load,
+            force_monochrome=(
+                bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
+            ),
+            prediction_confidence_threshold=prediction_confidence_threshold,
         )
 
     def _load_tiny_cnn_checkpoint(
@@ -5767,6 +8329,7 @@ class MainWindow(QMainWindow):
         show_message_box: bool = True,
     ) -> None:
         """Load a tiny CNN checkpoint and run inference."""
+        self._set_active_evaluation_from_meta(self._cached_model_evaluation_info(path))
         self._set_heldout_validation_summary(
             self._validation_summary_from_value(
                 ckpt.get("best_val_acc") if isinstance(ckpt, dict) else None,
@@ -5779,6 +8342,9 @@ class MainWindow(QMainWindow):
         )
         self._active_model_mode = "tiny"
         self.status.showMessage(f"Loading tiny CNN: {path.name}...")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -5798,6 +8364,10 @@ class MainWindow(QMainWindow):
             path,
             class_names=resolved,
             on_success=_after_load,
+            force_monochrome=(
+                bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
+            ),
+            prediction_confidence_threshold=prediction_confidence_threshold,
         )
 
     def _load_yolo_checkpoint(
@@ -5808,9 +8378,13 @@ class MainWindow(QMainWindow):
         show_message_box: bool = True,
     ) -> None:
         """Load a YOLO classifier checkpoint and run inference."""
+        self._set_active_evaluation_from_meta(self._cached_model_evaluation_info(path))
         self._set_heldout_validation_summary(None)
         self._yolo_model_path = path
         self.status.showMessage(f"Loading YOLO model: {path.name}...")
+        prediction_confidence_threshold = (
+            self._resolve_prediction_confidence_threshold_for_path(path)
+        )
 
         def _after_load(_result):
             self._evaluate_model_on_labeled()
@@ -5829,6 +8403,8 @@ class MainWindow(QMainWindow):
         self._run_yolo_inference(
             path,
             on_success=_after_load,
+            force_monochrome=self._resolve_yolo_force_monochrome(path),
+            prediction_confidence_threshold=prediction_confidence_threshold,
         )
 
     def _load_checkpoint_from_path(
@@ -5840,6 +8416,52 @@ class MainWindow(QMainWindow):
     ):
         """Load a checkpoint, auto-detecting YOLO vs embedding-head vs tiny CNN format."""
         try:
+            cache_entry = self._cached_model_cache_entry(path)
+            cache_paths = (cache_entry or {}).get("artifact_paths") or []
+            if (
+                str((cache_entry or {}).get("mode", "")).startswith("multihead")
+                and len(cache_paths) > 1
+            ):
+
+                def _after_cache_load():
+                    if show_message_box:
+                        QMessageBox.information(
+                            self,
+                            "Checkpoint Loaded",
+                            f"Loaded multi-head model set with {len(cache_paths)} artifacts.\n"
+                            f"Inference on {len(self.image_paths):,} images complete.",
+                        )
+                    if on_success is not None:
+                        on_success()
+
+                self._load_model_from_cache_entry(
+                    cache_entry, on_success=_after_cache_load
+                )
+                return
+
+            from ..model_bundle import discover_multihead_model_bundle
+
+            external_bundle = discover_multihead_model_bundle(path)
+            if external_bundle is not None:
+
+                def _after_external_load():
+                    if show_message_box:
+                        QMessageBox.information(
+                            self,
+                            "Checkpoint Loaded",
+                            f"Loaded external {external_bundle.get('mode', 'multi-head')} bundle with "
+                            f"{len(external_bundle.get('artifact_paths') or [])} artifacts.\n"
+                            f"Inference on {len(self.image_paths):,} images complete.",
+                        )
+                    if on_success is not None:
+                        on_success()
+
+                self._load_model_from_cache_entry(
+                    external_bundle,
+                    on_success=_after_external_load,
+                )
+                return
+
             import torch
 
             ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
@@ -6274,22 +8896,50 @@ class MainWindow(QMainWindow):
 
     # ================== Model Inference & Evaluation ==================
 
-    def _persist_prediction_cache(self, probs, class_names: list, mode: str) -> None:
+    def _persist_prediction_cache(
+        self,
+        probs,
+        class_names: list,
+        mode: str,
+        *,
+        prediction_heads=None,
+    ) -> None:
         """Save inference probs + class names to the project DB prediction cache."""
         if not self.db_path or probs is None:
             return
         try:
             from ..core.store.db import ClassKitDB
 
+            normalized_heads = self._normalize_prediction_heads(prediction_heads)
             ClassKitDB(self.db_path).save_prediction_cache(
                 probs=probs,
                 class_names=class_names or [],
                 active_model_mode=mode,
+                meta={
+                    "evaluation": {
+                        "split_name": self._active_evaluation_split_name,
+                        "paths": sorted(self._active_evaluation_paths or []),
+                        "split_paths": {
+                            name: sorted(paths)
+                            for name, paths in self._split_membership_paths.items()
+                            if paths
+                        },
+                    },
+                    "prediction_heads": normalized_heads,
+                    "recommended_confidence_threshold": self._current_prediction_confidence_threshold(),
+                },
             )
         except Exception:
             pass  # non-fatal — just means cache won't be available next session
 
-    def _run_yolo_inference(self, model_path: Path, on_success=None):
+    def _run_yolo_inference(
+        self,
+        model_path: Path,
+        on_success=None,
+        force_monochrome: bool = False,
+        apply_result: bool = True,
+        prediction_confidence_threshold: float | None = None,
+    ):
         """Run YOLO inference on all images in background and update confidences."""
         if not self.image_paths:
             return
@@ -6304,11 +8954,20 @@ class MainWindow(QMainWindow):
             self.image_paths,
             compute_runtime=compute_runtime,
             batch_size=64,
+            force_monochrome=force_monochrome,
         )
 
         def _inference_success(result):
-            self._model_probs = result["probs"]
-            self._model_class_names = result["class_names"]
+            if not apply_result:
+                if on_success:
+                    on_success(result)
+                return
+            self._set_model_prediction_state(
+                result["probs"],
+                result["class_names"],
+                active_model_mode="yolo",
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -6317,7 +8976,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
@@ -6343,13 +9001,18 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(lambda: self.progress_bar.setVisible(False))
         self._threadpool_start(worker)
 
-    def _run_tiny_inference(self, model_path: Path, class_names: list, on_success=None):
+    def _run_tiny_inference(
+        self,
+        model_path: Path,
+        class_names: list,
+        on_success=None,
+        force_monochrome: bool = False,
+        prediction_confidence_threshold: float | None = None,
+    ):
         """Run TinyCNN inference on all images in background and update confidences."""
         if not self.image_paths:
             return
-        compute_runtime = (self._last_training_settings or {}).get(
-            "compute_runtime", "cpu"
-        )
+        compute_runtime = self._resolve_classifier_compute_runtime(model_path)
 
         from ..jobs.task_workers import TinyCNNInferenceWorker
 
@@ -6359,11 +9022,16 @@ class MainWindow(QMainWindow):
             class_names,
             compute_runtime=compute_runtime,
             batch_size=64,
+            force_monochrome=force_monochrome,
         )
 
         def _tiny_success(result):
-            self._model_probs = result["probs"]
-            self._model_class_names = result["class_names"]
+            self._set_model_prediction_state(
+                result["probs"],
+                result["class_names"],
+                active_model_mode="tiny",
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -6372,7 +9040,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
@@ -6404,6 +9071,8 @@ class MainWindow(QMainWindow):
         class_names: list,
         input_size: int = 224,
         on_success=None,
+        force_monochrome: bool = False,
+        prediction_confidence_threshold: float | None = None,
     ):
         """Launch TorchvisionInferenceWorker and wire signals to the standard post-inference path."""
         if not self.image_paths:
@@ -6411,18 +9080,23 @@ class MainWindow(QMainWindow):
 
         from ..jobs.task_workers import TorchvisionInferenceWorker
 
-        rt = (self._last_training_settings or {}).get("compute_runtime", "cpu")
+        rt = self._resolve_classifier_compute_runtime(model_path)
         worker = TorchvisionInferenceWorker(
             model_path=model_path,
             image_paths=self.image_paths,
             class_names=class_names,
             input_size=input_size,
             compute_runtime=rt,
+            force_monochrome=force_monochrome,
         )
 
         def _torchvision_success(result):
-            self._model_probs = result["probs"]
-            self._model_class_names = result["class_names"]
+            self._set_model_prediction_state(
+                result["probs"],
+                result["class_names"],
+                active_model_mode="custom_cnn",
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
             self.umap_model_coords = None
             self.pca_model_coords = None
             self._show_model_umap = False
@@ -6431,7 +9105,6 @@ class MainWindow(QMainWindow):
             self.btn_umap_model.setChecked(False)
             if hasattr(self, "btn_pca_model"):
                 self.btn_pca_model.setChecked(False)
-            self.image_confidences = list(self._model_probs.max(axis=1).astype(float))
             self._set_model_projection_buttons_enabled(True)
             self._update_al_status()
             self.update_explorer_plot()
@@ -6439,7 +9112,6 @@ class MainWindow(QMainWindow):
                 f"Custom CNN done: {len(self.image_paths):,} images, "
                 f"{len(self._model_class_names)} classes"
             )
-            self._active_model_mode = "custom_cnn"
             self._persist_prediction_cache(
                 self._model_probs, self._model_class_names, "custom_cnn"
             )
@@ -6458,26 +9130,252 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(lambda: self.progress_bar.setVisible(False))
         self._threadpool_start(worker)
 
-    def _run_multihead_yolo_inference(self, model_paths: list, on_success=None):
+    def _run_multihead_custom_inference(
+        self,
+        model_paths: list,
+        on_success=None,
+        prediction_confidence_threshold: float | None = None,
+    ):
+        """Run multi-head TinyClassifier/Custom CNN inference and concatenate outputs."""
+        import numpy as np
+        import torch
+
+        from ..jobs.task_workers import (
+            TinyCNNInferenceWorker,
+            TorchvisionInferenceWorker,
+        )
+
+        if not model_paths or not self.image_paths:
+            return
+
+        valid_paths = [Path(path) for path in model_paths if Path(path).exists()]
+        if not valid_paths:
+            return
+
+        scheme = self._resolve_training_scheme()
+        scheme_factors = getattr(scheme, "factors", []) or []
+        collected: list[dict[str, object]] = []
+        total_heads = len(valid_paths)
+
+        def _finish() -> None:
+            all_probs = np.concatenate(
+                [np.asarray(entry["probs"]) for entry in collected], axis=1
+            )
+            all_names = [
+                name
+                for entry in collected
+                for name in list(entry.get("class_names") or [])
+            ]
+            prediction_heads = []
+            offset = 0
+            for entry_index, entry in enumerate(collected):
+                head_names = list(entry.get("class_names") or [])
+                prediction_heads.append(
+                    {
+                        "factor": str(
+                            entry.get("factor") or f"factor_{entry_index + 1}"
+                        ),
+                        "class_names": head_names,
+                        "start": offset,
+                        "end": offset + len(head_names),
+                    }
+                )
+                offset += len(head_names)
+            merged = {"probs": all_probs, "class_names": all_names}
+            self._set_model_prediction_state(
+                all_probs,
+                all_names,
+                active_model_mode="custom_cnn_multihead",
+                prediction_heads=prediction_heads,
+                prediction_confidence_threshold=prediction_confidence_threshold,
+            )
+            self.umap_model_coords = None
+            self.pca_model_coords = None
+            self._show_model_umap = False
+            self._show_model_pca = False
+            self.btn_umap_embedding.setChecked(True)
+            self.btn_umap_model.setChecked(False)
+            if hasattr(self, "btn_pca_model"):
+                self.btn_pca_model.setChecked(False)
+            self._set_model_projection_buttons_enabled(True)
+            self._update_al_status()
+            self.update_explorer_plot()
+            self.status.showMessage(
+                f"Multi-head Custom CNN inference done: {len(all_names)} combined classes"
+            )
+            self._persist_prediction_cache(
+                all_probs,
+                all_names,
+                "custom_cnn_multihead",
+                prediction_heads=prediction_heads,
+            )
+            if on_success:
+                on_success(merged)
+
+        def _run_head(index: int) -> None:
+            if index >= total_heads:
+                _finish()
+                return
+
+            model_path = valid_paths[index]
+            ckpt = torch.load(str(model_path), map_location="cpu", weights_only=False)
+            arch = (
+                ckpt.get("arch", "tinyclassifier")
+                if isinstance(ckpt, dict)
+                else "tinyclassifier"
+            )
+            class_names = (
+                list(ckpt.get("class_names") or list(self.classes))
+                if isinstance(ckpt, dict)
+                else list(self.classes)
+            )
+            force_monochrome = (
+                bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
+            )
+            factor_name = (
+                str((ckpt.get("factor_names") or [""])[0]).strip()
+                if isinstance(ckpt, dict)
+                else ""
+            )
+            if not factor_name and index < len(scheme_factors):
+                factor_name = str(getattr(scheme_factors[index], "name", "")).strip()
+            if not factor_name:
+                factor_name = f"factor_{index + 1}"
+            compute_runtime = self._resolve_classifier_compute_runtime(model_path)
+
+            if arch == "tinyclassifier":
+                worker = TinyCNNInferenceWorker(
+                    model_path,
+                    self.image_paths,
+                    class_names,
+                    compute_runtime=compute_runtime,
+                    batch_size=64,
+                    force_monochrome=force_monochrome,
+                )
+            else:
+                raw_size = (
+                    ckpt.get("input_size", (224, 224))
+                    if isinstance(ckpt, dict)
+                    else (224, 224)
+                )
+                input_size = (
+                    raw_size[0]
+                    if isinstance(raw_size, (list, tuple))
+                    else int(raw_size)
+                )
+                worker = TorchvisionInferenceWorker(
+                    model_path=model_path,
+                    image_paths=self.image_paths,
+                    class_names=class_names,
+                    input_size=input_size,
+                    compute_runtime=compute_runtime,
+                    batch_size=64,
+                    force_monochrome=force_monochrome,
+                )
+
+            def _head_success(result, next_index=index + 1):
+                collected.append(
+                    {
+                        "probs": result["probs"],
+                        "class_names": result["class_names"],
+                        "factor": factor_name,
+                    }
+                )
+                _run_head(next_index)
+
+            worker.signals.success.connect(_head_success)
+            worker.signals.error.connect(
+                lambda error: self.status.showMessage(
+                    f"Multi-head Custom CNN error: {error}"
+                )
+            )
+            worker.signals.progress.connect(
+                lambda _progress, message, head=index + 1: (
+                    self.status.showMessage(
+                        f"[Custom CNN {head}/{total_heads}] {message}"
+                    )
+                    if message
+                    else None
+                )
+            )
+            if index == 0:
+                self.progress_bar.setValue(0)
+                self.progress_bar.setVisible(True)
+            worker.signals.finished.connect(
+                lambda finished_index=index: (
+                    self.progress_bar.setVisible(False)
+                    if finished_index + 1 >= total_heads
+                    else None
+                )
+            )
+            self._threadpool_start(worker)
+
+        _run_head(0)
+
+    def _run_multihead_yolo_inference(
+        self,
+        model_paths: list,
+        on_success=None,
+        force_monochrome: bool = False,
+        prediction_confidence_threshold: float | None = None,
+    ):
         """Run YOLO inference on each factor model, concatenate log-prob columns."""
         import numpy as np
 
         if not model_paths or not self.image_paths:
             return
 
-        collected: list = []  # list of (probs ndarray, class_names list) per head
+        scheme = self._resolve_training_scheme()
+        scheme_factors = getattr(scheme, "factors", []) or []
+        collected: list[dict[str, object] | None] = [None] * len(model_paths)
         remaining: list = [len(model_paths)]
 
-        def _head_done(result):
-            collected.append((result["probs"], result["class_names"]))
+        def _head_done(head_index: int, result):
+            factor_name = (
+                str(getattr(scheme_factors[head_index], "name", "")).strip()
+                if head_index < len(scheme_factors)
+                else f"factor_{head_index + 1}"
+            )
+            collected[head_index] = {
+                "probs": result["probs"],
+                "class_names": result["class_names"],
+                "factor": factor_name,
+            }
             remaining[0] -= 1
             if remaining[0] == 0:
                 # Merge all heads column-wise
-                all_probs = np.concatenate([p for p, _ in collected], axis=1)
-                all_names = [n for _, names in collected for n in names]
+                ordered = [entry for entry in collected if entry is not None]
+                all_probs = np.concatenate(
+                    [np.asarray(entry["probs"]) for entry in ordered], axis=1
+                )
+                all_names = [
+                    name
+                    for entry in ordered
+                    for name in list(entry.get("class_names") or [])
+                ]
+                prediction_heads = []
+                offset = 0
+                for entry_index, entry in enumerate(ordered):
+                    head_names = list(entry.get("class_names") or [])
+                    prediction_heads.append(
+                        {
+                            "factor": str(
+                                entry.get("factor") or f"factor_{entry_index + 1}"
+                            ),
+                            "class_names": head_names,
+                            "start": offset,
+                            "end": offset + len(head_names),
+                        }
+                    )
+                    offset += len(head_names)
                 merged = {"probs": all_probs, "class_names": all_names}
-                self._model_probs = all_probs
-                self._model_class_names = all_names
+                self._set_model_prediction_state(
+                    all_probs,
+                    all_names,
+                    active_model_mode="yolo_multihead",
+                    prediction_heads=prediction_heads,
+                    prediction_confidence_threshold=prediction_confidence_threshold,
+                )
                 self.umap_model_coords = None
                 self.pca_model_coords = None
                 self._show_model_umap = False
@@ -6486,19 +9384,30 @@ class MainWindow(QMainWindow):
                 self.btn_umap_model.setChecked(False)
                 if hasattr(self, "btn_pca_model"):
                     self.btn_pca_model.setChecked(False)
-                self.image_confidences = list(all_probs.max(axis=1).astype(float))
                 self._set_model_projection_buttons_enabled(True)
                 self._update_al_status()
                 self.update_explorer_plot()
                 self.status.showMessage(
                     f"Multi-head inference done: {len(all_names)} combined classes"
                 )
-                self._persist_prediction_cache(all_probs, all_names, "yolo_multihead")
+                self._persist_prediction_cache(
+                    all_probs,
+                    all_names,
+                    "yolo_multihead",
+                    prediction_heads=prediction_heads,
+                )
                 if on_success:
                     on_success(merged)
 
-        for mp in model_paths:
-            self._run_yolo_inference(mp, on_success=_head_done)
+        for head_index, mp in enumerate(model_paths):
+            self._run_yolo_inference(
+                mp,
+                on_success=lambda result, idx=head_index: _head_done(idx, result),
+                force_monochrome=(
+                    force_monochrome or self._resolve_yolo_force_monochrome(mp)
+                ),
+                apply_result=False,
+            )
 
     def _open_model_history(self):
         """Open the Model History dialog and load a selected past model."""
@@ -6525,8 +9434,15 @@ class MainWindow(QMainWindow):
 
     def _load_model_from_cache_entry(self, entry: dict, on_success=None):
         """Load a model from a DB cache entry and run inference + UMAP."""
+        import torch
+
+        self._set_active_evaluation_from_meta(entry.get("meta"))
         self._set_heldout_validation_summary(
-            self._validation_summary_from_value(
+            self._validation_summary_from_results(
+                (entry.get("meta") or {}).get("factor_validation"),
+                factor_names=(entry.get("meta") or {}).get("factor_names"),
+            )
+            or self._validation_summary_from_value(
                 entry.get("best_val_acc") if isinstance(entry, dict) else None,
                 prefix="Saved held-out validation accuracy",
             )
@@ -6541,6 +9457,19 @@ class MainWindow(QMainWindow):
             )
             return
         class_names = entry.get("class_names") or list(self.classes)
+        entry_meta = entry.get("meta") or {}
+        training_settings = (
+            entry_meta.get("training_settings")
+            if isinstance(entry_meta, dict)
+            else None
+        )
+        cached_threshold = (
+            self._normalize_prediction_confidence_threshold(
+                training_settings.get("prediction_confidence_threshold")
+            )
+            if isinstance(training_settings, dict)
+            else None
+        )
 
         def _after(r):
             self._evaluate_model_on_labeled()
@@ -6552,44 +9481,403 @@ class MainWindow(QMainWindow):
             if mode.startswith("multihead"):
                 all_paths = [Path(p) for p in paths if Path(p).exists()]
                 self._active_model_mode = "yolo_multihead"
-                self._run_multihead_yolo_inference(all_paths, on_success=_after)
+                self._run_multihead_yolo_inference(
+                    all_paths,
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_multihead_prediction_confidence_threshold(
+                            all_paths
+                        )
+                    ),
+                )
             else:
                 self._yolo_model_path = Path(paths[0])
                 self._active_model_mode = "yolo"
-                self._run_yolo_inference(Path(paths[0]), on_success=_after)
+                self._run_yolo_inference(
+                    Path(paths[0]),
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
+                )
         else:
-            self._active_model_mode = "tiny"
-            self._run_tiny_inference(Path(paths[0]), class_names, on_success=_after)
+            if mode.startswith("multihead"):
+                all_paths = [Path(p) for p in paths if Path(p).exists()]
+                self._active_model_mode = "custom_cnn_multihead"
+                self._run_multihead_custom_inference(
+                    all_paths,
+                    on_success=_after,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_multihead_prediction_confidence_threshold(
+                            all_paths
+                        )
+                    ),
+                )
+                return
+
+            ckpt = torch.load(str(paths[0]), map_location="cpu", weights_only=False)
+            arch = (
+                ckpt.get("arch", "tinyclassifier")
+                if isinstance(ckpt, dict)
+                else "tinyclassifier"
+            )
+            resolved_names = (
+                list(ckpt.get("class_names") or class_names)
+                if isinstance(ckpt, dict)
+                else class_names
+            )
+            force_monochrome = (
+                bool(ckpt.get("monochrome", False)) if isinstance(ckpt, dict) else False
+            )
+            if arch == "tinyclassifier":
+                self._active_model_mode = "tiny"
+                self._run_tiny_inference(
+                    Path(paths[0]),
+                    resolved_names,
+                    on_success=_after,
+                    force_monochrome=force_monochrome,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
+                )
+            else:
+                raw_size = (
+                    ckpt.get("input_size", (224, 224))
+                    if isinstance(ckpt, dict)
+                    else (224, 224)
+                )
+                size = (
+                    raw_size[0]
+                    if isinstance(raw_size, (list, tuple))
+                    else int(raw_size)
+                )
+                self._active_model_mode = "custom_cnn"
+                self._run_torchvision_inference(
+                    Path(paths[0]),
+                    class_names=resolved_names,
+                    input_size=size,
+                    on_success=_after,
+                    force_monochrome=force_monochrome,
+                    prediction_confidence_threshold=(
+                        cached_threshold
+                        if cached_threshold is not None
+                        else self._resolve_prediction_confidence_threshold_for_path(
+                            Path(paths[0])
+                        )
+                    ),
+                )
 
     def _labeled_eval_arrays(self):
-        """Return labeled indices and ground-truth class ids for evaluation."""
+        """Return labeled indices, ground-truth ids, and evaluation-scope text."""
         import numpy as np
 
         labeled_indices = [i for i, lbl in enumerate(self.image_labels) if lbl]
+        scope_text = "All labeled project images"
+        if self._active_evaluation_paths:
+            heldout_indices = [
+                index
+                for index, (path, lbl) in enumerate(
+                    zip(self.image_paths, self.image_labels)
+                )
+                if lbl
+                and self._resolved_path_key(path) in self._active_evaluation_paths
+            ]
+            split_label = (self._active_evaluation_split_name or "held-out").strip()
+            if heldout_indices:
+                labeled_indices = heldout_indices
+                scope_text = f"{split_label.title()} split"
+            else:
+                scope_text = "All labeled project images (held-out subset unavailable)"
         if len(labeled_indices) < 2:
-            return None, None
+            return None, None, scope_text
 
-        class_to_id = {c: i for i, c in enumerate(self.classes)}
+        eval_class_names = self._evaluation_class_names()
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
         y_true = np.array(
             [class_to_id.get(self.image_labels[i], -1) for i in labeled_indices]
         )
         valid = y_true >= 0
         if valid.sum() < 2:
-            return None, None
-        return np.array(labeled_indices)[valid], y_true[valid]
+            return None, None, scope_text
+        return np.array(labeled_indices)[valid], y_true[valid], scope_text
 
-    def _aligned_eval_probs(self, idx_arr, probs_rows):
+    def _labeled_eval_arrays_for_paths(self, paths, scope_text: str):
+        """Return labeled indices, labels, and scope for one explicit split."""
+        import numpy as np
+
+        target_paths = {self._resolved_path_key(path) for path in (paths or []) if path}
+        if not target_paths:
+            return None, None, scope_text
+
+        labeled_indices = [
+            index
+            for index, (path, lbl) in enumerate(
+                zip(self.image_paths, self.image_labels)
+            )
+            if lbl and self._resolved_path_key(path) in target_paths
+        ]
+        if len(labeled_indices) < 2:
+            return None, None, scope_text
+
+        eval_class_names = self._evaluation_class_names()
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
+        y_true = np.array(
+            [class_to_id.get(self.image_labels[i], -1) for i in labeled_indices]
+        )
+        valid = y_true >= 0
+        if valid.sum() < 2:
+            return None, None, scope_text
+        return np.array(labeled_indices)[valid], y_true[valid], scope_text
+
+    def _available_split_metric_specs(self) -> list[tuple[str, list[str], str]]:
+        """Return train/val/test split definitions available for evaluation."""
+        specs: list[tuple[str, list[str], str]] = []
+        for split_name in ("train", "val", "test"):
+            split_paths = self._split_membership_paths.get(split_name)
+            if split_paths:
+                specs.append(
+                    (split_name, sorted(split_paths), f"{split_name.title()} split")
+                )
+        return specs
+
+    def _compute_metrics_for_split_paths(self, paths, *, scope_text: str):
+        """Compute metrics for one split path set using current predictions."""
+        if self._model_probs is None:
+            return None
+
+        idx_arr, y_true, _scope_text = self._labeled_eval_arrays_for_paths(
+            paths,
+            scope_text,
+        )
+        if idx_arr is None or y_true is None:
+            return None
+
+        metrics, extra_report = self._compute_prediction_metrics_for_indices(idx_arr)
+        if metrics is None:
+            return None
+        return {"metrics": metrics, "extra_report": extra_report}
+
+    def _decode_prediction_label_parts(self, label: str, head_count: int) -> list[str]:
+        """Decode a composite label into per-factor values for multi-head evaluation."""
+        scheme = self._resolve_training_scheme()
+        if scheme is not None:
+            try:
+                parts = [str(value) for value in scheme.decode_label(str(label))]
+                if len(parts) == head_count:
+                    return parts
+            except Exception:
+                pass
+
+        parts = [
+            str(value).strip() for value in str(label).split("|") if str(value).strip()
+        ]
+        return parts if len(parts) == head_count else []
+
+    def _compute_prediction_metrics_for_indices(self, idx_arr):
+        """Compute evaluation metrics for the current prediction matrix on one image subset."""
+        import numpy as np
+
+        from ..core.train.metrics import compute_metrics
+
+        if self._model_probs is None or idx_arr is None or len(idx_arr) < 2:
+            return None, ""
+
+        idx_arr = np.asarray(idx_arr, dtype=int)
+        heads = self._current_prediction_heads()
+        true_labels = [str(self.image_labels[int(index)]).strip() for index in idx_arr]
+
+        if len(heads) > 1:
+            summaries = [
+                self._prediction_summary_for_index(int(index), top_k=1)
+                for index in idx_arr
+            ]
+            if any(summary is None for summary in summaries):
+                return None, ""
+
+            pred_labels = [
+                str(summary.get("predicted_label") or "") for summary in summaries
+            ]
+            composite_names: list[str] = []
+            for value in [*true_labels, *pred_labels]:
+                if value and value not in composite_names:
+                    composite_names.append(value)
+            class_to_id = {name: index for index, name in enumerate(composite_names)}
+            y_true = np.asarray(
+                [class_to_id[label] for label in true_labels], dtype=int
+            )
+            y_pred = np.asarray(
+                [class_to_id[label] for label in pred_labels], dtype=int
+            )
+            metrics = compute_metrics(
+                y_pred,
+                y_true,
+                class_names=composite_names,
+            )
+
+            report_lines = [
+                "Multi-head summary",
+                "=" * 60,
+                f"Exact-match accuracy: {metrics.accuracy:.3f}  n={len(idx_arr)}",
+            ]
+            for factor_index, head in enumerate(heads):
+                factor_true: list[str] = []
+                factor_pred: list[str] = []
+                for true_label, summary in zip(true_labels, summaries):
+                    decoded = self._decode_prediction_label_parts(
+                        true_label,
+                        len(heads),
+                    )
+                    head_predictions = summary.get("head_predictions") or []
+                    if not decoded or factor_index >= len(head_predictions):
+                        continue
+                    factor_true.append(str(decoded[factor_index]))
+                    factor_pred.append(
+                        str(head_predictions[factor_index].get("predicted_label") or "")
+                    )
+                if not factor_true or len(factor_true) != len(factor_pred):
+                    continue
+                factor_accuracy = sum(
+                    int(true_value == pred_value)
+                    for true_value, pred_value in zip(factor_true, factor_pred)
+                ) / float(len(factor_true))
+                report_lines.append(
+                    f"{head['factor']}: acc={factor_accuracy:.3f}  n={len(factor_true)}"
+                )
+            return metrics, "\n".join(report_lines)
+
+        eval_class_names = self._evaluation_class_names()
+        probs_rows = np.asarray(self._model_probs[idx_arr])
+        probs_subset = self._aligned_eval_probs(
+            idx_arr,
+            probs_rows,
+            class_names=eval_class_names,
+        )
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
+        y_true = np.asarray(
+            [
+                class_to_id.get(str(self.image_labels[int(index)]), -1)
+                for index in idx_arr
+            ],
+            dtype=int,
+        )
+        valid = y_true >= 0
+        if valid.sum() < 2:
+            return None, ""
+        y_pred = probs_subset[valid].argmax(axis=1)
+        metrics = compute_metrics(
+            y_pred,
+            y_true[valid],
+            class_names=eval_class_names,
+        )
+        return metrics, ""
+
+    def _build_split_metrics_bundle(self):
+        """Compute metrics for all available dataset splits."""
+        bundle = []
+        for split_name, split_paths, scope_text in self._available_split_metric_specs():
+            split_result = self._compute_metrics_for_split_paths(
+                split_paths,
+                scope_text=scope_text,
+            )
+            if split_result is None:
+                continue
+            bundle.append(
+                {
+                    "split_name": split_name,
+                    "scope_text": scope_text,
+                    "metrics": split_result["metrics"],
+                    "extra_report": split_result.get("extra_report") or "",
+                }
+            )
+        return bundle
+
+    def _build_metrics_plot_panels(
+        self, metrics, *, evaluation_scope: str, split_metrics
+    ):
+        """Return ordered plot panels for the Metrics tab figure area."""
+        panels = []
+        seen_scopes: set[str] = set()
+        evaluation_scope_key = str(evaluation_scope or "").strip().casefold()
+        split_items = list(split_metrics or [])
+        has_matching_split = any(
+            str(item.get("scope_text") or "").strip().casefold() == evaluation_scope_key
+            for item in split_items
+        )
+
+        if metrics is not None and (not split_items or not has_matching_split):
+            panels.append(
+                {
+                    "title": str(evaluation_scope or "Evaluation subset").strip()
+                    or "Evaluation subset",
+                    "metrics": metrics,
+                }
+            )
+            if evaluation_scope_key:
+                seen_scopes.add(evaluation_scope_key)
+
+        for item in split_items:
+            scope_text = str(
+                item.get("scope_text") or item.get("split_name") or ""
+            ).strip()
+            if not scope_text:
+                continue
+            scope_key = scope_text.casefold()
+            if scope_key in seen_scopes:
+                continue
+            panel_metrics = item.get("metrics")
+            if panel_metrics is None:
+                continue
+            panels.append({"title": scope_text, "metrics": panel_metrics})
+            seen_scopes.add(scope_key)
+
+        return panels
+
+    def _evaluation_class_names(self) -> list[str]:
+        """Return the effective class order for metrics and probability alignment."""
+
+        ordered: list[str] = []
+
+        def _add(value) -> None:
+            text = str(value).strip()
+            if text and text not in ordered:
+                ordered.append(text)
+
+        for value in self.classes:
+            _add(value)
+        for value in self._model_class_names or []:
+            _add(value)
+        for value in self.image_labels:
+            if value:
+                _add(value)
+
+        return ordered
+
+    def _aligned_eval_probs(self, idx_arr, probs_rows, class_names=None):
         """Align model probability columns to the project's class order."""
         import numpy as np
+
+        eval_class_names = list(class_names or self._evaluation_class_names())
 
         if self._model_class_names:
             name_to_col = {
                 str(name): i for i, name in enumerate(self._model_class_names)
             }
             probs_subset = np.zeros(
-                (len(idx_arr), len(self.classes)), dtype=probs_rows.dtype
+                (len(idx_arr), len(eval_class_names)), dtype=probs_rows.dtype
             )
-            for target_col, class_name in enumerate(self.classes):
+            for target_col, class_name in enumerate(eval_class_names):
                 source_col = name_to_col.get(str(class_name))
                 if (
                     source_col is not None
@@ -6598,16 +9886,19 @@ class MainWindow(QMainWindow):
                     probs_subset[:, target_col] = probs_rows[:, int(source_col)]
             return probs_subset
 
-        usable_cols = min(probs_rows.shape[1], len(self.classes))
+        usable_cols = min(probs_rows.shape[1], len(eval_class_names))
         probs_subset = np.zeros(
-            (len(idx_arr), len(self.classes)), dtype=probs_rows.dtype
+            (len(idx_arr), len(eval_class_names)), dtype=probs_rows.dtype
         )
         if usable_cols > 0:
             probs_subset[:, :usable_cols] = probs_rows[:, :usable_cols]
         return probs_subset
 
     @staticmethod
-    def _validation_summary_from_results(results: list[dict] | None):
+    def _validation_summary_from_results(
+        results: list[dict] | None,
+        factor_names: list[str] | None = None,
+    ):
         """Build a held-out validation summary from training results."""
         values = []
         for index, result in enumerate(results or []):
@@ -6615,7 +9906,16 @@ class MainWindow(QMainWindow):
             if raw is None:
                 continue
             try:
-                values.append((index, float(raw)))
+                factor_label = str(
+                    (result.get("factor") if isinstance(result, dict) else None)
+                    or (result.get("factor_name") if isinstance(result, dict) else None)
+                    or (
+                        factor_names[index]
+                        if factor_names and index < len(factor_names)
+                        else f"f{index + 1}"
+                    )
+                ).strip()
+                values.append((factor_label, float(raw)))
             except Exception:
                 continue
         if not values:
@@ -6627,8 +9927,8 @@ class MainWindow(QMainWindow):
                 "short_text": f"Held-out val acc: {value:.3f}",
             }
 
-        mean_value = sum(value for _index, value in values) / len(values)
-        per_factor = ", ".join(f"f{index}={value:.3f}" for index, value in values)
+        mean_value = sum(value for _label, value in values) / len(values)
+        per_factor = ", ".join(f"{label}={value:.3f}" for label, value in values)
         return {
             "text": (
                 "Held-out validation accuracy by factor (best epoch per head): "
@@ -6678,90 +9978,104 @@ class MainWindow(QMainWindow):
         if self._model_probs is None:
             return
         try:
-            import numpy as np
-
-            from ..core.train.metrics import compute_metrics
-
-            idx_arr, y_true = self._labeled_eval_arrays()
+            idx_arr, y_true, scope_text = self._labeled_eval_arrays()
             if idx_arr is None or y_true is None:
                 return
 
-            probs_rows = np.asarray(self._model_probs[idx_arr])
-            probs_subset = self._aligned_eval_probs(idx_arr, probs_rows)
-            y_pred = probs_subset.argmax(axis=1)
-            metrics = compute_metrics(y_pred, y_true, class_names=self.classes)
+            metrics, extra_report = self._compute_prediction_metrics_for_indices(
+                idx_arr
+            )
+            if metrics is None:
+                return
             self._update_metrics_display(
-                metrics, activate_metrics_tab=activate_metrics_tab
+                metrics,
+                evaluation_scope=scope_text,
+                additional_report=extra_report,
+                activate_metrics_tab=activate_metrics_tab,
             )
         except Exception as e:
             self.metrics_view.setPlainText(f"Evaluation error: {e}")
 
-    def _update_metrics_display(self, metrics, activate_metrics_tab: bool = True):
-        """Update Metrics tab: text report + matplotlib confusion matrix / per-class bars."""
-        from ..core.train.metrics import format_metrics_report
+    # ──────────────────────────── Metrics tab helpers ────────────────────────────
 
-        report = format_metrics_report(metrics)
-        heldout_text = (
-            self._heldout_validation_summary.get("text")
-            if isinstance(self._heldout_validation_summary, dict)
-            else ""
+    def _compute_all_labeled_bundle(self):
+        """Compute prediction metrics for every labeled image, ignoring split membership."""
+        if self._model_probs is None:
+            return None
+        labeled_indices = [
+            i for i, lbl in enumerate(self.image_labels) if lbl and str(lbl).strip()
+        ]
+        if len(labeled_indices) < 2:
+            return None
+        eval_class_names = self._evaluation_class_names()
+        class_to_id = {c: i for i, c in enumerate(eval_class_names)}
+        y_true = np.array(
+            [
+                class_to_id.get(str(self.image_labels[i]).strip(), -1)
+                for i in labeled_indices
+            ]
         )
-        if heldout_text:
-            report = f"{heldout_text}\n\n{report}"
-        self.metrics_view.setPlainText(report)
-        if activate_metrics_tab:
-            self.tabs.setCurrentWidget(self.metrics_page)
+        valid = y_true >= 0
+        if valid.sum() < 2:
+            return None
+        metrics, _ = self._compute_prediction_metrics_for_indices(
+            np.array(labeled_indices)[valid]
+        )
+        return metrics
 
+    def _render_split_tab_figure(self, metrics, scope_text: str, label: QLabel) -> None:
+        """Render a compact (row-of-two) confusion-matrix + per-class bar chart into *label*."""
         try:
             import io
 
             import matplotlib
-            import numpy as np
 
             matplotlib.use("Agg")
-            from matplotlib.backends.backend_agg import FigureCanvasAgg
             from matplotlib.figure import Figure
             from PySide6.QtGui import QImage, QPixmap
 
             n_classes = len(metrics.per_class)
-            fig = Figure(figsize=(12, 4.5), facecolor="#1e1e1e")
             names = [c.class_name for c in metrics.per_class]
 
-            # ── Left: confusion matrix ──
-            ax1 = fig.add_subplot(1, 2, 1)
+            fig = Figure(figsize=(9, 3.5), facecolor="#1e1e1e")
+            ax1, ax2 = fig.subplots(1, 2)
+
+            # ── confusion matrix ──────────────────────────────────────────────
             ax1.set_facecolor("#252526")
-            cm = metrics.confusion_matrix.astype(float)
-            row_sums = cm.sum(axis=1, keepdims=True)
-            cm_norm = np.where(row_sums > 0, cm / row_sums, 0.0)
-            img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
-            ax1.set_title(
-                "Confusion Matrix (row-normalised)", color="#ddd", fontsize=10
+            cm_raw = metrics.confusion_matrix.astype(float)
+            row_sums = cm_raw.sum(axis=1, keepdims=True)
+            cm_norm = np.divide(
+                cm_raw,
+                row_sums,
+                out=np.zeros_like(cm_raw),
+                where=row_sums > 0,
             )
-            ax1.set_xlabel("Predicted", color="#aaa", fontsize=9)
-            ax1.set_ylabel("True", color="#aaa", fontsize=9)
+            img = ax1.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
+            ax1.set_title(f"{scope_text}: Confusion Matrix", color="#ddd", fontsize=9)
+            ax1.set_xlabel("Predicted", color="#aaa", fontsize=8)
+            ax1.set_ylabel("True", color="#aaa", fontsize=8)
             ax1.set_xticks(range(n_classes))
             ax1.set_yticks(range(n_classes))
             ax1.set_xticklabels(
-                names, rotation=45, ha="right", color="#ccc", fontsize=8
+                names, rotation=45, ha="right", color="#ccc", fontsize=7
             )
-            ax1.set_yticklabels(names, color="#ccc", fontsize=8)
+            ax1.set_yticklabels(names, color="#ccc", fontsize=7)
             for i in range(n_classes):
                 for j in range(n_classes):
                     ax1.text(
                         j,
                         i,
-                        f"{cm[i, j]:.0f}",
+                        f"{cm_raw[i, j]:.0f}",
                         ha="center",
                         va="center",
-                        fontsize=9,
+                        fontsize=8,
                         color="white" if cm_norm[i, j] > 0.5 else "#999",
                     )
             ax1.tick_params(colors="#aaa")
             cbar = fig.colorbar(img, ax=ax1)
             cbar.ax.tick_params(colors="#aaa")
 
-            # ── Right: per-class P/R/F1 bars ──
-            ax2 = fig.add_subplot(1, 2, 2)
+            # ── per-class bar chart ───────────────────────────────────────────
             ax2.set_facecolor("#252526")
             x = np.arange(n_classes)
             w = 0.25
@@ -6780,7 +10094,11 @@ class MainWindow(QMainWindow):
                 color="#5dbea3",
             )
             ax2.bar(
-                x + w, [c.f1 for c in metrics.per_class], w, label="F1", color="#e07b4e"
+                x + w,
+                [c.f1 for c in metrics.per_class],
+                w,
+                label="F1",
+                color="#e07b4e",
             )
             ax2.axhline(
                 metrics.accuracy,
@@ -6790,68 +10108,287 @@ class MainWindow(QMainWindow):
                 alpha=0.8,
             )
             ax2.set_title(
-                "Per-class Precision / Recall / F1", color="#ddd", fontsize=10
+                f"{scope_text}: Per-class Precision / Recall / F1",
+                color="#ddd",
+                fontsize=9,
             )
             ax2.set_xticks(x)
             ax2.set_xticklabels(
-                names, rotation=45, ha="right", color="#ccc", fontsize=8
+                names, rotation=45, ha="right", color="#ccc", fontsize=7
             )
             ax2.set_ylim(0, 1.08)
+            ax2.set_xlabel(
+                f"Acc: {metrics.accuracy:.3f}  |  Macro F1: {metrics.macro_f1:.3f}  |  n={metrics.num_samples}",
+                color="#aaa",
+                fontsize=7,
+            )
             ax2.tick_params(colors="#aaa")
             ax2.spines[:].set_color("#555")
             legend = ax2.legend(
-                loc="upper right", fontsize=8, facecolor="#252526", labelcolor="#ddd"
+                loc="upper right",
+                fontsize=7,
+                facecolor="#252526",
+                labelcolor="#ddd",
             )
             legend.get_frame().set_edgecolor("#555")
 
-            fig.text(
-                0.5,
-                0.01,
-                f"Accuracy: {metrics.accuracy:.3f}  |  Macro F1: {metrics.macro_f1:.3f}  |  "
-                f"Weighted F1: {metrics.weighted_f1:.3f}  |  n={metrics.num_samples}"
-                + (
-                    f"  |  {self._heldout_validation_short_text()}"
-                    if self._heldout_validation_short_text()
-                    else ""
-                ),
-                ha="center",
-                color="#aaa",
-                fontsize=9,
-            )
-            fig.tight_layout(rect=[0, 0.05, 1, 1])
+            fig.tight_layout()
 
-            canvas = FigureCanvasAgg(fig)
-            canvas.draw()
             buf = io.BytesIO()
             fig.savefig(
-                buf, format="png", dpi=110, bbox_inches="tight", facecolor="#1e1e1e"
+                buf, format="png", dpi=96, bbox_inches="tight", facecolor="#1e1e1e"
             )
             buf.seek(0)
             qimg = QImage.fromData(buf.read())
             pixmap = QPixmap.fromImage(qimg)
-            self.metrics_figure_label.setPixmap(pixmap)
-            self.metrics_figure_label.setFixedSize(pixmap.size())
-        except Exception as fig_exc:
-            self.metrics_figure_label.setText(f"Figure error: {fig_exc}")
+            label.setPixmap(pixmap)
+            label.setFixedSize(pixmap.size())
+        except Exception as exc:
+            label.setText(f"Figure error: {exc}")
+
+    def _create_split_tab_widget(self, metrics, scope_text: str) -> QWidget:
+        """Build the widget displayed inside one split tab of the Metrics tab.
+
+        Layout (top-to-bottom):
+          1. One-line summary banner (accuracy / F1 / n).
+          2. Horizontal splitter:
+             Left  — per-class table, auto-sized to all rows, no scroll.
+             Right — matplotlib figure in a scroll area.
+        """
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
+
+        # ── summary header ────────────────────────────────────────────────────
+        summary = QLabel(
+            f"<b>Accuracy:</b> {metrics.accuracy:.3f} &nbsp;|&nbsp; "
+            f"<b>Macro F1:</b> {metrics.macro_f1:.3f} &nbsp;|&nbsp; "
+            f"<b>Weighted F1:</b> {metrics.weighted_f1:.3f} &nbsp;|&nbsp; "
+            f"<b>n:</b> {metrics.num_samples}"
+        )
+        summary.setStyleSheet(
+            "background:#252526; color:#d4d4d4; padding:5px 10px;"
+            " border-radius:4px; font-size:12px;"
+        )
+        summary.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        outer.addWidget(summary)
+
+        # ── horizontal splitter: table | figure ──────────────────────────────
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(4)
+        splitter.setStyleSheet("QSplitter::handle { background: #3e3e42; }")
+
+        # Left: per-class table sized to show all rows without a scrollbar
+        table = QTableWidget()
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.setFocusPolicy(Qt.NoFocus)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(
+            ["Class", "Precision", "Recall", "F1", "Support"]
+        )
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for _col in range(1, 5):
+            table.horizontalHeader().setSectionResizeMode(
+                _col, QHeaderView.ResizeToContents
+            )
+        table.verticalHeader().setVisible(False)
+        table.setStyleSheet(
+            "QTableWidget { background:#1e1e1e; color:#d4d4d4;"
+            " gridline-color:#3e3e42; font-size:11px; border:none; }"
+            "QHeaderView::section { background:#252526; color:#aaa;"
+            " border:1px solid #3e3e42; padding:3px 6px; }"
+        )
+        table.setRowCount(len(metrics.per_class))
+        for _row, cm_entry in enumerate(metrics.per_class):
+            table.setItem(_row, 0, QTableWidgetItem(cm_entry.class_name))
+            for _ci, _val in enumerate(
+                [cm_entry.precision, cm_entry.recall, cm_entry.f1]
+            ):
+                _item = QTableWidgetItem(f"{_val:.3f}")
+                _item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(_row, _ci + 1, _item)
+            _sup = QTableWidgetItem(str(cm_entry.support))
+            _sup.setTextAlignment(Qt.AlignCenter)
+            table.setItem(_row, 4, _sup)
+
+        # Shrink row height and compute exact pixel height for all rows
+        _row_h = 22
+        table.verticalHeader().setDefaultSectionSize(_row_h)
+        _header_h = table.horizontalHeader().sizeHint().height()
+        _table_h = _header_h + _row_h * len(metrics.per_class) + 2
+        table.setFixedHeight(_table_h)
+        table.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        table.resizeColumnsToContents()
+        # Compute natural width so the splitter can initialise it correctly
+        _natural_w = sum(table.columnWidth(c) for c in range(table.columnCount())) + 4
+        table.setMinimumWidth(min(_natural_w, 260))
+
+        # Wrap in a container so it sits at the top without stretching
+        left_pane = QWidget()
+        left_pane.setStyleSheet("background:#1e1e1e;")
+        left_layout = QVBoxLayout(left_pane)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        left_layout.addWidget(table)
+        left_layout.addStretch(1)
+        splitter.addWidget(left_pane)
+
+        # Right: matplotlib figure in a scroll area
+        fig_label = QLabel("Rendering…")
+        fig_label.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        fig_label.setStyleSheet("background:#111; border-radius:4px;")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(False)
+        scroll.setWidget(fig_label)
+        scroll.setStyleSheet("background:#111; border:none;")
+        splitter.addWidget(scroll)
+
+        # Give figure ~65 % of the width, table ~35 %
+        total_hint = 600
+        splitter.setSizes([int(total_hint * 0.35), int(total_hint * 0.65)])
+
+        outer.addWidget(splitter, 1)
+
+        self._render_split_tab_figure(metrics, scope_text, fig_label)
+
+        return container
+
+    def _populate_metrics_split_tabs(
+        self, split_metrics, main_metrics, evaluation_scope: str
+    ) -> None:
+        """Rebuild all tabs in *metrics_split_tabs* from split bundles + all-labeled."""
+        # clear existing tabs
+        while self.metrics_split_tabs.count():
+            self.metrics_split_tabs.removeTab(0)
+
+        bundles: list[tuple[str, str, object]] = []  # (tab_label, scope_text, metrics)
+
+        # train / val / test splits (from training export)
+        for item in split_metrics or []:
+            split_name = str(item.get("split_name") or "").strip()
+            scope_text = str(item.get("scope_text") or split_name).strip()
+            tab_label = split_name.title() if split_name else scope_text
+            bundles.append((tab_label, scope_text, item["metrics"]))
+
+        # All-labeled (always shown when a model is loaded)
+        all_labeled = self._compute_all_labeled_bundle()
+        if all_labeled is not None:
+            bundles.append(("All", "All labeled images", all_labeled))
+        elif main_metrics is not None and not split_metrics:
+            bundles.append(
+                (
+                    "All",
+                    evaluation_scope or "All labeled images",
+                    main_metrics,
+                )
+            )
+
+        if not bundles:
+            _ph = QLabel("No evaluation data available.")
+            _ph.setAlignment(Qt.AlignCenter)
+            _ph.setStyleSheet("color:#555; background:#111;")
+            self.metrics_split_tabs.addTab(_ph, "—")
+            return
+
+        for tab_label, scope_text, metrics in bundles:
+            tab_widget = self._create_split_tab_widget(metrics, scope_text)
+            self.metrics_split_tabs.addTab(tab_widget, tab_label)
+
+        # activate the first non-"All" tab (most informative split), else first
+        preferred = next(
+            (
+                i
+                for i in range(self.metrics_split_tabs.count())
+                if self.metrics_split_tabs.tabText(i) in ("Val", "Test")
+            ),
+            0,
+        )
+        self.metrics_split_tabs.setCurrentIndex(preferred)
+
+    def _update_metrics_display(
+        self,
+        metrics,
+        *,
+        evaluation_scope: str = "All labeled project images",
+        additional_report: str = "",
+        activate_metrics_tab: bool = True,
+    ):
+        """Update Metrics tab: text report + split-tabbed visualisations."""
+        from ..core.train.metrics import format_metrics_report
+
+        split_metrics = self._build_split_metrics_bundle()
+
+        # ── legacy hidden text widget (kept for API / test compatibility) ─────
+        report_sections = []
+        heldout_text = (
+            self._heldout_validation_summary.get("text")
+            if isinstance(self._heldout_validation_summary, dict)
+            else ""
+        )
+        if heldout_text:
+            report_sections.append(heldout_text)
+        if split_metrics:
+            summary_lines = ["Split Summary", "=" * 60]
+            for item in split_metrics:
+                split_label = str(item["split_name"]).title()
+                split_metric = item["metrics"]
+                summary_lines.append(
+                    f"{split_label:<8} acc={split_metric.accuracy:.3f}"
+                    f"  macro_f1={split_metric.macro_f1:.3f}"
+                    f"  weighted_f1={split_metric.weighted_f1:.3f}"
+                    f"  n={split_metric.num_samples}"
+                )
+            report_sections.append("\n".join(summary_lines))
+            for item in split_metrics:
+                split_extra = str(item.get("extra_report") or "").strip()
+                split_report = format_metrics_report(item["metrics"])
+                if split_extra:
+                    split_report = f"{split_extra}\n\n{split_report}"
+                report_sections.append(
+                    f"Evaluation subset: {item['scope_text']}\n\n{split_report}"
+                )
+        main_report = format_metrics_report(metrics)
+        if additional_report:
+            main_report = f"{additional_report}\n\n{main_report}"
+        report_sections.append(
+            f"Evaluation subset: {evaluation_scope}\n\n{main_report}"
+        )
+        report = "\n\n".join(section for section in report_sections if section)
+        self.metrics_view.setPlainText(report)
+
+        # ── new split-tabbed display ──────────────────────────────────────────
+        self._populate_metrics_split_tabs(split_metrics, metrics, evaluation_scope)
+
+        if activate_metrics_tab:
+            self.tabs.setCurrentWidget(self.metrics_page)
 
     def _clear_metrics_display(self) -> None:
         """Reset the Metrics tab to its empty project state."""
         self._set_heldout_validation_summary(None)
+        self._split_membership_paths = {}
         if hasattr(self, "metrics_view"):
             self.metrics_view.clear()
-        if hasattr(self, "metrics_figure_label"):
-            self.metrics_figure_label.clear()
-            self.metrics_figure_label.setPixmap(QPixmap())
-            self.metrics_figure_label.setFixedSize(self.metrics_figure_label.sizeHint())
-            self.metrics_figure_label.setText("(Train a model to see visualizations)")
+        if hasattr(self, "metrics_split_tabs"):
+            while self.metrics_split_tabs.count():
+                self.metrics_split_tabs.removeTab(0)
+            _ph = QLabel("Train a model to see evaluation metrics here.")
+            _ph.setAlignment(Qt.AlignCenter)
+            _ph.setStyleSheet("color:#555; font-size:13px; background:#111;")
+            self.metrics_split_tabs.addTab(_ph, "—")
 
     # ================== Model-Space Projections ==================
 
     def _set_model_projection_buttons_enabled(self, enabled: bool) -> None:
         """Enable/disable model-space projection toggles together."""
         self.btn_umap_model.setEnabled(enabled)
+        self.btn_umap_model.setVisible(enabled)
         if hasattr(self, "btn_pca_model"):
             self.btn_pca_model.setEnabled(enabled)
+            self.btn_pca_model.setVisible(enabled)
 
     def _switch_projection_space(self, target: str) -> None:
         """Switch explorer between embedding UMAP, model UMAP, and model PCA."""
@@ -7055,6 +10592,8 @@ class MainWindow(QMainWindow):
             model_name = "tiny CNN"
         elif self._active_model_mode == "custom_cnn":
             model_name = "custom CNN"
+        elif self._active_model_mode == "custom_cnn_multihead":
+            model_name = "multi-head custom CNN"
         elif self._trained_classifier is not None:
             model_name = "embedding head"
         else:
@@ -7072,6 +10611,18 @@ class MainWindow(QMainWindow):
             f"Predictions: {_preds_span}"
         )
         self.al_status_label.setTextFormat(Qt.RichText)
+        active_learning_ready = preds_ready
+        self.al_group.setEnabled(active_learning_ready)
+        self.al_status_label.setEnabled(True)
+        self.al_hint_label.setEnabled(True)
+        self.al_disabled_label.setVisible(not active_learning_ready)
+        self.al_group.setToolTip(
+            ""
+            if active_learning_ready
+            else "Load a trained model checkpoint to enable active-learning batch building."
+        )
+        if not active_learning_ready:
+            self.al_candidates_badge.setText("")
 
     def _build_al_batch(self):
         """Launch ALBatchWorker to select the next high-value labeling batch."""
@@ -7091,6 +10642,11 @@ class MainWindow(QMainWindow):
         batch_size = (
             self.al_batch_spin.value() if hasattr(self, "al_batch_spin") else 50
         )
+        balance_mode = (
+            self.al_balance_check.isChecked()
+            if hasattr(self, "al_balance_check")
+            else False
+        )
         labeled_mask = np.array([bool(lbl) for lbl in self.image_labels])
 
         from ..jobs.task_workers import ALBatchWorker
@@ -7101,6 +10657,15 @@ class MainWindow(QMainWindow):
             labeled_mask=labeled_mask,
             cluster_assignments=self.cluster_assignments,
             batch_size=batch_size,
+            balance_mode=balance_mode,
+            image_labels=(
+                list(self.image_labels) if self.image_labels is not None else None
+            ),
+            class_names=(
+                list(self._model_class_names)
+                if self._model_class_names is not None
+                else None
+            ),
         )
         worker.signals.success.connect(self._on_al_batch_success)
         worker.signals.error.connect(
@@ -7110,10 +10675,9 @@ class MainWindow(QMainWindow):
             lambda p, m: self.status.showMessage(f"[AL] {m}") if m else None
         )
         self.al_candidates_badge.setText("  building…")
-        self.al_candidate_list.clear()
-        self.al_candidate_list.show()
-        self.al_start_btn.setEnabled(False)
-        self.al_highlight_btn.setEnabled(False)
+        self._prepared_candidate_source = None
+        self._prepared_candidate_indices = []
+        self._refresh_prepared_candidate_table("Building active-learning batch…")
         self._threadpool_start(worker)
 
     def _on_al_batch_success(self, result):
@@ -7127,95 +10691,154 @@ class MainWindow(QMainWindow):
             for idx in indices:
                 reason_map[int(idx)] = reason
 
-        self.al_candidate_list.clear()
-        for idx in self._al_candidates:
-            idx = int(idx)
-            reason = reason_map.get(idx, "selected")
-            path_name = (
-                self.image_paths[idx].name
-                if idx < len(self.image_paths)
-                else f"img_{idx}"
-            )
-            conf = (
-                float(self._model_probs[idx].max())
-                if self._model_probs is not None
-                else 0.0
-            )
-            pred_col = (
-                int(self._model_probs[idx].argmax())
-                if self._model_probs is not None
-                else 0
-            )
-            pred_class = (
-                self._model_class_names[pred_col]
-                if self._model_class_names and pred_col < len(self._model_class_names)
-                else f"cls_{pred_col}"
-            )
-            item_text = (
-                f"#{idx:5d}  {path_name:<30s}  conf={conf:.3f}  "
-                f"pred={pred_class:<12s}  [{reason}]"
-            )
-            item = QListWidgetItem(item_text)
-            item.setData(Qt.UserRole, idx)
-            if conf < 0.6:
-                from PySide6.QtGui import QColor
-
-                item.setForeground(QColor("#ff9944"))
-            self.al_candidate_list.addItem(item)
-
         n = len(self._al_candidates)
         self.al_candidates_badge.setText(f"  {n} selected")
-        self.al_candidate_list.show()
-        self.al_start_btn.setEnabled(n > 0)
-        self.al_highlight_btn.setEnabled(n > 0)
+        self._prepared_candidate_source = "active"
+        self._prepared_candidate_indices = [int(i) for i in self._al_candidates]
+        self._prepared_candidate_reason_map = reason_map
+        self._refresh_prepared_candidate_table(
+            f"Active-learning batch ready: {n} candidates selected"
+        )
         self.status.showMessage(
-            f"AL batch ready: {n} candidates — click ▶ Label to start"
+            f"Active-learning batch ready: {n} candidates — click Start Labeling to begin"
         )
 
-    def _start_labeling_al_batch(self):
-        """Set AL candidates as the active labeling set and enter labeling mode."""
-        if self._al_candidates is None or len(self._al_candidates) == 0:
+    def _refresh_prepared_candidate_table(self, summary: str | None = None) -> None:
+        """Render the shared candidate table for whichever batch is currently prepared."""
+        if not hasattr(self, "candidate_table"):
+            return
+
+        indices = [int(i) for i in self._prepared_candidate_indices or []]
+        source = self._prepared_candidate_source or ""
+        source_label = {
+            "random": "Random",
+            "active": "Active Learning",
+            "current": "Current",
+        }.get(source, "Prepared")
+
+        self.candidate_table.clearContents()
+        self.candidate_table.setRowCount(len(indices))
+        for row, idx in enumerate(indices):
+            file_name = (
+                self.image_paths[idx].name
+                if 0 <= idx < len(self.image_paths)
+                else f"img_{idx}"
+            )
+            current_label = (
+                self.image_labels[idx]
+                if idx < len(self.image_labels or []) and self.image_labels[idx]
+                else "unlabeled"
+            )
+            if source == "active":
+                reason = self._prepared_candidate_reason_map.get(idx, "selected")
+                conf = (
+                    float(self._model_probs[idx].max())
+                    if self._model_probs is not None and idx < len(self._model_probs)
+                    else 0.0
+                )
+                pred_col = (
+                    int(self._model_probs[idx].argmax())
+                    if self._model_probs is not None and idx < len(self._model_probs)
+                    else 0
+                )
+                pred_class = (
+                    self._model_class_names[pred_col]
+                    if self._model_class_names
+                    and pred_col < len(self._model_class_names)
+                    else f"cls_{pred_col}"
+                )
+                detail = f"pred={pred_class} · conf={conf:.3f} · label={current_label} · {reason}"
+            else:
+                cluster = (
+                    int(self.cluster_assignments[idx])
+                    if self.cluster_assignments is not None
+                    and idx < len(self.cluster_assignments)
+                    else "n/a"
+                )
+                detail = f"cluster={cluster} · label={current_label}"
+
+            source_item = QTableWidgetItem(source_label)
+            source_item.setData(Qt.UserRole, idx)
+            self.candidate_table.setItem(row, 0, source_item)
+            self.candidate_table.setItem(row, 1, QTableWidgetItem(str(idx)))
+            self.candidate_table.setItem(row, 2, QTableWidgetItem(file_name))
+            self.candidate_table.setItem(row, 3, QTableWidgetItem(detail))
+
+        self.candidate_table.setVisible(bool(indices))
+        self.btn_start_labeling.setEnabled(
+            bool(indices) and source in {"random", "active"}
+        )
+        if summary is not None:
+            self.prepared_candidates_summary.setText(summary)
+        elif indices:
+            self.prepared_candidates_summary.setText(
+                f"{source_label} batch prepared: {len(indices)} candidates ready."
+            )
+        else:
+            self.prepared_candidates_summary.setText(
+                "No candidate set prepared yet. Build one from Random Labeling or Active Learning."
+            )
+
+    def _activate_candidate_batch(self, indices: list[int], source: str) -> None:
+        """Set the active labeling candidate set and enter labeling mode."""
+        if not indices:
             return
         self._labeling_flow_mode = "batch"
         self._labeling_navigation_scope = "pool"
-        new_candidates = [int(i) for i in self._al_candidates]
-        # Preserve already-labeled images from the current candidate set so
-        # they remain visible after switching to the AL batch.
+        new_candidates = [int(i) for i in indices]
         labels = self.image_labels or []
         seen = set(new_candidates)
         for i in self.candidate_indices:
             if i not in seen and i < len(labels) and labels[i]:
                 new_candidates.append(i)
                 seen.add(i)
+
         self.candidate_indices = new_candidates
+        self._persist_candidate_indices()
         self.set_explorer_mode("labeling")
+        self.selected_point_index = None
+        self.hover_locked = False
+        self.selection_info.setText(
+            "<div style='line-height:1.5;'>"
+            "<b>Selected Point:</b> none<br>"
+            "<b>Hovered Point:</b> none<br>"
+            "<b>Current Label:</b> unlabeled<br>"
+            "Hover over candidate points to preview, then click to select one for labeling."
+            "</div>"
+        )
         self.tabs.setCurrentIndex(0)
         self.update_explorer_plot(force_fit=True)
+        self.request_update_context_panel()
+        source_text = "active-learning" if source == "active" else "random"
         self.status.showMessage(
-            f"Labeling {len(self.candidate_indices)} AL candidates — "
-            "use label buttons or 1-9 keys"
+            f"Labeling {len(self.candidate_indices)} {source_text} candidates — use label buttons or 1-9 keys"
         )
 
-    def _highlight_al_batch_on_map(self):
-        """Show AL candidates as the candidate set on the Explorer without entering labeling mode."""
-        if self._al_candidates is None or len(self._al_candidates) == 0:
+    def _start_prepared_labeling_batch(self):
+        """Start labeling using whichever candidate batch is currently prepared."""
+        indices = [int(i) for i in self._prepared_candidate_indices or []]
+        source = self._prepared_candidate_source
+        if not indices or source not in {"random", "active"}:
             return
-        self.candidate_indices = [int(i) for i in self._al_candidates]
-        self.tabs.setCurrentIndex(0)
-        self.update_explorer_plot(force_fit=True)
-        self.status.showMessage(
-            f"Highlighted {len(self.candidate_indices)} AL candidates on map"
+        self._activate_candidate_batch(indices, source)
+        self._prepared_candidate_source = "current"
+        self._prepared_candidate_indices = [int(i) for i in self.candidate_indices]
+        self._prepared_candidate_reason_map = {}
+        self._refresh_prepared_candidate_table(
+            f"Current candidate set: {len(self.candidate_indices)} items ready for labeling"
         )
 
-    def _al_candidate_goto(self, item):
-        """Jump explorer to the selected candidate when double-clicked in Batch Builder."""
-        idx = item.data(Qt.UserRole)
-        if idx is not None and 0 <= int(idx) < len(self.image_paths):
-            self.selected_point_index = int(idx)
+    def _prepared_candidate_goto(self, item):
+        """Jump explorer to a prepared candidate when double-clicked in the shared table."""
+        row = item.row()
+        if row < 0 or row >= len(self._prepared_candidate_indices):
+            return
+        idx = int(self._prepared_candidate_indices[row])
+        if 0 <= idx < len(self.image_paths):
+            self.selected_point_index = idx
             self.tabs.setCurrentIndex(0)
             self.update_explorer_plot()
-            self.load_preview_for_index(int(idx))
-            self.load_preview_for_index(int(idx))
+            self.load_preview_for_index(idx)
 
     def enter_review_mode(self) -> None:
         """Switch explorer into machine-label review mode."""
@@ -7604,6 +11227,8 @@ class MainWindow(QMainWindow):
 
     def approve_selected_review_label(self) -> None:
         """Mark the currently selected machine label as verified."""
+        if self.explorer_mode != "review":
+            return
         if self.selected_point_index is None:
             QMessageBox.information(
                 self,
@@ -7632,6 +11257,8 @@ class MainWindow(QMainWindow):
 
         db = ClassKitDB(self.db_path)
         path = self.image_paths[self.selected_point_index]
+        approved_index = self.selected_point_index
+        old_pos = self._review_candidate_position(approved_index)
         updated = db.mark_labels_verified([path])
         if updated:
             refreshed = db.get_label_review_status_by_path().get(str(path), status)
@@ -7644,12 +11271,24 @@ class MainWindow(QMainWindow):
                 auto_label_metadata=refreshed.get("auto_label_metadata"),
                 verified_at=refreshed.get("verified_at"),
             )
+            # Record in review history and refresh the strip
+            self.review_history.append(
+                {
+                    "index": approved_index,
+                    "label": refreshed.get("label") or status.get("label"),
+                    "approved": True,
+                }
+            )
+            self.request_refresh_review_history_strip()
+
             self.status.showMessage(f"Approved label for {Path(path).name}", 4000)
-            self.update_context_panel()
-            self.load_preview_for_index(self.selected_point_index, source="selection")
+
+            self._advance_review_selection_after_resolution(old_pos)
 
     def reject_selected_review_label(self) -> None:
-        """Clear the currently selected machine label without touching verified labels."""
+        """Replace the selected machine label with a human-reviewed label."""
+        if self.explorer_mode != "review":
+            return
         if self.selected_point_index is None:
             QMessageBox.information(
                 self,
@@ -7678,26 +11317,28 @@ class MainWindow(QMainWindow):
 
         db = ClassKitDB(self.db_path)
         path = self.image_paths[self.selected_point_index]
-        db.update_labels_batch({str(path): None})
+        rejected_index = self.selected_point_index
+        rejected_label = status.get("label")
+        replacement_label = self._prompt_review_relabel_choice(status)
+        if replacement_label is None:
+            return
+
+        old_pos = self._review_candidate_position(rejected_index)
+        db.update_labels_batch({str(path): replacement_label})
         self._reload_label_state_from_db(db)
         self.update_explorer_plot()
-        self.update_context_panel()
 
-        if self.explorer_mode == "review":
-            if self._review_candidate_indices:
-                if self.selected_point_index not in self._review_candidate_indices:
-                    self.selected_point_index = self._review_candidate_indices[0]
-                self.load_preview_for_index(
-                    self.selected_point_index, source="selection"
-                )
-            else:
-                self.selected_point_index = None
-                self.set_explorer_mode("explore")
-                self.clear_preview_display()
-        elif self.selected_point_index is not None:
-            self.load_preview_for_index(self.selected_point_index, source="selection")
+        # Record in review history
+        self.review_history.append(
+            {"index": rejected_index, "label": rejected_label, "approved": False}
+        )
+        self.request_refresh_review_history_strip()
+        self.status.showMessage(
+            f"Rejected machine label for {Path(path).name}; assigned {replacement_label}",
+            4000,
+        )
 
-        self.status.showMessage(f"Rejected machine label for {Path(path).name}", 4000)
+        self._advance_review_selection_after_resolution(old_pos)
 
     def approve_all_machine_labels(self) -> None:
         """Bulk-approve every unverified machine-generated label in the project."""
@@ -7854,23 +11495,19 @@ class MainWindow(QMainWindow):
                 skipped_verified += 1
                 continue
 
-            pred_idx = int(np.argmax(self._model_probs[index]))
-            if pred_idx >= len(self._model_class_names):
-                skipped_unknown += 1
-                continue
-            predicted_label = str(self._model_class_names[pred_idx])
-            if predicted_label not in self.classes:
+            prediction_payload = self._review_prediction_for_index(index)
+            if prediction_payload is None:
                 skipped_unknown += 1
                 continue
 
-            confidence = float(np.max(self._model_probs[index]))
+            predicted_label = str(prediction_payload["label"])
+            confidence = float(prediction_payload["confidence"])
             updates[str(path)] = (predicted_label, confidence)
             prediction_metadata = {
                 "provider": model_provider,
-                "active_model_mode": self._active_model_mode,
-                "predicted_index": pred_idx,
                 "scope": scope_label,
             }
+            prediction_metadata.update(prediction_payload.get("metadata") or {})
             if model_metadata:
                 prediction_metadata.update(model_metadata)
             metadata_by_path[str(path)] = prediction_metadata

@@ -8,6 +8,16 @@ from typing import List, Tuple
 from tqdm import tqdm
 
 
+def _resolve_destination_path(dest_dir: Path, src_path: Path) -> Path:
+    """Return a collision-safe destination path within one split/class directory."""
+    dest_path = dest_dir / src_path.name
+    counter = 1
+    while dest_path.exists():
+        dest_path = dest_dir / f"{src_path.stem}_{counter}{src_path.suffix}"
+        counter += 1
+    return dest_path
+
+
 def export_to_imagefolder(
     dataset_root: Path,
     images: List[Tuple[Path, str, str]],  # (source_path, label, split)
@@ -37,9 +47,7 @@ def export_to_imagefolder(
         dest_dir = dataset_root / split / label
         dest_dir.mkdir(parents=True, exist_ok=True)
 
-        dest_path = dest_dir / src_path.name
-
-        # Handle duplicates? Simple overwrite for now
+        dest_path = _resolve_destination_path(dest_dir, src_path)
         if copy:
             shutil.copy2(src_path, dest_path)
         else:

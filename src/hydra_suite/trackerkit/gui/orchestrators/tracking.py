@@ -21,7 +21,10 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from hydra_suite.core.identity.properties.export import build_pose_keypoint_labels
+from hydra_suite.core.identity.properties.export import (
+    DETECTED_HEADING_COLUMNS,
+    build_pose_keypoint_labels,
+)
 from hydra_suite.runtime.compute_runtime import (
     derive_detection_runtime_settings,
     derive_pose_runtime_settings,
@@ -36,6 +39,7 @@ from hydra_suite.utils.video_artifacts import (
     choose_writable_artifact_base_dir,
     find_existing_detection_cache_path,
 )
+from hydra_suite.utils.video_encoder import VideoEncoder
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.config.schemas import TrackerConfig
@@ -71,7 +75,8 @@ class TrackingOrchestrator:
         rich_path = self._rich_export_path(final_csv_path)
         legacy_path = self._rich_export_path(final_csv_path, legacy=True)
         try:
-            rich_df.to_csv(rich_path, index=False)
+            cleaned_df = self._drop_empty_rich_export_columns(rich_df)
+            cleaned_df.to_csv(rich_path, index=False)
             if legacy_path != rich_path and os.path.exists(legacy_path):
                 os.remove(legacy_path)
         except Exception:
@@ -82,6 +87,20 @@ class TrackingOrchestrator:
         if legacy_path != rich_path:
             logger.info("Legacy rich-export alias removed: %s", legacy_path)
         return rich_path
+
+    @staticmethod
+    def _drop_empty_rich_export_columns(rich_df: pd.DataFrame) -> pd.DataFrame:
+        """Remove columns that carry no information in the current export."""
+        keep_columns: list[str] = []
+        for column in rich_df.columns:
+            series = rich_df[column]
+            if series.isna().all():
+                continue
+            non_null = series.dropna()
+            if not non_null.empty and non_null.astype(str).str.strip().eq("").all():
+                continue
+            keep_columns.append(column)
+        return rich_df.loc[:, keep_columns].copy()
 
     def _remove_legacy_rich_exports(self, final_csv_path: str) -> None:
         """Remove any stale rich-export CSV variants next to *final_csv_path*."""
@@ -240,6 +259,11 @@ class TrackingOrchestrator:
         self._request_qthread_stop(
             getattr(self._mw, "merge_worker", None), "MergeWorker", timeout_ms=1200
         )
+        self._request_qthread_stop(
+            getattr(self._mw, "postprocess_worker", None),
+            "PostProcessWorker",
+            timeout_ms=1200,
+        )
         self._request_qthread_stop(self._mw.dataset_worker, "DatasetGenerationWorker")
         self._request_qthread_stop(self._mw.interp_worker, "InterpolatedCropsWorker")
         self._request_qthread_stop(
@@ -250,6 +274,7 @@ class TrackingOrchestrator:
 
         self._cleanup_thread_reference("_cache_builder_worker")
         self._cleanup_thread_reference("merge_worker")
+        self._cleanup_thread_reference("postprocess_worker")
         self._cleanup_thread_reference("dataset_worker")
         self._cleanup_thread_reference("interp_worker")
         self._cleanup_thread_reference("final_media_export_worker")
@@ -623,13 +648,16 @@ class TrackingOrchestrator:
         # Store tracking frame size for fit-to-screen calculation
         self._mw._tracking_frame_size = (w, h)
 
+        # Cache last frame so zoom changes can re-render from the current frame
+        self._mw._last_tracking_frame_rgb = rgb
+
         qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888)
 
         # ROI masking is now done in tracking worker - no need to duplicate here
         scaled = qimg.scaled(
             int(w * z), int(h * z), Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self._mw.video_label.setPixmap(QPixmap.fromImage(scaled))
+        self._mw._set_video_pixmap(QPixmap.fromImage(scaled))
 
         # Auto-fit to screen on first frame of tracking
         if self._mw._tracking_first_frame:
@@ -846,6 +874,9 @@ class TrackingOrchestrator:
             max_gap,
             tag_cache_path=_tag_cache_path,
             heading_flip_max_burst=heading_flip_max_burst,
+            directed_heading_posthoc=bool(
+                current_params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+            ),
             enable_profiling=_enable_profiling,
             profile_export_path=_merge_profile_path,
         )
@@ -1012,26 +1043,103 @@ class TrackingOrchestrator:
                 parts.append(f"{label}={count}")
         return ", ".join(parts) if parts else "none"
 
-    def _log_pose_augmented_merge_summary(self, with_pose_df):
-        """Log how many rows were retained or backfilled into pose-augmented output."""
-        detection_pose_rows, interpolated_pose_rows = self._count_augmented_pose_rows(
-            with_pose_df
+    def _log_rich_export_summary(self, df: pd.DataFrame) -> None:
+        """Log a structured per-source fill-rate summary for the rich export CSV."""
+        total = len(df)
+        if total == 0:
+            logger.info("Rich export summary: 0 rows — nothing to summarize.")
+            return
+
+        def fill(col: str) -> int:
+            return int(df[col].notna().sum()) if col in df.columns else 0
+
+        def fill_any(cols: list) -> int:
+            present = [c for c in cols if c in df.columns]
+            if not present:
+                return 0
+            return int(df[present].notna().any(axis=1).sum())
+
+        def pct(n: int) -> str:
+            return f"{100.0 * n / total:.1f}%" if total > 0 else "—"
+
+        lines = [f"Rich export summary — {total:,} rows"]
+
+        # --- pose (detection-keyed vs interpolated) ---
+        pose_cols = [c for c in df.columns if str(c).startswith("Pose")]
+        kpt_x_cols = [
+            c
+            for c in df.columns
+            if str(c).startswith("PoseKpt_") and str(c).endswith("_X")
+        ]
+        if pose_cols:
+            det_present = pd.to_numeric(df.get("DetectionID"), errors="coerce").notna()
+            pose_any = df[pose_cols].notna().any(axis=1)
+            det_pose = int((det_present & pose_any).sum())
+            interp_pose = int((~det_present & pose_any).sum())
+            lines.append(
+                f"  Pose (detection-keyed)   : {det_pose:>6,} / {total:,}  ({pct(det_pose)})"
+            )
+            if interp_pose:
+                lines.append(
+                    f"  Pose (interpolated)      : {interp_pose:>6,} / {total:,}  ({pct(interp_pose)})"
+                )
+
+        # --- detected heading ---
+        heading_cols = [c for c in DETECTED_HEADING_COLUMNS if c in df.columns]
+        if heading_cols:
+            h_fill = fill_any(heading_cols)
+            lines.append(
+                f"  Detected heading         : {h_fill:>6,} / {total:,}  ({pct(h_fill)})"
+            )
+
+        # --- detected CNN per label ---
+        cnn_class_cols = [c for c in df.columns if re.match(r"^CNN_.+_Class$", str(c))]
+        cnn_labels = sorted(
+            {re.match(r"^CNN_(.+)_Class$", str(c)).group(1) for c in cnn_class_cols}
         )
-        interp_tag_rows = int(
-            with_pose_df.get("InterpTagID", pd.Series(dtype=float)).notna().sum()
-        )
-        interp_headtail_rows = int(
-            with_pose_df.get("InterpHeadingRad", pd.Series(dtype=float)).notna().sum()
-        )
-        cnn_summary = self._count_interpolated_cnn_rows(with_pose_df)
-        logger.info(
-            "Pose-augmented merge summary: detection pose rows=%d, interpolated pose rows=%d, interpolated tag rows=%d, interpolated head-tail rows=%d, interpolated CNN rows=%s",
-            detection_pose_rows,
-            interpolated_pose_rows,
-            interp_tag_rows,
-            interp_headtail_rows,
-            cnn_summary,
-        )
+        for lbl in cnn_labels:
+            n = fill_any([f"CNN_{lbl}_Class", f"CNN_{lbl}_Conf"])
+            lines.append(
+                f"  CNN [{lbl}]               : {n:>6,} / {total:,}  ({pct(n)})"
+            )
+
+        # --- interpolated AprilTag ---
+        if "InterpTagID" in df.columns:
+            n = fill("InterpTagID")
+            if n:
+                lines.append(
+                    f"  AprilTag (interpolated)  : {n:>6,} / {total:,}  ({pct(n)})"
+                )
+
+        # --- interpolated head-tail ---
+        if "InterpHeadingRad" in df.columns:
+            n = fill("InterpHeadingRad")
+            if n:
+                lines.append(
+                    f"  Head-tail (interpolated) : {n:>6,} / {total:,}  ({pct(n)})"
+                )
+
+        # --- per-keypoint fill rates (grouped 4 per line) ---
+        if kpt_x_cols:
+            _kpt_re = re.compile(r"^PoseKpt_(.+)_X$")
+            kpt_entries = []
+            for col in kpt_x_cols:
+                m = _kpt_re.match(str(col))
+                if m:
+                    kpt_entries.append(f"{m.group(1)}: {pct(fill(col))}")
+            if kpt_entries:
+                lines.append("  Per-keypoint fill:")
+                for i in range(0, len(kpt_entries), 4):
+                    lines.append(
+                        "    " + "   ".join(f"{s:<22}" for s in kpt_entries[i : i + 4])
+                    )
+
+        # --- trajectory count ---
+        if "TrajectoryID" in df.columns:
+            n_tracks = int(df["TrajectoryID"].nunique())
+            lines.append(f"  Unique trajectories      : {n_tracks:,}")
+
+        logger.info("\n".join(lines))
 
     def _on_interpolated_crops_finished(self, result):
         sender = None
@@ -1092,9 +1200,7 @@ class TrackingOrchestrator:
         self._mw._refresh_progress_visibility()
 
         if self._mw._pending_pose_export_csv_path:
-            self._relink_final_pose_augmented_csv(
-                self._mw._pending_pose_export_csv_path
-            )
+            self._relink_and_export_rich_csv(self._mw._pending_pose_export_csv_path)
 
         if self._mw._pending_finish_after_interp:
             self._mw._pending_finish_after_interp = False
@@ -1563,6 +1669,7 @@ class TrackingOrchestrator:
         _track_ids = trajectories_df["TrajectoryID"].to_numpy(dtype=np.int32)
         _xs = trajectories_df["X"].to_numpy(dtype=np.float64)
         _ys = trajectories_df["Y"].to_numpy(dtype=np.float64)
+        _label_texts = self._build_video_track_label_array(trajectories_df)
         _thetas = (
             trajectories_df["Theta"].to_numpy(dtype=np.float64)
             if "Theta" in trajectories_df.columns
@@ -1611,6 +1718,7 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
@@ -1618,8 +1726,166 @@ class TrackingOrchestrator:
             _track_sorted_frame_vals,
         )
 
-    def _build_precomputed_color_palette(self, colors, _track_ids):
-        """Build per-track-ID precomputed color list and return (palette, category20)."""
+    def _format_video_track_label(self, track_id, unique_identity_key=None) -> str:
+        """Return the overlay label for one rendered track row."""
+        token = (
+            str(unique_identity_key).strip() if unique_identity_key is not None else ""
+        )
+        if token and token.lower() != "nan":
+            try:
+                from hydra_suite.core.post.identity_postprocess import (
+                    parse_identity_key,
+                )
+
+                parsed = parse_identity_key(token)
+            except Exception:
+                parsed = {}
+            if parsed:
+                compact_parts = []
+                cnn_parts_by_label: dict[str, list[str]] = {}
+                for source in sorted(parsed):
+                    value = str(parsed[source]).strip()
+                    if not value:
+                        continue
+                    if source == "apriltag":
+                        compact_parts.append(f"Tag {value}")
+                        continue
+                    if source.startswith("cnn:"):
+                        parts = source.split(":")
+                        label = parts[1] if len(parts) >= 2 else source
+                        compact_value = value
+                        if len(parts) >= 3:
+                            compact_value = value
+                        elif "+" in value:
+                            pieces = []
+                            for item in value.split("+"):
+                                item = str(item).strip()
+                                if not item:
+                                    continue
+                                if ":" in item:
+                                    item = str(item.split(":", 1)[1]).strip()
+                                if item:
+                                    pieces.append(item)
+                            if pieces:
+                                compact_value = " / ".join(pieces)
+                        if compact_value:
+                            cnn_parts_by_label.setdefault(label, []).append(
+                                compact_value
+                            )
+                        continue
+                    compact_parts.append(f"{source}={value}")
+                for label in sorted(cnn_parts_by_label):
+                    values = [value for value in cnn_parts_by_label[label] if value]
+                    if not values:
+                        continue
+                    compact_parts.append(
+                        values[0] if len(values) == 1 else " / ".join(values)
+                    )
+                if compact_parts:
+                    return " | ".join(compact_parts)
+            return token
+        return f"ID{track_id}"
+
+    def _build_video_track_label_array(self, trajectories_df):
+        """Precompute one overlay label per row using stable identity when available.
+
+        Checks identity columns in priority order (same as color key resolution):
+        UniqueIdentityKey → IdentityAssignedLabel → IdentityOfflineLabel →
+        IdentitySmoothedLabel.  Falls back to ``"ID{TrajectoryID}"`` when none
+        are available for a row.
+        """
+        if trajectories_df is None or len(trajectories_df) == 0:
+            return np.asarray([], dtype=object)
+
+        identity_columns = [
+            "UniqueIdentityKey",
+            "IdentityAssignedLabel",
+            "IdentityOfflineLabel",
+            "IdentitySmoothedLabel",
+        ]
+        track_ids = trajectories_df["TrajectoryID"].tolist()
+        labels = []
+        for row_index, track_id in enumerate(track_ids):
+            chosen_token = None
+            for column in identity_columns:
+                if column not in trajectories_df.columns:
+                    continue
+                token = self._normalize_video_identity_color_key(
+                    trajectories_df.iloc[row_index][column]
+                )
+                if token:
+                    chosen_token = token
+                    break
+            labels.append(self._format_video_track_label(track_id, chosen_token))
+        return np.asarray(labels, dtype=object)
+
+    def _normalize_video_identity_color_key(self, value):
+        """Return a stable identity color key token or an empty string.
+
+        Treats values that are missing, NaN, the bare word ``"unknown"``, or a
+        source-keyed identity string whose every value is empty/``"unknown"``
+        as having no identity — so the caller falls back to TrajectoryID for
+        both labels and colors.
+        """
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        token = str(value).strip()
+        if not token or token.lower() == "nan":
+            return ""
+        if token.lower() == "unknown":
+            return ""
+        try:
+            from hydra_suite.core.post.identity_postprocess import parse_identity_key
+
+            parsed = parse_identity_key(token)
+        except Exception:
+            parsed = {}
+        if parsed:
+            informative_values = [
+                str(v).strip()
+                for v in parsed.values()
+                if str(v).strip() and str(v).strip().lower() != "unknown"
+            ]
+            if not informative_values:
+                return ""
+        return token
+
+    def _build_video_track_color_key_array(self, trajectories_df):
+        """Precompute one color key per row, preferring identity evidence over TrajectoryID."""
+        if trajectories_df is None or len(trajectories_df) == 0:
+            return np.asarray([], dtype=object)
+
+        identity_columns = [
+            "UniqueIdentityKey",
+            "IdentityAssignedLabel",
+            "IdentityOfflineLabel",
+            "IdentitySmoothedLabel",
+        ]
+        track_ids = trajectories_df["TrajectoryID"].tolist()
+        color_keys = []
+        for row_index, track_id in enumerate(track_ids):
+            chosen_key = ""
+            for column in identity_columns:
+                if column not in trajectories_df.columns:
+                    continue
+                token = self._normalize_video_identity_color_key(
+                    trajectories_df.iloc[row_index][column]
+                )
+                if token:
+                    chosen_key = f"identity:{token}"
+                    break
+            if not chosen_key:
+                chosen_key = f"trajectory:{int(track_id)}"
+            color_keys.append(chosen_key)
+        return np.asarray(color_keys, dtype=object)
+
+    def _build_precomputed_color_palette(self, colors, _track_ids, color_keys):
+        """Build per-row colors, reusing one color for rows with the same identity key."""
         _category20_colors = [
             (127, 127, 31),
             (188, 189, 34),
@@ -1643,16 +1909,32 @@ class TrackingOrchestrator:
             (140, 162, 82),
         ]
         _n_cat = len(_category20_colors)
-        _max_track = int(_track_ids.max()) if len(_track_ids) > 0 else 0
-        _precomputed_colors = [
-            (
-                colors[_tid]
+
+        def _fallback_color(_track_id):
+            _tid = int(_track_id)
+            return (
+                tuple(colors[_tid])
                 if colors and _tid < len(colors)
                 else _category20_colors[_tid % _n_cat]
             )
-            for _tid in range(_max_track + 1)
-        ]
-        return _precomputed_colors, _category20_colors
+
+        _identity_palette = {}
+        _next_identity_color_idx = 0
+        _row_colors = []
+        for _tid, _key in zip(_track_ids.tolist(), color_keys.tolist()):
+            _key_token = str(_key)
+            if _key_token.startswith("identity:"):
+                if _key_token not in _identity_palette:
+                    _identity_palette[_key_token] = (
+                        tuple(colors[_next_identity_color_idx])
+                        if colors and _next_identity_color_idx < len(colors)
+                        else _category20_colors[_next_identity_color_idx % _n_cat]
+                    )
+                    _next_identity_color_idx += 1
+                _row_colors.append(_identity_palette[_key_token])
+                continue
+            _row_colors.append(_fallback_color(_tid))
+        return _row_colors
 
     def _draw_trail_for_track(
         self,
@@ -1710,6 +1992,7 @@ class TrackingOrchestrator:
         draw_p,
         _thetas,
         _pose_kpts,
+        _label_texts,
         pose_edges,
     ):
         """Draw circle, label, orientation arrow, and pose for a single track."""
@@ -1720,7 +2003,7 @@ class TrackingOrchestrator:
             label_offset = int(marker_radius + 5)
             cv2.putText(
                 frame,
-                f"ID{track_id}",
+                str(_label_texts[row_i]),
                 (cx + label_offset, cy - label_offset),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 draw_p["text_size"],
@@ -1816,16 +2099,14 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
             _track_sorted_row_indices,
             _track_sorted_frame_vals,
-            _precomputed_colors,
-            _category20_colors,
+            _row_colors,
         ) = arrays
-
-        _n_cat = len(_category20_colors)
         _write_q: _queue.Queue = _queue.Queue(maxsize=4)
 
         def _writer_thread():
@@ -1849,11 +2130,7 @@ class TrackingOrchestrator:
             if draw_p["show_trails"]:
                 for row_i in frame_row_indices:
                     track_id = int(_track_ids[row_i])
-                    color = (
-                        _precomputed_colors[track_id]
-                        if track_id < len(_precomputed_colors)
-                        else _category20_colors[track_id % _n_cat]
-                    )
+                    color = tuple(_row_colors[row_i])
                     self._draw_trail_for_track(
                         frame,
                         track_id,
@@ -1873,11 +2150,7 @@ class TrackingOrchestrator:
                 if np.isnan(cx_f) or np.isnan(cy_f):
                     continue
                 cx, cy = int(cx_f), int(cy_f)
-                color = (
-                    _precomputed_colors[track_id]
-                    if track_id < len(_precomputed_colors)
-                    else _category20_colors[track_id % _n_cat]
-                )
+                color = tuple(_row_colors[row_i])
                 self._draw_single_track_on_frame(
                     frame,
                     row_i,
@@ -1888,6 +2161,7 @@ class TrackingOrchestrator:
                     draw_p,
                     _thetas,
                     _pose_kpts if show_pose else None,
+                    _label_texts,
                     pose_edges,
                 )
 
@@ -1911,9 +2185,11 @@ class TrackingOrchestrator:
         total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-        if not out.isOpened():
+        try:
+            out = VideoEncoder(
+                output_path, fps=fps, width=frame_width, height=frame_height
+            )
+        except Exception:
             logger.error(f"Failed to create output video: {output_path}")
             cap.release()
             return None
@@ -2001,6 +2277,7 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
@@ -2009,8 +2286,9 @@ class TrackingOrchestrator:
         ) = self._preextract_traj_arrays(
             trajectories_df, show_pose, pose_column_triplets, draw_p["show_trails"]
         )
-        _precomputed_colors, _category20_colors = self._build_precomputed_color_palette(
-            draw_p["colors"], _track_ids
+        _color_keys = self._build_video_track_color_key_array(trajectories_df)
+        _row_colors = self._build_precomputed_color_palette(
+            draw_p["colors"], _track_ids, _color_keys
         )
 
         arrays = (
@@ -2018,13 +2296,13 @@ class TrackingOrchestrator:
             _track_ids,
             _xs,
             _ys,
+            _label_texts,
             _thetas,
             _pose_kpts,
             traj_indices_by_frame,
             _track_sorted_row_indices,
             _track_sorted_frame_vals,
-            _precomputed_colors,
-            _category20_colors,
+            _row_colors,
         )
         self._render_annotated_video_frames(
             cap, out, start_frame, total_frames, draw_p, pose_edges, show_pose, arrays
@@ -2059,36 +2337,6 @@ class TrackingOrchestrator:
                 "Preview Interrupted",
                 "Preview was stopped or encountered an error.",
             )
-
-    def _run_postprocessing(self, full_traj, is_backward_mode, is_backward_enabled):
-        """Apply post-processing to trajectories and return processed result."""
-        from hydra_suite.core.post.processing import (
-            process_trajectories,
-            process_trajectories_from_csv,
-        )
-
-        params = self._mw.get_parameters_dict()
-        raw_csv_path = self._panels.setup.csv_line.text()
-
-        if is_backward_mode and raw_csv_path:
-            base, ext = os.path.splitext(raw_csv_path)
-            csv_to_process = f"{base}_backward{ext}"
-        elif is_backward_enabled and raw_csv_path:
-            base, ext = os.path.splitext(raw_csv_path)
-            csv_to_process = f"{base}_forward{ext}"
-        else:
-            csv_to_process = raw_csv_path
-
-        if csv_to_process and os.path.exists(csv_to_process):
-            processed_trajectories, stats = process_trajectories_from_csv(
-                csv_to_process, params
-            )
-            logger.info(f"Post-processing stats: {stats}")
-        else:
-            processed_trajectories, stats = process_trajectories(full_traj, params)
-            logger.info(f"Post-processing stats (fallback): {stats}")
-
-        return processed_trajectories
 
     def _handle_forward_tracking_done(
         self, processed_trajectories, is_backward_enabled, fps_list
@@ -2144,11 +2392,15 @@ class TrackingOrchestrator:
                 heading_flip_max_burst = (
                     self._panels.postprocess.spin_heading_flip_max_burst.value()
                 )
+                current_params = self._mw.get_parameters_dict()
                 processed_trajectories = interpolate_trajectories(
                     processed_trajectories,
                     method=interp_method,
                     max_gap=max_gap,
                     heading_flip_max_burst=heading_flip_max_burst,
+                    directed_heading_posthoc=bool(
+                        current_params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+                    ),
                 )
 
             resize_factor = self._panels.setup.spin_resize.value()
@@ -2333,11 +2585,70 @@ class TrackingOrchestrator:
         self._accumulate_session_fps(fps_list, is_backward_mode)
         is_backward_enabled = self._panels.tracking.chk_enable_backward.isChecked()
 
-        processed_trajectories = full_traj
-        if self._panels.postprocess.enable_postprocessing.isChecked():
-            processed_trajectories = self._run_postprocessing(
-                full_traj, is_backward_mode, is_backward_enabled
-            )
+        self._mw._postprocess_is_backward_mode = is_backward_mode
+        self._mw._postprocess_is_backward_enabled = is_backward_enabled
+        self._mw._postprocess_fps_list = fps_list
+
+        self._start_postprocess_worker(is_backward_mode, is_backward_enabled)
+
+    def _start_postprocess_worker(self, is_backward_mode, is_backward_enabled):
+        """Launch PostProcessWorker to clean raw trajectory CSV in the background."""
+        from hydra_suite.trackerkit.gui.workers.postprocess_worker import (
+            PostProcessWorker,
+        )
+
+        params = self._mw.get_parameters_dict()
+        raw_csv_path = self._panels.setup.csv_line.text()
+
+        if is_backward_mode:
+            base, ext = os.path.splitext(raw_csv_path)
+            csv_to_process = f"{base}_backward{ext}"
+        elif is_backward_enabled:
+            base, ext = os.path.splitext(raw_csv_path)
+            csv_to_process = f"{base}_forward{ext}"
+        else:
+            csv_to_process = raw_csv_path
+
+        clean = self._panels.postprocess.enable_postprocessing.isChecked()
+
+        self._mw.progress_bar.setVisible(True)
+        self._mw.progress_label.setVisible(True)
+        self._mw.progress_bar.setValue(0)
+        self._mw.progress_label.setText("Post-processing trajectories...")
+
+        self._mw.postprocess_worker = PostProcessWorker(
+            csv_to_process, params, clean=clean
+        )
+        self._mw.postprocess_worker.progress_signal.connect(
+            self.on_postprocess_progress
+        )
+        self._mw.postprocess_worker.finished_signal.connect(
+            self.on_postprocess_finished
+        )
+        self._mw.postprocess_worker.error_signal.connect(self.on_postprocess_error)
+        self._mw.postprocess_worker.start()
+
+    def on_postprocess_progress(self, value, message):
+        """Update progress bar during post-processing."""
+        if self._mw._stop_all_requested:
+            return
+        self._mw.progress_bar.setValue(value)
+        self._mw.progress_label.setText(message)
+
+    def on_postprocess_finished(self, processed_trajectories):
+        """Route processed trajectories to the appropriate pipeline stage."""
+        self._cleanup_thread_reference("postprocess_worker")
+        if self._mw._stop_all_requested:
+            self._mw._refresh_progress_visibility()
+            return
+        self._mw.progress_bar.setVisible(False)
+        self._mw.progress_label.setVisible(False)
+
+        is_backward_mode = getattr(self._mw, "_postprocess_is_backward_mode", False)
+        is_backward_enabled = getattr(
+            self._mw, "_postprocess_is_backward_enabled", False
+        )
+        fps_list = getattr(self._mw, "_postprocess_fps_list", [])
 
         if not is_backward_mode:
             self._handle_forward_tracking_done(
@@ -2345,6 +2656,21 @@ class TrackingOrchestrator:
             )
         else:
             self._handle_backward_tracking_done(processed_trajectories)
+
+    def on_postprocess_error(self, error_message):
+        """Handle post-processing errors."""
+        self._cleanup_thread_reference("postprocess_worker")
+        if self._mw._stop_all_requested:
+            self._mw._refresh_progress_visibility()
+            return
+        self._mw.progress_bar.setVisible(False)
+        self._mw.progress_label.setVisible(False)
+        QMessageBox.critical(
+            self._mw,
+            "Post-Processing Error",
+            f"Error during trajectory post-processing:\n{error_message}",
+        )
+        logger.error(f"Trajectory post-processing error: {error_message}")
 
     def _check_pose_export_sources(self):
         """Return (has_other_analyses, cache_path, cache_available, interp_pose_path,
@@ -2454,6 +2780,30 @@ class TrackingOrchestrator:
                 _cnn_path,
                 label=str(_cnn_label),
             )
+
+        _tag_cache_path = self._resolve_current_tag_cache_path()
+        if _tag_cache_path and os.path.exists(_tag_cache_path):
+            try:
+                from hydra_suite.core.identity.properties.export import (
+                    augment_trajectories_with_detected_apriltag_cache,
+                )
+
+                _tag_labels = [
+                    str(_lbl)
+                    for _lbl in (
+                        self._mw.get_parameters_dict().get("TAG_IDENTITY_LABELS", [])
+                        or []
+                    )
+                ]
+                with_pose_df = augment_trajectories_with_detected_apriltag_cache(
+                    with_pose_df,
+                    _tag_cache_path,
+                    tag_labels=_tag_labels,
+                )
+            except Exception:
+                logger.debug(
+                    "Detection-level AprilTag augmentation skipped.", exc_info=True
+                )
 
         if cache_available:
             min_valid_conf = float(
@@ -2688,8 +3038,146 @@ class TrackingOrchestrator:
                 )
         return with_pose_df
 
-    def _build_pose_augmented_dataframe(self, final_csv_path):
-        """Load final CSV and merge available cached/interpolated pose columns."""
+    def _resolve_current_tag_cache_path(self) -> str:
+        """Return the best available detected AprilTag cache path for this session."""
+        current_params = self._mw.get_parameters_dict()
+        if not bool(current_params.get("USE_APRILTAGS", False)):
+            return ""
+        detection_cache_path = getattr(self._mw, "current_detection_cache_path", None)
+        if not detection_cache_path or not os.path.exists(str(detection_cache_path)):
+            return ""
+        pattern = str(detection_cache_path).replace(".npz", "") + "_tags_*.npz"
+        candidates = sorted(_glob.glob(pattern))
+        return str(candidates[-1]) if candidates else ""
+
+    def _apply_identity_postprocessing_to_df(
+        self, with_pose_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Run identity-aware split/join processing on the augmented dataframe."""
+        if with_pose_df is None or with_pose_df.empty:
+            return with_pose_df
+
+        params = self._mw.get_parameters_dict()
+
+        def _annotate_identity_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
+            out = df.copy()
+            cnn_class_columns = [
+                col
+                for col in out.columns
+                if str(col).startswith("CNN_") and str(col).endswith("_Class")
+            ]
+
+            def _row_sources(row: pd.Series) -> object:
+                sources = []
+                if pd.notna(row.get("DetectedTagID")) or pd.notna(
+                    row.get("InterpTagID")
+                ):
+                    sources.append("apriltag")
+                if any(pd.notna(row.get(col)) for col in cnn_class_columns):
+                    sources.append("cnn")
+                if pd.notna(row.get("IdentityOfflineLabel")) or pd.notna(
+                    row.get("IdentitySmoothedLabel")
+                ):
+                    sources.append("offline")
+                if pd.notna(row.get("IdentityAssignedLabel")) and not sources:
+                    sources.append("online")
+                if not sources:
+                    return np.nan
+                return ",".join(sorted(set(sources)))
+
+            def _row_conflict(row: pd.Series) -> int:
+                assigned = row.get("IdentityAssignedLabel")
+                observed = set()
+                detected_tag_label = row.get("DetectedTagLabel")
+                if pd.notna(detected_tag_label):
+                    observed.add(str(detected_tag_label))
+                for col in cnn_class_columns:
+                    value = row.get(col)
+                    if pd.notna(value):
+                        observed.add(str(value))
+                if pd.notna(assigned):
+                    assigned_label = str(assigned)
+                    if any(label != assigned_label for label in observed):
+                        return 1
+                return 1 if len(observed) > 1 else 0
+
+            out["IdentityEvidenceSources"] = out.apply(_row_sources, axis=1)
+            out["IdentityConflictFlag"] = out.apply(_row_conflict, axis=1).astype(int)
+            return out
+
+        try:
+            # Build catalog the same way as the online decoder: CNN composite
+            # class labels (cartesian product for multi-factor models) followed
+            # by tag labels that match CNN classes.  Using the CNN *phase name*
+            # (e.g. "test") instead of class names was the previous bug — phase
+            # names are model identifiers, not individual animal identities.
+            import itertools as _itertools
+
+            from hydra_suite.core.identity.catalog import IdentityCatalog
+            from hydra_suite.core.identity.fragment_solver import run_fragment_solver
+            from hydra_suite.core.post.identity_postprocess import (
+                fill_identity_nans_with_consensus,
+                sort_trajectories_by_identity,
+            )
+
+            _raw_labels: list[str] = []
+            for _cnn_cfg in params.get("CNN_CLASSIFIERS", []) or []:
+                if not bool(_cnn_cfg.get("unique_identifier", False)):
+                    continue
+                _cnpf = list(_cnn_cfg.get("class_names_per_factor") or [])
+                _non_empty = [fl for fl in _cnpf if fl]
+                if len(_non_empty) > 1:
+                    for _combo in _itertools.product(*_non_empty):
+                        _c = "_".join(str(x) for x in _combo if x)
+                        if _c and _c not in _raw_labels:
+                            _raw_labels.append(_c)
+                elif len(_non_empty) == 1:
+                    for _l in _non_empty[0]:
+                        if _l and str(_l) not in _raw_labels:
+                            _raw_labels.append(str(_l))
+                else:
+                    for _l in _cnn_cfg.get("labels", []) or []:
+                        if _l and str(_l) not in _raw_labels:
+                            _raw_labels.append(str(_l))
+
+            _cnn_label_set = set(_raw_labels)
+            for _lbl in params.get("TAG_IDENTITY_LABELS", []) or []:
+                _s = str(_lbl).strip()
+                if not _s:
+                    continue
+                # When CNN classes are known, only accept tag labels that
+                # match them — prevents garbage composites from entering.
+                if _cnn_label_set and _s not in _cnn_label_set:
+                    continue
+                if _s not in _raw_labels:
+                    _raw_labels.append(_s)
+
+            # Tag-only config (no CNN): accept all tag labels.
+            if not _raw_labels:
+                for _lbl in params.get("TAG_IDENTITY_LABELS", []) or []:
+                    _s = str(_lbl).strip()
+                    if _s and _s not in _raw_labels:
+                        _raw_labels.append(_s)
+
+            if params.get("ENABLE_IDENTITY_FRAGMENT_SOLVER", False) and _raw_labels:
+                try:
+                    catalog = IdentityCatalog.from_labels(_raw_labels)
+                    with_pose_df = run_fragment_solver(with_pose_df, catalog, params)
+                    with_pose_df = _annotate_identity_summary_columns(with_pose_df)
+                    logger.info("Fragment solver complete.")
+                except Exception:
+                    logger.exception("Fragment solver failed; results unchanged.")
+
+            with_pose_df = fill_identity_nans_with_consensus(with_pose_df)
+            with_pose_df = sort_trajectories_by_identity(with_pose_df)
+        except Exception:
+            logger.exception(
+                "Identity-aware post-processing failed; using unmodified rich dataframe."
+            )
+        return _annotate_identity_summary_columns(with_pose_df)
+
+    def _build_rich_export_dataframe(self, final_csv_path):
+        """Load final CSV and merge all available analysis sources into a rich export dataframe."""
         if not final_csv_path or not os.path.exists(final_csv_path):
             return None
 
@@ -2703,9 +3191,6 @@ class TrackingOrchestrator:
             interp_mem_available,
         ) = self._check_pose_export_sources()
 
-        if not self._mw._is_pose_export_enabled() and not _has_other_analyses:
-            return None
-
         if (
             not cache_available
             and not interp_available
@@ -2713,7 +3198,7 @@ class TrackingOrchestrator:
             and not _has_other_analyses
         ):
             logger.warning(
-                "Pose export skipped: no pose sources found (cache=%s, interpolated=%s, in_memory=%s).",
+                "Rich export skipped: no analysis sources found (pose_cache=%s, interp=%s, in_memory=%s).",
                 cache_path or "<empty>",
                 interp_pose_path or "<empty>",
                 bool(interp_mem_available),
@@ -2724,7 +3209,7 @@ class TrackingOrchestrator:
             trajectories_df = pd.read_csv(final_csv_path)
         except Exception:
             logger.exception(
-                "Pose export skipped: failed to load trajectories CSV: %s",
+                "Rich export skipped: failed to load trajectories CSV: %s",
                 final_csv_path,
             )
             return None
@@ -2741,7 +3226,7 @@ class TrackingOrchestrator:
             )
         except Exception:
             logger.exception(
-                "Pose export skipped: failed while merging pose sources (cache=%s, interpolated=%s)",
+                "Rich export skipped: failed while merging sources (pose_cache=%s, interp=%s)",
                 cache_path or "<empty>",
                 interp_pose_path or "<empty>",
             )
@@ -2749,42 +3234,43 @@ class TrackingOrchestrator:
 
         if with_pose_df is None or with_pose_df.empty:
             logger.warning(
-                "Pose export skipped: merged pose dataframe is empty for %s",
+                "Rich export skipped: merged dataframe is empty for %s",
                 final_csv_path,
             )
             return None
 
-        import re as _re
-
-        _kpt_re = _re.compile(r"^PoseKpt_(.+)_X$")
+        _kpt_re = re.compile(r"^PoseKpt_(.+)_X$")
         pose_labels = [
             m.group(1) for col in with_pose_df.columns if (m := _kpt_re.match(str(col)))
         ]
 
+        params = self._mw.get_parameters_dict()
+
         if pose_labels:
-            params = self._mw.get_parameters_dict()
             with_pose_df = self._apply_pose_quality_postprocessing(
                 with_pose_df, pose_labels, params
             )
 
-        self._log_pose_augmented_merge_summary(with_pose_df)
+        with_pose_df = self._apply_identity_postprocessing_to_df(with_pose_df)
+
+        self._log_rich_export_summary(with_pose_df)
 
         return with_pose_df
 
-    def _export_pose_augmented_csv(self, final_csv_path):
+    def _export_rich_csv(self, final_csv_path):
         """Write the rich individual-analysis CSV next to the final CSV."""
-        with_pose_df = self._build_pose_augmented_dataframe(final_csv_path)
+        with_pose_df = self._build_rich_export_dataframe(final_csv_path)
         if with_pose_df is None or with_pose_df.empty:
             return None
 
         return self._write_rich_export_csv(with_pose_df, final_csv_path)
 
-    def _relink_final_pose_augmented_csv(self, final_csv_path):
+    def _relink_and_export_rich_csv(self, final_csv_path):
         """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
         if not final_csv_path or not os.path.exists(final_csv_path):
             return None
 
-        with_pose_df = self._build_pose_augmented_dataframe(final_csv_path)
+        with_pose_df = self._build_rich_export_dataframe(final_csv_path)
         params = self._mw.get_parameters_dict()
 
         try:
@@ -2793,7 +3279,7 @@ class TrackingOrchestrator:
             logger.exception(
                 "Relinking skipped: failed to reload final CSV: %s", final_csv_path
             )
-            return self._export_pose_augmented_csv(final_csv_path)
+            return self._export_rich_csv(final_csv_path)
 
         relink_input_df = (
             with_pose_df
@@ -2908,7 +3394,7 @@ class TrackingOrchestrator:
 
         if final_csv_path:
             self._mw._pending_pose_export_csv_path = final_csv_path
-            self._export_pose_augmented_csv(final_csv_path)
+            self._export_rich_csv(final_csv_path)
 
         self._mw._pending_video_csv_path = final_csv_path
         self._mw._pending_video_generation = bool(
@@ -2932,7 +3418,7 @@ class TrackingOrchestrator:
                 return
 
         if final_csv_path:
-            self._relink_final_pose_augmented_csv(final_csv_path)
+            self._relink_and_export_rich_csv(final_csv_path)
 
         if self._start_pending_final_media_export(final_csv_path):
             return
@@ -3249,62 +3735,22 @@ class TrackingOrchestrator:
                 safe_rt, backend_family=params.get("POSE_MODEL_TYPE", "yolo")
             )
             params["POSE_RUNTIME_FLAVOR"] = safe_pose["pose_runtime_flavor"]
-
-        # Reuse an existing detection cache when one covers the current frame
-        # range — this ensures preview uses the same detections as the autotune
-        # preview instead of re-running live YOLO inference, which can produce
-        # slightly different detection sets and cause visible jumps.
-        start_frame = params.get("START_FRAME", 0)
-        end_frame = params.get("END_FRAME", 0)
-        cache_path, cache_valid = self._mw._find_or_plan_optimizer_cache_path(
-            video_path, params, start_frame, end_frame
+        params["HEADTAIL_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
+            params.get("HEADTAIL_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+        )
+        params["CNN_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
+            params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
         )
 
-        if not cache_valid:
-            res = QMessageBox.question(
-                self._mw,
-                "Build Detection Cache",
-                "No detection cache found for this frame range.\n\n"
-                "Build one now for a consistent preview?\n"
-                "(Detection-only scan — no CSV output, no config save.)",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if res == QMessageBox.Yes:
-                from hydra_suite.core.tracking.optimizer_workers import (
-                    DetectionCacheBuilderWorker,
-                )
-
-                self._mw._pending_preview_video_path = video_path
-                self._mw._cache_builder_worker = DetectionCacheBuilderWorker(
-                    video_path,
-                    cache_path,
-                    params,
-                    start_frame,
-                    end_frame,
-                )
-                self._mw._cache_builder_worker.progress_signal.connect(
-                    self.on_progress_update
-                )
-                self._mw._cache_builder_worker.finished_signal.connect(
-                    self._mw._on_preview_cache_built
-                )
-                self._mw.progress_bar.setVisible(True)
-                self._mw.progress_label.setVisible(True)
-                self._mw.progress_bar.setValue(0)
-                self._mw.progress_label.setText(
-                    "Building detection cache for preview..."
-                )
-                self._mw._cache_builder_worker.start()
-                return  # Will resume via _on_preview_cache_built
-
+        # Preview mode runs live (realtime) detection — no cache lookup or build.
         self._mw.tracking_worker = TrackingWorker(
             video_path,
             csv_writer_thread=None,
             video_output_path=None,
             backward_mode=False,
-            detection_cache_path=cache_path if cache_valid else None,
+            detection_cache_path=None,
             preview_mode=True,
-            use_cached_detections=cache_valid,
+            use_cached_detections=False,
         )
         self._mw.tracking_worker.set_parameters(params)
         self._mw.tracking_worker.frame_signal.connect(self.on_new_frame)
@@ -3573,6 +4019,15 @@ class TrackingOrchestrator:
                 "AssignmentConfidence",
                 "PositionUncertainty",
                 "DetectionID",
+                "IdentityAssignedID",
+                "IdentityAssignedLabel",
+                "IdentityAssignedConfidence",
+                "IdentityPosteriorMargin",
+                "IdentityEntropy",
+                "IdentityCommitted",
+                "IdentityEvidenceSources",
+                "IdentityConflictFlag",
+                "IdentitySlotLockLabel",
             ]
         else:
             hdr = [
@@ -3585,9 +4040,25 @@ class TrackingOrchestrator:
                 "FrameID",
                 "State",
                 "DetectionID",
+                "IdentityAssignedID",
+                "IdentityAssignedLabel",
+                "IdentityAssignedConfidence",
+                "IdentityPosteriorMargin",
+                "IdentityEntropy",
+                "IdentityCommitted",
+                "IdentityEvidenceSources",
+                "IdentityConflictFlag",
+                "IdentitySlotLockLabel",
             ]
         if self._mw._selected_identity_method() == "apriltags":
-            hdr.append("TagID")
+            hdr.extend(
+                [
+                    "DetectedTagID",
+                    "DetectedTagLabel",
+                    "DetectedTagConf",
+                    "DetectedTagHamming",
+                ]
+            )
         csv_path = self._panels.setup.csv_line.text()
         base, ext = os.path.splitext(csv_path)
         if backward_mode:
@@ -3602,6 +4073,14 @@ class TrackingOrchestrator:
     def start_tracking_on_video(self: object, video_path, backward_mode=False):
         """start_tracking_on_video method documentation."""
         if self._mw.tracking_worker and self._mw.tracking_worker.isRunning():
+            return
+        if not self._panels.setup.csv_line.text().strip():
+            QMessageBox.warning(
+                self._mw,
+                "No Output CSV",
+                "Please set an output CSV path before starting tracking.\n\n"
+                "A default path is set automatically when you load a video.",
+            )
             return
         self._mw._stop_all_requested = False
         self._mw._pending_finish_after_interp = False

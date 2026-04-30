@@ -100,14 +100,32 @@ class DatasetGenerationWorker(BaseWorker):
                     )
 
                 frame_data = df[df["FrameID"] == frame_id]
+                raw_meas = []
+                raw_shapes = []
                 raw_confidences = []
+                raw_obb_corners = []
+                used_detection_cache = False
                 if detection_cache is not None:
                     try:
-                        _, _, _, raw_confidences, _, _, *_ = detection_cache.get_frame(
-                            int(frame_id)
-                        )
+                        (
+                            raw_meas,
+                            _,
+                            raw_shapes,
+                            raw_confidences,
+                            raw_obb_corners,
+                            _,
+                            *_,
+                        ) = detection_cache.get_frame(int(frame_id))
+                        used_detection_cache = True
                     except Exception:
+                        raw_meas = []
+                        raw_shapes = []
                         raw_confidences = []
+                        raw_obb_corners = []
+
+                detection_count = (
+                    len(raw_meas) if used_detection_cache else len(frame_data)
+                )
 
                 # Detection data
                 detection_data = {
@@ -120,12 +138,20 @@ class DatasetGenerationWorker(BaseWorker):
                             else []
                         )
                     ),
-                    "count": len(frame_data),
+                    "count": detection_count,
+                    "measurements": raw_meas,
+                    "shapes": raw_shapes,
+                    "obb_corners": raw_obb_corners,
                 }
 
                 # Tracking data
                 tracking_data = {
                     "lost_tracks": int((frame_data["State"] == "lost").sum()),
+                    "assignment_confidences": (
+                        frame_data["AssignmentConfidence"].tolist()
+                        if "AssignmentConfidence" in frame_data.columns
+                        else []
+                    ),
                     "uncertainties": (
                         frame_data["PositionUncertainty"].tolist()
                         if "PositionUncertainty" in frame_data.columns

@@ -69,3 +69,46 @@ def test_dataset_panel_navigate_prev_next(qapp):
     # Methods should exist without raising
     panel.navigate_prev()
     panel.navigate_next()
+
+
+def test_dataset_panel_has_analysis_controls(qapp):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+    assert hasattr(panel, "btn_analyze_dataset")
+    assert hasattr(panel, "_analysis_view")
+
+
+def test_dataset_panel_analysis_without_project_shows_message(qapp):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    panel = DatasetPanel()
+    panel._run_dataset_analysis()
+    assert "No dataset sources" in panel._analysis_view.toPlainText()
+
+
+def test_dataset_panel_xany_stage_copies_source_into_app_data(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.panels.dataset_panel import DatasetPanel
+
+    source_dir = tmp_path / "portable_source"
+    (source_dir / "images").mkdir(parents=True)
+    (source_dir / "labels").mkdir(parents=True)
+    (source_dir / "images" / "frame.png").write_bytes(b"png")
+    (source_dir / "labels" / "frame.txt").write_text(
+        "0 0.5 0.5 0.5 0.5\n",
+        encoding="utf-8",
+    )
+    (source_dir / "classes.txt").write_text("ant\n", encoding="utf-8")
+
+    monkeypatch.setenv("HYDRA_DATA_DIR", str(tmp_path / "hydra_data"))
+
+    panel = DatasetPanel()
+    stage_dir = panel._prepare_xal_stage(source_dir)
+
+    assert stage_dir.exists()
+    assert stage_dir != source_dir
+    assert (stage_dir / "classes.txt").read_text(encoding="utf-8") == "ant\n"
+    assert (stage_dir / "images" / "frame.png").exists()
+    assert (stage_dir / "labels" / "frame.txt").exists()

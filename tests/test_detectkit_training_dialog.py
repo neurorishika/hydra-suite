@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -26,6 +27,30 @@ def _make_proj(tmp_path):
     proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
     proj.sources = [OBBSource(path=str(tmp_path / "ds1"), name="ds1")]
     return proj
+
+
+def _write_detectkit_source_dataset(root: Path) -> Path:
+    images_dir = root / "images" / "train"
+    labels_dir = root / "labels" / "train"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir.mkdir(parents=True, exist_ok=True)
+
+    image_path = images_dir / "sample.png"
+    image_path.write_bytes(
+        bytes.fromhex(
+            "89504E470D0A1A0A0000000D4948445200000001000000010802000000907753DE"
+            "0000000C49444154789C63F8FFFF3F0005FE02FE0EA257A90000000049454E44AE426082"
+        )
+    )
+    (labels_dir / "sample.txt").write_text(
+        "0 0.10 0.10 0.40 0.10 0.40 0.40 0.10 0.40\n",
+        encoding="utf-8",
+    )
+    (root / "dataset.yaml").write_text(
+        "train: images/train\nval: images/train\nnames:\n  0: ant\n",
+        encoding="utf-8",
+    )
+    return root
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +88,21 @@ def test_training_dialog_has_training_completed_signal(qapp, tmp_path):
     assert hasattr(dlg, "training_completed")
 
 
+def test_training_dialog_has_overview_tabs(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "training_tabs")
+    assert dlg.training_tabs.count() == 3
+
+
+def test_training_dialog_uses_advanced_tab_label(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert dlg.training_tabs.tabText(1) == "Advanced"
+
+
 def test_training_dialog_has_start_cancel_buttons(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
@@ -83,6 +123,80 @@ def test_training_dialog_has_log_view(qapp, tmp_path):
 
     dlg = TrainingDialog(_make_proj(tmp_path))
     assert hasattr(dlg, "log_view")
+
+
+def test_training_dialog_summary_reflects_current_plan(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    proj = _make_proj(tmp_path)
+    proj.class_names = ["worker", "queen"]
+    proj.species = "ant"
+    proj.model_tag = "v2"
+    dlg = TrainingDialog(proj)
+
+    summary = dlg.plan_summary.text()
+    assert "Recipe:" in summary
+    assert "Stages:" in summary
+    assert "Classes:" in summary
+    assert "worker" in summary
+    assert "ant / v2" in summary
+
+
+def test_training_dialog_has_recipe_selector(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "recipe_combo")
+    assert dlg.recipe_combo.count() >= 4
+
+
+def test_training_dialog_default_recipe_matches_all_stages(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert dlg.recipe_combo.currentData() == "all_stages"
+    assert dlg.chk_customize_roles.isChecked() is False
+    assert dlg.chk_role_obb_direct.isChecked() is True
+    assert dlg.chk_role_seq_detect.isChecked() is True
+    assert dlg.chk_role_seq_crop_obb.isChecked() is True
+
+
+def test_training_dialog_recipe_selection_updates_roles(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("sequential"))
+
+    assert dlg.chk_customize_roles.isChecked() is False
+    assert dlg.chk_role_obb_direct.isChecked() is False
+    assert dlg.chk_role_seq_detect.isChecked() is True
+    assert dlg.chk_role_seq_crop_obb.isChecked() is True
+
+
+def test_training_dialog_custom_recipe_enables_manual_stage_selection(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("custom"))
+
+    assert dlg.chk_customize_roles.isChecked() is True
+    assert dlg.role_cards_widget.isHidden() is False
+
+
+def test_training_dialog_has_dataset_fit_card(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "dataset_fit_view")
+    assert hasattr(dlg, "btn_refresh_dataset_fit")
+
+
+def test_training_dialog_has_source_preview_group(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "source_preview_group")
+    assert hasattr(dlg, "source_preview_cards_layout")
 
 
 def test_training_dialog_start_always_enabled(qapp, tmp_path):
@@ -109,6 +223,7 @@ def test_training_dialog_has_role_checkboxes(qapp, tmp_path):
     from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
 
     dlg = TrainingDialog(_make_proj(tmp_path))
+    assert hasattr(dlg, "chk_customize_roles")
     assert hasattr(dlg, "chk_role_obb_direct")
     assert hasattr(dlg, "chk_role_seq_detect")
     assert hasattr(dlg, "chk_role_seq_crop_obb")
@@ -125,6 +240,8 @@ def test_training_dialog_roles_roundtrip(qapp, tmp_path):
     assert dlg.chk_role_obb_direct.isChecked() is True
     assert dlg.chk_role_seq_detect.isChecked() is False
     assert dlg.chk_role_seq_crop_obb.isChecked() is True
+    assert dlg.chk_customize_roles.isChecked() is True
+    assert dlg.recipe_combo.currentData() == "custom"
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +385,36 @@ def test_training_dialog_has_per_role_model_combos(qapp, tmp_path):
     assert dlg.combo_model_seq_crop_obb.currentText() == "yolo26n-obb.pt"
 
 
+def test_training_dialog_recipe_hides_irrelevant_advanced_controls(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.recipe_combo.setCurrentIndex(dlg.recipe_combo.findData("direct_obb"))
+
+    assert dlg.spin_imgsz_obb_direct.isHidden() is False
+    assert dlg.spin_imgsz_seq_detect.isHidden() is True
+    assert dlg.spin_imgsz_seq_crop_obb.isHidden() is True
+    assert dlg.combo_model_obb_direct.isHidden() is False
+    assert dlg.combo_model_seq_detect.isHidden() is True
+    assert dlg.combo_model_seq_crop_obb.isHidden() is True
+    assert dlg.crop_settings_widget.isHidden() is True
+
+
+def test_training_dialog_source_preview_loads_real_source_samples(qapp, tmp_path):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+    from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+
+    source_root = _write_detectkit_source_dataset(tmp_path / "preview_source")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.sources = [OBBSource(path=str(source_root), name="preview_source")]
+
+    dlg = TrainingDialog(proj)
+
+    records = dlg._source_preview_records()
+    assert records
+    assert dlg.source_preview_status.text().startswith("Showing ")
+
+
 # ---------------------------------------------------------------------------
 # Augmentation group
 # ---------------------------------------------------------------------------
@@ -370,3 +517,96 @@ def test_training_dialog_write_to_project(qapp, tmp_path):
     assert proj.seed == 99
     assert proj.aug_enabled is False
     assert proj.species == "bee"
+
+
+def test_training_dialog_on_done_persists_project_history(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    captured = {}
+
+    def fake_record(project, results):
+        captured["project"] = project
+        captured["results"] = results
+        return [
+            {
+                "role": "obb_direct",
+                "success": True,
+                "project_model_path": str(tmp_path / "models" / "best.pt"),
+            }
+        ]
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.project.record_training_results",
+        fake_record,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.QMessageBox.information",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.training_dialog.QMessageBox.warning",
+        lambda *args, **kwargs: None,
+    )
+
+    dlg._role_logs = {"obb_direct": ["line 1", "line 2"]}
+    dlg._on_done([{"role": "obb_direct", "success": True, "artifact_path": ""}])
+
+    assert captured["project"] is dlg._project
+    assert captured["results"][0]["training_log"] == "line 1\nline 2"
+    assert dlg._last_training_results[0]["project_model_path"].endswith("best.pt")
+
+
+def test_training_dialog_quick_test_passes_role_specific_settings(
+    qapp, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import TrainingDialog
+
+    crop_model = tmp_path / "models" / "crop.pt"
+    detect_model = tmp_path / "models" / "detect.pt"
+    crop_model.parent.mkdir(parents=True)
+    crop_model.write_bytes(b"crop")
+    detect_model.write_bytes(b"detect")
+
+    dlg = TrainingDialog(_make_proj(tmp_path))
+    dlg.spin_imgsz_seq_crop_obb.setValue(224)
+    dlg.spin_crop_pad.setValue(0.3)
+    dlg.spin_crop_min_px.setValue(112)
+    dlg.chk_crop_square.setChecked(False)
+    dlg.role_dataset_dirs["seq_crop_obb"] = str(tmp_path / "dataset")
+    dlg._last_training_results = [
+        {
+            "role": "seq_crop_obb",
+            "success": True,
+            "project_model_path": str(crop_model),
+        },
+        {
+            "role": "seq_detect",
+            "success": True,
+            "project_model_path": str(detect_model),
+        },
+    ]
+
+    captured: dict[str, object] = {}
+
+    class FakeDialog:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def open(self):
+            captured["opened"] = True
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.model_test_dialog.ModelTestDialog",
+        FakeDialog,
+    )
+
+    dlg._quick_test()
+
+    assert captured["role"] == "seq_crop_obb"
+    assert captured["imgsz"] == 224
+    assert captured["detect_model_path"] == str(detect_model)
+    assert abs(float(captured["crop_pad_ratio"]) - 0.3) < 1e-6
+    assert captured["min_crop_size_px"] == 112
+    assert captured["enforce_square"] is False
+    assert captured["opened"] is True

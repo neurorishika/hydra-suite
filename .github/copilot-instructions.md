@@ -21,9 +21,8 @@
   - repo-local `.conda` via `conda run -p ./.conda ...`
   - Apple Silicon macOS: `hydra-mps`, then `hydra`
   - NVIDIA systems: `hydra-cuda`, then `hydra`
-  - AMD ROCm systems: `hydra-rocm`, then `hydra`
 - When terminal state is uncertain, prefer `conda run -n <env> ...` or `conda run -p ./.conda ...` for one-off commands.
-- Install missing dependencies into the selected HYDRA environment, not globally: `make install`, `make install-mps`, `make install-cuda`, `make install-rocm`, `make install-dev`, `make docs-install`.
+- Install missing dependencies into the selected HYDRA environment, not globally: `make install`, `make install-mps`, `make install-cuda`, `make install-dev`, `make docs-install`.
 
 ## Build And Test
 

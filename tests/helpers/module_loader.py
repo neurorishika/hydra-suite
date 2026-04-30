@@ -108,6 +108,7 @@ def make_cv2_stub() -> types.SimpleNamespace:
         CAP_PROP_FRAME_HEIGHT=4,
         INTER_AREA=1,
         INTER_NEAREST=2,
+        INTER_LINEAR=3,
         convertScaleAbs=lambda img, alpha=1.0, beta=0: np.clip(
             img.astype(np.float32) * alpha + beta, 0, 255
         ).astype(np.uint8),

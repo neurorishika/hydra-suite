@@ -109,3 +109,131 @@ def test_dialogs_init_exports(qapp):
     assert hasattr(dialogs, "TrainingDialog")
     assert hasattr(dialogs, "EvaluationDialog")
     assert hasattr(dialogs, "HistoryDialog")
+
+
+def test_load_project_populates_model_selector_from_history(qapp, main_win, tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    model_path = tmp_path / "models" / "best.pt"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"weights")
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.training_history = [{"run_id": "run_1", "project_model_path": str(model_path)}]
+
+    main_win._load_project(proj)
+
+    assert main_win._tools_panel._model_combo.count() == 1
+    assert main_win._tools_panel._model_combo.itemText(0) == str(model_path)
+
+
+def test_load_project_filters_non_preview_models(qapp, main_win, tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    obb_model = tmp_path / "models" / "obb.pt"
+    seq_model = tmp_path / "models" / "seq.pt"
+    obb_model.parent.mkdir(parents=True)
+    obb_model.write_bytes(b"obb")
+    seq_model.write_bytes(b"seq")
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.training_history = [
+        {"run_id": "run_1", "role": "obb_direct", "project_model_path": str(obb_model)},
+        {"run_id": "run_2", "role": "seq_detect", "project_model_path": str(seq_model)},
+    ]
+
+    main_win._load_project(proj)
+
+    assert main_win._tools_panel._model_combo.count() == 1
+    assert main_win._tools_panel._model_combo.itemText(0) == str(obb_model)
+
+
+def test_show_image_does_not_auto_run_prediction_overlay(
+    qapp, main_win, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    model_path = tmp_path / "models" / "best.pt"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"weights")
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.active_model_path = str(model_path)
+    proj.training_history = [
+        {
+            "run_id": "run_1",
+            "role": "obb_direct",
+            "project_model_path": str(model_path),
+        }
+    ]
+
+    main_win._load_project(proj)
+
+    called: list[tuple[tuple, dict]] = []
+
+    monkeypatch.setattr(main_win._canvas, "load_image", lambda _path: True)
+    monkeypatch.setattr(main_win._canvas, "fit_in_view", lambda: None)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.find_label_for_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.predict_preview_detections",
+        lambda *args, **kwargs: called.append((args, kwargs)) or [],
+    )
+
+    main_win.show_image(str(tmp_path), str(tmp_path / "sample.png"))
+
+    assert called == []
+
+
+def test_run_inference_overlay_populates_prediction_overlay(
+    qapp, main_win, tmp_path, monkeypatch
+):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    model_path = tmp_path / "models" / "best.pt"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"weights")
+
+    proj = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    proj.active_model_path = str(model_path)
+    proj.training_history = [
+        {
+            "run_id": "run_1",
+            "role": "obb_direct",
+            "project_model_path": str(model_path),
+        }
+    ]
+
+    main_win._load_project(proj)
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(main_win._canvas, "load_image", lambda _path: True)
+    monkeypatch.setattr(main_win._canvas, "fit_in_view", lambda: None)
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.find_label_for_image",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.predict_preview_detections",
+        lambda *args, **kwargs: [
+            {
+                "class_id": 0,
+                "polygon_px": [(0.0, 0.0), (8.0, 0.0), (8.0, 8.0), (0.0, 8.0)],
+                "confidence": 0.91,
+            }
+        ],
+    )
+
+    def _capture_pred(detections, class_names=None):
+        captured["detections"] = detections
+        captured["class_names"] = class_names
+
+    monkeypatch.setattr(main_win._canvas, "set_pred_detections", _capture_pred)
+
+    main_win.show_image(str(tmp_path), str(tmp_path / "sample.png"))
+    main_win._run_inference_overlay()
+
+    assert captured["class_names"] == ["ant"]
+    assert len(captured["detections"]) == 1
