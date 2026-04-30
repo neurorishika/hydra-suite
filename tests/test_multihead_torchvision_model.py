@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from hydra_suite.training.multihead_torchvision_model import (
+    MultiHeadTorchvisionClassifier,
     build_multihead_torchvision_classifier,
 )
 
@@ -100,3 +101,53 @@ def test_forward_concat_equals_per_factor_slices():
         assert slice_.shape == per_factor[k].shape
         assert torch.allclose(slice_, per_factor[k], atol=1e-6)
         offset += w
+
+
+def test_save_load_round_trip_preserves_head_kind(tmp_path):
+    from hydra_suite.training.torchvision_model import (
+        load_torchvision_classifier,
+        save_torchvision_checkpoint,
+    )
+
+    model = build_multihead_torchvision_classifier(
+        backbone="resnet18",
+        class_names_per_factor=[["a", "b"], ["x", "y", "z"]],
+        trainable_layers=-1,
+        head_hidden_dim=32,
+        head_dropout=0.1,
+        input_size=64,
+    )
+    ckpt_path = tmp_path / "shared_trunk.pth"
+    save_torchvision_checkpoint(
+        model=model,
+        backbone="resnet18",
+        class_names=[],
+        factor_names=["color1", "color2"],
+        class_names_per_factor=[["a", "b"], ["x", "y", "z"]],
+        input_size=(64, 64),
+        best_val_acc=0.91,
+        history={"train_loss": [], "val_acc": []},
+        trainable_layers=-1,
+        backbone_lr_scale=0.1,
+        monochrome=False,
+        extra_meta={
+            "head_kind": "multihead_shared_trunk",
+            "head_hidden_dim": 32,
+            "head_dropout": 0.1,
+        },
+        path=ckpt_path,
+    )
+
+    loaded, ckpt = load_torchvision_classifier(str(ckpt_path), device="cpu")
+    assert isinstance(loaded, MultiHeadTorchvisionClassifier)
+    assert loaded.factor_widths == [2, 3]
+    assert ckpt["head_kind"] == "multihead_shared_trunk"
+    assert ckpt["factor_names"] == ["color1", "color2"]
+    # Same input -> same output after round-trip
+    batch = torch.randn(1, 3, 64, 64)
+    model.train(False)
+    loaded.train(False)
+    with torch.no_grad():
+        a = model(batch)
+        b = loaded(batch)
+    assert torch.allclose(a, b, atol=1e-5)
