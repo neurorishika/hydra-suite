@@ -492,6 +492,7 @@ class ClassKitTrainingDialog(QDialog):
                 "flat_yolo",
                 "multihead_yolo",
                 "multihead_custom",
+                "multihead_custom_shared",
             ]
         return ["flat_custom", "flat_yolo"]
 
@@ -513,6 +514,7 @@ class ClassKitTrainingDialog(QDialog):
             "flat_yolo",
             "multihead_yolo",
             "multihead_custom",
+            "multihead_custom_shared",
         ]:
             if key in normalized_modes and key not in seen:
                 ordered.append(key)
@@ -1676,6 +1678,7 @@ class ClassKitTrainingDialog(QDialog):
             "flat_custom": "Flat - Custom CNN",
             "multihead_yolo": "Multi-head - YOLO-classify (one model per factor)",
             "multihead_custom": "Multi-head - Custom CNN (one model per factor)",
+            "multihead_custom_shared": "Multi-head - Custom CNN (shared trunk, one .pth)",
         }
         for key in self._resolved_mode_keys():
             self.mode_combo.addItem(labels[key], key)
@@ -1736,6 +1739,10 @@ class ClassKitTrainingDialog(QDialog):
             ),
             "multihead_custom": (
                 "Multi-head Custom CNN — one backbone per factor with the same fine-tuning controls as single-head custom training."
+            ),
+            "multihead_custom_shared": (
+                "Multi-head Custom CNN (shared trunk) — single backbone with one classification head per factor, "
+                "saved as a single .pth artifact."
             ),
         }
         if hasattr(self, "_mode_desc_label"):
@@ -2215,7 +2222,11 @@ class ClassKitTrainingDialog(QDialog):
         _train_device = str(self.device_combo.currentData() or "cpu")
 
         _mode = self.mode_combo.currentData() or ""
-        _is_custom = _mode in ("flat_custom", "multihead_custom")
+        _is_custom = _mode in (
+            "flat_custom",
+            "multihead_custom",
+            "multihead_custom_shared",
+        )
         fine_tune_method = self._custom_fine_tune_method_combo.currentData()
         custom_backbone = self._custom_backbone_combo.currentData()
         custom_is_tiny = _is_custom and custom_backbone == "tinyclassifier"
