@@ -574,6 +574,41 @@ class ClassKitTrainingDialog(QDialog):
         self._set_combo_value(self.mode_family_combo, selected_family)
         self.mode_family_combo.blockSignals(False)
 
+    def _shared_trunk_available(self, structure: object, family: object) -> bool:
+        """True when the shared-trunk multi-head mode is offered for the
+        currently-resolved scheme + structure + family combination."""
+        if str(structure or "").strip() != "multihead":
+            return False
+        if str(family or "").strip() != "custom":
+            return False
+        return "multihead_custom_shared" in self._resolved_mode_keys()
+
+    def _populate_mode_trunk_combo(
+        self, structure: object, family: object, preferred: object
+    ) -> None:
+        if not hasattr(self, "mode_trunk_combo"):
+            return
+        available = self._shared_trunk_available(structure, family)
+        self.mode_trunk_combo.blockSignals(True)
+        self.mode_trunk_combo.clear()
+        if available:
+            self.mode_trunk_combo.addItem(
+                "Per-factor backbones (one .pth per factor)", "default"
+            )
+            self.mode_trunk_combo.addItem(
+                "Shared trunk (single backbone, N MLP heads)", "shared"
+            )
+            target = (
+                "shared"
+                if str(preferred or "default").strip() == "shared"
+                else "default"
+            )
+            self._set_combo_value(self.mode_trunk_combo, target)
+        self.mode_trunk_combo.blockSignals(False)
+        if hasattr(self, "_mode_trunk_row_label"):
+            self._mode_trunk_row_label.setVisible(available)
+        self.mode_trunk_combo.setVisible(available)
+
     def _sync_mode_controls_from_mode(self, mode: object = None) -> None:
         normalized_mode = self._normalize_mode_key(
             mode or self.mode_combo.currentData()
@@ -596,6 +631,12 @@ class ClassKitTrainingDialog(QDialog):
         self.mode_structure_combo.blockSignals(False)
 
         self._populate_mode_family_combo(selected_structure, preferred_family)
+        preferred_trunk = (
+            "shared" if normalized_mode == "multihead_custom_shared" else "default"
+        )
+        self._populate_mode_trunk_combo(
+            selected_structure, preferred_family, preferred_trunk
+        )
 
     def _sync_mode_combo_from_controls(self) -> None:
         structure = str(self.mode_structure_combo.currentData() or "").strip()
@@ -603,7 +644,18 @@ class ClassKitTrainingDialog(QDialog):
         if not structure or not family:
             return
 
-        target_mode = f"{structure}_{family}"
+        trunk = ""
+        if hasattr(self, "mode_trunk_combo"):
+            trunk = str(self.mode_trunk_combo.currentData() or "").strip()
+        if (
+            structure == "multihead"
+            and family == "custom"
+            and trunk == "shared"
+            and self._shared_trunk_available(structure, family)
+        ):
+            target_mode = "multihead_custom_shared"
+        else:
+            target_mode = f"{structure}_{family}"
         index = self.mode_combo.findData(target_mode)
         if index < 0:
             return
@@ -614,6 +666,25 @@ class ClassKitTrainingDialog(QDialog):
         structure = self.mode_structure_combo.currentData()
         preferred_family = self.mode_family_combo.currentData()
         self._populate_mode_family_combo(structure, preferred_family)
+        preferred_trunk = (
+            self.mode_trunk_combo.currentData()
+            if hasattr(self, "mode_trunk_combo")
+            else "default"
+        )
+        self._populate_mode_trunk_combo(
+            structure, self.mode_family_combo.currentData(), preferred_trunk
+        )
+        self._sync_mode_combo_from_controls()
+
+    def _on_mode_family_changed(self) -> None:
+        structure = self.mode_structure_combo.currentData()
+        family = self.mode_family_combo.currentData()
+        preferred_trunk = (
+            self.mode_trunk_combo.currentData()
+            if hasattr(self, "mode_trunk_combo")
+            else "default"
+        )
+        self._populate_mode_trunk_combo(structure, family, preferred_trunk)
         self._sync_mode_combo_from_controls()
 
     def _on_internal_mode_changed(self) -> None:
@@ -641,6 +712,18 @@ class ClassKitTrainingDialog(QDialog):
             "Choose the training backend for the selected label layout."
         )
         form.addRow("<b>Model Family:</b>", self.mode_family_combo)
+
+        self.mode_trunk_combo = QComboBox()
+        self.mode_trunk_combo.setToolTip(
+            "Per-factor backbones train one full model per factor (independent "
+            "fine-tuning, .multihead.json bundle). Shared trunk reuses a single "
+            "backbone with one MLP head per factor (single .pth)."
+        )
+        self._mode_trunk_row_label = QLabel("<b>Trunk Strategy:</b>")
+        form.addRow(self._mode_trunk_row_label, self.mode_trunk_combo)
+        self._mode_trunk_row_label.setVisible(False)
+        self.mode_trunk_combo.setVisible(False)
+
         self._sync_mode_controls_from_mode()
 
         self.device_combo = QComboBox()
@@ -1614,6 +1697,9 @@ class ClassKitTrainingDialog(QDialog):
             lambda _index: self._on_mode_structure_changed()
         )
         self.mode_family_combo.currentIndexChanged.connect(
+            lambda _index: self._on_mode_family_changed()
+        )
+        self.mode_trunk_combo.currentIndexChanged.connect(
             lambda _index: self._sync_mode_combo_from_controls()
         )
         self.mode_combo.currentIndexChanged.connect(self._on_internal_mode_changed)
