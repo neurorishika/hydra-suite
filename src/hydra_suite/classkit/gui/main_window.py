@@ -5,6 +5,7 @@ ClassKit Main Window - Polished and feature-complete UI
 import hashlib
 import json
 import re
+import sys
 import time
 from html import escape
 from pathlib import Path
@@ -51,8 +52,10 @@ from hydra_suite.data.project_bundle import (
     load_project_bundle_archive_manifest,
 )
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
+from ..config.schemas import MULTIHEAD_LABEL_SEPARATOR, normalize_legacy_composite_label
 from .project import (
     classkit_config_path,
     classkit_export_dir,
@@ -522,6 +525,11 @@ class MainWindow(QMainWindow):
         save_btn.triggered.connect(self.save_project)
         toolbar.addAction(save_btn)
 
+        open_folder_btn = QAction("Open Folder", self)
+        open_folder_btn.setStatusTip("Reveal project folder in Finder / file manager")
+        open_folder_btn.triggered.connect(self.open_project_folder)
+        toolbar.addAction(open_folder_btn)
+
         portable_btn = QAction("Make Portable", self)
         portable_btn.setStatusTip("Copy linked images into the project bundle")
         portable_btn.triggered.connect(self.make_project_portable)
@@ -581,7 +589,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         # Export section
-        export_btn = QAction("Export", self)
+        export_btn = QAction("Export Dataset", self)
         export_btn.setStatusTip("Export labeled dataset")
         export_btn.triggered.connect(self.export_dataset)
         toolbar.addAction(export_btn)
@@ -1054,7 +1062,7 @@ class MainWindow(QMainWindow):
 
         # Labeling controls
         self.labeling_options_group = QGroupBox("Labeling Options")
-        self.labeling_options_group.setVisible(False)
+        # Visibility is controlled by the wrapping scroll area below.
         labeling_options_layout = QVBoxLayout(self.labeling_options_group)
         labeling_options_layout.setContentsMargins(10, 10, 10, 10)
         labeling_options_layout.setSpacing(8)
@@ -1241,7 +1249,22 @@ class MainWindow(QMainWindow):
 
         labeling_options_layout.addWidget(self.prepared_candidates_group)
 
-        explorer_layout.addWidget(self.labeling_options_group)
+        # Wrap the labeling-options group in a scroll area so its content does
+        # not push the explorer page's minimum size beyond the available
+        # screen when entering labeling mode.
+        self.labeling_options_scroll = QScrollArea()
+        self.labeling_options_scroll.setWidgetResizable(True)
+        self.labeling_options_scroll.setFrameShape(QFrame.NoFrame)
+        self.labeling_options_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.labeling_options_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.labeling_options_scroll.setWidget(self.labeling_options_group)
+        self.labeling_options_scroll.setVisible(False)
+        self.labeling_options_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        self.labeling_options_scroll.setMaximumHeight(320)
+        explorer_layout.addWidget(self.labeling_options_scroll)
         # ──────────────────────────────────────────────────────────────────
 
         self.history_title = QLabel("<b>Recent Labels (click to undo + relabel)</b>")
@@ -1530,10 +1553,10 @@ class MainWindow(QMainWindow):
                     with open(self._project_scheme_path(), "w") as f:
                         json.dump(scheme.to_dict(), f, indent=2)
 
-                self.classes = project_info.get("classes", []) or ["class_1", "class_2"]
-                self.rebuild_label_buttons()
-                self.setup_label_shortcuts()
-                self._refresh_shortcut_help()
+                # Load the freshly-created (empty) project so any stale
+                # in-memory state from a previously-open project is cleared.
+                # This drives the same ingest/finalize path as Open Project.
+                self.load_project_data()
 
                 self.update_context_panel()
                 self.status.showMessage(f"Created project: {project_info['name']}")
@@ -1603,12 +1626,26 @@ class MainWindow(QMainWindow):
             )
             if destination_dir is None:
                 return
-            imported_dir = import_project_bundle_archive(
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
+
+        def _extract(set_status, _set_progress):
+            set_status("Extracting project archive…")
+            return import_project_bundle_archive(
                 archive_path,
                 destination_dir,
                 expected_kit="classkit",
             )
-        except Exception as exc:
+
+        try:
+            imported_dir = run_blocking_with_busy_dialog(
+                self,
+                _extract,
+                title="Open Project Zip",
+                message="Extracting project archive…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Open Project Zip", str(exc))
             return
 
@@ -1656,7 +1693,7 @@ class MainWindow(QMainWindow):
             progress.setWindowTitle("Make Project Portable")
             progress.setCancelButton(None)
             progress.setMinimumDuration(0)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.ApplicationModal)
             progress.show()
 
             worker = _ClassKitPortableWorker(self.db_path)
@@ -1701,12 +1738,26 @@ class MainWindow(QMainWindow):
             worker.start()
             return True
 
-        try:
-            self.save_project()
-            from ..core.store.db import ClassKitDB
+        self.save_project()
+        from ..core.store.db import ClassKitDB
 
-            db = ClassKitDB(self.db_path)
-            copied_count = db.materialize_linked_images()
+        db_path = self.db_path
+
+        def _materialize(set_status, _set_progress):
+            set_status("Copying linked images into the project bundle…")
+            return ClassKitDB(db_path).materialize_linked_images()
+
+        try:
+            copied_count = run_blocking_with_busy_dialog(
+                self,
+                _materialize,
+                title="Make Project Portable",
+                message="Copying linked images into the project bundle…",
+            )
+        except BusyTaskError as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+        try:
             self.load_project_data()
             self.update_context_panel()
         except Exception as exc:
@@ -1761,10 +1812,24 @@ class MainWindow(QMainWindow):
             if not self.make_project_portable(interactive=False):
                 return
             self.save_project()
-            written_path = export_project_bundle_archive(
-                self.project_path, archive_path
-            )
         except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        project_path = self.project_path
+
+        def _archive(set_status, _set_progress):
+            set_status("Writing zip archive…")
+            return export_project_bundle_archive(project_path, archive_path)
+
+        try:
+            written_path = run_blocking_with_busy_dialog(
+                self,
+                _archive,
+                title="Export Project Zip",
+                message="Writing zip archive…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Export Project Zip", str(exc))
             return
 
@@ -1779,6 +1844,24 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Saving project...")
         self._flush_pending_label_updates(force=True)
         self.status.showMessage("Project saved", 2000)
+
+    def open_project_folder(self):
+        """Reveal the project folder in the system file manager."""
+        if not self.db_path:
+            self.status.showMessage("No project loaded", 2000)
+            return
+        import subprocess
+
+        folder = Path(self.db_path).parent
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            elif sys.platform.startswith("linux"):
+                subprocess.Popen(["xdg-open", str(folder)])
+            else:
+                subprocess.Popen(["explorer", str(folder)])
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
 
     def _load_project_config(self) -> dict:
         """Load project.json if present, otherwise return an empty config."""
@@ -1875,28 +1958,61 @@ class MainWindow(QMainWindow):
             self.toolbar.show()
 
     def load_project_data(self):
-        """Load project data from database."""
+        """Load project data from database (DB scans run off the UI thread)."""
         if not self.db_path:
             return
 
-        try:
-            from pathlib import Path
+        from pathlib import Path
 
-            from ..core.store.db import ClassKitDB
+        from ..core.store.db import ClassKitDB
 
-            db = ClassKitDB(self.db_path)
+        db_path = self.db_path
 
-            # Rebase project-owned bundle paths after extracting or moving a project.
+        def _scan(set_status, _set_progress):
+            db = ClassKitDB(db_path)
+            set_status("Rebasing project paths…")
             db.relocate_project_owned_paths()
-
-            # Migrate any non-resolved paths from older ingests (no-op if already resolved)
+            set_status("Migrating legacy image paths…")
             db.migrate_paths_to_resolved()
-
-            # Load image paths
+            set_status("Migrating legacy composite labels…")
+            db.migrate_legacy_composite_labels()
+            set_status("Loading image records…")
             path_strings = db.get_all_image_paths()
-            self.image_paths = [Path(p) for p in path_strings]
+            set_status(f"Loading labels ({len(path_strings):,} images)…")
+            labels = db.get_all_labels()
+            review_status = db.get_label_review_status_by_path()
+            set_status("Loading per-image metadata…")
+            metadata_by_path = db.get_image_metadata_by_path()
+            return {
+                "path_strings": path_strings,
+                "labels": labels,
+                "review_status": review_status,
+                "metadata_by_path": metadata_by_path,
+            }
+
+        try:
+            scan_result = run_blocking_with_busy_dialog(
+                self,
+                _scan,
+                title="Loading Project",
+                message="Reading project database…",
+            )
+        except BusyTaskError as exc:
+            QMessageBox.warning(
+                self, "Load Error", f"Failed to load project data:\n{exc}"
+            )
+            return
+
+        try:
+            self.image_paths = [Path(p) for p in scan_result["path_strings"]]
             self.image_confidences = [None] * len(self.image_paths)
-            self._reload_label_state_from_db(db)
+            self.image_labels = scan_result["labels"]
+            self._image_review_status = scan_result["review_status"]
+            self._image_metadata_by_path = scan_result["metadata_by_path"]
+            self._refresh_review_candidate_indices()
+            self._invalidate_infinite_labeling_cache()
+            if len(self.image_confidences) != len(self.image_paths):
+                self.image_confidences = [None] * len(self.image_paths)
 
             config = self._load_project_config()
             if config:
@@ -1906,6 +2022,7 @@ class MainWindow(QMainWindow):
 
             self._invalidate_image_set_dependent_state()
 
+            db = ClassKitDB(self.db_path)
             self._finalize_project_load(db)
 
             self.status.showMessage(
@@ -1913,7 +2030,7 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(
-                self, "Load Error", f"Failed to load project data:\\n{e}"
+                self, "Load Error", f"Failed to load project data:\n{e}"
             )
 
     def update_context_panel(self):
@@ -2998,13 +3115,17 @@ class MainWindow(QMainWindow):
         }
 
     def _can_recode_into_existing_scheme(self, flat_labels: list[str]) -> bool:
-        """Return True if _ → | re-encoding of flat_labels fits the current project scheme."""
+        """Return True if the imported flat labels already fit the project scheme.
+
+        Underscore-encoded composites coming from external imports are now the
+        canonical form, so this check only verifies subset membership.
+        """
         scheme = self._resolve_training_scheme()
         if scheme is None or len(scheme.factors) < 2:
             return False
         valid = scheme.valid_encoded_labels()
-        recoded = {"|".join(label.split("_")) for label in flat_labels if label.strip()}
-        return bool(recoded) and recoded.issubset(valid)
+        candidate = {label for label in flat_labels if label.strip()}
+        return bool(candidate) and candidate.issubset(valid)
 
     def _replace_project_schema_from_labels(
         self, labels: list[str], scheme_dict: dict | None = None
@@ -3171,14 +3292,11 @@ class MainWindow(QMainWindow):
 
         can_rewrite = self._project_image_count() == 0
 
-        # When the source labels, re-encoded from _ to |, exactly match the existing
-        # multihead scheme's valid labels, skip the dialog and import silently.
+        # Underscore is the canonical composite separator both externally and
+        # internally, so when imported labels fit the existing multihead
+        # scheme we can import them without any recoding.
         if not can_rewrite and self._can_recode_into_existing_scheme(imported_labels):
-            return {
-                "source_root": source_root,
-                "import_labels": True,
-                "label_recode": ("_", "|"),
-            }
+            return {"source_root": source_root, "import_labels": True}
 
         multihead_factors = (
             detect_multihead_label_structure(imported_labels) if can_rewrite else None
@@ -3190,16 +3308,11 @@ class MainWindow(QMainWindow):
             multihead_factors=multihead_factors,
         )
         if resolution == "rewrite_multihead" and multihead_factors:
-            recoded_labels = ["|".join(l.split("_")) for l in imported_labels]
             scheme_dict = self._build_multihead_imported_scheme_dict(multihead_factors)
             self._replace_project_schema_from_labels(
-                recoded_labels, scheme_dict=scheme_dict
+                imported_labels, scheme_dict=scheme_dict
             )
-            return {
-                "source_root": source_root,
-                "import_labels": True,
-                "label_recode": ("_", "|"),
-            }
+            return {"source_root": source_root, "import_labels": True}
         if resolution == "rewrite":
             self._replace_project_schema_from_labels(imported_labels)
             return {"source_root": source_root, "import_labels": True}
@@ -4820,7 +4933,9 @@ class MainWindow(QMainWindow):
                     head_labels.append(
                         self._threshold_prediction_label(label, _confidence)
                     )
-                out[i] = "|".join(head_labels) if head_labels else None
+                out[i] = (
+                    MULTIHEAD_LABEL_SEPARATOR.join(head_labels) if head_labels else None
+                )
             return out
 
         names = list(self._model_class_names or [])
@@ -4916,7 +5031,7 @@ class MainWindow(QMainWindow):
 
             return {
                 "predicted_index": None,
-                "predicted_label": "|".join(composite_labels),
+                "predicted_label": MULTIHEAD_LABEL_SEPARATOR.join(composite_labels),
                 "confidence": (
                     min(composite_confidences) if composite_confidences else None
                 ),
@@ -5155,7 +5270,9 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.setEnabled(labels_enabled)
 
-        if hasattr(self, "labeling_options_group"):
+        if hasattr(self, "labeling_options_scroll"):
+            self.labeling_options_scroll.setVisible(labels_enabled)
+        elif hasattr(self, "labeling_options_group"):
             self.labeling_options_group.setVisible(labels_enabled)
 
         if hasattr(self, "al_group"):
@@ -6088,10 +6205,29 @@ class MainWindow(QMainWindow):
         if folders_to_remove:
             from ..core.store.db import ClassKitDB
 
-            db = ClassKitDB(self.db_path)
-            total_removed = 0
-            for folder in folders_to_remove:
-                total_removed += db.remove_images_by_folder_exact(folder)
+            db_path = self.db_path
+
+            def _remove(set_status, _set_progress):
+                db = ClassKitDB(db_path)
+                total = 0
+                for index, folder in enumerate(folders_to_remove, start=1):
+                    set_status(
+                        f"Removing source {index} of {len(folders_to_remove)}: "
+                        f"{Path(folder).name}…"
+                    )
+                    total += db.remove_images_by_folder_exact(folder)
+                return total
+
+            try:
+                total_removed = run_blocking_with_busy_dialog(
+                    self,
+                    _remove,
+                    title="Removing Sources",
+                    message="Deleting linked image records…",
+                )
+            except BusyTaskError as exc:
+                QMessageBox.warning(self, "Remove Sources", str(exc))
+                total_removed = 0
             if total_removed:
                 self.status.showMessage(
                     f"Removed {total_removed:,} images from {len(folders_to_remove)} source(s)"
@@ -7060,6 +7196,27 @@ class MainWindow(QMainWindow):
             TrainingRunSpec,
         )
 
+        aug_args: dict = {
+            key: value
+            for key, value in {
+                "flipud": settings.get("flipud", 0.0),
+                "fliplr": settings.get("fliplr", 0.0),
+                "hsv_h": settings.get("hue", 0.0),
+                "hsv_s": settings.get("saturation", 0.0),
+                "hsv_v": settings.get("brightness", 0.0),
+            }.items()
+            if float(value) > 0.0
+        }
+        if mode == "multihead_custom_shared":
+            scheme = self._resolve_training_scheme()
+            factors = list(getattr(scheme, "factors", []) or [])
+            aug_args["class_names_per_factor"] = [
+                list(getattr(f, "labels", []) or []) for f in factors
+            ]
+            aug_args["factor_names"] = [
+                str(getattr(f, "name", "") or f"factor_{i + 1}")
+                for i, f in enumerate(factors)
+            ]
         aug = AugmentationProfile(
             enabled=True,
             flipud=settings.get("flipud", 0.0),
@@ -7069,17 +7226,7 @@ class MainWindow(QMainWindow):
             brightness=settings.get("brightness", 0.0),
             contrast=settings.get("contrast", 0.0),
             monochrome=bool(settings.get("monochrome", False)),
-            args={
-                key: value
-                for key, value in {
-                    "flipud": settings.get("flipud", 0.0),
-                    "fliplr": settings.get("fliplr", 0.0),
-                    "hsv_h": settings.get("hue", 0.0),
-                    "hsv_s": settings.get("saturation", 0.0),
-                    "hsv_v": settings.get("brightness", 0.0),
-                }.items()
-                if float(value) > 0.0
-            },
+            args=aug_args,
             label_expansion=settings.get("label_expansion") or {},
         )
 
@@ -7120,12 +7267,13 @@ class MainWindow(QMainWindow):
             training_space="original",
             resume_from=(
                 settings.get("initial_model_path", "")
-                if mode in ("flat_custom", "multihead_custom")
+                if mode
+                in ("flat_custom", "multihead_custom", "multihead_custom_shared")
                 else ""
             ),
             augmentation_profile=aug,
         )
-        if mode in ("flat_custom", "multihead_custom"):
+        if mode in ("flat_custom", "multihead_custom", "multihead_custom_shared"):
             spec = dataclasses.replace(
                 spec,
                 custom_params=CustomCNNParams(
@@ -7157,6 +7305,15 @@ class MainWindow(QMainWindow):
                     ignore_label_name=str(
                         settings.get("ignore_label_name", "unknown") or "unknown"
                     ),
+                    head_kind=(
+                        "multihead_shared_trunk"
+                        if mode == "multihead_custom_shared"
+                        else "flat"
+                    ),
+                    head_hidden_dim=int(
+                        settings.get("custom_head_hidden_dim", 256) or 256
+                    ),
+                    head_dropout=float(settings.get("custom_head_dropout", 0.1) or 0.0),
                 ),
             )
         return spec
@@ -7262,6 +7419,32 @@ class MainWindow(QMainWindow):
         artifact = results[0].get("artifact_path", "")
         if not artifact or not Path(artifact).exists():
             return
+        # Shared-trunk multi-head: the .pth carries factor_names + per-factor
+        # heads, but the existing torchvision in-dialog inference path expects
+        # a single flat class list. Skip the auto-preview here; the artifact
+        # publishes normally and TrackerKit / ClassKit "Previously Trained
+        # Models" consume it correctly via ClassifierBackend.
+        try:
+            import torch as _torch_probe
+
+            _probe_ckpt = _torch_probe.load(
+                str(artifact), map_location="cpu", weights_only=False
+            )
+            if (
+                isinstance(_probe_ckpt, dict)
+                and str(_probe_ckpt.get("head_kind") or "flat")
+                == "multihead_shared_trunk"
+            ):
+                dialog.append_log(
+                    "Shared-trunk multi-head: skipping in-dialog preview "
+                    "(artifact publishes normally; load via Previously "
+                    "Trained Models or TrackerKit for inference)."
+                )
+                if on_done:
+                    on_done({})
+                return
+        except Exception:
+            pass
         prediction_confidence_threshold = (
             self._normalize_prediction_confidence_threshold(
                 (self._last_training_settings or {}).get(
@@ -7369,7 +7552,9 @@ class MainWindow(QMainWindow):
         settings = dialog.get_settings()
         mode = settings.get("mode") or "flat_custom"
         is_yolo = "yolo" in mode
-        multi_head = mode.startswith("multihead")
+        # Treat shared-trunk as single-artifact for publish purposes — it
+        # produces one .pth and never participates in a manifest bundle.
+        multi_head = mode.startswith("multihead") and mode != "multihead_custom_shared"
         role_map = {
             "flat_tiny": "classify_flat_tiny",
             "flat_yolo": "classify_flat_yolo",
@@ -7377,6 +7562,7 @@ class MainWindow(QMainWindow):
             "multihead_yolo": "classify_multihead_yolo",
             "flat_custom": "classify_flat_custom",
             "multihead_custom": "classify_multihead_custom",
+            "multihead_custom_shared": "classify_multihead_custom_shared",
         }
         from ...training.contracts import TrainingRole
         from ...training.model_publish import (
@@ -7561,6 +7747,7 @@ class MainWindow(QMainWindow):
             "multihead_yolo": TrainingRole.CLASSIFY_MULTIHEAD_YOLO,
             "flat_custom": TrainingRole.CLASSIFY_FLAT_CUSTOM,
             "multihead_custom": TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM,
+            "multihead_custom_shared": TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM_SHARED,
         }
         return role_map.get(mode, TrainingRole.CLASSIFY_FLAT_CUSTOM)
 
@@ -7656,7 +7843,12 @@ class MainWindow(QMainWindow):
             "settings": settings,
             "mode": mode,
             "is_yolo": "yolo" in mode,
-            "multi_head": mode.startswith("multihead"),
+            # multi_head means "produces N independent artifacts bundled by a
+            # manifest". Shared-trunk is multi-factor but emits a single .pth,
+            # so it is NOT multi_head for export/spec/publish purposes.
+            "multi_head": mode.startswith("multihead")
+            and mode != "multihead_custom_shared",
+            "is_shared_trunk": mode == "multihead_custom_shared",
             "factor_names": [
                 str(getattr(factor, "name", "") or f"factor_{index + 1}")
                 for index, factor in enumerate(
@@ -7923,10 +8115,69 @@ class MainWindow(QMainWindow):
             labels_str=context["labels_str"],
         )
 
+    def _create_shared_trunk_export_worker(self, context, scheme):
+        """Export a single dataset whose folder names encode the full multi-factor
+        composite label (e.g. ``red__blue/img.png``).
+
+        Consumed by ``_train_multihead_shared_classify`` via
+        ``MultiFactorImageFolder`` with delimiter ``"__"``.
+        """
+        from ..jobs.task_workers import ExportWorker
+
+        ignored = str(
+            context["settings"].get("ignore_label_name", "unknown") or "unknown"
+        ).strip()
+        labels_str = context["labels_str"]
+        images = context["images"]
+
+        composite_strs: list[str] = []
+        kept_indices: list[int] = []
+        for index, label in enumerate(labels_str):
+            try:
+                decoded = scheme.decode_label(label)
+            except Exception:
+                continue
+            decoded = [str(part).strip() for part in decoded]
+            if any(part == ignored or not part for part in decoded):
+                continue
+            composite_strs.append("__".join(decoded))
+            kept_indices.append(index)
+
+        if not composite_strs:
+            raise ValueError(
+                "Shared-trunk training has no labeled samples after filtering "
+                f"'{ignored}' from any factor."
+            )
+
+        unique = sorted(set(composite_strs))
+        composite_to_int = {composite: i for i, composite in enumerate(unique)}
+        composite_int = [composite_to_int[s] for s in composite_strs]
+        composite_class_names = {
+            i: composite for composite, i in composite_to_int.items()
+        }
+        composite_images = [images[i] for i in kept_indices]
+
+        return ExportWorker(
+            image_paths=composite_images,
+            labels=composite_int,
+            output_path=context["run_dir"] / "export",
+            format="ultralytics",
+            class_names=composite_class_names,
+            split_strategy=context["settings"].get("split_strategy", "stratified"),
+            val_fraction=context["settings"].get("val_fraction", 0.2),
+            test_fraction=context["settings"].get("test_fraction", 0.0),
+            force_monochrome=bool(context["settings"].get("monochrome", False)),
+            label_expansion=context["settings"].get("label_expansion") or {},
+            preset_splits_by_path=context["source_split_by_path"],
+            preset_expanded_splits_by_key=context.get("expanded_split_by_key"),
+        )
+
     def _create_training_export_worker(self, context, scheme):
         """Create the export worker used before training begins."""
         from ..jobs.task_workers import ExportWorker
 
+        if context.get("is_shared_trunk") and scheme is not None:
+            return self._create_shared_trunk_export_worker(context, scheme)
         if context["multi_head"] and scheme is not None:
             return self._create_multihead_export_worker(context, scheme)
         return ExportWorker(
@@ -8147,6 +8398,8 @@ class MainWindow(QMainWindow):
                 self,
                 "Select Classifier Checkpoint",
                 str(model_dir if model_dir.exists() else self.project_path),
+                "Classifier Models (*.pt *.pth *.bundle.json);;"
+                "Multi-head Bundle Manifest (*.bundle.json);;"
                 "PyTorch Checkpoint (*.pt *.pth)",
             )
             if not file_path:
@@ -8253,14 +8506,17 @@ class MainWindow(QMainWindow):
             return bool(training_settings.get("monochrome", False))
         return bool((self._last_training_settings or {}).get("monochrome", False))
 
-    def _resolve_classifier_compute_runtime(self, path: Path) -> str:
-        """Resolve classifier inference runtime from cached training settings when available."""
+    def _resolve_classifier_device(self, path: Path) -> str:
+        """Resolve PyTorch inference device from cached training settings when available."""
         training_settings = self._cached_model_training_settings(path)
         if isinstance(training_settings, dict):
-            runtime = training_settings.get("compute_runtime")
-            if runtime:
-                return str(runtime)
-        return str((self._last_training_settings or {}).get("compute_runtime", "cpu"))
+            device = training_settings.get("device") or training_settings.get(
+                "compute_runtime"
+            )
+            if device:
+                return str(device)
+        last = self._last_training_settings or {}
+        return str(last.get("device") or last.get("compute_runtime") or "cpu")
 
     def _load_custom_cnn_checkpoint(
         self,
@@ -8439,7 +8695,10 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            from ..model_bundle import discover_multihead_model_bundle
+            from ..model_bundle import (
+                MODEL_BUNDLE_MANIFEST_SUFFIX,
+                discover_multihead_model_bundle,
+            )
 
             external_bundle = discover_multihead_model_bundle(path)
             if external_bundle is not None:
@@ -8459,6 +8718,16 @@ class MainWindow(QMainWindow):
                 self._load_model_from_cache_entry(
                     external_bundle,
                     on_success=_after_external_load,
+                )
+                return
+
+            if path.name.lower().endswith(MODEL_BUNDLE_MANIFEST_SUFFIX):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Multi-head Bundle",
+                    f"Could not load multi-head model bundle from manifest:\n{path}\n\n"
+                    "The manifest may be corrupted, target a non-multi-head mode, or "
+                    "reference artifacts that are missing from the bundle directory.",
                 )
                 return
 
@@ -8943,16 +9212,15 @@ class MainWindow(QMainWindow):
         """Run YOLO inference on all images in background and update confidences."""
         if not self.image_paths:
             return
-        compute_runtime = (self._last_training_settings or {}).get(
-            "compute_runtime", "cpu"
-        )
+        last = self._last_training_settings or {}
+        device = str(last.get("device") or last.get("compute_runtime") or "cpu")
 
         from ..jobs.task_workers import YoloInferenceWorker
 
         worker = YoloInferenceWorker(
             model_path,
             self.image_paths,
-            compute_runtime=compute_runtime,
+            device=device,
             batch_size=64,
             force_monochrome=force_monochrome,
         )
@@ -9012,7 +9280,7 @@ class MainWindow(QMainWindow):
         """Run TinyCNN inference on all images in background and update confidences."""
         if not self.image_paths:
             return
-        compute_runtime = self._resolve_classifier_compute_runtime(model_path)
+        device = self._resolve_classifier_device(model_path)
 
         from ..jobs.task_workers import TinyCNNInferenceWorker
 
@@ -9020,7 +9288,7 @@ class MainWindow(QMainWindow):
             model_path,
             self.image_paths,
             class_names,
-            compute_runtime=compute_runtime,
+            device=device,
             batch_size=64,
             force_monochrome=force_monochrome,
         )
@@ -9080,13 +9348,13 @@ class MainWindow(QMainWindow):
 
         from ..jobs.task_workers import TorchvisionInferenceWorker
 
-        rt = self._resolve_classifier_compute_runtime(model_path)
+        device = self._resolve_classifier_device(model_path)
         worker = TorchvisionInferenceWorker(
             model_path=model_path,
             image_paths=self.image_paths,
             class_names=class_names,
             input_size=input_size,
-            compute_runtime=rt,
+            device=device,
             force_monochrome=force_monochrome,
         )
 
@@ -9241,14 +9509,14 @@ class MainWindow(QMainWindow):
                 factor_name = str(getattr(scheme_factors[index], "name", "")).strip()
             if not factor_name:
                 factor_name = f"factor_{index + 1}"
-            compute_runtime = self._resolve_classifier_compute_runtime(model_path)
+            device = self._resolve_classifier_device(model_path)
 
             if arch == "tinyclassifier":
                 worker = TinyCNNInferenceWorker(
                     model_path,
                     self.image_paths,
                     class_names,
-                    compute_runtime=compute_runtime,
+                    device=device,
                     batch_size=64,
                     force_monochrome=force_monochrome,
                 )
@@ -9268,7 +9536,7 @@ class MainWindow(QMainWindow):
                     image_paths=self.image_paths,
                     class_names=class_names,
                     input_size=input_size,
-                    compute_runtime=compute_runtime,
+                    device=device,
                     batch_size=64,
                     force_monochrome=force_monochrome,
                 )
@@ -9680,8 +9948,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        normalized = normalize_legacy_composite_label(label)
         parts = [
-            str(value).strip() for value in str(label).split("|") if str(value).strip()
+            str(value).strip()
+            for value in normalized.split(MULTIHEAD_LABEL_SEPARATOR)
+            if str(value).strip()
         ]
         return parts if len(parts) == head_count else []
 
@@ -10952,6 +11223,52 @@ class MainWindow(QMainWindow):
                     scope_label=scope_label,
                     skip_verified=skip_verified,
                     model_provider="project_history_model",
+                    model_metadata=metadata,
+                ),
+            )
+            return
+
+        if model_source == MachineLabelingDialog.MODEL_SOURCE_OTHER_PROJECT:
+            entry = settings.get("model_entry") or {}
+            artifact_paths = entry.get("artifact_paths") or []
+            if not artifact_paths:
+                QMessageBox.warning(
+                    self,
+                    "No Model Selected",
+                    "Choose a model from another project's history before applying machine labels.",
+                )
+                return
+
+            missing = [p for p in artifact_paths if not Path(str(p)).exists()]
+            if missing:
+                QMessageBox.warning(
+                    self,
+                    "Model Files Missing",
+                    "One or more artifact files for the selected model could not be found:\n\n"
+                    + "\n".join(str(p) for p in missing),
+                )
+                return
+
+            other_project_path = settings.get("other_project_path")
+            metadata = {
+                "model_name": str(
+                    entry.get("display_name")
+                    or Path(str(artifact_paths[0])).stem
+                    or entry.get("mode")
+                    or "external_history_model"
+                ),
+                "model_path": str(artifact_paths[0]),
+                "source_project_path": (
+                    str(other_project_path) if other_project_path else ""
+                ),
+            }
+            self._load_model_from_cache_entry(
+                entry,
+                on_success=lambda: self.apply_model_predictions_as_review_labels(
+                    indices=indices,
+                    scope_label=scope_label,
+                    skip_verified=skip_verified,
+                    model_provider="external_project_history_model",
                     model_metadata=metadata,
                 ),
             )

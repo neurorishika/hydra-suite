@@ -43,12 +43,17 @@ def discover_multihead_model_bundle(selected_path: str | Path) -> dict[str, Any]
     """Discover a portable multi-head model bundle for *selected_path*.
 
     Resolution order:
-    1. Any sibling ``*.bundle.json`` manifest that explicitly lists the artifact.
-    2. Best-effort sibling discovery for older exports without manifests.
+    1. If *selected_path* is itself a ``*.bundle.json`` manifest, load it
+       directly and return the bundle it describes.
+    2. Any sibling ``*.bundle.json`` manifest that explicitly lists the artifact.
+    3. Best-effort sibling discovery for older exports without manifests.
     """
     selected = Path(selected_path).expanduser().resolve()
     if not selected.exists() or not selected.is_file():
         return None
+
+    if _is_bundle_manifest_path(selected):
+        return _bundle_from_manifest_file(selected)
 
     manifest_bundle = _bundle_from_manifests(selected)
     if manifest_bundle is not None:
@@ -70,6 +75,34 @@ def discover_multihead_model_bundle(selected_path: str | Path) -> dict[str, Any]
         "mode": mode,
         "artifact_paths": [str(path) for path in fallback_paths],
         "class_names": [],
+    }
+
+
+def _is_bundle_manifest_path(path: Path) -> bool:
+    return path.name.lower().endswith(MODEL_BUNDLE_MANIFEST_SUFFIX)
+
+
+def _bundle_from_manifest_file(manifest_path: Path) -> dict[str, Any] | None:
+    """Load *manifest_path* directly and return the multi-head bundle it describes."""
+    try:
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("bundle_type") != MODEL_BUNDLE_TYPE:
+        return None
+    mode = str(raw.get("mode") or "")
+    if not mode.startswith("multihead"):
+        return None
+    artifact_paths = _resolve_manifest_artifacts(manifest_path, raw)
+    resolved_paths = [path for path in artifact_paths if path.exists()]
+    if len(resolved_paths) < 2:
+        return None
+    return {
+        "mode": mode,
+        "artifact_paths": [str(path) for path in resolved_paths],
+        "class_names": list(raw.get("class_names") or []),
     }
 
 

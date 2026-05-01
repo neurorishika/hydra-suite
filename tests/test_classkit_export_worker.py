@@ -286,7 +286,7 @@ def test_multihead_export_worker_filters_unknown_factor_labels(
 
     scheme = SimpleNamespace(
         factors=[SimpleNamespace(name="color"), SimpleNamespace(name="side")],
-        decode_label=lambda label: tuple(str(label).split("|")),
+        decode_label=lambda label: tuple(str(label).split("_")),
     )
     context = {
         "settings": {},
@@ -294,7 +294,7 @@ def test_multihead_export_worker_filters_unknown_factor_labels(
         "run_dir": tmp_path / "export_root",
         "source_split_by_path": {},
         "expanded_split_by_key": None,
-        "labels_str": ["red|left", "unknown|right", "blue|unknown"],
+        "labels_str": ["red_left", "unknown_right", "blue_unknown"],
     }
 
     worker = window._create_multihead_export_worker(context, scheme)

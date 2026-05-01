@@ -75,7 +75,10 @@ def test_machine_labeling_dialog_returns_selected_model_source_settings(
         project_path=tmp_path,
         db_path=tmp_path / "classkit.db",
     )
-    dlg.model_source_combo.setCurrentIndex(1)
+    history_index = dlg.model_source_combo.findData(
+        MachineLabelingDialog.MODEL_SOURCE_HISTORY
+    )
+    dlg.model_source_combo.setCurrentIndex(history_index)
     dlg._selected_model_entry = entry
 
     history_settings = dlg.get_settings()
@@ -85,7 +88,10 @@ def test_machine_labeling_dialog_returns_selected_model_source_settings(
     )
     assert history_settings["model_entry"] == entry
 
-    dlg.model_source_combo.setCurrentIndex(2)
+    file_index = dlg.model_source_combo.findData(
+        MachineLabelingDialog.MODEL_SOURCE_FILE
+    )
+    dlg.model_source_combo.setCurrentIndex(file_index)
     dlg._selected_checkpoint_path = str(checkpoint)
 
     file_settings = dlg.get_settings()
@@ -137,6 +143,93 @@ def test_run_machine_labeling_model_source_uses_history_entry(
         "model_metadata": {
             "model_name": "Past Model",
             "model_path": str(tmp_path / "history_model.pt"),
+        },
+    }
+
+
+def test_machine_labeling_dialog_returns_other_project_source_settings(
+    qapp, tmp_path: Path
+) -> None:
+    other_project = tmp_path / "other_project"
+    other_project.mkdir()
+    other_artifact = other_project / "history_model.pt"
+    entry = {
+        "display_name": "External Model",
+        "artifact_paths": [str(other_artifact)],
+        "mode": "tiny",
+    }
+
+    dlg = MachineLabelingDialog(
+        scope_options=[("All images", [0, 1])],
+        predictions_available=False,
+        image_count=2,
+        model_history_entries=[],
+        project_path=tmp_path,
+        db_path=tmp_path / "classkit.db",
+    )
+
+    other_index = dlg.model_source_combo.findData(
+        MachineLabelingDialog.MODEL_SOURCE_OTHER_PROJECT
+    )
+    assert other_index >= 0
+    dlg.model_source_combo.setCurrentIndex(other_index)
+    dlg._selected_model_entry = entry
+    dlg._other_project_path = other_project
+
+    settings = dlg.get_settings()
+
+    assert settings["model_source"] == MachineLabelingDialog.MODEL_SOURCE_OTHER_PROJECT
+    assert settings["model_entry"] == entry
+    assert settings["other_project_path"] == str(other_project)
+
+
+def test_run_machine_labeling_model_source_uses_other_project_entry(
+    qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = MainWindow()
+    other_project = tmp_path / "other_project"
+    other_project.mkdir()
+    other_artifact = other_project / "history_model.pt"
+    other_artifact.touch()
+    entry = {
+        "display_name": "External Model",
+        "artifact_paths": [str(other_artifact)],
+        "mode": "tiny",
+    }
+    calls: dict[str, object] = {}
+
+    def fake_load(model_entry, on_success=None):
+        calls["entry"] = model_entry
+        if on_success is not None:
+            on_success()
+
+    def fake_apply(**kwargs):
+        calls["apply"] = kwargs
+
+    monkeypatch.setattr(window, "_load_model_from_cache_entry", fake_load)
+    monkeypatch.setattr(window, "apply_model_predictions_as_review_labels", fake_apply)
+
+    window._run_machine_labeling_model_source(
+        {
+            "scope_indices": [0],
+            "scope_label": "All images",
+            "skip_verified": True,
+            "model_source": MachineLabelingDialog.MODEL_SOURCE_OTHER_PROJECT,
+            "model_entry": entry,
+            "other_project_path": str(other_project),
+        }
+    )
+
+    assert calls["entry"] == entry
+    assert calls["apply"] == {
+        "indices": [0],
+        "scope_label": "All images",
+        "skip_verified": True,
+        "model_provider": "external_project_history_model",
+        "model_metadata": {
+            "model_name": "External Model",
+            "model_path": str(other_artifact),
+            "source_project_path": str(other_project),
         },
     }
 

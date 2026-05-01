@@ -61,8 +61,10 @@ class SourceManagerDialog(QDialog):
         header = QLabel(
             "<b>Image Sources</b><br>"
             "Manage the folders that supply images to this project. "
-            "ClassKit copies accepted sources into the project's internal image store "
-            "before ingesting them. "
+            "ClassKit links accepted source folders by default — image files stay "
+            "where they are and the database records their original paths. Use "
+            "<b>Make Project Portable</b> on the toolbar to copy linked images into "
+            "the project bundle. "
             "Adding a folder will ingest its images; removing one will "
             "delete those images from the database."
             "<br><br>"

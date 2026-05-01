@@ -592,6 +592,7 @@ class ModelHistoryDialog(QDialog):
             copied_artifact_paths
             and len(copied_artifact_paths) > 1
             and str(entry.get("mode", "")).startswith("multihead")
+            and str(entry.get("mode", "")) != "multihead_custom_shared"
         ):
             try:
                 from hydra_suite.classkit.model_bundle import (

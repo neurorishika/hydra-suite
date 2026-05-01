@@ -5,6 +5,21 @@ from itertools import product
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Canonical separator used to join per-factor values into a composite label.
+# Underscore is filesystem- and shell-safe; pipe (the legacy choice) breaks on
+# Windows paths and many remote storage backends. Legacy pipe-encoded labels
+# are migrated to underscore on read via ``normalize_legacy_composite_label``.
+MULTIHEAD_LABEL_SEPARATOR = "_"
+_LEGACY_LABEL_SEPARATOR = "|"
+
+
+def normalize_legacy_composite_label(value: object) -> str:
+    """Convert any legacy pipe-encoded composite label to the canonical form."""
+    text = "" if value is None else str(value)
+    if not text or _LEGACY_LABEL_SEPARATOR not in text:
+        return text
+    return text.replace(_LEGACY_LABEL_SEPARATOR, MULTIHEAD_LABEL_SEPARATOR)
+
 
 @dataclass
 class ModelConfig:
@@ -63,8 +78,8 @@ class Factor:
 class LabelingScheme:
     """Multi-factor compositional labeling scheme.
 
-    Each Factor defines one labeling axis; composite labels are encoded by joining
-    per-factor values with ``|``.
+    Each Factor defines one labeling axis; composite labels are encoded by
+    joining per-factor values with ``MULTIHEAD_LABEL_SEPARATOR`` (``_``).
     """
 
     name: str
@@ -102,10 +117,12 @@ class LabelingScheme:
             raise ValueError(
                 f"Expected {len(self.factors)} factor values, got {len(factor_values)}"
             )
-        return "|".join(factor_values)
+        return MULTIHEAD_LABEL_SEPARATOR.join(factor_values)
 
     def decode_label(self, composite: str) -> List[str]:
-        parts = composite.split("|")
+        # Accept legacy pipe-encoded labels by transparently re-splitting them.
+        normalized = normalize_legacy_composite_label(composite)
+        parts = normalized.split(MULTIHEAD_LABEL_SEPARATOR)
         if len(parts) != len(self.factors):
             raise ValueError(
                 f"Expected {len(self.factors)} parts in composite label, got {len(parts)}"

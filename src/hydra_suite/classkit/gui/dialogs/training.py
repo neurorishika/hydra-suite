@@ -340,9 +340,6 @@ class ClassKitTrainingDialog(QDialog):
             self.mode_combo, self._normalize_mode_key(settings.get("mode"))
         )
         self._set_combo_value(self.device_combo, settings.get("device"))
-        self._set_combo_value(
-            self.compute_runtime_combo, settings.get("compute_runtime")
-        )
         self._set_combo_value(self.base_model_combo, settings.get("base_model"))
         self._initial_model_path_edit.setText(
             self._normalize_path_text(settings.get("initial_model_path"))
@@ -403,6 +400,8 @@ class ClassKitTrainingDialog(QDialog):
                 "custom_gradual_unfreeze_interval",
             ),
             (self._custom_input_size_spin, "custom_input_size"),
+            (self._custom_head_hidden_dim_spin, "custom_head_hidden_dim"),
+            (self._custom_head_dropout_spin, "custom_head_dropout"),
             (self.hue_spin, "hue"),
             (self.saturation_spin, "saturation"),
             (self.brightness_spin, "brightness"),
@@ -492,6 +491,7 @@ class ClassKitTrainingDialog(QDialog):
                 "flat_yolo",
                 "multihead_yolo",
                 "multihead_custom",
+                "multihead_custom_shared",
             ]
         return ["flat_custom", "flat_yolo"]
 
@@ -506,6 +506,14 @@ class ClassKitTrainingDialog(QDialog):
         if not normalized_modes:
             normalized_modes = self._fallback_mode_keys()
 
+        # Auto-upgrade legacy schemes saved before multihead_custom_shared
+        # existed: if the scheme has multi-factor labels, surface the new
+        # shared-trunk mode even when the persisted training_modes list
+        # predates it.
+        factor_count = len(getattr(self._scheme, "factors", []) or [])
+        if factor_count > 1 and "multihead_custom_shared" not in normalized_modes:
+            normalized_modes.append("multihead_custom_shared")
+
         ordered: list[str] = []
         seen = set()
         for key in [
@@ -513,6 +521,7 @@ class ClassKitTrainingDialog(QDialog):
             "flat_yolo",
             "multihead_yolo",
             "multihead_custom",
+            "multihead_custom_shared",
         ]:
             if key in normalized_modes and key not in seen:
                 ordered.append(key)
@@ -565,6 +574,41 @@ class ClassKitTrainingDialog(QDialog):
         self._set_combo_value(self.mode_family_combo, selected_family)
         self.mode_family_combo.blockSignals(False)
 
+    def _shared_trunk_available(self, structure: object, family: object) -> bool:
+        """True when the shared-trunk multi-head mode is offered for the
+        currently-resolved scheme + structure + family combination."""
+        if str(structure or "").strip() != "multihead":
+            return False
+        if str(family or "").strip() != "custom":
+            return False
+        return "multihead_custom_shared" in self._resolved_mode_keys()
+
+    def _populate_mode_trunk_combo(
+        self, structure: object, family: object, preferred: object
+    ) -> None:
+        if not hasattr(self, "mode_trunk_combo"):
+            return
+        available = self._shared_trunk_available(structure, family)
+        self.mode_trunk_combo.blockSignals(True)
+        self.mode_trunk_combo.clear()
+        if available:
+            self.mode_trunk_combo.addItem(
+                "Per-factor backbones (one .pth per factor)", "default"
+            )
+            self.mode_trunk_combo.addItem(
+                "Shared trunk (single backbone, N MLP heads)", "shared"
+            )
+            target = (
+                "shared"
+                if str(preferred or "default").strip() == "shared"
+                else "default"
+            )
+            self._set_combo_value(self.mode_trunk_combo, target)
+        self.mode_trunk_combo.blockSignals(False)
+        if hasattr(self, "_mode_trunk_row_label"):
+            self._mode_trunk_row_label.setVisible(available)
+        self.mode_trunk_combo.setVisible(available)
+
     def _sync_mode_controls_from_mode(self, mode: object = None) -> None:
         normalized_mode = self._normalize_mode_key(
             mode or self.mode_combo.currentData()
@@ -587,6 +631,12 @@ class ClassKitTrainingDialog(QDialog):
         self.mode_structure_combo.blockSignals(False)
 
         self._populate_mode_family_combo(selected_structure, preferred_family)
+        preferred_trunk = (
+            "shared" if normalized_mode == "multihead_custom_shared" else "default"
+        )
+        self._populate_mode_trunk_combo(
+            selected_structure, preferred_family, preferred_trunk
+        )
 
     def _sync_mode_combo_from_controls(self) -> None:
         structure = str(self.mode_structure_combo.currentData() or "").strip()
@@ -594,7 +644,18 @@ class ClassKitTrainingDialog(QDialog):
         if not structure or not family:
             return
 
-        target_mode = f"{structure}_{family}"
+        trunk = ""
+        if hasattr(self, "mode_trunk_combo"):
+            trunk = str(self.mode_trunk_combo.currentData() or "").strip()
+        if (
+            structure == "multihead"
+            and family == "custom"
+            and trunk == "shared"
+            and self._shared_trunk_available(structure, family)
+        ):
+            target_mode = "multihead_custom_shared"
+        else:
+            target_mode = f"{structure}_{family}"
         index = self.mode_combo.findData(target_mode)
         if index < 0:
             return
@@ -605,6 +666,25 @@ class ClassKitTrainingDialog(QDialog):
         structure = self.mode_structure_combo.currentData()
         preferred_family = self.mode_family_combo.currentData()
         self._populate_mode_family_combo(structure, preferred_family)
+        preferred_trunk = (
+            self.mode_trunk_combo.currentData()
+            if hasattr(self, "mode_trunk_combo")
+            else "default"
+        )
+        self._populate_mode_trunk_combo(
+            structure, self.mode_family_combo.currentData(), preferred_trunk
+        )
+        self._sync_mode_combo_from_controls()
+
+    def _on_mode_family_changed(self) -> None:
+        structure = self.mode_structure_combo.currentData()
+        family = self.mode_family_combo.currentData()
+        preferred_trunk = (
+            self.mode_trunk_combo.currentData()
+            if hasattr(self, "mode_trunk_combo")
+            else "default"
+        )
+        self._populate_mode_trunk_combo(structure, family, preferred_trunk)
         self._sync_mode_combo_from_controls()
 
     def _on_internal_mode_changed(self) -> None:
@@ -632,6 +712,18 @@ class ClassKitTrainingDialog(QDialog):
             "Choose the training backend for the selected label layout."
         )
         form.addRow("<b>Model Family:</b>", self.mode_family_combo)
+
+        self.mode_trunk_combo = QComboBox()
+        self.mode_trunk_combo.setToolTip(
+            "Per-factor backbones train one full model per factor (independent "
+            "fine-tuning, .multihead.json bundle). Shared trunk reuses a single "
+            "backbone with one MLP head per factor (single .pth)."
+        )
+        self._mode_trunk_row_label = QLabel("<b>Trunk Strategy:</b>")
+        form.addRow(self._mode_trunk_row_label, self.mode_trunk_combo)
+        self._mode_trunk_row_label.setVisible(False)
+        self.mode_trunk_combo.setVisible(False)
+
         self._sync_mode_controls_from_mode()
 
         self.device_combo = QComboBox()
@@ -651,7 +743,6 @@ class ClassKitTrainingDialog(QDialog):
         )
         form.addRow("<b>Training Device:</b>", self.device_combo)
 
-        self._build_compute_runtime_combo(form)
         self._build_base_model_combo(form)
         self._build_initial_model_selector(form)
         self._build_hyperparams_widgets(form)
@@ -771,50 +862,6 @@ class ClassKitTrainingDialog(QDialog):
         row_layout.addLayout(button_row)
         row_layout.addWidget(self._auto_size_helper_label)
         layout.addWidget(self._auto_size_controls)
-
-    def _build_compute_runtime_combo(self, form):
-        """Build the inference runtime combo box."""
-        self.compute_runtime_combo = QComboBox()
-        try:
-            from hydra_suite.runtime.compute_runtime import (
-                runtime_label,
-                supported_runtimes_for_pipeline,
-            )
-
-            _runtimes = supported_runtimes_for_pipeline("tiny_classify")
-            for _rt in _runtimes:
-                self.compute_runtime_combo.addItem(runtime_label(_rt), _rt)
-        except Exception:
-            self.compute_runtime_combo.addItem("CPU", "cpu")
-
-        self._select_preferred_compute_runtime()
-        self.device_combo.currentIndexChanged.connect(
-            lambda _index: self._select_preferred_compute_runtime()
-        )
-
-        self.compute_runtime_combo.setToolTip(
-            "Runtime used for Tiny CNN inference in ClassKit (and MAT integration).\n"
-            "ONNX / TensorRT runtimes use exported artifacts (auto-exported after training).\n"
-            "On Apple Silicon, ONNX (CoreML) uses ONNX Runtime's CoreMLExecutionProvider."
-        )
-        form.addRow("<b>Inference Runtime:</b>", self.compute_runtime_combo)
-
-    def _preferred_compute_runtime(self) -> str:
-        runtimes = [
-            str(self.compute_runtime_combo.itemData(index) or "")
-            for index in range(self.compute_runtime_combo.count())
-        ]
-        train_device = str(self.device_combo.currentData() or "cpu").strip().lower()
-        if train_device == "mps":
-            return "onnx_coreml" if "onnx_coreml" in runtimes else "mps"
-        if train_device == "cuda":
-            return "onnx_cuda" if "onnx_cuda" in runtimes else "cuda"
-        return "cpu"
-
-    def _select_preferred_compute_runtime(self) -> None:
-        index = self.compute_runtime_combo.findData(self._preferred_compute_runtime())
-        if index >= 0:
-            self.compute_runtime_combo.setCurrentIndex(index)
 
     def _build_base_model_combo(self, form):
         """Build the YOLO base model combo box."""
@@ -1405,6 +1452,35 @@ class ClassKitTrainingDialog(QDialog):
         )
         custom_form.addRow(self._custom_input_size_label, self._custom_input_size_spin)
 
+        # Shared-trunk multi-head: per-factor head MLP shape.
+        # Visible only when the training mode is multihead_custom_shared.
+        self._custom_head_hidden_dim_label = QLabel("Head hidden dim:")
+        self._custom_head_hidden_dim_spin = QSpinBox()
+        self._custom_head_hidden_dim_spin.setRange(16, 2048)
+        self._custom_head_hidden_dim_spin.setSingleStep(32)
+        self._custom_head_hidden_dim_spin.setValue(256)
+        self._custom_head_hidden_dim_spin.setToolTip(
+            "Hidden dimension of the per-factor MLP head (Linear -> GELU -> "
+            "Dropout -> Linear). Shared-trunk multi-head only."
+        )
+        custom_form.addRow(
+            self._custom_head_hidden_dim_label, self._custom_head_hidden_dim_spin
+        )
+
+        self._custom_head_dropout_label = QLabel("Head dropout:")
+        self._custom_head_dropout_spin = QDoubleSpinBox()
+        self._custom_head_dropout_spin.setRange(0.0, 0.9)
+        self._custom_head_dropout_spin.setSingleStep(0.05)
+        self._custom_head_dropout_spin.setDecimals(2)
+        self._custom_head_dropout_spin.setValue(0.1)
+        self._custom_head_dropout_spin.setToolTip(
+            "Dropout applied between the two Linear layers of each per-factor "
+            "MLP head. Shared-trunk multi-head only."
+        )
+        custom_form.addRow(
+            self._custom_head_dropout_label, self._custom_head_dropout_spin
+        )
+
         self._custom_general_settings_note = QLabel(
             "Training epochs, batch size, learning rate, and patience always come from the General tab."
         )
@@ -1621,6 +1697,9 @@ class ClassKitTrainingDialog(QDialog):
             lambda _index: self._on_mode_structure_changed()
         )
         self.mode_family_combo.currentIndexChanged.connect(
+            lambda _index: self._on_mode_family_changed()
+        )
+        self.mode_trunk_combo.currentIndexChanged.connect(
             lambda _index: self._sync_mode_combo_from_controls()
         )
         self.mode_combo.currentIndexChanged.connect(self._on_internal_mode_changed)
@@ -1676,6 +1755,7 @@ class ClassKitTrainingDialog(QDialog):
             "flat_custom": "Flat - Custom CNN",
             "multihead_yolo": "Multi-head - YOLO-classify (one model per factor)",
             "multihead_custom": "Multi-head - Custom CNN (one model per factor)",
+            "multihead_custom_shared": "Multi-head - Custom CNN (shared trunk, one .pth)",
         }
         for key in self._resolved_mode_keys():
             self.mode_combo.addItem(labels[key], key)
@@ -1721,6 +1801,16 @@ class ClassKitTrainingDialog(QDialog):
             if not is_custom and self.tabs.currentIndex() == self._custom_tab_idx:
                 self.tabs.setCurrentIndex(0)
 
+        is_shared_trunk = mode == "multihead_custom_shared"
+        if hasattr(self, "_custom_head_hidden_dim_spin"):
+            for w in (
+                self._custom_head_hidden_dim_label,
+                self._custom_head_hidden_dim_spin,
+                self._custom_head_dropout_label,
+                self._custom_head_dropout_spin,
+            ):
+                w.setVisible(is_shared_trunk)
+
         _desc = {
             "flat_yolo": (
                 "YOLO Classify \u2014 fine-tuned pretrained backbone. Higher accuracy; "
@@ -1736,6 +1826,10 @@ class ClassKitTrainingDialog(QDialog):
             ),
             "multihead_custom": (
                 "Multi-head Custom CNN — one backbone per factor with the same fine-tuning controls as single-head custom training."
+            ),
+            "multihead_custom_shared": (
+                "Multi-head Custom CNN (shared trunk) — single backbone with one classification head per factor, "
+                "saved as a single .pth artifact."
             ),
         }
         if hasattr(self, "_mode_desc_label"):
@@ -2211,18 +2305,20 @@ class ClassKitTrainingDialog(QDialog):
         contrast_value = self.contrast_spin.value()
         monochrome_value = self.monochrome_check.isChecked()
 
-        _rt = str(self.compute_runtime_combo.currentData() or "cpu")
         _train_device = str(self.device_combo.currentData() or "cpu")
 
         _mode = self.mode_combo.currentData() or ""
-        _is_custom = _mode in ("flat_custom", "multihead_custom")
+        _is_custom = _mode in (
+            "flat_custom",
+            "multihead_custom",
+            "multihead_custom_shared",
+        )
         fine_tune_method = self._custom_fine_tune_method_combo.currentData()
         custom_backbone = self._custom_backbone_combo.currentData()
         custom_is_tiny = _is_custom and custom_backbone == "tinyclassifier"
 
         return {
             "mode": self._normalize_mode_key(self.mode_combo.currentData()),
-            "compute_runtime": _rt,
             "device": _train_device,
             "base_model": self.base_model_combo.currentData(),
             "initial_model_path": self._normalize_path_text(
@@ -2277,6 +2373,8 @@ class ClassKitTrainingDialog(QDialog):
             "custom_gradual_unfreeze_interval": self._custom_gradual_unfreeze_interval_spin.value(),
             "auto_size_scale_factor": self._auto_size_scale_spin.value(),
             "custom_input_size": self._custom_input_size_spin.value(),
+            "custom_head_hidden_dim": self._custom_head_hidden_dim_spin.value(),
+            "custom_head_dropout": self._custom_head_dropout_spin.value(),
             "flipud": flipud_value,
             "fliplr": fliplr_value,
             "hue": hue_value,

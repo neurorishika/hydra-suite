@@ -1,6 +1,7 @@
 # src/hydra_suite/widgets/dialogs.py
 """BaseDialog — standard QDialog base class for all kit dialogs."""
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout, QWidget
 
 HYDRA_DIALOG_TEXT_COLOR = "#ffffff"
@@ -295,6 +296,16 @@ class BaseDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
+        # Make dialogs behave as standalone movable/resizable windows rather
+        # than being locked to the parent (sheet-like behavior on macOS).
+        self.setWindowFlags(
+            Qt.Dialog
+            | Qt.WindowTitleHint
+            | Qt.WindowSystemMenuHint
+            | Qt.WindowCloseButtonHint
+            | Qt.WindowMinMaxButtonsHint
+        )
+        self.setSizeGripEnabled(True)
 
         if apply_dark_style:
             self.setStyleSheet(HYDRA_DIALOG_STYLE)

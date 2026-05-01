@@ -47,6 +47,7 @@ class MachineLabelingDialog(BaseDialog):
     METHOD_APRILTAG = "apriltag"
     MODEL_SOURCE_LOADED = "loaded"
     MODEL_SOURCE_HISTORY = "history"
+    MODEL_SOURCE_OTHER_PROJECT = "other_project"
     MODEL_SOURCE_FILE = "file"
 
     def __init__(
@@ -69,6 +70,8 @@ class MachineLabelingDialog(BaseDialog):
         self._db_path = db_path
         self._selected_model_entry: Optional[dict] = None
         self._selected_checkpoint_path: Optional[str] = None
+        self._other_project_path: Optional[Path] = None
+        self._other_project_db_path: Optional[Path] = None
 
         content = QWidget(self)
         layout = QVBoxLayout(content)
@@ -120,11 +123,14 @@ class MachineLabelingDialog(BaseDialog):
         self.add_content(content)
 
         if self._predictions_available:
-            self.model_source_combo.setCurrentIndex(0)
+            default_source = self.MODEL_SOURCE_LOADED
         elif self._model_history_entries:
-            self.model_source_combo.setCurrentIndex(1)
+            default_source = self.MODEL_SOURCE_HISTORY
         else:
-            self.model_source_combo.setCurrentIndex(2)
+            default_source = self.MODEL_SOURCE_FILE
+        default_index = self.model_source_combo.findData(default_source)
+        if default_index >= 0:
+            self.model_source_combo.setCurrentIndex(default_index)
         self._sync_method_state()
 
     def _build_model_page(self, image_count: int) -> QWidget:
@@ -134,7 +140,7 @@ class MachineLabelingDialog(BaseDialog):
 
         note = QLabel(
             "Use a trained model to write unverified review labels. You can reuse the current loaded predictions, "
-            "pick a model from this project's history, or choose a checkpoint file from another project. "
+            "pick a model from this project's history, browse another project's history, or choose a checkpoint file. "
             f"This can target a subset or all {image_count:,} images in the project."
         )
         note.setWordWrap(True)
@@ -151,6 +157,10 @@ class MachineLabelingDialog(BaseDialog):
         )
         self.model_source_combo.addItem(
             "Choose from this project's model history", self.MODEL_SOURCE_HISTORY
+        )
+        self.model_source_combo.addItem(
+            "Choose from another project's model history",
+            self.MODEL_SOURCE_OTHER_PROJECT,
         )
         self.model_source_combo.addItem(
             "Choose checkpoint file", self.MODEL_SOURCE_FILE
@@ -303,6 +313,10 @@ class MachineLabelingDialog(BaseDialog):
         source = self.selected_model_source()
         if source == self.MODEL_SOURCE_HISTORY:
             self._selected_model_entry = None
+        elif source == self.MODEL_SOURCE_OTHER_PROJECT:
+            self._selected_model_entry = None
+            self._other_project_path = None
+            self._other_project_db_path = None
         elif source == self.MODEL_SOURCE_FILE:
             self._selected_checkpoint_path = None
         self._sync_method_state()
@@ -311,6 +325,8 @@ class MachineLabelingDialog(BaseDialog):
         source = self.selected_model_source()
         if source == self.MODEL_SOURCE_HISTORY:
             self._pick_model_history_entry()
+        elif source == self.MODEL_SOURCE_OTHER_PROJECT:
+            self._pick_other_project_history_entry()
         elif source == self.MODEL_SOURCE_FILE:
             self._pick_checkpoint_file()
 
@@ -333,6 +349,97 @@ class MachineLabelingDialog(BaseDialog):
         )
         if dlg.exec() and dlg.selected_entry():
             self._selected_model_entry = dict(dlg.selected_entry())
+            self._sync_method_state()
+
+    def _pick_other_project_history_entry(self) -> None:
+        from hydra_suite.classkit.core.store.db import ClassKitDB
+        from hydra_suite.classkit.gui.project import (
+            classkit_db_path,
+            legacy_classkit_db_path,
+            project_exists,
+        )
+
+        from .model_history import ModelHistoryDialog
+
+        start_dir = ""
+        if self._other_project_path is not None:
+            start_dir = str(Path(self._other_project_path).parent)
+        elif self._project_path:
+            start_dir = str(Path(self._project_path).parent)
+
+        chosen = QFileDialog.getExistingDirectory(
+            self,
+            "Select Another ClassKit Project",
+            start_dir,
+        )
+        if not chosen:
+            return
+
+        project_dir = Path(chosen).expanduser().resolve()
+        if not project_exists(project_dir):
+            QMessageBox.warning(
+                self,
+                "Not a ClassKit Project",
+                f"The selected folder does not contain a ClassKit project bundle:\n{project_dir}",
+            )
+            return
+
+        if self._project_path is not None:
+            try:
+                current_dir = Path(self._project_path).expanduser().resolve()
+            except Exception:
+                current_dir = None
+            if current_dir is not None and current_dir == project_dir:
+                QMessageBox.information(
+                    self,
+                    "Same Project Selected",
+                    "The chosen folder is the current project. Use 'Choose from this project's model history' instead.",
+                )
+                return
+
+        bundle_db = classkit_db_path(project_dir)
+        legacy_db = legacy_classkit_db_path(project_dir)
+        if bundle_db.exists():
+            db_path = bundle_db
+        elif legacy_db.exists():
+            db_path = legacy_db
+        else:
+            QMessageBox.warning(
+                self,
+                "No Model Database",
+                f"The selected project has no ClassKit database:\n{project_dir}",
+            )
+            return
+
+        try:
+            entries = ClassKitDB(db_path).list_model_caches()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Failed To Load History",
+                f"Could not read model history from:\n{db_path}\n\n{exc}",
+            )
+            return
+
+        if not entries:
+            QMessageBox.information(
+                self,
+                "No Models In Project",
+                f"The selected project has no trained models in its history:\n{project_dir}",
+            )
+            return
+
+        dlg = ModelHistoryDialog(
+            entries,
+            project_path=project_dir,
+            db_path=db_path,
+            parent=self,
+        )
+        dlg.setWindowTitle(f"Models — {project_dir.name}")
+        if dlg.exec() and dlg.selected_entry():
+            self._selected_model_entry = dict(dlg.selected_entry())
+            self._other_project_path = project_dir
+            self._other_project_db_path = db_path
             self._sync_method_state()
 
     def _pick_checkpoint_file(self) -> None:
@@ -361,12 +468,17 @@ class MachineLabelingDialog(BaseDialog):
             source = self.selected_model_source()
             needs_picker = source in {
                 self.MODEL_SOURCE_HISTORY,
+                self.MODEL_SOURCE_OTHER_PROJECT,
                 self.MODEL_SOURCE_FILE,
             }
             self.model_source_pick_btn.setVisible(needs_picker)
             self.model_source_clear_btn.setVisible(
                 (
                     source == self.MODEL_SOURCE_HISTORY
+                    and self._selected_model_entry is not None
+                )
+                or (
+                    source == self.MODEL_SOURCE_OTHER_PROJECT
                     and self._selected_model_entry is not None
                 )
                 or (
@@ -427,6 +539,46 @@ class MachineLabelingDialog(BaseDialog):
                     )
                     self.model_warning.setText(
                         "No project-history model is selected yet. Choose one to run machine labeling from that checkpoint."
+                    )
+                    self.model_warning.setStyleSheet(
+                        "padding: 8px; background:#2d2a1f; border-left:3px solid #d7ba7d; border-radius:6px; color:#f0ddb0;"
+                    )
+            elif source == self.MODEL_SOURCE_OTHER_PROJECT:
+                self.model_source_pick_btn.setText("Choose Project…")
+                if (
+                    self._selected_model_entry is not None
+                    and self._other_project_path is not None
+                ):
+                    display_name = self._model_entry_display_name(
+                        self._selected_model_entry
+                    )
+                    artifact_paths = (
+                        self._selected_model_entry.get("artifact_paths") or []
+                    )
+                    path_name = Path(artifact_paths[0]).name if artifact_paths else ""
+                    project_name = Path(self._other_project_path).name
+                    self.model_source_detail.setText(
+                        f"Selected model from <b>{project_name}</b>: <b>{display_name}</b>"
+                        + (
+                            f"<br><span style='color:#ffffff'>{path_name}</span>"
+                            if path_name
+                            else ""
+                        )
+                        + f"<br><span style='color:#9cdcfe'>{self._other_project_path}</span>"
+                    )
+                    self.model_warning.setText(
+                        "ClassKit will load the selected model from the other project's history, run inference on this project's images, and apply the resulting labels as review candidates. The other project's files are read in place — nothing is copied."
+                    )
+                    self.model_warning.setStyleSheet(
+                        "padding: 8px; background:#1f2d22; border-left:3px solid #4ec943; border-radius:6px; color:#cfe9d1;"
+                    )
+                    ok_enabled = True
+                else:
+                    self.model_source_detail.setText(
+                        "Pick a different ClassKit project folder, then choose one of its trained models from history."
+                    )
+                    self.model_warning.setText(
+                        "No external project model is selected yet. Choose a project folder to browse its model history."
                     )
                     self.model_warning.setStyleSheet(
                         "padding: 8px; background:#2d2a1f; border-left:3px solid #d7ba7d; border-radius:6px; color:#f0ddb0;"
@@ -506,6 +658,11 @@ class MachineLabelingDialog(BaseDialog):
                     "model_source": self.selected_model_source(),
                     "model_entry": self._selected_model_entry,
                     "checkpoint_path": self._selected_checkpoint_path,
+                    "other_project_path": (
+                        str(self._other_project_path)
+                        if self._other_project_path is not None
+                        else None
+                    ),
                 }
             )
         if payload["method"] == self.METHOD_APRILTAG:

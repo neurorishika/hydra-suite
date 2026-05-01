@@ -33,6 +33,7 @@ from hydra_suite.data.project_bundle import (
 )
 from hydra_suite.detectkit.config.schemas import DetectKitConfig
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
 from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
@@ -796,12 +797,26 @@ class DetectKitMainWindow(QMainWindow):
             )
             if destination_dir is None:
                 return
-            imported_dir = import_project_bundle_archive(
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Project Zip", str(exc))
+            return
+
+        def _extract(set_status, _set_progress):
+            set_status("Extracting project archive…")
+            return import_project_bundle_archive(
                 archive_path,
                 destination_dir,
                 expected_kit="detectkit",
             )
-        except Exception as exc:
+
+        try:
+            imported_dir = run_blocking_with_busy_dialog(
+                self,
+                _extract,
+                title="Open Project Zip",
+                message="Extracting project archive…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Open Project Zip", str(exc))
             return
 
@@ -891,7 +906,7 @@ class DetectKitMainWindow(QMainWindow):
             progress.setWindowTitle("Make Project Portable")
             progress.setCancelButton(None)
             progress.setMinimumDuration(0)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.ApplicationModal)
             progress.show()
 
             worker = _DetectKitPortableWorker(self._project.project_dir)
@@ -933,8 +948,24 @@ class DetectKitMainWindow(QMainWindow):
 
         try:
             self._save_current_project()
-            after_counts = make_detectkit_project_portable(self._project)
         except Exception as exc:
+            QMessageBox.warning(self, "Make Project Portable", str(exc))
+            return False
+
+        project = self._project
+
+        def _materialize(set_status, _set_progress):
+            set_status("Copying linked sources and artifacts into the bundle…")
+            return make_detectkit_project_portable(project)
+
+        try:
+            after_counts = run_blocking_with_busy_dialog(
+                self,
+                _materialize,
+                title="Make Project Portable",
+                message="Copying linked sources and artifacts into the bundle…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Make Project Portable", str(exc))
             return False
 
@@ -985,11 +1016,24 @@ class DetectKitMainWindow(QMainWindow):
             if not self.make_project_portable(interactive=False):
                 return
             self._save_current_project()
-            written_path = export_project_bundle_archive(
-                self._project.project_dir,
-                archive_path,
-            )
         except Exception as exc:
+            QMessageBox.warning(self, "Export Project Zip", str(exc))
+            return
+
+        project_dir = self._project.project_dir
+
+        def _archive(set_status, _set_progress):
+            set_status("Writing zip archive…")
+            return export_project_bundle_archive(project_dir, archive_path)
+
+        try:
+            written_path = run_blocking_with_busy_dialog(
+                self,
+                _archive,
+                title="Export Project Zip",
+                message="Writing zip archive…",
+            )
+        except BusyTaskError as exc:
             QMessageBox.warning(self, "Export Project Zip", str(exc))
             return
 
