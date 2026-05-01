@@ -2490,13 +2490,13 @@ class ConfigOrchestrator:
         filepath = self._panels.setup.combo_presets.currentData()
         if not filepath or not os.path.exists(filepath):
             QMessageBox.warning(
-                self, "Preset Not Found", f"Preset file not found: {filepath}"
+                self._mw, "Preset Not Found", f"Preset file not found: {filepath}"
             )
             return
 
         # Confirm if current settings differ significantly
         reply = QMessageBox.question(
-            self,
+            self._mw,
             "Load Preset",
             f"Load preset: {self._panels.setup.combo_presets.currentText()}?\n\n"
             "This will replace your current parameter values.\n"
