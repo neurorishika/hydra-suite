@@ -400,6 +400,8 @@ class ClassKitTrainingDialog(QDialog):
                 "custom_gradual_unfreeze_interval",
             ),
             (self._custom_input_size_spin, "custom_input_size"),
+            (self._custom_head_hidden_dim_spin, "custom_head_hidden_dim"),
+            (self._custom_head_dropout_spin, "custom_head_dropout"),
             (self.hue_spin, "hue"),
             (self.saturation_spin, "saturation"),
             (self.brightness_spin, "brightness"),
@@ -1367,6 +1369,35 @@ class ClassKitTrainingDialog(QDialog):
         )
         custom_form.addRow(self._custom_input_size_label, self._custom_input_size_spin)
 
+        # Shared-trunk multi-head: per-factor head MLP shape.
+        # Visible only when the training mode is multihead_custom_shared.
+        self._custom_head_hidden_dim_label = QLabel("Head hidden dim:")
+        self._custom_head_hidden_dim_spin = QSpinBox()
+        self._custom_head_hidden_dim_spin.setRange(16, 2048)
+        self._custom_head_hidden_dim_spin.setSingleStep(32)
+        self._custom_head_hidden_dim_spin.setValue(256)
+        self._custom_head_hidden_dim_spin.setToolTip(
+            "Hidden dimension of the per-factor MLP head (Linear -> GELU -> "
+            "Dropout -> Linear). Shared-trunk multi-head only."
+        )
+        custom_form.addRow(
+            self._custom_head_hidden_dim_label, self._custom_head_hidden_dim_spin
+        )
+
+        self._custom_head_dropout_label = QLabel("Head dropout:")
+        self._custom_head_dropout_spin = QDoubleSpinBox()
+        self._custom_head_dropout_spin.setRange(0.0, 0.9)
+        self._custom_head_dropout_spin.setSingleStep(0.05)
+        self._custom_head_dropout_spin.setDecimals(2)
+        self._custom_head_dropout_spin.setValue(0.1)
+        self._custom_head_dropout_spin.setToolTip(
+            "Dropout applied between the two Linear layers of each per-factor "
+            "MLP head. Shared-trunk multi-head only."
+        )
+        custom_form.addRow(
+            self._custom_head_dropout_label, self._custom_head_dropout_spin
+        )
+
         self._custom_general_settings_note = QLabel(
             "Training epochs, batch size, learning rate, and patience always come from the General tab."
         )
@@ -1683,6 +1714,16 @@ class ClassKitTrainingDialog(QDialog):
             self.tabs.setTabVisible(self._custom_tab_idx, is_custom)
             if not is_custom and self.tabs.currentIndex() == self._custom_tab_idx:
                 self.tabs.setCurrentIndex(0)
+
+        is_shared_trunk = mode == "multihead_custom_shared"
+        if hasattr(self, "_custom_head_hidden_dim_spin"):
+            for w in (
+                self._custom_head_hidden_dim_label,
+                self._custom_head_hidden_dim_spin,
+                self._custom_head_dropout_label,
+                self._custom_head_dropout_spin,
+            ):
+                w.setVisible(is_shared_trunk)
 
         _desc = {
             "flat_yolo": (
@@ -2246,6 +2287,8 @@ class ClassKitTrainingDialog(QDialog):
             "custom_gradual_unfreeze_interval": self._custom_gradual_unfreeze_interval_spin.value(),
             "auto_size_scale_factor": self._auto_size_scale_spin.value(),
             "custom_input_size": self._custom_input_size_spin.value(),
+            "custom_head_hidden_dim": self._custom_head_hidden_dim_spin.value(),
+            "custom_head_dropout": self._custom_head_dropout_spin.value(),
             "flipud": flipud_value,
             "fliplr": fliplr_value,
             "hue": hue_value,

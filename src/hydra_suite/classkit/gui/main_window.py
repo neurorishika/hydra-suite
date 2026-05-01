@@ -7264,6 +7264,15 @@ class MainWindow(QMainWindow):
                     ignore_label_name=str(
                         settings.get("ignore_label_name", "unknown") or "unknown"
                     ),
+                    head_kind=(
+                        "multihead_shared_trunk"
+                        if mode == "multihead_custom_shared"
+                        else "flat"
+                    ),
+                    head_hidden_dim=int(
+                        settings.get("custom_head_hidden_dim", 256) or 256
+                    ),
+                    head_dropout=float(settings.get("custom_head_dropout", 0.1) or 0.0),
                 ),
             )
         return spec
