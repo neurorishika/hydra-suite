@@ -836,6 +836,9 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_identity_disagree_min_run.setValue(
             get_cfg("identity_disagree_min_run", default=5)
         )
+        self._panels.postprocess.chk_identity_gates_trajectory_structure.setChecked(
+            get_cfg("identity_gates_trajectory_structure", default=True)
+        )
 
     def _load_config_visualization(self, get_cfg):
         self._panels.postprocess.check_show_labels.setChecked(
@@ -1062,6 +1065,12 @@ class ConfigOrchestrator:
         )
         self._panels.tracking.spin_identity_rejoin_threshold.setValue(
             float(get_cfg("identity_rejoin_threshold", default=0.5))
+        )
+        self._panels.tracking.chk_enable_identity_swap_correction.setChecked(
+            bool(get_cfg("enable_identity_swap_correction", default=True))
+        )
+        self._panels.tracking.spin_identity_swap_min_frames.setValue(
+            int(get_cfg("identity_swap_min_frames", default=8))
         )
         apriltag_family = get_cfg("apriltag_family", default="tag36h11")
         idx = self._panels.identity.combo_apriltag_family.findText(apriltag_family)
@@ -1673,6 +1682,7 @@ class ConfigOrchestrator:
                 "merge_agreement_distance_multiplier": self._panels.postprocess.spin_merge_overlap_multiplier.value(),
                 "min_overlap_frames": self._panels.postprocess.spin_min_overlap_frames.value(),
                 "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
+                "identity_gates_trajectory_structure": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
@@ -1760,6 +1770,8 @@ class ConfigOrchestrator:
                 "identity_transition_epsilon": self._panels.tracking.spin_identity_transition_epsilon.value(),
                 "identity_unknown_prior": self._panels.tracking.spin_identity_unknown_prior.value(),
                 "identity_rejoin_threshold": self._panels.tracking.spin_identity_rejoin_threshold.value(),
+                "enable_identity_swap_correction": self._panels.tracking.chk_enable_identity_swap_correction.isChecked(),
+                "identity_swap_min_frames": self._panels.tracking.spin_identity_swap_min_frames.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
                 "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
@@ -2245,6 +2257,7 @@ class ConfigOrchestrator:
             * scaled_body_size,
             "MIN_OVERLAP_FRAMES": self._panels.postprocess.spin_min_overlap_frames.value(),
             "IDENTITY_DISAGREE_MIN_RUN": self._panels.postprocess.spin_identity_disagree_min_run.value(),
+            "IDENTITY_GATES_TRAJECTORY_STRUCTURE": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
             # Dataset generation parameters
             "ENABLE_DATASET_GENERATION": self._panels.dataset.chk_enable_dataset_gen.isChecked(),
             "DATASET_NAME": "",
@@ -2313,6 +2326,18 @@ class ConfigOrchestrator:
             "IDENTITY_TRANSITION_EPSILON": self._panels.tracking.spin_identity_transition_epsilon.value(),
             "IDENTITY_UNKNOWN_PRIOR": self._panels.tracking.spin_identity_unknown_prior.value(),
             "IDENTITY_REJOIN_THRESHOLD": self._panels.tracking.spin_identity_rejoin_threshold.value(),
+            "IDENTITY_SWAP_ENABLED": self._panels.tracking.chk_enable_identity_swap_correction.isChecked(),
+            "IDENTITY_SWAP_MIN_FRAMES": self._panels.tracking.spin_identity_swap_min_frames.value(),
+            # Advanced-config-only knobs (no UI; override via advanced_config.json)
+            "IDENTITY_SWAP_CONF_MARGIN": float(
+                self._mw.advanced_config.get("identity_swap_conf_margin", 0.2)
+            ),
+            "IDENTITY_REJOIN_VELOCITY_BUDGET": float(
+                self._mw.advanced_config.get("identity_rejoin_velocity_budget", 1.5)
+            ),
+            "IDENTITY_REJOIN_DIST_FLOOR": self._mw.advanced_config.get(
+                "identity_rejoin_dist_floor", None
+            ),
             "CNN_CLASSIFIER_WINDOW": 10,
             "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
@@ -2656,6 +2681,11 @@ class ConfigOrchestrator:
             # Dataset Generation - YOLO Detection Parameters (separate from tracking)
             "dataset_yolo_confidence_threshold": 0.05,  # Very low - detect all animals including uncertain ones for annotation
             "dataset_yolo_iou_threshold": 0.5,  # Moderate - remove obvious duplicates but keep borderline cases for manual review
+            # Identity swap-correction & rejoin gate (advanced; UI-exposed defaults
+            # cover most cases — tune here only if defaults are inappropriate).
+            "identity_swap_conf_margin": 0.2,  # prob margin to count a frame as mutual mismatch
+            "identity_rejoin_velocity_budget": 1.5,  # safety factor on (frames_lost * v_max) for identity rejoin distance
+            "identity_rejoin_dist_floor": None,  # absolute min rejoin distance (None = 2 * body_size)
         }
 
         if os.path.exists(config_path):

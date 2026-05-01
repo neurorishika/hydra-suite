@@ -3189,10 +3189,17 @@ class TrackingWorker(QThread):
                 profiler.tock("cost_matrix")
                 profiler.tick("hungarian")
 
-                # Build committed slot map for identity-first rejoining
+                # Build committed slot map for identity-first rejoining.
+                # Gated by ASSOCIATION_IDENTITY_HINT_SCALE so that weight=0
+                # means "decoder labels tracks but does not influence which
+                # detections are assigned to which slots" — geometry alone
+                # decides associations, matching the same gate used by the
+                # Bayesian cost term.
                 _committed_slot_identities: "dict | None" = None
-                if _identity_online_decoder is not None and params.get(
-                    "ENABLE_IDENTITY_ONLINE_DECODER", False
+                if (
+                    _identity_online_decoder is not None
+                    and params.get("ENABLE_IDENTITY_ONLINE_DECODER", False)
+                    and float(params.get("ASSOCIATION_IDENTITY_HINT_SCALE", 0.3)) > 0.0
                 ):
                     _csmap: dict = {}
                     for _s in range(N):
@@ -3212,6 +3219,7 @@ class TrackingWorker(QThread):
                     spatial_candidates,
                     association_data=association_data,
                     committed_slot_identities=_committed_slot_identities,
+                    missed_frames=missed_frames,
                 )
                 respawned_matches = {r for r in rows if track_states[r] == "lost"}
                 _identity_rejoin_slots = {s for s, _ in identity_rejoin_pairs}
