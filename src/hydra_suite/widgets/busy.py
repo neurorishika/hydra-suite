@@ -116,7 +116,9 @@ def run_with_busy_dialog(
     dialog.setWindowTitle(title)
     dialog.setCancelButton(None)
     dialog.setMinimumDuration(0)
-    dialog.setWindowModality(Qt.WindowModal)
+    # ApplicationModal renders as a standalone movable window on macOS;
+    # WindowModal would render the dialog as a sheet attached to the parent.
+    dialog.setWindowModality(Qt.ApplicationModal)
     dialog.setAutoClose(False)
     dialog.setAutoReset(False)
     dialog.show()

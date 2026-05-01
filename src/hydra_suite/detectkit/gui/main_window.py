@@ -906,7 +906,7 @@ class DetectKitMainWindow(QMainWindow):
             progress.setWindowTitle("Make Project Portable")
             progress.setCancelButton(None)
             progress.setMinimumDuration(0)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.ApplicationModal)
             progress.show()
 
             worker = _DetectKitPortableWorker(self._project.project_dir)

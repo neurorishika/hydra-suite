@@ -5,6 +5,7 @@ ClassKit Main Window - Polished and feature-complete UI
 import hashlib
 import json
 import re
+import sys
 import time
 from html import escape
 from pathlib import Path
@@ -524,6 +525,11 @@ class MainWindow(QMainWindow):
         save_btn.triggered.connect(self.save_project)
         toolbar.addAction(save_btn)
 
+        open_folder_btn = QAction("Open Folder", self)
+        open_folder_btn.setStatusTip("Reveal project folder in Finder / file manager")
+        open_folder_btn.triggered.connect(self.open_project_folder)
+        toolbar.addAction(open_folder_btn)
+
         portable_btn = QAction("Make Portable", self)
         portable_btn.setStatusTip("Copy linked images into the project bundle")
         portable_btn.triggered.connect(self.make_project_portable)
@@ -583,7 +589,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         # Export section
-        export_btn = QAction("Export", self)
+        export_btn = QAction("Export Dataset", self)
         export_btn.setStatusTip("Export labeled dataset")
         export_btn.triggered.connect(self.export_dataset)
         toolbar.addAction(export_btn)
@@ -1838,6 +1844,24 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Saving project...")
         self._flush_pending_label_updates(force=True)
         self.status.showMessage("Project saved", 2000)
+
+    def open_project_folder(self):
+        """Reveal the project folder in the system file manager."""
+        if not self.db_path:
+            self.status.showMessage("No project loaded", 2000)
+            return
+        import subprocess
+
+        folder = Path(self.db_path).parent
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            elif sys.platform.startswith("linux"):
+                subprocess.Popen(["xdg-open", str(folder)])
+            else:
+                subprocess.Popen(["explorer", str(folder)])
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
 
     def _load_project_config(self) -> dict:
         """Load project.json if present, otherwise return an empty config."""
