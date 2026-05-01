@@ -21,6 +21,16 @@ these fields:
 Multi-head YOLO bundles are instead described by a sidecar
 `*.multihead.json` manifest; see the spec.
 
+### `multihead_custom_shared` mode
+
+Trains a single torchvision backbone with N parallel MLP heads (one per
+factor) in a shared-trunk multi-head classifier. Produces a single `.pth`
+artifact whose v2 schema carries `factor_names` + `class_names_per_factor`
++ `head_kind="multihead_shared_trunk"`. Unlike `multihead_custom`, no
+`.multihead.json` sidecar is emitted — the checkpoint is self-describing.
+Available on multi-factor schemes (e.g. 2- or 3-factor color tags);
+single-factor schemes still use `flat_custom`.
+
 ## Registry
 
 The registry is stored at `{models_root}/model_registry.json` in the v2

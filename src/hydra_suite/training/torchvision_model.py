@@ -388,10 +388,25 @@ def save_torchvision_checkpoint(
         ckpt.update(tiny_model_checkpoint_metadata(model))
     if not is_multihead:
         ckpt["class_names"] = list(class_names_per_factor[0])
+    # Head-shape fields are managed here so they always have consistent types,
+    # not propagated raw via the trailing extra_meta copy.
+    _HEAD_FIELDS = ("head_kind", "head_hidden_dim", "head_dropout")
+    head_kind = None
+    if isinstance(extra_meta, dict):
+        head_kind = extra_meta.get("head_kind")
+    if head_kind:
+        ckpt["head_kind"] = str(head_kind)
+        if "head_hidden_dim" in extra_meta:
+            ckpt["head_hidden_dim"] = int(extra_meta["head_hidden_dim"])
+        if "head_dropout" in extra_meta:
+            ckpt["head_dropout"] = float(extra_meta["head_dropout"])
+    else:
+        ckpt["head_kind"] = "flat"
     if isinstance(extra_meta, dict) and extra_meta:
         for k, v in extra_meta.items():
-            if k not in ckpt:
-                ckpt[k] = v
+            if k in _HEAD_FIELDS or k in ckpt:
+                continue
+            ckpt[k] = v
     torch.save(ckpt, str(path))
     return path
 
@@ -399,28 +414,49 @@ def save_torchvision_checkpoint(
 def load_torchvision_classifier(
     path: str | Path, device: str = "cpu"
 ) -> tuple[nn.Module, dict[str, Any]]:
-    """Load a torchvision classifier from a unified ClassKit .pth checkpoint.
+    """Load a ClassKit torchvision .pth checkpoint as a ready-to-eval model.
+
+    Dispatches on ``head_kind``:
+      * ``"flat"`` (default): single linear classifier — same as before.
+      * ``"multihead_shared_trunk"``: the new shared-trunk wrapper.
 
     Returns:
         (model_in_eval_mode_on_device, full_ckpt_dict)
     """
-    # weights_only=False required because checkpoint contains non-tensor Python objects
-    # (class_names list, history dict). Safe here since checkpoints are produced by
-    # this codebase. Migrate to weights_only=True + SafeTensors when PyTorch enforces it.
     ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
     arch = ckpt["arch"]
-    num_classes = ckpt["num_classes"]
-    # Reconstruct with trainable_layers=-1 (all), then load state — freezing
-    # state is irrelevant after loading weights for inference.
-    model = build_torchvision_classifier(
-        arch,
-        num_classes,
-        trainable_layers=-1,
-        input_size=ckpt.get("input_size"),
-    )
+    head_kind = str(ckpt.get("head_kind") or "flat")
+
+    if head_kind == "multihead_shared_trunk":
+        from hydra_suite.training.multihead_torchvision_model import (
+            build_multihead_torchvision_classifier,
+        )
+
+        cnpf = ckpt.get("class_names_per_factor") or []
+        if not cnpf:
+            raise ValueError(
+                f"{path!r}: shared-trunk checkpoint missing class_names_per_factor"
+            )
+        model = build_multihead_torchvision_classifier(
+            backbone=arch,
+            class_names_per_factor=cnpf,
+            trainable_layers=-1,
+            head_hidden_dim=int(ckpt.get("head_hidden_dim", 256)),
+            head_dropout=float(ckpt.get("head_dropout", 0.1)),
+            input_size=ckpt.get("input_size"),
+        )
+    else:
+        num_classes = ckpt["num_classes"]
+        model = build_torchvision_classifier(
+            arch,
+            num_classes,
+            trainable_layers=-1,
+            input_size=ckpt.get("input_size"),
+        )
+
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)
-    model.eval()
+    model.train(False)
     return model, ckpt
 
 

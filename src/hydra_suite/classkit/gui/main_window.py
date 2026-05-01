@@ -7155,6 +7155,27 @@ class MainWindow(QMainWindow):
             TrainingRunSpec,
         )
 
+        aug_args: dict = {
+            key: value
+            for key, value in {
+                "flipud": settings.get("flipud", 0.0),
+                "fliplr": settings.get("fliplr", 0.0),
+                "hsv_h": settings.get("hue", 0.0),
+                "hsv_s": settings.get("saturation", 0.0),
+                "hsv_v": settings.get("brightness", 0.0),
+            }.items()
+            if float(value) > 0.0
+        }
+        if mode == "multihead_custom_shared":
+            scheme = self._resolve_training_scheme()
+            factors = list(getattr(scheme, "factors", []) or [])
+            aug_args["class_names_per_factor"] = [
+                list(getattr(f, "labels", []) or []) for f in factors
+            ]
+            aug_args["factor_names"] = [
+                str(getattr(f, "name", "") or f"factor_{i + 1}")
+                for i, f in enumerate(factors)
+            ]
         aug = AugmentationProfile(
             enabled=True,
             flipud=settings.get("flipud", 0.0),
@@ -7164,17 +7185,7 @@ class MainWindow(QMainWindow):
             brightness=settings.get("brightness", 0.0),
             contrast=settings.get("contrast", 0.0),
             monochrome=bool(settings.get("monochrome", False)),
-            args={
-                key: value
-                for key, value in {
-                    "flipud": settings.get("flipud", 0.0),
-                    "fliplr": settings.get("fliplr", 0.0),
-                    "hsv_h": settings.get("hue", 0.0),
-                    "hsv_s": settings.get("saturation", 0.0),
-                    "hsv_v": settings.get("brightness", 0.0),
-                }.items()
-                if float(value) > 0.0
-            },
+            args=aug_args,
             label_expansion=settings.get("label_expansion") or {},
         )
 
@@ -7215,12 +7226,13 @@ class MainWindow(QMainWindow):
             training_space="original",
             resume_from=(
                 settings.get("initial_model_path", "")
-                if mode in ("flat_custom", "multihead_custom")
+                if mode
+                in ("flat_custom", "multihead_custom", "multihead_custom_shared")
                 else ""
             ),
             augmentation_profile=aug,
         )
-        if mode in ("flat_custom", "multihead_custom"):
+        if mode in ("flat_custom", "multihead_custom", "multihead_custom_shared"):
             spec = dataclasses.replace(
                 spec,
                 custom_params=CustomCNNParams(
@@ -7656,6 +7668,7 @@ class MainWindow(QMainWindow):
             "multihead_yolo": TrainingRole.CLASSIFY_MULTIHEAD_YOLO,
             "flat_custom": TrainingRole.CLASSIFY_FLAT_CUSTOM,
             "multihead_custom": TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM,
+            "multihead_custom_shared": TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM_SHARED,
         }
         return role_map.get(mode, TrainingRole.CLASSIFY_FLAT_CUSTOM)
 

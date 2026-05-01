@@ -1541,11 +1541,305 @@ def _train_custom_classify(
     }
 
 
+def _train_multihead_shared_classify(
+    spec: "TrainingRunSpec",
+    run_dir: Path,
+    log_cb=None,
+    progress_cb=None,
+    should_cancel=None,
+) -> dict:
+    """Train a single shared-trunk multi-head torchvision classifier.
+
+    ``factor_names`` and ``class_names_per_factor`` are taken from
+    ``spec.augmentation_profile.args`` (set by the orchestrator from the
+    LabelingScheme). The dataset directory is expected to contain composite
+    folder names of the form ``<f0>__<f1>__.../files``.
+    """
+    import time as _time
+
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader
+    from torchvision import transforms
+
+    from hydra_suite.training.multihead_dataset import MultiFactorImageFolder
+    from hydra_suite.training.multihead_torchvision_model import (
+        build_multihead_torchvision_classifier,
+    )
+    from hydra_suite.training.torchvision_model import (
+        get_classifier_normalization_stats,
+        save_torchvision_checkpoint,
+    )
+
+    params: CustomCNNParams = spec.custom_params or CustomCNNParams()
+    if params.backbone == "tinyclassifier":
+        raise ValueError("shared-trunk multi-head requires a torchvision backbone")
+
+    args = dict(spec.augmentation_profile.args or {})
+    cnpf = args.get("class_names_per_factor")
+    factor_names = args.get("factor_names")
+    if (
+        not isinstance(cnpf, list)
+        or not cnpf
+        or not all(isinstance(c, list) and c for c in cnpf)
+    ):
+        raise ValueError(
+            "shared-trunk training needs augmentation_profile.args['class_names_per_factor']"
+        )
+    if not isinstance(factor_names, list) or len(factor_names) != len(cnpf):
+        factor_names = [f"factor_{i}" for i in range(len(cnpf))]
+
+    _t0 = _time.monotonic()
+    run_dir = Path(run_dir)
+    weights_dir = run_dir / "weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    best_ckpt_path = weights_dir / "best.pth"
+
+    sz = int(params.input_size)
+    profile = spec.augmentation_profile
+    mean, std = get_classifier_normalization_stats(monochrome=bool(profile.monochrome))
+
+    train_tf_steps = [transforms.Resize((sz, sz))]
+    if profile.fliplr > 0:
+        train_tf_steps.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
+    if profile.flipud > 0:
+        train_tf_steps.append(transforms.RandomVerticalFlip(p=profile.flipud))
+    if profile.brightness > 0 or profile.contrast > 0:
+        train_tf_steps.append(
+            transforms.ColorJitter(
+                brightness=float(profile.brightness),
+                contrast=float(profile.contrast),
+                saturation=float(getattr(profile, "saturation", 0.0)),
+                hue=float(getattr(profile, "hue", 0.0)),
+            )
+        )
+    if profile.monochrome:
+        train_tf_steps.append(transforms.Grayscale(num_output_channels=3))
+    train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
+    train_tf = transforms.Compose(train_tf_steps)
+    val_tf = transforms.Compose(
+        [transforms.Resize((sz, sz))]
+        + ([transforms.Grayscale(num_output_channels=3)] if profile.monochrome else [])
+        + [transforms.ToTensor(), transforms.Normalize(mean, std)]
+    )
+
+    dataset_root = Path(spec.derived_dataset_dir)
+    train_root = dataset_root / "train"
+    val_root = dataset_root / "val"
+    if not train_root.is_dir():
+        train_root = dataset_root
+        val_root = dataset_root
+
+    train_ds = MultiFactorImageFolder(
+        str(train_root),
+        class_names_per_factor=cnpf,
+        delimiter="__",
+        transform=train_tf,
+    )
+    val_ds = (
+        MultiFactorImageFolder(
+            str(val_root),
+            class_names_per_factor=cnpf,
+            delimiter="__",
+            transform=val_tf,
+        )
+        if val_root.is_dir() and val_root != train_root
+        else None
+    )
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=params.batch,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=True,
+    )
+    val_loader = (
+        DataLoader(
+            val_ds,
+            batch_size=params.batch,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=True,
+        )
+        if val_ds is not None
+        else None
+    )
+
+    device = _pick_torch_device(spec.device)
+    _safe_log(
+        log_cb,
+        f"Shared-trunk device={device} backbone={params.backbone} factors={factor_names}",
+    )
+    model = build_multihead_torchvision_classifier(
+        backbone=params.backbone,
+        class_names_per_factor=cnpf,
+        trainable_layers=int(params.trainable_layers),
+        head_hidden_dim=int(params.head_hidden_dim),
+        head_dropout=float(params.head_dropout),
+        input_size=sz,
+    )
+    model.to(device)
+
+    head_params = [p for p in model.heads.parameters() if p.requires_grad]
+    bb_params = [p for p in model.backbone.parameters() if p.requires_grad]
+    param_groups: list[dict] = [{"params": head_params, "lr": float(params.lr)}]
+    if bb_params:
+        param_groups.append(
+            {
+                "params": bb_params,
+                "lr": float(params.lr) * float(params.backbone_lr_scale),
+            }
+        )
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=float(params.weight_decay))
+    criterion = nn.CrossEntropyLoss(label_smoothing=float(params.label_smoothing))
+
+    factor_widths = model.factor_widths
+    history: dict = {"train_loss": [], "val_acc": []}
+    best_val_acc: float | None = None
+    best_epoch = 0
+    patience_count = 0
+
+    checkpoint_extra_meta = {
+        "fine_tune_method": getattr(params, "fine_tune_method", "head_only"),
+        "monochrome": bool(profile.monochrome),
+        "head_kind": "multihead_shared_trunk",
+        "head_hidden_dim": int(params.head_hidden_dim),
+        "head_dropout": float(params.head_dropout),
+    }
+
+    def _split_logits_per_factor(logits: torch.Tensor) -> list[torch.Tensor]:
+        out: list[torch.Tensor] = []
+        offset = 0
+        for w in factor_widths:
+            out.append(logits[:, offset : offset + w])
+            offset += w
+        return out
+
+    has_val = val_loader is not None
+
+    for epoch in range(int(params.epochs)):
+        if should_cancel and should_cancel():
+            _safe_log(log_cb, "Training canceled.")
+            break
+        model.train()
+        total_loss = 0.0
+        total_examples = 0
+        for batch_x, batch_y in train_loader:
+            batch_x = batch_x.to(device)
+            batch_y = batch_y.to(device)
+            optimizer.zero_grad()
+            per_factor_logits = _split_logits_per_factor(model(batch_x))
+            loss = sum(
+                criterion(pf, batch_y[:, k]) for k, pf in enumerate(per_factor_logits)
+            )
+            loss.backward()
+            optimizer.step()
+            total_loss += float(loss.item()) * batch_x.size(0)
+            total_examples += batch_x.size(0)
+        avg_loss = total_loss / max(total_examples, 1)
+        history["train_loss"].append(avg_loss)
+
+        val_acc: float | None = None
+        per_factor_acc: list[float] | None = None
+        if val_loader is not None:
+            model.eval()
+            correct_all = 0
+            correct_per_factor = [0] * len(factor_widths)
+            total = 0
+            with torch.no_grad():
+                for batch_x, batch_y in val_loader:
+                    batch_x = batch_x.to(device)
+                    batch_y = batch_y.to(device)
+                    pf = _split_logits_per_factor(model(batch_x))
+                    preds = torch.stack([p.argmax(dim=1) for p in pf], dim=1)
+                    correct_all += int(((preds == batch_y).all(dim=1)).sum().item())
+                    for k in range(len(factor_widths)):
+                        correct_per_factor[k] += int(
+                            (preds[:, k] == batch_y[:, k]).sum().item()
+                        )
+                    total += batch_y.size(0)
+            val_acc = correct_all / max(total, 1)
+            per_factor_acc = [c / max(total, 1) for c in correct_per_factor]
+        history["val_acc"].append(val_acc)
+        if per_factor_acc is not None:
+            history.setdefault("val_acc_per_factor", []).append(per_factor_acc)
+        _safe_log(
+            log_cb,
+            f"Epoch {epoch + 1}/{params.epochs} loss={avg_loss:.4f} "
+            f"val_acc={val_acc} per_factor={per_factor_acc}",
+        )
+        if progress_cb:
+            progress_cb(epoch + 1, int(params.epochs))
+
+        if has_val:
+            is_better = val_acc is not None and (
+                best_val_acc is None or val_acc > best_val_acc
+            )
+            if is_better:
+                best_val_acc = val_acc
+                best_epoch = epoch + 1
+                patience_count = 0
+                save_torchvision_checkpoint(
+                    model=model,
+                    backbone=params.backbone,
+                    class_names=[],
+                    factor_names=list(factor_names),
+                    class_names_per_factor=[list(c) for c in cnpf],
+                    input_size=(sz, sz),
+                    best_val_acc=best_val_acc,
+                    history=history,
+                    trainable_layers=int(params.trainable_layers),
+                    backbone_lr_scale=float(params.backbone_lr_scale),
+                    monochrome=bool(profile.monochrome),
+                    extra_meta=checkpoint_extra_meta,
+                    path=best_ckpt_path,
+                )
+            elif val_acc is not None:
+                patience_count += 1
+                if patience_count >= int(params.patience):
+                    _safe_log(log_cb, f"Early stopping at epoch {epoch + 1}.")
+                    break
+
+    # After the loop: when training ran without validation, save the final state once.
+    if not has_val and history["train_loss"]:
+        save_torchvision_checkpoint(
+            model=model,
+            backbone=params.backbone,
+            class_names=[],
+            factor_names=list(factor_names),
+            class_names_per_factor=[list(c) for c in cnpf],
+            input_size=(sz, sz),
+            best_val_acc=None,
+            history=history,
+            trainable_layers=int(params.trainable_layers),
+            backbone_lr_scale=float(params.backbone_lr_scale),
+            monochrome=bool(profile.monochrome),
+            extra_meta=checkpoint_extra_meta,
+            path=best_ckpt_path,
+        )
+        _safe_log(log_cb, "Final checkpoint saved (no validation).")
+
+    elapsed = _time.monotonic() - _t0
+    _safe_log(
+        log_cb,
+        f"Shared-trunk training done: best_val_acc={best_val_acc} @ epoch {best_epoch} ({elapsed:.1f}s)",
+    )
+    return {
+        "success": best_ckpt_path.exists(),
+        "artifact_path": str(best_ckpt_path) if best_ckpt_path.exists() else "",
+        "metrics_path": "",
+        "best_val_acc": best_val_acc,
+        "task": "shared_trunk_multihead_classify",
+    }
+
+
 _CUSTOM_CLASSIFY_ROLES = {
     TrainingRole.CLASSIFY_FLAT_CUSTOM,
     TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM,
     TrainingRole.CLASSIFY_FLAT_TINY,
     TrainingRole.CLASSIFY_MULTIHEAD_TINY,
+    TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM_SHARED,
 }
 
 
@@ -1620,6 +1914,22 @@ def run_training(
 
     run_dir = Path(run_dir).expanduser().resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+
+    if spec.role == TrainingRole.CLASSIFY_MULTIHEAD_CUSTOM_SHARED:
+        if spec.custom_params is None:
+            spec = dataclasses.replace(
+                spec,
+                custom_params=CustomCNNParams(
+                    backbone="resnet18", head_kind="multihead_shared_trunk"
+                ),
+            )
+        return _train_multihead_shared_classify(
+            spec,
+            run_dir,
+            log_cb=log_cb,
+            progress_cb=progress_cb,
+            should_cancel=should_cancel,
+        )
 
     if spec.role in _CUSTOM_CLASSIFY_ROLES:
         if spec.custom_params is None:
