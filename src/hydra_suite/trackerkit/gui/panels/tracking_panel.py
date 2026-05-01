@@ -524,6 +524,7 @@ class TrackingPanel(QWidget):
         f_identity_decoder = QFormLayout(None)
         f_identity_decoder.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
+        # ── Master toggle ──────────────────────────────────────────────────
         self.chk_enable_identity_in_tracking = QCheckBox(
             "Use identity to influence tracking"
         )
@@ -541,15 +542,20 @@ class TrackingPanel(QWidget):
         )
         f_identity_decoder.addRow(self.chk_enable_identity_in_tracking)
 
+        # ── Subgroup 1: assignment cost ────────────────────────────────────
+        _hdr_assignment = QLabel("Assignment influence")
+        _hdr_assignment.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        f_identity_decoder.addRow(_hdr_assignment)
+
         self.chk_enable_identity_online_decoder = QCheckBox(
-            "Enable online identity decoder (Bayesian cost term)"
+            "Enable Bayesian identity cost term"
         )
         self.chk_enable_identity_online_decoder.setChecked(False)
         self.chk_enable_identity_online_decoder.setToolTip(
-            "Activates the Bayesian online decoder that integrates CNN and AprilTag evidence\n"
-            "into the assignment cost as a soft probability term.\n"
-            "Requires identity classification to be configured in the Individual Analysis tab\n"
-            "AND the master 'Use identity to influence tracking' switch above to be ON."
+            "Adds a soft identity log-compatibility term to the Hungarian cost matrix\n"
+            "during assignment, scaled by the Identity weight below.  When this is OFF,\n"
+            "the decoder still maintains beliefs and emits labels, but assignment is\n"
+            "driven purely by geometry."
         )
         f_identity_decoder.addRow(self.chk_enable_identity_online_decoder)
 
@@ -560,14 +566,33 @@ class TrackingPanel(QWidget):
         self.spin_identity_weight.setValue(0.3)
         self.spin_identity_weight.setToolTip(
             "Relative weight of the identity cost term vs. the geometric cost.\n"
-            "0.0 = identity has no influence on assignment.\n"
+            "0.0 = identity has no influence on assignment (also disables the\n"
+            "    identity-based rejoin path for committed lost slots).\n"
             "0.3 = identity nudges Phase-1 association without dominating motion (default).\n"
-            "1.0 = balanced with geometry; can pull association toward identity-matching\n"
+            "1.0 = balanced with geometry; pulls association toward identity-matching\n"
             "    detections at the cost of motion smoothness — raise only when the\n"
             "    classifier is highly reliable.\n"
-            "When the decoder is uncertain (early frames), this term is near-zero automatically."
+            "When the decoder is uncertain (early frames) this term is near-zero automatically."
         )
         f_identity_decoder.addRow("Identity weight", self.spin_identity_weight)
+
+        self.spin_identity_rejoin_threshold = QDoubleSpinBox()
+        self.spin_identity_rejoin_threshold.setRange(0.0, 1.0)
+        self.spin_identity_rejoin_threshold.setSingleStep(0.05)
+        self.spin_identity_rejoin_threshold.setDecimals(2)
+        self.spin_identity_rejoin_threshold.setValue(0.5)
+        self.spin_identity_rejoin_threshold.setToolTip(
+            "Minimum identity score (probability) for a committed-lost slot to rejoin "
+            "a detection via identity evidence alone, bypassing the geometric gate."
+        )
+        f_identity_decoder.addRow(
+            "Rejoin threshold", self.spin_identity_rejoin_threshold
+        )
+
+        # ── Subgroup 2: belief decoder ────────────────────────────────────
+        _hdr_decoder = QLabel("Belief decoder")
+        _hdr_decoder.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        f_identity_decoder.addRow(_hdr_decoder)
 
         self.spin_identity_commit_threshold = QDoubleSpinBox()
         self.spin_identity_commit_threshold.setRange(0.5, 1.0)
@@ -619,21 +644,13 @@ class TrackingPanel(QWidget):
         )
         f_identity_decoder.addRow("Unknown prior", self.spin_identity_unknown_prior)
 
-        self.spin_identity_rejoin_threshold = QDoubleSpinBox()
-        self.spin_identity_rejoin_threshold.setRange(0.0, 1.0)
-        self.spin_identity_rejoin_threshold.setSingleStep(0.05)
-        self.spin_identity_rejoin_threshold.setDecimals(2)
-        self.spin_identity_rejoin_threshold.setValue(0.5)
-        self.spin_identity_rejoin_threshold.setToolTip(
-            "Minimum identity score (probability) for a committed-lost slot to rejoin "
-            "a detection via identity evidence alone, bypassing the geometric gate."
-        )
-        f_identity_decoder.addRow(
-            "Rejoin threshold", self.spin_identity_rejoin_threshold
-        )
+        # ── Subgroup 3: live identity-swap correction ─────────────────────
+        _hdr_swap = QLabel("Live identity-swap correction")
+        _hdr_swap.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        f_identity_decoder.addRow(_hdr_swap)
 
         self.chk_enable_identity_swap_correction = QCheckBox(
-            "Enable live identity-swap correction"
+            "Atomically swap labels on sustained mutual disagreement"
         )
         self.chk_enable_identity_swap_correction.setChecked(True)
         self.chk_enable_identity_swap_correction.setToolTip(

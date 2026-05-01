@@ -836,6 +836,9 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_identity_disagree_min_run.setValue(
             get_cfg("identity_disagree_min_run", default=5)
         )
+        self._panels.postprocess.chk_identity_gates_trajectory_structure.setChecked(
+            get_cfg("identity_gates_trajectory_structure", default=True)
+        )
 
     def _load_config_visualization(self, get_cfg):
         self._panels.postprocess.check_show_labels.setChecked(
@@ -1679,6 +1682,7 @@ class ConfigOrchestrator:
                 "merge_agreement_distance_multiplier": self._panels.postprocess.spin_merge_overlap_multiplier.value(),
                 "min_overlap_frames": self._panels.postprocess.spin_min_overlap_frames.value(),
                 "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
+                "identity_gates_trajectory_structure": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
@@ -2253,6 +2257,7 @@ class ConfigOrchestrator:
             * scaled_body_size,
             "MIN_OVERLAP_FRAMES": self._panels.postprocess.spin_min_overlap_frames.value(),
             "IDENTITY_DISAGREE_MIN_RUN": self._panels.postprocess.spin_identity_disagree_min_run.value(),
+            "IDENTITY_GATES_TRAJECTORY_STRUCTURE": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
             # Dataset generation parameters
             "ENABLE_DATASET_GENERATION": self._panels.dataset.chk_enable_dataset_gen.isChecked(),
             "DATASET_NAME": "",
@@ -2332,9 +2337,6 @@ class ConfigOrchestrator:
             ),
             "IDENTITY_REJOIN_DIST_FLOOR": self._mw.advanced_config.get(
                 "identity_rejoin_dist_floor", None
-            ),
-            "IDENTITY_MIN_TRACK_AGE": int(
-                self._mw.advanced_config.get("identity_min_track_age", 5)
             ),
             "CNN_CLASSIFIER_WINDOW": 10,
             "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
@@ -2684,7 +2686,6 @@ class ConfigOrchestrator:
             "identity_swap_conf_margin": 0.2,  # prob margin to count a frame as mutual mismatch
             "identity_rejoin_velocity_budget": 1.5,  # safety factor on (frames_lost * v_max) for identity rejoin distance
             "identity_rejoin_dist_floor": None,  # absolute min rejoin distance (None = 2 * body_size)
-            "identity_min_track_age": 5,  # frames a slot must persist before its identity label can display (suppresses short false-detection fragments)
         }
 
         if os.path.exists(config_path):

@@ -463,25 +463,6 @@ class PostProcessPanel(QWidget):
         )
         f_interpolation_merge.addRow(self.min_overlap_row_widget)
 
-        self.spin_identity_disagree_min_run = QSpinBox()
-        self.spin_identity_disagree_min_run.setRange(0, 100)
-        self.spin_identity_disagree_min_run.setValue(5)
-        self.spin_identity_disagree_min_run.setToolTip(
-            "Minimum consecutive frames of committed identity disagreement required\n"
-            "to split a spatially-agreeing forward/backward trajectory pair.\n"
-            "Forward and backward must both have committed (stable) identity labels\n"
-            "that conflict for at least this many consecutive frames before a split\n"
-            "is triggered. Set to 0 to split on every single disagreeing frame\n"
-            "(more aggressive). Higher values suppress noise from brief identity\n"
-            "uncertainty at segment boundaries. Recommended: 3-10 frames."
-        )
-        self.lbl_identity_disagree_min_run = QLabel("Identity split min run (frames)")
-        self.identity_disagree_row_widget = self._build_field_grid(
-            [(self.lbl_identity_disagree_min_run, self.spin_identity_disagree_min_run)],
-            columns=1,
-        )
-        f_interpolation_merge.addRow(self.identity_disagree_row_widget)
-
         # Cleanup option
         self.chk_cleanup_temp_files = QCheckBox("Auto-cleanup temporary files")
         self.chk_cleanup_temp_files.setChecked(True)
@@ -499,18 +480,68 @@ class PostProcessPanel(QWidget):
         vl_identity_postprocess = QVBoxLayout(self.g_identity_postprocess)
         vl_identity_postprocess.addWidget(
             self._main_window._create_help_label(
-                "Choose how identity labels are finalised after tracking. "
-                "Only takes effect when identity analysis is enabled.\n"
-                "• None — no identity post-processing.\n"
-                "• Fragment Solver — optional PELT changepoint splitting, then "
-                "iterative greedy label refinement: each fragment is re-evaluated "
-                "against the spatial schedule formed by the others (sorted by a "
-                "doubt score that combines short length, low CNN stability, poor "
-                "spatial fit, and Unknown labels), and a relabel is committed only "
-                "when it strictly increases the global evidence × spatial × length "
-                "objective."
+                "All identity-driven decisions that run after tracking. "
+                "Two independent stages: (1) trajectory-structure edits during "
+                "forward/backward merge — splits and stitch vetos triggered by "
+                "committed-label conflicts, and (2) final label refinement — "
+                "optional PELT changepoint splitting and iterative greedy relabeling."
             )
         )
+
+        # ── Stage 1: identity-driven trajectory structure ───────────────────
+        _hdr_struct = QLabel("Trajectory structure (during forward/backward merge)")
+        _hdr_struct.setStyleSheet("font-weight: bold; margin-top: 4px;")
+        vl_identity_postprocess.addWidget(_hdr_struct)
+
+        self.chk_identity_gates_trajectory_structure = QCheckBox(
+            "Let identity drive splits and block stitches"
+        )
+        self.chk_identity_gates_trajectory_structure.setChecked(True)
+        self.chk_identity_gates_trajectory_structure.setToolTip(
+            "Master switch for whether committed identity labels may change\n"
+            "trajectory structure during post-processing.  When checked:\n"
+            "• forward/backward passes that commit conflicting labels for\n"
+            "  the same physical animal split the trajectory (governed by\n"
+            "  Identity split min run);\n"
+            "• two consecutive fragments at the same spatial location are\n"
+            "  blocked from stitching when their committed labels differ.\n"
+            "Uncheck to make post-processing decide structure on geometry\n"
+            "alone — labels still flow through to the output, they just\n"
+            "no longer cause splits or veto stitches.  Useful when running\n"
+            "with low/zero tracking-time identity weight."
+        )
+        vl_identity_postprocess.addWidget(self.chk_identity_gates_trajectory_structure)
+
+        self.spin_identity_disagree_min_run = QSpinBox()
+        self.spin_identity_disagree_min_run.setRange(0, 100)
+        self.spin_identity_disagree_min_run.setValue(5)
+        self.spin_identity_disagree_min_run.setToolTip(
+            "Minimum consecutive frames of committed identity disagreement required\n"
+            "to split a spatially-agreeing forward/backward trajectory pair.\n"
+            "Forward and backward must both have committed (stable) identity labels\n"
+            "that conflict for at least this many consecutive frames before a split\n"
+            "is triggered. Set to 0 to split on every single disagreeing frame\n"
+            "(more aggressive). Higher values suppress noise from brief identity\n"
+            "uncertainty at segment boundaries. Recommended: 3-10 frames."
+        )
+        self.lbl_identity_disagree_min_run = QLabel("Identity split min run (frames)")
+        self.identity_disagree_row_widget = self._build_field_grid(
+            [(self.lbl_identity_disagree_min_run, self.spin_identity_disagree_min_run)],
+            columns=1,
+        )
+        vl_identity_postprocess.addWidget(self.identity_disagree_row_widget)
+        self.chk_identity_gates_trajectory_structure.toggled.connect(
+            self.identity_disagree_row_widget.setEnabled
+        )
+        self.identity_disagree_row_widget.setEnabled(
+            self.chk_identity_gates_trajectory_structure.isChecked()
+        )
+
+        # ── Stage 2: label refinement ───────────────────────────────────────
+        _hdr_refine = QLabel("Label refinement (after merge)")
+        _hdr_refine.setStyleSheet("font-weight: bold; margin-top: 12px;")
+        vl_identity_postprocess.addWidget(_hdr_refine)
+
         self.cmb_identity_postprocess_mode = QComboBox()
         self.cmb_identity_postprocess_mode.addItems(["None", "Fragment Solver"])
         self.cmb_identity_postprocess_mode.setCurrentText("Fragment Solver")
@@ -528,8 +559,9 @@ class PostProcessPanel(QWidget):
         fs_layout.setContentsMargins(0, 4, 0, 0)
         fs_layout.setSpacing(4)
 
+        # ── PELT changepoint splitting (subgroup) ───────────────────────────
         self.chk_enable_pelt_splitting = QCheckBox(
-            "Split trajectories at identity changepoints"
+            "Split trajectories at identity changepoints (PELT)"
         )
         self.chk_enable_pelt_splitting.setChecked(False)
         self.chk_enable_pelt_splitting.setToolTip(
@@ -538,11 +570,11 @@ class PostProcessPanel(QWidget):
             "Disable this (default) when you have not observed identity swaps — enabling it\n"
             "on clean data may cause over-fragmentation."
         )
-        fs_layout.addRow("", self.chk_enable_pelt_splitting)
+        fs_layout.addRow(self.chk_enable_pelt_splitting)
 
         self.pelt_controls_widget = QWidget()
         pelt_controls_layout = QFormLayout(self.pelt_controls_widget)
-        pelt_controls_layout.setContentsMargins(0, 0, 0, 0)
+        pelt_controls_layout.setContentsMargins(16, 0, 0, 0)
         pelt_controls_layout.setSpacing(4)
 
         self.spin_changepoint_penalty = QDoubleSpinBox()
@@ -555,11 +587,63 @@ class PostProcessPanel(QWidget):
             "Higher → fewer, longer fragments. Lower → more, shorter fragments.\n"
             "Recommended: 2.0–5.0."
         )
-        pelt_controls_layout.addRow(
-            "Changepoint penalty", self.spin_changepoint_penalty
+        self.lbl_changepoint_penalty = QLabel("Changepoint penalty")
+
+        self.spin_min_fragment_frames = QSpinBox()
+        self.spin_min_fragment_frames.setRange(1, 200)
+        self.spin_min_fragment_frames.setValue(5)
+        self.spin_min_fragment_frames.setToolTip(
+            "Minimum number of frames required on each side of a changepoint.\n"
+            "Prevents over-fragmentation of short noisy segments.\n"
+            "Recommended: 3–10."
+        )
+        self.lbl_min_fragment_frames = QLabel("Min fragment frames")
+
+        self.cmb_pelt_model = QComboBox()
+        self.cmb_pelt_model.addItems(["rbf", "l1", "l2"])
+        self.cmb_pelt_model.setCurrentText("rbf")
+        self.cmb_pelt_model.setToolTip(
+            "PELT signal model for changepoint detection:\n"
+            "• rbf — nonparametric kernel; robust to non-Gaussian evidence (default).\n"
+            "• l1 — median-based; outlier-resistant, no z-scoring applied.\n"
+            "• l2 — mean-based; fastest, assumes Gaussian evidence."
+        )
+        self.lbl_pelt_model = QLabel("PELT model")
+
+        self.pelt_param_grid = self._build_field_grid(
+            [
+                (self.lbl_changepoint_penalty, self.spin_changepoint_penalty),
+                (self.lbl_min_fragment_frames, self.spin_min_fragment_frames),
+                (self.lbl_pelt_model, self.cmb_pelt_model),
+            ],
+            columns=3,
+        )
+        pelt_controls_layout.addRow(self.pelt_param_grid)
+
+        self.pelt_controls_widget.setEnabled(False)
+        fs_layout.addRow(self.pelt_controls_widget)
+        self.chk_enable_pelt_splitting.toggled.connect(
+            self.pelt_controls_widget.setEnabled
         )
 
-        fs_layout.addRow(
+        # ── Iterative label refinement (subgroup) ───────────────────────────
+        self.chk_enable_fragment_scoring = QCheckBox("Apply iterative label refinement")
+        self.chk_enable_fragment_scoring.setChecked(True)
+        self.chk_enable_fragment_scoring.setToolTip(
+            "When checked, the iterative solver re-evaluates each fragment's\n"
+            "label against the schedule formed by the others, committing a\n"
+            "relabel only when it strictly improves the global evidence × spatial\n"
+            "× length objective. Uncheck to run PELT changepoint detection only\n"
+            "(log changepoints without modifying any labels)."
+        )
+        fs_layout.addRow(self.chk_enable_fragment_scoring)
+
+        self.refinement_controls_widget = QWidget()
+        refinement_layout = QFormLayout(self.refinement_controls_widget)
+        refinement_layout.setContentsMargins(16, 0, 0, 0)
+        refinement_layout.setSpacing(4)
+
+        refinement_layout.addRow(
             self._main_window._create_help_label(
                 "Evidence weights — CNN, AprilTag, and the online prior set the "
                 "fragment unary evidence used by the iterative solver. Spatial "
@@ -627,7 +711,7 @@ class PostProcessPanel(QWidget):
             ],
             columns=2,
         )
-        fs_layout.addRow(self.evidence_weight_grid)
+        refinement_layout.addRow(self.evidence_weight_grid)
 
         self.spin_assignment_margin_threshold = QDoubleSpinBox()
         self.spin_assignment_margin_threshold.setRange(0.0, 1.0)
@@ -640,9 +724,7 @@ class PostProcessPanel(QWidget):
             "fewer flips, more conservative; lower → more flips, more aggressive.\n"
             "Recommended: 0.05–0.20."
         )
-        fs_layout.addRow(
-            "Relabel acceptance threshold", self.spin_assignment_margin_threshold
-        )
+        self.lbl_assignment_margin_threshold = QLabel("Relabel acceptance threshold")
 
         self.spin_max_bridge_gap_frames = QSpinBox()
         self.spin_max_bridge_gap_frames.setRange(1, 100000)
@@ -658,7 +740,7 @@ class PostProcessPanel(QWidget):
             "frames.  Lower → tighter spatial gating; higher → more permissive.\n"
             "Recommended: 30–120 (≈1–4 seconds at 30 fps)."
         )
-        fs_layout.addRow("Max bridge gap (frames)", self.spin_max_bridge_gap_frames)
+        self.lbl_max_bridge_gap_frames = QLabel("Max bridge gap (frames)")
 
         self.spin_fragment_spatial_veto_threshold = QDoubleSpinBox()
         self.spin_fragment_spatial_veto_threshold.setRange(0.0, 1.0)
@@ -673,49 +755,31 @@ class PostProcessPanel(QWidget):
             "Unknown; lower → more permissive.\n"
             "Recommended: 0.02–0.10."
         )
-        fs_layout.addRow(
-            "Spatial veto threshold", self.spin_fragment_spatial_veto_threshold
-        )
+        self.lbl_fragment_spatial_veto_threshold = QLabel("Spatial veto threshold")
 
-        self.spin_min_fragment_frames = QSpinBox()
-        self.spin_min_fragment_frames.setRange(1, 200)
-        self.spin_min_fragment_frames.setValue(5)
-        self.spin_min_fragment_frames.setToolTip(
-            "Minimum number of frames required on each side of a changepoint.\n"
-            "Prevents over-fragmentation of short noisy segments.\n"
-            "Recommended: 3–10."
+        self.refinement_gate_grid = self._build_field_grid(
+            [
+                (
+                    self.lbl_assignment_margin_threshold,
+                    self.spin_assignment_margin_threshold,
+                ),
+                (self.lbl_max_bridge_gap_frames, self.spin_max_bridge_gap_frames),
+                (
+                    self.lbl_fragment_spatial_veto_threshold,
+                    self.spin_fragment_spatial_veto_threshold,
+                ),
+            ],
+            columns=3,
         )
-        pelt_controls_layout.addRow(
-            "Min fragment frames", self.spin_min_fragment_frames
-        )
+        refinement_layout.addRow(self.refinement_gate_grid)
 
-        self.cmb_pelt_model = QComboBox()
-        self.cmb_pelt_model.addItems(["rbf", "l1", "l2"])
-        self.cmb_pelt_model.setCurrentText("rbf")
-        self.cmb_pelt_model.setToolTip(
-            "PELT signal model for changepoint detection:\n"
-            "• rbf — nonparametric kernel; robust to non-Gaussian evidence (default).\n"
-            "• l1 — median-based; outlier-resistant, no z-scoring applied.\n"
-            "• l2 — mean-based; fastest, assumes Gaussian evidence."
+        fs_layout.addRow(self.refinement_controls_widget)
+        self.chk_enable_fragment_scoring.toggled.connect(
+            self.refinement_controls_widget.setEnabled
         )
-        pelt_controls_layout.addRow("PELT model", self.cmb_pelt_model)
-
-        self.pelt_controls_widget.setEnabled(False)
-        fs_layout.addRow(self.pelt_controls_widget)
-        self.chk_enable_pelt_splitting.toggled.connect(
-            self.pelt_controls_widget.setEnabled
+        self.refinement_controls_widget.setEnabled(
+            self.chk_enable_fragment_scoring.isChecked()
         )
-
-        self.chk_enable_fragment_scoring = QCheckBox("Apply iterative label refinement")
-        self.chk_enable_fragment_scoring.setChecked(True)
-        self.chk_enable_fragment_scoring.setToolTip(
-            "When checked, the iterative solver re-evaluates each fragment's\n"
-            "label against the schedule formed by the others, committing a\n"
-            "relabel only when it strictly improves the global evidence × spatial\n"
-            "× length objective. Uncheck to run PELT changepoint detection only\n"
-            "(log changepoints without modifying any labels)."
-        )
-        fs_layout.addRow("", self.chk_enable_fragment_scoring)
 
         self.fragment_solver_content.setVisible(True)
         vl_identity_postprocess.addWidget(self.fragment_solver_content)

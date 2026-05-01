@@ -964,6 +964,7 @@ def _apply_merge_candidates(
     agreement_distance,
     min_length,
     identity_disagree_min_run=5,
+    identity_drives_splits: bool = True,
 ):
     used_forward = set()
     used_backward = set()
@@ -985,6 +986,7 @@ def _apply_merge_candidates(
             agreement_distance,
             min_length,
             identity_disagree_min_run=identity_disagree_min_run,
+            identity_drives_splits=identity_drives_splits,
         )
         result_trajectories.extend(merged_segments)
     for fi, fwd in enumerate(forward_dfs):
@@ -1043,6 +1045,14 @@ def resolve_trajectories(
     MIN_OVERLAP_FRAMES = params.get("MIN_OVERLAP_FRAMES", 5)
     MIN_LENGTH = params.get("MIN_TRAJECTORY_LENGTH", 5)
     IDENTITY_DISAGREE_MIN_RUN = int(params.get("IDENTITY_DISAGREE_MIN_RUN", 5))
+    # Whether identity labels are allowed to influence trajectory structure
+    # (splits, stitch vetos).  When False (typically because the user set the
+    # identity weight to 0), post-processing makes structural decisions on
+    # geometry alone — labels still flow through the output, they just no
+    # longer cause splits or block stitches.
+    IDENTITY_GATES_TRAJECTORY_STRUCTURE = bool(
+        params.get("IDENTITY_GATES_TRAJECTORY_STRUCTURE", True)
+    )
 
     logger.info(
         f"Starting conservative trajectory resolution with {len(forward_trajs)} forward "
@@ -1107,6 +1117,7 @@ def resolve_trajectories(
         AGREEMENT_DISTANCE,
         MIN_LENGTH,
         identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
+        identity_drives_splits=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
     )
 
     # Note: Filtering by MIN_LENGTH is deferred until after stitching
@@ -1127,6 +1138,7 @@ def resolve_trajectories(
         MIN_OVERLAP_FRAMES,
         MIN_LENGTH,
         identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
+        identity_drives_splits=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
     )
 
     # NEW: Stitch consecutive fragments that are spatially close
@@ -1137,6 +1149,7 @@ def resolve_trajectories(
         result_trajectories,
         AGREEMENT_DISTANCE * 2,
         max_gap=_stitch_gap,
+        identity_gates_stitching=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
     )
 
     # FINAL DEDUPLICATION: Run a second redundancy pass after all merging and stitching.
@@ -1363,6 +1376,7 @@ def _compute_identity_disagree_frames(
     t2_by_frame: dict,
     agreement_distance: float,
     min_run: int,
+    identity_drives_splits: bool = True,
 ) -> frozenset:
     """Return the set of frames that belong to a sustained identity-disagree run.
 
@@ -1370,7 +1384,13 @@ def _compute_identity_disagree_frames(
     carry committed but conflicting identity labels.  Isolated disagreements shorter
     than ``min_run`` consecutive frames are discarded to suppress single-frame blips.
     Gap tolerance between consecutive candidate frames is 2 frames.
+
+    When ``identity_drives_splits`` is False, identity is treated as advisory only
+    and the function short-circuits to an empty set so post-processing structure
+    is decided on geometry alone.
     """
+    if not identity_drives_splits:
+        return frozenset()
     common = sorted(set(t1_by_frame.keys()).intersection(t2_by_frame.keys()))
     candidates: list[int] = []
     for frame in common:
@@ -1534,7 +1554,12 @@ def _build_final_segments_from_rows(
 
 
 def _conservative_merge(
-    traj1, traj2, agreement_distance, min_length, identity_disagree_min_run=5
+    traj1,
+    traj2,
+    agreement_distance,
+    min_length,
+    identity_disagree_min_run=5,
+    identity_drives_splits: bool = True,
 ):
     """
     Conservatively merge two trajectories.
@@ -1555,7 +1580,11 @@ def _conservative_merge(
     all_frames = sorted(frames1.union(frames2))
 
     identity_disagree_frames = _compute_identity_disagree_frames(
-        t1_by_frame, t2_by_frame, agreement_distance, identity_disagree_min_run
+        t1_by_frame,
+        t2_by_frame,
+        agreement_distance,
+        identity_disagree_min_run,
+        identity_drives_splits=identity_drives_splits,
     )
 
     # Build trajectory segments using state machine
@@ -2232,6 +2261,7 @@ def _try_merge_trajectory_pair(
     min_length,
     max_spatial_jump,
     identity_disagree_min_run=5,
+    identity_drives_splits: bool = True,
 ):
     """Try to merge trajectory pair (i, j). Returns merged segments list, or None if not mergeable."""
     lookup_a = traj_lookups[i]
@@ -2274,7 +2304,11 @@ def _try_merge_trajectory_pair(
 
     all_frames = sorted(frames_a.union(frames_b))
     identity_disagree_frames = _compute_identity_disagree_frames(
-        lookup_a, lookup_b, agreement_distance, identity_disagree_min_run
+        lookup_a,
+        lookup_b,
+        agreement_distance,
+        identity_disagree_min_run,
+        identity_drives_splits=identity_drives_splits,
     )
     frame_classifications = _classify_overlap_frames(
         all_frames,
@@ -2324,6 +2358,7 @@ def _merge_overlapping_agreeing_trajectories(
     min_overlap,
     min_length,
     identity_disagree_min_run=5,
+    identity_drives_splits: bool = True,
 ):
     """
     Merge trajectories that overlap in time and agree spatially or share DetectionIDs.
@@ -2392,6 +2427,7 @@ def _merge_overlapping_agreeing_trajectories(
                     min_length,
                     max_spatial_jump,
                     identity_disagree_min_run=identity_disagree_min_run,
+                    identity_drives_splits=identity_drives_splits,
                 )
 
                 if result_segments is not None:
@@ -2475,13 +2511,16 @@ def _find_best_stitch_candidate(
     used,
     agreement_distance,
     max_gap,
+    identity_gates_stitching: bool = True,
 ):
     """Find the best stitch candidate within max_gap frames.
 
     Spatial proximity is the primary filter.  When multiple candidates are
     spatially valid, committed identity agreement breaks ties.  Candidates
     where both endpoints carry committed but conflicting identity labels are
-    blocked entirely (identity gate).
+    blocked entirely (identity gate) — unless ``identity_gates_stitching`` is
+    False, in which case structural decisions are made by geometry alone
+    (used when the user has set identity weight to 0).
     """
     best_idx = -1
     min_dist = float("inf")
@@ -2505,8 +2544,7 @@ def _find_best_stitch_candidate(
 
         start_id = info_b.get("start_identity", "")
 
-        # Identity gate: conflicting committed labels → skip this candidate.
-        if end_id and start_id and end_id != start_id:
+        if identity_gates_stitching and end_id and start_id and end_id != start_id:
             continue
 
         dist = np.sqrt((ax - bx) ** 2 + (ay - by) ** 2)
@@ -2524,7 +2562,12 @@ def _find_best_stitch_candidate(
     return best_idx, min_dist
 
 
-def _stitch_broken_trajectory_fragments(trajectories, agreement_distance, max_gap=2):
+def _stitch_broken_trajectory_fragments(
+    trajectories,
+    agreement_distance,
+    max_gap=2,
+    identity_gates_stitching: bool = True,
+):
     """
     Stitch together trajectories that are likely fragmented parts of the same track.
 
@@ -2559,6 +2602,7 @@ def _stitch_broken_trajectory_fragments(trajectories, agreement_distance, max_ga
                 used,
                 agreement_distance,
                 max_gap,
+                identity_gates_stitching=identity_gates_stitching,
             )
 
             if best_idx_b != -1:

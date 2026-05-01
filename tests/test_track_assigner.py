@@ -729,3 +729,47 @@ def test_identity_rejoin_backward_compatible_when_missed_frames_omitted() -> Non
         "Without missed_frames, motion-budget gate must not engage; "
         f"got {identity_rejoin_pairs}"
     )
+
+
+def test_identity_rejoin_disabled_when_committed_map_is_none() -> None:
+    """When the worker passes ``committed_slot_identities=None`` (e.g. the
+    Identity-weight knob is 0 so identity must not influence track formation),
+    the identity-rejoin path must not fire even if full identity evidence is
+    attached to ``association_data``.  This is the contract that makes
+    weight=0 truly mean "decoder labels tracks but does not steer them"."""
+    params = _params()
+    params["MAX_DISTANCE_THRESHOLD"] = 1000.0
+    params["KALMAN_MAX_VELOCITY_MULTIPLIER"] = 2.0
+    params["IDENTITY_REJOIN_THRESHOLD"] = 0.5
+    assigner = TrackAssigner(params)
+    kf = _DummyKF(2)
+    kf.X[0, :2] = [10.0, 10.0]
+    kf.X[1, :2] = [100.0, 100.0]
+
+    measurements = [np.array([50.0, 50.0, 0.1], dtype=np.float32)]
+    cost = np.array([[5.0], [600.0]], dtype=np.float32)
+
+    log_post_certain = np.log(np.array([0.99, 0.01]))
+    log_like_match = np.log(np.array([0.95, 0.05]))
+    association_data = {
+        "identity_track_log_posteriors": {1: log_post_certain},
+        "identity_detection_log_likelihoods": [log_like_match],
+    }
+
+    _rows, _cols, _free, identity_rejoin_pairs = assigner.assign_tracks(
+        cost=cost,
+        N=2,
+        M=1,
+        meas=measurements,
+        track_states=["active", "lost"],
+        tracking_continuity=[10, 0],
+        kf_manager=kf,
+        spatial_candidates={},
+        association_data=association_data,
+        committed_slot_identities=None,
+        missed_frames=[0, 5],
+    )
+    assert identity_rejoin_pairs == [], (
+        "Identity-rejoin must be skipped when committed_slot_identities is None; "
+        f"got {identity_rejoin_pairs}"
+    )
