@@ -122,6 +122,24 @@ def _load_pretrained(
                 pass
         return timm.create_model(model_name, pretrained=True)
 
+    # ViT-B/16 positional embeddings are baked for exactly 224×224 (14×14 patch
+    # grid).  Feeding any other resolution causes a shape mismatch in the
+    # transformer — raise early with a clear message rather than a cryptic
+    # RuntimeError inside the attention block.
+    if backbone == "vit_b_16" and input_size is not None:
+        if isinstance(input_size, (list, tuple)):
+            sizes = [int(s) for s in input_size]
+        else:
+            sizes = [int(input_size)]
+        if any(s != 224 for s in sizes):
+            raise ValueError(
+                f"vit_b_16 requires input_size=224 — its positional embeddings "
+                f"are fixed to a 14×14 patch grid.  Got {input_size!r}.  "
+                "Use a CNN backbone (resnet18, convnext_tiny, etc.) for arbitrary "
+                "input sizes, or a timm ViT variant which supports resolution "
+                "interpolation (e.g. timm/vit_base_patch16_224)."
+            )
+
     weights_map = {
         "mobilenet_v3_small": tvm.MobileNet_V3_Small_Weights.IMAGENET1K_V1,
         "shufflenet_v2_x1_0": tvm.ShuffleNet_V2_X1_0_Weights.IMAGENET1K_V1,

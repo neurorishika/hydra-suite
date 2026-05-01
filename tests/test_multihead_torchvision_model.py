@@ -208,3 +208,24 @@ def test_strip_classifier_head_uses_input_size_for_timm_probe(monkeypatch):
     assert feat_dim == 768
     assert captured["probe_shape"] == (1, 3, 224, 224)
     assert out is stub
+
+
+def test_vit_b_16_rejects_non_224_input_size():
+    """vit_b_16 positional embeddings are fixed to 14×14 patches (224px input).
+
+    Requesting any other input_size must raise ValueError before any model
+    weights are downloaded or instantiated, so the user gets a clear message
+    instead of a cryptic shape mismatch inside the transformer.
+    """
+    import pytest
+
+    from hydra_suite.training.torchvision_model import _load_pretrained
+
+    with pytest.raises(ValueError, match="vit_b_16 requires input_size=224"):
+        _load_pretrained("vit_b_16", input_size=64)
+
+    with pytest.raises(ValueError, match="vit_b_16 requires input_size=224"):
+        _load_pretrained("vit_b_16", input_size=(64, 64))
+
+    with pytest.raises(ValueError, match="vit_b_16 requires input_size=224"):
+        _load_pretrained("vit_b_16", input_size=(128, 224))
