@@ -26,6 +26,9 @@ IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN   float  margin to override lock (default 0.5
 IDENTITY_SWAP_ENABLED                bool   enable swap-correction (default True)
 IDENTITY_SWAP_MIN_FRAMES             int    sustained mutual-mismatch frames (default 8)
 IDENTITY_SWAP_CONF_MARGIN            float  prob margin to count as mismatch (default 0.2)
+IDENTITY_MIN_TRACK_AGE               int    frames a slot must persist before its label
+                                            is allowed to display or compete in the
+                                            uniqueness assignment (default 0 = disabled)
 """
 
 from __future__ import annotations
@@ -60,6 +63,10 @@ class TrackIdentityBelief:
     stable_count:
         Consecutive frames agreeing with the current committed identity.
         Resets to 0 on any commitment change.
+    frame_count:
+        Number of frames this slot has been visible since (re)spawn.
+        Reset implicitly when the belief is destroyed via ``clear_slot``.
+        Used to gate label display behind ``IDENTITY_MIN_TRACK_AGE``.
     committed:
         True once the belief has crossed both the confidence and hit thresholds.
     committed_label:
@@ -78,6 +85,7 @@ class TrackIdentityBelief:
     log_posterior: np.ndarray
     hit_count: int = 0
     stable_count: int = 0
+    frame_count: int = 0
     committed: bool = False
     committed_label: Optional[str] = None
     committed_index: int = 0
@@ -189,6 +197,7 @@ class OnlineIdentityDecoder:
         self._swap_conf_margin: float = float(
             params.get("IDENTITY_SWAP_CONF_MARGIN", 0.2)
         )
+        self._min_track_age: int = max(0, int(params.get("IDENTITY_MIN_TRACK_AGE", 0)))
 
         # Sustained-mutual-mismatch counter, keyed by sorted slot pair.
         self._swap_evidence: dict[tuple[int, int], int] = {}
@@ -417,6 +426,7 @@ class OnlineIdentityDecoder:
                 blocked_labels=blocked_labels,
                 frame_idx=frame_idx,
             )
+            belief.frame_count += 1
             self._predict_belief(belief)
             evs = slot_evidences.get(slot, [])
             belief.last_evidence_sources = tuple(
@@ -523,12 +533,20 @@ class OnlineIdentityDecoder:
 
         # N × (K + N) cost matrix: K identity columns + N dummy columns
         cost = np.zeros((N, K + N), dtype=np.float64)
+        # Sentinel cost for under-age slots: must dominate any plausible
+        # -log(prob) so the optimizer always picks a dummy column for them
+        # while leaving aged slots free to claim known identities.
+        BLOCK_COST = 1e9
         for i, slot in enumerate(visible_slots):
             belief = self._beliefs[slot]
             probs = self._posterior_probs(belief)
-            # Known identity columns: cost = -log(prob)
+            under_age = belief.frame_count < self._min_track_age
+            # Known identity columns: cost = -log(prob); blocked if under-age
             for j in range(K):
-                cost[i, j] = -np.log(max(probs[j + 1], 1e-300))  # j+1 skips unknown
+                if under_age:
+                    cost[i, j] = BLOCK_COST
+                else:
+                    cost[i, j] = -np.log(max(probs[j + 1], 1e-300))  # j+1 skips unknown
             # Dummy columns: cost = -log(unknown_prob)
             unknown_cost = -np.log(max(probs[0], 1e-300))
             for j in range(N):
@@ -556,6 +574,9 @@ class OnlineIdentityDecoder:
         used: set[int] = set()
         for slot in visible_slots:
             belief = self._beliefs[slot]
+            if belief.frame_count < self._min_track_age:
+                result[slot] = None
+                continue
             probs = self._posterior_probs(belief)
             known_probs = probs[1:]
             best_k = int(np.argmax(known_probs))  # 0-based over knowns

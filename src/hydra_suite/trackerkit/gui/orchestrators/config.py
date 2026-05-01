@@ -2333,6 +2333,9 @@ class ConfigOrchestrator:
             "IDENTITY_REJOIN_DIST_FLOOR": self._mw.advanced_config.get(
                 "identity_rejoin_dist_floor", None
             ),
+            "IDENTITY_MIN_TRACK_AGE": int(
+                self._mw.advanced_config.get("identity_min_track_age", 5)
+            ),
             "CNN_CLASSIFIER_WINDOW": 10,
             "APRILTAG_FAMILY": self._panels.identity.combo_apriltag_family.currentText(),
             "APRILTAG_DECIMATE": self._panels.identity.spin_apriltag_decimate.value(),
@@ -2681,6 +2684,7 @@ class ConfigOrchestrator:
             "identity_swap_conf_margin": 0.2,  # prob margin to count a frame as mutual mismatch
             "identity_rejoin_velocity_budget": 1.5,  # safety factor on (frames_lost * v_max) for identity rejoin distance
             "identity_rejoin_dist_floor": None,  # absolute min rejoin distance (None = 2 * body_size)
+            "identity_min_track_age": 5,  # frames a slot must persist before its identity label can display (suppresses short false-detection fragments)
         }
 
         if os.path.exists(config_path):
