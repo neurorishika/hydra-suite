@@ -1056,7 +1056,7 @@ class MainWindow(QMainWindow):
 
         # Labeling controls
         self.labeling_options_group = QGroupBox("Labeling Options")
-        self.labeling_options_group.setVisible(False)
+        # Visibility is controlled by the wrapping scroll area below.
         labeling_options_layout = QVBoxLayout(self.labeling_options_group)
         labeling_options_layout.setContentsMargins(10, 10, 10, 10)
         labeling_options_layout.setSpacing(8)
@@ -1243,7 +1243,22 @@ class MainWindow(QMainWindow):
 
         labeling_options_layout.addWidget(self.prepared_candidates_group)
 
-        explorer_layout.addWidget(self.labeling_options_group)
+        # Wrap the labeling-options group in a scroll area so its content does
+        # not push the explorer page's minimum size beyond the available
+        # screen when entering labeling mode.
+        self.labeling_options_scroll = QScrollArea()
+        self.labeling_options_scroll.setWidgetResizable(True)
+        self.labeling_options_scroll.setFrameShape(QFrame.NoFrame)
+        self.labeling_options_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.labeling_options_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.labeling_options_scroll.setWidget(self.labeling_options_group)
+        self.labeling_options_scroll.setVisible(False)
+        self.labeling_options_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
+        self.labeling_options_scroll.setMaximumHeight(320)
+        explorer_layout.addWidget(self.labeling_options_scroll)
         # ──────────────────────────────────────────────────────────────────
 
         self.history_title = QLabel("<b>Recent Labels (click to undo + relabel)</b>")
@@ -1672,7 +1687,7 @@ class MainWindow(QMainWindow):
             progress.setWindowTitle("Make Project Portable")
             progress.setCancelButton(None)
             progress.setMinimumDuration(0)
-            progress.setWindowModality(Qt.WindowModal)
+            progress.setWindowModality(Qt.ApplicationModal)
             progress.show()
 
             worker = _ClassKitPortableWorker(self.db_path)
@@ -5231,7 +5246,9 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.setEnabled(labels_enabled)
 
-        if hasattr(self, "labeling_options_group"):
+        if hasattr(self, "labeling_options_scroll"):
+            self.labeling_options_scroll.setVisible(labels_enabled)
+        elif hasattr(self, "labeling_options_group"):
             self.labeling_options_group.setVisible(labels_enabled)
 
         if hasattr(self, "al_group"):
@@ -7378,6 +7395,32 @@ class MainWindow(QMainWindow):
         artifact = results[0].get("artifact_path", "")
         if not artifact or not Path(artifact).exists():
             return
+        # Shared-trunk multi-head: the .pth carries factor_names + per-factor
+        # heads, but the existing torchvision in-dialog inference path expects
+        # a single flat class list. Skip the auto-preview here; the artifact
+        # publishes normally and TrackerKit / ClassKit "Previously Trained
+        # Models" consume it correctly via ClassifierBackend.
+        try:
+            import torch as _torch_probe
+
+            _probe_ckpt = _torch_probe.load(
+                str(artifact), map_location="cpu", weights_only=False
+            )
+            if (
+                isinstance(_probe_ckpt, dict)
+                and str(_probe_ckpt.get("head_kind") or "flat")
+                == "multihead_shared_trunk"
+            ):
+                dialog.append_log(
+                    "Shared-trunk multi-head: skipping in-dialog preview "
+                    "(artifact publishes normally; load via Previously "
+                    "Trained Models or TrackerKit for inference)."
+                )
+                if on_done:
+                    on_done({})
+                return
+        except Exception:
+            pass
         prediction_confidence_threshold = (
             self._normalize_prediction_confidence_threshold(
                 (self._last_training_settings or {}).get(
@@ -7485,7 +7528,9 @@ class MainWindow(QMainWindow):
         settings = dialog.get_settings()
         mode = settings.get("mode") or "flat_custom"
         is_yolo = "yolo" in mode
-        multi_head = mode.startswith("multihead")
+        # Treat shared-trunk as single-artifact for publish purposes — it
+        # produces one .pth and never participates in a manifest bundle.
+        multi_head = mode.startswith("multihead") and mode != "multihead_custom_shared"
         role_map = {
             "flat_tiny": "classify_flat_tiny",
             "flat_yolo": "classify_flat_yolo",
@@ -7493,6 +7538,7 @@ class MainWindow(QMainWindow):
             "multihead_yolo": "classify_multihead_yolo",
             "flat_custom": "classify_flat_custom",
             "multihead_custom": "classify_multihead_custom",
+            "multihead_custom_shared": "classify_multihead_custom_shared",
         }
         from ...training.contracts import TrainingRole
         from ...training.model_publish import (
@@ -7773,7 +7819,12 @@ class MainWindow(QMainWindow):
             "settings": settings,
             "mode": mode,
             "is_yolo": "yolo" in mode,
-            "multi_head": mode.startswith("multihead"),
+            # multi_head means "produces N independent artifacts bundled by a
+            # manifest". Shared-trunk is multi-factor but emits a single .pth,
+            # so it is NOT multi_head for export/spec/publish purposes.
+            "multi_head": mode.startswith("multihead")
+            and mode != "multihead_custom_shared",
+            "is_shared_trunk": mode == "multihead_custom_shared",
             "factor_names": [
                 str(getattr(factor, "name", "") or f"factor_{index + 1}")
                 for index, factor in enumerate(
@@ -8040,10 +8091,69 @@ class MainWindow(QMainWindow):
             labels_str=context["labels_str"],
         )
 
+    def _create_shared_trunk_export_worker(self, context, scheme):
+        """Export a single dataset whose folder names encode the full multi-factor
+        composite label (e.g. ``red__blue/img.png``).
+
+        Consumed by ``_train_multihead_shared_classify`` via
+        ``MultiFactorImageFolder`` with delimiter ``"__"``.
+        """
+        from ..jobs.task_workers import ExportWorker
+
+        ignored = str(
+            context["settings"].get("ignore_label_name", "unknown") or "unknown"
+        ).strip()
+        labels_str = context["labels_str"]
+        images = context["images"]
+
+        composite_strs: list[str] = []
+        kept_indices: list[int] = []
+        for index, label in enumerate(labels_str):
+            try:
+                decoded = scheme.decode_label(label)
+            except Exception:
+                continue
+            decoded = [str(part).strip() for part in decoded]
+            if any(part == ignored or not part for part in decoded):
+                continue
+            composite_strs.append("__".join(decoded))
+            kept_indices.append(index)
+
+        if not composite_strs:
+            raise ValueError(
+                "Shared-trunk training has no labeled samples after filtering "
+                f"'{ignored}' from any factor."
+            )
+
+        unique = sorted(set(composite_strs))
+        composite_to_int = {composite: i for i, composite in enumerate(unique)}
+        composite_int = [composite_to_int[s] for s in composite_strs]
+        composite_class_names = {
+            i: composite for composite, i in composite_to_int.items()
+        }
+        composite_images = [images[i] for i in kept_indices]
+
+        return ExportWorker(
+            image_paths=composite_images,
+            labels=composite_int,
+            output_path=context["run_dir"] / "export",
+            format="ultralytics",
+            class_names=composite_class_names,
+            split_strategy=context["settings"].get("split_strategy", "stratified"),
+            val_fraction=context["settings"].get("val_fraction", 0.2),
+            test_fraction=context["settings"].get("test_fraction", 0.0),
+            force_monochrome=bool(context["settings"].get("monochrome", False)),
+            label_expansion=context["settings"].get("label_expansion") or {},
+            preset_splits_by_path=context["source_split_by_path"],
+            preset_expanded_splits_by_key=context.get("expanded_split_by_key"),
+        )
+
     def _create_training_export_worker(self, context, scheme):
         """Create the export worker used before training begins."""
         from ..jobs.task_workers import ExportWorker
 
+        if context.get("is_shared_trunk") and scheme is not None:
+            return self._create_shared_trunk_export_worker(context, scheme)
         if context["multi_head"] and scheme is not None:
             return self._create_multihead_export_worker(context, scheme)
         return ExportWorker(
