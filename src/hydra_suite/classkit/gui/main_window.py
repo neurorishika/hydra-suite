@@ -11072,6 +11072,52 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if model_source == MachineLabelingDialog.MODEL_SOURCE_OTHER_PROJECT:
+            entry = settings.get("model_entry") or {}
+            artifact_paths = entry.get("artifact_paths") or []
+            if not artifact_paths:
+                QMessageBox.warning(
+                    self,
+                    "No Model Selected",
+                    "Choose a model from another project's history before applying machine labels.",
+                )
+                return
+
+            missing = [p for p in artifact_paths if not Path(str(p)).exists()]
+            if missing:
+                QMessageBox.warning(
+                    self,
+                    "Model Files Missing",
+                    "One or more artifact files for the selected model could not be found:\n\n"
+                    + "\n".join(str(p) for p in missing),
+                )
+                return
+
+            other_project_path = settings.get("other_project_path")
+            metadata = {
+                "model_name": str(
+                    entry.get("display_name")
+                    or Path(str(artifact_paths[0])).stem
+                    or entry.get("mode")
+                    or "external_history_model"
+                ),
+                "model_path": str(artifact_paths[0]),
+                "source_project_path": (
+                    str(other_project_path) if other_project_path else ""
+                ),
+            }
+            self._load_model_from_cache_entry(
+                entry,
+                on_success=lambda: self.apply_model_predictions_as_review_labels(
+                    indices=indices,
+                    scope_label=scope_label,
+                    skip_verified=skip_verified,
+                    model_provider="external_project_history_model",
+                    model_metadata=metadata,
+                ),
+            )
+            return
+
         checkpoint_path = settings.get("checkpoint_path")
         if not checkpoint_path:
             QMessageBox.warning(
