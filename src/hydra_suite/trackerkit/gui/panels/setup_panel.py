@@ -255,18 +255,20 @@ class SetupPanel(QWidget):
 
         batch_help = self._main_window._create_help_label(
             "The 'Keystone' video (top of list) defines the tracking parameters. "
-            "Additional videos will save their own results using these shared settings."
+            "Additional videos will use their own saved config if available, "
+            "otherwise the Keystone settings are applied."
         )
         v_container.addWidget(batch_help)
 
         self.list_batch_videos = QListWidget()
         self.list_batch_videos.setMaximumHeight(120)
         self.list_batch_videos.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.list_batch_videos.itemClicked.connect(
-            self._main_window._on_batch_video_selected
+        self.list_batch_videos.setToolTip(
+            "Double-click a video to switch to it.\n"
+            "The current video's config will be auto-saved first."
         )
         self.list_batch_videos.itemDoubleClicked.connect(
-            self._main_window._on_batch_video_selected
+            self._main_window._on_batch_video_double_clicked
         )
         v_container.addWidget(self.list_batch_videos)
 
@@ -307,6 +309,18 @@ class SetupPanel(QWidget):
         self.btn_import_batch.setObjectName("SecondaryBtn")
         batch_io_btns.addWidget(self.btn_import_batch)
         v_container.addLayout(batch_io_btns)
+
+        self.chk_batch_keystone_override = QCheckBox(
+            "Override all videos with Keystone settings"
+        )
+        self.chk_batch_keystone_override.setToolTip(
+            "When checked, all videos in the batch will use the Keystone's\n"
+            "parameters, ignoring any per-video saved configs.\n"
+            "When unchecked (default), a video's own saved config is used\n"
+            "if one exists next to the video file."
+        )
+        self.chk_batch_keystone_override.setChecked(False)
+        v_container.addWidget(self.chk_batch_keystone_override)
 
         vl_batch.addWidget(self.container_batch)
         self.container_batch.setVisible(False)  # Default hidden

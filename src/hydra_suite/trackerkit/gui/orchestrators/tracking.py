@@ -40,6 +40,9 @@ from hydra_suite.utils.video_artifacts import (
     find_existing_detection_cache_path,
 )
 from hydra_suite.utils.video_encoder import VideoEncoder
+from hydra_suite.trackerkit.gui.orchestrators.config import (
+    _get_video_config_path,
+)
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.config.schemas import TrackerConfig
@@ -3488,9 +3491,26 @@ class TrackingOrchestrator:
                     self._mw.current_batch_index
                 )
 
-                # We MUST skip_config_load here to preserve the keystone parameters
-                # currently in the UI so they are applied to this video.
-                self._mw._setup_video_file(fp, skip_config_load=True)
+                # If the video has its own config, load it.  Otherwise restore the
+                # keystone config so that videos without per-video configs always
+                # use the keystone parameters, not leftover params from a previous
+                # video that did have its own config.
+                keystone_override = (
+                    self._panels.setup.chk_batch_keystone_override.isChecked()
+                )
+                video_config_path = _get_video_config_path(fp)
+                has_own_config = not keystone_override and bool(
+                    video_config_path and os.path.isfile(video_config_path)
+                )
+                if not has_own_config:
+                    keystone_config_path = _get_video_config_path(
+                        self._mw.batch_videos[0]
+                    )
+                    if keystone_config_path and os.path.isfile(keystone_config_path):
+                        self._mw._config_orch._load_config_from_file(
+                            keystone_config_path
+                        )
+                self._mw._setup_video_file(fp, skip_config_load=not has_own_config)
 
                 # Small delay to ensure UI updates before starting next
                 logger.info(

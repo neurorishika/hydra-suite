@@ -1661,18 +1661,47 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_session_orch"):
             self._session_orch._sync_batch_list_ui()
 
-    def _on_batch_video_selected(self, *args):
-        """Load a video from the batch list for preview/tuning."""
-        row = self._setup_panel.list_batch_videos.currentRow()
-        if 0 <= row < len(self.batch_videos):
-            fp = self.batch_videos[row]
-            # If it's already the current video, do nothing
-            if fp == self.current_video_path:
-                return
+    def _on_batch_video_double_clicked(self, *args):
+        """Switch to a video from the batch list: auto-saves current config then loads the new video's config."""
+        if self.tracking_worker and self.tracking_worker.isRunning():
+            QMessageBox.warning(
+                self,
+                "Tracking Active",
+                "Cannot switch videos while tracking is running.",
+            )
+            return
 
-            # Skip config load so we keep using the keystone's parameters in the UI
-            self._setup_video_file(fp, skip_config_load=True)
-            self._sync_batch_list_ui()
+        row = self._setup_panel.list_batch_videos.currentRow()
+        if not (0 <= row < len(self.batch_videos)):
+            return
+        fp = self.batch_videos[row]
+        if fp == self.current_video_path:
+            return
+
+        # Auto-save the current video's config before switching
+        if self.current_video_path:
+            current_name = os.path.basename(self.current_video_path)
+            saved_ok = self.save_config(prompt_if_exists=False)
+            if saved_ok:
+                self.statusBar().showMessage(
+                    f"✓ Auto-saved config for {current_name}", 4000
+                )
+            else:
+                if (
+                    QMessageBox.warning(
+                        self,
+                        "Config Save Failed",
+                        f"Could not auto-save config for {current_name}.\n\nSwitch anyway?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    )
+                    != QMessageBox.Yes
+                ):
+                    return
+
+        # Load the new video and its per-video config (if one exists)
+        self._setup_video_file(fp, skip_config_load=False)
+        self._sync_batch_list_ui()
 
     def _remove_from_batch(self):
         """Remove selected additional video from the batch list."""
