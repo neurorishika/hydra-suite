@@ -18,14 +18,31 @@ from hydra_suite.training.torchvision_model import (
 )
 
 
-def _strip_classifier_head(model: nn.Module, backbone: str) -> tuple[nn.Module, int]:
+def _strip_classifier_head(
+    model: nn.Module,
+    backbone: str,
+    *,
+    input_size: int | tuple[int, int] | None = None,
+) -> tuple[nn.Module, int]:
     """Replace the model's classifier head with ``nn.Identity`` and return the
-    backbone-feature dimension."""
+    backbone-feature dimension.
+
+    For TIMM backbones we must probe a forward pass to read ``feat_dim``;
+    fixed-resolution models (ViT/EVA02) reject inputs that don't match their
+    configured ``img_size``, so the probe shape comes from ``input_size`` when
+    provided.
+    """
     if is_timm_backbone(backbone):
         if hasattr(model, "reset_classifier"):
             model.reset_classifier(num_classes=0)
+            if isinstance(input_size, (list, tuple)) and len(input_size) == 2:
+                probe_h, probe_w = int(input_size[0]), int(input_size[1])
+            elif isinstance(input_size, int) and input_size > 0:
+                probe_h = probe_w = int(input_size)
+            else:
+                probe_h = probe_w = 64
             with torch.no_grad():
-                dummy = torch.zeros(1, 3, 64, 64)
+                dummy = torch.zeros(1, 3, probe_h, probe_w)
                 feat_dim = int(model(dummy).shape[1])
             return model, feat_dim
         raise ValueError(f"unsupported timm backbone for trunk strip: {backbone!r}")
@@ -127,7 +144,7 @@ def build_multihead_torchvision_classifier(
     if not class_names_per_factor:
         raise ValueError("class_names_per_factor must be non-empty")
     base = _load_pretrained(backbone, input_size=input_size)
-    base, feat_dim = _strip_classifier_head(base, backbone)
+    base, feat_dim = _strip_classifier_head(base, backbone, input_size=input_size)
     class_counts = [len(inner) for inner in class_names_per_factor]
     model = MultiHeadTorchvisionClassifier(
         backbone_module=base,

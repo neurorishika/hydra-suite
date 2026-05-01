@@ -169,3 +169,42 @@ def test_contracts_expose_shared_trunk_role_and_params():
         head_kind="multihead_shared_trunk", head_hidden_dim=128, head_dropout=0.2
     )
     assert p2.head_kind == "multihead_shared_trunk"
+
+
+def test_strip_classifier_head_uses_input_size_for_timm_probe(monkeypatch):
+    """Fixed-resolution timm models (ViT/EVA02) reject the legacy 64x64 probe.
+
+    ``_strip_classifier_head`` must use the configured ``input_size`` so the
+    feat_dim probe matches the model's expected resolution.
+    """
+    import torch.nn as nn
+
+    from hydra_suite.training import multihead_torchvision_model as mod
+
+    captured: dict = {}
+
+    class _StubVitOnly(nn.Module):
+        """Mimics a fixed-resolution ViT: rejects anything other than 224x224."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.fc = nn.Identity()
+
+        def reset_classifier(self, num_classes: int = 0) -> None:
+            self.fc = nn.Identity()
+
+        def forward(self, x):
+            captured["probe_shape"] = tuple(x.shape)
+            if x.shape[-1] != 224 or x.shape[-2] != 224:
+                raise RuntimeError(
+                    f"Input height ({x.shape[-2]}) doesn't match model (224)."
+                )
+            return torch.zeros(x.shape[0], 768)
+
+    monkeypatch.setattr(mod, "is_timm_backbone", lambda name: name == "timm/eva02_stub")
+
+    stub = _StubVitOnly()
+    out, feat_dim = mod._strip_classifier_head(stub, "timm/eva02_stub", input_size=224)
+    assert feat_dim == 768
+    assert captured["probe_shape"] == (1, 3, 224, 224)
+    assert out is stub
