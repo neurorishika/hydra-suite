@@ -85,7 +85,8 @@ install-apriltag-fork:
 		-DCMAKE_INSTALL_PREFIX="$$prefix" \
 		-DPython3_EXECUTABLE="$$python_bin" \
 		-DPython3_ROOT_DIR="$$prefix" \
-		-DPython3_FIND_VIRTUALENV=ONLY; \
+		-DPython3_FIND_VIRTUALENV=ONLY \
+		-DBUILD_EXAMPLES=OFF; \
 	cmake --build build --parallel; \
 	cmake --install build; \
 	echo "Installed apriltag fork $(APRILTAG_FORK_REF)."

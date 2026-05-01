@@ -2614,7 +2614,7 @@ class ConfigOrchestrator:
             is_custom = filename == "custom.json"
 
             QMessageBox.information(
-                self,
+                self._mw,
                 "Preset Saved",
                 f"Your settings have been saved as:\n{preset_name}\n\n"
                 f"Location: {custom_path}\n\n"
@@ -2996,7 +2996,7 @@ class ConfigOrchestrator:
 
             # Show non-blocking message
             QMessageBox.information(
-                self,
+                self._mw,
                 "Cropping Video",
                 f"Video cropping has started in the background.\n\n"
                 f"Original: {frame_w}x{frame_h}\n"
@@ -3573,7 +3573,7 @@ class ConfigOrchestrator:
                     new_p["CONSERVATIVE_ERODE_ITER"]
                 )
             QMessageBox.information(
-                self,
+                self._mw,
                 "Parameters Applied",
                 "Detection parameters have been applied to the UI.\n"
                 "Use 'Preview Detection' to verify the results.",
