@@ -504,6 +504,14 @@ class ClassKitTrainingDialog(QDialog):
         if not normalized_modes:
             normalized_modes = self._fallback_mode_keys()
 
+        # Auto-upgrade legacy schemes saved before multihead_custom_shared
+        # existed: if the scheme has multi-factor labels, surface the new
+        # shared-trunk mode even when the persisted training_modes list
+        # predates it.
+        factor_count = len(getattr(self._scheme, "factors", []) or [])
+        if factor_count > 1 and "multihead_custom_shared" not in normalized_modes:
+            normalized_modes.append("multihead_custom_shared")
+
         ordered: list[str] = []
         seen = set()
         for key in [
