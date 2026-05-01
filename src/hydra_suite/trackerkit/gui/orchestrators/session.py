@@ -1545,13 +1545,18 @@ class SessionOrchestrator:
     def _probe_video_io(video_path, set_status, _set_progress):
         """Open video file and decode the first frame — pure I/O, thread-safe.
 
-        Returns a dict with keys: cap, total_frames, fps, width, height,
+        The VideoCapture is opened and closed entirely within this method so
+        that no cv2 object crosses a thread boundary (GStreamer/FFMPEG backends
+        on Linux are not safe to hand off between threads even sequentially).
+
+        Returns a dict with keys: total_frames, fps, width, height,
         first_frame_rgb (ndarray or None).  Raises RuntimeError if the file
         cannot be opened.
         """
         set_status(f"Opening {os.path.basename(video_path)}\u2026")
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
+            cap.release()
             raise RuntimeError(f"Cannot open video file: {video_path}")
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -1561,8 +1566,8 @@ class SessionOrchestrator:
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         ok, frame_bgr = cap.read()
         first_frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB) if ok else None
+        cap.release()  # Close here — do NOT pass cap across thread boundary
         return {
-            "cap": cap,
             "total_frames": total_frames,
             "fps": fps,
             "width": width,
@@ -1591,7 +1596,12 @@ class SessionOrchestrator:
         self._mw.is_playing = False
 
         if _probe is not None:
-            cap = _probe["cap"]
+            # Re-open cap on the main thread (fast: just open, no slow FRAME_COUNT
+            # query needed since we already have the metadata from the probe thread).
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                logger.error(f"Failed to open video: {video_path}")
+                return
             total_frames = _probe["total_frames"]
             fps = _probe["fps"]
             width = _probe["width"]

@@ -458,6 +458,24 @@ def _available_onnx_provider_names() -> set[str]:
         return set()
 
 
+def _looks_like_cuda_alloc_failure(exc: BaseException) -> bool:
+    """Return True when *exc* looks like a CUDA/cuBLAS memory-allocation error.
+
+    ORT raises a plain ``Exception`` whose message contains the CUDA error
+    string; there is no ORT-specific exception subclass to reliably catch.
+    """
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "cublas_status_alloc_failed",
+            "cuda_error_out_of_memory",
+            "alloc_failed",
+            "cublascreate",
+        )
+    )
+
+
 def _native_accelerator_available(compute_runtime: str) -> bool:
     device = _torch_device(compute_runtime)
     if device == "cuda":
@@ -659,12 +677,31 @@ class ClassifierBackend:
             except Exception:
                 pass  # silently fall back to providers without profile options
 
-        self._model = ort.InferenceSession(str(peer), providers=providers)
+        is_gpu_requested = any(
+            any(kw in (p if isinstance(p, str) else p[0]).lower() for kw in ("cuda", "tensorrt"))
+            for p in providers
+        )
+        try:
+            self._model = ort.InferenceSession(str(peer), providers=providers)
+        except Exception as gpu_exc:
+            if is_gpu_requested and _looks_like_cuda_alloc_failure(gpu_exc):
+                logger.warning(
+                    "ClassifierBackend: CUDA/cuBLAS initialization failed for %s (%s); "
+                    "falling back to CPU execution",
+                    self._model_path,
+                    gpu_exc,
+                )
+                self._model = ort.InferenceSession(
+                    str(peer), providers=["CPUExecutionProvider"]
+                )
+                is_gpu_requested = False
+            else:
+                raise
         # Warm up the ORT session to trigger CUDA/TRT kernel JIT now (during
         # model loading) rather than stalling on the first real inference batch.
         # Two dummy runs cover both JIT passes on Ada/Hopper GPUs.
         # This applies to both TRT EP and CUDA EP sessions.
-        is_cuda = any(
+        is_cuda = is_gpu_requested and any(
             "cuda" in (p if isinstance(p, str) else p[0]).lower() for p in providers
         )
         if is_trt or is_cuda:

@@ -1700,8 +1700,17 @@ class MainWindow(QMainWindow):
                 ):
                     return
 
-        # Load the new video and its per-video config (if one exists),
-        # using a loading dialog to keep the UI responsive during the I/O.
+        # Stop any active playback before entering the nested event loop so that
+        # the QTimer.singleShot chain cannot fire against a VideoCapture that is
+        # being torn down or replaced.
+        if self.is_playing:
+            self._stop_playback()
+
+        # Disable the batch list to prevent re-entrant double-clicks while loading.
+        self._setup_panel.list_batch_videos.setEnabled(False)
+
+        # Load the new video's metadata in a background thread while showing a
+        # progress dialog (keeps the UI painting without blocking).
         from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
         from hydra_suite.trackerkit.gui.orchestrators.session import SessionOrchestrator
 
@@ -1714,7 +1723,10 @@ class MainWindow(QMainWindow):
             )
         except BusyTaskError as exc:
             QMessageBox.warning(self, "Video Load Failed", str(exc))
+            self._setup_panel.list_batch_videos.setEnabled(True)
             return
+        finally:
+            self._setup_panel.list_batch_videos.setEnabled(True)
 
         self._setup_video_file(fp, skip_config_load=False, _probe=probe)
         self._sync_batch_list_ui()
