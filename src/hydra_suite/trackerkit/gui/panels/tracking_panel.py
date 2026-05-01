@@ -632,6 +632,31 @@ class TrackingPanel(QWidget):
             "Rejoin threshold", self.spin_identity_rejoin_threshold
         )
 
+        self.chk_enable_identity_swap_correction = QCheckBox(
+            "Enable live identity-swap correction"
+        )
+        self.chk_enable_identity_swap_correction.setChecked(True)
+        self.chk_enable_identity_swap_correction.setToolTip(
+            "When two committed slots show sustained mutual identity disagreement\n"
+            "(each slot's evidence persistently favours the other slot's identity),\n"
+            "atomically swap their identity labels.  Trajectories don't move — only\n"
+            "the labels exchange — so this fixes 'wrongly committed' identities\n"
+            "without ever teleporting a track."
+        )
+        f_identity_decoder.addRow(self.chk_enable_identity_swap_correction)
+
+        self.spin_identity_swap_min_frames = QSpinBox()
+        self.spin_identity_swap_min_frames.setRange(1, 240)
+        self.spin_identity_swap_min_frames.setSingleStep(1)
+        self.spin_identity_swap_min_frames.setValue(8)
+        self.spin_identity_swap_min_frames.setToolTip(
+            "Number of consecutive frames of sustained mutual identity disagreement\n"
+            "required before a swap fires.\n"
+            "Lower = more eager to swap (catches errors faster, but more false swaps).\n"
+            "Higher = more conservative (only fires on persistent, confident swaps)."
+        )
+        f_identity_decoder.addRow("Swap min frames", self.spin_identity_swap_min_frames)
+
         vl_identity_decoder.addLayout(f_identity_decoder)
         g_identity_decoder.setContentLayout(vl_identity_decoder)
         vbox.addWidget(g_identity_decoder)
@@ -1025,6 +1050,8 @@ class TrackingPanel(QWidget):
             self.spin_identity_transition_epsilon,
             self.spin_identity_unknown_prior,
             self.spin_identity_rejoin_threshold,
+            self.chk_enable_identity_swap_correction,
+            self.spin_identity_swap_min_frames,
         ):
             widget.setEnabled(enabled)
 

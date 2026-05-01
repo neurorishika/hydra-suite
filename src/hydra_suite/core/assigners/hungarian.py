@@ -819,7 +819,8 @@ class TrackAssigner:
                 float(p.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0)) * body_size
             )
             budget_safety = float(p.get("IDENTITY_REJOIN_VELOCITY_BUDGET", 1.5))
-            budget_floor = float(p.get("IDENTITY_REJOIN_DIST_FLOOR", 2.0 * body_size))
+            _floor_raw = p.get("IDENTITY_REJOIN_DIST_FLOOR", None)
+            budget_floor = 2.0 * body_size if _floor_raw is None else float(_floor_raw)
 
             def _within_budget(slot_idx: int, det_xy: np.ndarray) -> bool:
                 if missed_frames is None:
