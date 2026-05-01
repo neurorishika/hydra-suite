@@ -1670,6 +1670,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Artifacts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multihead_custom_shared-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      multihead_custom_shared mode
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1784,6 +1799,14 @@ these fields:</p>
 </table>
 <p>Multi-head YOLO bundles are instead described by a sidecar
 <code>*.multihead.json</code> manifest; see the spec.</p>
+<h3 id="multihead_custom_shared-mode"><code>multihead_custom_shared</code> mode<a class="headerlink" href="#multihead_custom_shared-mode" title="Permanent link">&para;</a></h3>
+<p>Trains a single torchvision backbone with N parallel MLP heads (one per
+factor) in a shared-trunk multi-head classifier. Produces a single <code>.pth</code>
+artifact whose v2 schema carries <code>factor_names</code> + <code>class_names_per_factor</code>
++ <code>head_kind="multihead_shared_trunk"</code>. Unlike <code>multihead_custom</code>, no
+<code>.multihead.json</code> sidecar is emitted — the checkpoint is self-describing.
+Available on multi-factor schemes (e.g. 2- or 3-factor color tags);
+single-factor schemes still use <code>flat_custom</code>.</p>
 <h2 id="registry">Registry<a class="headerlink" href="#registry" title="Permanent link">&para;</a></h2>
 <p>The registry is stored at <code>{models_root}/model_registry.json</code> in the v2
 root shape:</p>
