@@ -907,6 +907,7 @@ class DetectKitMainWindow(QMainWindow):
             progress.setCancelButton(None)
             progress.setMinimumDuration(0)
             progress.setWindowModality(Qt.ApplicationModal)
+            progress.setAttribute(Qt.WA_DeleteOnClose, True)
             progress.show()
 
             worker = _DetectKitPortableWorker(self._project.project_dir)

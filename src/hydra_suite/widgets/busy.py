@@ -121,6 +121,7 @@ def run_with_busy_dialog(
     dialog.setWindowModality(Qt.ApplicationModal)
     dialog.setAutoClose(False)
     dialog.setAutoReset(False)
+    dialog.setAttribute(Qt.WA_DeleteOnClose, True)
     dialog.show()
 
     worker = CallableWorker(fn)
@@ -177,6 +178,11 @@ def run_blocking_with_busy_dialog(
     dialog.setWindowModality(Qt.ApplicationModal)
     dialog.setAutoClose(False)
     dialog.setAutoReset(False)
+    # Ensure the dialog is destroyed when closed, not merely hidden.
+    # Without this, each call adds a persistent child widget to *parent*
+    # (Qt takes ownership when a parent is supplied), causing the main window
+    # to accumulate ghost dialogs that make every repaint progressively slower.
+    dialog.setAttribute(Qt.WA_DeleteOnClose, True)
 
     worker = CallableWorker(fn)
     worker.status.connect(dialog.setLabelText)
