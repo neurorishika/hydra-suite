@@ -1541,9 +1541,48 @@ class SessionOrchestrator:
     # VIDEO PLAYER
     # =========================================================================
 
-    def _init_video_player(self, video_path):
-        """Initialize video player with the loaded video."""
+    @staticmethod
+    def _probe_video_io(video_path, set_status, _set_progress):
+        """Open video file and decode the first frame — pure I/O, thread-safe.
 
+        Returns a dict with keys: cap, total_frames, fps, width, height,
+        first_frame_rgb (ndarray or None).  Raises RuntimeError if the file
+        cannot be opened.
+        """
+        set_status(f"Opening {os.path.basename(video_path)}\u2026")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open video file: {video_path}")
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        set_status("Decoding first frame\u2026")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ok, frame_bgr = cap.read()
+        first_frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB) if ok else None
+        return {
+            "cap": cap,
+            "total_frames": total_frames,
+            "fps": fps,
+            "width": width,
+            "height": height,
+            "first_frame_rgb": first_frame_rgb,
+        }
+
+    def _init_video_player(self, video_path, _probe=None):
+        """Initialize video player with the loaded video.
+
+        Parameters
+        ----------
+        video_path:
+            Path to the video file.
+        _probe:
+            Optional pre-loaded result from :meth:`_probe_video_io`.  When
+            provided the expensive ``cv2.VideoCapture`` open and first-frame
+            decode are skipped because they were already done in a background
+            thread via ``run_blocking_with_busy_dialog``.
+        """
         if self._mw.video_cap is not None:
             self._mw.video_cap.release()
         if self._mw.playback_timer:
@@ -1551,22 +1590,29 @@ class SessionOrchestrator:
             self._mw.playback_timer = None
         self._mw.is_playing = False
 
-        self._mw.video_cap = cv2.VideoCapture(video_path)
-        if not self._mw.video_cap.isOpened():
-            logger.error(f"Failed to open video: {video_path}")
-            return
+        if _probe is not None:
+            cap = _probe["cap"]
+            total_frames = _probe["total_frames"]
+            fps = _probe["fps"]
+            width = _probe["width"]
+            height = _probe["height"]
+        else:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                logger.error(f"Failed to open video: {video_path}")
+                return
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        self._mw.video_total_frames = int(
-            self._mw.video_cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        )
-        fps = self._mw.video_cap.get(cv2.CAP_PROP_FPS)
-        width = int(self._mw.video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(self._mw.video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self._mw.video_cap = cap
+        self._mw.video_total_frames = total_frames
 
         self._panels.setup.lbl_video_info.setText(
-            f"Video: {self._mw.video_total_frames} frames, {width}x{height}, {fps:.2f} FPS"
+            f"Video: {total_frames} frames, {width}x{height}, {fps:.2f} FPS"
         )
-        self._panels.setup.slider_timeline.setMaximum(self._mw.video_total_frames - 1)
+        self._panels.setup.slider_timeline.setMaximum(total_frames - 1)
         self._panels.setup.slider_timeline.setEnabled(True)
         self._panels.setup.btn_first_frame.setEnabled(True)
         self._panels.setup.btn_prev_frame.setEnabled(True)
@@ -1575,10 +1621,10 @@ class SessionOrchestrator:
         self._panels.setup.btn_last_frame.setEnabled(True)
         self._panels.setup.btn_random_seek.setEnabled(True)
         self._panels.setup.combo_playback_speed.setEnabled(True)
-        self._panels.setup.spin_start_frame.setMaximum(self._mw.video_total_frames - 1)
+        self._panels.setup.spin_start_frame.setMaximum(total_frames - 1)
         self._panels.setup.spin_start_frame.setEnabled(True)
-        self._panels.setup.spin_end_frame.setMaximum(self._mw.video_total_frames - 1)
-        self._panels.setup.spin_end_frame.setValue(self._mw.video_total_frames - 1)
+        self._panels.setup.spin_end_frame.setMaximum(total_frames - 1)
+        self._panels.setup.spin_end_frame.setValue(total_frames - 1)
         self._panels.setup.spin_end_frame.setEnabled(True)
         self._sync_trail_history_bounds()
         self._panels.setup.btn_set_start_current.setEnabled(True)
@@ -1587,10 +1633,22 @@ class SessionOrchestrator:
         self._panels.setup.g_video_player.setVisible(True)
 
         self._mw.video_current_frame_idx = 0
-        self._mw._display_current_frame()
+        if _probe is not None and _probe.get("first_frame_rgb") is not None:
+            # Apply the already-decoded frame directly — avoids a second disk read
+            self._mw.preview_frame_original = _probe["first_frame_rgb"]
+            self._mw.last_read_frame_idx = 0
+            self._mw.detection_test_result = None
+            if hasattr(self._mw, "_detection_panel"):
+                self._mw._detection_panel._update_preview_display()
+            self._set_current_frame_label(0)
+            self._panels.setup.slider_timeline.blockSignals(True)
+            self._panels.setup.slider_timeline.setValue(0)
+            self._panels.setup.slider_timeline.blockSignals(False)
+        else:
+            self._mw._display_current_frame()
         QTimer.singleShot(0, self._mw._fit_image_to_screen)
         self._update_range_info()
-        logger.info(f"Video player initialized: {self._mw.video_total_frames} frames")
+        logger.info(f"Video player initialized: {total_frames} frames")
 
     def _set_current_frame_label(self, frame_idx: int, *, scrubbing: bool = False):
         """Refresh the preview frame label without forcing a video seek."""

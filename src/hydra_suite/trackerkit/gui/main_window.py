@@ -1618,15 +1618,16 @@ class MainWindow(QMainWindow):
 
             self._setup_video_file(fp)
 
-    def _setup_video_file(self, fp, skip_config_load=False):
+    def _setup_video_file(self, fp, skip_config_load=False, _probe=None):
         """
         Setup a video file for tracking.
 
         Args:
             fp: Path to the video file
             skip_config_load: If True, skip auto-loading config (used when loading config itself)
+            _probe: Optional pre-loaded video probe from SessionOrchestrator._probe_video_io
         """
-        self._config_orch._setup_video_file(fp, skip_config_load=skip_config_load)
+        self._config_orch._setup_video_file(fp, skip_config_load=skip_config_load, _probe=_probe)
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""
@@ -1699,8 +1700,23 @@ class MainWindow(QMainWindow):
                 ):
                     return
 
-        # Load the new video and its per-video config (if one exists)
-        self._setup_video_file(fp, skip_config_load=False)
+        # Load the new video and its per-video config (if one exists),
+        # using a loading dialog to keep the UI responsive during the I/O.
+        from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
+        from hydra_suite.trackerkit.gui.orchestrators.session import SessionOrchestrator
+
+        try:
+            probe = run_blocking_with_busy_dialog(
+                self,
+                lambda ss, sp: SessionOrchestrator._probe_video_io(fp, ss, sp),
+                title="Loading Video",
+                message=f"Opening {os.path.basename(fp)}\u2026",
+            )
+        except BusyTaskError as exc:
+            QMessageBox.warning(self, "Video Load Failed", str(exc))
+            return
+
+        self._setup_video_file(fp, skip_config_load=False, _probe=probe)
         self._sync_batch_list_ui()
 
     def _remove_from_batch(self):
@@ -1845,9 +1861,9 @@ class MainWindow(QMainWindow):
     # VIDEO PLAYER FUNCTIONS
     # =========================================================================
 
-    def _init_video_player(self, video_path):
+    def _init_video_player(self, video_path, _probe=None):
         """Initialize video player with the loaded video."""
-        self._session_orch._init_video_player(video_path)
+        self._session_orch._init_video_player(video_path, _probe=_probe)
 
     def _display_current_frame(self):
         """Display the current frame in the video label."""

@@ -2735,13 +2735,17 @@ class ConfigOrchestrator:
     # VIDEO SETUP
     # =========================================================================
 
-    def _setup_video_file(self, fp, skip_config_load=False):
+    def _setup_video_file(self, fp, skip_config_load=False, _probe=None):
         """
         Setup a video file for tracking.
 
         Args:
             fp: Path to the video file
             skip_config_load: If True, skip auto-loading config (used when loading config itself)
+            _probe: Optional pre-loaded video probe from SessionOrchestrator._probe_video_io.
+                    When provided, the VideoCapture open and first-frame decode are skipped
+                    inside _init_video_player because they were already done in a background
+                    thread (i.e. via run_blocking_with_busy_dialog).
         """
         self._panels.setup.file_line.setText(fp)
         self._mw.current_video_path = fp
@@ -2770,8 +2774,8 @@ class ConfigOrchestrator:
         self._mw.btn_test_detection.setEnabled(True)
         self._panels.setup.btn_detect_fps.setEnabled(True)
 
-        # Initialize video player
-        self._mw._init_video_player(fp)
+        # Initialize video player (pass probe so the heavy I/O is not repeated)
+        self._mw._init_video_player(fp, _probe=_probe)
 
         # Update window title
         self._mw.setWindowTitle(f"HYDRA - {os.path.basename(fp)}")
