@@ -3212,6 +3212,7 @@ class TrackingWorker(QThread):
                     spatial_candidates,
                     association_data=association_data,
                     committed_slot_identities=_committed_slot_identities,
+                    missed_frames=missed_frames,
                 )
                 respawned_matches = {r for r in rows if track_states[r] == "lost"}
                 _identity_rejoin_slots = {s for s, _ in identity_rejoin_pairs}

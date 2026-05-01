@@ -557,11 +557,14 @@ class TrackingPanel(QWidget):
         self.spin_identity_weight.setRange(0.0, 2.0)
         self.spin_identity_weight.setSingleStep(0.05)
         self.spin_identity_weight.setDecimals(2)
-        self.spin_identity_weight.setValue(1.0)
+        self.spin_identity_weight.setValue(0.3)
         self.spin_identity_weight.setToolTip(
             "Relative weight of the identity cost term vs. the geometric cost.\n"
             "0.0 = identity has no influence on assignment.\n"
-            "1.0 = balanced with geometry.\n"
+            "0.3 = identity nudges Phase-1 association without dominating motion (default).\n"
+            "1.0 = balanced with geometry; can pull association toward identity-matching\n"
+            "    detections at the cost of motion smoothness — raise only when the\n"
+            "    classifier is highly reliable.\n"
             "When the decoder is uncertain (early frames), this term is near-zero automatically."
         )
         f_identity_decoder.addRow("Identity weight", self.spin_identity_weight)

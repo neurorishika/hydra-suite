@@ -23,6 +23,9 @@ IDENTITY_DISPLAY_THRESHOLD           float  min confidence to display (default 0
 IDENTITY_SLOT_LOCK_MIN_FRAMES        int    frames before slot lock (default 30)
 IDENTITY_SLOT_LOCK_STRENGTH          float  soft-lock bias weight (default 0.9)
 IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN   float  margin to override lock (default 0.5)
+IDENTITY_SWAP_ENABLED                bool   enable swap-correction (default True)
+IDENTITY_SWAP_MIN_FRAMES             int    sustained mutual-mismatch frames (default 8)
+IDENTITY_SWAP_CONF_MARGIN            float  prob margin to count as mismatch (default 0.2)
 """
 
 from __future__ import annotations
@@ -181,6 +184,14 @@ class OnlineIdentityDecoder:
         self._respawn_prior_max_gap: int = int(
             params.get("IDENTITY_RESPAWN_PRIOR_MAX_GAP", 120)
         )
+        self._swap_enabled: bool = bool(params.get("IDENTITY_SWAP_ENABLED", True))
+        self._swap_min_frames: int = int(params.get("IDENTITY_SWAP_MIN_FRAMES", 8))
+        self._swap_conf_margin: float = float(
+            params.get("IDENTITY_SWAP_CONF_MARGIN", 0.2)
+        )
+
+        # Sustained-mutual-mismatch counter, keyed by sorted slot pair.
+        self._swap_evidence: dict[tuple[int, int], int] = {}
 
         # Build sticky transition matrix in log-space once
         self._log_transition: np.ndarray = self._build_log_transition(catalog.size)
@@ -394,7 +405,7 @@ class OnlineIdentityDecoder:
         if not visible_slots:
             return []
 
-        # Step 1+2+3: predict, fuse, apply lock bias for each visible slot
+        # Step 1+2: predict and fuse evidence for each visible slot
         for slot in visible_slots:
             blocked_labels = {
                 other_belief.committed_label
@@ -415,8 +426,17 @@ class OnlineIdentityDecoder:
             )
             belief.last_conflict_flag = False
             self._fuse_evidence(belief, evs)
-            self._apply_slot_lock_bias(belief)
             belief.last_frame_idx = int(frame_idx)
+
+        # Step 2.5: detect & execute swaps using pre-bias (raw evidence) posteriors
+        # so that sustained mutual mismatch can override the slot-lock bias that
+        # would otherwise pin both slots to wrong identities.
+        self._detect_and_execute_swaps(visible_slots, frame_idx)
+
+        # Step 3: apply lock bias (post-swap, so the bias follows the new
+        # committed identity)
+        for slot in visible_slots:
+            self._apply_slot_lock_bias(self._beliefs[slot])
 
         # Step 4: uniqueness-constrained visible-slot assignment
         assigned_labels = self._solve_visible_assignment(visible_slots)
@@ -644,6 +664,141 @@ class OnlineIdentityDecoder:
                 frame_idx,
             )
 
+    def _detect_and_execute_swaps(
+        self,
+        visible_slots: list[int],
+        frame_idx: int,
+    ) -> None:
+        """Detect sustained mutual identity disagreement between committed
+        slot pairs and atomically swap their committed labels.
+
+        This runs on raw post-fusion (pre-lock-bias) posteriors so the slot lock
+        cannot mask a real swap.  Pairwise only — three-way cycles must resolve
+        as two consecutive pairwise swaps.
+        """
+        if not self._swap_enabled:
+            return
+
+        # Snapshot committed slots and their pre-bias posteriors
+        committed_visible: list[int] = []
+        probs_by_slot: dict[int, np.ndarray] = {}
+        for slot in visible_slots:
+            belief = self._beliefs.get(slot)
+            if belief is None or not belief.committed or not belief.committed_label:
+                continue
+            committed_visible.append(slot)
+            probs_by_slot[slot] = self._posterior_probs(belief)
+
+        if len(committed_visible) < 2:
+            # Drop counters tied to absent/uncommitted slots
+            self._swap_evidence = {
+                k: v
+                for k, v in self._swap_evidence.items()
+                if k[0] in probs_by_slot and k[1] in probs_by_slot
+            }
+            return
+
+        already_swapped: set[int] = set()
+        seen_pairs: set[tuple[int, int]] = set()
+        committed_visible.sort()
+        for i in range(len(committed_visible)):
+            for j in range(i + 1, len(committed_visible)):
+                a = committed_visible[i]
+                b = committed_visible[j]
+                pair = (a, b)
+                seen_pairs.add(pair)
+                if a in already_swapped or b in already_swapped:
+                    continue
+                belief_a = self._beliefs[a]
+                belief_b = self._beliefs[b]
+                if self._is_mutual_mismatch(
+                    belief_a, belief_b, probs_by_slot[a], probs_by_slot[b]
+                ):
+                    self._swap_evidence[pair] = self._swap_evidence.get(pair, 0) + 1
+                    if self._swap_evidence[pair] >= self._swap_min_frames:
+                        self._execute_swap(a, b, frame_idx)
+                        already_swapped.add(a)
+                        already_swapped.add(b)
+                        self._swap_evidence.pop(pair, None)
+                else:
+                    self._swap_evidence.pop(pair, None)
+
+        # Drop counters for pairs that didn't appear this frame (stale state)
+        self._swap_evidence = {
+            k: v for k, v in self._swap_evidence.items() if k in seen_pairs
+        }
+
+    def _is_mutual_mismatch(
+        self,
+        belief_a: TrackIdentityBelief,
+        belief_b: TrackIdentityBelief,
+        probs_a: np.ndarray,
+        probs_b: np.ndarray,
+    ) -> bool:
+        """True if A's evidence favors B's identity and B's evidence favors A's,
+        each by at least ``IDENTITY_SWAP_CONF_MARGIN`` and above the display
+        threshold.
+        """
+        if belief_a.committed_label is None or belief_b.committed_label is None:
+            return False
+        if belief_a.committed_label == belief_b.committed_label:
+            return False
+        idx_a = int(belief_a.committed_index)
+        idx_b = int(belief_b.committed_index)
+        if idx_a <= 0 or idx_b <= 0:
+            return False
+        if idx_a >= probs_a.shape[0] or idx_b >= probs_a.shape[0]:
+            return False
+
+        margin = self._swap_conf_margin
+        thresh = self._display_threshold
+        a_likes_b = (
+            float(probs_a[idx_b]) >= thresh
+            and float(probs_a[idx_b]) - float(probs_a[idx_a]) >= margin
+        )
+        b_likes_a = (
+            float(probs_b[idx_a]) >= thresh
+            and float(probs_b[idx_a]) - float(probs_b[idx_b]) >= margin
+        )
+        return a_likes_b and b_likes_a
+
+    def _execute_swap(self, slot_a: int, slot_b: int, frame_idx: int) -> None:
+        """Atomically swap committed identities (and slot-lock state) between
+        two beliefs.  Trajectory geometry is unchanged; only the identity
+        labels exchange."""
+        bel_a = self._beliefs[slot_a]
+        bel_b = self._beliefs[slot_b]
+        log.info(
+            "Identity swap fired: slot %d ('%s') <-> slot %d ('%s') at frame %d",
+            slot_a,
+            bel_a.committed_label,
+            slot_b,
+            bel_b.committed_label,
+            frame_idx,
+        )
+        bel_a.committed_label, bel_b.committed_label = (
+            bel_b.committed_label,
+            bel_a.committed_label,
+        )
+        bel_a.committed_index, bel_b.committed_index = (
+            bel_b.committed_index,
+            bel_a.committed_index,
+        )
+        bel_a.slot_lock_label, bel_b.slot_lock_label = (
+            bel_b.slot_lock_label,
+            bel_a.slot_lock_label,
+        )
+        bel_a.slot_lock_strength, bel_b.slot_lock_strength = (
+            bel_b.slot_lock_strength,
+            bel_a.slot_lock_strength,
+        )
+        bel_a.slot_lock_frame, bel_b.slot_lock_frame = (
+            bel_b.slot_lock_frame,
+            bel_a.slot_lock_frame,
+        )
+        bel_a.stable_count = 0
+        bel_b.stable_count = 0
+
     def clear_slot(
         self,
         slot_index: int,
@@ -684,6 +839,12 @@ class OnlineIdentityDecoder:
                     new_reason,
                 )
             del self._beliefs[slot_index]
+
+        # Drop any swap-evidence counters that referenced this slot
+        if self._swap_evidence:
+            self._swap_evidence = {
+                k: v for k, v in self._swap_evidence.items() if slot_index not in k
+            }
 
     def get_belief(self, slot_index: int) -> Optional[TrackIdentityBelief]:
         """Return the current belief for *slot_index*, or ``None`` if absent."""

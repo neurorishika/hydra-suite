@@ -637,3 +637,95 @@ def test_pose_stage1_candidates_outside_fixed_cull_get_real_cost_in_large_n_spat
     assert 0 in candidates
     assert 0 in candidates[0]
     assert float(cost[0, 0]) < 1e6
+
+
+# ---------------------------------------------------------------------------
+# Identity-rejoin motion-budget gate (Fix B)
+# ---------------------------------------------------------------------------
+
+
+def _identity_rejoin_setup(missed_frames):
+    """Two-slot setup where slot 1 is committed-lost far from a single detection
+    that has matching identity evidence.  Returns the assigner result."""
+    params = _params()
+    params["MAX_DISTANCE_THRESHOLD"] = 1000.0
+    params["KALMAN_MAX_VELOCITY_MULTIPLIER"] = 2.0
+    params["IDENTITY_REJOIN_THRESHOLD"] = 0.5
+    params["IDENTITY_REJOIN_VELOCITY_BUDGET"] = 1.5
+    assigner = TrackAssigner(params)
+    kf = _DummyKF(2)
+    kf.X[0, :2] = [10.0, 10.0]
+    kf.X[1, :2] = [100.0, 100.0]
+
+    measurements = [
+        np.array([50.0, 50.0, 0.1], dtype=np.float32),
+    ]
+    cost = np.array([[5.0], [600.0]], dtype=np.float32)
+
+    track_states = ["active", "lost"]
+    continuity = [10, 0]
+
+    log_post_certain = np.log(np.array([0.99, 0.01]))
+    log_like_match = np.log(np.array([0.95, 0.05]))
+    association_data = {
+        "identity_track_log_posteriors": {1: log_post_certain},
+        "identity_detection_log_likelihoods": [log_like_match],
+    }
+    committed_slot_identities = {1: "mouse1"}
+
+    kwargs = dict(
+        cost=cost,
+        N=2,
+        M=1,
+        meas=measurements,
+        track_states=track_states,
+        tracking_continuity=continuity,
+        kf_manager=kf,
+        spatial_candidates={},
+        association_data=association_data,
+        committed_slot_identities=committed_slot_identities,
+    )
+    if missed_frames is not None:
+        kwargs["missed_frames"] = missed_frames
+    return assigner.assign_tracks(**kwargs)
+
+
+def test_identity_rejoin_blocks_short_lost_far_jump() -> None:
+    """Slot lost for 1 frame must not teleport ~70 units to a far identity match.
+
+    Distance from (100,100) to (50,50) is sqrt(5000) ~= 70.7.  With body_size=20
+    and KALMAN_MAX_VELOCITY_MULTIPLIER=2.0 the per-frame budget is 40 units;
+    safety_factor=1.5 -> 60 units for 1 frame.  70.7 > 60 -> rejoin is blocked.
+    """
+    rows, cols, _free, identity_rejoin_pairs = _identity_rejoin_setup(
+        missed_frames=[0, 1]
+    )
+    assert identity_rejoin_pairs == [], (
+        f"Expected no identity-rejoin within 1-frame motion budget, "
+        f"got {identity_rejoin_pairs}"
+    )
+
+
+def test_identity_rejoin_allows_long_occlusion_recovery() -> None:
+    """Slot lost for many frames should still be allowed to rejoin at distance.
+
+    For 5 frames lost: budget = 5 * 40 * 1.5 = 300 units.  Distance 70.7 < 300.
+    """
+    _rows, _cols, _free, identity_rejoin_pairs = _identity_rejoin_setup(
+        missed_frames=[0, 5]
+    )
+    assert (1, 0) in identity_rejoin_pairs, (
+        f"Expected long-occlusion identity-rejoin to fire, got "
+        f"{identity_rejoin_pairs}"
+    )
+
+
+def test_identity_rejoin_backward_compatible_when_missed_frames_omitted() -> None:
+    """When missed_frames is not provided, fall back to old behaviour (no gate)."""
+    _rows, _cols, _free, identity_rejoin_pairs = _identity_rejoin_setup(
+        missed_frames=None
+    )
+    assert (1, 0) in identity_rejoin_pairs, (
+        "Without missed_frames, motion-budget gate must not engage; "
+        f"got {identity_rejoin_pairs}"
+    )

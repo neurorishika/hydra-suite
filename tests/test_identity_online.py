@@ -264,3 +264,215 @@ def test_online_decoder_respawn_prior_max_gap_applies_in_backward() -> None:
         abs(probs[catalog.index_of("mouse1")] - probs[catalog.index_of("mouse2")])
         < 0.05
     ), probs
+
+
+# ---------------------------------------------------------------------------
+# Live identity-swap correction (Fix A)
+# ---------------------------------------------------------------------------
+
+
+def _swap_decoder() -> OnlineIdentityDecoder:
+    catalog = IdentityCatalog.from_labels(["mouse1", "mouse2"])
+    return OnlineIdentityDecoder(
+        catalog,
+        {
+            "IDENTITY_DISPLAY_THRESHOLD": 0.4,
+            "IDENTITY_COMMIT_THRESHOLD": 0.7,
+            "IDENTITY_COMMIT_MIN_HITS": 1,
+            "IDENTITY_SLOT_LOCK_MIN_FRAMES": 1,
+            "IDENTITY_SLOT_LOCK_STRENGTH": 0.9,
+            "IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN": 0.5,
+            "IDENTITY_SWAP_MIN_FRAMES": 3,
+            "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+            "IDENTITY_SWAP_ENABLED": True,
+        },
+    )
+
+
+def _commit_initial_identities(decoder: OnlineIdentityDecoder) -> None:
+    """Frame 1: commit slot 0 to mouse1, slot 1 to mouse2."""
+    decoder.update_frame(
+        1,
+        [0, 1],
+        {
+            0: [IdentityEvidence.from_cnn(1, 100, "cnn", _log_probs(0.02, 0.96, 0.02))],
+            1: [IdentityEvidence.from_cnn(1, 101, "cnn", _log_probs(0.02, 0.02, 0.96))],
+        },
+    )
+
+
+def test_swap_correction_swaps_committed_labels_after_sustained_mutual_mismatch() -> (
+    None
+):
+    decoder = _swap_decoder()
+    _commit_initial_identities(decoder)
+    assert decoder.get_belief(0).committed_label == "mouse1"
+    assert decoder.get_belief(1).committed_label == "mouse2"
+
+    # Sustained mutual mismatch: it takes ~1 frame for evidence to overcome the
+    # initial commitment posterior, then 3 frames at the swap threshold to
+    # accumulate.  Use stronger evidence so the threshold is reached cleanly.
+    for f in range(2, 7):
+        decoder.update_frame(
+            f,
+            [0, 1],
+            {
+                0: [
+                    IdentityEvidence.from_cnn(
+                        f, 100, "cnn", _log_probs(0.001, 0.005, 0.994)
+                    )
+                ],
+                1: [
+                    IdentityEvidence.from_cnn(
+                        f, 101, "cnn", _log_probs(0.001, 0.994, 0.005)
+                    )
+                ],
+            },
+        )
+
+    assert decoder.get_belief(0).committed_label == "mouse2"
+    assert decoder.get_belief(1).committed_label == "mouse1"
+
+
+def test_swap_correction_does_not_fire_on_single_frame_flicker() -> None:
+    decoder = _swap_decoder()
+    _commit_initial_identities(decoder)
+
+    # Single frame of mutual mismatch — should not trigger swap (need 3 sustained)
+    decoder.update_frame(
+        2,
+        [0, 1],
+        {
+            0: [IdentityEvidence.from_cnn(2, 100, "cnn", _log_probs(0.02, 0.05, 0.93))],
+            1: [IdentityEvidence.from_cnn(2, 101, "cnn", _log_probs(0.02, 0.93, 0.05))],
+        },
+    )
+
+    assert decoder.get_belief(0).committed_label == "mouse1"
+    assert decoder.get_belief(1).committed_label == "mouse2"
+
+
+def test_swap_correction_does_not_fire_on_one_way_disagreement() -> None:
+    decoder = _swap_decoder()
+    _commit_initial_identities(decoder)
+
+    # Slot 0's evidence flips toward mouse2, but slot 1 still strongly mouse2.
+    # Without mutual mismatch, no swap.
+    for f in range(2, 6):
+        decoder.update_frame(
+            f,
+            [0, 1],
+            {
+                0: [
+                    IdentityEvidence.from_cnn(
+                        f, 100, "cnn", _log_probs(0.02, 0.05, 0.93)
+                    )
+                ],
+                1: [
+                    IdentityEvidence.from_cnn(
+                        f, 101, "cnn", _log_probs(0.02, 0.02, 0.96)
+                    )
+                ],
+            },
+        )
+
+    # Slot 1's commitment should be unchanged; slot 0 may revise via existing
+    # override-margin path, but the swap counter must NOT have fired a swap.
+    assert decoder.get_belief(1).committed_label == "mouse2"
+
+
+def test_swap_correction_counter_resets_on_agreement_frame() -> None:
+    decoder = _swap_decoder()
+    _commit_initial_identities(decoder)
+
+    # 2 frames of mutual mismatch (counter -> 2; below threshold 3)
+    for f in (2, 3):
+        decoder.update_frame(
+            f,
+            [0, 1],
+            {
+                0: [
+                    IdentityEvidence.from_cnn(
+                        f, 100, "cnn", _log_probs(0.02, 0.05, 0.93)
+                    )
+                ],
+                1: [
+                    IdentityEvidence.from_cnn(
+                        f, 101, "cnn", _log_probs(0.02, 0.93, 0.05)
+                    )
+                ],
+            },
+        )
+
+    # Frame 4: agreement frame — counter should reset
+    decoder.update_frame(
+        4,
+        [0, 1],
+        {
+            0: [IdentityEvidence.from_cnn(4, 100, "cnn", _log_probs(0.02, 0.96, 0.02))],
+            1: [IdentityEvidence.from_cnn(4, 101, "cnn", _log_probs(0.02, 0.02, 0.96))],
+        },
+    )
+
+    # Frame 5+6: only 2 more mismatch frames; insufficient to trigger
+    for f in (5, 6):
+        decoder.update_frame(
+            f,
+            [0, 1],
+            {
+                0: [
+                    IdentityEvidence.from_cnn(
+                        f, 100, "cnn", _log_probs(0.02, 0.05, 0.93)
+                    )
+                ],
+                1: [
+                    IdentityEvidence.from_cnn(
+                        f, 101, "cnn", _log_probs(0.02, 0.93, 0.05)
+                    )
+                ],
+            },
+        )
+
+    # Without reset, 4 cumulative mismatch frames would have triggered (>= 3).
+    # With reset, this run only has 2 consecutive — no swap.
+    assert decoder.get_belief(0).committed_label == "mouse1"
+    assert decoder.get_belief(1).committed_label == "mouse2"
+
+
+def test_swap_correction_disabled_when_flag_false() -> None:
+    catalog = IdentityCatalog.from_labels(["mouse1", "mouse2"])
+    decoder = OnlineIdentityDecoder(
+        catalog,
+        {
+            "IDENTITY_DISPLAY_THRESHOLD": 0.4,
+            "IDENTITY_COMMIT_THRESHOLD": 0.7,
+            "IDENTITY_COMMIT_MIN_HITS": 1,
+            "IDENTITY_SLOT_LOCK_MIN_FRAMES": 1,
+            "IDENTITY_SWAP_MIN_FRAMES": 3,
+            "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+            "IDENTITY_SWAP_ENABLED": False,
+        },
+    )
+    _commit_initial_identities(decoder)
+    for f in range(2, 8):
+        decoder.update_frame(
+            f,
+            [0, 1],
+            {
+                0: [
+                    IdentityEvidence.from_cnn(
+                        f, 100, "cnn", _log_probs(0.02, 0.05, 0.93)
+                    )
+                ],
+                1: [
+                    IdentityEvidence.from_cnn(
+                        f, 101, "cnn", _log_probs(0.02, 0.93, 0.05)
+                    )
+                ],
+            },
+        )
+
+    # When swap correction is disabled, the existing per-slot revision logic may
+    # still revise individually, but the deliberate atomic swap path is off.
+    # We only assert the flag was honoured: no swap-detection state was kept.
+    assert decoder._swap_evidence == {}

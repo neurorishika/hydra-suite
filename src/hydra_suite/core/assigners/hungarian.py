@@ -238,7 +238,7 @@ class TrackAssigner:
         """
         if not self.params.get("ENABLE_IDENTITY_ONLINE_DECODER", False):
             return
-        alpha = float(self.params.get("ASSOCIATION_IDENTITY_HINT_SCALE", 1.0))
+        alpha = float(self.params.get("ASSOCIATION_IDENTITY_HINT_SCALE", 0.3))
         if alpha <= 0.0 or not association_data:
             return
 
@@ -767,6 +767,7 @@ class TrackAssigner:
         spatial_candidates: dict | None = None,
         association_data: dict | None = None,
         committed_slot_identities: dict | None = None,
+        missed_frames: list | None = None,
         _lost=None,
         _M=None,
         _MAX_DIST=None,
@@ -808,6 +809,27 @@ class TrackAssigner:
             rejoin_threshold = float(p.get("IDENTITY_REJOIN_THRESHOLD", 0.5))
             log_threshold = np.log(max(rejoin_threshold, 1e-10))
 
+            # Motion-budget gate: short occlusions can only rejoin nearby; long
+            # occlusions retain long-range re-ID.  If missed_frames isn't
+            # supplied (e.g. legacy callers / unit tests) the gate is disabled.
+            body_size = float(p.get("REFERENCE_BODY_SIZE", 20.0)) * float(
+                p.get("RESIZE_FACTOR", 1.0)
+            )
+            v_max_per_frame = (
+                float(p.get("KALMAN_MAX_VELOCITY_MULTIPLIER", 2.0)) * body_size
+            )
+            budget_safety = float(p.get("IDENTITY_REJOIN_VELOCITY_BUDGET", 1.5))
+            budget_floor = float(p.get("IDENTITY_REJOIN_DIST_FLOOR", 2.0 * body_size))
+
+            def _within_budget(slot_idx: int, det_xy: np.ndarray) -> bool:
+                if missed_frames is None:
+                    return True
+                last_pos = kf_manager.X[slot_idx, :2]
+                dist = float(np.linalg.norm(det_xy - last_pos))
+                lost_n = int(missed_frames[slot_idx])
+                budget = max(budget_floor, lost_n * v_max_per_frame * budget_safety)
+                return dist <= budget
+
             # Build best (score, det_idx) for each committed slot
             slot_best: dict = {}
             for slot in committed_lost:
@@ -817,6 +839,9 @@ class TrackAssigner:
                 log_post_arr = np.asarray(log_post, dtype=np.float64)
                 for j, log_like in enumerate(det_log_likes):
                     if j in assigned_dets or log_like is None:
+                        continue
+                    det_xy = np.asarray(meas[j][:2], dtype=np.float64)
+                    if not _within_budget(slot, det_xy):
                         continue
                     log_like_arr = np.asarray(log_like, dtype=np.float64)
                     score = float(np.logaddexp.reduce(log_post_arr + log_like_arr))
@@ -884,6 +909,7 @@ class TrackAssigner:
         spatial_candidates: object = None,
         association_data: Dict[str, Any] | None = None,
         committed_slot_identities: Dict[int, str] | None = None,
+        missed_frames: list | None = None,
     ) -> object:
         """
         Drop-in replacement for track assignment logic.
@@ -975,6 +1001,7 @@ class TrackAssigner:
             spatial_candidates=spatial_candidates,
             association_data=association_data,
             committed_slot_identities=committed_slot_identities,
+            missed_frames=missed_frames,
             _lost=lost,
             _M=M,
             _MAX_DIST=MAX_DIST,
