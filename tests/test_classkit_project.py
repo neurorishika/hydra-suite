@@ -199,3 +199,38 @@ def test_classkit_db_relocates_bundle_owned_paths_after_archive_import(
         (restored_dir / "artifacts" / "imported_sources" / "source-a").resolve()
     )
     assert restored_db.get_most_recent_embeddings() is not None
+
+
+def test_relocate_rebases_classkit_runs_model_artifacts(tmp_path: Path) -> None:
+    """Model checkpoints under .classkit_runs/ rebase after a project move."""
+    original_dir = tmp_path / "original_project"
+    db_path = prepare_project_directory(original_dir)
+    run_dir = original_dir / ".classkit_runs" / "flat_custom_20260101_000000"
+    run_dir.mkdir(parents=True)
+    artifact = run_dir / "best.pth"
+    artifact.write_bytes(b"fake-checkpoint")
+
+    db = ClassKitDB(db_path)
+    db.save_model_cache(
+        mode="flat_custom",
+        artifact_paths=[str(artifact.resolve())],
+        class_names=["a", "b"],
+        num_classes=2,
+    )
+
+    moved_dir = tmp_path / "moved_project"
+    original_dir.rename(moved_dir)
+
+    moved_db = ClassKitDB(classkit_db_path(moved_dir))
+    assert moved_db.relocate_project_owned_paths() > 0
+
+    entries = moved_db.list_model_caches()
+    assert len(entries) == 1
+    rebased = Path(entries[0]["artifact_paths"][0])
+    assert (
+        rebased
+        == (
+            moved_dir / ".classkit_runs" / "flat_custom_20260101_000000" / "best.pth"
+        ).resolve()
+    )
+    assert rebased.exists()

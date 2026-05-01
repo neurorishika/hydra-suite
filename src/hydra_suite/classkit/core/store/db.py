@@ -17,6 +17,7 @@ from hydra_suite.data.project_bundle import (
     ensure_bundle_subdirectory,
 )
 
+_PROJECT_OWNED_TOP_DIRS = frozenset({"state", "history", ".classkit_runs"})
 _PROJECT_ARTIFACT_PREFIXES = {
     ("artifacts", "exports"),
     ("artifacts", "imported_sources"),
@@ -43,19 +44,9 @@ class ClassKitDB:
     @staticmethod
     def _project_owned_suffix(path_value: Path) -> Optional[Path]:
         parts = path_value.parts
-        if not parts:
-            return None
-
-        if parts[0] == "state" or parts[0] == "history":
-            return Path(*parts)
-        if len(parts) >= 2 and tuple(parts[:2]) in _PROJECT_ARTIFACT_PREFIXES:
-            return Path(*parts)
-
-        for index, part in enumerate(parts):
+        for index in range(len(parts)):
             suffix = parts[index:]
-            if not suffix:
-                continue
-            if suffix[0] == "state" or suffix[0] == "history":
+            if suffix[0] in _PROJECT_OWNED_TOP_DIRS:
                 return Path(*suffix)
             if len(suffix) >= 2 and tuple(suffix[:2]) in _PROJECT_ARTIFACT_PREFIXES:
                 return Path(*suffix)
