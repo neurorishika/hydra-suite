@@ -1065,6 +1065,11 @@ class IdentityPanel(QWidget):
         self._sync_realtime_individual_batch_ui()
         self._main_window._sync_individual_analysis_mode_ui()
 
+    def _clear_cnn_classifier_rows(self) -> None:
+        """Remove all configured CNN classifier rows before loading new config."""
+        for row in list(self._cnn_classifier_rows()):
+            self._remove_cnn_classifier_row(row)
+
     def _cnn_classifier_rows(self) -> list:
         """Return list of all CNNClassifierRow instances."""
         rows = []

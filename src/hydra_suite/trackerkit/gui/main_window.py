@@ -1678,6 +1678,7 @@ class MainWindow(QMainWindow):
         fp = self.batch_videos[row]
         if fp == self.current_video_path:
             return
+        previous_video_path = self.current_video_path
 
         # Auto-save the current video's config before switching
         if self.current_video_path:
@@ -1729,7 +1730,7 @@ class MainWindow(QMainWindow):
             self._setup_panel.list_batch_videos.setEnabled(True)
 
         self._setup_video_file(fp, skip_config_load=False, _probe=probe)
-        self._sync_batch_list_ui()
+        self._session_orch._refresh_batch_list_current_video(previous_video_path, fp)
 
     def _remove_from_batch(self):
         """Remove selected additional video from the batch list."""

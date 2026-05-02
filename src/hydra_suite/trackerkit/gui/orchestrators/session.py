@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
@@ -589,35 +589,111 @@ class SessionOrchestrator:
         """Refresh the batch list widget with markers for the keystone."""
         from PySide6.QtWidgets import QListWidgetItem
 
-        self._panels.setup.list_batch_videos.clear()
+        list_widget = self._panels.setup.list_batch_videos
         current_fp = (
             os.path.normpath(self._panels.setup.file_line.text().strip())
             if self._panels.setup.file_line.text().strip()
             else ""
         )
 
-        for i, fp in enumerate(self._mw.batch_videos):
-            norm_fp = os.path.normpath(fp)
-            if i == 0:
-                item_text = f"⭐ KEYSTONE: {fp}"
+        selected_row = -1
+        blocker = QSignalBlocker(list_widget)
+        list_widget.setUpdatesEnabled(False)
+        try:
+            list_widget.clear()
+            for i, fp in enumerate(self._mw.batch_videos):
+                norm_fp = os.path.normpath(fp)
+                item_text = f"⭐ KEYSTONE: {fp}" if i == 0 else fp
+
+                if norm_fp == current_fp:
+                    item_text = f"▶ CURRENT: {item_text}"
+                    selected_row = i
+
+                item = QListWidgetItem(item_text)
+                item.setToolTip(fp)
+                item.setData(Qt.UserRole, fp)
+
+                if norm_fp == current_fp:
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+
+                list_widget.addItem(item)
+
+            if 0 <= selected_row < list_widget.count():
+                list_widget.setCurrentRow(selected_row)
             else:
-                item_text = fp
+                list_widget.clearSelection()
+        finally:
+            del blocker
+            list_widget.setUpdatesEnabled(True)
+            list_widget.viewport().update()
 
-            if norm_fp == current_fp:
-                item_text = f"▶ CURRENT: {item_text}"
+    def _refresh_batch_list_current_video(self, previous_fp: str | None, current_fp: str):
+        """Update only the affected batch-list rows when the current video changes."""
+        list_widget = self._panels.setup.list_batch_videos
+        current_norm = os.path.normpath(current_fp) if current_fp else ""
+        previous_norm = os.path.normpath(previous_fp) if previous_fp else ""
+        target_rows = set()
 
-            item = QListWidgetItem(item_text)
-            item.setToolTip(fp)
+        for row, fp in enumerate(self._mw.batch_videos):
+            norm_fp = os.path.normpath(fp)
+            if norm_fp == current_norm or norm_fp == previous_norm:
+                target_rows.add(row)
 
-            if norm_fp == current_fp:
+        if not target_rows:
+            return
+
+        blocker = QSignalBlocker(list_widget)
+        list_widget.setUpdatesEnabled(False)
+        try:
+            for row in sorted(target_rows):
+                item = list_widget.item(row)
+                if item is None:
+                    continue
+                fp = self._mw.batch_videos[row]
+                item_text = f"⭐ KEYSTONE: {fp}" if row == 0 else fp
+                is_current = os.path.normpath(fp) == current_norm
+                if is_current:
+                    item_text = f"▶ CURRENT: {item_text}"
+                item.setText(item_text)
+                item.setToolTip(fp)
+                item.setData(Qt.UserRole, fp)
                 font = item.font()
-                font.setBold(True)
+                font.setBold(is_current)
                 item.setFont(font)
 
-            self._panels.setup.list_batch_videos.addItem(item)
+            current_row = next(
+                (
+                    row
+                    for row, fp in enumerate(self._mw.batch_videos)
+                    if os.path.normpath(fp) == current_norm
+                ),
+                -1,
+            )
+            if 0 <= current_row < list_widget.count():
+                list_widget.setCurrentRow(current_row)
+            else:
+                list_widget.clearSelection()
+        finally:
+            del blocker
+            list_widget.setUpdatesEnabled(True)
+            list_widget.viewport().update()
 
-            if norm_fp == current_fp:
-                self._panels.setup.list_batch_videos.setCurrentItem(item)
+    def _release_video_player_resources(self):
+        """Drop resources tied to the previously loaded preview video."""
+        if self._mw.video_cap is not None:
+            self._mw.video_cap.release()
+            self._mw.video_cap = None
+        if self._mw.playback_timer:
+            self._mw.playback_timer.stop()
+            self._mw.playback_timer = None
+        self._mw.is_playing = False
+        self._mw.last_read_frame_idx = -1
+        self._mw.preview_frame_original = None
+        self._mw.detection_test_result = None
+        self._mw._last_tracking_frame_rgb = None
+        self._mw._roi_masked_cache.clear()
 
     def _sync_video_pose_overlay_controls(self, *_args):
         """Gate pose video overlay controls based on pose inference enable state."""
@@ -1588,12 +1664,7 @@ class SessionOrchestrator:
             decode are skipped because they were already done in a background
             thread via ``run_blocking_with_busy_dialog``.
         """
-        if self._mw.video_cap is not None:
-            self._mw.video_cap.release()
-        if self._mw.playback_timer:
-            self._mw.playback_timer.stop()
-            self._mw.playback_timer = None
-        self._mw.is_playing = False
+        self._release_video_player_resources()
 
         if _probe is not None:
             # Re-open cap on the main thread (fast: just open, no slow FRAME_COUNT

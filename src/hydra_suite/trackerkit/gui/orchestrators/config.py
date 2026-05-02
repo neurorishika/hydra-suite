@@ -1005,6 +1005,8 @@ class ConfigOrchestrator:
         if old_method == "color_tags_yolo":
             old_method = "cnn_classifier"
         self._panels.identity.g_identity.setChecked(old_method != "none_disabled")
+        self._panels.identity._clear_cnn_classifier_rows()
+        self._panels.identity.g_apriltags.setChecked(False)
 
         # --- New format or migrate from old format ---
         _new_cnn_classifiers = get_cfg("cnn_classifiers", default=None)
