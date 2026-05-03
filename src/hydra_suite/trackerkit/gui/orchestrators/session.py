@@ -629,7 +629,9 @@ class SessionOrchestrator:
             list_widget.setUpdatesEnabled(True)
             list_widget.viewport().update()
 
-    def _refresh_batch_list_current_video(self, previous_fp: str | None, current_fp: str):
+    def _refresh_batch_list_current_video(
+        self, previous_fp: str | None, current_fp: str
+    ):
         """Update only the affected batch-list rows when the current video changes."""
         list_widget = self._panels.setup.list_batch_videos
         current_norm = os.path.normpath(current_fp) if current_fp else ""
@@ -638,7 +640,7 @@ class SessionOrchestrator:
 
         for row, fp in enumerate(self._mw.batch_videos):
             norm_fp = os.path.normpath(fp)
-            if norm_fp == current_norm or norm_fp == previous_norm:
+            if norm_fp in (current_norm, previous_norm):
                 target_rows.add(row)
 
         if not target_rows:
@@ -1919,7 +1921,10 @@ class SessionOrchestrator:
     def _set_preview_test_running(self, running: bool):
         """Lock/unlock UI while async preview detection is running."""
         if running:
-            self._mw._set_interactive_widgets_enabled(False, remember_state=True)
+            # Disable without saving state — restore re-applies the idle state
+            # instead of trusting a snapshot, so finished_signal handlers (e.g.
+            # _update_detection_stats) can safely toggle widgets mid-flight.
+            self._mw._set_interactive_widgets_enabled(False, remember_state=False)
             self._mw._set_video_interaction_enabled(False)
             self._mw.btn_test_detection.setText("Testing Detection...")
             self._mw.btn_test_detection.setEnabled(False)
@@ -1929,9 +1934,8 @@ class SessionOrchestrator:
             self._mw.progress_bar.setVisible(True)
             return
 
-        self._mw._set_interactive_widgets_enabled(True, remember_state=True)
-        self._mw._set_video_interaction_enabled(True)
-        self._sync_contextual_controls()
+        # Test detection only runs from idle, so re-apply idle to fully restore.
+        self._apply_ui_state("idle")
         self._mw._sync_individual_analysis_mode_ui()
         self._mw._sync_pose_backend_ui()
         if hasattr(self._mw, "_detection_panel"):
@@ -1945,6 +1949,15 @@ class SessionOrchestrator:
         self._mw.btn_test_detection.setEnabled(
             self._mw.preview_frame_original is not None
         )
+        # Result-driven enables: idle blanket-enables everything, but the
+        # auto-set buttons should reflect whether detections were found.
+        detected = getattr(self._mw, "detected_sizes", None)
+        has_detections = bool(detected) and int(detected.get("count", 0)) > 0
+        if hasattr(self._mw, "_detection_panel"):
+            self._mw._detection_panel.btn_auto_set_body_size.setEnabled(has_detections)
+            self._mw._detection_panel.btn_auto_set_aspect_ratio.setEnabled(
+                has_detections
+            )
         self._mw.progress_bar.setRange(0, 100)
         self._mw._refresh_progress_visibility()
 
