@@ -1190,19 +1190,28 @@ class DetectKitMainWindow(QMainWindow):
     def _start_al_round(self, dlg) -> None:
         from hydra_suite.detectkit.jobs.al_worker import ALRequest, ALWorker
 
-        request = ALRequest(
-            input_kind=(
-                "video"
-                if dlg.rb_video.isChecked()
-                else "folder" if dlg.rb_folder.isChecked() else "project"
-            ),
-            input_path=dlg.input_path_edit.text(),
-            project=self._project,
-            budget=dlg.budget_spin.value(),
-            preset=dlg.preset_combo.currentText(),
-            expected_count=dlg.expected_count_spin.value(),
-            detector_fn=self._load_active_detector_fn(),
-        )
+        try:
+            detector_fn = self._load_active_detector_fn()
+            request = ALRequest(
+                input_kind=(
+                    "video"
+                    if dlg.rb_video.isChecked()
+                    else "folder" if dlg.rb_folder.isChecked() else "project"
+                ),
+                input_path=dlg.input_path_edit.text(),
+                project=self._project,
+                budget=dlg.budget_spin.value(),
+                preset=dlg.preset_combo.currentText(),
+                expected_count=dlg.expected_count_spin.value(),
+                detector_fn=detector_fn,
+            )
+        except NotImplementedError as exc:
+            dlg.status_label.setText(f"Error: {exc}")
+            return
+        except Exception as exc:
+            dlg.status_label.setText(f"Error: {exc}")
+            return
+
         worker = ALWorker(request)
         worker.progress_signal.connect(
             lambda p, s: (dlg.progress.setValue(p), dlg.status_label.setText(s))

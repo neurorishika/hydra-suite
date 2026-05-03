@@ -109,3 +109,32 @@ def test_select_min_score_filters_out_low_scoring_frames():
         min_score=0.5,
     )
     assert picks == []
+
+
+def test_select_min_score_and_diversity_window_compose():
+    """min_score filtering plus diversity guard must coexist correctly.
+
+    Construct 10 signals with strictly decreasing uncertainty (frame_id 0 has
+    the highest score, frame_id 9 the lowest). With min_score below the median
+    and diversity_window=3, we should still get evenly-spaced picks.
+    """
+    signals = [
+        _signal(i, mean_confidence=0.0 + 0.05 * i, count_deviation=0.0)
+        for i in range(10)
+    ]
+    picks = select(
+        signals,
+        weights=PRESETS["balanced"],
+        k=4,
+        diversity_window=3,
+        probabilistic=False,
+        min_score=0.05,
+    )
+    # All picked frames must be at least diversity_window apart.
+    diffs = [abs(a - b) for a in picks for b in picks if a != b]
+    if diffs:
+        assert min(diffs) >= 3
+    # Picks must respect min_score: the bottom signals (high confidence -> low
+    # score) should be excluded; the top of the ranking (low confidence) should
+    # be preferred.
+    assert all(p in {0, 1, 2, 3, 4, 5, 6} for p in picks)

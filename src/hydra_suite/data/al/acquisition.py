@@ -176,5 +176,9 @@ def select(
         fid = candidates[chosen_idx]
         if _diverse(fid):
             picks.append(fid)
-        candidates = [c for c in candidates if abs(c - fid) >= diversity_window]
+            # Only enforce the diversity-window pruning around accepted picks.
+            candidates = [c for c in candidates if abs(c - fid) >= diversity_window]
+        else:
+            # Rejected: drop just this candidate and continue.
+            candidates.pop(chosen_idx)
     return picks
