@@ -108,7 +108,8 @@ def test_tools_panel_refresh_model_selector(qapp):
 
     panel = ToolsPanel()
     panel.refresh_model_selector(["/some/model.pt", "/other/model.pt"])
-    assert panel._model_combo.count() == 2
+    # First path auto-selected when none is currently active.
+    assert panel._active_model_path == "/some/model.pt"
 
 
 def test_tools_panel_get_overlay_settings_default(qapp):

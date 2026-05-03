@@ -127,8 +127,9 @@ def test_load_project_populates_model_selector_from_history(qapp, main_win, tmp_
 
     main_win._load_project(proj)
 
-    assert main_win._tools_panel._model_combo.count() == 1
-    assert main_win._tools_panel._model_combo.itemText(0) == str(model_path)
+    # Model selector is now a read-only display label, not a combo box.
+    assert main_win._tools_panel._active_model_path == str(model_path)
+    assert model_path.name in main_win._tools_panel._model_display.text()
 
 
 def test_load_project_filters_non_preview_models(qapp, main_win, tmp_path):
@@ -148,8 +149,8 @@ def test_load_project_filters_non_preview_models(qapp, main_win, tmp_path):
 
     main_win._load_project(proj)
 
-    assert main_win._tools_panel._model_combo.count() == 1
-    assert main_win._tools_panel._model_combo.itemText(0) == str(obb_model)
+    # Only the obb_direct model should be auto-selected (seq_detect has no counterpart).
+    assert main_win._tools_panel._active_model_path == str(obb_model)
 
 
 def test_show_image_does_not_auto_run_prediction_overlay(
@@ -189,6 +190,14 @@ def test_show_image_does_not_auto_run_prediction_overlay(
     main_win.show_image(str(tmp_path), str(tmp_path / "sample.png"))
 
     assert called == []
+
+
+def test_main_window_al_action_disabled_without_active_model(qapp):
+    """AL toolbar action must be disabled on a fresh window (no project, no model)."""
+    from hydra_suite.detectkit.gui.main_window import DetectKitMainWindow
+
+    win = DetectKitMainWindow()
+    assert not win._al_action.isEnabled()
 
 
 def test_run_inference_overlay_populates_prediction_overlay(

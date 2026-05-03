@@ -597,13 +597,17 @@ def detectkit_model_path_is_previewable(
 
     matched_history = False
     for entry in project.training_history or []:
-        entry_paths = {str(path).strip() for path in _entry_model_paths(entry)}
+        entry_paths = {str(p).strip() for p in _entry_model_paths(entry)}
         if candidate not in entry_paths:
             continue
         matched_history = True
         role = str(entry.get("role", "") or "").strip().lower()
         if role in _PREVIEWABLE_HISTORY_ROLES:
             return True
+        if role in {"seq_detect", "seq_crop_obb"}:
+            counterpart_role = "seq_crop_obb" if role == "seq_detect" else "seq_detect"
+            if detectkit_latest_model_path_for_role(project, counterpart_role):
+                return True
 
     return not matched_history
 
@@ -650,6 +654,59 @@ def detectkit_latest_model_path_for_role(
             if resolved and Path(resolved).exists():
                 return resolved
     return ""
+
+
+def detectkit_resolve_inference_models(
+    project: DetectKitProject,
+    primary_path: str,
+) -> "tuple[str, str, str | None]":
+    """Resolve the runtime inference shape for a chosen primary model path.
+
+    Returns (kind, primary, secondary):
+    - kind == "obb_direct" — primary is an OBB-direct checkpoint; secondary is None.
+    - kind == "sequential" — primary is a `seq_detect` checkpoint; secondary is the
+      newest `seq_crop_obb` checkpoint (or vice versa). Both paths exist.
+    - kind == "unknown" — primary cannot be matched to any role (treated as
+      legacy/external; caller may try direct-OBB inference at its own risk).
+
+    Raises `RuntimeError` if `kind == "sequential"` but the matching counterpart
+    cannot be located on disk.
+    """
+    primary = str(primary_path or "").strip()
+    if not primary:
+        return ("unknown", "", None)
+
+    role = ""
+    for entry in project.training_history or []:
+        entry_paths = {str(p).strip() for p in _entry_model_paths(entry)}
+        if primary in entry_paths:
+            role = str(entry.get("role", "") or "").strip().lower()
+            break
+
+    if role in {"", "obb_direct"}:
+        return ("obb_direct", primary, None)
+
+    if role == "seq_detect":
+        counterpart = detectkit_latest_model_path_for_role(project, "seq_crop_obb")
+        if not counterpart:
+            raise RuntimeError(
+                "Sequential inference requires both seq_detect and seq_crop_obb "
+                "models. Train a seq_crop_obb model and try again."
+            )
+        return ("sequential", primary, counterpart)
+
+    if role == "seq_crop_obb":
+        counterpart = detectkit_latest_model_path_for_role(project, "seq_detect")
+        if not counterpart:
+            raise RuntimeError(
+                "Sequential inference requires both seq_detect and seq_crop_obb "
+                "models. Train a seq_detect model and try again."
+            )
+        # Normalize primary to the seq_detect head so callers always see a
+        # consistent (detect, obb) ordering.
+        return ("sequential", counterpart, primary)
+
+    return ("unknown", primary, None)
 
 
 def record_training_results(

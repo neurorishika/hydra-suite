@@ -42,7 +42,11 @@ from .canvas import OBBCanvas
 from .models import DetectKitProject
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
-from .prediction_preview import load_torch_model, predict_preview_detections_for_image
+from .prediction_preview import (
+    load_torch_model,
+    predict_obb_for_frame_sequential,
+    predict_preview_detections_for_image,
+)
 from .project import (
     create_project,
     default_project_parent_dir,
@@ -50,6 +54,7 @@ from .project import (
     detectkit_project_is_portable,
     detectkit_project_linked_reference_counts,
     detectkit_project_preview_model_paths,
+    detectkit_resolve_inference_models,
     make_detectkit_project_portable,
     open_project,
     project_exists,
@@ -76,12 +81,16 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         model_path: str,
         device_preference: str,
         confidence_threshold: float,
+        secondary_model_path: "str | None" = None,
     ) -> None:
         super().__init__()
         self._image_paths = list(image_paths)
         self._model_path = str(model_path)
         self._device_preference = str(device_preference or "auto")
         self._confidence_threshold = float(confidence_threshold)
+        self._secondary_model_path = (
+            str(secondary_model_path).strip() if secondary_model_path else None
+        )
         self._cancel = False
 
     def cancel(self) -> None:
@@ -101,41 +110,115 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
             )
             return
 
-        self.status.emit("Loading model…")
-        model, device = load_torch_model(self._model_path, self._device_preference)
-
         per_image: dict[str, list[dict[str, object]]] = {}
         class_counts: dict[int, int] = {}
         confidence_sum = 0.0
         detection_count = 0
         confidence_threshold = self._confidence_threshold
 
-        for index, image_path in enumerate(self._image_paths, start=1):
-            if self._cancel:
-                self.status.emit("Inference cancelled.")
-                return
-            self.status.emit(
-                f"Running inference on image {index}/{total}: {Path(image_path).name}"
+        if self._secondary_model_path:
+            self.status.emit("Loading sequential models…")
+            detect_model, detect_device = load_torch_model(
+                self._model_path, self._device_preference
             )
-            try:
-                detections = predict_preview_detections_for_image(
-                    model,
-                    image_path,
-                    device=device,
-                    confidence_threshold=confidence_threshold,
+            obb_model, obb_device = load_torch_model(
+                self._secondary_model_path, self._device_preference
+            )
+
+            import cv2
+
+            for index, image_path in enumerate(self._image_paths, start=1):
+                if self._cancel:
+                    self.status.emit("Inference cancelled.")
+                    return
+                self.status.emit(
+                    f"Running inference on image {index}/{total}: {Path(image_path).name}"
                 )
-            except Exception:
-                logger.warning(
-                    "Dataset inference failed on %s", image_path, exc_info=True
+                try:
+                    frame = cv2.imread(str(image_path))
+                    if frame is None:
+                        raise RuntimeError(f"Could not read image: {image_path}")
+                    tuples = predict_obb_for_frame_sequential(
+                        detect_model,
+                        obb_model,
+                        frame,
+                        detect_device=detect_device,
+                        obb_device=obb_device,
+                        conf=confidence_threshold,
+                        iou=0.7,
+                    )
+                    import numpy as np
+
+                    detections: list[dict[str, object]] = []
+                    for cx, cy, w, h, theta, conf in tuples:
+                        cos_t = float(np.cos(theta))
+                        sin_t = float(np.sin(theta))
+                        local = np.array(
+                            [
+                                [-w / 2, -h / 2],
+                                [w / 2, -h / 2],
+                                [w / 2, h / 2],
+                                [-w / 2, h / 2],
+                            ],
+                            dtype=np.float32,
+                        )
+                        rot = np.array(
+                            [[cos_t, -sin_t], [sin_t, cos_t]], dtype=np.float32
+                        )
+                        corners = local @ rot.T + np.array([cx, cy], dtype=np.float32)
+                        detections.append(
+                            {
+                                "class_id": 0,
+                                "polygon_px": [
+                                    (float(p[0]), float(p[1])) for p in corners
+                                ],
+                                "confidence": float(conf),
+                            }
+                        )
+                except Exception:
+                    logger.warning(
+                        "Sequential dataset inference failed on %s",
+                        image_path,
+                        exc_info=True,
+                    )
+                    detections = []
+                per_image[image_path] = detections
+                for det in detections:
+                    detection_count += 1
+                    class_id = int(det.get("class_id", 0))
+                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
+                    confidence_sum += float(det.get("confidence", 0.0))
+                self.progress.emit(int(index / max(1, total) * 100))
+        else:
+            self.status.emit("Loading model…")
+            model, device = load_torch_model(self._model_path, self._device_preference)
+
+            for index, image_path in enumerate(self._image_paths, start=1):
+                if self._cancel:
+                    self.status.emit("Inference cancelled.")
+                    return
+                self.status.emit(
+                    f"Running inference on image {index}/{total}: {Path(image_path).name}"
                 )
-                detections = []
-            per_image[image_path] = detections
-            for det in detections:
-                detection_count += 1
-                class_id = int(det.get("class_id", 0))
-                class_counts[class_id] = class_counts.get(class_id, 0) + 1
-                confidence_sum += float(det.get("confidence", 0.0))
-            self.progress.emit(int(index / max(1, total) * 100))
+                try:
+                    detections = predict_preview_detections_for_image(
+                        model,
+                        image_path,
+                        device=device,
+                        confidence_threshold=confidence_threshold,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Dataset inference failed on %s", image_path, exc_info=True
+                    )
+                    detections = []
+                per_image[image_path] = detections
+                for det in detections:
+                    detection_count += 1
+                    class_id = int(det.get("class_id", 0))
+                    class_counts[class_id] = class_counts.get(class_id, 0) + 1
+                    confidence_sum += float(det.get("confidence", 0.0))
+                self.progress.emit(int(index / max(1, total) * 100))
 
         mean_confidence = confidence_sum / detection_count if detection_count else 0.0
         self.success.emit(
@@ -577,9 +660,10 @@ class DetectKitMainWindow(QMainWindow):
         act_history.triggered.connect(self._open_history_dialog)
         tb.addAction(act_history)
 
-        al_action = QAction("Active Learning", self)
-        al_action.triggered.connect(self._open_active_learning_dialog)
-        tb.addAction(al_action)
+        self._al_action = QAction("Active Learning", self)
+        self._al_action.triggered.connect(self._open_active_learning_dialog)
+        self._al_action.setEnabled(False)
+        tb.addAction(self._al_action)
 
         tb.addSeparator()
 
@@ -931,6 +1015,12 @@ class DetectKitMainWindow(QMainWindow):
                 f"Imported project could not be opened:\n{imported_dir}",
             )
 
+    def _sync_al_action_enabled(self) -> None:
+        """Enable the AL toolbar action only when a project with an active model is loaded."""
+        self._al_action.setEnabled(
+            bool(self._project and self._project.active_model_path)
+        )
+
     def _load_project(self, proj: DetectKitProject) -> None:
         """Activate proj: wire panels, show toolbar, switch to workspace."""
         self._project = proj
@@ -954,6 +1044,24 @@ class DetectKitMainWindow(QMainWindow):
         self._tools_panel.set_project(proj)
         self._tools_panel.set_portability_status(portability_status, linked_counts)
         self._tools_panel.refresh_model_selector(preview_paths)
+
+        # Sync tools panel display with resolved pair info.
+        if proj.active_model_path:
+            try:
+                kind, primary, secondary = detectkit_resolve_inference_models(
+                    proj, proj.active_model_path
+                )
+                self._tools_panel.set_active_model_path(
+                    primary, secondary if kind == "sequential" else None
+                )
+            except RuntimeError as exc:
+                # Sequential pair incomplete — show with suffix, no secondary.
+                self._tools_panel.set_active_model_path(
+                    f"{proj.active_model_path} (missing OBB head)"
+                )
+                logger.warning("Sequential pair resolution failed: %s", exc)
+
+        self._sync_al_action_enabled()
 
         self._toolbar.setVisible(True)
         self._stack.setCurrentIndex(1)
@@ -1176,6 +1284,21 @@ class DetectKitMainWindow(QMainWindow):
                 detectkit_project_preview_model_paths(self._project)
             )
             self._refresh_prediction_overlay(force=True)
+        # Sync resolved pair display and AL gate regardless of dialog outcome.
+        if self._project.active_model_path:
+            try:
+                kind, primary, secondary = detectkit_resolve_inference_models(
+                    self._project, self._project.active_model_path
+                )
+                self._tools_panel.set_active_model_path(
+                    primary, secondary if kind == "sequential" else None
+                )
+            except RuntimeError as exc:
+                self._tools_panel.set_active_model_path(
+                    f"{self._project.active_model_path} (missing OBB head)"
+                )
+                logger.warning("Sequential pair resolution failed: %s", exc)
+        self._sync_al_action_enabled()
 
     def _open_active_learning_dialog(self) -> None:
         if self._project is None:
@@ -1241,7 +1364,7 @@ class DetectKitMainWindow(QMainWindow):
         model_path = str(self._project.active_model_path or "").strip()
         if not model_path:
             raise RuntimeError(
-                "No active model selected. Set one via Run History or after a training run."
+                "No active model selected. Pick one from History (double-click)."
             )
         if not detectkit_model_path_is_previewable(self._project, model_path):
             raise RuntimeError(
@@ -1251,7 +1374,33 @@ class DetectKitMainWindow(QMainWindow):
 
         from .prediction_preview import load_torch_model, predict_obb_for_frame
 
-        model, device = load_torch_model(model_path, self._project.device or "auto")
+        kind, primary, secondary = detectkit_resolve_inference_models(
+            self._project, model_path
+        )
+        device_pref = self._project.device or "auto"
+
+        if kind == "sequential" and secondary is not None:
+            detect_model, detect_device = load_torch_model(primary, device_pref)
+            obb_model, obb_device = load_torch_model(secondary, device_pref)
+
+            def _detector_fn_seq(frame, conf, iou):
+                return predict_obb_for_frame_sequential(
+                    detect_model,
+                    obb_model,
+                    frame,
+                    detect_device=detect_device,
+                    obb_device=obb_device,
+                    conf=conf,
+                    iou=iou,
+                    crop_pad_ratio=float(
+                        getattr(self._project, "crop_pad_ratio", None) or 0.15
+                    ),
+                )
+
+            return _detector_fn_seq
+
+        # obb_direct or unknown — try direct OBB inference.
+        model, device = load_torch_model(primary, device_pref)
 
         def _detector_fn(frame, conf, iou):
             return predict_obb_for_frame(
@@ -1276,6 +1425,7 @@ class DetectKitMainWindow(QMainWindow):
         settings = self._tools_panel.get_overlay_settings()
         if self._project is not None:
             self._project.active_model_path = settings.active_model_path
+            self._sync_al_action_enabled()
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
 
@@ -1356,6 +1506,14 @@ class DetectKitMainWindow(QMainWindow):
             )
             return
 
+        try:
+            kind, primary, secondary = detectkit_resolve_inference_models(
+                self._project, model_path
+            )
+        except RuntimeError as exc:
+            QMessageBox.information(self, "Run Inference", str(exc))
+            return
+
         image_paths = [str(p) for p in list_images_in_source(self._current_source_path)]
         if not image_paths:
             QMessageBox.information(
@@ -1380,9 +1538,10 @@ class DetectKitMainWindow(QMainWindow):
 
         worker = _DetectKitDatasetInferenceWorker(
             image_paths,
-            model_path,
+            primary,
             self._project.device or "auto",
             settings.confidence_threshold,
+            secondary_model_path=secondary if kind == "sequential" else None,
         )
         worker.progress.connect(progress.setValue)
         worker.status.connect(progress.setLabelText)

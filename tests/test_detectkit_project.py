@@ -20,6 +20,7 @@ from hydra_suite.detectkit.gui.project import (
     detectkit_project_linked_reference_counts,
     detectkit_project_model_paths,
     detectkit_project_preview_model_paths,
+    detectkit_resolve_inference_models,
     legacy_project_file_path,
     make_detectkit_project_portable,
     open_project,
@@ -471,3 +472,113 @@ def test_detectkit_project_owned_paths_round_trip_through_archive(
     assert loaded.training_history[0]["project_run_dir"] == str(
         (restored_dir / "artifacts" / "training_runs" / "run-a").resolve()
     )
+
+
+# ---------------------------------------------------------------------------
+# detectkit_resolve_inference_models tests
+# ---------------------------------------------------------------------------
+
+
+def _make_model_file(tmp_path: Path, name: str) -> str:
+    p = tmp_path / name
+    p.write_bytes(b"weights")
+    return str(p)
+
+
+def test_resolve_inference_models_obb_direct(tmp_path: Path) -> None:
+    model = _make_model_file(tmp_path, "best_obb.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [
+        {
+            "run_id": "run_1",
+            "role": "obb_direct",
+            "project_model_path": model,
+        }
+    ]
+
+    kind, primary, secondary = detectkit_resolve_inference_models(project, model)
+
+    assert kind == "obb_direct"
+    assert primary == model
+    assert secondary is None
+
+
+def test_resolve_inference_models_sequential_via_detect(tmp_path: Path) -> None:
+    detect_model = _make_model_file(tmp_path, "detect.pt")
+    obb_model = _make_model_file(tmp_path, "obb_crop.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [
+        {
+            "run_id": "run_detect",
+            "role": "seq_detect",
+            "project_model_path": detect_model,
+        },
+        {
+            "run_id": "run_obb",
+            "role": "seq_crop_obb",
+            "project_model_path": obb_model,
+        },
+    ]
+
+    kind, primary, secondary = detectkit_resolve_inference_models(project, detect_model)
+
+    assert kind == "sequential"
+    assert primary == detect_model
+    assert secondary == obb_model
+
+
+def test_resolve_inference_models_sequential_via_obb(tmp_path: Path) -> None:
+    detect_model = _make_model_file(tmp_path, "detect.pt")
+    obb_model = _make_model_file(tmp_path, "obb_crop.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [
+        {
+            "run_id": "run_detect",
+            "role": "seq_detect",
+            "project_model_path": detect_model,
+        },
+        {
+            "run_id": "run_obb",
+            "role": "seq_crop_obb",
+            "project_model_path": obb_model,
+        },
+    ]
+
+    # Choosing the obb path as primary — should normalize to (detect, obb) ordering.
+    kind, primary, secondary = detectkit_resolve_inference_models(project, obb_model)
+
+    assert kind == "sequential"
+    assert primary == detect_model
+    assert secondary == obb_model
+
+
+def test_resolve_inference_models_missing_counterpart_raises(tmp_path: Path) -> None:
+    detect_model = _make_model_file(tmp_path, "detect.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = [
+        {
+            "run_id": "run_detect",
+            "role": "seq_detect",
+            "project_model_path": detect_model,
+        }
+        # No seq_crop_obb entry!
+    ]
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="seq_crop_obb"):
+        detectkit_resolve_inference_models(project, detect_model)
+
+
+def test_resolve_inference_models_unknown_path(tmp_path: Path) -> None:
+    # Path not in any training history entry.
+    model = _make_model_file(tmp_path, "external.pt")
+    project = DetectKitProject(project_dir=tmp_path, class_names=["ant"])
+    project.training_history = []
+
+    kind, primary, secondary = detectkit_resolve_inference_models(project, model)
+
+    # Empty history role maps to obb_direct.
+    assert kind == "obb_direct"
+    assert primary == model
+    assert secondary is None
