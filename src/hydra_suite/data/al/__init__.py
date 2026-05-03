@@ -8,8 +8,10 @@ from .frame_source import (
     ImageFolderFrameSource,
     VideoFrameSource,
 )
+from .signals import ALSignals, score_count_deviation, score_crowd, score_uncertainty
 
 __all__ = [
+    "ALSignals",
     "CandidatePoolConfig",
     "DetectKitProjectSource",
     "FrameRef",
@@ -17,4 +19,7 @@ __all__ = [
     "ImageFolderFrameSource",
     "VideoFrameSource",
     "build_candidate_pool",
+    "score_count_deviation",
+    "score_crowd",
+    "score_uncertainty",
 ]
