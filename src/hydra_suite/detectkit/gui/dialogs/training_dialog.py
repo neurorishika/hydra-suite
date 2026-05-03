@@ -20,12 +20,11 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QTextEdit,
@@ -183,8 +182,8 @@ class TrainingDialog(BaseDialog):
             self._workspace_default = Path("./training_workspace")
             self._orchestrator = None
 
-        self.resize(960, 860)
-        self.setMinimumSize(900, 760)
+        self.resize(1080, 960)
+        self.setMinimumSize(960, 820)
         self._build_content()
         self._load_from_project()
 
@@ -205,8 +204,9 @@ class TrainingDialog(BaseDialog):
         self.training_tabs = QTabWidget()
         self.training_tabs.addTab(self._build_overview_tab(), "Overview")
         self.training_tabs.addTab(self._build_training_tab(), "Advanced")
-        self.training_tabs.addTab(self._build_monitoring_tab(), "Monitoring")
         layout.addWidget(self.training_tabs, 1)
+
+        layout.addWidget(self._build_run_group(), 0)
 
         self.add_content(container)
         self._connect_summary_signals()
@@ -317,8 +317,7 @@ QTabBar::tab:selected {
         chip_row = QHBoxLayout()
         chip_row.setSpacing(8)
         chip_row.addWidget(self._build_workflow_chip("1. Pick recipe"))
-        chip_row.addWidget(self._build_workflow_chip("2. Prepare datasets"))
-        chip_row.addWidget(self._build_workflow_chip("3. Train and review"))
+        chip_row.addWidget(self._build_workflow_chip("2. Train and review"))
         chip_row.addStretch(1)
         layout.addLayout(chip_row)
         return frame
@@ -350,8 +349,6 @@ QTabBar::tab:selected {
         layout.addLayout(top_row)
 
         layout.addWidget(self._build_source_preview_group())
-
-        layout.addWidget(self._build_run_group())
         layout.addStretch(1)
         return self._wrap_scroll_page(page)
 
@@ -361,12 +358,7 @@ QTabBar::tab:selected {
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
-        top_row.addWidget(self._build_config_group(), 2)
-        top_row.addWidget(self._build_publish_group(), 1)
-        layout.addLayout(top_row)
-
+        layout.addWidget(self._build_config_group())
         layout.addWidget(self._build_hyperparams_group())
 
         lower_row = QHBoxLayout()
@@ -377,47 +369,6 @@ QTabBar::tab:selected {
 
         layout.addStretch(1)
         return self._wrap_scroll_page(page)
-
-    def _build_monitoring_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        note = self._build_section_note(
-            "Review live metrics and logs here while a run is active. Quick test"
-            " becomes available after at least one successful role finishes."
-        )
-        layout.addWidget(note)
-        layout.addWidget(
-            self._build_monitoring_group(
-                "Loss Curve",
-                "Training loss appears here when the loss plot widget is available.",
-                self._build_loss_plot(),
-            )
-        )
-        layout.addWidget(
-            self._build_monitoring_group(
-                "Session Log",
-                "Per-role progress, warnings, and orchestration messages are collected here.",
-                self._build_log(),
-            )
-        )
-        layout.addStretch(1)
-        return self._wrap_scroll_page(page)
-
-    def _build_monitoring_group(
-        self,
-        title: str,
-        description: str,
-        content: QWidget,
-    ) -> QGroupBox:
-        gb = QGroupBox(title)
-        layout = QVBoxLayout(gb)
-        layout.setSpacing(8)
-        layout.addWidget(self._build_section_note(description))
-        layout.addWidget(content)
-        return gb
 
     def _build_summary_card(self) -> QFrame:
         frame = QFrame()
@@ -576,8 +527,6 @@ QTabBar::tab:selected {
             self.chk_role_seq_detect,
             self.chk_role_seq_crop_obb,
             self.chk_customize_roles,
-            self.chk_auto_import,
-            self.chk_auto_select,
         ):
             checkbox.toggled.connect(self._refresh_summary)
 
@@ -588,11 +537,7 @@ QTabBar::tab:selected {
         ):
             spinner.valueChanged.connect(self._refresh_summary)
 
-        self.class_names_edit.textChanged.connect(self._refresh_summary)
-        self.line_species.textChanged.connect(self._refresh_summary)
-        self.line_model_tag.textChanged.connect(self._refresh_summary)
         self.combo_device.currentTextChanged.connect(self._refresh_summary)
-        self.combo_device.editTextChanged.connect(self._refresh_summary)
 
         self.chk_role_obb_direct.toggled.connect(self._on_role_selection_changed)
         self.chk_role_seq_detect.toggled.connect(self._on_role_selection_changed)
@@ -631,37 +576,20 @@ QTabBar::tab:selected {
 
         selected_roles = self._selected_role_keys()
         role_labels = [self._role_display_name(role) for role in selected_roles]
-        prepared_count = sum(
-            1 for role in selected_roles if self.role_dataset_dirs.get(role, "")
-        )
         class_names = self._class_names()
-        device = self.combo_device.currentText().strip() or "auto"
-        tag = self.line_model_tag.text().strip() or "train"
-        species = self.line_species.text().strip() or "unspecified"
+        device = self.combo_device.currentText().strip() or "cpu"
         recipe_key = self._selected_recipe_key()
         recipe_label = self.recipe_combo.currentText().strip() or "Custom"
-        publish_mode = (
-            "auto-import on" if self.chk_auto_import.isChecked() else "artifacts only"
-        )
-        select_mode = (
-            "auto-select on"
-            if self.chk_auto_select.isChecked()
-            else "selection unchanged"
-        )
         summary = (
             f"<b>Recipe:</b> {recipe_label}"
             f" &nbsp;&bull;&nbsp; <b>Overrides:</b> {'manual' if self.chk_customize_roles.isChecked() or recipe_key == 'custom' else 'guided'}<br>"
             f"<b>Stages:</b> {self._preview_values(role_labels)}<br>"
             f"<b>Classes:</b> {len(class_names)} ({self._preview_values(class_names)})<br>"
-            f"<b>Sources:</b> {len(self._project.sources)} OBB source(s)"
-            f" &nbsp;&bull;&nbsp; <b>Datasets ready:</b> {prepared_count}/{len(selected_roles)}<br>"
+            f"<b>Sources:</b> {len(self._project.sources)} OBB source(s)<br>"
             f"<b>Split:</b> {int(round(self.spin_train.value() * 100.0))}% train / "
             f"{int(round(self.spin_val.value() * 100.0))}% val"
             f" &nbsp;&bull;&nbsp; <b>Seed:</b> {self.spin_seed.value()}<br>"
             f"<b>Device:</b> {device}"
-            f" &nbsp;&bull;&nbsp; <b>Publish:</b> {species} / {tag}<br>"
-            f"<b>Import policy:</b> {publish_mode}"
-            f" &nbsp;&bull;&nbsp; <b>Selection:</b> {select_mode}"
         )
         self.plan_summary.setText(summary)
 
@@ -735,28 +663,26 @@ QTabBar::tab:selected {
     # --- 2. Config ---
 
     def _build_config_group(self) -> QGroupBox:
-        gb = QGroupBox("Dataset, Runtime, And Workspace")
+        gb = QGroupBox("Dataset And Runtime")
         form = QFormLayout(gb)
         form.setSpacing(10)
         form.addRow(
             "",
             self._build_section_note(
-                "Lower-frequency project settings live here so the overview can stay focused on recipe choice and dataset sanity checks."
+                "Project class names and workspace are managed by DetectKit. Adjust split, runtime, and crop derivation here."
             ),
         )
 
-        self.class_names_edit = QPlainTextEdit()
-        self.class_names_edit.setPlaceholderText("ant\nbee")
-        self.class_names_edit.setFixedHeight(84)
-        form.addRow("Class names", self.class_names_edit)
+        from ..models import normalize_class_names
 
-        self.line_workspace = QLineEdit(str(self._workspace_default))
-        self.btn_workspace = QPushButton("Browse…")
-        h_ws = QHBoxLayout()
-        h_ws.addWidget(self.line_workspace, 1)
-        h_ws.addWidget(self.btn_workspace)
-        form.addRow("Workspace", h_ws)
-        self.btn_workspace.clicked.connect(self._choose_workspace)
+        class_names_text = ", ".join(normalize_class_names(self._project.class_names))
+        self.class_names_label = QLabel(class_names_text)
+        self.class_names_label.setObjectName("detectkitTrainingNote")
+        self.class_names_label.setWordWrap(True)
+        self.class_names_label.setToolTip(
+            "Class names come from the project. Edit them by changing project metadata."
+        )
+        form.addRow("Project classes", self.class_names_label)
 
         # Split
         self.spin_train = QDoubleSpinBox()
@@ -804,11 +730,11 @@ QTabBar::tab:selected {
         self.crop_settings_widget.setLayout(h_crop)
         form.addRow(self.crop_settings_label, self.crop_settings_widget)
 
-        # Device
+        # Device — PyTorch training devices only.
         self.combo_device = QComboBox()
-        self.combo_device.setEditable(True)
+        self.combo_device.setEditable(False)
         self.combo_device.setToolTip(
-            "Select compute device. For multi-GPU, type comma-separated list."
+            "PyTorch training device. ONNX/TensorRT exports happen later from history."
         )
         self.combo_device.addItems(self._build_device_options())
         form.addRow("Compute device", self.combo_device)
@@ -1003,38 +929,7 @@ QTabBar::tab:selected {
         v.addLayout(form)
         return self.aug_group
 
-    # --- 6. Publish ---
-
-    def _build_publish_group(self) -> QGroupBox:
-        gb = QGroupBox("Publish And Naming")
-        form = QFormLayout(gb)
-        form.setSpacing(10)
-        form.addRow(
-            "",
-            self._build_section_note(
-                "Define how successful runs are named and whether they should be imported back into the project automatically."
-            ),
-        )
-
-        self.line_species = QLineEdit("")
-        form.addRow("Species", self.line_species)
-
-        self.line_model_tag = QLineEdit("train")
-        form.addRow("Model tag", self.line_model_tag)
-
-        self.chk_auto_import = QCheckBox(
-            "Auto-import successful models into repository"
-        )
-        self.chk_auto_import.setChecked(True)
-        form.addRow("", self.chk_auto_import)
-
-        self.chk_auto_select = QCheckBox("Auto-select newly imported models in main UI")
-        self.chk_auto_select.setChecked(False)
-        form.addRow("", self.chk_auto_select)
-
-        return gb
-
-    # --- 7. Run Controls ---
+    # --- 6. Run Controls ---
 
     def _build_run_group(self) -> QGroupBox:
         gb = QGroupBox("Run Session")
@@ -1042,14 +937,13 @@ QTabBar::tab:selected {
         v.setSpacing(10)
 
         self.run_status_label = QLabel(
-            "Ready to prepare datasets for the selected roles."
+            "Ready to start training for the selected roles."
         )
         self.run_status_label.setObjectName("detectkitRunStatus")
         self.run_status_label.setWordWrap(True)
         v.addWidget(self.run_status_label)
 
         row1 = QHBoxLayout()
-        self.btn_build = QPushButton("Prepare Datasets")
         self.btn_start = QPushButton("Start Training")
         self.btn_cancel = QPushButton("Stop Run")
         self.btn_cancel.setEnabled(False)
@@ -1058,24 +952,14 @@ QTabBar::tab:selected {
         self.btn_resume.setToolTip(
             "Resume training from last.pt checkpoint of the most recent run."
         )
-        self.btn_detach = QPushButton("Run Detached")
-        self.btn_detach.setToolTip("Launch training as a background process.")
-        row1.addWidget(self.btn_build)
+        self.btn_save_config = QPushButton("Save Preset")
+        self.btn_load_config = QPushButton("Load Preset")
         row1.addWidget(self.btn_start)
         row1.addWidget(self.btn_cancel)
         row1.addWidget(self.btn_resume)
-        row1.addWidget(self.btn_detach)
+        row1.addWidget(self.btn_save_config)
+        row1.addWidget(self.btn_load_config)
         v.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        self.btn_quick_test = QPushButton("Open Quick Test")
-        self.btn_quick_test.setEnabled(False)
-        self.btn_save_config = QPushButton("Save Preset")
-        self.btn_load_config = QPushButton("Load Preset")
-        row2.addWidget(self.btn_quick_test)
-        row2.addWidget(self.btn_save_config)
-        row2.addWidget(self.btn_load_config)
-        v.addLayout(row2)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -1083,12 +967,30 @@ QTabBar::tab:selected {
         self.progress.setFormat("Idle")
         v.addWidget(self.progress)
 
-        self.btn_build.clicked.connect(self._build_role_datasets)
+        monitor_row = QHBoxLayout()
+        monitor_row.setSpacing(10)
+
+        loss_box = QGroupBox("Loss Curve")
+        loss_layout = QVBoxLayout(loss_box)
+        loss_layout.setContentsMargins(8, 14, 8, 8)
+        loss_layout.setSpacing(6)
+        loss_widget = self._build_loss_plot()
+        loss_widget.setMinimumHeight(220)
+        loss_layout.addWidget(loss_widget, 1)
+        monitor_row.addWidget(loss_box, 1)
+
+        log_box = QGroupBox("Session Log")
+        log_layout = QVBoxLayout(log_box)
+        log_layout.setContentsMargins(8, 14, 8, 8)
+        log_layout.setSpacing(6)
+        log_layout.addWidget(self._build_log(), 1)
+        monitor_row.addWidget(log_box, 1)
+
+        v.addLayout(monitor_row, 1)
+
         self.btn_start.clicked.connect(self._start_training)
         self.btn_cancel.clicked.connect(self._cancel_training)
         self.btn_resume.clicked.connect(self._resume_training)
-        self.btn_detach.clicked.connect(self._start_detached)
-        self.btn_quick_test.clicked.connect(self._quick_test)
         self.btn_save_config.clicked.connect(self._save_training_config)
         self.btn_load_config.clicked.connect(self._load_training_config)
 
@@ -1103,12 +1005,21 @@ QTabBar::tab:selected {
             )
 
             self.loss_plot = LossPlotWidget()
-            self.loss_plot.setMinimumHeight(180)
+            self.loss_plot.setMinimumHeight(220)
+            self.loss_plot.setMinimumWidth(360)
+            self.loss_plot.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
             return self.loss_plot
         except ImportError:
             self.loss_plot = None
             placeholder = QLabel("Loss plot not available (trackerkit not installed).")
-            placeholder.setStyleSheet("color: gray; font-style: italic;")
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setStyleSheet(
+                "color: #cfcfcf; font-style: italic; background-color: #1e1e1e;"
+                " border: 1px solid #3e3e42; border-radius: 6px; padding: 12px;"
+            )
+            placeholder.setMinimumHeight(220)
             return placeholder
 
     # --- 9. Log ---
@@ -1127,12 +1038,6 @@ QTabBar::tab:selected {
     def _load_from_project(self) -> None:
         proj = self._project
 
-        from ..models import normalize_class_names
-
-        self.class_names_edit.setPlainText(
-            "\n".join(normalize_class_names(proj.class_names))
-        )
-
         self.chk_role_obb_direct.setChecked(proj.role_obb_direct)
         self.chk_role_seq_detect.setChecked(proj.role_seq_detect)
         self.chk_role_seq_crop_obb.setChecked(proj.role_seq_crop_obb)
@@ -1146,7 +1051,7 @@ QTabBar::tab:selected {
         self.spin_crop_min_px.setValue(proj.min_crop_size_px)
         self.chk_crop_square.setChecked(proj.enforce_square)
 
-        self.combo_device.setCurrentText(proj.device or "auto")
+        self._set_device_combo(proj.device or "")
 
         self.spin_epochs.setValue(proj.epochs)
         self.spin_batch.setValue(proj.batch)
@@ -1174,23 +1079,23 @@ QTabBar::tab:selected {
         self.aug_hsv_s.setValue(proj.aug_hsv_s)
         self.aug_hsv_v.setValue(proj.aug_hsv_v)
 
-        self.line_species.setText(proj.species or "")
-        self.line_model_tag.setText(proj.model_tag or "train")
-        self.chk_auto_import.setChecked(proj.auto_import)
-        self.chk_auto_select.setChecked(proj.auto_select)
+        self._apply_persistent_state()
         self._sync_recipe_from_roles()
-        self._set_run_status("Ready to prepare datasets for the selected roles.")
+        self._set_run_status("Ready to start training for the selected roles.")
         self._refresh_summary()
         self._refresh_overview_data_cards()
 
+    def _set_device_combo(self, device: str) -> None:
+        """Select *device* in combo_device, falling back to the first available option."""
+        wanted = (device or "").strip()
+        idx = self.combo_device.findText(wanted, Qt.MatchFlag.MatchFixedString)
+        if idx < 0:
+            idx = 0
+        if self.combo_device.count() > 0:
+            self.combo_device.setCurrentIndex(idx)
+
     def _write_to_project(self) -> None:
         proj = self._project
-
-        from ..models import normalize_class_names
-
-        proj.class_names = normalize_class_names(
-            self.class_names_edit.toPlainText().splitlines()
-        )
 
         proj.role_obb_direct = self.chk_role_obb_direct.isChecked()
         proj.role_seq_detect = self.chk_role_seq_detect.isChecked()
@@ -1205,7 +1110,7 @@ QTabBar::tab:selected {
         proj.min_crop_size_px = self.spin_crop_min_px.value()
         proj.enforce_square = self.chk_crop_square.isChecked()
 
-        proj.device = self.combo_device.currentText().strip() or "auto"
+        proj.device = self.combo_device.currentText().strip() or "cpu"
 
         proj.epochs = self.spin_epochs.value()
         proj.batch = self.spin_batch.value()
@@ -1233,10 +1138,7 @@ QTabBar::tab:selected {
         proj.aug_hsv_s = self.aug_hsv_s.value()
         proj.aug_hsv_v = self.aug_hsv_v.value()
 
-        proj.species = self.line_species.text().strip()
-        proj.model_tag = self.line_model_tag.text().strip() or "train"
-        proj.auto_import = self.chk_auto_import.isChecked()
-        proj.auto_select = self.chk_auto_select.isChecked()
+        self._save_persistent_state()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1245,7 +1147,7 @@ QTabBar::tab:selected {
     def _class_names(self) -> list[str]:
         from ..models import normalize_class_names
 
-        return normalize_class_names(self.class_names_edit.toPlainText().splitlines())
+        return normalize_class_names(self._project.class_names)
 
     def _selected_recipe_key(self) -> str:
         return (
@@ -1717,20 +1619,23 @@ QTabBar::tab:selected {
         self.source_preview_cards_layout.addStretch()
 
     def _build_device_options(self) -> list[str]:
+        """Return PyTorch-only training device choices (no ONNX/TRT)."""
         try:
             from hydra_suite.utils.gpu_utils import get_device_info
 
             info = get_device_info()
         except ImportError:
             info = {}
-        options = ["auto", "cpu"]
+        options: list[str] = []
         if info.get("torch_cuda_available"):
-            options.append("cuda")
             count = int(info.get("torch_cuda_device_count", 0) or 0)
+            if count > 1:
+                options.append("cuda")
             for i in range(count):
                 options.append(f"cuda:{i}")
         if info.get("mps_available"):
             options.append("mps")
+        options.append("cpu")
         return options
 
     def _imgsz_for_role(self, role) -> int:
@@ -1809,8 +1714,6 @@ QTabBar::tab:selected {
         return "unknown"
 
     def _publish_meta_for_role(self, role, base_model: str) -> dict:
-        species = self.line_species.text().strip() or "species"
-        tag = self.line_model_tag.text().strip() or "train"
         training_params: dict = {"imgsz": self._imgsz_for_role(role)}
         try:
             from hydra_suite.training import TrainingRole
@@ -1823,8 +1726,8 @@ QTabBar::tab:selected {
             pass
         return {
             "size": self._infer_size_token(base_model),
-            "species": species,
-            "model_info": f"{tag}_{role.value}",
+            "species": (self._project.species or "").strip() or "species",
+            "model_info": f"train_{role.value}",
             "training_params": training_params,
         }
 
@@ -1836,27 +1739,12 @@ QTabBar::tab:selected {
         if self.loss_plot is not None:
             self.loss_plot.ingest_log_line(log_text)
 
-    def _choose_workspace(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Select Workspace Root")
-        if d:
-            self.line_workspace.setText(d)
-            try:
-                from hydra_suite.training import TrainingOrchestrator
-
-                self._orchestrator = TrainingOrchestrator(d)
-            except ImportError:
-                pass
-            self._set_run_status(f"Workspace updated to {d}")
-            self._refresh_summary()
-
     def _get_orchestrator(self):
         if self._orchestrator is None:
             try:
                 from hydra_suite.training import TrainingOrchestrator
 
-                ws_text = self.line_workspace.text().strip()
-                ws = Path(ws_text) if ws_text else self._workspace_default
-                self._orchestrator = TrainingOrchestrator(ws)
+                self._orchestrator = TrainingOrchestrator(self._workspace_default)
             except ImportError:
                 return None
         return self._orchestrator
@@ -1865,7 +1753,7 @@ QTabBar::tab:selected {
     # Dataset building
     # ------------------------------------------------------------------
 
-    def _build_role_datasets(self) -> bool:
+    def _build_role_datasets(self, *, silent: bool = False) -> bool:
         orchestrator = self._get_orchestrator()
         if orchestrator is None:
             QMessageBox.critical(
@@ -1884,6 +1772,8 @@ QTabBar::tab:selected {
         if not roles:
             QMessageBox.warning(self, "No Roles", "Select at least one training role.")
             return False
+
+        self._set_run_status("Preparing role datasets…")
 
         try:
             from hydra_suite.training import SplitConfig
@@ -1925,9 +1815,10 @@ QTabBar::tab:selected {
             f"Prepared datasets for {len(self.role_dataset_dirs)} selected role(s)."
         )
         self._refresh_summary()
-        QMessageBox.information(
-            self, "Datasets Ready", "Role datasets built successfully."
-        )
+        if not silent:
+            QMessageBox.information(
+                self, "Datasets Ready", "Role datasets built successfully."
+            )
         return True
 
     # ------------------------------------------------------------------
@@ -1944,16 +1835,7 @@ QTabBar::tab:selected {
             QMessageBox.warning(self, "No Roles", "Select at least one training role.")
             return
 
-        if not self.role_dataset_dirs:
-            if not self._build_role_datasets():
-                return
-
-        if not self.chk_auto_import.isChecked() and self.chk_auto_select.isChecked():
-            QMessageBox.warning(
-                self,
-                "Invalid Publish Settings",
-                "Auto-select requires auto-import to be enabled.",
-            )
+        if not self._build_role_datasets(silent=True):
             return
 
         orchestrator = self._get_orchestrator()
@@ -1973,6 +1855,10 @@ QTabBar::tab:selected {
         except ImportError as exc:
             self._append_log(f"Training dependencies not available: {exc}")
             return
+
+        # Default publish policy: import successful artifacts back into the project
+        # so the History dialog can drive any later export.
+        publish_policy = PublishPolicy(auto_import=True, auto_select=False)
 
         source_obb = self._collect_sources()
         role_entries = []
@@ -2025,16 +1911,13 @@ QTabBar::tab:selected {
                     workers=self.spin_workers.value(),
                     cache=self.chk_cache.isChecked(),
                 ),
-                device=self.combo_device.currentText().strip() or "auto",
+                device=self.combo_device.currentText().strip() or "cpu",
                 seed=self.spin_seed.value(),
                 augmentation_profile=AugmentationProfile(
                     enabled=self.aug_group.isChecked(),
                     args=aug_args,
                 ),
-                publish_policy=PublishPolicy(
-                    auto_import=self.chk_auto_import.isChecked(),
-                    auto_select=self.chk_auto_select.isChecked(),
-                ),
+                publish_policy=publish_policy,
             )
             role_entries.append(
                 {
@@ -2061,7 +1944,7 @@ QTabBar::tab:selected {
         if self.loss_plot is not None:
             self.loss_plot.clear()
         self._set_run_status(
-            f"Training started for {len(role_entries)} role(s). Review Monitoring for live output."
+            f"Training started for {len(role_entries)} role(s). Watch the loss curve and log below for live output."
         )
         self._refresh_summary()
         self._worker.start()
@@ -2129,7 +2012,6 @@ QTabBar::tab:selected {
 
         succeeded = [r for r in results if r.get("success")]
         failed = [r for r in results if not r.get("success")]
-        self.btn_quick_test.setEnabled(bool(self._quick_test_enabled_results()))
 
         self._append_log(
             f"Session complete: {len(succeeded)} success, {len(failed)} failed"
@@ -2252,274 +2134,53 @@ QTabBar::tab:selected {
         self._worker.start()
 
     # ------------------------------------------------------------------
-    # Detached training
-    # ------------------------------------------------------------------
-
-    def _start_detached(self) -> None:
-        import subprocess as _subprocess
-
-        roles = self._selected_roles()
-        if not roles:
-            QMessageBox.warning(self, "No Roles", "Select at least one training role.")
-            return
-        if not self.role_dataset_dirs:
-            if not self._build_role_datasets():
-                return
-
-        try:
-            from hydra_suite.training import TrainingHyperParams, TrainingRunSpec
-            from hydra_suite.training.runner import build_ultralytics_command
-        except ImportError as exc:
-            QMessageBox.critical(self, "Not Available", f"Training dependencies: {exc}")
-            return
-
-        launched = []
-        ws_text = self.line_workspace.text().strip()
-        ws = Path(ws_text) if ws_text else self._workspace_default
-
-        for role in roles:
-            ds = self.role_dataset_dirs.get(role.value, "")
-            if not ds:
-                continue
-            base_model = self._base_model_for_role(role)
-            if not base_model:
-                continue
-
-            batch_val = (
-                -1 if self.chk_auto_batch.isChecked() else self.spin_batch.value()
-            )
-            spec = TrainingRunSpec(
-                role=role,
-                source_datasets=self._collect_sources(),
-                derived_dataset_dir=ds,
-                base_model=base_model,
-                hyperparams=TrainingHyperParams(
-                    epochs=self.spin_epochs.value(),
-                    imgsz=self._imgsz_for_role(role),
-                    batch=batch_val,
-                    lr0=self.spin_lr0.value(),
-                    patience=self.spin_patience.value(),
-                    workers=self.spin_workers.value(),
-                    cache=self.chk_cache.isChecked(),
-                ),
-                device=self.combo_device.currentText().strip() or "auto",
-                seed=self.spin_seed.value(),
-            )
-
-            run_dir = ws / "runs" / ("detached_" + role.value)
-            run_dir.mkdir(parents=True, exist_ok=True)
-            cmd = build_ultralytics_command(spec, str(run_dir))
-
-            log_file = run_dir / "detached_output.log"
-            with open(log_file, "w") as log_fh:
-                proc = _subprocess.Popen(
-                    cmd,
-                    stdout=log_fh,
-                    stderr=_subprocess.STDOUT,
-                    start_new_session=True,
-                )
-            launched.append((role.value, proc.pid, str(log_file)))
-            self._append_log(
-                f"Detached {role.value} training: PID={proc.pid}, log={log_file}"
-            )
-
-        if launched:
-            self._set_run_status(
-                f"Detached training launched for {len(launched)} role(s)."
-            )
-            msg = "\n".join(
-                f"* {r}: PID {pid}\n  Log: {log}" for r, pid, log in launched
-            )
-            QMessageBox.information(
-                self,
-                "Detached Training Started",
-                f"Training launched in background:\n\n{msg}\n\n"
-                "You can close this dialog. Check Run History for results.",
-            )
-
-    # ------------------------------------------------------------------
-    # Quick Test
-    # ------------------------------------------------------------------
-
-    def _quick_test_enabled_results(self) -> list[dict]:
-        """Return successful training results that Quick Test can exercise."""
-        supported_roles = {"obb_direct", "seq_crop_obb"}
-        return [
-            result
-            for result in (self._last_training_results or [])
-            if result.get("success")
-            and str(result.get("role") or "obb_direct").strip().lower()
-            in supported_roles
-        ]
-
-    def _quick_test_detect_model_path(self, role: str) -> str:
-        """Resolve the paired seq-detect model path needed for crop-OBB quick tests."""
-        if str(role or "").strip().lower() != "seq_crop_obb":
-            return ""
-
-        for result in self._last_training_results or []:
-            result_role = str(result.get("role") or "").strip().lower()
-            if result_role != "seq_detect" or not result.get("success"):
-                continue
-            candidate = (
-                result.get("project_model_path")
-                or result.get("published_model_path")
-                or result.get("artifact_path", "")
-            )
-            if candidate and Path(candidate).exists():
-                return str(candidate)
-
-        try:
-            from ..project import detectkit_latest_model_path_for_role
-        except ImportError:
-            return ""
-
-        return detectkit_latest_model_path_for_role(self._project, "seq_detect")
-
-    def _quick_test(self) -> None:
-        succeeded = self._quick_test_enabled_results()
-        if not succeeded:
-            QMessageBox.warning(
-                self,
-                "No Model Available",
-                "No quick-testable trained model found. Quick Test currently supports OBB direct models and sequence crop OBB models with a paired detect checkpoint.",
-            )
-            return
-
-        result = succeeded[0]
-        model_path = (
-            result.get("project_model_path")
-            or result.get("published_model_path")
-            or result.get("artifact_path", "")
-        )
-        if not model_path or not Path(model_path).exists():
-            QMessageBox.warning(
-                self, "Model Not Found", f"Model file not found: {model_path}"
-            )
-            return
-
-        try:
-            from hydra_suite.trackerkit.gui.dialogs.model_test_dialog import (
-                ModelTestDialog,
-            )
-        except ImportError:
-            QMessageBox.information(
-                self, "Not Available", "Model test dialog is not available."
-            )
-            return
-
-        role = str(result.get("role", "obb_direct") or "obb_direct").strip().lower()
-        dataset_dir = self.role_dataset_dirs.get(role, "")
-        if not dataset_dir:
-            QMessageBox.warning(
-                self, "No Dataset", f"No dataset directory found for role '{role}'."
-            )
-            return
-
-        detect_model_path = self._quick_test_detect_model_path(role)
-        if role == "seq_crop_obb" and not detect_model_path:
-            QMessageBox.warning(
-                self,
-                "Missing Detect Model",
-                "Quick Test for sequence crop OBB needs a paired sequence-detect checkpoint.",
-            )
-            return
-
-        imgsz = {
-            "obb_direct": int(self.spin_imgsz_obb_direct.value()),
-            "seq_detect": int(self.spin_imgsz_seq_detect.value()),
-            "seq_crop_obb": int(self.spin_imgsz_seq_crop_obb.value()),
-        }.get(role, int(self.spin_imgsz_obb_direct.value()))
-
-        dlg = ModelTestDialog(
-            model_path=model_path,
-            role=role,
-            dataset_dir=dataset_dir,
-            device=self.combo_device.currentText() or "cpu",
-            imgsz=imgsz,
-            crop_pad_ratio=float(self.spin_crop_pad.value()),
-            min_crop_size_px=int(self.spin_crop_min_px.value()),
-            enforce_square=self.chk_crop_square.isChecked(),
-            detect_model_path=detect_model_path,
-            parent=self,
-        )
-        dlg.open()
-
-    # ------------------------------------------------------------------
     # Save / Load Config
     # ------------------------------------------------------------------
 
-    def _save_training_config(self) -> None:
-        import json
-
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Training Config", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        self._write_to_project()
-        proj = self._project
-        data = {
+    def _collect_training_state(self) -> dict:
+        """Collect dialog widget values into a serialisable dict."""
+        return {
             "roles": {
-                "obb_direct": proj.role_obb_direct,
-                "seq_detect": proj.role_seq_detect,
-                "seq_crop_obb": proj.role_seq_crop_obb,
+                "obb_direct": self.chk_role_obb_direct.isChecked(),
+                "seq_detect": self.chk_role_seq_detect.isChecked(),
+                "seq_crop_obb": self.chk_role_seq_crop_obb.isChecked(),
             },
-            "split_train": proj.split_train,
-            "split_val": proj.split_val,
-            "seed": proj.seed,
-            "dedup": proj.dedup,
-            "crop_pad_ratio": proj.crop_pad_ratio,
-            "min_crop_size_px": proj.min_crop_size_px,
-            "enforce_square": proj.enforce_square,
-            "epochs": proj.epochs,
-            "batch": proj.batch,
-            "auto_batch": proj.auto_batch,
-            "lr0": proj.lr0,
-            "patience": proj.patience,
-            "workers": proj.workers,
-            "cache": proj.cache,
-            "imgsz_obb_direct": proj.imgsz_obb_direct,
-            "imgsz_seq_detect": proj.imgsz_seq_detect,
-            "imgsz_seq_crop_obb": proj.imgsz_seq_crop_obb,
-            "model_obb_direct": proj.model_obb_direct,
-            "model_seq_detect": proj.model_seq_detect,
-            "model_seq_crop_obb": proj.model_seq_crop_obb,
-            "aug_enabled": proj.aug_enabled,
-            "aug_fliplr": proj.aug_fliplr,
-            "aug_flipud": proj.aug_flipud,
-            "aug_degrees": proj.aug_degrees,
-            "aug_mosaic": proj.aug_mosaic,
-            "aug_mixup": proj.aug_mixup,
-            "aug_hsv_h": proj.aug_hsv_h,
-            "aug_hsv_s": proj.aug_hsv_s,
-            "aug_hsv_v": proj.aug_hsv_v,
-            "device": proj.device,
-            "species": proj.species,
-            "model_tag": proj.model_tag,
-            "auto_import": proj.auto_import,
-            "auto_select": proj.auto_select,
+            "recipe": self._selected_recipe_key(),
+            "customize_roles": self.chk_customize_roles.isChecked(),
+            "split_train": self.spin_train.value(),
+            "split_val": self.spin_val.value(),
+            "seed": self.spin_seed.value(),
+            "dedup": self.chk_dedup.isChecked(),
+            "crop_pad_ratio": self.spin_crop_pad.value(),
+            "min_crop_size_px": self.spin_crop_min_px.value(),
+            "enforce_square": self.chk_crop_square.isChecked(),
+            "device": self.combo_device.currentText().strip(),
+            "epochs": self.spin_epochs.value(),
+            "batch": self.spin_batch.value(),
+            "auto_batch": self.chk_auto_batch.isChecked(),
+            "lr0": self.spin_lr0.value(),
+            "patience": self.spin_patience.value(),
+            "workers": self.spin_workers.value(),
+            "cache": self.chk_cache.isChecked(),
+            "imgsz_obb_direct": self.spin_imgsz_obb_direct.value(),
+            "imgsz_seq_detect": self.spin_imgsz_seq_detect.value(),
+            "imgsz_seq_crop_obb": self.spin_imgsz_seq_crop_obb.value(),
+            "model_obb_direct": self.combo_model_obb_direct.currentText(),
+            "model_seq_detect": self.combo_model_seq_detect.currentText(),
+            "model_seq_crop_obb": self.combo_model_seq_crop_obb.currentText(),
+            "aug_enabled": self.aug_group.isChecked(),
+            "aug_fliplr": self.aug_fliplr.value(),
+            "aug_flipud": self.aug_flipud.value(),
+            "aug_degrees": self.aug_degrees.value(),
+            "aug_mosaic": self.aug_mosaic.value(),
+            "aug_mixup": self.aug_mixup.value(),
+            "aug_hsv_h": self.aug_hsv_h.value(),
+            "aug_hsv_s": self.aug_hsv_s.value(),
+            "aug_hsv_v": self.aug_hsv_v.value(),
         }
-        try:
-            Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
-            QMessageBox.information(self, "Saved", f"Config saved to:\n{path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Save Failed", str(exc))
 
-    def _load_training_config(self) -> None:
-        import json
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Training Config", "", "JSON (*.json)"
-        )
-        if not path:
-            return
-        try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Failed", str(exc))
-            return
-
+    def _apply_training_state(self, data: dict) -> None:
+        """Apply a previously saved state dict to the dialog widgets."""
         roles = data.get("roles", {})
         if "obb_direct" in roles:
             self.chk_role_obb_direct.setChecked(bool(roles["obb_direct"]))
@@ -2560,8 +2221,7 @@ QTabBar::tab:selected {
             ("auto_batch", self.chk_auto_batch),
             ("cache", self.chk_cache),
             ("aug_enabled", self.aug_group),
-            ("auto_import", self.chk_auto_import),
-            ("auto_select", self.chk_auto_select),
+            ("customize_roles", self.chk_customize_roles),
         ]:
             if attr in data:
                 widget.setChecked(bool(data[attr]))
@@ -2570,16 +2230,93 @@ QTabBar::tab:selected {
             ("model_obb_direct", self.combo_model_obb_direct),
             ("model_seq_detect", self.combo_model_seq_detect),
             ("model_seq_crop_obb", self.combo_model_seq_crop_obb),
-            ("device", self.combo_device),
         ]:
             if attr in data:
                 widget.setCurrentText(str(data[attr]))
 
-        if "species" in data:
-            self.line_species.setText(str(data["species"]))
-        if "model_tag" in data:
-            self.line_model_tag.setText(str(data["model_tag"]))
+        if "device" in data:
+            self._set_device_combo(str(data["device"]))
 
+        if "recipe" in data:
+            self._set_recipe_combo(str(data["recipe"]))
+
+    def _save_training_config(self) -> None:
+        import json
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Training Config", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        data = self._collect_training_state()
+        try:
+            Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+            QMessageBox.information(self, "Saved", f"Preset saved to:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Failed", str(exc))
+
+    def _load_training_config(self) -> None:
+        import json
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Training Config", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Failed", str(exc))
+            return
+        self._apply_training_state(data)
         self._set_run_status(f"Loaded training preset from {path}")
         self._refresh_summary()
-        QMessageBox.information(self, "Loaded", f"Config loaded from:\n{path}")
+        QMessageBox.information(self, "Loaded", f"Preset loaded from:\n{path}")
+
+    # ------------------------------------------------------------------
+    # Persistent state
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _persistent_state_key() -> str:
+        return "training_dialog_state"
+
+    def _apply_persistent_state(self) -> None:
+        """Restore the last training-dialog state from the UI settings file."""
+        try:
+            from ..utils import load_ui_settings
+        except ImportError:
+            return
+        try:
+            settings = load_ui_settings() or {}
+        except Exception:
+            return
+        state = settings.get(self._persistent_state_key())
+        if isinstance(state, dict):
+            try:
+                self._apply_training_state(state)
+            except Exception:
+                logger.warning("Failed to restore training-dialog state", exc_info=True)
+
+    def _save_persistent_state(self) -> None:
+        """Persist the current training-dialog state to the UI settings file."""
+        try:
+            from ..utils import load_ui_settings, save_ui_settings
+        except ImportError:
+            return
+        try:
+            settings = load_ui_settings() or {}
+            settings[self._persistent_state_key()] = self._collect_training_state()
+            save_ui_settings(settings)
+        except Exception:
+            logger.warning("Failed to persist training-dialog state", exc_info=True)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        """Persist UI state when the dialog closes."""
+        try:
+            self._save_persistent_state()
+        except Exception:
+            logger.warning(
+                "Failed to persist training-dialog state on close", exc_info=True
+            )
+        super().closeEvent(event)

@@ -279,7 +279,7 @@ class MainWindow(QMainWindow):
 
             /* Lists and Tables */
             QListWidget, QTableWidget {
-                background-color: #252526; border: 1px solid #3e3e42; border-radius: 4px; outline: none;
+                background-color: #252526; alternate-background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 4px; outline: none;
             }
             QListWidget::item, QTableWidget::item { padding: 4px 8px; }
             QListWidget::item:selected, QTableWidget::item:selected { background-color: #094771; color: #ffffff; }
@@ -1627,7 +1627,9 @@ class MainWindow(QMainWindow):
             skip_config_load: If True, skip auto-loading config (used when loading config itself)
             _probe: Optional pre-loaded video probe from SessionOrchestrator._probe_video_io
         """
-        self._config_orch._setup_video_file(fp, skip_config_load=skip_config_load, _probe=_probe)
+        self._config_orch._setup_video_file(
+            fp, skip_config_load=skip_config_load, _probe=_probe
+        )
 
     def _on_batch_mode_toggled(self, checked):
         """Handle showing/hiding batch controls and syncing keystone video."""
@@ -1712,8 +1714,11 @@ class MainWindow(QMainWindow):
 
         # Load the new video's metadata in a background thread while showing a
         # progress dialog (keeps the UI painting without blocking).
-        from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialog
         from hydra_suite.trackerkit.gui.orchestrators.session import SessionOrchestrator
+        from hydra_suite.widgets.busy import (
+            BusyTaskError,
+            run_blocking_with_busy_dialog,
+        )
 
         try:
             probe = run_blocking_with_busy_dialog(

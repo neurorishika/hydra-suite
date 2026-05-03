@@ -241,6 +241,7 @@ class MainWindow(QMainWindow):
             }
             QListWidget {
                 background-color: #252526;
+                alternate-background-color: #2d2d30;
                 border: 1px solid #3e3e42;
                 border-radius: 4px;
                 padding: 4px;

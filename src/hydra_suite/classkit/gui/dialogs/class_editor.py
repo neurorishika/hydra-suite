@@ -123,7 +123,7 @@ class ClassEditorDialog(QDialog):
         self._factor_list.setMinimumWidth(150)
         self._factor_list.setMaximumWidth(220)
         self._factor_list.setStyleSheet(
-            "QListWidget { background:#252526; border:1px solid #3e3e42; border-radius:4px; }"
+            "QListWidget { background:#252526; alternate-background-color:#2d2d30; border:1px solid #3e3e42; border-radius:4px; }"
             "QListWidget::item { padding:6px 10px; color:#ffffff; }"
             "QListWidget::item:selected { background-color:#094771; color:#ffffff; }"
         )

@@ -461,6 +461,64 @@ def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
     return class_names
 
 
+def compute_positional_class_remap(
+    source_classes: list[str],
+    project_classes: list[str],
+) -> dict[int, int]:
+    """Map source class ids onto project class ids by list position.
+
+    Rules:
+    - If both lists are empty, returns an empty mapping.
+    - If the project has a single class, every source class maps to 0.
+    - If the source has a single class, that source class maps to 0 (the
+      first project class).
+    - Otherwise, source class *i* maps to project class *i* if *i* is within
+      bounds. Source classes beyond the project list are dropped.
+    """
+    if not source_classes or not project_classes:
+        return {}
+    if len(project_classes) == 1:
+        return {i: 0 for i in range(len(source_classes))}
+    if len(source_classes) == 1:
+        return {0: 0}
+    return {i: i for i in range(min(len(source_classes), len(project_classes)))}
+
+
+def remap_materialized_source_classes(
+    canonical_path: Path,
+    project_classes: list[str],
+    remap: dict[int, int],
+) -> None:
+    """Rewrite *canonical_path*/classes.txt and labels to use project class ids."""
+    canonical_root = Path(canonical_path)
+    _write_classes_txt(canonical_root, list(project_classes))
+
+    labels_dir = canonical_root / "labels"
+    if not labels_dir.is_dir():
+        return
+
+    for label_file in labels_dir.rglob("*.txt"):
+        new_lines: list[str] = []
+        for raw_line in label_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            try:
+                source_class_id = int(float(parts[0]))
+            except (ValueError, IndexError):
+                continue
+            mapped = remap.get(source_class_id)
+            if mapped is None:
+                continue
+            parts[0] = str(int(mapped))
+            new_lines.append(" ".join(parts))
+        label_file.write_text(
+            "\n".join(new_lines) + ("\n" if new_lines else ""),
+            encoding="utf-8",
+        )
+
+
 def materialize_detectkit_source(
     source_root: str | Path,
     project_dir: str | Path,

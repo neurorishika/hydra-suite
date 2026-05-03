@@ -98,11 +98,6 @@ class ToolsPanel(QWidget):
 
     overlay_settings_changed = Signal()
     run_inference_requested = Signal()
-    prev_requested = Signal()
-    next_requested = Signal()
-    train_requested = Signal()
-    evaluate_requested = Signal()
-    history_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -147,9 +142,8 @@ class ToolsPanel(QWidget):
         layout.setSpacing(8)
 
         layout.addWidget(self._build_overview_group())
-        layout.addWidget(self._build_analysis_section())
         layout.addWidget(self._build_overlay_group())
-        layout.addWidget(self._build_navigation_group())
+        layout.addWidget(self._build_analysis_section())
         layout.addStretch(1)
 
     def _build_overview_group(self) -> QGroupBox:
@@ -183,8 +177,10 @@ class ToolsPanel(QWidget):
 
         self._metrics_view = QTextEdit()
         self._metrics_view.setReadOnly(True)
-        self._metrics_view.setPlaceholderText("Run training to see model metrics.")
-        self._metrics_view.setMaximumHeight(120)
+        self._metrics_view.setPlaceholderText(
+            "Run inference to see prediction statistics."
+        )
+        self._metrics_view.setMinimumHeight(140)
         v.addWidget(self._metrics_view)
 
         self._analysis_section.set_content(content)
@@ -241,44 +237,9 @@ class ToolsPanel(QWidget):
         self._class_checkboxes_layout.setSpacing(2)
         v.addWidget(self._class_checkboxes_widget)
 
-        overlay_actions = QHBoxLayout()
         self._btn_run_inference = QPushButton("Run Inference")
-        self._btn_overlay_evaluate = QPushButton("Evaluate...")
-        self._btn_overlay_evaluate.setProperty("detectkitVariant", "secondary")
         self._btn_run_inference.clicked.connect(self.run_inference_requested)
-        self._btn_overlay_evaluate.clicked.connect(self.evaluate_requested)
-        overlay_actions.addWidget(self._btn_run_inference)
-        overlay_actions.addWidget(self._btn_overlay_evaluate)
-        v.addLayout(overlay_actions)
-
-        return box
-
-    def _build_navigation_group(self) -> QGroupBox:
-        box = QGroupBox("Navigation & Actions")
-        v = QVBoxLayout(box)
-
-        nav_row = QHBoxLayout()
-        self._btn_prev = QPushButton("◀ Prev")
-        self._btn_next = QPushButton("Next ▶")
-        self._btn_prev.setProperty("detectkitVariant", "secondary")
-        self._btn_next.setProperty("detectkitVariant", "secondary")
-        self._btn_prev.clicked.connect(self.prev_requested)
-        self._btn_next.clicked.connect(self.next_requested)
-        nav_row.addWidget(self._btn_prev)
-        nav_row.addWidget(self._btn_next)
-        v.addLayout(nav_row)
-
-        self._counter_label = QLabel("0 / 0")
-        self._counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(self._counter_label)
-
-        self._btn_train = QPushButton("Train…")
-        self._btn_history = QPushButton("History…")
-        self._btn_history.setProperty("detectkitVariant", "secondary")
-        self._btn_train.clicked.connect(self.train_requested)
-        self._btn_history.clicked.connect(self.history_requested)
-        v.addWidget(self._btn_train)
-        v.addWidget(self._btn_history)
+        v.addWidget(self._btn_run_inference)
 
         return box
 
@@ -343,10 +304,6 @@ class ToolsPanel(QWidget):
         if self._proj is not None:
             self.refresh_overview()
 
-    def set_image_counter(self, current: int, total: int) -> None:
-        """Update the navigation counter label."""
-        self._counter_label.setText(f"{current} / {total}")
-
     def refresh_model_selector(self, model_paths: list[str]) -> None:
         """Repopulate the model combo box."""
         self._model_combo.blockSignals(True)
@@ -357,13 +314,55 @@ class ToolsPanel(QWidget):
             self._model_combo.setCurrentIndex(0)
         self._model_combo.blockSignals(False)
 
-    def update_model_metrics(self, metrics: dict) -> None:
-        """Display model metrics in the Analysis section."""
-        if not metrics:
-            self._metrics_view.setPlainText("No model metrics available yet.")
+    def update_inference_stats(
+        self,
+        stats: dict,
+        *,
+        class_names: list[str] | None = None,
+    ) -> None:
+        """Display per-run inference statistics in the Analysis section."""
+        if not stats:
+            self._metrics_view.setPlainText(
+                "Run inference to see prediction statistics."
+            )
             return
-        lines = [f"{k}: {v}" for k, v in metrics.items()]
+
+        image_count = int(stats.get("image_count", 0))
+        detection_count = int(stats.get("detection_count", 0))
+        mean_confidence = float(stats.get("mean_confidence", 0.0))
+        class_counts = stats.get("class_counts", {}) or {}
+        per_image = stats.get("per_image", {}) or {}
+
+        per_image_count = max(1, image_count)
+        average_per_image = detection_count / per_image_count
+        images_with_detections = sum(1 for dets in per_image.values() if dets)
+
+        lines = [
+            f"Images processed:    {image_count:,}",
+            f"Images w/ detections: {images_with_detections:,}",
+            f"Total detections:    {detection_count:,}",
+            f"Detections / image:  {average_per_image:.2f}",
+            f"Mean confidence:     {mean_confidence:.3f}",
+        ]
+
+        if class_counts:
+            lines.append("")
+            lines.append("By class:")
+            ordered = sorted(class_counts.items(), key=lambda kv: int(kv[0]))
+            for class_id, count in ordered:
+                cid = int(class_id)
+                name = (
+                    class_names[cid]
+                    if class_names is not None and 0 <= cid < len(class_names)
+                    else f"class {cid}"
+                )
+                lines.append(f"  {cid}: {name} — {int(count):,}")
+
         self._metrics_view.setPlainText("\n".join(lines))
+
+    def reset_inference_stats(self) -> None:
+        """Clear the Analysis stats display."""
+        self._metrics_view.clear()
 
     def get_overlay_settings(self) -> OverlaySettings:
         """Return the current overlay display settings."""

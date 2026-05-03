@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -22,9 +23,9 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
-    QTextEdit,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -33,7 +34,6 @@ from PySide6.QtWidgets import (
 from hydra_suite.paths import get_app_data_dir
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
-from ..evaluation import build_dataset_analysis_report
 from ..utils import (
     ensure_detectkit_source_structure,
     list_images_in_source,
@@ -57,6 +57,8 @@ class DatasetPanel(QWidget):
     """Left panel: source selector, image browser, X-AnyLabeling launch."""
 
     manage_sources_requested = Signal()
+    train_requested = Signal()
+    history_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -124,8 +126,22 @@ class DatasetPanel(QWidget):
         self.image_list = QListWidget()
         self.image_list.setAlternatingRowColors(True)
         self.image_list.setUniformItemSizes(True)
+        self.image_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.image_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.image_list.customContextMenuRequested.connect(
+            self._on_image_list_context_menu
+        )
         self.image_list.currentRowChanged.connect(self._on_image_changed)
         images_layout.addWidget(self.image_list)
+
+        self._delete_shortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.image_list)
+        self._delete_shortcut.setContext(Qt.WidgetShortcut)
+        self._delete_shortcut.activated.connect(self._delete_selected_images)
+        self._backspace_shortcut = QShortcut(
+            QKeySequence(Qt.Key_Backspace), self.image_list
+        )
+        self._backspace_shortcut.setContext(Qt.WidgetShortcut)
+        self._backspace_shortcut.activated.connect(self._delete_selected_images)
 
         layout.addWidget(images_group, 1)
 
@@ -164,32 +180,40 @@ class DatasetPanel(QWidget):
 
         layout.addWidget(xany_group)
 
-        analysis_group = QGroupBox("Dataset Analysis")
-        analysis_layout = QVBoxLayout(analysis_group)
-        analysis_layout.setSpacing(8)
+        nav_group = QGroupBox("Navigation & Actions")
+        nav_layout = QVBoxLayout(nav_group)
+        nav_layout.setSpacing(6)
 
-        analysis_hint = QLabel(
-            "Inspect all connected sources together to catch class-mapping or crop-size issues before training."
-        )
-        analysis_hint.setWordWrap(True)
-        analysis_hint.setProperty("detectkitRole", "sectionHint")
-        analysis_layout.addWidget(analysis_hint)
+        nav_row = QHBoxLayout()
+        self.btn_prev = QPushButton("◀ Prev")
+        self.btn_next = QPushButton("Next ▶")
+        self.btn_prev.setProperty("detectkitVariant", "secondary")
+        self.btn_next.setProperty("detectkitVariant", "secondary")
+        self.btn_prev.clicked.connect(self.navigate_prev)
+        self.btn_next.clicked.connect(self.navigate_next)
+        nav_row.addWidget(self.btn_prev)
+        nav_row.addWidget(self.btn_next)
+        nav_layout.addLayout(nav_row)
 
-        self.btn_analyze_dataset = QPushButton("Analyze Dataset")
-        self.btn_analyze_dataset.clicked.connect(self._run_dataset_analysis)
-        analysis_layout.addWidget(self.btn_analyze_dataset)
+        self._counter_label = QLabel("0 / 0")
+        self._counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav_layout.addWidget(self._counter_label)
 
-        self._analysis_view = QTextEdit()
-        self._analysis_view.setReadOnly(True)
-        self._analysis_view.setPlaceholderText(
-            "Run dataset analysis to inspect merged source statistics and warnings."
-        )
-        self._analysis_view.setMinimumHeight(180)
-        analysis_layout.addWidget(self._analysis_view)
+        self.btn_train = QPushButton("Train…")
+        self.btn_history = QPushButton("History…")
+        self.btn_history.setProperty("detectkitVariant", "secondary")
+        self.btn_train.clicked.connect(self.train_requested)
+        self.btn_history.clicked.connect(self.history_requested)
+        nav_layout.addWidget(self.btn_train)
+        nav_layout.addWidget(self.btn_history)
 
-        layout.addWidget(analysis_group)
+        layout.addWidget(nav_group)
 
         self._refresh_xal_envs()
+
+    def set_image_counter(self, current: int, total: int) -> None:
+        """Update the navigation counter label."""
+        self._counter_label.setText(f"{current} / {total}")
 
     # ------------------------------------------------------------------
     # Public API
@@ -220,7 +244,6 @@ class DatasetPanel(QWidget):
             self.image_list.clear()
             self._source_summary.setText("No sources connected yet.")
             self._image_summary.setText("Select a source to browse its images.")
-            self._analysis_view.clear()
             return
         self._source_summary.setText(
             f"{source_count} source(s) available for browsing and export."
@@ -268,6 +291,115 @@ class DatasetPanel(QWidget):
         row = self.image_list.currentRow()
         if row < self.image_list.count() - 1:
             self.image_list.setCurrentRow(row + 1)
+
+    # ------------------------------------------------------------------
+    # Image deletion
+    # ------------------------------------------------------------------
+
+    def _on_image_list_context_menu(self, pos) -> None:
+        """Show right-click menu on the image list."""
+        items = self.image_list.selectedItems()
+        if not items:
+            item = self.image_list.itemAt(pos)
+            if item is not None:
+                items = [item]
+        if not items:
+            return
+        menu = QMenu(self.image_list)
+        label_text = (
+            f"Delete {len(items)} images..." if len(items) > 1 else "Delete image..."
+        )
+        delete_action = QAction(label_text, menu)
+        delete_action.triggered.connect(self._delete_selected_images)
+        menu.addAction(delete_action)
+        menu.exec(self.image_list.viewport().mapToGlobal(pos))
+
+    def _delete_selected_images(self) -> None:
+        """Permanently delete selected images and their label files from disk."""
+        items = self.image_list.selectedItems()
+        if not items:
+            return
+
+        source_path = self._selected_source_path()
+        if source_path is None:
+            return
+        source_root = Path(source_path)
+
+        image_paths: list[Path] = []
+        for item in items:
+            data = item.data(Qt.UserRole)
+            if not data:
+                continue
+            image_paths.append(Path(str(data)))
+        if not image_paths:
+            return
+
+        sample_names = ", ".join(p.name for p in image_paths[:3])
+        if len(image_paths) > 3:
+            sample_names += f", ... (+{len(image_paths) - 3} more)"
+        confirm = QMessageBox.warning(
+            self,
+            "Delete Images",
+            (
+                f"Permanently delete {len(image_paths)} image(s) and any matching "
+                f"label files?\n\n{sample_names}\n\n"
+                "This cannot be undone."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        failures: list[str] = []
+        deleted_image_paths: list[str] = []
+        for image_path in image_paths:
+            try:
+                if image_path.exists():
+                    image_path.unlink()
+                label_path = self._label_path_for_image(image_path, source_root)
+                if label_path is not None and label_path.exists():
+                    label_path.unlink()
+                deleted_image_paths.append(str(image_path))
+            except Exception as exc:
+                logger.warning("Failed to delete %s: %s", image_path, exc)
+                failures.append(f"{image_path.name}: {exc}")
+
+        if self._main_window is not None and hasattr(
+            self._main_window, "on_images_deleted"
+        ):
+            self._main_window.on_images_deleted(deleted_image_paths)
+
+        self._on_source_combo_changed(self.source_combo.currentIndex())
+
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Delete Images",
+                "Some images could not be deleted:\n\n" + "\n".join(failures),
+            )
+
+    @staticmethod
+    def _label_path_for_image(image_path: Path, source_root: Path) -> Path | None:
+        """Mirror images/<rel> -> labels/<rel>.txt, with a stem-match fallback."""
+        labels_dir = source_root / "labels"
+        if not labels_dir.is_dir():
+            return None
+        images_dir = source_root / "images"
+        if images_dir.is_dir():
+            try:
+                rel = image_path.relative_to(images_dir)
+                candidate = labels_dir / rel.with_suffix(".txt")
+                if candidate.exists():
+                    return candidate
+            except ValueError:
+                pass
+        candidate = labels_dir / f"{image_path.stem}.txt"
+        if candidate.exists():
+            return candidate
+        for found in labels_dir.rglob(f"{image_path.stem}.txt"):
+            return found
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -426,17 +558,6 @@ class DatasetPanel(QWidget):
         except Exception:
             logger.debug("xlabel conversion failed for %s", path, exc_info=True)
 
-    def _run_dataset_analysis(self) -> None:
-        """Analyze all configured sources and display the merged report."""
-        if self._project is None:
-            self._analysis_view.setPlainText("No dataset sources configured.")
-            return
-
-        report, warnings = build_dataset_analysis_report(self._project)
-        self._analysis_view.setPlainText(report)
-        if warnings:
-            QMessageBox.warning(self, "Dataset Analysis Warnings", "\n".join(warnings))
-
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -463,23 +584,14 @@ class DatasetPanel(QWidget):
         self._image_summary.setText(
             f"{source_name}: {image_count} image(s) available for review."
         )
-        if self._main_window is not None and hasattr(self._main_window, "_tools_panel"):
-            self._main_window._tools_panel.set_image_counter(
-                1 if image_count else 0,
-                image_count,
-            )
+        self.set_image_counter(1 if image_count else 0, image_count)
         if self.image_list.count() > 0:
             self.image_list.setCurrentRow(0)
 
     def _on_image_changed(self, row: int) -> None:
         """Show selected image in canvas."""
         if row < 0 or self._main_window is None:
-            if self._main_window is not None and hasattr(
-                self._main_window, "_tools_panel"
-            ):
-                self._main_window._tools_panel.set_image_counter(
-                    0, self.image_list.count()
-                )
+            self.set_image_counter(0, self.image_list.count())
             return
         img_item = self.image_list.item(row)
         if img_item is None:
@@ -488,11 +600,7 @@ class DatasetPanel(QWidget):
         if source_path is None:
             return
         image_path = img_item.data(Qt.UserRole)
-        if hasattr(self._main_window, "_tools_panel"):
-            self._main_window._tools_panel.set_image_counter(
-                row + 1,
-                self.image_list.count(),
-            )
+        self.set_image_counter(row + 1, self.image_list.count())
         self._main_window.show_image(source_path, str(image_path))
 
     def _open_xanylabeling(self) -> None:

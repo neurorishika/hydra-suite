@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -37,11 +39,10 @@ from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialo
 from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
-from .evaluation import open_quick_test_dialog
 from .models import DetectKitProject
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
-from .prediction_preview import predict_preview_detections
+from .prediction_preview import load_torch_model, predict_preview_detections_for_image
 from .project import (
     create_project,
     default_project_parent_dir,
@@ -54,9 +55,98 @@ from .project import (
     project_exists,
     save_project,
 )
-from .utils import find_label_for_image, parse_obb_label, source_class_id_map
+from .utils import (
+    find_label_for_image,
+    list_images_in_source,
+    parse_obb_label,
+    source_class_id_map,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class _DetectKitDatasetInferenceWorker(BaseWorker):
+    """Run PyTorch OBB inference across every image in the active source."""
+
+    success = Signal(dict)
+
+    def __init__(
+        self,
+        image_paths: list[str],
+        model_path: str,
+        device_preference: str,
+        confidence_threshold: float,
+    ) -> None:
+        super().__init__()
+        self._image_paths = list(image_paths)
+        self._model_path = str(model_path)
+        self._device_preference = str(device_preference or "auto")
+        self._confidence_threshold = float(confidence_threshold)
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def execute(self) -> None:
+        total = len(self._image_paths)
+        if total == 0:
+            self.success.emit(
+                {
+                    "per_image": {},
+                    "image_count": 0,
+                    "detection_count": 0,
+                    "class_counts": {},
+                    "mean_confidence": 0.0,
+                }
+            )
+            return
+
+        self.status.emit("Loading model…")
+        model, device = load_torch_model(self._model_path, self._device_preference)
+
+        per_image: dict[str, list[dict[str, object]]] = {}
+        class_counts: dict[int, int] = {}
+        confidence_sum = 0.0
+        detection_count = 0
+        confidence_threshold = self._confidence_threshold
+
+        for index, image_path in enumerate(self._image_paths, start=1):
+            if self._cancel:
+                self.status.emit("Inference cancelled.")
+                return
+            self.status.emit(
+                f"Running inference on image {index}/{total}: {Path(image_path).name}"
+            )
+            try:
+                detections = predict_preview_detections_for_image(
+                    model,
+                    image_path,
+                    device=device,
+                    confidence_threshold=confidence_threshold,
+                )
+            except Exception:
+                logger.warning(
+                    "Dataset inference failed on %s", image_path, exc_info=True
+                )
+                detections = []
+            per_image[image_path] = detections
+            for det in detections:
+                detection_count += 1
+                class_id = int(det.get("class_id", 0))
+                class_counts[class_id] = class_counts.get(class_id, 0) + 1
+                confidence_sum += float(det.get("confidence", 0.0))
+            self.progress.emit(int(index / max(1, total) * 100))
+
+        mean_confidence = confidence_sum / detection_count if detection_count else 0.0
+        self.success.emit(
+            {
+                "per_image": per_image,
+                "image_count": total,
+                "detection_count": detection_count,
+                "class_counts": class_counts,
+                "mean_confidence": mean_confidence,
+            }
+        )
 
 
 class _DetectKitPortableWorker(BaseWorker):
@@ -212,6 +302,7 @@ QListWidget,
 QTextEdit,
 QPlainTextEdit {
     background-color: #252526;
+    alternate-background-color: #2d2d30;
     border: 1px solid #3e3e42;
     border-radius: 4px;
     padding: 4px;
@@ -384,6 +475,10 @@ class DetectKitMainWindow(QMainWindow):
         self._current_source_path = ""
         self._current_image_path = ""
         self._last_prediction_request: tuple[str, str, float] | None = None
+        self._dataset_predictions: dict[str, list[dict[str, object]]] = {}
+        self._dataset_prediction_signature: tuple[str, str, float] | None = None
+        self._inference_worker: Optional[_DetectKitDatasetInferenceWorker] = None
+        self._inference_progress_dialog: Optional[QProgressDialog] = None
         self._portable_worker = None
         self._portable_progress_dialog = None
 
@@ -411,15 +506,12 @@ class DetectKitMainWindow(QMainWindow):
         self._stack.setCurrentIndex(0)
         self.menuBar().hide()
 
-        # Connect ToolsPanel signals
+        # Connect panel signals
         self._dataset_panel.manage_sources_requested.connect(self._open_source_manager)
+        self._dataset_panel.train_requested.connect(self._open_training_dialog)
+        self._dataset_panel.history_requested.connect(self._open_history_dialog)
         self._tools_panel.overlay_settings_changed.connect(self._on_overlay_changed)
         self._tools_panel.run_inference_requested.connect(self._run_inference_overlay)
-        self._tools_panel.prev_requested.connect(self._dataset_panel.navigate_prev)
-        self._tools_panel.next_requested.connect(self._dataset_panel.navigate_next)
-        self._tools_panel.train_requested.connect(self._open_training_dialog)
-        self._tools_panel.evaluate_requested.connect(self._evaluate_active_model)
-        self._tools_panel.history_requested.connect(self._open_history_dialog)
 
     # ------------------------------------------------------------------
     # Toolbar
@@ -450,6 +542,11 @@ class DetectKitMainWindow(QMainWindow):
         act_export_zip.triggered.connect(self.export_project_zip)
         tb.addAction(act_export_zip)
 
+        act_open_folder = QAction("Open Folder", self)
+        act_open_folder.setStatusTip("Reveal project folder in Finder / file manager")
+        act_open_folder.triggered.connect(self.open_project_folder)
+        tb.addAction(act_open_folder)
+
         tb.addSeparator()
 
         act_sources = QAction("Sources", self)
@@ -475,10 +572,6 @@ class DetectKitMainWindow(QMainWindow):
         act_run_inference = QAction("Run Inference", self)
         act_run_inference.triggered.connect(self._run_inference_overlay)
         tb.addAction(act_run_inference)
-
-        act_evaluate = QAction("Evaluate", self)
-        act_evaluate.triggered.connect(self._evaluate_active_model)
-        tb.addAction(act_evaluate)
 
         act_history = QAction("History", self)
         act_history.triggered.connect(self._open_history_dialog)
@@ -645,6 +738,10 @@ class DetectKitMainWindow(QMainWindow):
         act_export_zip = QAction("Export Project Zip...", self)
         act_export_zip.triggered.connect(self.export_project_zip)
         file_menu.addAction(act_export_zip)
+
+        act_open_folder = QAction("Open Project Folder", self)
+        act_open_folder.triggered.connect(self.open_project_folder)
+        file_menu.addAction(act_open_folder)
 
         file_menu.addSeparator()
 
@@ -1063,15 +1160,6 @@ class DetectKitMainWindow(QMainWindow):
         dlg.training_completed.connect(self._on_training_completed)
         dlg.exec()
 
-    def _open_evaluation_dialog(self) -> None:
-        """Backward-compatible alias for the active-model evaluation flow."""
-        self._evaluate_active_model()
-
-    def _evaluate_active_model(self) -> None:
-        if self._project is None:
-            return
-        open_quick_test_dialog(self._project, parent=self)
-
     def _open_history_dialog(self) -> None:
         if self._project is None:
             return
@@ -1104,15 +1192,16 @@ class DetectKitMainWindow(QMainWindow):
         self._canvas.set_overlay_visibility(settings.show_gt, settings.show_pred)
         self._canvas.set_class_filter(settings.visible_class_ids)
 
-        request = self._prediction_request(settings)
-        if request is None:
+        signature = self._dataset_signature(settings)
+
+        if signature is None:
             self._canvas.clear_pred_detections()
             self._last_prediction_request = None
             return
 
         if self._project is not None and not detectkit_model_path_is_previewable(
             self._project,
-            request[1],
+            signature[1],
         ):
             self._canvas.clear_pred_detections()
             self._last_prediction_request = None
@@ -1122,10 +1211,9 @@ class DetectKitMainWindow(QMainWindow):
             )
             return
 
-        if (
-            self._last_prediction_request is not None
-            and request != self._last_prediction_request
-        ):
+        if signature == self._dataset_prediction_signature:
+            self._refresh_prediction_overlay(force=True)
+        else:
             self._canvas.clear_pred_detections()
             self._last_prediction_request = None
             self.statusBar().showMessage(
@@ -1133,27 +1221,113 @@ class DetectKitMainWindow(QMainWindow):
                 4000,
             )
 
-    def _prediction_request(self, settings=None) -> tuple[str, str, float] | None:
-        """Return the current prediction request tuple, or None if not runnable."""
-        if self._project is None or not self._current_image_path:
+    def _dataset_signature(self, settings) -> tuple[str, str, float] | None:
+        if self._project is None or not self._current_source_path:
             return None
-
-        if settings is None:
-            settings = self._tools_panel.get_overlay_settings()
-
         model_path = str(settings.active_model_path or "").strip()
         if not model_path:
             return None
-
         return (
-            self._current_image_path,
+            self._current_source_path,
             model_path,
             round(float(settings.confidence_threshold), 4),
         )
 
     def _run_inference_overlay(self) -> None:
-        """Run preview inference for the current image using the selected overlay settings."""
-        self._refresh_prediction_overlay(force=True)
+        """Run dataset-wide PyTorch inference for the active source."""
+        if self._project is None or not self._current_source_path:
+            QMessageBox.information(
+                self,
+                "Run Inference",
+                "Open a project and select a source before running inference.",
+            )
+            return
+        if self._inference_worker is not None:
+            QMessageBox.information(
+                self,
+                "Run Inference",
+                "An inference run is already in progress.",
+            )
+            return
+
+        settings = self._tools_panel.get_overlay_settings()
+        signature = self._dataset_signature(settings)
+        if signature is None:
+            QMessageBox.information(
+                self,
+                "Run Inference",
+                "Select a model with a populated source before running inference.",
+            )
+            return
+
+        model_path = signature[1]
+        if not detectkit_model_path_is_previewable(self._project, model_path):
+            QMessageBox.information(
+                self,
+                "Run Inference",
+                "Selected model does not support direct preview inference.",
+            )
+            return
+
+        image_paths = [str(p) for p in list_images_in_source(self._current_source_path)]
+        if not image_paths:
+            QMessageBox.information(
+                self,
+                "Run Inference",
+                "No images found in the active source.",
+            )
+            return
+
+        progress = QProgressDialog(
+            f"Running inference on {len(image_paths)} image(s)…",
+            "Cancel",
+            0,
+            100,
+            self,
+        )
+        progress.setWindowTitle("Run Inference")
+        progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.ApplicationModal)
+        progress.setAttribute(Qt.WA_DeleteOnClose, True)
+        progress.setValue(0)
+
+        worker = _DetectKitDatasetInferenceWorker(
+            image_paths,
+            model_path,
+            self._project.device or "auto",
+            settings.confidence_threshold,
+        )
+        worker.progress.connect(progress.setValue)
+        worker.status.connect(progress.setLabelText)
+        progress.canceled.connect(worker.cancel)
+        worker.error.connect(
+            lambda msg: QMessageBox.warning(self, "Run Inference", msg)
+        )
+
+        def _finish() -> None:
+            progress.close()
+            self._inference_worker = None
+            self._inference_progress_dialog = None
+
+        def _handle_success(result: dict) -> None:
+            self._dataset_predictions = dict(result.get("per_image", {}))
+            self._dataset_prediction_signature = signature
+            self._tools_panel.update_inference_stats(
+                result, class_names=self._project.class_names
+            )
+            self._refresh_prediction_overlay(force=True)
+            self.statusBar().showMessage(
+                f"Inference complete: {result.get('detection_count', 0):,} "
+                f"detection(s) across {result.get('image_count', 0):,} image(s).",
+                5000,
+            )
+
+        worker.success.connect(_handle_success)
+        worker.finished.connect(_finish)
+        self._inference_worker = worker
+        self._inference_progress_dialog = progress
+        progress.show()
+        worker.start()
 
     def _refresh_prediction_overlay(self, *, force: bool = False) -> None:
         if self._project is None or not self._current_image_path:
@@ -1162,56 +1336,63 @@ class DetectKitMainWindow(QMainWindow):
             return
 
         settings = self._tools_panel.get_overlay_settings()
-        request = self._prediction_request(settings)
-        if request is None:
+        signature = self._dataset_signature(settings)
+
+        if (
+            signature is None
+            or signature != self._dataset_prediction_signature
+            or self._current_image_path not in self._dataset_predictions
+        ):
             self._canvas.clear_pred_detections()
             self._last_prediction_request = None
             return
 
-        model_path = request[1]
-
-        if not detectkit_model_path_is_previewable(self._project, model_path):
-            self._canvas.clear_pred_detections()
-            self._last_prediction_request = None
-            self.statusBar().showMessage(
-                "Selected model does not support direct preview overlays.",
-                4000,
-            )
-            return
-
-        if not force and request == self._last_prediction_request:
-            return
-
-        try:
-            detections = predict_preview_detections(
-                self._current_image_path,
-                model_path,
-                device_preference=self._project.device or "auto",
-                confidence_threshold=settings.confidence_threshold,
-            )
-        except Exception as exc:
-            logger.warning("DetectKit preview inference failed", exc_info=True)
-            self._canvas.clear_pred_detections()
-            self._last_prediction_request = None
-            self.statusBar().showMessage(
-                f"Prediction preview failed: {exc}",
-                5000,
-            )
-            return
-
+        detections = self._dataset_predictions.get(self._current_image_path, [])
         self._canvas.set_pred_detections(
             detections,
             class_names=self._project.class_names,
         )
-        self._last_prediction_request = request
+        self._last_prediction_request = signature
 
     # ------------------------------------------------------------------
     # Image display
     # ------------------------------------------------------------------
 
+    def open_project_folder(self) -> None:
+        """Reveal the project folder in the system file manager."""
+        if self._project is None:
+            self.statusBar().showMessage("No project loaded.", 2000)
+            return
+        folder = Path(self._project.project_dir)
+        try:
+            if sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            elif sys.platform.startswith("linux"):
+                subprocess.Popen(["xdg-open", str(folder)])
+            else:
+                subprocess.Popen(["explorer", str(folder)])
+        except Exception as exc:
+            QMessageBox.warning(self, "Open Folder", f"Could not open folder:\n{exc}")
+
+    def on_images_deleted(self, deleted_paths: list[str]) -> None:
+        """Drop cached predictions for *deleted_paths* and clear canvas if needed."""
+        deleted = set(deleted_paths or [])
+        if not deleted:
+            return
+        for path in deleted:
+            self._dataset_predictions.pop(path, None)
+        if self._current_image_path in deleted:
+            self._current_image_path = ""
+            self._last_prediction_request = None
+            self._canvas.clear_all()
+
     def show_image(self, source_path: str, image_path: str) -> None:
         """Load an image and overlay GT labels."""
-        self._current_source_path = str(source_path or "")
+        new_source = str(source_path or "")
+        if new_source != self._current_source_path:
+            self._dataset_predictions = {}
+            self._dataset_prediction_signature = None
+        self._current_source_path = new_source
         self._current_image_path = str(image_path or "")
         self._last_prediction_request = None
         self._canvas.clear_gt_detections()
@@ -1244,8 +1425,11 @@ class DetectKitMainWindow(QMainWindow):
                 dets = parse_obb_label(label_path, w, h, class_id_map=class_id_map)
                 self._canvas.set_gt_detections(dets, class_names=class_names)
 
+        # If we already have predictions for this image from a previous Run Inference, restore them.
+        self._refresh_prediction_overlay(force=True)
         if (
-            self._project is not None
+            self._last_prediction_request is None
+            and self._project is not None
             and str(self._project.active_model_path or "").strip()
         ):
             self.statusBar().showMessage(

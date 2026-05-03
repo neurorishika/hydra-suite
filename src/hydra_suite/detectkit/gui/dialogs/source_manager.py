@@ -20,7 +20,12 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.widgets.dialogs import BaseDialog
 
-from ..source_import import inspect_detectkit_source, materialize_detectkit_source
+from ..source_import import (
+    compute_positional_class_remap,
+    inspect_detectkit_source,
+    materialize_detectkit_source,
+    remap_materialized_source_classes,
+)
 from .source_validation import confirm_detectkit_source_addition
 
 if TYPE_CHECKING:
@@ -110,14 +115,83 @@ class SourceManagerDialog(BaseDialog):
         if not confirm_detectkit_source_addition(self, selected_path, inspection):
             return
 
+        force_remap = False
+        project_classes = list(self._project.class_names)
+        source_classes = list(inspection.discovered_labels)
+        if source_classes != project_classes:
+            remap_preview = compute_positional_class_remap(
+                source_classes, project_classes
+            )
+            mapping_lines: list[str] = []
+            for source_idx, target_idx in sorted(remap_preview.items()):
+                source_name = (
+                    source_classes[source_idx]
+                    if 0 <= source_idx < len(source_classes)
+                    else f"class {source_idx}"
+                )
+                target_name = (
+                    project_classes[target_idx]
+                    if 0 <= target_idx < len(project_classes)
+                    else f"class {target_idx}"
+                )
+                mapping_lines.append(
+                    f"  source[{source_idx}] {source_name!r} → "
+                    f"project[{target_idx}] {target_name!r}"
+                )
+            dropped = sorted(
+                {
+                    source_idx
+                    for source_idx in range(len(source_classes))
+                    if source_idx not in remap_preview
+                }
+            )
+            preview_text = (
+                "Source classes do not match the project class scheme.\n\n"
+                f"Project classes: {project_classes}\n"
+                f"Source classes:  {source_classes}\n\n"
+                "Force the source labels to match the project classes by mapping "
+                "by position?\n" + "\n".join(mapping_lines)
+            )
+            if dropped:
+                dropped_names = ", ".join(
+                    f"{i}:{source_classes[i]!r}"
+                    for i in dropped
+                    if 0 <= i < len(source_classes)
+                )
+                preview_text += (
+                    "\n\nThese source classes will be dropped: " + dropped_names
+                )
+            answer = QMessageBox.question(
+                self,
+                "Class Mismatch",
+                preview_text,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            force_remap = True
+
         try:
             materialized = materialize_detectkit_source(
                 selected_path,
                 self._project.project_dir,
+                force_import=force_remap,
             )
         except Exception as exc:
             QMessageBox.warning(self, "Add Source", str(exc))
             return
+
+        if force_remap:
+            try:
+                remap = compute_positional_class_remap(source_classes, project_classes)
+                remap_materialized_source_classes(
+                    Path(materialized.canonical_path),
+                    project_classes,
+                    remap,
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "Add Source", str(exc))
+                return
 
         canonical_path = str(materialized.canonical_path)
         original_path = str(materialized.source_root)
