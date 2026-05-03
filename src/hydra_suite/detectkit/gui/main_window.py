@@ -1184,6 +1184,7 @@ class DetectKitMainWindow(QMainWindow):
 
         dlg = ActiveLearningDialog(project=self._project, parent=self)
         dlg.set_run_handler(lambda: self._start_al_round(dlg))
+        dlg.finished.connect(lambda *_: self._cancel_al_round())
         dlg.open()
 
     def _start_al_round(self, dlg) -> None:
