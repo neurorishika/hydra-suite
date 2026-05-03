@@ -1184,7 +1184,6 @@ class DetectKitMainWindow(QMainWindow):
 
         dlg = ActiveLearningDialog(project=self._project, parent=self)
         dlg.set_run_handler(lambda: self._start_al_round(dlg))
-        dlg.set_cancel_handler(lambda: self._cancel_al_round())
         dlg.open()
 
     def _start_al_round(self, dlg) -> None:
@@ -1233,18 +1232,35 @@ class DetectKitMainWindow(QMainWindow):
             worker.requestInterruption()
 
     def _load_active_detector_fn(self):
-        """Return a detector_fn(frame, conf, iou) -> list of tuples.
+        """Return a detector_fn(frame, conf, iou) -> list[(cx,cy,w,h,theta,conf)].
 
-        NOTE: extraction of the in-process model loader from main_window's existing
-        dataset-prediction code (around line 1237 onward in this file) is a
-        documented follow-up. Until that helper exists, raise NotImplementedError
-        to surface the gap loudly when a user actually clicks Run.
+        Loads the project's active model via the same torch loader used by
+        `_run_inference_overlay` and adapts the result to the OBB-tuple format
+        required by `hydra_suite.data.al`.
         """
-        raise NotImplementedError(
-            "Active-learning detector loading is not yet wired. "
-            "Extract the model loader from main_window._run_dataset_prediction "
-            "into a reusable helper, then call it here."
-        )
+        if self._project is None:
+            raise RuntimeError("No project loaded.")
+        model_path = str(self._project.active_model_path or "").strip()
+        if not model_path:
+            raise RuntimeError(
+                "No active model selected. Set one via Run History or after a training run."
+            )
+        if not detectkit_model_path_is_previewable(self._project, model_path):
+            raise RuntimeError(
+                "Selected model does not support direct inference. "
+                "Train or load a YOLO OBB model and try again."
+            )
+
+        from .prediction_preview import load_torch_model, predict_obb_for_frame
+
+        model, device = load_torch_model(model_path, self._project.device or "auto")
+
+        def _detector_fn(frame, conf, iou):
+            return predict_obb_for_frame(
+                model, frame, device=device, conf=conf, iou=iou
+            )
+
+        return _detector_fn
 
     def _on_training_completed(self, results: list) -> None:
         if self._project is None:

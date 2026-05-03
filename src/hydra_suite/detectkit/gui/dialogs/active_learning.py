@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -26,7 +27,7 @@ from hydra_suite.widgets.dialogs import BaseDialog
 
 
 class ActiveLearningDialog(BaseDialog):
-    """Three-section AL dialog: Input, Acquisition, Execution."""
+    """Active-learning frame-selection dialog (Input / Acquisition / Run)."""
 
     def __init__(
         self,
@@ -34,29 +35,30 @@ class ActiveLearningDialog(BaseDialog):
         parent: QWidget | None = None,
     ):
         super().__init__(
-            title="Active Learning",
+            "Active Learning",
             parent=parent,
-            buttons=QDialogButtonBox.NoButton,
+            buttons=QDialogButtonBox.StandardButton.Close,
         )
         self._project = project
         self._run_handler: Callable[[], None] | None = None
-        self._cancel_handler: Callable[[], None] | None = None
-        self._build_ui()
+        self.resize(560, 540)
+        self._build_content()
         self._sync_run_enabled()
 
     # ------------------------------------------------------------------
-    def _build_ui(self) -> None:
-        self.add_content(self._build_input_section())
-        self.add_content(self._build_acquisition_section())
-        self.add_content(self._build_execution_section())
-
-    def _build_input_section(self) -> QWidget:
-        section = QWidget()
-        layout = QVBoxLayout(section)
+    def _build_content(self) -> None:
+        container = QWidget()
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("<b>Input</b>"))
+        layout.setSpacing(10)
+        layout.addWidget(self._build_input_group())
+        layout.addWidget(self._build_acquisition_group())
+        layout.addWidget(self._build_run_group())
+        self.add_content(container)
 
-        form = QFormLayout()
+    def _build_input_group(self) -> QGroupBox:
+        box = QGroupBox("Input")
+        form = QFormLayout(box)
 
         self.rb_video = QRadioButton("Video")
         self.rb_folder = QRadioButton("Image folder")
@@ -79,61 +81,49 @@ class ActiveLearningDialog(BaseDialog):
         path_row.addWidget(browse_btn)
         form.addRow("Path", _wrap(path_row))
 
-        layout.addLayout(form)
-        return section
+        return box
 
-    def _build_acquisition_section(self) -> QWidget:
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("<b>Acquisition</b>"))
+    def _build_acquisition_group(self) -> QGroupBox:
+        box = QGroupBox("Acquisition")
+        form = QFormLayout(box)
 
         self.preset_combo = QComboBox()
         for name in PRESETS:
             if name != "tracker_default":
                 self.preset_combo.addItem(name)
+        form.addRow("Preset", self.preset_combo)
 
         self.expected_count_spin = QSpinBox()
         self.expected_count_spin.setRange(0, 1000)
         self.expected_count_spin.setValue(0)
+        form.addRow("Expected count per frame (0 = unknown)", self.expected_count_spin)
 
         self.budget_spin = QSpinBox()
         self.budget_spin.setRange(1, 1000)
         self.budget_spin.setValue(50)
-
-        form = QFormLayout()
-        form.addRow("Preset", self.preset_combo)
-        form.addRow("Expected count per frame (0 = unknown)", self.expected_count_spin)
         form.addRow("Budget (top-K)", self.budget_spin)
 
-        layout.addLayout(form)
-        return section
+        return box
 
-    def _build_execution_section(self) -> QWidget:
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("<b>Execution</b>"))
+    def _build_run_group(self) -> QGroupBox:
+        box = QGroupBox("Run")
+        v = QVBoxLayout(box)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
+        v.addWidget(self.progress)
+
         self.status_label = QLabel("Idle.")
+        self.status_label.setWordWrap(True)
+        v.addWidget(self.status_label)
 
         self.run_button = QPushButton("Run")
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setEnabled(False)
         self.run_button.clicked.connect(self._on_run)
-        self.cancel_button.clicked.connect(self._on_cancel)
-
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         btn_row.addWidget(self.run_button)
-        btn_row.addWidget(self.cancel_button)
-
-        layout.addWidget(self.progress)
-        layout.addWidget(self.status_label)
-        layout.addLayout(btn_row)
-        return section
+        v.addLayout(btn_row)
+        return box
 
     # ------------------------------------------------------------------
     def _browse(self) -> None:
@@ -170,16 +160,9 @@ class ActiveLearningDialog(BaseDialog):
         if self._run_handler is not None:
             self._run_handler()
 
-    def _on_cancel(self) -> None:
-        if self._cancel_handler is not None:
-            self._cancel_handler()
-
     def set_run_handler(self, handler: Callable[[], None]) -> None:
         """Main window wires this to construct + start the AL worker."""
         self._run_handler = handler
-
-    def set_cancel_handler(self, handler: Callable[[], None]) -> None:
-        self._cancel_handler = handler
 
 
 def _wrap(layout) -> QWidget:
