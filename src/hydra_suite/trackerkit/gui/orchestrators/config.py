@@ -2757,8 +2757,7 @@ class ConfigOrchestrator:
         self._mw.current_detection_cache_path = None
         self._mw.current_individual_properties_cache_path = None
 
-        if self._mw.roi_selection_active:
-            self._mw.clear_roi()
+        self._mw.clear_roi()
 
         # Auto-generate output paths based on video name
         video_dir = os.path.dirname(fp)
