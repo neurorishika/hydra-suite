@@ -964,12 +964,13 @@ class ConfigOrchestrator:
         self._panels.dataset.spin_dataset_max_frames.setValue(
             get_cfg("dataset_max_frames", default=100)
         )
-        self._panels.dataset.spin_dataset_conf_threshold.setValue(
-            get_cfg(
-                "dataset_confidence_threshold",
-                "dataset_conf_threshold",
-                default=0.5,
-            )
+        self._panels.dataset.spin_dataset_min_selection_score.setValue(
+            get_cfg("dataset_min_selection_score", default=0.0)
+        )
+        preset_name = get_cfg("dataset_al_preset", default="tracker_default")
+        preset_idx = self._panels.dataset.combo_dataset_preset.findText(preset_name)
+        self._panels.dataset.combo_dataset_preset.setCurrentIndex(
+            preset_idx if preset_idx >= 0 else 0
         )
         # Note: dataset YOLO conf/IOU now in advanced_config.json, not per-video config
         self._panels.dataset.spin_dataset_diversity_window.setValue(
@@ -1742,7 +1743,8 @@ class ConfigOrchestrator:
 
         cfg.update(
             {
-                "dataset_confidence_threshold": self._panels.dataset.spin_dataset_conf_threshold.value(),
+                "dataset_min_selection_score": self._panels.dataset.spin_dataset_min_selection_score.value(),
+                "dataset_al_preset": self._panels.dataset.combo_dataset_preset.currentText(),
                 # Note: dataset YOLO conf/IOU now in advanced_config.json, not per-video config
                 "dataset_diversity_window": self._panels.dataset.spin_dataset_diversity_window.value(),
                 "dataset_include_context": self._panels.dataset.chk_dataset_include_context.isChecked(),
@@ -2275,7 +2277,9 @@ class ConfigOrchestrator:
                 else ""
             ),
             "DATASET_MAX_FRAMES": self._panels.dataset.spin_dataset_max_frames.value(),
-            "DATASET_CONF_THRESHOLD": self._panels.dataset.spin_dataset_conf_threshold.value(),
+            "DATASET_CONF_THRESHOLD": 0.5,  # uncertainty conf floor; legacy default
+            "DATASET_MIN_SELECTION_SCORE": self._panels.dataset.spin_dataset_min_selection_score.value(),
+            "DATASET_AL_PRESET": self._panels.dataset.combo_dataset_preset.currentText(),
             # Dataset-specific YOLO parameters from advanced config (for export, not tracking)
             "DATASET_YOLO_CONFIDENCE_THRESHOLD": self._mw.advanced_config.get(
                 "dataset_yolo_confidence_threshold", 0.05

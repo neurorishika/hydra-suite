@@ -135,3 +135,42 @@ def load_torch_model(model_path: str, device_preference: str = "auto"):
     resolved = str(Path(model_path).expanduser().resolve())
     device = _resolve_torch_device(device_preference)
     return _get_torch_model(resolved, device), device
+
+
+def predict_obb_for_frame(
+    model,
+    frame,
+    *,
+    device: str,
+    conf: float,
+    iou: float = 0.7,
+) -> list[tuple[float, float, float, float, float, float]]:
+    """Run OBB inference on a single in-memory BGR frame and return
+    (cx, cy, w, h, theta_rad, confidence) tuples. For AL detector_fn use.
+    """
+    raw_floor = max(1e-4, float(conf))
+    results = model.predict(
+        source=frame,
+        device=device,
+        conf=raw_floor,
+        iou=float(iou),
+        verbose=False,
+    )
+    if not results:
+        return []
+    obb = getattr(results[0], "obb", None)
+    if obb is None or len(obb) == 0:
+        return []
+
+    xywhr = getattr(obb, "xywhr", None)
+    confs = getattr(obb, "conf", None)
+    if xywhr is None or confs is None:
+        return []
+
+    rows = xywhr.detach().cpu().numpy()
+    confidences = confs.detach().cpu().numpy()
+    out: list[tuple[float, float, float, float, float, float]] = []
+    for row, c in zip(rows, confidences):
+        cx, cy, w, h, theta = (float(v) for v in row[:5])
+        out.append((cx, cy, w, h, theta, float(c)))
+    return out

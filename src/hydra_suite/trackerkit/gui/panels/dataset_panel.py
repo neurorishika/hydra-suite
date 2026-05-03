@@ -127,21 +127,33 @@ class DatasetPanel(QWidget):
         )
         f_selection.addRow("Maximum frames to export", self.spin_dataset_max_frames)
 
-        # Frame quality scoring threshold (used DURING TRACKING to identify problematic frames)
-        self.spin_dataset_conf_threshold = QDoubleSpinBox()
-        self.spin_dataset_conf_threshold.setRange(0.0, 1.0)
-        self.spin_dataset_conf_threshold.setSingleStep(0.05)
-        self.spin_dataset_conf_threshold.setDecimals(2)
-        self.spin_dataset_conf_threshold.setValue(0.5)
-        self.spin_dataset_conf_threshold.setToolTip(
-            "[FRAME SELECTION] Confidence threshold for identifying problematic frames DURING TRACKING.\n\n"
-            "Frames with detections below this confidence are scored as 'challenging'\n"
-            "and prioritized for export to improve training data.\n\n"
-            "• Lower (0.3-0.4): Only flag very uncertain detections\n"
-            "• Higher (0.5-0.7): Flag moderately uncertain detections too\n\n"
-            "Recommended: 0.5 (default) - captures frames that need model improvement"
+        self.spin_dataset_min_selection_score = QDoubleSpinBox()
+        self.spin_dataset_min_selection_score.setRange(0.0, 1.0)
+        self.spin_dataset_min_selection_score.setSingleStep(0.05)
+        self.spin_dataset_min_selection_score.setDecimals(2)
+        self.spin_dataset_min_selection_score.setValue(0.0)
+        self.spin_dataset_min_selection_score.setToolTip(
+            "Min selection score (0.0-1.0).\n\n"
+            "Frames with a normalized acquisition score below this value are\n"
+            "discarded before top-K selection. 0.0 = no filter (default).\n\n"
+            "Replaces the legacy 'Quality threshold' control: under the new\n"
+            "normalized scoring, an unbounded threshold no longer makes sense."
         )
-        f_selection.addRow("Quality threshold", self.spin_dataset_conf_threshold)
+        f_selection.addRow("Min selection score", self.spin_dataset_min_selection_score)
+
+        self.combo_dataset_preset = QComboBox()
+        for preset_name in (
+            "tracker_default",
+            "balanced",
+            "uncertainty_heavy",
+            "exploration_heavy",
+        ):
+            self.combo_dataset_preset.addItem(preset_name)
+        self.combo_dataset_preset.setToolTip(
+            "Acquisition weight preset. Default 'tracker_default' includes tracker-side\n"
+            "signals (assignment cost, track loss). Others apply to detector-only paths."
+        )
+        f_selection.addRow("Acquisition preset", self.combo_dataset_preset)
 
         # Add help label explaining advanced options
         advanced_help = self._main_window._create_help_label(

@@ -70,6 +70,10 @@ def test_main_window_has_open_history_dialog(main_win):
     assert hasattr(main_win, "_open_history_dialog")
 
 
+def test_main_window_has_open_active_learning_dialog(main_win):
+    assert hasattr(main_win, "_open_active_learning_dialog")
+
+
 def test_main_window_toolbar_hidden_on_welcome(qapp):
     """Fresh window (welcome screen) must have toolbar explicitly hidden."""
     from hydra_suite.detectkit.gui.main_window import DetectKitMainWindow
@@ -109,6 +113,7 @@ def test_dialogs_init_exports(qapp):
     assert hasattr(dialogs, "TrainingDialog")
     assert hasattr(dialogs, "EvaluationDialog")
     assert hasattr(dialogs, "HistoryDialog")
+    assert hasattr(dialogs, "ActiveLearningDialog")
 
 
 def test_load_project_populates_model_selector_from_history(qapp, main_win, tmp_path):

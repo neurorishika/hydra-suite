@@ -599,3 +599,68 @@ def test_score_frame_prioritizes_split_detections_over_clean_overcount():
 
     assert split_score > clean_overcount_score
     assert "fragmented_detections" in scorer.frame_scores[0]["metrics"]
+
+
+def test_frame_quality_scorer_uses_tracker_default_preset_after_refactor():
+    """After refactor, scorer routes through data/al/acquisition with tracker_default."""
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "REFERENCE_BODY_SIZE": 20.0,
+        "METRIC_LOW_CONFIDENCE": True,
+        "METRIC_COUNT_MISMATCH": True,
+        "METRIC_HIGH_ASSIGNMENT_COST": True,
+        "METRIC_TRACK_LOSS": True,
+        "METRIC_HIGH_UNCERTAINTY": False,
+        "METRIC_FRAGMENTED_DETECTIONS": False,
+    }
+    scorer = FrameQualityScorer(params)
+
+    scorer.score_frame(
+        0,
+        detection_data={"confidences": [0.9, 0.9, 0.9, 0.9], "count": 4},
+        tracking_data={"lost_tracks": 0},
+    )
+    scorer.score_frame(
+        100,
+        detection_data={"confidences": [0.2, 0.3], "count": 2},
+        tracking_data={
+            "lost_tracks": 2,
+            "assignment_confidences": [0.3, 0.3],
+        },
+    )
+
+    picks = scorer.get_worst_frames(
+        max_frames=1, diversity_window=0, probabilistic=False
+    )
+    assert picks == [100]
+
+
+def test_frame_quality_scorer_honors_dataset_al_preset_param():
+    """Custom DATASET_AL_PRESET param swaps the weight preset."""
+    from hydra_suite.data.al.acquisition import PRESETS
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "DATASET_AL_PRESET": "uncertainty_heavy",
+        "REFERENCE_BODY_SIZE": 20.0,
+    }
+    scorer = FrameQualityScorer(params)
+    expected = PRESETS["uncertainty_heavy"]
+    # uncertainty channel should match the preset's uncertainty weight
+    # (only enabled-channel weights flow through; uncertainty is enabled by default).
+    assert scorer._weights.uncertainty == expected.uncertainty
+
+
+def test_frame_quality_scorer_unknown_preset_falls_back_to_tracker_default():
+    from hydra_suite.data.al.acquisition import PRESETS
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    params = {"MAX_TARGETS": 4, "DATASET_AL_PRESET": "no_such_preset"}
+    scorer = FrameQualityScorer(params)
+    expected = PRESETS["tracker_default"]
+    assert scorer._weights.uncertainty == expected.uncertainty

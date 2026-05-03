@@ -12,33 +12,148 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from hydra_suite.utils.geometry import clamp01 as _clamp01
+from hydra_suite.utils.geometry import (
+    obb_corners_from_dims as _detection_corners_from_dims,
+)
+from hydra_suite.utils.geometry import polygon_overlap_ratio as _polygon_overlap_ratio
+
 logger = logging.getLogger(__name__)
 
 
 class FrameQualityScorer:
-    """
-    Scores frames based on various quality metrics to identify
-    challenging frames that would benefit from additional training data.
+    """Tracker-side adapter that produces ALSignals and selects worst frames.
+
+    Public API (`score_frame`, `get_worst_frames`) is preserved for callers; the
+    underlying ranking now lives in `hydra_suite.data.al.acquisition`.
     """
 
     def __init__(self, params):
+        from hydra_suite.data.al.acquisition import PRESETS, AcquisitionWeights
+
         self.params = params
-        self.frame_scores = defaultdict(lambda: {"score": 0.0, "metrics": {}})
+        self.frame_signals: dict = {}
         self.max_targets = params.get("MAX_TARGETS", 4)
         self.conf_threshold = params.get("DATASET_CONF_THRESHOLD", 0.5)
-
-        # Enabled metrics
-        self.use_confidence = params.get("METRIC_LOW_CONFIDENCE", True)
-        self.use_count_mismatch = params.get("METRIC_COUNT_MISMATCH", True)
-        self.use_assignment_cost = params.get("METRIC_HIGH_ASSIGNMENT_COST", True)
-        self.use_track_loss = params.get("METRIC_TRACK_LOSS", True)
-        self.use_uncertainty = params.get("METRIC_HIGH_UNCERTAINTY", False)
-        self.use_fragmented_detections = params.get(
-            "METRIC_FRAGMENTED_DETECTIONS", True
-        )
         self.reference_body_size = max(
             float(params.get("REFERENCE_BODY_SIZE", 20.0)), 1.0
         )
+
+        # Public legacy boolean flags (kept for backward compat).
+        self.use_confidence = bool(params.get("METRIC_LOW_CONFIDENCE", True))
+        self.use_count_mismatch = bool(params.get("METRIC_COUNT_MISMATCH", True))
+        self.use_assignment_cost = bool(params.get("METRIC_HIGH_ASSIGNMENT_COST", True))
+        self.use_track_loss = bool(params.get("METRIC_TRACK_LOSS", True))
+        self.use_uncertainty = bool(params.get("METRIC_HIGH_UNCERTAINTY", False))
+        self.use_fragmented_detections = bool(
+            params.get("METRIC_FRAGMENTED_DETECTIONS", True)
+        )
+
+        self._enabled = {
+            "uncertainty": self.use_confidence,
+            "count": self.use_count_mismatch,
+            "assignment": self.use_assignment_cost,
+            "track_loss": self.use_track_loss,
+            "position_uncertainty": self.use_uncertainty,
+            "crowd": self.use_fragmented_detections,
+        }
+
+        preset_name = params.get("DATASET_AL_PRESET", "tracker_default")
+        base = PRESETS.get(preset_name, PRESETS["tracker_default"])
+        self._weights = AcquisitionWeights(
+            uncertainty=base.uncertainty if self._enabled["uncertainty"] else 0.0,
+            nms_instability=0.0,
+            count=base.count if self._enabled["count"] else 0.0,
+            crowd=base.crowd if self._enabled["crowd"] else 0.0,
+            edge=base.edge,
+            assignment=base.assignment if self._enabled["assignment"] else 0.0,
+            track_loss=base.track_loss if self._enabled["track_loss"] else 0.0,
+            position_uncertainty=(
+                base.position_uncertainty
+                if self._enabled["position_uncertainty"]
+                else 0.0
+            ),
+        )
+
+        # Backward-compat scalar map for legacy callers.
+        self.frame_scores = defaultdict(lambda: {"score": 0.0, "metrics": {}})
+
+    def score_frame(self, frame_id, detection_data=None, tracking_data=None):
+        from hydra_suite.data.al.signals import (
+            ALSignals,
+            score_count_deviation,
+            score_crowd,
+            score_uncertainty,
+        )
+
+        detection_data = detection_data or {}
+        tracking_data = tracking_data or {}
+
+        # ------------------------------------------------------------------
+        # New pipeline: build ALSignals and store for get_worst_frames.
+        # ------------------------------------------------------------------
+        confidences = detection_data.get("confidences") or []
+        mean_conf, margin = score_uncertainty(
+            confidences, conf_floor=self.conf_threshold
+        )
+
+        n_dets = int(detection_data.get("count", len(confidences)))
+        count_dev = score_count_deviation(n_dets, self.max_targets)
+
+        obb_corners = self._extract_obb_corners(detection_data)
+        if obb_corners:
+            crowd, edge = score_crowd(obb_corners, frame_shape=(1, 1))
+        else:
+            crowd, edge = 0.0, 0.0
+
+        extras: dict[str, float] = {}
+        ac = tracking_data.get("assignment_confidences") or []
+        if ac:
+            extras["assignment"] = max(0.0, 1.0 - float(np.mean(ac)))
+        elif tracking_data.get("assignment_costs"):
+            costs = tracking_data["assignment_costs"]
+            extras["assignment"] = float(min(np.mean(costs) / 50.0, 1.0))
+
+        lost = int(tracking_data.get("lost_tracks", 0))
+        if lost > 0:
+            extras["track_loss"] = float(min(lost / max(self.max_targets, 1), 1.0))
+
+        unc = tracking_data.get("uncertainties") or []
+        if unc:
+            extras["position_uncertainty"] = float(min(np.mean(unc) / 50.0, 1.0))
+
+        signal = ALSignals(
+            frame_id=int(frame_id),
+            n_detections=n_dets,
+            mean_confidence=mean_conf,
+            margin=margin,
+            count_deviation=count_dev,
+            crowd_score=crowd,
+            edge_score=edge,
+            extras=extras,
+        )
+        self.frame_signals[int(frame_id)] = signal
+
+        # ------------------------------------------------------------------
+        # Legacy pipeline: compute scalar score + structured metrics dict
+        # so that frame_scores[fid]["score"] and frame_scores[fid]["metrics"]
+        # match the pre-refactor API that the tests verify.
+        # ------------------------------------------------------------------
+        metrics: dict = {}
+        legacy_score = 0.0
+        legacy_score += self._score_confidence(detection_data, metrics)
+        legacy_score += self._score_count_mismatch(detection_data, metrics)
+        legacy_score += self._score_assignment_cost(tracking_data, metrics)
+        legacy_score += self._score_track_loss(tracking_data, metrics)
+        legacy_score += self._score_uncertainty(tracking_data, metrics)
+        legacy_score += self._score_fragmented_detections(detection_data, metrics)
+
+        self.frame_scores[int(frame_id)] = {"score": legacy_score, "metrics": metrics}
+        return legacy_score
+
+    # ------------------------------------------------------------------
+    # Legacy per-metric scorers (restored for backward compat)
+    # ------------------------------------------------------------------
 
     def _score_confidence(self, detection_data, metrics):
         """Score based on low detection confidence. Returns weighted score."""
@@ -243,174 +358,31 @@ class FrameQualityScorer:
         }
         return fragmentation_score * 0.3
 
-    def score_frame(
-        self: object,
-        frame_id: object,
-        detection_data: object = None,
-        tracking_data: object = None,
-    ) -> object:
-        """
-        Score a single frame based on enabled quality metrics.
+    def get_worst_frames(self, max_frames, diversity_window=30, probabilistic=True):
+        from hydra_suite.data.al.acquisition import select
 
-        Args:
-            frame_id: Frame number
-            detection_data: Dict with detection information
-                - confidences: List of detection confidence scores
-                - count: Number of detections
-            tracking_data: Dict with tracking information
-                - assignment_costs: List of assignment costs
-                - lost_tracks: Number of lost tracks
-                - uncertainties: List of position uncertainties
-
-        Returns:
-            score: Higher score = more problematic frame (0.0 to 1.0+)
-        """
-        if detection_data is None:
-            detection_data = {}
-        if tracking_data is None:
-            tracking_data = {}
-
-        metrics = {}
-        score = (
-            self._score_confidence(detection_data, metrics)
-            + self._score_count_mismatch(detection_data, metrics)
-            + self._score_fragmented_detections(detection_data, metrics)
-            + self._score_assignment_cost(tracking_data, metrics)
-            + self._score_track_loss(tracking_data, metrics)
-            + self._score_uncertainty(tracking_data, metrics)
+        signals = list(self.frame_signals.values())
+        rng = np.random.default_rng() if probabilistic else None
+        return select(
+            signals,
+            weights=self._weights,
+            k=int(max_frames),
+            diversity_window=int(diversity_window),
+            probabilistic=bool(probabilistic),
+            rng=rng,
+            min_score=float(self.params.get("DATASET_MIN_SELECTION_SCORE", 0.0)),
         )
 
-        self.frame_scores[frame_id] = {"score": score, "metrics": metrics}
-        return score
-
-    def get_worst_frames(
-        self: object,
-        max_frames: object,
-        diversity_window: object = 30,
-        probabilistic: object = True,
-    ) -> object:
-        """
-        Select the worst N frames with visual diversity constraint.
-
-        Args:
-            max_frames: Maximum number of frames to select
-            diversity_window: Minimum frame separation to ensure diversity
-            probabilistic: If True, use rank-based probabilistic sampling.
-                          If False, use greedy selection (worst frames first).
-
-        Returns:
-            selected_frames: List of frame IDs sorted by score (worst first)
-        """
-        if not self.frame_scores:
-            return []
-
-        # Sort frames by score (descending)
-        sorted_frames = sorted(
-            self.frame_scores.items(), key=lambda x: x[1]["score"], reverse=True
-        )
-
-        if probabilistic:
-            # Rank-based weighted sampling for better variety
-            # Higher rank (worse frame) = higher probability
-            candidates = sorted_frames.copy()
-            selected = []
-
-            while len(selected) < max_frames and candidates:
-                # Calculate rank-based weights for remaining candidates
-                # weight = 1 / (rank + 1), normalized
-                weights = np.array([1.0 / (i + 1) for i in range(len(candidates))])
-                weights = weights / weights.sum()  # Normalize to probabilities
-
-                # Sample one frame
-                idx = np.random.choice(len(candidates), p=weights)
-                frame_id, data = candidates[idx]
-
-                # Check diversity constraint
-                if all(abs(frame_id - sel) >= diversity_window for sel in selected):
-                    selected.append(frame_id)
-
-                # Remove this candidate (and nearby frames to speed up)
-                # Remove frames within diversity_window to avoid checking them repeatedly
-                candidates = [
-                    (fid, fdata)
-                    for fid, fdata in candidates
-                    if abs(fid - frame_id) >= diversity_window
-                ]
-
-            logger.info(
-                f"Probabilistically selected {len(selected)} frames out of {len(sorted_frames)} "
-                f"with diversity window of {diversity_window} frames"
-            )
-        else:
-            # Greedy selection: take worst frames first
-            selected = []
-            for frame_id, data in sorted_frames:
-                if len(selected) >= max_frames:
-                    break
-
-                # Check if this frame is far enough from already selected frames
-                if all(abs(frame_id - sel) >= diversity_window for sel in selected):
-                    selected.append(frame_id)
-
-            logger.info(
-                f"Greedily selected {len(selected)} frames out of {len(sorted_frames)} "
-                f"with diversity window of {diversity_window} frames"
-            )
-
-        return selected
-
-
-def _clamp01(value):
-    """Clamp a scalar to the inclusive range [0, 1]."""
-    return float(max(0.0, min(1.0, value)))
-
-
-def _detection_corners_from_dims(cx, cy, width, height, theta):
-    """Return pixel-space oriented-box corners for a detection."""
-    cos_theta = np.cos(theta)
-    sin_theta = np.sin(theta)
-    half_width = width / 2.0
-    half_height = height / 2.0
-    corners_local = np.array(
-        [
-            [-half_width, -half_height],
-            [half_width, -half_height],
-            [half_width, half_height],
-            [-half_width, half_height],
-        ],
-        dtype=np.float32,
-    )
-    rotation = np.array(
-        [[cos_theta, -sin_theta], [sin_theta, cos_theta]],
-        dtype=np.float32,
-    )
-    return corners_local @ rotation.T + np.array([cx, cy], dtype=np.float32)
-
-
-def _polygon_overlap_ratio(corners_a, corners_b):
-    """Return overlap area divided by the smaller polygon area."""
-    if corners_a is None or corners_b is None:
-        return 0.0
-
-    poly_a = np.asarray(corners_a, dtype=np.float32).reshape(-1, 1, 2)
-    poly_b = np.asarray(corners_b, dtype=np.float32).reshape(-1, 1, 2)
-    if len(poly_a) < 3 or len(poly_b) < 3:
-        return 0.0
-
-    area_a = abs(float(cv2.contourArea(poly_a)))
-    area_b = abs(float(cv2.contourArea(poly_b)))
-    if area_a <= 0.0 or area_b <= 0.0:
-        return 0.0
-
-    try:
-        intersection_area, _ = cv2.intersectConvexConvex(poly_a, poly_b)
-    except cv2.error:
-        return 0.0
-
-    if intersection_area <= 0.0:
-        return 0.0
-
-    return _clamp01(float(intersection_area) / max(min(area_a, area_b), 1e-6))
+    def _extract_obb_corners(self, detection_data):
+        corners = detection_data.get("obb_corners") or []
+        out: list[np.ndarray] = []
+        for c in corners:
+            if c is None:
+                continue
+            arr = np.asarray(c, dtype=np.float32).reshape(-1, 2)
+            if arr.shape[0] >= 3:
+                out.append(arr)
+        return out
 
 
 def _make_dataset_dir(output_dir, dataset_name):

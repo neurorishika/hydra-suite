@@ -577,6 +577,10 @@ class DetectKitMainWindow(QMainWindow):
         act_history.triggered.connect(self._open_history_dialog)
         tb.addAction(act_history)
 
+        al_action = QAction("Active Learning", self)
+        al_action.triggered.connect(self._open_active_learning_dialog)
+        tb.addAction(al_action)
+
         tb.addSeparator()
 
         act_export = QAction("Export", self)
@@ -1172,6 +1176,89 @@ class DetectKitMainWindow(QMainWindow):
                 detectkit_project_preview_model_paths(self._project)
             )
             self._refresh_prediction_overlay(force=True)
+
+    def _open_active_learning_dialog(self) -> None:
+        if self._project is None:
+            return
+        from .dialogs.active_learning import ActiveLearningDialog
+
+        dlg = ActiveLearningDialog(project=self._project, parent=self)
+        dlg.set_run_handler(lambda: self._start_al_round(dlg))
+        dlg.finished.connect(lambda *_: self._cancel_al_round())
+        dlg.open()
+
+    def _start_al_round(self, dlg) -> None:
+        from hydra_suite.detectkit.jobs.al_worker import ALRequest, ALWorker
+
+        try:
+            detector_fn = self._load_active_detector_fn()
+            request = ALRequest(
+                input_kind=(
+                    "video"
+                    if dlg.rb_video.isChecked()
+                    else "folder" if dlg.rb_folder.isChecked() else "project"
+                ),
+                input_path=dlg.input_path_edit.text(),
+                project=self._project,
+                budget=dlg.budget_spin.value(),
+                preset=dlg.preset_combo.currentText(),
+                expected_count=dlg.expected_count_spin.value(),
+                detector_fn=detector_fn,
+            )
+        except NotImplementedError as exc:
+            dlg.status_label.setText(f"Error: {exc}")
+            return
+        except Exception as exc:
+            dlg.status_label.setText(f"Error: {exc}")
+            return
+
+        worker = ALWorker(request)
+        worker.progress.connect(dlg.progress.setValue)
+        worker.status.connect(dlg.status_label.setText)
+        worker.result_ready.connect(
+            lambda path, n, _ids: dlg.status_label.setText(
+                f"Imported {n} frames -> {path}"
+            )
+        )
+        worker.error.connect(lambda msg: dlg.status_label.setText(f"Error: {msg}"))
+        worker.start()
+        self._al_worker = worker
+
+    def _cancel_al_round(self) -> None:
+        worker = getattr(self, "_al_worker", None)
+        if worker is not None:
+            worker.requestInterruption()
+
+    def _load_active_detector_fn(self):
+        """Return a detector_fn(frame, conf, iou) -> list[(cx,cy,w,h,theta,conf)].
+
+        Loads the project's active model via the same torch loader used by
+        `_run_inference_overlay` and adapts the result to the OBB-tuple format
+        required by `hydra_suite.data.al`.
+        """
+        if self._project is None:
+            raise RuntimeError("No project loaded.")
+        model_path = str(self._project.active_model_path or "").strip()
+        if not model_path:
+            raise RuntimeError(
+                "No active model selected. Set one via Run History or after a training run."
+            )
+        if not detectkit_model_path_is_previewable(self._project, model_path):
+            raise RuntimeError(
+                "Selected model does not support direct inference. "
+                "Train or load a YOLO OBB model and try again."
+            )
+
+        from .prediction_preview import load_torch_model, predict_obb_for_frame
+
+        model, device = load_torch_model(model_path, self._project.device or "auto")
+
+        def _detector_fn(frame, conf, iou):
+            return predict_obb_for_frame(
+                model, frame, device=device, conf=conf, iou=iou
+            )
+
+        return _detector_fn
 
     def _on_training_completed(self, results: list) -> None:
         if self._project is None:
