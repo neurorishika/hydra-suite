@@ -28,6 +28,7 @@ from hydra_suite.data.al.signals import (
     score_uncertainty,
 )
 from hydra_suite.detectkit.gui.models import DetectKitProject, OBBSource
+from hydra_suite.utils.geometry import obb_corners_from_dims as _detection_corners
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -72,21 +73,6 @@ def _build_frame_source(req: ALRequest) -> FrameSource:
     if req.input_kind == "project":
         return DetectKitProjectSource(req.project, only_unlabeled=True)
     raise ValueError(f"unknown input_kind: {req.input_kind}")
-
-
-def _detection_corners(cx, cy, ww, hh, theta) -> np.ndarray:
-    cos_t, sin_t = np.cos(theta), np.sin(theta)
-    local = np.array(
-        [
-            [-ww / 2, -hh / 2],
-            [ww / 2, -hh / 2],
-            [ww / 2, hh / 2],
-            [-ww / 2, hh / 2],
-        ],
-        dtype=np.float32,
-    )
-    rot = np.array([[cos_t, -sin_t], [sin_t, cos_t]], dtype=np.float32)
-    return local @ rot.T + np.array([cx, cy], dtype=np.float32)
 
 
 def _frame_signals(

@@ -210,3 +210,64 @@ def filter_keypoints_by_foreign_obbs(
             continue
 
     return arr
+
+
+# ---------------------------------------------------------------------------
+# OBB rotation helpers (shared across data and detectkit layers)
+# ---------------------------------------------------------------------------
+
+
+def clamp01(value: float) -> float:
+    """Clamp a scalar to the inclusive range [0, 1]."""
+    return float(max(0.0, min(1.0, value)))
+
+
+def obb_corners_from_dims(cx, cy, w, h, theta) -> np.ndarray:
+    """Return pixel-space oriented-box corners (4x2 array) for a detection.
+
+    Corners are ordered top-left, top-right, bottom-right, bottom-left in the
+    rotated frame.
+    """
+    cos_t = float(np.cos(theta))
+    sin_t = float(np.sin(theta))
+    half_w = float(w) / 2.0
+    half_h = float(h) / 2.0
+    local = np.array(
+        [
+            [-half_w, -half_h],
+            [half_w, -half_h],
+            [half_w, half_h],
+            [-half_w, half_h],
+        ],
+        dtype=np.float32,
+    )
+    rotation = np.array(
+        [[cos_t, -sin_t], [sin_t, cos_t]],
+        dtype=np.float32,
+    )
+    return local @ rotation.T + np.array([float(cx), float(cy)], dtype=np.float32)
+
+
+def polygon_overlap_ratio(corners_a, corners_b) -> float:
+    """Intersection area divided by the smaller polygon area, clipped to [0, 1].
+
+    Both inputs are interpreted as 4x2 (or Nx2) corner arrays in pixel space.
+    Returns 0.0 when either polygon is degenerate or non-overlapping.
+    """
+    import cv2
+
+    poly_a = np.asarray(corners_a, dtype=np.float32).reshape(-1, 1, 2)
+    poly_b = np.asarray(corners_b, dtype=np.float32).reshape(-1, 1, 2)
+    if len(poly_a) < 3 or len(poly_b) < 3:
+        return 0.0
+    area_a = abs(float(cv2.contourArea(poly_a)))
+    area_b = abs(float(cv2.contourArea(poly_b)))
+    if area_a <= 0.0 or area_b <= 0.0:
+        return 0.0
+    try:
+        inter, _ = cv2.intersectConvexConvex(poly_a, poly_b)
+    except cv2.error:
+        return 0.0
+    if inter <= 0.0:
+        return 0.0
+    return clamp01(float(inter) / max(min(area_a, area_b), 1e-6))

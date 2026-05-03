@@ -12,48 +12,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from hydra_suite.utils.geometry import clamp01 as _clamp01
+from hydra_suite.utils.geometry import (
+    obb_corners_from_dims as _detection_corners_from_dims,
+)
+from hydra_suite.utils.geometry import polygon_overlap_ratio as _polygon_overlap_ratio
+
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Module-private geometry helpers (used by legacy _score_fragmented_detections)
-# ---------------------------------------------------------------------------
-
-
-def _clamp01(v: float) -> float:
-    """Clamp *v* to [0, 1]."""
-    return float(max(0.0, min(1.0, v)))
-
-
-def _detection_corners_from_dims(
-    cx: float, cy: float, width: float, height: float, theta: float
-) -> "np.ndarray":
-    """Return (4, 2) float32 OBB corners given centre, axes, and heading."""
-    cos_t = float(np.cos(theta))
-    sin_t = float(np.sin(theta))
-    hw, hh = width / 2.0, height / 2.0
-    local = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], dtype=np.float32)
-    rot = np.array([[cos_t, -sin_t], [sin_t, cos_t]], dtype=np.float32)
-    return (local @ rot.T + np.array([cx, cy], dtype=np.float32)).astype(np.float32)
-
-
-def _polygon_overlap_ratio(corners_a: "np.ndarray", corners_b: "np.ndarray") -> float:
-    """Intersection area / smaller polygon area, clipped to [0, 1]."""
-    poly_a = np.asarray(corners_a, dtype=np.float32).reshape(-1, 1, 2)
-    poly_b = np.asarray(corners_b, dtype=np.float32).reshape(-1, 1, 2)
-    if len(poly_a) < 3 or len(poly_b) < 3:
-        return 0.0
-    area_a = abs(float(cv2.contourArea(poly_a)))
-    area_b = abs(float(cv2.contourArea(poly_b)))
-    if area_a <= 0.0 or area_b <= 0.0:
-        return 0.0
-    try:
-        inter, _ = cv2.intersectConvexConvex(poly_a, poly_b)
-    except cv2.error:
-        return 0.0
-    if inter <= 0.0:
-        return 0.0
-    return float(max(0.0, min(1.0, inter / max(min(area_a, area_b), 1e-6))))
 
 
 class FrameQualityScorer:

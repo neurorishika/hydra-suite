@@ -7,8 +7,11 @@ from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Callable, Sequence
 
-import cv2
 import numpy as np
+
+from hydra_suite.utils.geometry import (  # noqa: F401
+    polygon_overlap_ratio as _polygon_overlap_ratio,
+)
 
 
 @dataclass
@@ -49,25 +52,6 @@ def score_count_deviation(n: int, expected: int) -> float:
     if expected <= 0:
         return 0.0
     return float(min(1.0, abs(n - expected) / float(expected)))
-
-
-def _polygon_overlap_ratio(corners_a: np.ndarray, corners_b: np.ndarray) -> float:
-    """Intersection area divided by smaller polygon area, clipped to [0, 1]."""
-    poly_a = np.asarray(corners_a, dtype=np.float32).reshape(-1, 1, 2)
-    poly_b = np.asarray(corners_b, dtype=np.float32).reshape(-1, 1, 2)
-    if len(poly_a) < 3 or len(poly_b) < 3:
-        return 0.0
-    area_a = abs(float(cv2.contourArea(poly_a)))
-    area_b = abs(float(cv2.contourArea(poly_b)))
-    if area_a <= 0.0 or area_b <= 0.0:
-        return 0.0
-    try:
-        inter, _ = cv2.intersectConvexConvex(poly_a, poly_b)
-    except cv2.error:
-        return 0.0
-    if inter <= 0.0:
-        return 0.0
-    return float(max(0.0, min(1.0, inter / max(min(area_a, area_b), 1e-6))))
 
 
 def score_crowd(
