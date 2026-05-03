@@ -2924,6 +2924,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.set_identity_section_visible" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;set_identity_section_visible
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.sync_directed_orient_posthoc_ui" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;sync_directed_orient_posthoc_ui
@@ -4643,6 +4652,15 @@
   <a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.apply_config" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;apply_config
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.set_identity_section_visible" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;set_identity_section_visible
     </span>
   </a>
   
@@ -7700,6 +7718,28 @@
     <div class="doc doc-contents ">
 
         <p>Update panel widgets to reflect a new config object.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.set_identity_section_visible" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <code class="highlight language-python"><span class="n">set_identity_section_visible</span><span class="p">(</span><span class="n">visible</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.trackerkit.gui.panels.tracking_panel.TrackingPanel.set_identity_section_visible" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Hide the entire identity-decoder collapsible.</p>
+<p>Called from the session orchestrator's individual-analysis-mode sync
+whenever identity classification is toggled in the Analyse Individuals
+panel. When identity classification is OFF the entire decoder section
+is irrelevant — hide it rather than leaving disabled controls on
+screen.</p>
 
     </div>
 
