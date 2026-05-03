@@ -577,6 +577,10 @@ class DetectKitMainWindow(QMainWindow):
         act_history.triggered.connect(self._open_history_dialog)
         tb.addAction(act_history)
 
+        al_action = QAction("Active Learning", self)
+        al_action.triggered.connect(self._open_active_learning_dialog)
+        tb.addAction(al_action)
+
         tb.addSeparator()
 
         act_export = QAction("Export", self)
@@ -1172,6 +1176,66 @@ class DetectKitMainWindow(QMainWindow):
                 detectkit_project_preview_model_paths(self._project)
             )
             self._refresh_prediction_overlay(force=True)
+
+    def _open_active_learning_dialog(self) -> None:
+        if self._project is None:
+            return
+        from .dialogs.active_learning import ActiveLearningDialog
+
+        dlg = ActiveLearningDialog(project=self._project, parent=self)
+        dlg.set_run_handler(lambda: self._start_al_round(dlg))
+        dlg.set_cancel_handler(lambda: self._cancel_al_round())
+        dlg.open()
+
+    def _start_al_round(self, dlg) -> None:
+        from hydra_suite.detectkit.jobs.al_worker import ALRequest, ALWorker
+
+        request = ALRequest(
+            input_kind=(
+                "video"
+                if dlg.rb_video.isChecked()
+                else "folder" if dlg.rb_folder.isChecked() else "project"
+            ),
+            input_path=dlg.input_path_edit.text(),
+            project=self._project,
+            budget=dlg.budget_spin.value(),
+            preset=dlg.preset_combo.currentText(),
+            expected_count=dlg.expected_count_spin.value(),
+            detector_fn=self._load_active_detector_fn(),
+        )
+        worker = ALWorker(request)
+        worker.progress_signal.connect(
+            lambda p, s: (dlg.progress.setValue(p), dlg.status_label.setText(s))
+        )
+        worker.finished_signal.connect(
+            lambda path, n, _ids: dlg.status_label.setText(
+                f"Imported {n} frames -> {path}"
+            )
+        )
+        worker.error_signal.connect(
+            lambda msg: dlg.status_label.setText(f"Error: {msg}")
+        )
+        worker.start()
+        self._al_worker = worker
+
+    def _cancel_al_round(self) -> None:
+        worker = getattr(self, "_al_worker", None)
+        if worker is not None:
+            worker.requestInterruption()
+
+    def _load_active_detector_fn(self):
+        """Return a detector_fn(frame, conf, iou) -> list of tuples.
+
+        NOTE: extraction of the in-process model loader from main_window's existing
+        dataset-prediction code (around line 1237 onward in this file) is a
+        documented follow-up. Until that helper exists, raise NotImplementedError
+        to surface the gap loudly when a user actually clicks Run.
+        """
+        raise NotImplementedError(
+            "Active-learning detector loading is not yet wired. "
+            "Extract the model loader from main_window._run_dataset_prediction "
+            "into a reusable helper, then call it here."
+        )
 
     def _on_training_completed(self, results: list) -> None:
         if self._project is None:
