@@ -47,6 +47,15 @@ from hydra_suite.trackerkit.gui.model_utils import (
     register_yolo_model,
     remove_model_from_repository,
 )
+from hydra_suite.trackerkit.gui.panels.tracking_panel import (
+    DENSITY_BINARIZE_THRESHOLD_CONST,
+    DENSITY_DOWNSAMPLE_FACTOR_CONST,
+    DENSITY_GAUSSIAN_SIGMA_SCALE_CONST,
+    KALMAN_ANISOTROPY_RATIO_CONST,
+    POSE_REJECTION_MIN_VISIBILITY_CONST,
+    POSE_REJECTION_THRESHOLD_CONST,
+    SOLVER_AUTOPICK_GREEDY_THRESHOLD,
+)
 
 if TYPE_CHECKING:
     pass
@@ -54,6 +63,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "tracking_config.json"
+
+
+def _autopick_greedy(n_targets: int) -> bool:
+    """Auto-pick greedy + spatial solver above the configured animal count."""
+    return int(n_targets) >= SOLVER_AUTOPICK_GREEDY_THRESHOLD
+
+
+def _resolve_solver_flags(tracking_panel, n_targets: int) -> tuple[bool, bool]:
+    """Resolve (greedy, spatial) flags: saved override wins over auto-pick."""
+    auto = _autopick_greedy(n_targets)
+    greedy = (
+        tracking_panel._enable_greedy_override
+        if tracking_panel._enable_greedy_override is not None
+        else auto
+    )
+    spatial = (
+        tracking_panel._enable_spatial_override
+        if tracking_panel._enable_spatial_override is not None
+        else auto
+    )
+    return bool(greedy), bool(spatial)
 
 
 def _get_video_config_path(video_path: str):
@@ -543,8 +573,15 @@ class ConfigOrchestrator:
         self._panels.tracking.spin_kalman_longitudinal_noise.setValue(
             get_cfg("kalman_longitudinal_noise_multiplier", default=5.0)
         )
-        self._panels.tracking.spin_kalman_lateral_noise.setValue(
-            get_cfg("kalman_lateral_noise_multiplier", default=0.1)
+        # Hidden expert knob: stored on the panel without a UI widget so old
+        # presets continue to override the default lateral noise.
+        self._panels.tracking._kalman_lateral_noise_multiplier = float(
+            get_cfg(
+                "kalman_lateral_noise_multiplier",
+                "KALMAN_LATERAL_NOISE_MULTIPLIER",
+                default=self._panels.tracking.spin_kalman_longitudinal_noise.value()
+                / KALMAN_ANISOTROPY_RATIO_CONST,
+            )
         )
         self._panels.tracking.spin_Wp.setValue(
             get_cfg("weight_position", "W_POSITION", default=1.0)
@@ -561,11 +598,15 @@ class ConfigOrchestrator:
         self._panels.tracking.chk_use_mahal.setChecked(
             get_cfg("use_mahalanobis_distance", "USE_MAHALANOBIS", default=True)
         )
-        self._panels.tracking.combo_assignment_method.setCurrentIndex(
-            1 if get_cfg("enable_greedy_assignment", default=False) else 0
+        # Solver flags: hidden from UI but respect saved values when present;
+        # otherwise auto-pick at runtime from the configured animal count.
+        _saved_greedy = get_cfg("enable_greedy_assignment", default=None)
+        _saved_spatial = get_cfg("enable_spatial_optimization", default=None)
+        self._panels.tracking._enable_greedy_override = (
+            None if _saved_greedy is None else bool(_saved_greedy)
         )
-        self._panels.tracking.chk_spatial_optimization.setChecked(
-            get_cfg("enable_spatial_optimization", default=False)
+        self._panels.tracking._enable_spatial_override = (
+            None if _saved_spatial is None else bool(_saved_spatial)
         )
         self._panels.tracking.spin_assoc_gate_multiplier.setValue(
             get_cfg(
@@ -595,18 +636,20 @@ class ConfigOrchestrator:
                 default=True,
             )
         )
-        self._panels.tracking.spin_pose_rejection_threshold.setValue(
+        # Hidden expert knobs: stored on the panel without a UI widget so old
+        # presets keep their tuned pose-rejection thresholds.
+        self._panels.tracking._pose_rejection_threshold = float(
             get_cfg(
                 "pose_rejection_threshold",
                 "POSE_REJECTION_THRESHOLD",
-                default=0.5,
+                default=POSE_REJECTION_THRESHOLD_CONST,
             )
         )
-        self._panels.tracking.spin_pose_rejection_min_visibility.setValue(
+        self._panels.tracking._pose_rejection_min_visibility = float(
             get_cfg(
                 "pose_rejection_min_visibility",
                 "POSE_REJECTION_MIN_VISIBILITY",
-                default=0.5,
+                default=POSE_REJECTION_MIN_VISIBILITY_CONST,
             )
         )
         self._panels.tracking.spin_track_feature_ema_alpha.setValue(
@@ -658,7 +701,9 @@ class ConfigOrchestrator:
         self._panels.tracking.spin_min_respawn_distance.setValue(
             get_cfg("min_respawn_distance_multiplier", default=2.5)
         )
-        self._panels.tracking.spin_min_detections_to_start.setValue(
+        # Hidden expert knob: stored on the panel without a UI widget so old
+        # presets keep their tuned init-counter threshold.
+        self._panels.tracking._min_detections_to_start_seconds = float(
             get_cfg_time(
                 "min_detections_to_start_seconds",
                 "min_detections_to_start",
@@ -739,14 +784,26 @@ class ConfigOrchestrator:
         self._panels.tracking.chk_enable_confidence_density_map.setChecked(
             get_cfg("enable_confidence_density_map", default=True)
         )
-        self._panels.tracking.spin_density_gaussian_sigma_scale.setValue(
-            get_cfg("density_gaussian_sigma_scale", default=1.0)
+        # Hidden expert knobs: stored on the panel without a UI widget so old
+        # presets keep their tuned density-map low-level settings.
+        self._panels.tracking._density_gaussian_sigma_scale = float(
+            get_cfg(
+                "density_gaussian_sigma_scale",
+                default=DENSITY_GAUSSIAN_SIGMA_SCALE_CONST,
+            )
+        )
+        self._panels.tracking._density_binarize_threshold = float(
+            get_cfg(
+                "density_binarize_threshold", default=DENSITY_BINARIZE_THRESHOLD_CONST
+            )
+        )
+        self._panels.tracking._density_downsample_factor = int(
+            get_cfg(
+                "density_downsample_factor", default=DENSITY_DOWNSAMPLE_FACTOR_CONST
+            )
         )
         self._panels.tracking.spin_density_temporal_sigma.setValue(
             get_cfg("density_temporal_sigma", default=2.0)
-        )
-        self._panels.tracking.spin_density_binarize_threshold.setValue(
-            get_cfg("density_binarize_threshold", default=0.3)
         )
         self._panels.tracking.spin_density_conservative_factor.setValue(
             get_cfg("density_conservative_factor", default=0.7)
@@ -756,9 +813,6 @@ class ConfigOrchestrator:
         )
         self._panels.tracking.spin_density_min_area_bodies.setValue(
             float(get_cfg("density_min_area_bodies", default=0.25))
-        )
-        self._panels.tracking.spin_density_downsample_factor.setValue(
-            int(get_cfg("density_downsample_factor", default=8))
         )
         self._panels.tracking.chk_export_confidence_density_video.setChecked(
             get_cfg("export_confidence_density_video", default=False)
@@ -1607,7 +1661,7 @@ class ConfigOrchestrator:
                 "kalman_initial_velocity_retention": self._panels.tracking.spin_kalman_initial_velocity_retention.value(),
                 "kalman_max_velocity_multiplier": self._panels.tracking.spin_kalman_max_velocity.value(),
                 "kalman_longitudinal_noise_multiplier": self._panels.tracking.spin_kalman_longitudinal_noise.value(),
-                "kalman_lateral_noise_multiplier": self._panels.tracking.spin_kalman_lateral_noise.value(),
+                "kalman_lateral_noise_multiplier": self._panels.tracking._kalman_lateral_noise_multiplier,
                 # === COST FUNCTION WEIGHTS ===
                 "weight_position": self._panels.tracking.spin_Wp.value(),
                 "weight_orientation": self._panels.tracking.spin_Wo.value(),
@@ -1618,15 +1672,21 @@ class ConfigOrchestrator:
                 "pose_valid_orientation_scale": 0.15,
                 "use_mahalanobis_distance": self._panels.tracking.chk_use_mahal.isChecked(),
                 # === ASSIGNMENT ALGORITHM ===
-                "enable_greedy_assignment": self._panels.tracking.combo_assignment_method.currentIndex()
-                == 1,
-                "enable_spatial_optimization": self._panels.tracking.chk_spatial_optimization.isChecked(),
+                # Solver flags: respect saved override, else auto-pick from N animals.
+                "enable_greedy_assignment": _resolve_solver_flags(
+                    self._panels.tracking,
+                    self._panels.setup.spin_max_targets.value(),
+                )[0],
+                "enable_spatial_optimization": _resolve_solver_flags(
+                    self._panels.tracking,
+                    self._panels.setup.spin_max_targets.value(),
+                )[1],
                 "association_stage1_motion_gate_multiplier": self._panels.tracking.spin_assoc_gate_multiplier.value(),
                 "association_stage1_max_area_ratio": self._panels.tracking.spin_assoc_max_area_ratio.value(),
                 "association_stage1_max_aspect_diff": self._panels.tracking.spin_assoc_max_aspect_diff.value(),
                 "enable_pose_rejection": self._panels.tracking.chk_enable_pose_rejection.isChecked(),
-                "pose_rejection_threshold": self._panels.tracking.spin_pose_rejection_threshold.value(),
-                "pose_rejection_min_visibility": self._panels.tracking.spin_pose_rejection_min_visibility.value(),
+                "pose_rejection_threshold": self._panels.tracking._pose_rejection_threshold,
+                "pose_rejection_min_visibility": self._panels.tracking._pose_rejection_min_visibility,
                 "track_feature_ema_alpha": self._panels.tracking.spin_track_feature_ema_alpha.value(),
                 "association_high_confidence_threshold": self._panels.tracking.spin_assoc_high_conf_threshold.value(),
                 # === ORIENTATION & MOTION ===
@@ -1639,7 +1699,7 @@ class ConfigOrchestrator:
                 # === TRACK LIFECYCLE ===
                 "lost_threshold_seconds": self._panels.tracking.spin_lost_thresh.value(),
                 "min_respawn_distance_multiplier": self._panels.tracking.spin_min_respawn_distance.value(),
-                "min_detections_to_start_seconds": self._panels.tracking.spin_min_detections_to_start.value(),
+                "min_detections_to_start_seconds": self._panels.tracking._min_detections_to_start_seconds,
                 "min_detect_seconds": self._panels.tracking.spin_min_detect.value(),
                 "min_track_seconds": self._panels.tracking.spin_min_track.value(),
                 # === POST-PROCESSING ===
@@ -1656,13 +1716,13 @@ class ConfigOrchestrator:
                 "pose_postproc_max_gap": self._panels.postprocess.spin_pose_postproc_max_gap.value(),
                 "pose_temporal_outlier_zscore": self._panels.postprocess.spin_pose_temporal_outlier_zscore.value(),
                 "enable_confidence_density_map": self._panels.tracking.chk_enable_confidence_density_map.isChecked(),
-                "density_gaussian_sigma_scale": self._panels.tracking.spin_density_gaussian_sigma_scale.value(),
+                "density_gaussian_sigma_scale": self._panels.tracking._density_gaussian_sigma_scale,
                 "density_temporal_sigma": self._panels.tracking.spin_density_temporal_sigma.value(),
-                "density_binarize_threshold": self._panels.tracking.spin_density_binarize_threshold.value(),
+                "density_binarize_threshold": self._panels.tracking._density_binarize_threshold,
                 "density_conservative_factor": self._panels.tracking.spin_density_conservative_factor.value(),
                 "density_min_frame_duration": self._panels.tracking.spin_density_min_duration.value(),
                 "density_min_area_bodies": self._panels.tracking.spin_density_min_area_bodies.value(),
-                "density_downsample_factor": self._panels.tracking.spin_density_downsample_factor.value(),
+                "density_downsample_factor": self._panels.tracking._density_downsample_factor,
                 "export_confidence_density_video": self._panels.tracking.chk_export_confidence_density_video.isChecked(),
                 "max_velocity_zscore": self._panels.postprocess.spin_max_velocity_zscore.value(),
                 "velocity_zscore_window_seconds": self._panels.postprocess.spin_velocity_zscore_window.value(),
@@ -1978,7 +2038,7 @@ class ConfigOrchestrator:
             self._panels.detection.spin_bg_prime.value(), min_frames=0
         )
         min_detections_to_start = _seconds_to_frames(
-            self._panels.tracking.spin_min_detections_to_start.value()
+            self._panels.tracking._min_detections_to_start_seconds
         )
         min_detection_counts = _seconds_to_frames(
             self._panels.tracking.spin_min_detect.value()
@@ -2187,13 +2247,11 @@ class ConfigOrchestrator:
             "KALMAN_INITIAL_VELOCITY_RETENTION": self._panels.tracking.spin_kalman_initial_velocity_retention.value(),
             "KALMAN_MAX_VELOCITY_MULTIPLIER": self._panels.tracking.spin_kalman_max_velocity.value(),
             "KALMAN_LONGITUDINAL_NOISE_MULTIPLIER": self._panels.tracking.spin_kalman_longitudinal_noise.value(),
-            "KALMAN_LATERAL_NOISE_MULTIPLIER": self._panels.tracking.spin_kalman_lateral_noise.value(),
-            # Derived anisotropy ratio for the autotune domain banner.
-            # Lateral = Longitudinal / ratio, so ratio = long / lat (clamped ≥ 1).
+            "KALMAN_LATERAL_NOISE_MULTIPLIER": self._panels.tracking._kalman_lateral_noise_multiplier,
             "KALMAN_ANISOTROPY_RATIO": max(
                 1.0,
                 self._panels.tracking.spin_kalman_longitudinal_noise.value()
-                / max(self._panels.tracking.spin_kalman_lateral_noise.value(), 1e-6),
+                / max(self._panels.tracking._kalman_lateral_noise_multiplier, 1e-6),
             ),
             "RESIZE_FACTOR": self._panels.setup.spin_resize.value(),
             "ENABLE_CONSERVATIVE_SPLIT": self._panels.detection.chk_conservative_split.isChecked(),
@@ -2227,15 +2285,22 @@ class ConfigOrchestrator:
             "W_POSE_LENGTH": 0.0,
             "POSE_VALID_ORIENTATION_SCALE": 0.15,
             "USE_MAHALANOBIS": self._panels.tracking.chk_use_mahal.isChecked(),
-            "ENABLE_GREEDY_ASSIGNMENT": self._panels.tracking.combo_assignment_method.currentIndex()
-            == 1,
-            "ENABLE_SPATIAL_OPTIMIZATION": self._panels.tracking.chk_spatial_optimization.isChecked(),
+            # Solver flags: saved override wins; otherwise auto-pick from N animals
+            # (greedy + spatial above SOLVER_AUTOPICK_GREEDY_THRESHOLD; Hungarian below).
+            "ENABLE_GREEDY_ASSIGNMENT": _resolve_solver_flags(
+                self._panels.tracking,
+                self._panels.setup.spin_max_targets.value(),
+            )[0],
+            "ENABLE_SPATIAL_OPTIMIZATION": _resolve_solver_flags(
+                self._panels.tracking,
+                self._panels.setup.spin_max_targets.value(),
+            )[1],
             "ASSOCIATION_STAGE1_MOTION_GATE_MULTIPLIER": self._panels.tracking.spin_assoc_gate_multiplier.value(),
             "ASSOCIATION_STAGE1_MAX_AREA_RATIO": self._panels.tracking.spin_assoc_max_area_ratio.value(),
             "ASSOCIATION_STAGE1_MAX_ASPECT_DIFF": self._panels.tracking.spin_assoc_max_aspect_diff.value(),
             "ENABLE_POSE_REJECTION": self._panels.tracking.chk_enable_pose_rejection.isChecked(),
-            "POSE_REJECTION_THRESHOLD": self._panels.tracking.spin_pose_rejection_threshold.value(),
-            "POSE_REJECTION_MIN_VISIBILITY": self._panels.tracking.spin_pose_rejection_min_visibility.value(),
+            "POSE_REJECTION_THRESHOLD": self._panels.tracking._pose_rejection_threshold,
+            "POSE_REJECTION_MIN_VISIBILITY": self._panels.tracking._pose_rejection_min_visibility,
             "TRACK_FEATURE_EMA_ALPHA": self._panels.tracking.spin_track_feature_ema_alpha.value(),
             "ASSOCIATION_HIGH_CONFIDENCE_THRESHOLD": self._panels.tracking.spin_assoc_high_conf_threshold.value(),
             "TRAJECTORY_COLORS": colors,
@@ -2428,13 +2493,13 @@ class ConfigOrchestrator:
             "SUPPRESS_FOREIGN_OBB_ORIENTED_VIDEO": self._panels.dataset.chk_suppress_foreign_obb_oriented_videos.isChecked(),
             "INDIVIDUAL_DATASET_RUN_ID": self._mw._individual_dataset_run_id,
             "ENABLE_CONFIDENCE_DENSITY_MAP": self._panels.tracking.chk_enable_confidence_density_map.isChecked(),
-            "DENSITY_GAUSSIAN_SIGMA_SCALE": self._panels.tracking.spin_density_gaussian_sigma_scale.value(),
+            "DENSITY_GAUSSIAN_SIGMA_SCALE": self._panels.tracking._density_gaussian_sigma_scale,
             "DENSITY_TEMPORAL_SIGMA": self._panels.tracking.spin_density_temporal_sigma.value(),
-            "DENSITY_BINARIZE_THRESHOLD": self._panels.tracking.spin_density_binarize_threshold.value(),
+            "DENSITY_BINARIZE_THRESHOLD": self._panels.tracking._density_binarize_threshold,
             "DENSITY_CONSERVATIVE_FACTOR": self._panels.tracking.spin_density_conservative_factor.value(),
             "DENSITY_MIN_FRAME_DURATION": self._panels.tracking.spin_density_min_duration.value(),
             "DENSITY_MIN_AREA_BODIES": self._panels.tracking.spin_density_min_area_bodies.value(),
-            "DENSITY_DOWNSAMPLE_FACTOR": self._panels.tracking.spin_density_downsample_factor.value(),
+            "DENSITY_DOWNSAMPLE_FACTOR": self._panels.tracking._density_downsample_factor,
             "EXPORT_CONFIDENCE_DENSITY_VIDEO": self._panels.tracking.chk_export_confidence_density_video.isChecked(),
             "ENABLE_PROFILING": self._panels.setup.chk_enable_profiling.isChecked(),
         }

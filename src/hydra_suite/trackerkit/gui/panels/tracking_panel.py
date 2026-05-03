@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,6 +28,35 @@ if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
 
+# ─── Hardcoded defaults for parameters formerly exposed in the GUI ──────────
+# These were never tuned by the parameter optimizer or in practice. They are
+# baked in so the panel stays compact; saved-config keys still flow through
+# the runtime params dict so external tests/configs continue to work.
+
+# Kalman lateral noise is auto-derived from longitudinal × anisotropy ratio.
+# Ratio matches the previous default (5.0 / 0.1 = 50) and is treated as a
+# biological constant for body-axis-aligned motion.
+KALMAN_ANISOTROPY_RATIO_CONST = 50.0
+
+# Pose-rejection knobs: never appeared in the optimizer; defaults are universal.
+POSE_REJECTION_THRESHOLD_CONST = 0.5
+POSE_REJECTION_MIN_VISIBILITY_CONST = 0.5
+
+# Density-map low-level knobs: scale-/dimension-independent defaults.
+DENSITY_GAUSSIAN_SIGMA_SCALE_CONST = 1.0
+DENSITY_BINARIZE_THRESHOLD_CONST = 0.3
+DENSITY_DOWNSAMPLE_FACTOR_CONST = 8
+
+# Solver auto-pick threshold: above this many tracked animals, switch to
+# greedy + spatial indexing for speed; below it Hungarian is strictly better.
+SOLVER_AUTOPICK_GREEDY_THRESHOLD = 50
+
+# Min-detections-to-start: previously an FPS-coupled spinbox that was
+# inadvertently used as a per-frame detection-count threshold. 1 restores
+# the documented behaviour ("any frame with ≥1 detection counts toward init").
+MIN_DETECTIONS_TO_START_CONST = 1
+
+
 class TrackingPanel(QWidget):
     """Kalman filter parameters, identity assignment, and backward pass controls."""
 
@@ -42,8 +71,32 @@ class TrackingPanel(QWidget):
         super().__init__(parent)
         self._main_window = main_window
         self._config = config
+
+        # Hidden/expert parameters: no UI control, but values still flow
+        # through saved configs so existing presets keep working unchanged.
+        # Defaults match the previous GUI defaults; the orchestrator
+        # overwrites these from disk during config load.
+        self._kalman_lateral_noise_multiplier = (
+            self._kalman_longitudinal_default_for_init() / KALMAN_ANISOTROPY_RATIO_CONST
+        )
+        self._pose_rejection_threshold = POSE_REJECTION_THRESHOLD_CONST
+        self._pose_rejection_min_visibility = POSE_REJECTION_MIN_VISIBILITY_CONST
+        self._density_gaussian_sigma_scale = DENSITY_GAUSSIAN_SIGMA_SCALE_CONST
+        self._density_binarize_threshold = DENSITY_BINARIZE_THRESHOLD_CONST
+        self._density_downsample_factor = DENSITY_DOWNSAMPLE_FACTOR_CONST
+        self._min_detections_to_start_seconds = 0.03
+        # Solver overrides: None = auto-pick from animal count; bool = saved override.
+        self._enable_greedy_override: bool | None = None
+        self._enable_spatial_override: bool | None = None
+
         self._layout = QVBoxLayout(self)
         self._build_ui()
+
+    @staticmethod
+    def _kalman_longitudinal_default_for_init() -> float:
+        """Default longitudinal-noise value used to seed lateral noise."""
+        # Matches spin_kalman_longitudinal_noise default in _build_ui (5.0).
+        return 5.0
 
     def _build_ui(self) -> None:
         from hydra_suite.trackerkit.gui.widgets.collapsible import (
@@ -62,20 +115,24 @@ class TrackingPanel(QWidget):
         vbox.setContentsMargins(6, 6, 6, 6)
         vbox.setSpacing(8)
         self._main_window._set_compact_scroll_layout(vbox)
+        vbox.setAlignment(Qt.AlignTop)
 
-        # Core Params
-        g_core = QGroupBox("How should track continuity be handled?")
+        # ── Basic settings ────────────────────────────────────────────────
+        # Always visible at the top: the few knobs most users actually touch.
+        # Everything else lives in the collapsed Advanced accordion below.
+        g_core = QGroupBox("Basic settings")
         self._main_window._set_compact_section_widget(g_core)
         vl_core = QVBoxLayout(g_core)
+        vl_core.setSpacing(8)
         vl_core.addWidget(
             self._main_window._create_help_label(
-                "These control basic track-to-detection matching. Max movement sets how far an animal can "
-                "move between frames. Max speed gates Kalman predictions to physically plausible values. "
-                "Recovery search distance helps reconnect lost tracks."
+                "Max movement sets how far an animal can move between frames. "
+                "Max speed gates Kalman predictions to physically plausible values. "
+                "Reverse pass and the low-confidence map further improve accuracy."
             )
         )
         f_core = QFormLayout(None)
-        f_core.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._configure_form_layout(f_core)
 
         self.spin_max_dist = QDoubleSpinBox()
         self.spin_max_dist.setRange(0.1, 20.0)
@@ -88,8 +145,6 @@ class TrackingPanel(QWidget):
             "Too low = tracks break frequently, Too high = identity swaps.\n"
             "Recommended: 1-2× for normal motion, 3-5× for fast motion."
         )
-        f_core.addRow("Max movement (body lengths)", self.spin_max_dist)
-
         self.spin_kalman_max_velocity = QDoubleSpinBox()
         self.spin_kalman_max_velocity.setRange(0.5, 10.0)
         self.spin_kalman_max_velocity.setSingleStep(0.1)
@@ -103,8 +158,15 @@ class TrackingPanel(QWidget):
             "Recommended: 1.5-3.0 depending on animal speed"
         )
         f_core.addRow(
-            "Max speed (body lengths/frame)",
-            self.spin_kalman_max_velocity,
+            self._build_field_grid(
+                [
+                    ("Max movement (body lengths)", self.spin_max_dist),
+                    (
+                        "Max speed (body lengths/frame)",
+                        self.spin_kalman_max_velocity,
+                    ),
+                ]
+            )
         )
 
         self.chk_enable_backward = QCheckBox("Run reverse pass for better accuracy")
@@ -116,8 +178,6 @@ class TrackingPanel(QWidget):
             "Recommended: Enable for best results (takes ~2× time).\n"
             "Disable for faster processing if accuracy is sufficient."
         )
-        f_core.addRow("", self.chk_enable_backward)
-
         self.chk_enable_confidence_density_map = QCheckBox(
             "Enable low-confidence detection map"
         )
@@ -128,7 +188,15 @@ class TrackingPanel(QWidget):
             "and density-aware conservative matching is applied.\n"
             "Disable to skip the extra density-map pass entirely."
         )
-        f_core.addRow("", self.chk_enable_confidence_density_map)
+        f_core.addRow(
+            self._build_checkbox_grid(
+                [
+                    self.chk_enable_backward,
+                    self.chk_enable_confidence_density_map,
+                ],
+                columns=1,
+            )
+        )
         vl_core.addLayout(f_core)
         vbox.addWidget(g_core)
 
@@ -143,7 +211,22 @@ class TrackingPanel(QWidget):
         )
         vbox.addWidget(self.btn_param_helper)
 
-        # Create accordion for advanced tracking settings
+        # ── Advanced settings ─────────────────────────────────────────────
+        # All sections below collapse by default. New users should rely on
+        # the basic settings + Auto-Tune; expand a section only to override.
+        adv_header = QLabel("Advanced settings")
+        adv_header.setStyleSheet(
+            "font-weight: 700; font-size: 12px; color: #9cdcfe; "
+            "margin-top: 10px; margin-bottom: 2px;"
+        )
+        adv_header.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        vbox.addWidget(adv_header)
+        vbox.addWidget(
+            self._make_inline_note(
+                "Click a section to expand it. Defaults are tuned for most videos, so start with the basic settings and Auto-Tune before overriding advanced controls manually."
+            )
+        )
+
         self.tracking_accordion = AccordionContainer()
 
         # Kalman
@@ -157,7 +240,7 @@ class TrackingPanel(QWidget):
             )
         )
         f_kf = QFormLayout(None)
-        f_kf.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._configure_form_layout(f_kf)
 
         self.spin_kalman_noise = QDoubleSpinBox()
         self.spin_kalman_noise.setRange(0.0, 1.0)
@@ -168,10 +251,8 @@ class TrackingPanel(QWidget):
             "Process noise covariance (0.0-1.0) for motion prediction.\n"
             "Lower = trust motion model more (smooth, may lag).\n"
             "Higher = trust measurements more (responsive, less smooth).\n"
-            "Note: Optimal value depends on frame rate (time step).\n"
-            "Recommended: 0.01-0.05 for predictable motion."
+            "Recommended: 0.01-0.05"
         )
-        f_kf.addRow("How smooth should motion prediction be?", self.spin_kalman_noise)
 
         self.spin_kalman_meas = QDoubleSpinBox()
         self.spin_kalman_meas.setRange(0.0, 1.0)
@@ -184,8 +265,14 @@ class TrackingPanel(QWidget):
             "Higher = trust predictions more (smooth, may drift).\n"
             "Recommended: 0.05-0.15"
         )
+
         f_kf.addRow(
-            "How strongly should detections override prediction?", self.spin_kalman_meas
+            self._build_field_grid(
+                [
+                    ("Process noise", self.spin_kalman_noise),
+                    ("Measurement noise", self.spin_kalman_meas),
+                ]
+            )
         )
 
         self.spin_kalman_damping = QDoubleSpinBox()
@@ -195,20 +282,13 @@ class TrackingPanel(QWidget):
         self.spin_kalman_damping.setValue(0.95)
         self.spin_kalman_damping.setToolTip(
             "Velocity damping coefficient (0.5-0.99).\n"
-            "Controls how quickly velocity decays each frame.\n"
-            "Lower = faster decay (better for stop-and-go behavior).\n"
-            "Higher = slower decay (better for continuous motion).\n"
+            "Lower = faster decay (stop-and-go).\n"
+            "Higher = slower decay (continuous motion).\n"
             "Recommended: 0.90-0.95"
         )
-        f_kf.addRow(
-            "How quickly should estimated speed decay?", self.spin_kalman_damping
-        )
+        f_kf.addRow("Velocity damping", self.spin_kalman_damping)
 
-        # Age-dependent velocity damping
-        age_label = QLabel("How conservative should new tracks be?")
-        age_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-        f_kf.addRow(age_label)
-
+        # Age-dependent velocity damping (compact pair: maturity time + retention)
         self.spin_kalman_maturity_age = QDoubleSpinBox()
         self.spin_kalman_maturity_age.setRange(0.01, 2.0)
         self.spin_kalman_maturity_age.setSingleStep(0.02)
@@ -216,15 +296,9 @@ class TrackingPanel(QWidget):
         self.spin_kalman_maturity_age.setValue(0.17)
         self.spin_kalman_maturity_age.setToolTip(
             "Time for a track to reach maturity (seconds).\n"
-            "Converted to frames using the acquisition frame rate.\n"
-            "Young tracks use conservative velocity estimates.\n"
-            "After this time, tracks use full dynamics.\n"
-            "Lower = faster adaptation, Higher = more conservative.\n"
+            "Young tracks use conservative velocity estimates;\n"
+            "after this time, tracks use full dynamics.\n"
             "Recommended: 0.10-0.35 s"
-        )
-        f_kf.addRow(
-            "How long until a track is trusted (seconds)?",
-            self.spin_kalman_maturity_age,
         )
 
         self.spin_kalman_initial_velocity_retention = QDoubleSpinBox()
@@ -233,22 +307,23 @@ class TrackingPanel(QWidget):
         self.spin_kalman_initial_velocity_retention.setDecimals(2)
         self.spin_kalman_initial_velocity_retention.setValue(0.2)
         self.spin_kalman_initial_velocity_retention.setToolTip(
-            "Initial velocity retention for brand new tracks (0.0-1.0).\n"
-            "0.0 = assume stationary (no velocity)\n"
-            "1.0 = use full velocity estimate\n"
-            "Gradually increases to 1.0 as track ages to maturity.\n"
-            "Lower = more conservative (prevents wild predictions).\n"
+            "Initial velocity retention for brand-new tracks (0.0-1.0).\n"
+            "0.0 = assume stationary, 1.0 = full velocity.\n"
             "Recommended: 0.1-0.3"
         )
-        f_kf.addRow(
-            "How much initial speed should new tracks keep?",
-            self.spin_kalman_initial_velocity_retention,
-        )
 
-        # Anisotropic process noise
-        aniso_label = QLabel("Should forward and sideways uncertainty differ?")
-        aniso_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
-        f_kf.addRow(aniso_label)
+        f_kf.addRow(
+            "New-track caution",
+            self._build_field_grid(
+                [
+                    ("Maturity time (s)", self.spin_kalman_maturity_age),
+                    (
+                        "Initial velocity retention",
+                        self.spin_kalman_initial_velocity_retention,
+                    ),
+                ]
+            ),
+        )
 
         self.spin_kalman_longitudinal_noise = QDoubleSpinBox()
         self.spin_kalman_longitudinal_noise.setRange(0.1, 20.0)
@@ -257,29 +332,15 @@ class TrackingPanel(QWidget):
         self.spin_kalman_longitudinal_noise.setValue(5.0)
         self.spin_kalman_longitudinal_noise.setToolTip(
             "Forward/longitudinal noise multiplier (0.1-20.0).\n"
-            "Controls uncertainty in direction of movement.\n"
-            "Higher = more uncertainty forward (smoother forward motion).\n"
-            "Multiplies base process noise for forward direction.\n"
+            "Controls uncertainty along the movement direction.\n"
+            f"Lateral uncertainty is locked at 1/{int(KALMAN_ANISOTROPY_RATIO_CONST)} "
+            "of this value (body-axis anisotropy is biologically fixed).\n"
             "Recommended: 3.0-7.0"
         )
         f_kf.addRow(
-            "How much uncertainty along movement direction?",
+            "Forward/sideways uncertainty (forward scale)",
             self.spin_kalman_longitudinal_noise,
         )
-
-        self.spin_kalman_lateral_noise = QDoubleSpinBox()
-        self.spin_kalman_lateral_noise.setRange(0.01, 5.0)
-        self.spin_kalman_lateral_noise.setSingleStep(0.05)
-        self.spin_kalman_lateral_noise.setDecimals(2)
-        self.spin_kalman_lateral_noise.setValue(0.1)
-        self.spin_kalman_lateral_noise.setToolTip(
-            "Sideways/lateral noise multiplier (0.01-5.0).\n"
-            "Controls uncertainty perpendicular to movement.\n"
-            "Lower = less uncertainty sideways (constrains lateral drift).\n"
-            "Multiplies base process noise for sideways direction.\n"
-            "Recommended: 0.05-0.2"
-        )
-        f_kf.addRow("How much uncertainty sideways?", self.spin_kalman_lateral_noise)
 
         vl_kf.addLayout(f_kf)
         g_kf.setContentLayout(vl_kf)
@@ -300,62 +361,49 @@ class TrackingPanel(QWidget):
             )
         )
 
-        row1 = QHBoxLayout()
         self.spin_Wp = QDoubleSpinBox()
         self.spin_Wp.setRange(0.0, 10.0)
         self.spin_Wp.setValue(1.0)
         self.spin_Wp.setToolTip(
             "Weight for position distance in the assignment cost.\n"
-            "Higher = trust spatial proximity more.\n"
-            "Recommended: keep this as the dominant term."
+            "Keep this as the dominant term."
         )
-        row1.addWidget(QLabel("Position weight"))
-        row1.addWidget(self.spin_Wp)
-
         self.spin_Wo = QDoubleSpinBox()
         self.spin_Wo.setRange(0.0, 10.0)
         self.spin_Wo.setValue(1.0)
         self.spin_Wo.setToolTip(
-            "Weight for orientation difference in the assignment cost.\n"
-            "Higher = penalize large direction changes more strongly."
+            "Weight for orientation difference in the assignment cost."
         )
-        row1.addWidget(QLabel("Direction weight"))
-        row1.addWidget(self.spin_Wo)
-        l_weights.addLayout(row1)
-
-        row2 = QHBoxLayout()
         self.spin_Wa = QDoubleSpinBox()
         self.spin_Wa.setRange(0.0, 1.0)
         self.spin_Wa.setSingleStep(0.001)
         self.spin_Wa.setDecimals(4)
         self.spin_Wa.setValue(0.001)
-        self.spin_Wa.setToolTip(
-            "Weight for area difference in the assignment cost.\n"
-            "Higher = penalize sudden size changes more strongly."
-        )
-        row2.addWidget(QLabel("Area weight"))
-        row2.addWidget(self.spin_Wa)
-
+        self.spin_Wa.setToolTip("Weight for area difference in the assignment cost.")
         self.spin_Wasp = QDoubleSpinBox()
         self.spin_Wasp.setRange(0.0, 10.0)
         self.spin_Wasp.setValue(0.1)
         self.spin_Wasp.setToolTip(
-            "Weight for aspect-ratio difference in the assignment cost.\n"
-            "Higher = penalize coarse shape changes more strongly."
+            "Weight for aspect-ratio difference in the assignment cost."
         )
-        row2.addWidget(QLabel("Aspect weight"))
-        row2.addWidget(self.spin_Wasp)
-        l_weights.addLayout(row2)
+        l_weights.addWidget(
+            self._build_field_grid(
+                [
+                    ("Position weight", self.spin_Wp),
+                    ("Direction weight", self.spin_Wo),
+                    ("Area weight", self.spin_Wa),
+                    ("Aspect weight", self.spin_Wasp),
+                ]
+            )
+        )
 
-        self.chk_use_mahal = QCheckBox("Use motion-aware distance")
+        self.chk_use_mahal = QCheckBox("Use motion-aware distance (Mahalanobis)")
         self.chk_use_mahal.setChecked(True)
         self.chk_use_mahal.setToolTip(
-            "Use Mahalanobis distance instead of Euclidean distance for the position term.\n"
-            "This makes the matcher respect predicted velocity and uncertainty."
+            "Use Mahalanobis distance instead of Euclidean for the position term.\n"
+            "Respects predicted velocity and uncertainty."
         )
         l_weights.addWidget(self.chk_use_mahal)
-
-        f_w2 = QFormLayout(None)
 
         self.spin_track_feature_ema_alpha = QDoubleSpinBox()
         self.spin_track_feature_ema_alpha.setRange(0.0, 0.99)
@@ -363,26 +411,26 @@ class TrackingPanel(QWidget):
         self.spin_track_feature_ema_alpha.setSingleStep(0.01)
         self.spin_track_feature_ema_alpha.setValue(0.85)
         self.spin_track_feature_ema_alpha.setToolTip(
-            "EMA retention for the per-track pose prototype and step-size summary.\n"
-            "Higher = slower adaptation (more stable but lags sudden changes).\n"
-            "Lower = faster adaptation (more responsive but noisier).\n"
-            "Recommended: 0.80-0.95"
+            "EMA retention for per-track pose prototype.\n"
+            "Higher = slower adaptation. Recommended: 0.80-0.95"
         )
-        f_w2.addRow("Track feature EMA", self.spin_track_feature_ema_alpha)
-
         self.spin_assoc_high_conf_threshold = QDoubleSpinBox()
         self.spin_assoc_high_conf_threshold.setRange(0.0, 1.0)
         self.spin_assoc_high_conf_threshold.setDecimals(2)
         self.spin_assoc_high_conf_threshold.setSingleStep(0.05)
         self.spin_assoc_high_conf_threshold.setValue(0.7)
         self.spin_assoc_high_conf_threshold.setToolTip(
-            "Minimum detection confidence required before updating the per-track\n"
-            "high-confidence step-size summary.\n"
+            "Minimum detection confidence to update per-track step-size summary.\n"
             "Recommended: 0.6-0.8"
         )
-        f_w2.addRow("High-conf update threshold", self.spin_assoc_high_conf_threshold)
-
-        l_weights.addLayout(f_w2)
+        l_weights.addWidget(
+            self._build_field_grid(
+                [
+                    ("Track EMA α", self.spin_track_feature_ema_alpha),
+                    ("High-confidence threshold", self.spin_assoc_high_conf_threshold),
+                ]
+            )
+        )
         g_weights.setContentLayout(l_weights)
         vbox.addWidget(g_weights)
         self._main_window._remember_collapsible_state(
@@ -400,6 +448,7 @@ class TrackingPanel(QWidget):
             )
         )
         f_assign = QFormLayout(None)
+        self._configure_form_layout(f_assign)
 
         self.spin_assoc_gate_multiplier = QDoubleSpinBox()
         self.spin_assoc_gate_multiplier.setRange(0.5, 5.0)
@@ -409,7 +458,6 @@ class TrackingPanel(QWidget):
         self.spin_assoc_gate_multiplier.setToolTip(
             "Multiplier for the stage-1 motion gate before full scoring."
         )
-        f_assign.addRow("Motion gate multiplier", self.spin_assoc_gate_multiplier)
 
         self.spin_assoc_max_area_ratio = QDoubleSpinBox()
         self.spin_assoc_max_area_ratio.setRange(1.0, 10.0)
@@ -419,7 +467,6 @@ class TrackingPanel(QWidget):
         self.spin_assoc_max_area_ratio.setToolTip(
             "Maximum allowed area ratio during candidate gating."
         )
-        f_assign.addRow("Max area ratio", self.spin_assoc_max_area_ratio)
 
         self.spin_assoc_max_aspect_diff = QDoubleSpinBox()
         self.spin_assoc_max_aspect_diff.setRange(0.0, 5.0)
@@ -429,38 +476,28 @@ class TrackingPanel(QWidget):
         self.spin_assoc_max_aspect_diff.setToolTip(
             "Maximum aspect-ratio change allowed during candidate gating."
         )
-        f_assign.addRow("Max aspect diff", self.spin_assoc_max_aspect_diff)
 
-        self.chk_enable_pose_rejection = QCheckBox("Enable pose rejection")
+        f_assign.addRow(
+            self._build_field_grid(
+                [
+                    ("Motion gate ×", self.spin_assoc_gate_multiplier),
+                    ("Max area ratio", self.spin_assoc_max_area_ratio),
+                    ("Max aspect diff", self.spin_assoc_max_aspect_diff),
+                ]
+            )
+        )
+
+        self.chk_enable_pose_rejection = QCheckBox(
+            "Enable pose veto on incompatible same-keypoint layouts"
+        )
         self.chk_enable_pose_rejection.setChecked(True)
         self.chk_enable_pose_rejection.setToolTip(
             "Allow pose to veto motion-feasible matches when the same-keypoint layout\n"
-            "is clearly incompatible."
+            "is clearly incompatible. Thresholds are baked-in defaults\n"
+            f"(distance ≤ {POSE_REJECTION_THRESHOLD_CONST}, "
+            f"min visibility ≥ {POSE_REJECTION_MIN_VISIBILITY_CONST})."
         )
         f_assign.addRow(self.chk_enable_pose_rejection)
-
-        self.spin_pose_rejection_threshold = QDoubleSpinBox()
-        self.spin_pose_rejection_threshold.setRange(0.0, 5.0)
-        self.spin_pose_rejection_threshold.setDecimals(2)
-        self.spin_pose_rejection_threshold.setSingleStep(0.05)
-        self.spin_pose_rejection_threshold.setValue(0.5)
-        self.spin_pose_rejection_threshold.setToolTip(
-            "Maximum normalized same-keypoint pose distance allowed before rejecting a match.\n"
-            "Lower = stricter pose veto."
-        )
-        f_assign.addRow("Pose rejection threshold", self.spin_pose_rejection_threshold)
-
-        self.spin_pose_rejection_min_visibility = QDoubleSpinBox()
-        self.spin_pose_rejection_min_visibility.setRange(0.0, 1.0)
-        self.spin_pose_rejection_min_visibility.setDecimals(2)
-        self.spin_pose_rejection_min_visibility.setSingleStep(0.05)
-        self.spin_pose_rejection_min_visibility.setValue(0.5)
-        self.spin_pose_rejection_min_visibility.setToolTip(
-            "Minimum pose visibility required before pose rejection is allowed to activate."
-        )
-        f_assign.addRow(
-            "Pose rejection min visibility", self.spin_pose_rejection_min_visibility
-        )
 
         vl_assign.addLayout(f_assign)
         g_assign.setContentLayout(vl_assign)
@@ -469,48 +506,17 @@ class TrackingPanel(QWidget):
             "tracking.candidate_filtering", g_assign
         )
 
-        # Assignment algorithm
-        g_solver = CollapsibleGroupBox("Which assignment algorithm should be used?")
-        self.tracking_accordion.addCollapsible(g_solver)
-        vl_solver = QVBoxLayout()
-        vl_solver.addWidget(
-            self._main_window._create_help_label(
-                "These settings select the core assignment algorithm and whether to use spatial indexing "
-                "to speed up matching for larger groups."
-            )
-        )
-        f_solver = QFormLayout(None)
+        # Assignment solver: auto-picked from animal count at runtime
+        # (Hungarian for small groups, greedy + spatial indexing above
+        # SOLVER_AUTOPICK_GREEDY_THRESHOLD). No UI knob.
 
-        self.combo_assignment_method = QComboBox()
-        self.combo_assignment_method.addItems(
-            ["Most accurate (slower)", "Fast approximate (large groups)"]
-        )
-        self.combo_assignment_method.setCurrentIndex(0)
-        self.combo_assignment_method.setToolTip(
-            "Hungarian: optimal global assignment.\n"
-            "Greedy: faster approximation for very large groups."
-        )
-        f_solver.addRow("Assignment solver", self.combo_assignment_method)
-
-        self.chk_spatial_optimization = QCheckBox("Speed up matching for many animals")
-        self.chk_spatial_optimization.setChecked(False)
-        self.chk_spatial_optimization.setToolTip(
-            "Use spatial indexing to reduce comparisons when many animals are present.\n"
-            "Usually only helpful for larger groups."
-        )
-        f_solver.addRow(self.chk_spatial_optimization)
-
-        vl_solver.addLayout(f_solver)
-        g_solver.setContentLayout(vl_solver)
-        vbox.addWidget(g_solver)
-        self._main_window._remember_collapsible_state(
-            "tracking.assignment_solver", g_solver
-        )
-
-        # Identity Decoder
-        g_identity_decoder = CollapsibleGroupBox(
+        # Identity Decoder — entire section is hidden when identity
+        # classification is disabled in the Analyse Individuals panel
+        # (see set_identity_section_visible).
+        self.g_identity_decoder = CollapsibleGroupBox(
             "How should identity guide assignment?"
         )
+        g_identity_decoder = self.g_identity_decoder
         self.tracking_accordion.addCollapsible(g_identity_decoder)
         vl_identity_decoder = QVBoxLayout()
         vl_identity_decoder.addWidget(
@@ -522,7 +528,7 @@ class TrackingPanel(QWidget):
             )
         )
         f_identity_decoder = QFormLayout(None)
-        f_identity_decoder.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._configure_form_layout(f_identity_decoder)
 
         # ── Master toggle ──────────────────────────────────────────────────
         self.chk_enable_identity_in_tracking = QCheckBox(
@@ -542,10 +548,19 @@ class TrackingPanel(QWidget):
         )
         f_identity_decoder.addRow(self.chk_enable_identity_in_tracking)
 
+        # Subgroup container — hidden as a unit when master toggle is OFF.
+        self._identity_subgroup = QWidget()
+        sg_layout = QVBoxLayout(self._identity_subgroup)
+        sg_layout.setContentsMargins(0, 0, 0, 0)
+        sg_layout.setSpacing(4)
+        sg_form = QFormLayout()
+        self._configure_form_layout(sg_form)
+        sg_form.setContentsMargins(0, 0, 0, 0)
+
         # ── Subgroup 1: assignment cost ────────────────────────────────────
         _hdr_assignment = QLabel("Assignment influence")
-        _hdr_assignment.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        f_identity_decoder.addRow(_hdr_assignment)
+        _hdr_assignment.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        sg_form.addRow(_hdr_assignment)
 
         self.chk_enable_identity_online_decoder = QCheckBox(
             "Enable Bayesian identity cost term"
@@ -557,7 +572,10 @@ class TrackingPanel(QWidget):
             "the decoder still maintains beliefs and emits labels, but assignment is\n"
             "driven purely by geometry."
         )
-        f_identity_decoder.addRow(self.chk_enable_identity_online_decoder)
+        self.chk_enable_identity_online_decoder.toggled.connect(
+            self._on_identity_online_decoder_toggled
+        )
+        sg_form.addRow(self.chk_enable_identity_online_decoder)
 
         self.spin_identity_weight = QDoubleSpinBox()
         self.spin_identity_weight.setRange(0.0, 2.0)
@@ -565,16 +583,12 @@ class TrackingPanel(QWidget):
         self.spin_identity_weight.setDecimals(2)
         self.spin_identity_weight.setValue(0.3)
         self.spin_identity_weight.setToolTip(
-            "Relative weight of the identity cost term vs. the geometric cost.\n"
-            "0.0 = identity has no influence on assignment (also disables the\n"
-            "    identity-based rejoin path for committed lost slots).\n"
-            "0.3 = identity nudges Phase-1 association without dominating motion (default).\n"
-            "1.0 = balanced with geometry; pulls association toward identity-matching\n"
-            "    detections at the cost of motion smoothness — raise only when the\n"
-            "    classifier is highly reliable.\n"
-            "When the decoder is uncertain (early frames) this term is near-zero automatically."
+            "Relative weight of identity cost vs. geometric cost.\n"
+            "0.0 = identity has no influence (also disables identity-based rejoin).\n"
+            "0.3 = nudges Phase-1 association without dominating motion (default).\n"
+            "1.0 = balanced with geometry; only raise if the classifier is highly reliable.\n"
+            "When the decoder is uncertain this term is near-zero automatically."
         )
-        f_identity_decoder.addRow("Identity weight", self.spin_identity_weight)
 
         self.spin_identity_rejoin_threshold = QDoubleSpinBox()
         self.spin_identity_rejoin_threshold.setRange(0.0, 1.0)
@@ -582,17 +596,26 @@ class TrackingPanel(QWidget):
         self.spin_identity_rejoin_threshold.setDecimals(2)
         self.spin_identity_rejoin_threshold.setValue(0.5)
         self.spin_identity_rejoin_threshold.setToolTip(
-            "Minimum identity score (probability) for a committed-lost slot to rejoin "
-            "a detection via identity evidence alone, bypassing the geometric gate."
+            "Minimum identity score for a committed-lost slot to rejoin a detection\n"
+            "via identity evidence alone, bypassing the geometric gate."
         )
-        f_identity_decoder.addRow(
-            "Rejoin threshold", self.spin_identity_rejoin_threshold
-        )
+
+        # Pack the two cost-term knobs into a compact widget so we can
+        # show/hide them as a unit when the Bayesian checkbox toggles.
+        self._identity_cost_widget = QWidget()
+        _row_id_cost = QHBoxLayout(self._identity_cost_widget)
+        _row_id_cost.setContentsMargins(0, 0, 0, 0)
+        _row_id_cost.addWidget(QLabel("Identity weight"))
+        _row_id_cost.addWidget(self.spin_identity_weight)
+        _row_id_cost.addSpacing(6)
+        _row_id_cost.addWidget(QLabel("Rejoin threshold"))
+        _row_id_cost.addWidget(self.spin_identity_rejoin_threshold)
+        sg_form.addRow(self._identity_cost_widget)
 
         # ── Subgroup 2: belief decoder ────────────────────────────────────
         _hdr_decoder = QLabel("Belief decoder")
         _hdr_decoder.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        f_identity_decoder.addRow(_hdr_decoder)
+        sg_form.addRow(_hdr_decoder)
 
         self.spin_identity_commit_threshold = QDoubleSpinBox()
         self.spin_identity_commit_threshold.setRange(0.5, 1.0)
@@ -603,9 +626,6 @@ class TrackingPanel(QWidget):
             "Posterior confidence required before a track slot commits to an identity.\n"
             "Higher = fewer but more certain identity assignments."
         )
-        f_identity_decoder.addRow(
-            "Commit threshold", self.spin_identity_commit_threshold
-        )
 
         self.spin_identity_display_threshold = QDoubleSpinBox()
         self.spin_identity_display_threshold.setRange(0.0, 1.0)
@@ -613,10 +633,17 @@ class TrackingPanel(QWidget):
         self.spin_identity_display_threshold.setDecimals(2)
         self.spin_identity_display_threshold.setValue(0.6)
         self.spin_identity_display_threshold.setToolTip(
-            "Minimum posterior confidence before an identity label is shown in the tracking overlay."
+            "Minimum posterior confidence before an identity label is emitted (per-frame).\n"
+            "Gates published labels in the live overlay and CSV output."
         )
-        f_identity_decoder.addRow(
-            "Display threshold", self.spin_identity_display_threshold
+
+        sg_form.addRow(
+            self._build_field_grid(
+                [
+                    ("Commit ≥", self.spin_identity_commit_threshold),
+                    ("Per-frame label ≥", self.spin_identity_display_threshold),
+                ]
+            )
         )
 
         self.spin_identity_transition_epsilon = QDoubleSpinBox()
@@ -626,11 +653,7 @@ class TrackingPanel(QWidget):
         self.spin_identity_transition_epsilon.setValue(0.02)
         self.spin_identity_transition_epsilon.setToolTip(
             "Off-diagonal probability in the identity Markov transition.\n"
-            "Lower = identity is assumed more stable between frames.\n"
-            "Higher = allows faster identity switching."
-        )
-        f_identity_decoder.addRow(
-            "Transition epsilon", self.spin_identity_transition_epsilon
+            "Lower = identity is assumed more stable between frames."
         )
 
         self.spin_identity_unknown_prior = QDoubleSpinBox()
@@ -639,15 +662,22 @@ class TrackingPanel(QWidget):
         self.spin_identity_unknown_prior.setDecimals(3)
         self.spin_identity_unknown_prior.setValue(0.05)
         self.spin_identity_unknown_prior.setToolTip(
-            "Prior probability mass reserved for the 'unknown' identity state.\n"
-            "Higher = more uncertainty about whether any known identity applies."
+            "Prior probability mass reserved for the 'unknown' identity state."
         )
-        f_identity_decoder.addRow("Unknown prior", self.spin_identity_unknown_prior)
+
+        sg_form.addRow(
+            self._build_field_grid(
+                [
+                    ("Transition ε", self.spin_identity_transition_epsilon),
+                    ("Unknown prior", self.spin_identity_unknown_prior),
+                ]
+            )
+        )
 
         # ── Subgroup 3: live identity-swap correction ─────────────────────
         _hdr_swap = QLabel("Live identity-swap correction")
         _hdr_swap.setStyleSheet("font-weight: bold; margin-top: 8px;")
-        f_identity_decoder.addRow(_hdr_swap)
+        sg_form.addRow(_hdr_swap)
 
         self.chk_enable_identity_swap_correction = QCheckBox(
             "Atomically swap labels on sustained mutual disagreement"
@@ -655,24 +685,32 @@ class TrackingPanel(QWidget):
         self.chk_enable_identity_swap_correction.setChecked(True)
         self.chk_enable_identity_swap_correction.setToolTip(
             "When two committed slots show sustained mutual identity disagreement\n"
-            "(each slot's evidence persistently favours the other slot's identity),\n"
-            "atomically swap their identity labels.  Trajectories don't move — only\n"
-            "the labels exchange — so this fixes 'wrongly committed' identities\n"
-            "without ever teleporting a track."
+            "atomically swap their identity labels — trajectories don't move."
         )
-        f_identity_decoder.addRow(self.chk_enable_identity_swap_correction)
+        self.chk_enable_identity_swap_correction.toggled.connect(
+            self._on_identity_swap_correction_toggled
+        )
+        sg_form.addRow(self.chk_enable_identity_swap_correction)
 
         self.spin_identity_swap_min_frames = QSpinBox()
         self.spin_identity_swap_min_frames.setRange(1, 240)
         self.spin_identity_swap_min_frames.setSingleStep(1)
         self.spin_identity_swap_min_frames.setValue(8)
         self.spin_identity_swap_min_frames.setToolTip(
-            "Number of consecutive frames of sustained mutual identity disagreement\n"
-            "required before a swap fires.\n"
-            "Lower = more eager to swap (catches errors faster, but more false swaps).\n"
-            "Higher = more conservative (only fires on persistent, confident swaps)."
+            "Consecutive frames of mutual disagreement required before a swap fires.\n"
+            "Lower = catches errors faster but more false swaps."
         )
-        f_identity_decoder.addRow("Swap min frames", self.spin_identity_swap_min_frames)
+        # Wrap so we can hide it as a unit when swap correction is OFF.
+        self._identity_swap_frames_widget = QWidget()
+        _row_swap = QHBoxLayout(self._identity_swap_frames_widget)
+        _row_swap.setContentsMargins(0, 0, 0, 0)
+        _row_swap.addWidget(QLabel("Swap min frames"))
+        _row_swap.addWidget(self.spin_identity_swap_min_frames)
+        _row_swap.addStretch(1)
+        sg_form.addRow(self._identity_swap_frames_widget)
+
+        sg_layout.addLayout(sg_form)
+        f_identity_decoder.addRow(self._identity_subgroup)
 
         vl_identity_decoder.addLayout(f_identity_decoder)
         g_identity_decoder.setContentLayout(vl_identity_decoder)
@@ -692,6 +730,7 @@ class TrackingPanel(QWidget):
             )
         )
         f_misc = QFormLayout(None)
+        self._configure_form_layout(f_misc)
 
         self.spin_velocity = QDoubleSpinBox()
         self.spin_velocity.setRange(0.1, 100.0)
@@ -702,36 +741,36 @@ class TrackingPanel(QWidget):
             "Velocity threshold (body-sizes/second) to classify as 'moving'.\n"
             "Below this = stationary (allows larger orientation changes).\n"
             "Above this = moving (instant orientation flip possible).\n"
-            "Independent of frame rate - automatically scaled by FPS.\n"
-            "Recommended: 2-10 body-sizes/s depending on animal speed."
+            "Recommended: 2-10 body-sizes/s."
         )
-        f_misc.addRow("Moving-speed threshold (body lengths/sec)", self.spin_velocity)
-
-        self.chk_instant_flip = QCheckBox(
-            "Allow instant direction flips when moving fast"
-        )
-        self.chk_instant_flip.setChecked(True)
-        self.chk_instant_flip.setToolTip(
-            "Allow instant 180° orientation flip when moving quickly.\n"
-            "Recommended: Enable for animals that can turn rapidly.\n"
-            "Disable for slowly rotating animals."
-        )
-        f_misc.addRow(self.chk_instant_flip)
 
         self.spin_max_orient = QDoubleSpinBox()
         self.spin_max_orient.setRange(1, 180)
         self.spin_max_orient.setValue(30)
         self.spin_max_orient.setToolTip(
             "Maximum orientation change (degrees) when stationary (1-180).\n"
-            "Larger = allow more rotation while stopped.\n"
             "Recommended: 20-45° (prevents orientation jitter)."
         )
+
         f_misc.addRow(
-            "Max direction change while stopped (degrees)", self.spin_max_orient
+            self._build_field_grid(
+                [
+                    ("Moving speed (BL/s)", self.spin_velocity),
+                    ("Max stopped Δθ (°)", self.spin_max_orient),
+                ]
+            )
         )
 
+        self.chk_instant_flip = QCheckBox("Allow instant 180° flips when moving fast")
+        self.chk_instant_flip.setChecked(True)
+        self.chk_instant_flip.setToolTip(
+            "Allow instant 180° orientation flip when moving quickly.\n"
+            "Enable for animals that can turn rapidly."
+        )
+        f_misc.addRow(self.chk_instant_flip)
+
         self.chk_directed_orient_smoothing = QCheckBox(
-            "Apply consistency check to pose/head-tail orientation flips"
+            "Consistency check on pose/head-tail flips"
         )
         self.chk_directed_orient_smoothing.setChecked(True)
         self.chk_directed_orient_smoothing.setToolTip(
@@ -739,6 +778,9 @@ class TrackingPanel(QWidget):
             "are only accepted when motion corroborates the new direction\n"
             "and the detection confidence meets the threshold below.\n"
             "Small changes (≤90°) are always accepted unchanged."
+        )
+        self.chk_directed_orient_smoothing.toggled.connect(
+            self._on_directed_orient_smoothing_toggled
         )
         f_misc.addRow(self.chk_directed_orient_smoothing)
 
@@ -748,33 +790,36 @@ class TrackingPanel(QWidget):
         self.spin_directed_orient_flip_conf.setDecimals(2)
         self.spin_directed_orient_flip_conf.setValue(0.7)
         self.spin_directed_orient_flip_conf.setToolTip(
-            "Minimum confidence to accept a >90° pose/head-tail orientation flip (0–1).\n"
-            "For pose-directed headings, this is the pose visibility score.\n"
-            "For head-tail-directed headings, this is the classifier confidence.\n"
+            "Minimum confidence to accept a >90° pose/head-tail flip (0–1).\n"
             "Higher = fewer spurious flips; lower = more responsive."
-        )
-        f_misc.addRow(
-            "Directed-flip confidence threshold", self.spin_directed_orient_flip_conf
         )
 
         self.spin_directed_orient_flip_persist = QSpinBox()
         self.spin_directed_orient_flip_persist.setRange(1, 20)
         self.spin_directed_orient_flip_persist.setValue(3)
         self.spin_directed_orient_flip_persist.setToolTip(
-            "Number of consecutive frames a >90° heading flip must be observed\n"
-            "before it is accepted as genuine. Higher values suppress transient\n"
-            "head-tail classifier errors at the cost of slower real-turn response."
-        )
-        f_misc.addRow(
-            "Directed-flip persistence (frames)", self.spin_directed_orient_flip_persist
+            "Consecutive frames a >90° flip must be observed before it is\n"
+            "accepted. Higher values suppress transient classifier errors."
         )
 
-        # Group the three online consistency controls so they can be shown/hidden
-        # together when the post-hoc mode is toggled on/off.
+        # Pack flip-conf and flip-persist into one row, hidden together when
+        # the smoothing checkbox is OFF.
+        self._directed_orient_flip_widget = QWidget()
+        _row_flip = QHBoxLayout(self._directed_orient_flip_widget)
+        _row_flip.setContentsMargins(0, 0, 0, 0)
+        _row_flip.addWidget(QLabel("Flip conf ≥"))
+        _row_flip.addWidget(self.spin_directed_orient_flip_conf)
+        _row_flip.addSpacing(6)
+        _row_flip.addWidget(QLabel("Flip persist (frames)"))
+        _row_flip.addWidget(self.spin_directed_orient_flip_persist)
+        f_misc.addRow(self._directed_orient_flip_widget)
+
+        # Group the online consistency controls so they can be shown/hidden
+        # together when the post-hoc mode is toggled on/off. The flip conf+persist
+        # widget is also cascade-hidden by the smoothing checkbox itself.
         self._directed_orient_online_widgets = [
             self.chk_directed_orient_smoothing,
-            self.spin_directed_orient_flip_conf,
-            self.spin_directed_orient_flip_persist,
+            self._directed_orient_flip_widget,
         ]
 
         # Note shown in place of the online controls when post-hoc mode is active.
@@ -804,6 +849,7 @@ class TrackingPanel(QWidget):
             )
         )
         f_lifecycle = QFormLayout(None)
+        self._configure_form_layout(f_lifecycle)
 
         self.spin_lost_thresh = QDoubleSpinBox()
         self.spin_lost_thresh.setRange(0.01, 10.0)
@@ -812,14 +858,8 @@ class TrackingPanel(QWidget):
         self.spin_lost_thresh.setValue(0.33)
         self.spin_lost_thresh.setToolTip(
             "Time without detection before track is terminated (seconds).\n"
-            "Converted to frames using the acquisition frame rate.\n"
             "Higher = tracks persist longer during occlusions.\n"
-            "Lower = tracks end quickly, creating fragments.\n"
             "Recommended: 0.15-0.70 s."
-        )
-        f_lifecycle.addRow(
-            "How long to keep a track without detections (seconds)?",
-            self.spin_lost_thresh,
         )
 
         self.spin_min_respawn_distance = QDoubleSpinBox()
@@ -829,12 +869,17 @@ class TrackingPanel(QWidget):
         self.spin_min_respawn_distance.setValue(2.5)
         self.spin_min_respawn_distance.setToolTip(
             "Minimum distance from existing tracks to spawn new track (×body size).\n"
-            "Prevents creating duplicate tracks near existing animals.\n"
+            "Prevents duplicate tracks near existing animals.\n"
             "Recommended: 2-4× body size."
         )
+
         f_lifecycle.addRow(
-            "How far from existing tracks to start a new one (body lengths)?",
-            self.spin_min_respawn_distance,
+            self._build_field_grid(
+                [
+                    ("Lost threshold (s)", self.spin_lost_thresh),
+                    ("Min respawn distance (BL)", self.spin_min_respawn_distance),
+                ]
+            )
         )
         vl_lifecycle.addLayout(f_lifecycle)
         g_lifecycle.setContentLayout(vl_lifecycle)
@@ -849,26 +894,13 @@ class TrackingPanel(QWidget):
         vl_stab = QVBoxLayout()
         vl_stab.addWidget(
             self._main_window._create_help_label(
-                "Use these settings to suppress noisy starts and remove short-lived fragments."
+                "Use these settings to remove short-lived fragments. The init-counter "
+                "minimum is hardcoded to one detection per frame (formerly "
+                "Min-detections-to-start, which was confusingly FPS-coupled)."
             )
         )
         f_stab = QFormLayout(None)
-        self.spin_min_detections_to_start = QDoubleSpinBox()
-        self.spin_min_detections_to_start.setRange(0.01, 2.0)
-        self.spin_min_detections_to_start.setSingleStep(0.02)
-        self.spin_min_detections_to_start.setDecimals(2)
-        self.spin_min_detections_to_start.setValue(0.03)
-        self.spin_min_detections_to_start.setToolTip(
-            "Minimum time of consecutive detections before starting a track (seconds).\n"
-            "Converted to frames using the acquisition frame rate.\n"
-            "Higher = fewer false tracks from noise, slower to start tracking.\n"
-            "Lower = faster tracking startup, more noise-based tracks.\n"
-            "Recommended: 0.03-0.10 s"
-        )
-        f_stab.addRow(
-            "How long must detections persist before starting a track (seconds)?",
-            self.spin_min_detections_to_start,
-        )
+        self._configure_form_layout(f_stab)
 
         self.spin_min_detect = QDoubleSpinBox()
         self.spin_min_detect.setRange(0.01, 30.0)
@@ -877,7 +909,6 @@ class TrackingPanel(QWidget):
         self.spin_min_detect.setValue(0.33)
         self.spin_min_detect.setToolTip(
             "Minimum total detection time to keep a track (seconds).\n"
-            "Converted to frames using the acquisition frame rate.\n"
             "Filters out short-lived false tracks in post-processing.\n"
             "Recommended: 0.15-0.70 s."
         )
@@ -888,17 +919,18 @@ class TrackingPanel(QWidget):
         self.spin_min_track.setDecimals(2)
         self.spin_min_track.setValue(0.33)
         self.spin_min_track.setToolTip(
-            "Minimum tracking time (including predicted) to keep (seconds).\n"
-            "Converted to frames using the acquisition frame rate.\n"
-            "Filters out tracks with too many gaps/predictions.\n"
+            "Minimum tracking time including predictions (seconds).\n"
+            "Filters out tracks with too many gaps.\n"
             "Recommended: similar to min detection time."
         )
-        _min_frames_row = QHBoxLayout()
-        _min_frames_row.addWidget(QLabel("Min detection time (s)"))
-        _min_frames_row.addWidget(self.spin_min_detect)
-        _min_frames_row.addWidget(QLabel("Min total time (s)"))
-        _min_frames_row.addWidget(self.spin_min_track)
-        f_stab.addRow(_min_frames_row)
+        f_stab.addRow(
+            self._build_field_grid(
+                [
+                    ("Min detection time (s)", self.spin_min_detect),
+                    ("Min total time (s)", self.spin_min_track),
+                ]
+            )
+        )
         vl_stab.addLayout(f_stab)
         g_stab.setContentLayout(vl_stab)
         vbox.addWidget(g_stab)
@@ -920,20 +952,7 @@ class TrackingPanel(QWidget):
             )
         )
         f_density = QFormLayout(None)
-        f_density.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-
-        self.spin_density_gaussian_sigma_scale = QDoubleSpinBox()
-        self.spin_density_gaussian_sigma_scale.setRange(0.1, 5.0)
-        self.spin_density_gaussian_sigma_scale.setSingleStep(0.1)
-        self.spin_density_gaussian_sigma_scale.setDecimals(1)
-        self.spin_density_gaussian_sigma_scale.setValue(1.0)
-        self.spin_density_gaussian_sigma_scale.setToolTip(
-            "Scale factor for the Gaussian sigma derived from detection size.\n"
-            "Controls the spatial spread of each detection's contribution\n"
-            "to the confidence density map. Larger values produce smoother maps.\n"
-            "Range: 0.1–5.0. Default: 1.0."
-        )
-        f_density.addRow("Gaussian sigma scale", self.spin_density_gaussian_sigma_scale)
+        self._configure_form_layout(f_density)
 
         self.spin_density_temporal_sigma = QDoubleSpinBox()
         self.spin_density_temporal_sigma.setRange(0.5, 10.0)
@@ -941,27 +960,10 @@ class TrackingPanel(QWidget):
         self.spin_density_temporal_sigma.setDecimals(1)
         self.spin_density_temporal_sigma.setValue(2.0)
         self.spin_density_temporal_sigma.setToolTip(
-            "Standard deviation (in frames) for temporal Gaussian smoothing\n"
-            "of the confidence density volume. Higher values merge nearby\n"
-            "low-confidence events into broader temporal regions.\n"
-            "Range: 0.5–10.0. Default: 2.0."
+            "Standard deviation (frames) for temporal Gaussian smoothing.\n"
+            "Higher values merge nearby low-confidence events.\n"
+            "Default: 2.0."
         )
-        f_density.addRow(
-            "Temporal smoothing sigma (frames)", self.spin_density_temporal_sigma
-        )
-
-        self.spin_density_binarize_threshold = QDoubleSpinBox()
-        self.spin_density_binarize_threshold.setRange(0.05, 0.95)
-        self.spin_density_binarize_threshold.setSingleStep(0.05)
-        self.spin_density_binarize_threshold.setDecimals(2)
-        self.spin_density_binarize_threshold.setValue(0.3)
-        self.spin_density_binarize_threshold.setToolTip(
-            "Threshold for binarizing the normalised density volume.\n"
-            "Voxels above this value become foreground regions where\n"
-            "density-aware conservative tracking is applied.\n"
-            "Range: 0.05–0.95. Default: 0.3."
-        )
-        f_density.addRow("Binarize threshold", self.spin_density_binarize_threshold)
 
         self.spin_density_conservative_factor = QDoubleSpinBox()
         self.spin_density_conservative_factor.setRange(0.3, 1.0)
@@ -970,13 +972,16 @@ class TrackingPanel(QWidget):
         self.spin_density_conservative_factor.setValue(0.70)
         self.spin_density_conservative_factor.setToolTip(
             "Distance gate fraction for detections in flagged density regions.\n"
-            "Reduces the maximum assignment distance for in-region detections\n"
-            "to prevent long-range jumps into crowded zones.\n"
-            "1.0 = disabled, 0.7 = 70% of normal distance.\n"
-            "Range: 0.3–1.0. Default: 0.70."
+            "1.0 = disabled, 0.7 = 70% of normal distance. Default: 0.70."
         )
+
         f_density.addRow(
-            "Conservative distance gate", self.spin_density_conservative_factor
+            self._build_field_grid(
+                [
+                    ("Temporal sigma (frames)", self.spin_density_temporal_sigma),
+                    ("Conservative gate", self.spin_density_conservative_factor),
+                ]
+            )
         )
 
         self.spin_density_min_duration = QSpinBox()
@@ -984,11 +989,9 @@ class TrackingPanel(QWidget):
         self.spin_density_min_duration.setValue(3)
         self.spin_density_min_duration.setToolTip(
             "Minimum temporal duration (frames) for a density region to be kept.\n"
-            "Regions shorter than this are discarded — they usually represent a\n"
-            "single isolated animal rather than a genuine crowding event.\n"
-            "Range: 1–50. Default: 3."
+            "Shorter regions usually represent a single isolated animal.\n"
+            "Default: 3."
         )
-        f_density.addRow("Min region duration (frames)", self.spin_density_min_duration)
 
         self.spin_density_min_area_bodies = QDoubleSpinBox()
         self.spin_density_min_area_bodies.setRange(0.0, 10.0)
@@ -996,38 +999,29 @@ class TrackingPanel(QWidget):
         self.spin_density_min_area_bodies.setDecimals(2)
         self.spin_density_min_area_bodies.setValue(0.25)
         self.spin_density_min_area_bodies.setToolTip(
-            "Minimum spatial area of a density region expressed as multiples of\n"
-            "the reference body area (body_size²). Regions smaller than this in\n"
-            "the density grid are discarded as single-animal artefacts.\n"
-            "E.g. 0.25 requires the region to cover at least ¼ of one body area.\n"
-            "Range: 0.0–10.0. Default: 0.25."
-        )
-        f_density.addRow(
-            "Min region area (body areas)", self.spin_density_min_area_bodies
+            "Minimum region area in multiples of body area (body_size²).\n"
+            "0.25 = at least ¼ of one body area. Default: 0.25."
         )
 
-        self.spin_density_downsample_factor = QSpinBox()
-        self.spin_density_downsample_factor.setRange(1, 32)
-        self.spin_density_downsample_factor.setValue(8)
-        self.spin_density_downsample_factor.setToolTip(
-            "Spatial downsampling factor applied to the density grid.\n"
-            "Higher values make computation faster but reduce spatial precision.\n"
-            "The grid will be (frame_h / factor) × (frame_w / factor).\n"
-            "Range: 1–32. Default: 8."
+        f_density.addRow(
+            self._build_field_grid(
+                [
+                    ("Min duration (frames)", self.spin_density_min_duration),
+                    ("Min area (body areas)", self.spin_density_min_area_bodies),
+                ]
+            )
         )
-        f_density.addRow("Grid downsample factor", self.spin_density_downsample_factor)
 
         self.chk_export_confidence_density_video = QCheckBox(
             "Export density diagnostic video"
         )
         self.chk_export_confidence_density_video.setChecked(False)
         self.chk_export_confidence_density_video.setToolTip(
-            "Write a reduced-resolution confidence-density visualization video\n"
-            "next to the source video after density-map computation completes.\n"
-            "Leave disabled unless you need the diagnostic visualization,\n"
-            "because exporting it adds a full extra video write pass."
+            "Write a reduced-resolution density visualization video alongside\n"
+            "the source video. Adds a full extra video write pass — leave off\n"
+            "unless you need the diagnostic."
         )
-        f_density.addRow("", self.chk_export_confidence_density_video)
+        f_density.addRow(self.chk_export_confidence_density_video)
 
         vl_density.addLayout(f_density)
         self.g_density.setContentLayout(vl_density)
@@ -1043,8 +1037,77 @@ class TrackingPanel(QWidget):
             self.chk_enable_confidence_density_map.checkState()
         )
 
+        # Apply initial cascade-hide state so sub-options match toggle defaults.
+        self._on_identity_in_tracking_toggled()
+        self._on_directed_orient_smoothing_toggled()
+
+        vbox.addStretch(1)
         scroll.setWidget(content)
         layout.addWidget(scroll)
+
+    @staticmethod
+    def _configure_form_layout(form: QFormLayout) -> None:
+        """Apply the compact spacing used by the cleaned-up right-hand panels."""
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(8)
+
+    @staticmethod
+    def _build_field_grid(
+        fields: list[tuple[str, QWidget]],
+        columns: int = 2,
+    ) -> QWidget:
+        """Arrange labeled controls in compact vertical cells."""
+        widget = QWidget()
+        grid = QGridLayout(widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        for index, (label_text, field_widget) in enumerate(fields):
+            row = index // columns
+            column = index % columns
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(4)
+            label = QLabel(label_text)
+            label.setStyleSheet("color: #cccccc;")
+            label.setWordWrap(True)
+            cell_layout.addWidget(label)
+            cell_layout.addWidget(field_widget)
+            grid.addWidget(cell, row, column)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        return widget
+
+    @staticmethod
+    def _build_checkbox_grid(
+        checkboxes: list[QCheckBox],
+        columns: int = 2,
+    ) -> QWidget:
+        """Arrange related checkboxes in a compact grid."""
+        widget = QWidget()
+        grid = QGridLayout(widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        for index, checkbox in enumerate(checkboxes):
+            row = index // columns
+            column = index % columns
+            grid.addWidget(checkbox, row, column)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        return widget
+
+    @staticmethod
+    def _make_inline_note(text: str) -> QLabel:
+        """Create a low-emphasis explanatory note for section intros."""
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        label.setStyleSheet("color: #b8b8b8; padding: 0 2px 4px 2px;")
+        return label
 
     def apply_config(self, config: TrackerConfig) -> None:
         """Update panel widgets to reflect a new config object."""
@@ -1056,21 +1119,47 @@ class TrackingPanel(QWidget):
         self.g_density.setVisible(enabled)
         self.g_density.setEnabled(enabled)
 
-    def _on_identity_in_tracking_toggled(self, _checked):
-        """Disable identity-decoder controls when the master switch is OFF."""
+    def _on_identity_in_tracking_toggled(self, _checked=None):
+        """Cascade-hide identity-decoder controls when the master switch is OFF."""
         enabled = self.chk_enable_identity_in_tracking.isChecked()
-        for widget in (
-            self.chk_enable_identity_online_decoder,
-            self.spin_identity_weight,
-            self.spin_identity_commit_threshold,
-            self.spin_identity_display_threshold,
-            self.spin_identity_transition_epsilon,
-            self.spin_identity_unknown_prior,
-            self.spin_identity_rejoin_threshold,
-            self.chk_enable_identity_swap_correction,
-            self.spin_identity_swap_min_frames,
-        ):
-            widget.setEnabled(enabled)
+        self._identity_subgroup.setVisible(enabled)
+        if enabled:
+            # Re-apply nested cascade rules so widgets restore correct state.
+            self._on_identity_online_decoder_toggled()
+            self._on_identity_swap_correction_toggled()
+
+    def _on_identity_online_decoder_toggled(self, _checked=None):
+        """Hide Identity weight + Rejoin threshold when Bayesian cost term is OFF."""
+        on = (
+            self.chk_enable_identity_in_tracking.isChecked()
+            and self.chk_enable_identity_online_decoder.isChecked()
+        )
+        self._identity_cost_widget.setVisible(on)
+
+    def _on_identity_swap_correction_toggled(self, _checked=None):
+        """Hide Swap min frames when swap correction is OFF."""
+        on = (
+            self.chk_enable_identity_in_tracking.isChecked()
+            and self.chk_enable_identity_swap_correction.isChecked()
+        )
+        self._identity_swap_frames_widget.setVisible(on)
+
+    def _on_directed_orient_smoothing_toggled(self, _checked=None):
+        """Hide flip-confidence and persistence row when smoothing is OFF."""
+        on = self.chk_directed_orient_smoothing.isChecked()
+        self._directed_orient_flip_widget.setVisible(on)
+
+    def set_identity_section_visible(self, visible: bool) -> None:
+        """Hide the entire identity-decoder collapsible.
+
+        Called from the session orchestrator's individual-analysis-mode sync
+        whenever identity classification is toggled in the Analyse Individuals
+        panel. When identity classification is OFF the entire decoder section
+        is irrelevant — hide it rather than leaving disabled controls on
+        screen.
+        """
+        self.g_identity_decoder.setVisible(visible)
+        self.g_identity_decoder.setEnabled(visible)
 
     def sync_directed_orient_posthoc_ui(self, posthoc_active: bool) -> None:
         """Toggle between online-consistency controls and the post-hoc note.

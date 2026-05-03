@@ -1467,6 +1467,14 @@ class SessionOrchestrator:
             self._mw._identity_panel._sync_headtail_analysis_ui()
             self._mw._identity_panel._sync_identity_method_ui()
             self._mw._identity_panel._sync_pose_analysis_ui()
+
+        # Hide tracking-side identity decoder when classification is OFF.
+        if hasattr(self._mw, "_tracking_panel"):
+            identity_active = pipeline_enabled and bool(
+                getattr(self._mw, "_identity_panel", None)
+                and self._mw._identity_panel.g_identity.isChecked()
+            )
+            self._mw._tracking_panel.set_identity_section_visible(identity_active)
         if hasattr(self._mw, "_dataset_panel"):
             self._mw._dataset_panel.g_individual_dataset.setVisible(pipeline_enabled)
             self._mw._dataset_panel.g_individual_dataset.setEnabled(pipeline_enabled)
