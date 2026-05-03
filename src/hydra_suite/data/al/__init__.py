@@ -1,5 +1,17 @@
 """Active learning core: frame sources, candidate pool, signals, acquisition."""
 
-from .frame_source import FrameRef, FrameSource, VideoFrameSource
+from .frame_source import (
+    DetectKitProjectSource,
+    FrameRef,
+    FrameSource,
+    ImageFolderFrameSource,
+    VideoFrameSource,
+)
 
-__all__ = ["FrameRef", "FrameSource", "VideoFrameSource"]
+__all__ = [
+    "DetectKitProjectSource",
+    "FrameRef",
+    "FrameSource",
+    "ImageFolderFrameSource",
+    "VideoFrameSource",
+]

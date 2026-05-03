@@ -59,3 +59,70 @@ class VideoFrameSource:
 
     def length(self) -> int:
         return self._n_frames
+
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+
+
+class ImageFolderFrameSource:
+    """FrameSource backed by a directory of image files."""
+
+    def __init__(self, folder: str) -> None:
+        self._folder = Path(folder)
+        self._paths: list[Path] = sorted(
+            p
+            for p in self._folder.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMAGE_EXTS
+        )
+        self._source_id = f"folder:{self._folder.name}"
+
+    def __iter__(self) -> Iterator[FrameRef]:
+        for idx, p in enumerate(self._paths):
+            yield FrameRef(source_id=self._source_id, frame_id=idx, path=str(p))
+
+    def read(self, ref: FrameRef) -> np.ndarray | None:
+        if ref.path is None:
+            return None
+        img = cv2.imread(ref.path)
+        return img if img is not None else None
+
+    def length(self) -> int:
+        return len(self._paths)
+
+
+class DetectKitProjectSource:
+    """FrameSource backed by all sources in a DetectKitProject.
+
+    `only_unlabeled=True` skips images that have a corresponding non-empty `.txt`
+    label file in the source's `labels/` directory.
+    """
+
+    def __init__(self, project, only_unlabeled: bool = True) -> None:
+        self._only_unlabeled = only_unlabeled
+        self._items: list[tuple[str, Path]] = []
+        for src in getattr(project, "sources", []):
+            root = Path(src.path)
+            images_dir = root / "images"
+            labels_dir = root / "labels"
+            if not images_dir.is_dir():
+                continue
+            for img_path in sorted(images_dir.iterdir()):
+                if img_path.suffix.lower() not in _IMAGE_EXTS:
+                    continue
+                if only_unlabeled:
+                    label_path = labels_dir / (img_path.stem + ".txt")
+                    if label_path.is_file() and label_path.stat().st_size > 0:
+                        continue
+                self._items.append((f"project:{src.name}", img_path))
+
+    def __iter__(self) -> Iterator[FrameRef]:
+        for idx, (sid, p) in enumerate(self._items):
+            yield FrameRef(source_id=sid, frame_id=idx, path=str(p))
+
+    def read(self, ref: FrameRef) -> np.ndarray | None:
+        if ref.path is None:
+            return None
+        return cv2.imread(ref.path)
+
+    def length(self) -> int:
+        return len(self._items)
