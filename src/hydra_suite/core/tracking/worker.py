@@ -1837,6 +1837,25 @@ class TrackingWorker(QThread):
                 tag_observation_cache_path = results.get("apriltag")
                 profiler.phase_end("precompute")
 
+                # If the user requested a stop during precompute, exit cleanly
+                # before performing the long tracking loop.
+                if self._stop_requested:
+                    logger.info(
+                        "Stop requested during precompute; aborting tracking run."
+                    )
+                    if detection_cache:
+                        try:
+                            detection_cache.close()
+                        except Exception:
+                            logger.debug(
+                                "detection_cache.close() failed", exc_info=True
+                            )
+                    cap.release()
+                    if self.video_writer:
+                        self.video_writer.release()
+                    self.finished_signal.emit(False, [], [])
+                    return
+
                 if props_path:
                     logger.info("Individual properties cache: %s", props_path)
 

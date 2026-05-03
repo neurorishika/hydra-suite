@@ -15,6 +15,7 @@ import cv2
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -1588,9 +1589,58 @@ class MainWindow(QMainWindow):
         self._session_orch._compute_median_background_color()
 
     def closeEvent(self, event) -> None:
-        """Persist MAT-specific UI layout state on close."""
+        """Stop active workers cleanly, then persist UI layout state on close."""
+        if self._has_active_tracking_workers():
+            reply = QMessageBox.question(
+                self,
+                "Tracking In Progress",
+                "Tracking is currently running. Stop tracking and exit?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                self._tracking_orch.stop_tracking()
+            except Exception:
+                logger.exception("Error during stop_tracking on close.")
+            finally:
+                QApplication.restoreOverrideCursor()
+
         self._save_ui_settings()
         super().closeEvent(event)
+
+    def _has_active_tracking_workers(self) -> bool:
+        """Return True if any tracking-related worker thread is still running."""
+        worker_attrs = (
+            "tracking_worker",
+            "_cache_builder_worker",
+            "merge_worker",
+            "postprocess_worker",
+            "dataset_worker",
+            "interp_worker",
+            "final_media_export_worker",
+            "preview_detection_worker",
+        )
+        for attr in worker_attrs:
+            worker = getattr(self, attr, None)
+            if worker is None:
+                continue
+            try:
+                if worker.isRunning():
+                    return True
+            except Exception:
+                continue
+        writer = getattr(self, "csv_writer_thread", None)
+        if writer is not None:
+            try:
+                if writer.is_alive():
+                    return True
+            except Exception:
+                pass
+        return False
 
     def select_file(self: object) -> object:
         """Select video file via file dialog."""
