@@ -636,3 +636,31 @@ def test_frame_quality_scorer_uses_tracker_default_preset_after_refactor():
         max_frames=1, diversity_window=0, probabilistic=False
     )
     assert picks == [100]
+
+
+def test_frame_quality_scorer_honors_dataset_al_preset_param():
+    """Custom DATASET_AL_PRESET param swaps the weight preset."""
+    from hydra_suite.data.al.acquisition import PRESETS
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    params = {
+        "MAX_TARGETS": 4,
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "DATASET_AL_PRESET": "uncertainty_heavy",
+        "REFERENCE_BODY_SIZE": 20.0,
+    }
+    scorer = FrameQualityScorer(params)
+    expected = PRESETS["uncertainty_heavy"]
+    # uncertainty channel should match the preset's uncertainty weight
+    # (only enabled-channel weights flow through; uncertainty is enabled by default).
+    assert scorer._weights.uncertainty == expected.uncertainty
+
+
+def test_frame_quality_scorer_unknown_preset_falls_back_to_tracker_default():
+    from hydra_suite.data.al.acquisition import PRESETS
+    from hydra_suite.data.dataset_generation import FrameQualityScorer
+
+    params = {"MAX_TARGETS": 4, "DATASET_AL_PRESET": "no_such_preset"}
+    scorer = FrameQualityScorer(params)
+    expected = PRESETS["tracker_default"]
+    assert scorer._weights.uncertainty == expected.uncertainty

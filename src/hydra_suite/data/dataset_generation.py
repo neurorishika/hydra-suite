@@ -93,7 +93,8 @@ class FrameQualityScorer:
             "crowd": self.use_fragmented_detections,
         }
 
-        base = PRESETS["tracker_default"]
+        preset_name = params.get("DATASET_AL_PRESET", "tracker_default")
+        base = PRESETS.get(preset_name, PRESETS["tracker_default"])
         self._weights = AcquisitionWeights(
             uncertainty=base.uncertainty if self._enabled["uncertainty"] else 0.0,
             nms_instability=0.0,
