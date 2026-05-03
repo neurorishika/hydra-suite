@@ -89,10 +89,7 @@ class _StubTrackAssigner:
         return np.zeros((N, len(meas)), dtype=np.float32), {}
 
     def assign_tracks(self, cost, N, M, meas, *args, **kwargs):
-        next_trajectory_id = (
-            args[4] if len(args) > 4 else kwargs.get("next_trajectory_id", N)
-        )
-        return [0], [0], [], next_trajectory_id, []
+        return [0], [0], [], []
 
 
 class _FakeCache:

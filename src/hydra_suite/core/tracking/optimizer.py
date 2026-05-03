@@ -981,7 +981,7 @@ class TrackingOptimizer(QThread):
                     ),
                     association_data=_association_data,
                 )
-                matched_r, matched_c, free_dets, next_trajectory_id, _ = (
+                matched_r, matched_c, free_dets, _identity_rejoin_pairs = (
                     assigner.assign_tracks(
                         cost,
                         N,
@@ -990,9 +990,9 @@ class TrackingOptimizer(QThread):
                         track_states,
                         tracking_continuity,
                         kf_manager,
-                        trajectory_ids,
-                        next_trajectory_id,
-                        _spatial_candidates,
+                        spatial_candidates=_spatial_candidates,
+                        association_data=_association_data,
+                        missed_frames=missed_frames,
                     )
                 )
                 respawned_matches = {r for r in matched_r if track_states[r] == "lost"}

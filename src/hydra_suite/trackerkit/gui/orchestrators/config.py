@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 from datetime import datetime
@@ -3410,14 +3411,19 @@ class ConfigOrchestrator:
 
         start_frame = self._panels.setup.spin_start_frame.value()
         end_frame = self._panels.setup.spin_end_frame.value()
+        selected_frame_count = max(end_frame - start_frame + 1, 0)
+        fps = float(self._panels.setup.spin_fps.value())
+        if not math.isfinite(fps) or fps <= 0.0:
+            fps = 30.0
+        max_autotune_duration_seconds = 5 * 60
 
-        if (end_frame - start_frame) > 1000:
+        if (selected_frame_count / fps) > max_autotune_duration_seconds:
             QMessageBox.warning(
                 self._mw,
                 "Range Too Large",
-                "The selected range is very large. For faster optimization, "
-                "please select a smaller slice (e.g., 100-500 frames) using "
-                "the 'Start Frame' and 'End Frame' boxes.",
+                "The selected range spans more than 5 minutes at the current "
+                "FPS. For faster optimization, please select a smaller slice "
+                "using the 'Start Frame' and 'End Frame' boxes.",
             )
             return
 

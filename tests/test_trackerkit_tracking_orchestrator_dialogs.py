@@ -142,6 +142,7 @@ def test_open_parameter_helper_uses_main_window_parent(monkeypatch) -> None:
             file_line=SimpleNamespace(text=lambda: "video.mp4"),
             spin_start_frame=SimpleNamespace(value=lambda: 0),
             spin_end_frame=SimpleNamespace(value=lambda: 100),
+            spin_fps=SimpleNamespace(value=lambda: 30.0),
         )
     )
     orchestrator = ConfigOrchestrator(
@@ -214,7 +215,8 @@ def test_open_parameter_helper_range_warning_uses_main_window_parent(
         setup=SimpleNamespace(
             file_line=SimpleNamespace(text=lambda: "video.mp4"),
             spin_start_frame=SimpleNamespace(value=lambda: 0),
-            spin_end_frame=SimpleNamespace(value=lambda: 1001),
+            spin_end_frame=SimpleNamespace(value=lambda: 9001),
+            spin_fps=SimpleNamespace(value=lambda: 30.0),
         )
     )
     orchestrator = ConfigOrchestrator(
@@ -238,9 +240,83 @@ def test_open_parameter_helper_range_warning_uses_main_window_parent(
     assert captured == {
         "parent": main_window,
         "title": "Range Too Large",
-        "message": "The selected range is very large. For faster optimization, "
-        "please select a smaller slice (e.g., 100-500 frames) using "
-        "the 'Start Frame' and 'End Frame' boxes.",
+        "message": "The selected range spans more than 5 minutes at the current "
+        "FPS. For faster optimization, please select a smaller slice "
+        "using the 'Start Frame' and 'End Frame' boxes.",
+    }
+
+
+def test_open_parameter_helper_allows_large_frame_count_when_under_five_minutes(
+    monkeypatch,
+) -> None:
+    main_window = object()
+    panels = SimpleNamespace(
+        setup=SimpleNamespace(
+            file_line=SimpleNamespace(text=lambda: "video.mp4"),
+            spin_start_frame=SimpleNamespace(value=lambda: 0),
+            spin_end_frame=SimpleNamespace(value=lambda: 2000),
+            spin_fps=SimpleNamespace(value=lambda: 120.0),
+        )
+    )
+    orchestrator = ConfigOrchestrator(
+        main_window=main_window,
+        config=object(),
+        panels=panels,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeDialog:
+        def __init__(
+            self,
+            video_path: str,
+            cache_path: str,
+            start_frame: int,
+            end_frame: int,
+            params: dict[str, object],
+            parent=None,
+        ) -> None:
+            captured.update(
+                {
+                    "video_path": video_path,
+                    "cache_path": cache_path,
+                    "start_frame": start_frame,
+                    "end_frame": end_frame,
+                    "params": params,
+                    "parent": parent,
+                }
+            )
+
+        def exec(self) -> int:
+            return config_module.QDialog.Rejected
+
+    monkeypatch.setattr(
+        "hydra_suite.trackerkit.gui.dialogs.parameter_helper.ParameterHelperDialog",
+        FakeDialog,
+    )
+    monkeypatch.setattr(
+        ConfigOrchestrator,
+        "get_parameters_dict",
+        lambda self: {"YOLO_CONFIDENCE_THRESHOLD": 0.5},
+    )
+    monkeypatch.setattr(
+        ConfigOrchestrator,
+        "_find_or_plan_optimizer_cache_path",
+        lambda self, video_path, params, start_frame, end_frame: (
+            "/tmp/cache.npz",
+            True,
+        ),
+    )
+    monkeypatch.setattr(config_module.os.path, "exists", lambda path: True)
+
+    orchestrator._open_parameter_helper()
+
+    assert captured == {
+        "video_path": "video.mp4",
+        "cache_path": "/tmp/cache.npz",
+        "start_frame": 0,
+        "end_frame": 2000,
+        "params": {"YOLO_CONFIDENCE_THRESHOLD": 0.5},
+        "parent": main_window,
     }
 
 
@@ -253,6 +329,7 @@ def test_open_parameter_helper_detection_prompt_uses_main_window_parent(
             file_line=SimpleNamespace(text=lambda: "video.mp4"),
             spin_start_frame=SimpleNamespace(value=lambda: 10),
             spin_end_frame=SimpleNamespace(value=lambda: 100),
+            spin_fps=SimpleNamespace(value=lambda: 30.0),
         )
     )
     orchestrator = ConfigOrchestrator(
