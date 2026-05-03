@@ -83,8 +83,7 @@ class ImageFolderFrameSource:
     def read(self, ref: FrameRef) -> np.ndarray | None:
         if ref.path is None:
             return None
-        img = cv2.imread(ref.path)
-        return img if img is not None else None
+        return cv2.imread(ref.path)
 
     def length(self) -> int:
         return len(self._paths)
@@ -93,8 +92,10 @@ class ImageFolderFrameSource:
 class DetectKitProjectSource:
     """FrameSource backed by all sources in a DetectKitProject.
 
-    `only_unlabeled=True` skips images that have a corresponding non-empty `.txt`
-    label file in the source's `labels/` directory.
+    Iterates `<source_path>/images/` for each entry in `project.sources`. Project
+    sources without an `images/` subdirectory are silently skipped. When
+    `only_unlabeled=True`, images with a non-empty `<source_path>/labels/<stem>.txt`
+    label file are skipped.
     """
 
     def __init__(self, project, only_unlabeled: bool = True) -> None:
