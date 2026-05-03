@@ -592,7 +592,10 @@ class DetectionPanel(QWidget):
         self.combo_yolo_model = QComboBox()
         self.combo_yolo_model.activated.connect(self.on_yolo_model_changed)
         self.combo_yolo_model.currentIndexChanged.connect(
-            lambda _index: self._sync_model_selector_buttons()
+            lambda _index: (
+                self._sync_model_selector_buttons(),
+                self._main_window._auto_apply_yolo_training_params("obb_direct"),
+            )
         )
         self.combo_yolo_model.setFixedHeight(30)
         self.combo_yolo_model.setToolTip("Direct-mode YOLO OBB model.")
@@ -618,7 +621,10 @@ class DetectionPanel(QWidget):
             self.on_yolo_detect_model_changed
         )
         self.combo_yolo_detect_model.currentIndexChanged.connect(
-            lambda _index: self._sync_model_selector_buttons()
+            lambda _index: (
+                self._sync_model_selector_buttons(),
+                self._main_window._auto_apply_yolo_training_params("seq_detect"),
+            )
         )
         self.combo_yolo_detect_model.setFixedHeight(30)
         self.combo_yolo_detect_model.setToolTip(
@@ -646,7 +652,10 @@ class DetectionPanel(QWidget):
             self.on_yolo_crop_obb_model_changed
         )
         self.combo_yolo_crop_obb_model.currentIndexChanged.connect(
-            lambda _index: self._sync_model_selector_buttons()
+            lambda _index: (
+                self._sync_model_selector_buttons(),
+                self._main_window._auto_apply_yolo_training_params("seq_crop_obb"),
+            )
         )
         self.combo_yolo_crop_obb_model.setFixedHeight(30)
         self.combo_yolo_crop_obb_model.setToolTip(

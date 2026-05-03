@@ -12,9 +12,21 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-# Regex to match ultralytics epoch lines:
-#   <epoch>/<total>  <box_loss>  <cls_loss>  <dfl_loss>  ...
-_EPOCH_RE = re.compile(r"^\s*(\d+)/(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)")
+# Regex to match ultralytics epoch lines. The on-screen format from recent
+# Ultralytics releases looks like
+#
+#   [role]   10/500    8.02G    1.171   0.7284   0.0164   0.09518   ...   100% ...
+#
+# i.e. an optional bracketed worker prefix, then ``epoch/total``, an optional
+# ``<gpu_mem>G`` column, then the loss columns. OBB models add an extra
+# ``angle_loss`` column which we ignore.
+_EPOCH_RE = re.compile(
+    r"^\s*"
+    r"(?:\[[A-Za-z0-9_\-]+\]\s+)?"  # optional "[role]" prefix
+    r"(\d+)/(\d+)"  # epoch / total
+    r"\s+(?:[\d.]+\s*G\s+)?"  # optional GPU memory column
+    r"([\d.]+)\s+([\d.]+)\s+([\d.]+)"  # box_loss, cls_loss, dfl_loss
+)
 
 _SERIES_KEYS = ("box_loss", "cls_loss", "dfl_loss")
 
@@ -23,8 +35,13 @@ def parse_ultralytics_log_line(line: str) -> Optional[dict]:
     """Parse a single ultralytics training log line.
 
     Returns a dict with epoch, total_epochs, box_loss, cls_loss, dfl_loss
-    if the line matches the epoch pattern, otherwise ``None``.
+    if the line matches the epoch pattern at the *final* (100%) per-epoch
+    progress update; otherwise ``None``. Filtering on the 100% line keeps
+    one point per epoch and avoids the noisy in-progress samples that
+    Ultralytics emits as the bar fills.
     """
+    if "100%" not in line:
+        return None
     m = _EPOCH_RE.match(line)
     if m is None:
         return None
@@ -53,22 +70,38 @@ class LossPlotWidget(QWidget):
             "cls_loss": QColor(239, 83, 80),  # red
             "dfl_loss": QColor(102, 187, 106),  # green
         }
+        self._last_epoch: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def add_metrics(self, metrics: dict) -> None:
-        """Append parsed metric values and schedule a repaint."""
+        """Append parsed metric values and schedule a repaint.
+
+        If *metrics* carries an ``epoch`` key that matches the previously
+        appended sample, the new sample replaces the last one rather than
+        being appended. This keeps a single point per epoch even when the
+        same epoch's 100% line shows up more than once in the log.
+        """
+        epoch = metrics.get("epoch")
+        replace = epoch is not None and epoch == self._last_epoch
         for key in _SERIES_KEYS:
-            if key in metrics:
+            if key not in metrics:
+                continue
+            if replace and self.series[key]:
+                self.series[key][-1] = metrics[key]
+            else:
                 self.series[key].append(metrics[key])
+        if epoch is not None:
+            self._last_epoch = int(epoch)
         self.update()
 
     def clear(self) -> None:
         """Remove all accumulated data."""
         for key in _SERIES_KEYS:
             self.series[key].clear()
+        self._last_epoch = None
         self.update()
 
     def ingest_log_line(self, line: str) -> None:

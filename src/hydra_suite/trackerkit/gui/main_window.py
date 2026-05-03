@@ -2301,37 +2301,102 @@ class MainWindow(QMainWindow):
             self._session_orch._update_obb_mode_warning()
 
     def _apply_crop_obb_training_params(self):
-        """Auto-configure sequential inference params from model training metadata."""
-        model_path = self._get_selected_yolo_crop_obb_model_path()
+        """Backward-compatible alias: apply seq_crop_obb training metadata."""
+        self._auto_apply_yolo_training_params("seq_crop_obb")
+
+    def _auto_apply_yolo_training_params(self, role: str) -> None:
+        """Read model registry metadata for *role* and populate inference UI.
+
+        DetectKit publishes ``training_params`` on every successful run so
+        TrackerKit can recover the values it would otherwise need the user
+        to retype. This applies them on selection (including programmatic
+        selection right after import).
+        """
+        role = (role or "").strip().lower()
+        if role == "seq_crop_obb":
+            model_path = self._get_selected_yolo_crop_obb_model_path()
+        elif role == "seq_detect":
+            model_path = self._get_selected_yolo_detect_model_path()
+        elif role == "obb_direct":
+            model_path = self._get_selected_yolo_model_path()
+        else:
+            return
         if not model_path:
             return
+
+        # Switch OBB mode to match the role of the model the user picked.
+        panel = self._detection_panel
+        try:
+            if role in ("seq_detect", "seq_crop_obb"):
+                if panel.combo_yolo_obb_mode.currentIndex() != 1:
+                    panel.combo_yolo_obb_mode.setCurrentIndex(1)
+            elif role == "obb_direct":
+                if panel.combo_yolo_obb_mode.currentIndex() != 0:
+                    panel.combo_yolo_obb_mode.setCurrentIndex(0)
+        except Exception:
+            pass
+
         meta = get_yolo_model_metadata(model_path) or {}
         tp = meta.get("training_params")
         if not isinstance(tp, dict):
             return
 
-        applied = []
-        if "imgsz" in tp:
-            val = int(tp["imgsz"])
-            self._detection_panel.spin_yolo_seq_stage2_imgsz.setValue(val)
-            applied.append(f"stage2_imgsz={val}")
-        if "crop_pad_ratio" in tp:
-            val = float(tp["crop_pad_ratio"])
-            self._detection_panel.spin_yolo_seq_crop_pad.setValue(val)
-            applied.append(f"crop_pad={val}")
-        if "min_crop_size_px" in tp:
-            val = int(tp["min_crop_size_px"])
-            self._detection_panel.spin_yolo_seq_min_crop_px.setValue(val)
-            applied.append(f"min_crop={val}")
-        if "enforce_square" in tp:
-            val = bool(tp["enforce_square"])
-            self._detection_panel.chk_yolo_seq_square_crop.setChecked(val)
-            applied.append(f"square={val}")
+        applied: list[str] = []
+
+        if role == "seq_crop_obb":
+            if "imgsz" in tp:
+                val = int(tp["imgsz"])
+                panel.spin_yolo_seq_stage2_imgsz.setValue(val)
+                applied.append(f"stage2_imgsz={val}")
+            if "crop_pad_ratio" in tp:
+                val = float(tp["crop_pad_ratio"])
+                panel.spin_yolo_seq_crop_pad.setValue(val)
+                applied.append(f"crop_pad={val}")
+            if "min_crop_size_px" in tp:
+                val = int(tp["min_crop_size_px"])
+                panel.spin_yolo_seq_min_crop_px.setValue(val)
+                applied.append(f"min_crop={val}")
+            if "enforce_square" in tp:
+                val = bool(tp["enforce_square"])
+                panel.chk_yolo_seq_square_crop.setChecked(val)
+                applied.append(f"square={val}")
+        elif role == "seq_detect":
+            # Stage-1 imgsz is auto-recovered by Ultralytics from the .pt;
+            # apply matching crop derivation params so stage-1 and stage-2
+            # share the same crop policy if the detect model recorded one.
+            if "crop_pad_ratio" in tp:
+                val = float(tp["crop_pad_ratio"])
+                panel.spin_yolo_seq_crop_pad.setValue(val)
+                applied.append(f"crop_pad={val}")
+            if "min_crop_size_px" in tp:
+                val = int(tp["min_crop_size_px"])
+                panel.spin_yolo_seq_min_crop_px.setValue(val)
+                applied.append(f"min_crop={val}")
+            if "enforce_square" in tp:
+                val = bool(tp["enforce_square"])
+                panel.chk_yolo_seq_square_crop.setChecked(val)
+                applied.append(f"square={val}")
+        elif role == "obb_direct":
+            # Direct OBB has no per-field UI for imgsz; metadata is logged
+            # so users see what the model expects. The Ultralytics runtime
+            # picks up the trained imgsz from the .pt automatically.
+            if "imgsz" in tp:
+                applied.append(f"trained_imgsz={int(tp['imgsz'])}")
+
         if applied:
             logger.info(
-                "Auto-configured sequential params from model metadata: %s",
+                "Auto-configured %s params from model metadata: %s",
+                role,
                 ", ".join(applied),
             )
+            if hasattr(self, "statusBar"):
+                try:
+                    self.statusBar().showMessage(
+                        f"Applied {role} model defaults: {', '.join(applied)}",
+                        4000,
+                    )
+                except Exception:
+                    pass
 
     def on_yolo_headtail_model_changed(self: object, index: object) -> object:
         """Handle head/tail classification model combo-box changes.

@@ -170,6 +170,7 @@ class TrainingDialog(BaseDialog):
         self._dataset_fit_cache_key: tuple | None = None
         self._dataset_fit_cache_text = ""
         self._dataset_fit_dirty = True
+        self._training_running = False
         self.role_dataset_dirs: dict[str, str] = {}
 
         try:
@@ -597,6 +598,36 @@ QTabBar::tab:selected {
         if hasattr(self, "run_status_label"):
             self.run_status_label.setText(message)
 
+    def _set_training_running(self, running: bool) -> None:
+        """Lock the configuration UI while a training run is active."""
+        self._training_running = bool(running)
+        if hasattr(self, "training_tabs"):
+            self.training_tabs.setEnabled(not running)
+        for btn_attr in (
+            "btn_start",
+            "btn_resume",
+            "btn_save_config",
+            "btn_load_config",
+        ):
+            btn = getattr(self, btn_attr, None)
+            if btn is not None:
+                btn.setEnabled(not running)
+        if hasattr(self, "btn_cancel"):
+            self.btn_cancel.setEnabled(running)
+        # Re-evaluate "Resume" availability when a run completes.
+        if not running:
+            self._update_resume_enabled()
+
+    def _update_resume_enabled(self) -> None:
+        if not hasattr(self, "btn_resume"):
+            return
+        has_resume = any(
+            r.get("_run_dir")
+            and Path(r["_run_dir"]).joinpath("weights", "last.pt").exists()
+            for r in (self._last_training_results or [])
+        )
+        self.btn_resume.setEnabled(has_resume)
+
     # --- 1. Roles ---
 
     def _build_roles_group(self) -> QGroupBox:
@@ -836,6 +867,18 @@ QTabBar::tab:selected {
 
     # --- 4. Base Models ---
 
+    @staticmethod
+    def _yolo_detect_options() -> list[str]:
+        sizes = ("n", "s", "m", "l", "x")
+        families = ("yolov8", "yolo11", "yolo12", "yolo26")
+        return [f"{family}{size}.pt" for family in families for size in sizes]
+
+    @staticmethod
+    def _yolo_obb_options() -> list[str]:
+        sizes = ("n", "s", "m", "l", "x")
+        families = ("yolov8", "yolo11", "yolo12", "yolo26")
+        return [f"{family}{size}-obb.pt" for family in families for size in sizes]
+
     def _build_base_models_group(self) -> QGroupBox:
         gb = QGroupBox("Base Checkpoints")
         form = QFormLayout(gb)
@@ -843,40 +886,33 @@ QTabBar::tab:selected {
         form.addRow(
             "",
             self._build_section_note(
-                "Only checkpoints for the active stages are shown. Editable fields still let you point to custom weights."
+                "Pick a base checkpoint per active stage. Type a path to use custom weights."
             ),
         )
 
+        obb_options = self._yolo_obb_options()
+        detect_options = self._yolo_detect_options()
+        default_obb = "yolo26s-obb.pt"
+        default_detect = "yolo26s.pt"
+
         self.combo_model_obb_direct = QComboBox()
         self.combo_model_obb_direct.setEditable(True)
-        self.combo_model_obb_direct.addItems(
-            [
-                "yolo26n-obb.pt",
-                "yolo26s-obb.pt",
-                "yolo26m-obb.pt",
-                "yolo26l-obb.pt",
-                "yolo26x-obb.pt",
-            ]
-        )
-        self.combo_model_obb_direct.setCurrentText("yolo26s-obb.pt")
+        self.combo_model_obb_direct.addItems(obb_options)
+        self.combo_model_obb_direct.setCurrentText(default_obb)
         self.label_model_obb_direct = QLabel("obb_direct")
         form.addRow(self.label_model_obb_direct, self.combo_model_obb_direct)
 
         self.combo_model_seq_detect = QComboBox()
         self.combo_model_seq_detect.setEditable(True)
-        self.combo_model_seq_detect.addItems(
-            ["yolo26n.pt", "yolo26s.pt", "yolo26m.pt", "yolo26l.pt", "yolo26x.pt"]
-        )
-        self.combo_model_seq_detect.setCurrentText("yolo26s.pt")
+        self.combo_model_seq_detect.addItems(detect_options)
+        self.combo_model_seq_detect.setCurrentText(default_detect)
         self.label_model_seq_detect = QLabel("seq_detect")
         form.addRow(self.label_model_seq_detect, self.combo_model_seq_detect)
 
         self.combo_model_seq_crop_obb = QComboBox()
         self.combo_model_seq_crop_obb.setEditable(True)
-        self.combo_model_seq_crop_obb.addItems(
-            ["yolo26n-obb.pt", "yolo26s-obb.pt", "yolo26m-obb.pt"]
-        )
-        self.combo_model_seq_crop_obb.setCurrentText("yolo26s-obb.pt")
+        self.combo_model_seq_crop_obb.addItems(obb_options)
+        self.combo_model_seq_crop_obb.setCurrentText(default_obb)
         self.label_model_seq_crop_obb = QLabel("seq_crop_obb")
         form.addRow(self.label_model_seq_crop_obb, self.combo_model_seq_crop_obb)
 
@@ -1935,8 +1971,7 @@ QTabBar::tab:selected {
         self._worker.done_signal.connect(self._on_done)
         self._worker.finished.connect(self._on_worker_finished)
 
-        self.btn_start.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
+        self._set_training_running(True)
         self.progress.setValue(0)
         self.progress.setFormat("Starting…")
         self._role_logs = {}
@@ -2002,13 +2037,7 @@ QTabBar::tab:selected {
             else:
                 r["_run_dir"] = ""
 
-        self.btn_resume.setEnabled(
-            any(
-                r.get("_run_dir")
-                and Path(r["_run_dir"]).joinpath("weights", "last.pt").exists()
-                for r in results
-            )
-        )
+        self._update_resume_enabled()
 
         succeeded = [r for r in results if r.get("success")]
         failed = [r for r in results if not r.get("success")]
@@ -2037,8 +2066,7 @@ QTabBar::tab:selected {
 
     def _on_worker_finished(self) -> None:
         self._current_role = ""
-        self.btn_start.setEnabled(True)
-        self.btn_cancel.setEnabled(False)
+        self._set_training_running(False)
         self.progress.setFormat("Done")
         self.progress.setValue(100)
         if not self._last_training_results:
@@ -2113,9 +2141,7 @@ QTabBar::tab:selected {
             return
 
         self._append_log(f"Resuming training from {last_pt}")
-        self.btn_start.setEnabled(False)
-        self.btn_resume.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
+        self._set_training_running(True)
         self.progress.setValue(0)
         self.progress.setFormat("Resuming…")
         self._role_logs = {}
@@ -2312,7 +2338,15 @@ QTabBar::tab:selected {
             logger.warning("Failed to persist training-dialog state", exc_info=True)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        """Persist UI state when the dialog closes."""
+        """Persist UI state when the dialog closes; refuse close while training."""
+        if self._training_running:
+            QMessageBox.information(
+                self,
+                "Training in progress",
+                "Stop the running training session before closing this dialog.",
+            )
+            event.ignore()
+            return
         try:
             self._save_persistent_state()
         except Exception:
