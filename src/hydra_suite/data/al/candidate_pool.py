@@ -1,11 +1,27 @@
-"""Candidate-pool construction backed by FilterKit dedup primitives."""
+"""Candidate-pool construction backed by FilterKit dedup primitives.
+
+Layer note
+----------
+`hydra_suite.filterkit.core.FilterKitCore` lives under the `filterkit/` app
+package, so the `from hydra_suite.filterkit.core import FilterKitCore` below
+inverts the strict App -> Data dependency rule documented in CLAUDE.md.
+
+`FilterKitCore` itself is a pure-utility class (perceptual hashing + BK-tree
+indexing, no Qt/GUI dependencies). The clean fix is to relocate it to
+`hydra_suite/utils/perceptual_dedup.py` and have both FilterKit and this module
+import from there. That refactor is intentionally out of scope for the AL
+detection-dataset feature; treat this import as a documented carve-out until
+the Simplification Sprint lands the relocation.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
 
-from hydra_suite.filterkit.core import FilterKitCore
+from hydra_suite.filterkit.core import (  # noqa: I900 (layer carve-out, see module docstring)
+    FilterKitCore,
+)
 
 from .frame_source import FrameRef, FrameSource
 
