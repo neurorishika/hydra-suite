@@ -139,7 +139,7 @@ def select(
 ) -> list[int]:
     """Return up to k frame_ids from `signals`, ranked by weighted composite score.
 
-    `diversity_window` enforces minimum frame-index spacing between picks.
+    `diversity_window` enforces minimum frame-index spacing between picks (`abs(a-b) >= diversity_window`).
     `probabilistic=True` uses rank-based sampling; False is deterministic top-K.
     `min_score` drops candidates whose composite score is below this cutoff.
     """
@@ -158,7 +158,7 @@ def select(
     picks: list[int] = []
 
     def _diverse(fid: int) -> bool:
-        return all(abs(fid - p) > diversity_window for p in picks)
+        return all(abs(fid - p) >= diversity_window for p in picks)
 
     if not probabilistic:
         for fid in sorted_ids:
@@ -176,5 +176,5 @@ def select(
         fid = candidates[chosen_idx]
         if _diverse(fid):
             picks.append(fid)
-        candidates = [c for c in candidates if abs(c - fid) > diversity_window]
+        candidates = [c for c in candidates if abs(c - fid) >= diversity_window]
     return picks

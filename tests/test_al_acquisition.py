@@ -60,7 +60,7 @@ def test_select_diversity_window_blocks_neighbors():
     )
     assert len(picks) == 3
     diffs = [abs(a - b) for a in picks for b in picks if a != b]
-    assert min(diffs) > 10
+    assert min(diffs) >= 10
 
 
 def test_select_returns_at_most_k():
