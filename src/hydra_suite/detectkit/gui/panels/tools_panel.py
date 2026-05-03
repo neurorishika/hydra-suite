@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -105,6 +106,7 @@ class ToolsPanel(QWidget):
         self._class_checkboxes: list[QCheckBox] = []
         self._portability_status = "Unknown"
         self._linked_counts: dict[str, int] = {}
+        self._active_model_path: str = ""
         self.setFixedWidth(_PANEL_WIDTH)
         self.setProperty("detectkitRole", "panelShell")
         self._build_ui()
@@ -210,12 +212,25 @@ class ToolsPanel(QWidget):
         v.addWidget(overlay_hint)
 
         v.addWidget(QLabel("Model:"))
-        self._model_combo = QComboBox()
-        self._model_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        model_frame = QFrame()
+        model_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        model_frame.setFrameShadow(QFrame.Shadow.Sunken)
+        model_frame_layout = QVBoxLayout(model_frame)
+        model_frame_layout.setContentsMargins(4, 4, 4, 4)
+        model_frame_layout.setSpacing(0)
+        self._model_display = QLabel("(no model selected)")
+        self._model_display.setWordWrap(True)
+        self._model_display.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
-        self._model_combo.currentIndexChanged.connect(self._emit_overlay_changed)
-        v.addWidget(self._model_combo)
+        model_frame_layout.addWidget(self._model_display)
+        v.addWidget(model_frame)
+        model_hint = QLabel(
+            "Select a model from the History dialog (double-click a row)."
+        )
+        model_hint.setWordWrap(True)
+        model_hint.setProperty("detectkitRole", "sectionHint")
+        v.addWidget(model_hint)
 
         conf_row = QHBoxLayout()
         conf_row.addWidget(QLabel("Confidence:"))
@@ -305,14 +320,9 @@ class ToolsPanel(QWidget):
             self.refresh_overview()
 
     def refresh_model_selector(self, model_paths: list[str]) -> None:
-        """Repopulate the model combo box."""
-        self._model_combo.blockSignals(True)
-        self._model_combo.clear()
-        for path in model_paths:
-            self._model_combo.addItem(path)
-        if model_paths and self._model_combo.currentIndex() < 0:
-            self._model_combo.setCurrentIndex(0)
-        self._model_combo.blockSignals(False)
+        """Update internal model path list; auto-select first when none active."""
+        if not self._active_model_path and model_paths:
+            self.set_active_model_path(model_paths[0])
 
     def update_inference_stats(
         self,
@@ -369,7 +379,6 @@ class ToolsPanel(QWidget):
         show_gt = self._chk_show_gt.isChecked()
         show_pred = self._chk_show_pred.isChecked()
         confidence = self._conf_slider.value() / 100.0
-        active_model = self._model_combo.currentText()
 
         visible_ids: set[int] = set()
         for chk in self._class_checkboxes:
@@ -383,8 +392,21 @@ class ToolsPanel(QWidget):
             show_pred=show_pred,
             confidence_threshold=confidence,
             visible_class_ids=visible_ids,
-            active_model_path=active_model,
+            active_model_path=self._active_model_path,
         )
+
+    def set_active_model_path(self, primary: str, secondary: str | None = None) -> None:
+        """Set the active model path and update the read-only display label."""
+        self._active_model_path = str(primary or "").strip()
+        if not self._active_model_path:
+            self._model_display.setText("(no model selected)")
+        elif secondary:
+            p_name = Path(primary).name
+            s_name = Path(secondary).name
+            self._model_display.setText(f"Detect: {p_name}\nOBB: {s_name}")
+        else:
+            self._model_display.setText(Path(primary).name)
+        self._emit_overlay_changed()
 
     # ------------------------------------------------------------------
     # Internal
