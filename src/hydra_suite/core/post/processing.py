@@ -1142,13 +1142,28 @@ def resolve_trajectories(
     )
 
     # NEW: Stitch consecutive fragments that are spatially close
-    # This fixes tracking breaks during turns or fast movements
-    # Use 2x agreement distance to allow for fast movements/ambiguities across small gaps
+    # This fixes tracking breaks during turns or fast movements.
+    # Use 2× agreement distance as the base spatial gate; the motion-aware
+    # scorer in `_stitch_broken_trajectory_fragments` then tightens via:
+    #   • motion-predicted residual (uses end_velocity × Δframes),
+    #   • heading mismatch veto when both endpoints are moving,
+    #   • density tightening when ≥2 other fragments are near the gap midpoint,
+    #   • margin test (reject when runner-up is comparable),
+    #   • symmetric NN test (A→B accepted only if B also prefers A).
     _stitch_gap = int(params.get("STITCH_MAX_GAP_FRAMES", 3))
+    _max_vel_break = float(params.get("MAX_VELOCITY_BREAK", 100.0))
+    _single_option_margin = float(params.get("STITCH_SINGLE_OPTION_MARGIN", 0.5))
+    _heading_gate_deg = float(params.get("STITCH_HEADING_GATE_DEG", 60.0))
+    _heading_gate_rad = float(np.deg2rad(_heading_gate_deg))
+    _density_tighten_factor = float(params.get("STITCH_DENSITY_TIGHTEN_FACTOR", 0.5))
     result_trajectories = _stitch_broken_trajectory_fragments(
         result_trajectories,
         AGREEMENT_DISTANCE * 2,
         max_gap=_stitch_gap,
+        max_vel_break=_max_vel_break,
+        heading_gate_rad=_heading_gate_rad,
+        single_option_margin=_single_option_margin,
+        density_tighten_factor=_density_tighten_factor,
         identity_gates_stitching=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
     )
 
@@ -2484,23 +2499,206 @@ def _first_committed_label(df: pd.DataFrame) -> str:
     return str(lbl) if lbl and not pd.isna(lbl) else ""
 
 
+def _endpoint_window_velocity(df: pd.DataFrame, at_start: bool, k: int = 3):
+    """Estimate end-of-fragment velocity (px/frame) from the last (or first) k valid rows.
+
+    Uses only rows with finite X/Y so NaN gaps inside the fragment do not corrupt the
+    estimate. Returns (vx, vy, theta) where theta is the row's reported heading at the
+    selected endpoint (used for heading-consistency gating).
+    """
+    if df is None or df.empty:
+        return 0.0, 0.0, 0.0
+    valid = df[df["X"].notna() & df["Y"].notna()]
+    if valid.empty:
+        return 0.0, 0.0, 0.0
+    if at_start:
+        window = valid.head(k)
+        anchor = window.iloc[0]
+    else:
+        window = valid.tail(k)
+        anchor = window.iloc[-1]
+    if len(window) < 2:
+        theta = (
+            float(anchor["Theta"]) if np.isfinite(anchor.get("Theta", np.nan)) else 0.0
+        )
+        return 0.0, 0.0, theta
+    r0 = window.iloc[0]
+    r1 = window.iloc[-1]
+    dt = max(1.0, float(r1["FrameID"]) - float(r0["FrameID"]))
+    vx = (float(r1["X"]) - float(r0["X"])) / dt
+    vy = (float(r1["Y"]) - float(r0["Y"])) / dt
+    theta = float(anchor["Theta"]) if np.isfinite(anchor.get("Theta", np.nan)) else 0.0
+    return vx, vy, theta
+
+
 def _build_stitch_info(trajectories):
-    """Build start/end frame and position lookup for stitching."""
+    """Build start/end frame, position, motion predictors, and identity for each fragment.
+
+    Motion predictors (``end_velocity``, ``start_velocity`` and corresponding speeds/headings)
+    are estimated from a short window of valid rows so the basic stitcher can do
+    motion-aware gating without pose features. Identity labels are cached for the
+    identity-conflict gate.
+    """
     traj_info = {}
     for idx, df in enumerate(trajectories):
         if df.empty:
             continue
+        sx = df["X"].iat[0]
+        sy = df["Y"].iat[0]
+        ex = df["X"].iat[-1]
+        ey = df["Y"].iat[-1]
+        s_vx, s_vy, s_theta = _endpoint_window_velocity(df, at_start=True)
+        e_vx, e_vy, e_theta = _endpoint_window_velocity(df, at_start=False)
         traj_info[idx] = {
-            "start_frame": df["FrameID"].iat[0],
-            "end_frame": df["FrameID"].iat[-1],
-            "start_pos": (df["X"].iat[0], df["Y"].iat[0]),
-            "end_pos": (df["X"].iat[-1], df["Y"].iat[-1]),
+            "idx": idx,
+            "start_frame": int(df["FrameID"].iat[0]),
+            "end_frame": int(df["FrameID"].iat[-1]),
+            "start_pos": (sx, sy),
+            "end_pos": (ex, ey),
+            "start_velocity": (s_vx, s_vy),
+            "end_velocity": (e_vx, e_vy),
+            "start_speed": float(np.hypot(s_vx, s_vy)),
+            "end_speed": float(np.hypot(e_vx, e_vy)),
+            "start_theta": s_theta,
+            "end_theta": e_theta,
             "end_identity": _last_committed_label(df),
             "start_identity": _first_committed_label(df),
             "df": df,
         }
     sorted_indices = sorted(traj_info.keys(), key=lambda i: traj_info[i]["start_frame"])
     return traj_info, sorted_indices
+
+
+def _build_stitch_density_index(traj_info):
+    """Pre-index per-frame fragment positions for the density neighbour count.
+
+    Returns a dict {frame: list of (idx, x, y)} covering the union of frames present
+    in any fragment. Built once per stitch iteration so the inner loop stays cheap.
+    """
+    index: dict[int, list[tuple[int, float, float]]] = {}
+    for idx, info in traj_info.items():
+        df = info["df"]
+        for frame_v, x_v, y_v in zip(
+            df["FrameID"].to_numpy(), df["X"].to_numpy(), df["Y"].to_numpy()
+        ):
+            if pd.isna(x_v) or pd.isna(y_v):
+                continue
+            f = int(frame_v)
+            index.setdefault(f, []).append((idx, float(x_v), float(y_v)))
+    return index
+
+
+def _count_stitch_neighbors(
+    density_index,
+    midpoint,
+    frame_lo,
+    frame_hi,
+    radius,
+    exclude_a,
+    exclude_b,
+):
+    """Count distinct fragments other than ``exclude_a``/``exclude_b`` within ``radius``
+    of ``midpoint`` over the inclusive frame range [frame_lo, frame_hi]."""
+    if radius <= 0.0 or not density_index:
+        return 0
+    mx, my = midpoint
+    seen = set()
+    r2 = float(radius) ** 2
+    for f in range(int(frame_lo), int(frame_hi) + 1):
+        rows = density_index.get(f)
+        if not rows:
+            continue
+        for idx, x_v, y_v in rows:
+            if idx in (exclude_a, exclude_b) or idx in seen:
+                continue
+            dx = x_v - mx
+            dy = y_v - my
+            if dx * dx + dy * dy <= r2:
+                seen.add(idx)
+    return len(seen)
+
+
+def _score_stitch_pair(
+    info_a,
+    info_b,
+    agreement_distance,
+    max_vel_break,
+    max_gap,
+    heading_gate,
+    min_motion_speed,
+    identity_gates_stitching,
+    density_neighbors,
+    density_tighten_factor,
+):
+    """Conservative motion-aware score for a candidate stitch ``info_a → info_b``.
+
+    Returns ``(score, identity_match)`` if the pair passes every gate, else ``None``.
+    Lower scores are better. The score is dimensionless: residual relative to a
+    body-length, plus small heading and gap-length penalties so ties favour
+    short, kinematically-consistent stitches.
+
+    Gates applied (any failure → reject):
+      • frame-gap ∈ [1, max_gap]
+      • raw end→start displacement ≤ max_vel_break × min(Δframes, 4)  (absolute envelope)
+      • |predicted_pos − start_pos| ≤ effective_agreement_distance
+        where effective = agreement × (density_tighten_factor if ≥2 neighbours else 1)
+      • heading mismatch ≤ heading_gate, only when both endpoints exceed min_motion_speed
+      • identity-conflict gate (when both endpoints carry committed labels)
+    """
+    ax, ay = info_a["end_pos"]
+    bx, by = info_b["start_pos"]
+    if pd.isna(ax) or pd.isna(ay) or pd.isna(bx) or pd.isna(by):
+        return None
+
+    gap = int(info_b["start_frame"] - info_a["end_frame"])
+    if gap < 1 or gap > max_gap:
+        return None
+
+    end_id = info_a.get("end_identity", "")
+    start_id = info_b.get("start_identity", "")
+    if identity_gates_stitching and end_id and start_id and end_id != start_id:
+        return None
+
+    delta_frames = float(gap)
+    raw_jump = float(np.hypot(bx - ax, by - ay))
+    raw_jump_limit = max(
+        agreement_distance * 2.0,
+        max_vel_break * float(min(delta_frames, 4.0)),
+    )
+    if raw_jump > raw_jump_limit:
+        return None
+
+    e_vx, e_vy = info_a["end_velocity"]
+    predicted_x = float(ax) + e_vx * delta_frames
+    predicted_y = float(ay) + e_vy * delta_frames
+    residual = float(np.hypot(predicted_x - bx, predicted_y - by))
+
+    effective_agreement = agreement_distance
+    if density_neighbors >= 2:
+        effective_agreement = agreement_distance * float(density_tighten_factor)
+
+    if residual > effective_agreement:
+        return None
+
+    heading_norm = 0.0
+    if (
+        info_a["end_speed"] > min_motion_speed
+        and info_b["start_speed"] > min_motion_speed
+    ):
+        heading_diff = _link_orientation_diff(
+            info_a["end_theta"], info_b["start_theta"]
+        )
+        if heading_diff > heading_gate:
+            return None
+        heading_norm = float(heading_diff / np.pi)
+
+    score = (
+        residual / max(effective_agreement, 1e-6)
+        + 0.25 * (delta_frames / max(float(max_gap), 1.0))
+        + 0.35 * heading_norm
+    )
+    identity_match = bool(end_id and start_id and end_id == start_id)
+    return float(score), identity_match
 
 
 def _find_best_stitch_candidate(
@@ -2511,80 +2709,216 @@ def _find_best_stitch_candidate(
     used,
     agreement_distance,
     max_gap,
+    *,
+    max_vel_break,
+    heading_gate,
+    min_motion_speed,
+    single_option_margin,
+    density_index,
+    density_radius,
+    density_tighten_factor,
+    best_src_for_dst,
     identity_gates_stitching: bool = True,
 ):
-    """Find the best stitch candidate within max_gap frames.
+    """Pick a stitch partner for ``info_a``, applying conservative gates.
 
-    Spatial proximity is the primary filter.  When multiple candidates are
-    spatially valid, committed identity agreement breaks ties.  Candidates
-    where both endpoints carry committed but conflicting identity labels are
-    blocked entirely (identity gate) — unless ``identity_gates_stitching`` is
-    False, in which case structural decisions are made by geometry alone
-    (used when the user has set identity weight to 0).
+    Conservatism layers (in addition to every gate enforced by
+    ``_score_stitch_pair``):
+      • **Margin test** — best.score must be ≤ single_option_margin × second_best.score,
+        otherwise the stitch is too ambiguous and we leave the fragments split.
+      • **Symmetric NN** — accepted only if ``info_a`` is also the best predecessor for
+        the chosen ``info_b`` under the same scorer (precomputed in
+        ``best_src_for_dst``).
+
+    Identity-tied scores nudge the best toward identity-matching candidates as a
+    cheap tie-breaker but never override the gates above.
     """
-    best_idx = -1
-    min_dist = float("inf")
-    best_identity_match = False
-    end_id = info_a.get("end_identity", "")
-
+    candidates = []
     for idx_next in range(idx_ptr + 1, len(sorted_indices)):
         idx_b = sorted_indices[idx_next]
         if idx_b in used:
             continue
         info_b = traj_info[idx_b]
         gap = info_b["start_frame"] - info_a["end_frame"]
-        if gap <= 0:
-            continue
         if gap > max_gap:
             break
-        ax, ay = info_a["end_pos"]
-        bx, by = info_b["start_pos"]
-        if pd.isna(ax) or pd.isna(bx):
+
+        midpoint = (
+            0.5 * (float(info_a["end_pos"][0]) + float(info_b["start_pos"][0])),
+            0.5 * (float(info_a["end_pos"][1]) + float(info_b["start_pos"][1])),
+        )
+        neighbors = _count_stitch_neighbors(
+            density_index,
+            midpoint,
+            info_a["end_frame"],
+            info_b["start_frame"],
+            density_radius,
+            info_a["idx"],
+            idx_b,
+        )
+
+        result = _score_stitch_pair(
+            info_a,
+            info_b,
+            agreement_distance,
+            max_vel_break,
+            max_gap,
+            heading_gate,
+            min_motion_speed,
+            identity_gates_stitching,
+            neighbors,
+            density_tighten_factor,
+        )
+        if result is None:
             continue
+        score, identity_match = result
+        # Identity-tied ties: nudge identity-matching candidates slightly ahead.
+        adj_score = score - (1e-3 if identity_match else 0.0)
+        candidates.append((adj_score, idx_b))
 
-        start_id = info_b.get("start_identity", "")
+    if not candidates:
+        return -1, float("inf")
 
-        if identity_gates_stitching and end_id and start_id and end_id != start_id:
+    candidates.sort(key=lambda item: item[0])
+    best_score, best_idx_b = candidates[0]
+
+    # Margin test: only stitch if best is clearly better than runner-up.
+    if len(candidates) >= 2:
+        second_score = candidates[1][0]
+        # second_score is also dimensionless — guard against zero so the inequality
+        # behaves sanely when both scores are tiny.
+        denom = max(second_score, 1e-6)
+        if (best_score / denom) > float(single_option_margin):
+            return -1, float("inf")
+
+    # Symmetric NN test: ``info_a`` must also be the best predecessor of ``best_idx_b``.
+    if best_src_for_dst.get(best_idx_b, -1) != info_a["idx"]:
+        return -1, float("inf")
+
+    return best_idx_b, best_score
+
+
+def _build_best_src_for_dst(
+    sorted_indices,
+    traj_info,
+    used,
+    agreement_distance,
+    max_gap,
+    max_vel_break,
+    heading_gate,
+    min_motion_speed,
+    density_index,
+    density_radius,
+    density_tighten_factor,
+    identity_gates_stitching,
+):
+    """For each ``dst`` fragment, return the ``src`` whose stitch score is lowest.
+
+    Used by the symmetric-NN check in ``_find_best_stitch_candidate`` so that a
+    candidate ``A → B`` is only accepted when ``A`` is also the best predecessor
+    for ``B`` under the same conservative scorer.
+    """
+    best_src: dict[int, tuple[float, int]] = {}
+    n = len(sorted_indices)
+    for i in range(n):
+        idx_a = sorted_indices[i]
+        if idx_a in used:
             continue
-
-        dist = np.sqrt((ax - bx) ** 2 + (ay - by) ** 2)
-        if dist > agreement_distance:
-            continue
-
-        identity_match = bool(end_id and start_id and end_id == start_id)
-        if dist < min_dist or (
-            dist == min_dist and identity_match and not best_identity_match
-        ):
-            min_dist = dist
-            best_idx = idx_b
-            best_identity_match = identity_match
-
-    return best_idx, min_dist
+        info_a = traj_info[idx_a]
+        for j in range(i + 1, n):
+            idx_b = sorted_indices[j]
+            if idx_b in used:
+                continue
+            info_b = traj_info[idx_b]
+            gap = info_b["start_frame"] - info_a["end_frame"]
+            if gap > max_gap:
+                break
+            midpoint = (
+                0.5 * (float(info_a["end_pos"][0]) + float(info_b["start_pos"][0])),
+                0.5 * (float(info_a["end_pos"][1]) + float(info_b["start_pos"][1])),
+            )
+            neighbors = _count_stitch_neighbors(
+                density_index,
+                midpoint,
+                info_a["end_frame"],
+                info_b["start_frame"],
+                density_radius,
+                info_a["idx"],
+                idx_b,
+            )
+            result = _score_stitch_pair(
+                info_a,
+                info_b,
+                agreement_distance,
+                max_vel_break,
+                max_gap,
+                heading_gate,
+                min_motion_speed,
+                identity_gates_stitching,
+                neighbors,
+                density_tighten_factor,
+            )
+            if result is None:
+                continue
+            score, identity_match = result
+            adj = score - (1e-3 if identity_match else 0.0)
+            existing = best_src.get(idx_b)
+            if existing is None or adj < existing[0]:
+                best_src[idx_b] = (adj, idx_a)
+    return {dst: src for dst, (_, src) in best_src.items()}
 
 
 def _stitch_broken_trajectory_fragments(
     trajectories,
     agreement_distance,
     max_gap=2,
+    *,
+    max_vel_break: float = 100.0,
+    heading_gate_rad: float = float(np.pi / 3.0),
+    single_option_margin: float = 0.5,
+    density_radius_multiplier: float = 5.0,
+    density_tighten_factor: float = 0.5,
+    min_motion_speed: float = 1e-3,
     identity_gates_stitching: bool = True,
 ):
-    """
-    Stitch together trajectories that are likely fragmented parts of the same track.
+    """Stitch consecutive fragments that are likely the same track.
 
-    This handles sequential fragments where T2 starts shortly after T1 ends,
-    and they are spatially close (within agreement_distance).
+    The matcher applies, in order: a kinematic gate (motion-predicted residual
+    plus an absolute jump cap), a heading-consistency gate, an identity-conflict
+    gate, a density-aware tightening of the spatial gate, a margin test against
+    the runner-up, and a symmetric nearest-neighbour check. All gates can only
+    *reject* a stitch — they never relax the existing radius — so accepting the
+    output is at least as conservative as the legacy behaviour and reconnects
+    additional fragments where motion prediction lands on the right successor.
     """
     if not trajectories:
         return trajectories
 
     max_iterations = 20
     current_trajectories = trajectories
+    iteration = 0
+    density_radius = float(agreement_distance) * float(density_radius_multiplier)
 
     for iteration in range(1, max_iterations + 1):
         merged_any = False
-        used = set()
-        new_trajectories = []
+        used: set[int] = set()
+        new_trajectories: list[pd.DataFrame] = []
         traj_info, sorted_indices = _build_stitch_info(current_trajectories)
+        density_index = _build_stitch_density_index(traj_info)
+        best_src_for_dst = _build_best_src_for_dst(
+            sorted_indices,
+            traj_info,
+            used,
+            agreement_distance,
+            max_gap,
+            max_vel_break,
+            heading_gate_rad,
+            min_motion_speed,
+            density_index,
+            density_radius,
+            density_tighten_factor,
+            identity_gates_stitching,
+        )
 
         idx_ptr = 0
         while idx_ptr < len(sorted_indices):
@@ -2594,7 +2928,7 @@ def _stitch_broken_trajectory_fragments(
                 continue
 
             info_a = traj_info[idx_a]
-            best_idx_b, min_dist = _find_best_stitch_candidate(
+            best_idx_b, _best_score = _find_best_stitch_candidate(
                 info_a,
                 sorted_indices,
                 idx_ptr,
@@ -2602,6 +2936,14 @@ def _stitch_broken_trajectory_fragments(
                 used,
                 agreement_distance,
                 max_gap,
+                max_vel_break=max_vel_break,
+                heading_gate=heading_gate_rad,
+                min_motion_speed=min_motion_speed,
+                single_option_margin=single_option_margin,
+                density_index=density_index,
+                density_radius=density_radius,
+                density_tighten_factor=density_tighten_factor,
+                best_src_for_dst=best_src_for_dst,
                 identity_gates_stitching=identity_gates_stitching,
             )
 

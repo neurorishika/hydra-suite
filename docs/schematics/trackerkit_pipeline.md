@@ -1180,3 +1180,42 @@ flowchart RL
 4. **Slide 5** (2 min) — "the tracker fuses motion, shape, and identity into one cost matrix; Hungarian assigns, then the identity decoder updates a per-slot posterior."
 5. **Slide 6** (2 min) — "after tracking, each direction is cleaned independently, then merged conservatively; the fragment solver and identity finalize run last in the rich-export build."
 6. **Slide 7** (1 min) — "the four cleanup primitives — what each one does, where it's called from, and what it gates on."
+
+```mermaid
+---
+config:
+  layout: dagre
+---
+flowchart LR
+ subgraph s1["Individual Level inference"]
+        n1["Identity"]
+        n2["Orientation"]
+        n3["Pose"]
+  end
+ subgraph s2["Tracking Logic"]
+        Fwd["Assignment Logic"]
+        n4["Identity Logic"]
+  end
+    Fwd --> n4
+    s2 --> Refine["Post Processing"]
+    s1 --> s2
+    n4 --> Fwd
+    Setup["Detection"] --> s1 & s2
+    n5["Input"] --> Setup
+    Refine --> n6["Output"]
+    n6 --> n7["Proofreading"]
+
+     n1:::opt
+     n2:::opt
+     n3:::opt
+     Fwd:::req
+     n4:::opt
+     Refine:::req
+     Setup:::req
+     n5:::io
+     n6:::io
+    classDef opt fill:#fff3e0, stroke:#f57c00, stroke-width:2px, stroke-dasharray:5 5, color:#e65100
+    classDef io fill:#e8f5e9, stroke:#2e7d32, stroke-width:2.5px, color:#1b5e20
+    classDef req fill:#e3f2fd, stroke:#1976d2, stroke-width:2.5px, color:#0d47a1
+    style n7 fill:#E1BEE7
+```

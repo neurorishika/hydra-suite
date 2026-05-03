@@ -888,6 +888,18 @@ class ConfigOrchestrator:
         self._panels.postprocess.spin_min_overlap_frames.setValue(
             get_cfg("min_overlap_frames", default=5)
         )
+        self._panels.postprocess.spin_stitch_max_gap_seconds.setValue(
+            float(get_cfg("stitch_max_gap_seconds", default=0.1))
+        )
+        self._panels.postprocess.spin_stitch_density_tighten_factor.setValue(
+            float(get_cfg("stitch_density_tighten_factor", default=0.5))
+        )
+        self._panels.postprocess.spin_stitch_single_option_margin.setValue(
+            float(get_cfg("stitch_single_option_margin", default=0.5))
+        )
+        self._panels.postprocess.spin_stitch_heading_gate_deg.setValue(
+            float(get_cfg("stitch_heading_gate_deg", default=60.0))
+        )
         self._panels.postprocess.spin_identity_disagree_min_run.setValue(
             get_cfg("identity_disagree_min_run", default=5)
         )
@@ -1745,6 +1757,10 @@ class ConfigOrchestrator:
                 # Agreement distance and min overlap frames for conservative merging
                 "merge_agreement_distance_multiplier": self._panels.postprocess.spin_merge_overlap_multiplier.value(),
                 "min_overlap_frames": self._panels.postprocess.spin_min_overlap_frames.value(),
+                "stitch_max_gap_seconds": self._panels.postprocess.spin_stitch_max_gap_seconds.value(),
+                "stitch_density_tighten_factor": self._panels.postprocess.spin_stitch_density_tighten_factor.value(),
+                "stitch_single_option_margin": self._panels.postprocess.spin_stitch_single_option_margin.value(),
+                "stitch_heading_gate_deg": self._panels.postprocess.spin_stitch_heading_gate_deg.value(),
                 "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
                 "identity_gates_trajectory_structure": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
                 # === VIDEO VISUALIZATION ===
@@ -2055,6 +2071,9 @@ class ConfigOrchestrator:
         velocity_zscore_window = _seconds_to_frames(
             self._panels.postprocess.spin_velocity_zscore_window.value(), min_frames=5
         )
+        stitch_max_gap_frames = _seconds_to_frames(
+            self._panels.postprocess.spin_stitch_max_gap_seconds.value(), min_frames=0
+        )
         # YOLO Batching settings from UI (overrides advanced_config defaults)
         advanced_config = self._mw.advanced_config.copy()
         advanced_config["enable_yolo_batching"] = (
@@ -2326,6 +2345,10 @@ class ConfigOrchestrator:
             "AGREEMENT_DISTANCE": self._panels.postprocess.spin_merge_overlap_multiplier.value()
             * scaled_body_size,
             "MIN_OVERLAP_FRAMES": self._panels.postprocess.spin_min_overlap_frames.value(),
+            "STITCH_MAX_GAP_FRAMES": stitch_max_gap_frames,
+            "STITCH_DENSITY_TIGHTEN_FACTOR": self._panels.postprocess.spin_stitch_density_tighten_factor.value(),
+            "STITCH_SINGLE_OPTION_MARGIN": self._panels.postprocess.spin_stitch_single_option_margin.value(),
+            "STITCH_HEADING_GATE_DEG": self._panels.postprocess.spin_stitch_heading_gate_deg.value(),
             "IDENTITY_DISAGREE_MIN_RUN": self._panels.postprocess.spin_identity_disagree_min_run.value(),
             "IDENTITY_GATES_TRAJECTORY_STRUCTURE": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
             # Dataset generation parameters

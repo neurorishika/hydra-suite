@@ -463,6 +463,101 @@ class PostProcessPanel(QWidget):
         )
         f_interpolation_merge.addRow(self.min_overlap_row_widget)
 
+        # ── Fragment stitching (motion-aware, single-option matcher) ──────────
+        self.lbl_stitch_header = QLabel("Fragment stitching")
+        self.lbl_stitch_header.setStyleSheet("font-weight: bold; margin-top: 6px;")
+        f_interpolation_merge.addRow(self.lbl_stitch_header)
+        self.lbl_stitch_help = self._main_window._create_help_label(
+            "Reconnects consecutive fragments using motion prediction "
+            "(end-velocity × gap), heading consistency, and a density-aware "
+            "spatial gate. To stay conservative, a stitch is accepted only when "
+            "it is unambiguously better than the runner-up and both endpoints "
+            "agree on each other as the best partner."
+        )
+        f_interpolation_merge.addRow(self.lbl_stitch_help)
+
+        self.spin_stitch_max_gap_seconds = QDoubleSpinBox()
+        self.spin_stitch_max_gap_seconds.setRange(0.0, 2.0)
+        self.spin_stitch_max_gap_seconds.setSingleStep(0.05)
+        self.spin_stitch_max_gap_seconds.setDecimals(3)
+        self.spin_stitch_max_gap_seconds.setValue(0.1)
+        self.spin_stitch_max_gap_seconds.setToolTip(
+            "Maximum gap between fragment end and successor start (seconds).\n"
+            "Converted to frames using the acquisition frame rate so the same\n"
+            "value works at different fps. Larger gaps allow longer occlusions\n"
+            "to be bridged but increase the chance of mis-stitching across\n"
+            "real identity swaps. Recommended: 0.05–0.20 s (≈ 1–6 frames at\n"
+            "30 fps). Set to 0 to disable stitching."
+        )
+        self.lbl_stitch_max_gap_seconds = QLabel("Max stitch gap (seconds)")
+
+        self.spin_stitch_density_tighten_factor = QDoubleSpinBox()
+        self.spin_stitch_density_tighten_factor.setRange(0.05, 1.0)
+        self.spin_stitch_density_tighten_factor.setSingleStep(0.05)
+        self.spin_stitch_density_tighten_factor.setDecimals(2)
+        self.spin_stitch_density_tighten_factor.setValue(0.5)
+        self.spin_stitch_density_tighten_factor.setToolTip(
+            "Density tightening factor.\n"
+            "When two or more other fragments are present near the gap\n"
+            "midpoint, the spatial gate is multiplied by this factor before\n"
+            "deciding the stitch. Lower = stricter in clusters (where false\n"
+            "merges are most likely); 1.0 disables the density check.\n"
+            "Recommended: 0.4–0.6 in dense scenes; up to 0.8 if your tracker\n"
+            "rarely produces nearby fragments."
+        )
+        self.lbl_stitch_density_tighten_factor = QLabel(
+            "Density tightening factor (clusters)"
+        )
+
+        self.spin_stitch_single_option_margin = QDoubleSpinBox()
+        self.spin_stitch_single_option_margin.setRange(0.05, 1.0)
+        self.spin_stitch_single_option_margin.setSingleStep(0.05)
+        self.spin_stitch_single_option_margin.setDecimals(2)
+        self.spin_stitch_single_option_margin.setValue(0.5)
+        self.spin_stitch_single_option_margin.setToolTip(
+            "Single-option margin for fragment stitching.\n"
+            "A stitch is accepted only if the best candidate's score is at most\n"
+            "(margin × runner-up score). Lower = stricter (more conservative);\n"
+            "1.0 effectively disables the margin test.\n"
+            '0.5 means "the best must be at least 2× better than the next best."\n'
+            "Recommended: 0.4–0.6 for crowded scenes; 0.6–0.8 for sparse.\n"
+            "False merges are far costlier than missed merges, so err strict."
+        )
+        self.lbl_stitch_single_option_margin = QLabel(
+            "Single-option margin (best vs. runner-up)"
+        )
+
+        self.spin_stitch_heading_gate_deg = QDoubleSpinBox()
+        self.spin_stitch_heading_gate_deg.setRange(0.0, 180.0)
+        self.spin_stitch_heading_gate_deg.setSingleStep(5.0)
+        self.spin_stitch_heading_gate_deg.setDecimals(1)
+        self.spin_stitch_heading_gate_deg.setValue(60.0)
+        self.spin_stitch_heading_gate_deg.setToolTip(
+            "Maximum heading mismatch (degrees) allowed when stitching two\n"
+            "fragments. Only enforced when both endpoints are moving above the\n"
+            "minimum motion speed (still animals skip the gate). Tune to the\n"
+            "species' turning behaviour: 45–60° for ants, 75–90° for\n"
+            "fast-pivoting animals. Set to 180° to disable the heading gate."
+        )
+        self.lbl_stitch_heading_gate_deg = QLabel("Heading gate (deg)")
+
+        self.stitch_params_row_widget = self._build_field_grid(
+            [
+                (self.lbl_stitch_max_gap_seconds, self.spin_stitch_max_gap_seconds),
+                (
+                    self.lbl_stitch_density_tighten_factor,
+                    self.spin_stitch_density_tighten_factor,
+                ),
+                (
+                    self.lbl_stitch_single_option_margin,
+                    self.spin_stitch_single_option_margin,
+                ),
+                (self.lbl_stitch_heading_gate_deg, self.spin_stitch_heading_gate_deg),
+            ],
+            columns=2,
+        )
+        f_interpolation_merge.addRow(self.stitch_params_row_widget)
+
         # Cleanup option
         self.chk_cleanup_temp_files = QCheckBox("Auto-cleanup temporary files")
         self.chk_cleanup_temp_files.setChecked(True)
