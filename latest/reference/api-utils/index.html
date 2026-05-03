@@ -1938,6 +1938,33 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.geometry.clamp01" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;clamp01
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.geometry.obb_corners_from_dims" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;obb_corners_from_dims
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.geometry.polygon_overlap_ratio" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;polygon_overlap_ratio
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2674,6 +2701,33 @@
   <a href="#hydra_suite.utils.geometry.filter_keypoints_by_foreign_obbs" class="md-nav__link">
     <span class="md-ellipsis">
       <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;filter_keypoints_by_foreign_obbs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.geometry.clamp01" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;clamp01
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.geometry.obb_corners_from_dims" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;obb_corners_from_dims
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hydra_suite.utils.geometry.polygon_overlap_ratio" class="md-nav__link">
+    <span class="md-ellipsis">
+      <code class="doc-symbol doc-symbol-toc doc-symbol-function"></code>&nbsp;polygon_overlap_ratio
     </span>
   </a>
   
@@ -3908,6 +3962,61 @@ and fills the polygon with <em>background_color</em> using <code>cv2.fillPoly</c
 <p>Returns:
     Modified copy of <em>keypoints</em> with contaminated entries having conf=0.
     X/Y coordinates are preserved.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.utils.geometry.clamp01" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">clamp01</span><span class="p">(</span><span class="n">value</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.utils.geometry.clamp01" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Clamp a scalar to the inclusive range [0, 1].</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.utils.geometry.obb_corners_from_dims" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">obb_corners_from_dims</span><span class="p">(</span><span class="n">cx</span><span class="p">,</span> <span class="n">cy</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">theta</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.utils.geometry.obb_corners_from_dims" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return pixel-space oriented-box corners (4x2 array) for a detection.</p>
+<p>Corners are ordered top-left, top-right, bottom-right, bottom-left in the
+rotated frame.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="hydra_suite.utils.geometry.polygon_overlap_ratio" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-function"></code>            <code class="highlight language-python"><span class="n">polygon_overlap_ratio</span><span class="p">(</span><span class="n">corners_a</span><span class="p">,</span> <span class="n">corners_b</span><span class="p">)</span></code>
+
+<a href="#hydra_suite.utils.geometry.polygon_overlap_ratio" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Intersection area divided by the smaller polygon area, clipped to [0, 1].</p>
+<p>Both inputs are interpreted as 4x2 (or Nx2) corner arrays in pixel space.
+Returns 0.0 when either polygon is degenerate or non-overlapping.</p>
 
     </div>
 
