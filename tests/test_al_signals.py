@@ -62,3 +62,45 @@ def test_score_crowd_full_overlap():
     box = np.array([[0, 0], [10, 0], [10, 10], [0, 10]], dtype=np.float32)
     crowd, edge = score_crowd([box, box.copy()], frame_shape=(200, 200))
     assert crowd > 0.9
+
+
+def test_nms_instability_stable_detector_returns_low_score():
+    from hydra_suite.data.al.signals import score_nms_instability
+
+    base = [
+        (10, 10, 8, 4, 0.0, 0.95),
+        (50, 50, 8, 4, 0.0, 0.93),
+        (90, 90, 8, 4, 0.0, 0.97),
+    ]
+
+    def detector(_frame, conf, iou):
+        return [d for d in base if d[5] >= conf]
+
+    score = score_nms_instability(
+        frame=np.zeros((100, 100, 3), np.uint8),
+        detector_fn=detector,
+        base_conf=0.5,
+        base_iou=0.7,
+    )
+    assert score < 0.05
+
+
+def test_nms_instability_unstable_detector_returns_high_score():
+    from hydra_suite.data.al.signals import score_nms_instability
+
+    def detector(_frame, conf, iou):
+        if conf < 0.4:
+            return [
+                (10, 10, 8, 4, 0.0, 0.45),
+                (30, 30, 8, 4, 0.0, 0.42),
+                (60, 60, 8, 4, 0.0, 0.95),
+            ]
+        return [(60, 60, 8, 4, 0.0, 0.95)]
+
+    score = score_nms_instability(
+        frame=np.zeros((100, 100, 3), np.uint8),
+        detector_fn=detector,
+        base_conf=0.5,
+        base_iou=0.7,
+    )
+    assert score > 0.3

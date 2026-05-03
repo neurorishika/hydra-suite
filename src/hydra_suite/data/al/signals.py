@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Sequence
+from typing import Callable, Sequence
 
 import cv2
 import numpy as np
@@ -101,3 +101,57 @@ def score_crowd(
         edge = max(edge, edge_norm)
 
     return float(crowd), float(edge)
+
+
+Detection = tuple  # (cx, cy, w, h, theta, conf)
+
+
+def _set_iou_greedy(
+    set_a: Sequence[Detection],
+    set_b: Sequence[Detection],
+    match_distance: float = 12.0,
+) -> float:
+    """Approximate set IoU via greedy center-distance matching."""
+    if not set_a and not set_b:
+        return 1.0
+    if not set_a or not set_b:
+        return 0.0
+    used_b: set[int] = set()
+    matched = 0
+    for det_a in set_a:
+        best_idx, best_dist = -1, math.inf
+        for j, det_b in enumerate(set_b):
+            if j in used_b:
+                continue
+            dist = math.hypot(det_a[0] - det_b[0], det_a[1] - det_b[1])
+            if dist < best_dist:
+                best_dist, best_idx = dist, j
+        if best_idx >= 0 and best_dist <= match_distance:
+            used_b.add(best_idx)
+            matched += 1
+    union = len(set_a) + len(set_b) - matched
+    return matched / max(union, 1)
+
+
+def score_nms_instability(
+    frame: np.ndarray,
+    detector_fn: Callable[[np.ndarray, float, float], Sequence[Detection]],
+    base_conf: float,
+    base_iou: float,
+) -> float:
+    """Return 1 - mean(set_IoU) across two (conf, iou) perturbations.
+
+    Higher score = detection set changes meaningfully under small NMS-threshold
+    shifts -> model is unstable on this frame -> good AL pick.
+    """
+    base_set = list(detector_fn(frame, base_conf, base_iou))
+    perturbations = [
+        (max(base_conf * 0.7, 0.01), base_iou),
+        (base_conf, min(base_iou * 1.3, 0.95)),
+    ]
+    ious = []
+    for conf, iou in perturbations:
+        ious.append(_set_iou_greedy(base_set, list(detector_fn(frame, conf, iou))))
+    if not ious:
+        return 0.0
+    return float(1.0 - sum(ious) / len(ious))
