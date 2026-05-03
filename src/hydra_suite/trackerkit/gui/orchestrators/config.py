@@ -52,6 +52,7 @@ from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     DENSITY_DOWNSAMPLE_FACTOR_CONST,
     DENSITY_GAUSSIAN_SIGMA_SCALE_CONST,
     KALMAN_ANISOTROPY_RATIO_CONST,
+    MIN_DETECTIONS_TO_START_CONST,
     POSE_REJECTION_MIN_VISIBILITY_CONST,
     POSE_REJECTION_THRESHOLD_CONST,
     SOLVER_AUTOPICK_GREEDY_THRESHOLD,
@@ -2053,9 +2054,12 @@ class ConfigOrchestrator:
         bg_prime_frames = _seconds_to_frames(
             self._panels.detection.spin_bg_prime.value(), min_frames=0
         )
-        min_detections_to_start = _seconds_to_frames(
-            self._panels.tracking._min_detections_to_start_seconds
-        )
+        # MIN_DETECTIONS_TO_START is a per-frame detection-count gate in the
+        # worker (`len(meas) >= MIN_DETECTIONS_TO_START`), not a frame count.
+        # The legacy seconds-based knob ran through _seconds_to_frames and
+        # produced values >1 at higher FPS, which prevented init when the
+        # animal count was lower than the FPS-derived threshold.
+        min_detections_to_start = MIN_DETECTIONS_TO_START_CONST
         min_detection_counts = _seconds_to_frames(
             self._panels.tracking.spin_min_detect.value()
         )
