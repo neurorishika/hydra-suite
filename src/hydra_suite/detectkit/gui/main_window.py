@@ -1212,17 +1212,14 @@ class DetectKitMainWindow(QMainWindow):
             return
 
         worker = ALWorker(request)
-        worker.progress_signal.connect(
-            lambda p, s: (dlg.progress.setValue(p), dlg.status_label.setText(s))
-        )
-        worker.finished_signal.connect(
+        worker.progress.connect(dlg.progress.setValue)
+        worker.status.connect(dlg.status_label.setText)
+        worker.result_ready.connect(
             lambda path, n, _ids: dlg.status_label.setText(
                 f"Imported {n} frames -> {path}"
             )
         )
-        worker.error_signal.connect(
-            lambda msg: dlg.status_label.setText(f"Error: {msg}")
-        )
+        worker.error.connect(lambda msg: dlg.status_label.setText(f"Error: {msg}"))
         worker.start()
         self._al_worker = worker
 

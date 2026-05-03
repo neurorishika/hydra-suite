@@ -160,7 +160,8 @@ def run_active_learning(
     if progress:
         progress(20, f"Scoring {len(candidates)} candidates...")
     signals: list[ALSignals] = []
-    detections_by_id: dict[int, tuple[np.ndarray, list]] = {}
+    detections_by_id: dict[int, list] = {}
+    frame_refs_by_id: dict[int, object] = {}
     for i, ref in enumerate(candidates):
         img = source.read(ref)
         if img is None:
@@ -174,7 +175,8 @@ def run_active_learning(
             req.base_iou,
         )
         signals.append(sig)
-        detections_by_id[ref.frame_id] = (img, dets)
+        detections_by_id[ref.frame_id] = dets
+        frame_refs_by_id[ref.frame_id] = ref
         if progress and i % 10 == 0:
             pct = 20 + int(60 * i / max(len(candidates), 1))
             progress(pct, f"Scoring {i}/{len(candidates)}")
@@ -201,8 +203,14 @@ def run_active_learning(
     images_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
 
+    written_ids: list[int] = []
     for fid in picked_ids:
-        img, dets = detections_by_id[fid]
+        ref = frame_refs_by_id[fid]
+        img = source.read(ref)
+        if img is None:
+            logger.warning("Could not re-read picked frame %s; skipping.", fid)
+            continue
+        dets = detections_by_id[fid]
         img_path = images_dir / f"f_{fid:06d}.jpg"
         cv2.imwrite(str(img_path), img)
         _write_yolo_obb_label(
@@ -210,6 +218,7 @@ def run_active_learning(
             dets,
             frame_size=img.shape[:2],
         )
+        written_ids.append(fid)
 
     (source_root / "classes.txt").write_text(req.project.class_name + "\n")
 
@@ -228,39 +237,40 @@ def run_active_learning(
 
     return ALResult(
         source_path=str(source_root),
-        n_picked=len(picked_ids),
-        selected_frames=picked_ids,
+        n_picked=len(written_ids),
+        selected_frames=written_ids,
     )
 
 
 class ALWorker(BaseWorker):
-    """QThread wrapper around run_active_learning."""
+    """QThread wrapper around run_active_learning.
 
-    progress_signal = Signal(int, str)
-    finished_signal = Signal(str, int, list)
-    error_signal = Signal(str)
+    Uses the inherited BaseWorker signals (`progress`, `status`, `error`)
+    plus an AL-specific `result_ready(source_path, n_picked, selected_frames)`
+    signal carrying the structured result. `QThread.finished` (parameterless)
+    is inherited and emitted automatically by Qt when run() returns.
+    """
+
+    result_ready = Signal(str, int, list)
 
     def __init__(self, request: ALRequest):
         super().__init__()
         self._request = request
 
     def execute(self):
-        try:
+        def cb(pct, msg):
+            if self._should_stop():
+                return
+            self.progress.emit(int(pct))
+            self.status.emit(str(msg))
 
-            def cb(pct, msg):
-                if not self._should_stop():
-                    self.progress_signal.emit(int(pct), str(msg))
-
-            result = run_active_learning(self._request, progress=cb)
-            if not self._should_stop():
-                self.finished_signal.emit(
-                    result.source_path,
-                    result.n_picked,
-                    list(result.selected_frames),
-                )
-        except Exception as e:
-            logger.exception("AL worker failed")
-            self.error_signal.emit(str(e))
+        result = run_active_learning(self._request, progress=cb)
+        if not self._should_stop():
+            self.result_ready.emit(
+                result.source_path,
+                result.n_picked,
+                list(result.selected_frames),
+            )
 
     def _should_stop(self) -> bool:
         return bool(self.isInterruptionRequested())
