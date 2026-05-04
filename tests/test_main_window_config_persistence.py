@@ -905,7 +905,7 @@ def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
     window.close()
 
 
-def test_headtail_runtime_selectors_stay_synchronized(
+def test_headtail_runtime_selector_uses_setup_panel_only(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
@@ -925,19 +925,14 @@ def test_headtail_runtime_selectors_stay_synchronized(
     _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
     window._populate_headtail_runtime_options(preferred="cpu")
 
-    identity_combo = window._identity_panel.combo_headtail_runtime
     setup_combo = window._setup_panel.combo_headtail_runtime
+    assert not hasattr(window._identity_panel, "combo_headtail_runtime")
 
-    identity_idx = identity_combo.findData("onnx_coreml")
     setup_idx = setup_combo.findData("onnx_cpu")
-    assert identity_idx >= 0
+    assert setup_combo.findData("onnx_coreml") >= 0
     assert setup_idx >= 0
-
-    identity_combo.setCurrentIndex(identity_idx)
-    assert setup_combo.currentData() == "onnx_coreml"
-
     setup_combo.setCurrentIndex(setup_idx)
-    assert identity_combo.currentData() == "onnx_cpu"
+    assert window._selected_headtail_runtime() == "onnx_cpu"
     window.close()
 
 

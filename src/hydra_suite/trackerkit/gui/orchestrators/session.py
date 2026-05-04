@@ -1082,12 +1082,6 @@ class SessionOrchestrator:
             self._mw._setup_panel.combo_headtail_runtime.setToolTip(
                 HEADTAIL_RUNTIME_TOOLTIP
             )
-        if hasattr(self._mw, "_identity_panel") and hasattr(
-            self._mw._identity_panel, "combo_headtail_runtime"
-        ):
-            self._mw._identity_panel.combo_headtail_runtime.setToolTip(
-                HEADTAIL_RUNTIME_TOOLTIP
-            )
         if hasattr(self._mw._setup_panel, "combo_cnn_runtime"):
             self._mw._setup_panel.combo_cnn_runtime.setToolTip(CNN_RUNTIME_TOOLTIP)
         if hasattr(self._mw._setup_panel, "combo_pose_runtime_flavor"):
@@ -1114,7 +1108,7 @@ class SessionOrchestrator:
         ]
 
     def _populate_headtail_runtime_options(self, preferred=None):
-        """Populate the head-tail runtime combo(s) with native runtime options."""
+        """Populate the setup-tab head-tail runtime combo with native options."""
         selected = (
             str(
                 preferred
@@ -1129,20 +1123,6 @@ class SessionOrchestrator:
         if selected not in values:
             selected = values[0] if values else "cpu"
 
-        # Populate identity panel combo (primary location).
-        if hasattr(self._mw, "_identity_panel") and hasattr(
-            self._mw._identity_panel, "combo_headtail_runtime"
-        ):
-            combo = self._mw._identity_panel.combo_headtail_runtime
-            combo.blockSignals(True)
-            combo.clear()
-            for label, value in options:
-                combo.addItem(label, value)
-            idx = combo.findData(selected)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
-
-        # Also populate setup panel combo (performance section, secondary).
         if hasattr(self._mw, "_setup_panel") and hasattr(
             self._mw._setup_panel, "combo_headtail_runtime"
         ):
@@ -1158,17 +1138,9 @@ class SessionOrchestrator:
     def _selected_headtail_runtime(self) -> str:
         """Return the currently selected head-tail runtime key.
 
-        Prefers the identity panel combo (co-located with the head-tail
-        model and confidence settings).  Falls back to the setup panel
-        performance combo for backward compatibility, then to the main
-        compute runtime.
+        Uses the setup-tab performance combo when available, then falls back to
+        the main detection runtime.
         """
-        if hasattr(self._mw, "_identity_panel") and hasattr(
-            self._mw._identity_panel, "combo_headtail_runtime"
-        ):
-            data = self._mw._identity_panel.combo_headtail_runtime.currentData()
-            if data:
-                return str(data).strip().lower()
         if hasattr(self._mw, "_setup_panel") and hasattr(
             self._mw._setup_panel, "combo_headtail_runtime"
         ):
@@ -1178,33 +1150,19 @@ class SessionOrchestrator:
         return self._selected_compute_runtime()
 
     def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
-        """Mirror head-tail runtime changes across the duplicated UI selectors."""
-        if source_combo is not None:
-            data = source_combo.currentData()
-            selected = (
-                str(data).strip().lower() if data else self._selected_compute_runtime()
-            )
-        else:
-            selected = self._selected_headtail_runtime()
-
-        for combo in (
-            getattr(
-                getattr(self._mw, "_identity_panel", None),
-                "combo_headtail_runtime",
-                None,
-            ),
-            getattr(
-                getattr(self._mw, "_setup_panel", None), "combo_headtail_runtime", None
-            ),
-        ):
-            if combo is None or combo is source_combo:
-                continue
-            index = combo.findData(selected)
-            if index < 0 or combo.currentIndex() == index:
-                continue
-            combo.blockSignals(True)
-            combo.setCurrentIndex(index)
-            combo.blockSignals(False)
+        """Normalize setup-tab head-tail runtime state after combo changes."""
+        if source_combo is None:
+            return
+        data = source_combo.currentData()
+        selected = (
+            str(data).strip().lower() if data else self._selected_compute_runtime()
+        )
+        index = source_combo.findData(selected)
+        if index < 0 or source_combo.currentIndex() == index:
+            return
+        source_combo.blockSignals(True)
+        source_combo.setCurrentIndex(index)
+        source_combo.blockSignals(False)
 
     def _cnn_runtime_options(self):
         """Return (label, value) pairs for the CNN runtime combo."""
