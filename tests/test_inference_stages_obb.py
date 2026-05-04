@@ -124,7 +124,7 @@ def test_extract_obb_result_carries_detection_ids():
 
 def test_extract_raw_tensors_returns_named_tuple():
     r = _mock_ul_result_tensors(n=2)
-    raw = _extract_raw_tensors(r, frame_idx=5)
+    raw = _extract_raw_tensors(r, frame_idx=5, device="cpu")
     assert isinstance(raw, _RawOBBTensors)
     assert raw.frame_idx == 5
     assert raw.xywhr.shape == (2, 5)
@@ -142,7 +142,7 @@ def test_extract_raw_tensors_no_cpu_call():
     r.obb.xyxyxyxy = corners_mock
     r.obb.conf = conf_mock
     r.obb.__len__ = lambda self: 2
-    _extract_raw_tensors(r, frame_idx=0)
+    _extract_raw_tensors(r, frame_idx=0, device="cpu")
     xywhr_mock.cpu.assert_not_called()
     corners_mock.cpu.assert_not_called()
     conf_mock.cpu.assert_not_called()
@@ -267,3 +267,48 @@ def test_load_yolo_calls_to_for_native_pt(monkeypatch):
     calls.clear()
     _load_yolo("/m.pt", "mps")
     assert calls == ["mps"]
+
+
+import warnings
+
+
+def test_extract_obb_result_no_divzero_warning_for_zero_height():
+    """Per code-quality fix: zero-height detections must not raise divide-by-zero warning."""
+
+    def _t(arr):
+        from unittest.mock import MagicMock
+
+        m = MagicMock()
+        m.cpu.return_value.numpy.return_value = arr
+        return m
+
+    # Build a mock with one detection that has h=0 (degenerate but possible from YOLO)
+    xywhr = np.array([[100.0, 100.0, 20.0, 0.0, 0.5]], dtype=np.float32)
+    corners = np.zeros((1, 4, 2), dtype=np.float32)
+    conf = np.full(1, 0.8, dtype=np.float32)
+    from unittest.mock import MagicMock
+
+    r = MagicMock()
+    r.obb.xywhr = _t(xywhr)
+    r.obb.xyxyxyxy = _t(corners)
+    r.obb.conf = _t(conf)
+    r.obb.__len__ = lambda self: 1
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        # Must NOT raise a RuntimeWarning
+        result = _extract_obb_result(r, frame_idx=0)
+    assert result.num_detections == 1
+    # Aspect should be the safe-fallback 1.0 when h=0
+    assert result.shapes[0, 1] == pytest.approx(1.0)
+
+
+def test_extract_raw_tensors_uses_runtime_device_for_empty_path():
+    """Per code-quality fix: empty-result tensors must land on the runtime's device,
+    not hardcoded cuda:0."""
+    r = MagicMock()
+    r.obb = None
+    raw = _extract_raw_tensors(r, frame_idx=0, device="cpu")
+    assert str(raw.xywhr.device) == "cpu"
+    assert str(raw.corners.device) == "cpu"
+    assert str(raw.conf.device) == "cpu"

@@ -82,7 +82,10 @@ def _run_direct(
     # Only native PyTorch "cuda" runtime leaves tensors on device.
     # onnx_cuda and tensorrt: predict() returns CPU numpy regardless of GPU use.
     if runtime.tensor_on_cuda:
-        return [_extract_raw_tensors(r, idx) for idx, r in enumerate(results)]
+        return [
+            _extract_raw_tensors(r, idx, runtime.device)
+            for idx, r in enumerate(results)
+        ]
     return [_extract_obb_result(r, idx) for idx, r in enumerate(results)]
 
 
@@ -163,16 +166,16 @@ def _build_crops(
     return crops, offsets
 
 
-def _extract_raw_tensors(result: Any, frame_idx: int) -> _RawOBBTensors:
+def _extract_raw_tensors(result: Any, frame_idx: int, device: str) -> _RawOBBTensors:
     """Keep OBB tensors on the compute device — no .cpu() call."""
     obb = result.obb
     if obb is None or len(obb) == 0:
-        device = torch.device("cuda:0")
+        dev = torch.device(device)
         return _RawOBBTensors(
             frame_idx=frame_idx,
-            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=device),
-            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=device),
-            conf=torch.zeros(0, dtype=torch.float32, device=device),
+            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
+            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
+            conf=torch.zeros(0, dtype=torch.float32, device=dev),
         )
     return _RawOBBTensors(
         frame_idx=frame_idx,
@@ -203,7 +206,8 @@ def _extract_obb_result(
     corners[:, :, 1] += oy
     w_arr, h_arr = xywhr[:, 2], xywhr[:, 3]
     sizes = w_arr * h_arr
-    aspect = np.where(h_arr > 0, w_arr / h_arr, 1.0)
+    safe_h = np.where(h_arr > 0, h_arr, 1.0)
+    aspect = np.where(h_arr > 0, w_arr / safe_h, 1.0)
     return OBBResult(
         frame_idx=frame_idx,
         centroids=centroids.astype(np.float32),
