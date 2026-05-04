@@ -1174,7 +1174,6 @@ class TrackingWorker(QThread):
             deque(maxlen=2) for _ in range(N)
         ]  # entries: (x, y, frame_count)
         orientation_last, last_shape_info = [None] * N, [None] * N
-        heading_flip_counters = [0] * N  # Hysteresis for directed heading flips
         track_pose_prototypes = [None] * N
         track_avg_step = [0.0] * N
         tracking_continuity = [0] * N
@@ -3596,7 +3595,6 @@ class TrackingWorker(QThread):
                         track_avg_step[r] = 0.0
                         local_counts[r] = 0
                         orientation_last[r] = theta_for_tracking
-                        heading_flip_counters[r] = 0
                         track_pose_prototypes[r] = None
                         self.kf_manager.initialize_filter(
                             r,
@@ -3659,23 +3657,6 @@ class TrackingWorker(QThread):
                         speed = math.hypot(px2 - px1, py2 - py1) / max(1, pf2 - pf1)
                     else:
                         speed = 0
-                    # Confidence for the directed-heading flip gate:
-                    # pose-directed → pose visibility; head-tail-directed →
-                    # detector confidence; undirected → not used (1.0).
-                    orient_confidence = 1.0
-                    if directed_heading:
-                        if c < len(pose_directed_mask) and pose_directed_mask[c]:
-                            orient_confidence = (
-                                float(detection_pose_visibility[c])
-                                if c < len(detection_pose_visibility)
-                                else 1.0
-                            )
-                        else:
-                            orient_confidence = (
-                                float(detection_headtail_confidence[c])
-                                if c < len(detection_headtail_confidence)
-                                else 1.0
-                            )
                     orientation_last[r] = self._smooth_orientation(
                         r,
                         theta_for_tracking,
@@ -3684,8 +3665,6 @@ class TrackingWorker(QThread):
                         orientation_last,
                         position_deques,
                         directed_heading=directed_heading,
-                        orient_confidence=orient_confidence,
-                        heading_flip_counters=heading_flip_counters,
                     )
                     # Feed smoothed heading back into the Kalman state so that
                     # the KF prediction stays consistent with the orientation
@@ -4508,8 +4487,6 @@ class TrackingWorker(QThread):
         orientation_last,
         position_deques,
         directed_heading=False,
-        orient_confidence=1.0,
-        heading_flip_counters=None,
     ):
         from hydra_suite.core.tracking.orientation import smooth_orientation
 
@@ -4521,8 +4498,6 @@ class TrackingWorker(QThread):
             orientation_last,
             position_deques,
             directed_heading=directed_heading,
-            orient_confidence=orient_confidence,
-            heading_flip_counters=heading_flip_counters,
             motion_is_reversed=bool(self.backward_mode),
         )
 
