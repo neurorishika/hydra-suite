@@ -366,6 +366,12 @@ class TrackingWorker(QThread):
     def stop(self: object) -> object:
         """Request cooperative stop for current processing loop."""
         self._stop_requested = True
+        prefetcher = getattr(self, "frame_prefetcher", None)
+        if prefetcher is not None:
+            try:
+                prefetcher.stop()
+            except Exception:
+                logger.debug("Failed to stop frame prefetcher", exc_info=True)
 
     def _forward_frame_iterator(self, cap, use_prefetcher=False):
         """Iterate through frames in forward direction.
@@ -4372,12 +4378,13 @@ class TrackingWorker(QThread):
 
         # === 3. CLEANUP (Identical to Original) ===
         profiler.phase_start("cleanup")
+        stop_requested = bool(self._stop_requested)
         # Stop frame prefetcher if still running
         if self.frame_prefetcher is not None:
             self.frame_prefetcher.stop()
             self.frame_prefetcher = None
 
-        if live_feature_precompute is not None:
+        if live_feature_precompute is not None and not stop_requested:
             try:
                 live_results = live_feature_precompute.finalize_live(
                     warning_cb=lambda title, msg: self.warning_signal.emit(title, msg)
@@ -4392,15 +4399,26 @@ class TrackingWorker(QThread):
                     "Realtime Analysis Finalization Failed",
                     f"Tracking finished, but finalizing realtime analysis artifacts failed:\n{exc}",
                 )
+        elif live_feature_precompute is not None:
+            logger.info(
+                "Skipping realtime analysis finalization because stop was requested."
+            )
 
         # === Streaming Phase 3+4 / Identity Phase 0 ===
         # Flush any pending evidence emitters so all buffered frames are written.
-        if hasattr(self, "_evidence_emitters") and self._evidence_emitters:
+        if (
+            hasattr(self, "_evidence_emitters")
+            and self._evidence_emitters
+            and not stop_requested
+        ):
             for _emitter in self._evidence_emitters:
                 try:
                     _emitter.flush()
                 except Exception as _flush_exc:
                     logger.warning("Evidence emitter flush failed: %s", _flush_exc)
+            self._evidence_emitters.clear()
+        elif hasattr(self, "_evidence_emitters") and self._evidence_emitters:
+            logger.info("Skipping evidence cache flush because stop was requested.")
             self._evidence_emitters.clear()
 
         cap.release()
@@ -4414,19 +4432,24 @@ class TrackingWorker(QThread):
                 pass
         if detected_props_cache is not None:
             try:
-                detected_props_cache.save(
-                    metadata={
-                        "cache_id": detected_props_id,
-                        "start_frame": int(start_frame),
-                        "end_frame": int(end_frame),
-                        "video_path": str(Path(self.video_path).expanduser().resolve()),
-                    }
-                )
+                if not stop_requested:
+                    detected_props_cache.save(
+                        metadata={
+                            "cache_id": detected_props_id,
+                            "start_frame": int(start_frame),
+                            "end_frame": int(end_frame),
+                            "video_path": str(
+                                Path(self.video_path).expanduser().resolve()
+                            ),
+                        }
+                    )
             finally:
                 detected_props_cache.close()
         # Save or close detection cache
         if detection_cache:
-            if not self.backward_mode and not use_cached_detections:
+            if stop_requested:
+                detection_cache.close()
+            elif not self.backward_mode and not use_cached_detections:
                 # Forward pass Phase 1 (detection phase): save cache to disk
                 # Note: In batched detection, cache is already saved after Phase 1
                 detection_cache.save()
@@ -4436,7 +4459,7 @@ class TrackingWorker(QThread):
                 detection_cache.close()
 
         # Finalize individual dataset if enabled
-        if individual_generator is not None:
+        if individual_generator is not None and not stop_requested:
             dataset_path = individual_generator.finalize()
             if dataset_path:
                 logger.info(f"Individual dataset saved to: {dataset_path}")
@@ -4467,7 +4490,7 @@ class TrackingWorker(QThread):
             profile_export_path = (
                 Path(self.video_path).parent / f"tracking_profile_{_dir_tag}.json"
             )
-        if profile_export_path is not None:
+        if profile_export_path is not None and not stop_requested:
             profiler.export_summary(profile_export_path)
 
         logger.info("Tracking worker finished. Emitting raw trajectory data.")

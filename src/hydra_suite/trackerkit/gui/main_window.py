@@ -94,6 +94,8 @@ def get_video_config_path(video_path: object) -> object:
 
 logger = logging.getLogger(__name__)
 
+_HEADTAIL_USAGE_ROLE_ALIASES = {"headtail", "head_tail"}
+
 
 class MainWindow(QMainWindow):
     """
@@ -2422,8 +2424,16 @@ class MainWindow(QMainWindow):
         """Return True if rel_path is not yet annotated as head_tail in the registry."""
         from hydra_suite.training.model_publish import iter_registry_entries
 
+        normalized_path = str(rel_path or "").strip()
+        if not normalized_path or normalized_path in {"__add_new__", "__none__"}:
+            return False
+
         return all(
-            not (key == rel_path and meta.get("usage_role") == "head_tail")
+            not (
+                key == normalized_path
+                and str(meta.get("usage_role") or "").strip().lower()
+                in _HEADTAIL_USAGE_ROLE_ALIASES
+            )
             for key, meta in iter_registry_entries()
         )
 

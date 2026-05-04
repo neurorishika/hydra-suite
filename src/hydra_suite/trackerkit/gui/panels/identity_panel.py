@@ -1572,7 +1572,8 @@ class IdentityPanel(QWidget):
         registry_paths = {
             key
             for key, meta in iter_registry_entries()
-            if meta.get("usage_role") == "head_tail"
+            if str(meta.get("usage_role") or "").strip().lower()
+            in {"headtail", "head_tail"}
         }
         existing_data = set()
         for i in range(self.combo_yolo_headtail_model.count()):
