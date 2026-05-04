@@ -110,6 +110,11 @@ def test_detectkit_main_window_new_project_creates_project_from_dialog(
         "hydra_suite.detectkit.gui.dialogs.NewProjectDialog",
         _FakeDialog,
     )
+    scheduled: list[tuple[int, object]] = []
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
 
     window = MainWindow()
     loaded_projects = []
@@ -125,6 +130,13 @@ def test_detectkit_main_window_new_project_creates_project_from_dialog(
     assert loaded_projects[0].project_dir == project_path
     assert loaded_projects[0].class_name == "ant"
     assert loaded_projects[0].class_names == ["ant", "bee"]
+    assert scheduled
+    assert scheduled[0][0] == 100
+    assert getattr(scheduled[0][1], "__self__", None) is window
+    assert (
+        getattr(scheduled[0][1], "__func__", None)
+        is window._open_source_manager.__func__
+    )
     window.close()
 
 
@@ -159,6 +171,11 @@ def test_detectkit_main_window_new_project_opens_existing_project(
         "hydra_suite.detectkit.gui.main_window.QMessageBox.question",
         lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
     )
+    scheduled: list[tuple[int, object]] = []
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.main_window.QTimer.singleShot",
+        lambda delay, callback: scheduled.append((delay, callback)),
+    )
 
     window = MainWindow()
     loaded_projects = []
@@ -171,6 +188,7 @@ def test_detectkit_main_window_new_project_opens_existing_project(
     assert loaded_projects
     assert loaded_projects[0].project_dir == project_path
     assert loaded_projects[0].class_name == "bee"
+    assert scheduled
     window.close()
 
 

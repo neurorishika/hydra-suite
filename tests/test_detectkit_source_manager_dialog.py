@@ -84,6 +84,10 @@ def test_source_manager_has_add_remove_buttons(qapp, tmp_path):
 
 def test_source_manager_adds_imported_yolo_detect_source(qapp, tmp_path, monkeypatch):
     from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        SOURCE_ADD_MODE_PORTABLE,
+        DetectKitSourceAdditionChoice,
+    )
 
     source_root = tmp_path / "external_detect"
     (source_root / "images").mkdir(parents=True)
@@ -104,7 +108,9 @@ def test_source_manager_adds_imported_yolo_detect_source(qapp, tmp_path, monkeyp
     )
     monkeypatch.setattr(
         "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
-        lambda *args, **kwargs: True,
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(
+            mode=SOURCE_ADD_MODE_PORTABLE
+        ),
     )
 
     proj = _make_proj(tmp_path)
@@ -156,3 +162,46 @@ def test_source_manager_does_not_add_source_when_validation_cancelled(
 
     assert proj.sources == []
     assert dlg._source_list.count() == 0
+
+
+def test_source_manager_adds_linked_source_in_place(qapp, tmp_path, monkeypatch):
+    from hydra_suite.detectkit.gui.dialogs.source_manager import SourceManagerDialog
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        SOURCE_ADD_MODE_LINKED,
+        DetectKitSourceAdditionChoice,
+    )
+
+    source_root = tmp_path / "linked_detect"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    (source_root / "images" / "sample.jpg").write_text("fake", encoding="utf-8")
+    (source_root / "labels" / "sample.txt").write_text(
+        "0 0.5 0.5 0.4 0.2\n",
+        encoding="utf-8",
+    )
+    (source_root / "dataset.yaml").write_text(
+        "train: images\nnames:\n  0: ant\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: str(source_root),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.detectkit.gui.dialogs.source_manager.confirm_detectkit_source_addition",
+        lambda *args, **kwargs: DetectKitSourceAdditionChoice(
+            mode=SOURCE_ADD_MODE_LINKED
+        ),
+    )
+
+    proj = _make_proj(tmp_path)
+    dlg = SourceManagerDialog(proj)
+    dlg._add_source()
+
+    assert len(proj.sources) == 1
+    added = proj.sources[0]
+    assert added.path == str(source_root)
+    assert added.original_path == str(source_root)
+    assert added.imported is False
+    assert (source_root / "classes.txt").exists()

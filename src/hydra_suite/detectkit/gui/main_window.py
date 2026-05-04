@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -712,6 +712,7 @@ class DetectKitMainWindow(QMainWindow):
             proj = open_project(project_dir)
             if proj is not None:
                 self._load_project(proj)
+                self._queue_source_manager_if_empty(proj)
             else:
                 QMessageBox.warning(
                     self, "Open Failed", f"Could not open project at:\n{path}"
@@ -854,6 +855,7 @@ class DetectKitMainWindow(QMainWindow):
             proj = open_project(Path(path_str))
             if proj is not None:
                 self._load_project(proj)
+                self._queue_source_manager_if_empty(proj)
             else:
                 QMessageBox.warning(
                     self, "Open Failed", f"Could not open project at:\n{path_str}"
@@ -885,6 +887,7 @@ class DetectKitMainWindow(QMainWindow):
                 proj = open_project(proj_dir)
                 if proj is not None:
                     self._load_project(proj)
+                    self._queue_source_manager_if_empty(proj)
             return
 
         proj = create_project(
@@ -893,6 +896,7 @@ class DetectKitMainWindow(QMainWindow):
             class_names=list(project_info.get("class_names", [])),
         )
         self._load_project(proj)
+        self._queue_source_manager_if_empty(proj)
 
     @staticmethod
     def _next_available_project_dir(parent_dir: Path, base_name: str) -> Path:
@@ -959,6 +963,7 @@ class DetectKitMainWindow(QMainWindow):
         proj = open_project(Path(directory))
         if proj is not None:
             self._load_project(proj)
+            self._queue_source_manager_if_empty(proj)
         else:
             QMessageBox.warning(
                 self, "Open Failed", f"No DetectKit project found in:\n{directory}"
@@ -1008,6 +1013,7 @@ class DetectKitMainWindow(QMainWindow):
         proj = open_project(imported_dir)
         if proj is not None:
             self._load_project(proj)
+            self._queue_source_manager_if_empty(proj)
         else:
             QMessageBox.warning(
                 self,
@@ -1074,6 +1080,12 @@ class DetectKitMainWindow(QMainWindow):
         self._refresh_recent_menu()
 
         self.statusBar().showMessage(f"Loaded project: {proj.project_dir}", 5000)
+
+    def _queue_source_manager_if_empty(self, proj: DetectKitProject) -> None:
+        """Schedule Source Manager when a user-facing load opens an empty project."""
+        if proj.sources:
+            return
+        QTimer.singleShot(100, self._open_source_manager)
 
     def _save_current_project(self) -> None:
         if self._project is None:
@@ -1336,6 +1348,7 @@ class DetectKitMainWindow(QMainWindow):
             return
 
         worker = ALWorker(request)
+        dlg.set_running(True)
         worker.progress.connect(dlg.progress.setValue)
         worker.status.connect(dlg.status_label.setText)
         worker.result_ready.connect(
@@ -1344,6 +1357,7 @@ class DetectKitMainWindow(QMainWindow):
             )
         )
         worker.error.connect(lambda msg: dlg.status_label.setText(f"Error: {msg}"))
+        worker.finished.connect(lambda: dlg.set_running(False))
         worker.start()
         self._al_worker = worker
 

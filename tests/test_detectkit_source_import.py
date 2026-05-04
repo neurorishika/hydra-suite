@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from hydra_suite.detectkit.gui.source_import import (
+    IMPORT_MODE_LINKED,
     inspect_detectkit_source,
     materialize_detectkit_source,
 )
@@ -102,6 +103,39 @@ def test_materialize_detectkit_source_converts_coco_bbox_annotations(tmp_path: P
 
     fields = (
         (materialized.canonical_path / "labels" / "sample.txt")
+        .read_text(encoding="utf-8")
+        .strip()
+        .split()
+    )
+    assert len(fields) == 9
+    assert fields[0] == "0"
+
+
+def test_materialize_detectkit_source_can_link_and_normalize_in_place(tmp_path: Path):
+    source_root = tmp_path / "linked_yolo_detect"
+    (source_root / "images").mkdir(parents=True)
+    (source_root / "labels").mkdir(parents=True)
+    _write_fake_image(source_root / "images" / "frame001.jpg")
+    (source_root / "labels" / "frame001.txt").write_text(
+        "0 0.5 0.5 0.4 0.2\n",
+        encoding="utf-8",
+    )
+    (source_root / "dataset.yaml").write_text(
+        "train: images\nnames:\n  0: ant\n",
+        encoding="utf-8",
+    )
+
+    materialized = materialize_detectkit_source(
+        source_root,
+        tmp_path / "project",
+        import_mode=IMPORT_MODE_LINKED,
+    )
+
+    assert materialized.imported is False
+    assert materialized.canonical_path == source_root.resolve()
+    assert (source_root / "classes.txt").read_text(encoding="utf-8") == "ant\n"
+    fields = (
+        (source_root / "labels" / "frame001.txt")
         .read_text(encoding="utf-8")
         .strip()
         .split()

@@ -41,6 +41,7 @@ class ActiveLearningDialog(BaseDialog):
         )
         self._project = project
         self._run_handler: Callable[[], None] | None = None
+        self._running = False
         self.resize(560, 540)
         self._build_content()
         self._sync_run_enabled()
@@ -57,8 +58,8 @@ class ActiveLearningDialog(BaseDialog):
         self.add_content(container)
 
     def _build_input_group(self) -> QGroupBox:
-        box = QGroupBox("Input")
-        form = QFormLayout(box)
+        self.input_group = QGroupBox("Input")
+        form = QFormLayout(self.input_group)
 
         self.rb_video = QRadioButton("Video")
         self.rb_folder = QRadioButton("Image folder")
@@ -74,18 +75,18 @@ class ActiveLearningDialog(BaseDialog):
 
         self.input_path_edit = QLineEdit()
         self.input_path_edit.textChanged.connect(self._sync_run_enabled)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse)
+        self.browse_button = QPushButton("Browse...")
+        self.browse_button.clicked.connect(self._browse)
         path_row = QHBoxLayout()
         path_row.addWidget(self.input_path_edit)
-        path_row.addWidget(browse_btn)
+        path_row.addWidget(self.browse_button)
         form.addRow("Path", _wrap(path_row))
 
-        return box
+        return self.input_group
 
     def _build_acquisition_group(self) -> QGroupBox:
-        box = QGroupBox("Acquisition")
-        form = QFormLayout(box)
+        self.acquisition_group = QGroupBox("Acquisition")
+        form = QFormLayout(self.acquisition_group)
 
         self.preset_combo = QComboBox()
         for name in PRESETS:
@@ -103,7 +104,7 @@ class ActiveLearningDialog(BaseDialog):
         self.budget_spin.setValue(50)
         form.addRow("Budget (top-K)", self.budget_spin)
 
-        return box
+        return self.acquisition_group
 
     def _build_run_group(self) -> QGroupBox:
         box = QGroupBox("Run")
@@ -142,6 +143,10 @@ class ActiveLearningDialog(BaseDialog):
             self.input_path_edit.setText(path)
 
     def _sync_run_enabled(self, *_):
+        if self._running:
+            self.run_button.setEnabled(False)
+            self.status_label.setText("Active learning is running. Inputs are locked.")
+            return
         path_ok = self.rb_project.isChecked() or bool(
             self.input_path_edit.text().strip()
         )
@@ -163,6 +168,13 @@ class ActiveLearningDialog(BaseDialog):
     def set_run_handler(self, handler: Callable[[], None]) -> None:
         """Main window wires this to construct + start the AL worker."""
         self._run_handler = handler
+
+    def set_running(self, running: bool) -> None:
+        """Lock editable controls while an AL round is active."""
+        self._running = bool(running)
+        self.input_group.setEnabled(not self._running)
+        self.acquisition_group.setEnabled(not self._running)
+        self._sync_run_enabled()
 
 
 def _wrap(layout) -> QWidget:

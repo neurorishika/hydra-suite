@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QDialogButtonBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QScrollArea  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +23,7 @@ def qapp():
 
 def test_detectkit_source_validation_dialog_describes_import(qapp, tmp_path: Path):
     from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        SOURCE_ADD_MODE_PORTABLE,
         DetectKitSourceValidationDialog,
     )
     from hydra_suite.detectkit.gui.source_import import DetectKitSourceInspection
@@ -37,12 +38,60 @@ def test_detectkit_source_validation_dialog_describes_import(qapp, tmp_path: Pat
     )
 
     dialog = DetectKitSourceValidationDialog(tmp_path, inspection)
-    ok_button = dialog._buttons.button(QDialogButtonBox.StandardButton.Ok)
+    cancel_button = dialog._buttons.button(QDialogButtonBox.StandardButton.Cancel)
 
-    assert ok_button is not None
-    assert ok_button.text() == "Import and Add"
+    assert cancel_button is not None
     assert dialog._kind_value.text() == "COCO annotations dataset"
     assert dialog._images_value.text() == "12"
     assert dialog._annotations_value.text() == "34"
     assert dialog._class_names_value.text() == "ant, bee"
-    assert "normalized to DetectKit's canonical" in dialog._action_value.text()
+    assert (
+        "normalized it to DetectKit's canonical"
+        not in dialog._portable_action_value.text()
+    )
+    assert (
+        "normalized it to DetectKit's canonical"
+        not in dialog._linked_action_value.text()
+    )
+    assert "normalized it to DetectKit's canonical" not in cancel_button.text()
+
+    dialog._portable_button.click()
+
+    assert dialog.selected_choice() is not None
+    assert dialog.selected_choice().mode == SOURCE_ADD_MODE_PORTABLE
+    assert (
+        "normalized it to DetectKit's canonical"
+        not in dialog._portable_action_value.text()
+    )
+    assert (
+        "normalizes it to DetectKit's canonical" in dialog._portable_action_value.text()
+    )
+    assert "modify labels at the source dataset" in dialog._linked_action_value.text()
+
+
+def test_detectkit_source_validation_dialog_scrolls_overflow(qapp, tmp_path: Path):
+    from hydra_suite.detectkit.gui.dialogs.source_validation import (
+        DetectKitSourceValidationDialog,
+    )
+    from hydra_suite.detectkit.gui.source_import import DetectKitSourceInspection
+
+    source_root = tmp_path / ("very-long-dataset-folder-name-" * 6)
+    inspection = DetectKitSourceInspection(
+        dataset_root=source_root,
+        source_kind="detectkit",
+        images_count=50,
+        annotation_count=100,
+        discovered_labels=[f"class_{index:02d}" for index in range(24)],
+        requires_import=False,
+    )
+
+    dialog = DetectKitSourceValidationDialog(source_root, inspection)
+    dialog.resize(420, 140)
+    dialog.show()
+    qapp.processEvents()
+
+    scroll_area = dialog.findChild(QScrollArea)
+
+    assert scroll_area is not None
+    assert scroll_area.widgetResizable()
+    assert scroll_area.verticalScrollBar().maximum() > 0

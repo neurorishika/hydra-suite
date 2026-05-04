@@ -313,6 +313,7 @@ def make_detectkit_project_portable(project: DetectKitProject) -> dict[str, int]
         materialized = materialize_detectkit_source(
             source.path,
             project_dir,
+            import_mode="portable",
             force_import=True,
         )
         localized_sources.append(

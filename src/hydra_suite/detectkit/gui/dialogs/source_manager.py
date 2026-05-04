@@ -21,12 +21,18 @@ from PySide6.QtWidgets import (
 from hydra_suite.widgets.dialogs import BaseDialog
 
 from ..source_import import (
+    IMPORT_MODE_LINKED,
+    IMPORT_MODE_PORTABLE,
     compute_positional_class_remap,
     inspect_detectkit_source,
     materialize_detectkit_source,
     remap_materialized_source_classes,
 )
-from .source_validation import confirm_detectkit_source_addition
+from .source_validation import (
+    SOURCE_ADD_MODE_LINKED,
+    SOURCE_ADD_MODE_PORTABLE,
+    confirm_detectkit_source_addition,
+)
 
 if TYPE_CHECKING:
     from ..models import DetectKitProject
@@ -112,8 +118,23 @@ class SourceManagerDialog(BaseDialog):
             QMessageBox.warning(self, "Add Source", str(exc))
             return
 
-        if not confirm_detectkit_source_addition(self, selected_path, inspection):
+        selection = confirm_detectkit_source_addition(self, selected_path, inspection)
+        if selection in {None, False}:
             return
+        selection_mode = getattr(
+            selection,
+            "mode",
+            (
+                SOURCE_ADD_MODE_LINKED
+                if selection == SOURCE_ADD_MODE_LINKED
+                else SOURCE_ADD_MODE_PORTABLE
+            ),
+        )
+        import_mode = (
+            IMPORT_MODE_LINKED
+            if selection_mode == SOURCE_ADD_MODE_LINKED
+            else IMPORT_MODE_PORTABLE
+        )
 
         force_remap = False
         project_classes = list(self._project.class_names)
@@ -175,6 +196,7 @@ class SourceManagerDialog(BaseDialog):
             materialized = materialize_detectkit_source(
                 selected_path,
                 self._project.project_dir,
+                import_mode=import_mode,
                 force_import=force_remap,
             )
         except Exception as exc:

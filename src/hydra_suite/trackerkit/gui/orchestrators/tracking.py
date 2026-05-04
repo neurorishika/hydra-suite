@@ -29,6 +29,7 @@ from hydra_suite.runtime.compute_runtime import (
     derive_detection_runtime_settings,
     derive_pose_runtime_settings,
 )
+from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
@@ -40,9 +41,6 @@ from hydra_suite.utils.video_artifacts import (
     find_existing_detection_cache_path,
 )
 from hydra_suite.utils.video_encoder import VideoEncoder
-from hydra_suite.trackerkit.gui.orchestrators.config import (
-    _get_video_config_path,
-)
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.config.schemas import TrackerConfig
@@ -272,6 +270,11 @@ class TrackingOrchestrator:
         self._request_qthread_stop(
             self._mw.final_media_export_worker, "FinalMediaExportWorker"
         )
+        self._request_qthread_stop(
+            getattr(self._mw, "preview_detection_worker", None),
+            "PreviewDetectionWorker",
+            timeout_ms=1200,
+        )
         self._request_qthread_stop(self._mw.tracking_worker, "TrackingWorker")
         self._stop_csv_writer()
 
@@ -281,6 +284,8 @@ class TrackingOrchestrator:
         self._cleanup_thread_reference("dataset_worker")
         self._cleanup_thread_reference("interp_worker")
         self._cleanup_thread_reference("final_media_export_worker")
+        self._cleanup_thread_reference("preview_detection_worker")
+        self._cleanup_thread_reference("tracking_worker")
 
         self._mw.progress_bar.setVisible(False)
         self._mw.progress_label.setVisible(False)

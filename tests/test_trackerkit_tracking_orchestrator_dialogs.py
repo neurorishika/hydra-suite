@@ -102,6 +102,96 @@ def test_on_tracking_warning_uses_main_window_parent(monkeypatch) -> None:
     }
 
 
+def test_stop_tracking_stops_preview_detection_worker(monkeypatch) -> None:
+    orchestrator, _ = _make_orchestrator()
+    stopped_workers: list[str] = []
+    cleaned_workers: list[str] = []
+
+    class FakeControl:
+        def setVisible(self, _visible: bool) -> None:
+            return None
+
+        def setValue(self, _value: int) -> None:
+            return None
+
+        def setText(self, _text: str) -> None:
+            return None
+
+        def setChecked(self, _checked: bool) -> None:
+            return None
+
+        def setEnabled(self, _enabled: bool) -> None:
+            return None
+
+        def blockSignals(self, _blocked: bool) -> None:
+            return None
+
+    orchestrator._mw = SimpleNamespace(
+        _stop_all_requested=False,
+        _pending_finish_after_interp=True,
+        _pending_finish_after_track_videos=True,
+        _pending_pose_export_csv_path="pose.csv",
+        _pending_video_csv_path="video.csv",
+        _pending_video_generation=True,
+        _cache_builder_worker=object(),
+        merge_worker=object(),
+        postprocess_worker=object(),
+        dataset_worker=object(),
+        interp_worker=object(),
+        final_media_export_worker=object(),
+        preview_detection_worker=object(),
+        tracking_worker=object(),
+        progress_bar=FakeControl(),
+        progress_label=FakeControl(),
+        _set_ui_controls_enabled=lambda _enabled: None,
+        current_video_path="video.mp4",
+        _apply_ui_state=lambda _state: None,
+        btn_preview=FakeControl(),
+        btn_start=FakeControl(),
+        _individual_dataset_run_id="run-id",
+        current_detection_cache_path="cache.npz",
+        current_individual_properties_cache_path="individual_props.npz",
+        current_detected_properties_cache_path="detected_props.npz",
+        current_detected_cnn_cache_paths={"model": "cnn.npz"},
+        current_interpolated_roi_npz_path="roi.npz",
+        current_interpolated_pose_csv_path="pose_interp.csv",
+        current_interpolated_pose_df=object(),
+        current_interpolated_tag_csv_path="tag_interp.csv",
+        current_interpolated_tag_df=object(),
+        current_interpolated_cnn_csv_paths={"model": "cnn.csv"},
+        current_interpolated_cnn_dfs={"model": object()},
+        current_interpolated_headtail_csv_path="headtail.csv",
+        current_interpolated_headtail_df=object(),
+        label_current_fps=FakeControl(),
+        label_elapsed_time=FakeControl(),
+        label_eta=FakeControl(),
+        _tracking_frame_size=(640, 480),
+        _cleanup_session_logging=lambda: None,
+    )
+
+    monkeypatch.setattr(
+        orchestrator,
+        "_request_qthread_stop",
+        lambda _worker, worker_name, **_kwargs: stopped_workers.append(worker_name),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_stop_csv_writer",
+        lambda timeout_sec=2.0: None,
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_cleanup_thread_reference",
+        lambda attr_name: cleaned_workers.append(attr_name),
+    )
+
+    orchestrator.stop_tracking()
+
+    assert "PreviewDetectionWorker" in stopped_workers
+    assert "preview_detection_worker" in cleaned_workers
+    assert "tracking_worker" in cleaned_workers
+
+
 def test_load_config_uses_main_window_parent(monkeypatch) -> None:
     main_window = object()
     panels = SimpleNamespace(setup=SimpleNamespace(config_status_label=None))

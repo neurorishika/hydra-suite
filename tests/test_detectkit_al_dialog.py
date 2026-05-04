@@ -37,3 +37,27 @@ def test_dialog_disables_run_until_inputs_valid(qapp, tmp_path):
     dlg = ActiveLearningDialog(project=project)
     assert not dlg.run_button.isEnabled()
     dlg.close()
+
+
+def test_dialog_locks_inputs_while_running(qapp, tmp_path):
+    project = DetectKitProject(project_dir=tmp_path)
+    project.active_model_path = str(tmp_path / "best.pt")
+    dlg = ActiveLearningDialog(project=project)
+    dlg.rb_project.setChecked(True)
+    dlg._sync_run_enabled()
+
+    assert dlg.run_button.isEnabled()
+
+    dlg.set_running(True)
+
+    assert not dlg.input_group.isEnabled()
+    assert not dlg.acquisition_group.isEnabled()
+    assert not dlg.run_button.isEnabled()
+    assert "Inputs are locked" in dlg.status_label.text()
+
+    dlg.set_running(False)
+
+    assert dlg.input_group.isEnabled()
+    assert dlg.acquisition_group.isEnabled()
+    assert dlg.run_button.isEnabled()
+    dlg.close()

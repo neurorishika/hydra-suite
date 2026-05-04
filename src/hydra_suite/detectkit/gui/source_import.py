@@ -47,6 +47,10 @@ class MaterializedDetectKitSource:
     imported: bool
 
 
+IMPORT_MODE_PORTABLE = "portable"
+IMPORT_MODE_LINKED = "linked"
+
+
 def _slugify_name(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
     return slug or "source"
@@ -294,6 +298,8 @@ def _convert_yolo_label_text(label_path: Path) -> str:
 
 
 def _copy_file(source_path: Path, dest_path: Path) -> None:
+    if source_path.resolve() == dest_path.resolve():
+        return
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, dest_path)
 
@@ -523,11 +529,32 @@ def materialize_detectkit_source(
     source_root: str | Path,
     project_dir: str | Path,
     *,
+    import_mode: str = IMPORT_MODE_PORTABLE,
     force_import: bool = False,
 ) -> MaterializedDetectKitSource:
     """Resolve *source_root* into a DetectKit-ready source for *project_dir*."""
     root = Path(source_root).expanduser().resolve()
     inspection = inspect_detectkit_source(root)
+    if import_mode not in {IMPORT_MODE_PORTABLE, IMPORT_MODE_LINKED}:
+        raise ValueError(f"Unsupported DetectKit import mode: {import_mode}")
+
+    if import_mode == IMPORT_MODE_LINKED and not force_import:
+        if inspection.requires_import:
+            if inspection.source_kind == "coco":
+                _materialize_coco_source(root, root)
+            else:
+                _materialize_yolo_source(root, root)
+        return MaterializedDetectKitSource(
+            source_root=root,
+            canonical_path=root,
+            source_kind=inspection.source_kind,
+            display_name=root.name,
+            images_count=inspection.images_count,
+            annotation_count=inspection.annotation_count,
+            discovered_labels=list(inspection.discovered_labels),
+            imported=False,
+        )
+
     if not inspection.requires_import and not force_import:
         return MaterializedDetectKitSource(
             source_root=root,
