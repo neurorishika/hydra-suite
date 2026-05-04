@@ -261,3 +261,33 @@ def _load_yolo(model_path: str, compute_runtime: ComputeRuntime) -> Any:
     elif compute_runtime == "mps":
         model.to("mps")
     return model
+
+
+def materialize_tensors(raw: _RawOBBTensors) -> OBBResult:
+    """Pull all device tensors to CPU as OBBResult with no filtering gates applied.
+
+    Used before caching the GPU-path raw tensors. Generates fresh detection_ids
+    via OBBResult.make_detection_ids since _RawOBBTensors does not carry them.
+    The aspect-ratio computation uses a safe-h guard to avoid divide-by-zero
+    warnings on degenerate detections.
+    """
+    if raw.xywhr.shape[0] == 0:
+        return _empty_obb_result(raw.frame_idx)
+    xywhr_np = raw.xywhr.cpu().numpy()
+    corners_np = raw.corners.cpu().numpy()
+    conf_np = raw.conf.cpu().numpy()
+    w_arr, h_arr = xywhr_np[:, 2], xywhr_np[:, 3]
+    sizes = (w_arr * h_arr).astype(np.float32)
+    safe_h = np.where(h_arr > 0, h_arr, 1.0)
+    aspect = np.where(h_arr > 0, w_arr / safe_h, 1.0).astype(np.float32)
+    n = int(len(conf_np))
+    return OBBResult(
+        frame_idx=raw.frame_idx,
+        centroids=xywhr_np[:, :2].astype(np.float32),
+        angles=xywhr_np[:, 4].astype(np.float32),
+        sizes=sizes,
+        shapes=np.stack([sizes, aspect], axis=1),
+        confidences=conf_np.astype(np.float32),
+        corners=corners_np.astype(np.float32),
+        detection_ids=OBBResult.make_detection_ids(raw.frame_idx, n),
+    )
