@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+import torch
+
+from ..config import PoseConfig
+from ..result import OBBResult, PoseResult
+from ..runtime import RuntimeContext
+
+
+@dataclass
+class PoseModel:
+    backend: Any  # YoloNativeBackend or SleapExportedBackend
+    n_keypoints: int
+    keypoint_names: list[str]
+
+    def close(self) -> None:
+        pass
+
+
+def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
+    skeleton = _load_skeleton(config.skeleton_file)
+    keypoint_names: list[str] = skeleton.get("keypoints", [])
+    n_kpts = len(keypoint_names)
+
+    if config.backend == "yolo":
+        assert config.yolo is not None
+        from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
+
+        device = (
+            "cuda:0"
+            if config.yolo.compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
+            else ("mps" if config.yolo.compute_runtime == "mps" else "cpu")
+        )
+        backend = YoloNativeBackend(
+            model_path=config.yolo.model_path,
+            device=device,
+            min_valid_conf=config.min_keypoint_confidence,
+            keypoint_names=keypoint_names if keypoint_names else None,
+            conf=config.yolo.confidence_threshold,
+            iou=config.yolo.iou_threshold,
+            max_det=config.yolo.max_detections_per_crop,
+            batch_size=config.yolo.batch_size,
+        )
+        return PoseModel(
+            backend=backend, n_keypoints=n_kpts, keypoint_names=keypoint_names
+        )
+
+    assert config.sleap is not None
+    from hydra_suite.core.identity.pose.backends.sleap import SleapExportedBackend
+
+    backend = SleapExportedBackend(model_path=config.sleap.model_path)
+    return PoseModel(backend=backend, n_keypoints=n_kpts, keypoint_names=keypoint_names)
+
+
+def run_pose(
+    crops: torch.Tensor,
+    obb_result: OBBResult,
+    model: PoseModel,
+    config: PoseConfig,
+    runtime: RuntimeContext,
+) -> PoseResult:
+    """Run pose estimation on canonical crops. Returns (D, K, 3) keypoints + valid_mask.
+
+    Keypoints are in CROP coordinates (the canonical crop space). Mapping back to
+    image coordinates is the responsibility of the caller (it has the OBB+affine).
+    """
+    n = obb_result.num_detections
+    empty = PoseResult(
+        keypoints=np.zeros((0, model.n_keypoints, 3), dtype=np.float32),
+        valid_mask=np.zeros(0, dtype=bool),
+    )
+    if crops.shape[0] == 0 or n == 0:
+        return empty
+
+    np_crops = [crops[i].permute(1, 2, 0).cpu().numpy() for i in range(crops.shape[0])]
+    raw_results = model.backend.predict_batch(np_crops)
+
+    kpts_out = np.zeros((n, model.n_keypoints, 3), dtype=np.float32)
+    valid = np.zeros(n, dtype=bool)
+
+    min_kpt_conf = config.min_keypoint_confidence
+    min_valid = config.min_valid_keypoints
+
+    for i, r in enumerate(raw_results):
+        kpts = r.keypoints.data.cpu().numpy()  # (1, K, 3)
+        if kpts.shape[0] == 0:
+            continue
+        kpts = kpts[0]  # (K, 3)
+        kpts_out[i] = kpts
+        n_confident = int(np.sum(kpts[:, 2] >= min_kpt_conf))
+        valid[i] = n_confident >= min_valid
+
+    return PoseResult(keypoints=kpts_out, valid_mask=valid)
+
+
+def _load_skeleton(skeleton_file: str) -> dict:
+    if not skeleton_file:
+        return {}
+    try:
+        with open(skeleton_file) as f:
+            return json.load(f)
+    except Exception:
+        return {}
