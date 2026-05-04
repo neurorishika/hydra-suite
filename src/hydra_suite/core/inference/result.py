@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+import numpy as np
+
+# Max detections per frame; matches the legacy stride used to encode
+# detection IDs as `frame_idx * STRIDE + slot`. Downstream consumers
+# (CSV writer, identity evidence, pose keypoint maps, AprilTag association)
+# treat this integer as the primary key for joins across caches.
+DETECTION_ID_STRIDE = 10000
+
+
+@dataclass
+class OBBResult:
+    frame_idx: int
+    centroids: np.ndarray  # (D, 2)  cx, cy
+    angles: np.ndarray  # (D,)    radians
+    sizes: np.ndarray  # (D,)    area px²
+    shapes: np.ndarray  # (D, 2)  ellipse_area, aspect_ratio
+    confidences: np.ndarray  # (D,)    raw detection confidence
+    corners: np.ndarray  # (D, 4, 2) OBB corners
+    detection_ids: np.ndarray  # (D,) int64 primary key for downstream consumers
+
+    @property
+    def num_detections(self) -> int:
+        return int(len(self.confidences))
+
+    @staticmethod
+    def make_detection_ids(frame_idx: int, num_detections: int) -> np.ndarray:
+        """Generate legacy-compatible primary keys: frame_idx * STRIDE + slot."""
+        return np.arange(num_detections, dtype=np.int64) + np.int64(
+            frame_idx
+        ) * np.int64(DETECTION_ID_STRIDE)
+
+
+@dataclass
+class HeadTailResult:
+    heading_hints: np.ndarray  # (D,) radians; nan = no confident direction
+    heading_confidences: np.ndarray  # (D,)
+    directed_mask: np.ndarray  # (D,) uint8; 1 = heading trusted
+    # (D, 2, 3) affine matrices, or None when loaded from cache (caches store
+    # outputs only; affines are recomputable from OBBResult + headtail config).
+    canonical_affines: np.ndarray | None
+
+
+@dataclass
+class CNNFactorPrediction:
+    factor_name: str
+    class_names: list[str]
+    raw_probabilities: np.ndarray  # (num_classes,) pre-calibration
+
+
+@dataclass
+class CNNDetectionPrediction:
+    det_index: int
+    factors: list[CNNFactorPrediction]  # len=1 flat; len=K multi-head
+
+
+@dataclass
+class CNNResult:
+    label: str  # from CNNConfig.label
+    predictions: list[CNNDetectionPrediction]  # one per detection
+
+
+@dataclass
+class PoseResult:
+    keypoints: np.ndarray  # (D, K, 3): [x, y, confidence] per keypoint
+    valid_mask: np.ndarray  # (D,) bool: meets min_kpt_conf + min_valid_kpts
+
+
+@dataclass
+class AprilTagResult:
+    tag_ids: list[int]
+    det_indices: list[int]  # which OBB detection each tag maps to
+    centers: np.ndarray  # (T, 2)
+    corners: np.ndarray  # (T, 4, 2)
+
+
+@dataclass
+class FrameResult:
+    frame_idx: int
+    obb: OBBResult
+    filtered_indices: list[int]  # detections that survived filtering
+    headtail: HeadTailResult | None
+    cnn: list[CNNResult]  # one per CNN phase
+    pose: PoseResult | None
+    apriltag: AprilTagResult | None
+    resolved_headings: np.ndarray  # (D,) final merged heading per detection
+
+
+def assemble_resolved_headings(
+    obb: OBBResult,
+    headtail: HeadTailResult | None,
+    pose_headings: np.ndarray | None,  # (D,) nan where pose unavailable
+    pose_valid: np.ndarray | None,  # (D,) bool
+    overrides_headtail: bool = True,
+) -> np.ndarray:
+    """Merge headings with priority: pose -> headtail -> OBB axis.
+
+    When overrides_headtail=False the priority is: headtail -> pose -> OBB axis.
+    """
+    result = obb.angles.copy()
+
+    if headtail is not None:
+        for i in range(obb.num_detections):
+            if headtail.directed_mask[i] and not math.isnan(
+                float(headtail.heading_hints[i])
+            ):
+                result[i] = headtail.heading_hints[i]
+
+    if pose_headings is not None and pose_valid is not None:
+        for i in range(obb.num_detections):
+            if not pose_valid[i]:
+                continue
+            if math.isnan(float(pose_headings[i])):
+                continue
+            if overrides_headtail:
+                result[i] = pose_headings[i]
+            elif headtail is None or not headtail.directed_mask[i]:
+                result[i] = pose_headings[i]
+
+    return result
