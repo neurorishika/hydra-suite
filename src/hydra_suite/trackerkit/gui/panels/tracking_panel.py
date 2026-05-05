@@ -765,69 +765,23 @@ class TrackingPanel(QWidget):
         self.chk_instant_flip.setChecked(True)
         self.chk_instant_flip.setToolTip(
             "Allow instant 180° orientation flip when moving quickly.\n"
-            "Enable for animals that can turn rapidly."
+            "Only used when no head-tail or pose model is loaded; with a\n"
+            "directed source the model owns heading and motion never overrides it."
         )
         f_misc.addRow(self.chk_instant_flip)
 
-        self.chk_directed_orient_smoothing = QCheckBox(
-            "Consistency check on pose/head-tail flips"
-        )
-        self.chk_directed_orient_smoothing.setChecked(True)
-        self.chk_directed_orient_smoothing.setToolTip(
-            "When enabled, 180° flips from directed models (pose / head-tail)\n"
-            "are only accepted when motion corroborates the new direction\n"
-            "and the detection confidence meets the threshold below.\n"
-            "Small changes (≤90°) are always accepted unchanged."
-        )
-        self.chk_directed_orient_smoothing.toggled.connect(
-            self._on_directed_orient_smoothing_toggled
-        )
-        f_misc.addRow(self.chk_directed_orient_smoothing)
-
-        self.spin_directed_orient_flip_conf = QDoubleSpinBox()
-        self.spin_directed_orient_flip_conf.setRange(0.0, 1.0)
-        self.spin_directed_orient_flip_conf.setSingleStep(0.05)
-        self.spin_directed_orient_flip_conf.setDecimals(2)
-        self.spin_directed_orient_flip_conf.setValue(0.7)
-        self.spin_directed_orient_flip_conf.setToolTip(
-            "Minimum confidence to accept a >90° pose/head-tail flip (0–1).\n"
-            "Higher = fewer spurious flips; lower = more responsive."
-        )
-
-        self.spin_directed_orient_flip_persist = QSpinBox()
-        self.spin_directed_orient_flip_persist.setRange(1, 20)
-        self.spin_directed_orient_flip_persist.setValue(3)
-        self.spin_directed_orient_flip_persist.setToolTip(
-            "Consecutive frames a >90° flip must be observed before it is\n"
-            "accepted. Higher values suppress transient classifier errors."
-        )
-
-        # Pack flip-conf and flip-persist into one row, hidden together when
-        # the smoothing checkbox is OFF.
-        self._directed_orient_flip_widget = QWidget()
-        _row_flip = QHBoxLayout(self._directed_orient_flip_widget)
-        _row_flip.setContentsMargins(0, 0, 0, 0)
-        _row_flip.addWidget(QLabel("Flip conf ≥"))
-        _row_flip.addWidget(self.spin_directed_orient_flip_conf)
-        _row_flip.addSpacing(6)
-        _row_flip.addWidget(QLabel("Flip persist (frames)"))
-        _row_flip.addWidget(self.spin_directed_orient_flip_persist)
-        f_misc.addRow(self._directed_orient_flip_widget)
-
-        # Group the online consistency controls so they can be shown/hidden
-        # together when the post-hoc mode is toggled on/off. The flip conf+persist
-        # widget is also cascade-hidden by the smoothing checkbox itself.
-        self._directed_orient_online_widgets = [
-            self.chk_directed_orient_smoothing,
-            self._directed_orient_flip_widget,
-        ]
-
-        # Note shown in place of the online controls when post-hoc mode is active.
+        # Static note explaining the head-tail / pose anchor behaviour.  No
+        # user-facing controls here: when a directed source is loaded its
+        # high-quality predictions set the orientation anchor and low-quality
+        # frames fall back to the OBB axis collapsed to that anchor.  Global
+        # 180° ambiguities are resolved by the post-processing DP pass.
         self.lbl_directed_orient_posthoc_note = self._main_window._create_help_label(
-            "Post-hoc global heading consistency is active (head-tail or pose model "
-            "detected). Online flip checks are disabled — heading ambiguities are "
-            "resolved globally per track in post-processing using a minimum-flips "
-            "dynamic-programming algorithm."
+            "When a head-tail or pose model is loaded, its high-quality predictions "
+            "(both detection and classifier confidence above their thresholds) set "
+            "the orientation anchor for each track. Frames without a high-quality "
+            "prediction stay aligned with that anchor — no motion-based flips, no "
+            "heading thrash. Residual 180° ambiguities are resolved globally per "
+            "track in post-processing."
         )
         self.lbl_directed_orient_posthoc_note.setVisible(False)
         vl_misc.addWidget(self.lbl_directed_orient_posthoc_note)
@@ -1039,7 +993,6 @@ class TrackingPanel(QWidget):
 
         # Apply initial cascade-hide state so sub-options match toggle defaults.
         self._on_identity_in_tracking_toggled()
-        self._on_directed_orient_smoothing_toggled()
 
         vbox.addStretch(1)
         scroll.setWidget(content)
@@ -1144,11 +1097,6 @@ class TrackingPanel(QWidget):
         )
         self._identity_swap_frames_widget.setVisible(on)
 
-    def _on_directed_orient_smoothing_toggled(self, _checked=None):
-        """Hide flip-confidence and persistence row when smoothing is OFF."""
-        on = self.chk_directed_orient_smoothing.isChecked()
-        self._directed_orient_flip_widget.setVisible(on)
-
     def set_identity_section_visible(self, visible: bool) -> None:
         """Hide the entire identity-decoder collapsible.
 
@@ -1162,17 +1110,5 @@ class TrackingPanel(QWidget):
         self.g_identity_decoder.setEnabled(visible)
 
     def sync_directed_orient_posthoc_ui(self, posthoc_active: bool) -> None:
-        """Toggle between online-consistency controls and the post-hoc note.
-
-        Called whenever the head-tail / pose model configuration changes so the
-        Direction Updates section stays consistent with the active pipeline.
-
-        Args:
-            posthoc_active: True when a head-tail or pose model is configured,
-                meaning online flip hysteresis is bypassed in favour of the
-                global DP step at post-processing time.
-        """
-        for w in self._directed_orient_online_widgets:
-            w.setVisible(not posthoc_active)
-            w.setEnabled(not posthoc_active)
+        """Show/hide the head-tail/pose anchor note based on model presence."""
         self.lbl_directed_orient_posthoc_note.setVisible(posthoc_active)

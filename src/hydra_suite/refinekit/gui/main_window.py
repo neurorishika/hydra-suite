@@ -6,6 +6,7 @@ detected in HYDRA Suite tracking trajectories.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -410,7 +411,7 @@ class MainWindow(QMainWindow):
         self._timeline = TimelinePanelWidget()
         self._timeline.split_requested.connect(self._on_manual_split)
         self._timeline.region_edit_requested.connect(self._on_manual_region_edit)
-        self._timeline.setMaximumHeight(200)
+        self._timeline.track_move_requested.connect(self._on_manual_track_reassign)
         vsplitter.addWidget(self._timeline)
 
         vsplitter.setStretchFactor(0, 3)
@@ -564,6 +565,7 @@ class MainWindow(QMainWindow):
         self._player.load_video(video_path)
         self._player.load_trajectories(self._df)
         self._timeline.load_trajectories(self._df)
+        self._content_stack.setCurrentIndex(1)  # reveal main view before modal flows
 
         # --- Merge wizard: offer automatic fragment stitching ---
         self._maybe_run_merge_wizard()
@@ -571,7 +573,6 @@ class MainWindow(QMainWindow):
         self._run_scorer()
         if hasattr(self, "_recents_store"):
             self._recents_store.add(video_path)
-        self._content_stack.setCurrentIndex(1)  # reveal main view
         self._update_nav_state()
         logger.info(
             "Opened session %d: %s  CSV=%s",
@@ -607,14 +608,18 @@ class MainWindow(QMainWindow):
             return
 
         from hydra_suite.refinekit.core.merge_candidates import (
-            build_candidates,
+            build_candidates_for_target_count,
             build_swap_candidates,
             extract_segments,
         )
 
         last_frame = int(self._df["FrameID"].max())
         segments = extract_segments(self._df, last_frame)
-        candidates = build_candidates(segments)
+        max_animals = self._load_tracking_max_animals()
+        candidates, merge_tuning = build_candidates_for_target_count(
+            segments,
+            max_animals=max_animals,
+        )
         swap_candidates = build_swap_candidates(self._df, segments)
 
         total = sum(len(v) for v in candidates.values()) + sum(
@@ -638,13 +643,21 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        self._run_merge_wizard(segments, candidates, swap_candidates)
+        self._run_merge_wizard(
+            segments,
+            candidates,
+            swap_candidates,
+            merge_tuning=merge_tuning,
+            max_animals=max_animals,
+        )
 
     def _run_merge_wizard(
         self,
         segments=None,
         candidates=None,
         swap_candidates=None,
+        merge_tuning=None,
+        max_animals=None,
     ) -> None:
         """Open the MergeWizardDialog.
 
@@ -655,7 +668,7 @@ class MainWindow(QMainWindow):
             return
 
         from hydra_suite.refinekit.core.merge_candidates import (
-            build_candidates,
+            build_candidates_for_target_count,
             build_swap_candidates,
             extract_segments,
         )
@@ -664,7 +677,11 @@ class MainWindow(QMainWindow):
         if segments is None or candidates is None:
             last_frame = int(self._df["FrameID"].max())
             segments = extract_segments(self._df, last_frame)
-            candidates = build_candidates(segments)
+            max_animals = self._load_tracking_max_animals()
+            candidates, merge_tuning = build_candidates_for_target_count(
+                segments,
+                max_animals=max_animals,
+            )
         if swap_candidates is None:
             swap_candidates = build_swap_candidates(self._df, segments)
 
@@ -683,6 +700,8 @@ class MainWindow(QMainWindow):
             writer=self._writer,
             parent=self,
             swap_candidates=swap_candidates,
+            merge_tuning=merge_tuning,
+            max_animals=max_animals,
         )
         dlg.exec()
 
@@ -712,6 +731,28 @@ class MainWindow(QMainWindow):
                     f"Merge wizard: {len(flagged)} pair(s) flagged for detailed editing",
                     4000,
                 )
+
+    def _load_tracking_max_animals(self) -> Optional[int]:
+        """Load MAX_TARGETS from the sibling tracking config, if present."""
+        if self._video_path is None:
+            return None
+
+        video_path = Path(self._video_path).expanduser()
+        cfg_path = video_path.parent / f"{video_path.stem}_config.json"
+        if not cfg_path.is_file():
+            return None
+
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            return None
+
+        value = data.get("MAX_TARGETS")
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return None
 
     # ------------------------------------------------------------------
     # Scoring
@@ -919,6 +960,67 @@ class MainWindow(QMainWindow):
             score=1.0,
         )
         self._show_track_editor(event)
+
+    def _on_manual_track_reassign(self, source_id: int, target_id: int) -> None:
+        """Move an entire trajectory to another lane when no frames overlap."""
+        if self._df is None or self._writer is None or source_id == target_id:
+            return
+
+        source_rows = self._df[self._df["TrajectoryID"] == source_id]
+        target_rows = self._df[self._df["TrajectoryID"] == target_id]
+        if source_rows.empty or target_rows.empty:
+            return
+
+        source_frames = {int(frame) for frame in source_rows["FrameID"].tolist()}
+        target_frames = {int(frame) for frame in target_rows["FrameID"].tolist()}
+        overlap_count = len(source_frames & target_frames)
+        if overlap_count > 0:
+            self.statusBar().showMessage(
+                f"Cannot move T{source_id} to T{target_id}: {overlap_count} overlapping frame(s)",
+                5000,
+            )
+            return
+
+        from hydra_suite.refinekit.core.track_editor_model import EditOp, OpKind
+
+        frame_start = int(source_rows["FrameID"].min())
+        frame_end = int(source_rows["FrameID"].max())
+        self._writer.apply_edit_ops(
+            [
+                EditOp(
+                    kind=OpKind.REASSIGN,
+                    track_id=source_id,
+                    frame_start=frame_start,
+                    frame_end=frame_end,
+                    new_track_id=target_id,
+                )
+            ]
+        )
+        self._df = self._writer.df
+        self._player.load_trajectories(self._df)
+        self._timeline.load_trajectories(self._df)
+
+        affected_tracks = [source_id, target_id]
+        rescore_range = (
+            frame_start,
+            max(frame_end, int(target_rows["FrameID"].max())),
+        )
+        self._queue.remove_events_for_tracks(affected_tracks, rescore_range)
+        if self._scorer is not None:
+            new_events = self._scorer.score_local(
+                self._df,
+                affected_tracks,
+                rescore_range,
+                context_frames=50,
+            )
+            if new_events:
+                self._queue.add_events(new_events)
+            self._queue.show_rescore_button(True)
+
+        self.statusBar().showMessage(
+            f"Moved T{source_id} to T{target_id}",
+            4000,
+        )
 
     # ------------------------------------------------------------------
     # Cleanup

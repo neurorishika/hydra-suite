@@ -113,7 +113,8 @@ class TrackEditorModel:
         visible_tracks: List[int],
         frame_range: Tuple[int, int],
     ) -> None:
-        self._frame_range = frame_range
+        self._full_frame_range = frame_range
+        self._view_range = frame_range
         self._visible_tracks = sorted(visible_tracks)
         self._next_frag_id = 0
         self._fragments: List[TrackFragment] = []
@@ -126,12 +127,15 @@ class TrackEditorModel:
     # ------------------------------------------------------------------
 
     def _build_fragments(self, df: pd.DataFrame) -> None:
-        """Convert DataFrame rows into contiguous fragments."""
-        fstart, fend = self._frame_range
-        sub = df[
-            df["TrajectoryID"].isin(self._visible_tracks)
-            & df["FrameID"].between(fstart, fend)
-        ].copy()
+        """Convert DataFrame rows into full contiguous fragments.
+
+        Fragment boundaries follow the underlying trajectory continuity, not
+        the editor's loaded window. Any contiguous segment that overlaps the
+        loaded frame range is included so deletes/reassigns apply to the full
+        segment the user is editing.
+        """
+        fstart, fend = self._full_frame_range
+        sub = df[df["TrajectoryID"].isin(self._visible_tracks)].copy()
 
         for tid, grp in sub.groupby("TrajectoryID"):
             frames = sorted(grp["FrameID"].unique())
@@ -142,10 +146,12 @@ class TrackEditorModel:
             prev = frames[0]
             for f in frames[1:]:
                 if f > prev + 1:
-                    self._add_fragment(int(tid), seg_start, prev)
+                    if seg_start <= fend and prev >= fstart:
+                        self._add_fragment(int(tid), seg_start, prev)
                     seg_start = f
                 prev = f
-            self._add_fragment(int(tid), seg_start, prev)
+            if seg_start <= fend and prev >= fstart:
+                self._add_fragment(int(tid), seg_start, prev)
 
     def _add_fragment(self, track_id: int, fs: int, fe: int) -> TrackFragment:
         frag = TrackFragment(
@@ -200,7 +206,30 @@ class TrackEditorModel:
     @property
     def frame_range(self) -> Tuple[int, int]:
         """Inclusive ``(start, end)`` frame range visible in the editor."""
-        return self._frame_range
+        return self._view_range
+
+    @property
+    def full_frame_range(self) -> Tuple[int, int]:
+        """Full frame range loaded into the editor."""
+        return self._full_frame_range
+
+    def set_view_range(self, frame_start: int, frame_end: int) -> bool:
+        """Update the timeline view window used for coordinate mapping."""
+        full_start, full_end = self._full_frame_range
+        clamped_start = max(full_start, min(frame_start, full_end))
+        clamped_end = max(clamped_start, min(frame_end, full_end))
+        new_range = (clamped_start, clamped_end)
+        if new_range == self._view_range:
+            return False
+        self._view_range = new_range
+        return True
+
+    def reset_view_range(self) -> bool:
+        """Reset the timeline view window to the full loaded frame range."""
+        if self._view_range == self._full_frame_range:
+            return False
+        self._view_range = self._full_frame_range
+        return True
 
     def fragment_by_id(self, frag_id: int) -> Optional[TrackFragment]:
         """Return the fragment with the given ``frag_id``, or ``None`` if not found."""

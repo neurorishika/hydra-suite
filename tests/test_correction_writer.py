@@ -8,6 +8,7 @@ from hydra_suite.refinekit.core.correction_writer import (
     CorrectionWriter,
     apply_split_and_swap,
 )
+from hydra_suite.refinekit.core.track_editor_model import TrackEditorModel
 
 
 def _make_two_track_df():
@@ -120,3 +121,60 @@ def test_correction_writer_proofread_path_naming():
         )
         writer = CorrectionWriter(src)
         assert writer.proofread_path.name == "fly_run_01_with_pose_proofread.csv"
+
+
+def test_track_editor_delete_applies_to_full_contiguous_segment():
+    """Deleting a fragment from a clipped editor window removes the full segment."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * 21 + [2] * 21,
+            "FrameID": list(range(21)) + list(range(21)),
+            "X": [0.0] * 42,
+            "Y": [0.0] * 42,
+        }
+    )
+
+    model = TrackEditorModel(df, [1, 2], (5, 10))
+    frag = next(frag for frag in model.fragments if frag.track_id == 1)
+    assert (frag.frame_start, frag.frame_end) == (0, 20)
+    assert model.delete(frag.frag_id)
+    ops = model.compute_ops()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "test_tracked.csv"
+        df.to_csv(src, index=False)
+        writer = CorrectionWriter(src)
+        writer.open()
+        writer.apply_edit_ops(ops)
+        result = writer.df
+
+    assert 1 not in result["TrajectoryID"].unique()
+    assert set(result["TrajectoryID"].unique()) == {2}
+
+
+def test_track_editor_reassign_applies_to_full_contiguous_segment():
+    """Reassigning from a clipped editor window relabels the full segment."""
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [1] * 21 + [2] * 5,
+            "FrameID": list(range(21)) + list(range(30, 35)),
+            "X": [0.0] * 26,
+            "Y": [0.0] * 26,
+        }
+    )
+
+    model = TrackEditorModel(df, [1, 2], (5, 10))
+    frag = next(frag for frag in model.fragments if frag.track_id == 1)
+    assert model.reassign(frag.frag_id, 2)
+    ops = model.compute_ops()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "test_tracked.csv"
+        df.to_csv(src, index=False)
+        writer = CorrectionWriter(src)
+        writer.open()
+        writer.apply_edit_ops(ops)
+        result = writer.df
+
+    reassigned = result[result["FrameID"].between(0, 20)].sort_values("FrameID")
+    assert set(reassigned["TrajectoryID"].unique()) == {2}

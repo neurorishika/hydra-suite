@@ -682,15 +682,6 @@ class ConfigOrchestrator:
                 default=30.0,
             )
         )
-        self._panels.tracking.chk_directed_orient_smoothing.setChecked(
-            bool(get_cfg("directed_orient_smoothing", default=True))
-        )
-        self._panels.tracking.spin_directed_orient_flip_conf.setValue(
-            float(get_cfg("directed_orient_flip_confidence", default=0.7))
-        )
-        self._panels.tracking.spin_directed_orient_flip_persist.setValue(
-            int(get_cfg("directed_orient_flip_persistence", default=3))
-        )
         self._panels.tracking.spin_lost_thresh.setValue(
             get_cfg_time(
                 "lost_threshold_seconds",
@@ -1706,9 +1697,6 @@ class ConfigOrchestrator:
                 "velocity_threshold": self._panels.tracking.spin_velocity.value(),
                 "enable_instant_flip": self._panels.tracking.chk_instant_flip.isChecked(),
                 "max_orientation_delta_stopped": self._panels.tracking.spin_max_orient.value(),
-                "directed_orient_smoothing": self._panels.tracking.chk_directed_orient_smoothing.isChecked(),
-                "directed_orient_flip_confidence": self._panels.tracking.spin_directed_orient_flip_conf.value(),
-                "directed_orient_flip_persistence": self._panels.tracking.spin_directed_orient_flip_persist.value(),
                 # === TRACK LIFECYCLE ===
                 "lost_threshold_seconds": self._panels.tracking.spin_lost_thresh.value(),
                 "min_respawn_distance_multiplier": self._panels.tracking.spin_min_respawn_distance.value(),
@@ -2290,12 +2278,14 @@ class ConfigOrchestrator:
             "VELOCITY_THRESHOLD": velocity_threshold_pixels_per_frame,
             "INSTANT_FLIP_ORIENTATION": self._panels.tracking.chk_instant_flip.isChecked(),
             "MAX_ORIENT_DELTA_STOPPED": self._panels.tracking.spin_max_orient.value(),
-            "DIRECTED_ORIENT_SMOOTHING": self._panels.tracking.chk_directed_orient_smoothing.isChecked(),
-            "DIRECTED_ORIENT_FLIP_CONFIDENCE": self._panels.tracking.spin_directed_orient_flip_conf.value(),
-            "DIRECTED_ORIENT_FLIP_PERSISTENCE": self._panels.tracking.spin_directed_orient_flip_persist.value(),
-            # Post-hoc mode: when a directed heading source (head-tail or pose
-            # model) is active, skip the online flip-hysteresis check and instead
-            # resolve all heading ambiguities globally in post-processing.
+            # Auto-derived flag: a directed heading source (head-tail or pose
+            # model) is active for this run.  When True, smooth_orientation
+            # passes the caller's resolved theta through (high-quality
+            # detections become the new anchor; low-quality detections fall
+            # back to OBB axis collapsed against the anchor) and global 180°
+            # ambiguities are resolved by interpolate_trajectories'
+            # _fix_heading_globally DP pass.  When False, smooth_orientation
+            # uses motion-aware undirected smoothing instead.
             "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": bool(
                 str(yolo_headtail_path or "").strip() or pose_extractor_enabled
             ),
@@ -3791,12 +3781,6 @@ class ConfigOrchestrator:
         headtail = recommendations.get("headtail")
         if headtail is not None:
             _set_combo_data(self._panels.setup.combo_headtail_runtime, headtail.runtime)
-            if hasattr(self._panels, "identity") and hasattr(
-                self._panels.identity, "combo_headtail_runtime"
-            ):
-                _set_combo_data(
-                    self._panels.identity.combo_headtail_runtime, headtail.runtime
-                )
             if hasattr(self._panels.identity, "spin_headtail_batch"):
                 self._panels.identity.spin_headtail_batch.setValue(
                     int(headtail.batch_size)

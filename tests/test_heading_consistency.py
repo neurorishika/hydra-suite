@@ -3,7 +3,7 @@
 Covers:
 1. Kalman filter theta normalization after predict/correct.
 2. Post-processing heading flip correction (_fix_heading_flips).
-3. Worker _smooth_orientation hysteresis (unit-level).
+3. Anchor-based directed-orientation rule in smooth_orientation.
 """
 
 import math
@@ -166,138 +166,150 @@ class TestFixHeadingFlips:
 
 
 # ---------------------------------------------------------------------------
-# Worker _smooth_orientation hysteresis
+# Anchor-based directed-orientation rule
 # ---------------------------------------------------------------------------
 
 
-class TestSmoothOrientationHysteresis:
-    """Test that the heading flip hysteresis gate works."""
+class TestDirectedOrientationAnchor:
+    """When a head-tail or pose model is loaded the run is in posthoc-consistency
+    mode. ``smooth_orientation`` must trust the caller's resolved theta — the
+    caller has already resolved high-quality detections to the directed
+    heading and low-quality / undirected detections to the OBB axis collapsed
+    against the anchor. No motion override, no flip hysteresis."""
 
-    def _make_worker_stub(self):
-        """Create a minimal mock for _smooth_orientation testing."""
-        from unittest.mock import MagicMock
-
-        from hydra_suite.core.tracking.worker import TrackingWorker
-
-        worker = MagicMock(spec=TrackingWorker)
-        worker.backward_mode = False
-        worker._smooth_orientation = TrackingWorker._smooth_orientation.__get__(
-            worker, TrackingWorker
-        )
-        worker._normalize_theta = TrackingWorker._normalize_theta
-        worker._circular_abs_diff_rad = TrackingWorker._circular_abs_diff_rad
-        worker._collapse_obb_axis_theta = (
-            TrackingWorker._collapse_obb_axis_theta.__get__(worker, TrackingWorker)
-        )
-        return worker
-
-    def test_hysteresis_blocks_single_frame_flip(self):
-        """A single directed stationary 180° flip should be blocked."""
-        from collections import deque
-
-        worker = self._make_worker_stub()
-        base = 1.0
-        flipped = base + math.pi
-        orientation_last = [base]
-        pos_deques = [deque(maxlen=2)]
-        flip_counters = [0]
-        params = {
-            "DIRECTED_ORIENT_SMOOTHING": True,
-            "DIRECTED_ORIENT_FLIP_CONFIDENCE": 0.5,
-            "DIRECTED_ORIENT_FLIP_PERSISTENCE": 3,
+    @staticmethod
+    def _params():
+        return {
+            "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": True,
             "VELOCITY_THRESHOLD": 2.0,
+            "MAX_ORIENT_DELTA_STOPPED": 30.0,
+            "INSTANT_FLIP_ORIENTATION": True,
         }
 
-        # Single frame requesting a flip — should be rejected
-        result = worker._smooth_orientation(
-            0,
-            flipped,
-            0.0,
-            params,
-            orientation_last,
-            pos_deques,
+    def test_high_quality_directed_passes_through(self):
+        """A directed prediction is returned as-is regardless of motion."""
+        from collections import deque
+
+        from hydra_suite.core.tracking.orientation import smooth_orientation
+
+        # Animal moving in +x but model says heading is -x.
+        pos_deque = deque([(0.0, 0.0, 0), (5.0, 0.0, 1)], maxlen=2)
+        result = smooth_orientation(
+            r=0,
+            theta=math.pi,
+            speed=5.0,
+            p=self._params(),
+            orientation_last=[0.0],
+            position_deques=[pos_deque],
             directed_heading=True,
-            orient_confidence=0.9,
-            heading_flip_counters=flip_counters,
         )
-        # Should remain close to base (flip rejected)
-        diff = abs(result - base) % (2 * math.pi)
-        diff = min(diff, 2 * math.pi - diff)
-        assert diff < 0.5, f"Single-frame flip should be rejected, got {result}"
-        assert flip_counters[0] == 0
+        assert abs(result - math.pi) < 1e-6
 
-    def test_hysteresis_rejects_stationary_flip_after_persistence(self):
-        """Persistent stationary 180° swaps should remain rejected."""
+    def test_low_quality_axis_collapsed_to_anchor_passes_through(self):
+        """The caller has already collapsed the axis to the anchor; smoothing
+        must not second-guess that with motion."""
         from collections import deque
 
-        worker = self._make_worker_stub()
-        base = 1.0
-        flipped = base + math.pi
-        orientation_last = [base]
-        pos_deques = [deque(maxlen=2)]
-        flip_counters = [0]
-        params = {
-            "DIRECTED_ORIENT_SMOOTHING": True,
-            "DIRECTED_ORIENT_FLIP_CONFIDENCE": 0.5,
-            "DIRECTED_ORIENT_FLIP_PERSISTENCE": 3,
-            "VELOCITY_THRESHOLD": 2.0,
-        }
+        from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
+        from hydra_suite.core.tracking.orientation import smooth_orientation
 
-        for _ in range(5):
-            result = worker._smooth_orientation(
-                0,
-                flipped,
-                0.0,
-                params,
-                orientation_last,
-                pos_deques,
-                directed_heading=True,
-                orient_confidence=0.9,
-                heading_flip_counters=flip_counters,
-            )
-            orientation_last[0] = result
+        anchor = math.pi
+        axis = 0.0  # axis-only; collapsing against anchor (pi) yields pi
+        theta_for_tracking = collapse_obb_axis_theta(axis, anchor)
+        pos_deque = deque([(0.0, 0.0, 0), (5.0, 0.0, 1)], maxlen=2)  # motion +x
+        result = smooth_orientation(
+            r=0,
+            theta=theta_for_tracking,
+            speed=5.0,
+            p=self._params(),
+            orientation_last=[anchor],
+            position_deques=[pos_deque],
+            directed_heading=False,
+        )
+        assert abs(result - anchor) < 1e-6
 
-        diff = abs(result - base) % (2 * math.pi)
-        diff = min(diff, 2 * math.pi - diff)
-        assert (
-            diff < 0.5
-        ), f"Stationary persistent flip should remain rejected, got {result}"
-        assert flip_counters[0] == 0
-
-    def test_hysteresis_accepts_motion_supported_flip_after_persistence(self):
-        """A persistent flip should be accepted once motion corroborates it."""
+    def test_weak_frames_between_strong_predictions_do_not_flip(self):
+        """A burst of low-quality (axis-only) frames between two opposing
+        high-quality predictions: the anchor is held until the second strong
+        prediction arrives."""
         from collections import deque
 
-        worker = self._make_worker_stub()
-        base = 0.0
-        flipped = math.pi
-        orientation_last = [base]
-        pos_deques = [deque([(0.0, 0.0, 0), (-5.0, 0.0, 1)], maxlen=2)]
-        flip_counters = [0]
-        params = {
-            "DIRECTED_ORIENT_SMOOTHING": True,
-            "DIRECTED_ORIENT_FLIP_CONFIDENCE": 0.5,
-            "DIRECTED_ORIENT_FLIP_PERSISTENCE": 3,
-            "VELOCITY_THRESHOLD": 2.0,
-        }
+        from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
+        from hydra_suite.core.tracking.orientation import smooth_orientation
 
-        for _ in range(3):
-            result = worker._smooth_orientation(
+        params = self._params()
+        orientation_last = [0.0]
+        pos_deque = deque([(0.0, 0.0, 0), (5.0, 0.0, 1)], maxlen=2)
+
+        # Frame 1: strong prediction confirms heading 0.
+        out = smooth_orientation(
+            0, 0.0, 5.0, params, orientation_last, [pos_deque], directed_heading=True
+        )
+        orientation_last[0] = out
+        assert abs(out - 0.0) < 1e-6
+
+        # Frames 2-5: weak (axis-only) frames. Caller collapses axis 0 against
+        # anchor -> 0.  smooth_orientation must not flip them.
+        for _ in range(4):
+            theta = collapse_obb_axis_theta(0.0, orientation_last[0])
+            out = smooth_orientation(
                 0,
-                flipped,
+                theta,
                 5.0,
                 params,
                 orientation_last,
-                pos_deques,
-                directed_heading=True,
-                orient_confidence=0.9,
-                heading_flip_counters=flip_counters,
+                [pos_deque],
+                directed_heading=False,
             )
-            orientation_last[0] = result
+            orientation_last[0] = out
+            assert abs(out - 0.0) < 1e-6
 
-        diff = abs(result - flipped) % (2 * math.pi)
+        # Frame 6: a strong prediction now disagrees -> anchor flips.
+        out = smooth_orientation(
+            0,
+            math.pi,
+            5.0,
+            params,
+            orientation_last,
+            [pos_deque],
+            directed_heading=True,
+        )
+        orientation_last[0] = out
+        diff = abs(out - math.pi) % (2 * math.pi)
         diff = min(diff, 2 * math.pi - diff)
-        assert (
-            diff < 0.5
-        ), f"Motion-supported flip should be accepted after persistence, got {result}"
-        assert flip_counters[0] == 0
+        assert diff < 1e-6
+
+
+class TestUndirectedMotionPath:
+    """When no directed source is loaded, smooth_orientation falls back to the
+    motion-aware undirected path (legacy behaviour)."""
+
+    @staticmethod
+    def _params():
+        return {
+            "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": False,
+            "VELOCITY_THRESHOLD": 2.0,
+            "MAX_ORIENT_DELTA_STOPPED": 30.0,
+            "INSTANT_FLIP_ORIENTATION": True,
+        }
+
+    def test_moving_axis_flipped_against_motion(self):
+        """No directed source: motion direction breaks the 180° ambiguity."""
+        from collections import deque
+
+        from hydra_suite.core.tracking.orientation import smooth_orientation
+
+        pos_deque = deque([(0.0, 0.0, 0), (5.0, 0.0, 1)], maxlen=2)  # motion +x
+        # theta points -x (against motion); should be flipped to align with motion.
+        result = smooth_orientation(
+            r=0,
+            theta=math.pi,
+            speed=5.0,
+            p=self._params(),
+            orientation_last=[0.0],
+            position_deques=[pos_deque],
+            directed_heading=False,
+        )
+        diff = abs(result - 0.0) % (2 * math.pi)
+        diff = min(diff, 2 * math.pi - diff)
+        assert diff < 1e-6

@@ -75,6 +75,16 @@ class SwapCandidate:
     score: float
 
 
+@dataclass(frozen=True)
+class MergeSearchTuning:
+    """Active merge-search parameters for RefineKit candidate generation."""
+
+    max_dist: float
+    max_pred_dist: float
+    max_dist_cap: float
+    required_reductions: int
+
+
 # ---------------------------------------------------------------------------
 # Scoring weights (tunable)
 # ---------------------------------------------------------------------------
@@ -88,7 +98,7 @@ W_OVERLAP = 0.10
 MAX_DIST = 200.0
 MAX_PRED_DIST = 120.0
 MAX_GAP = 60
-MAX_OVERLAP = 15
+MAX_OVERLAP = 0
 
 MIN_SCORE = 0.05
 
@@ -236,7 +246,8 @@ def _score_candidate(
     gap = target.frame_birth - source.frame_death
     overlap = max(0, -gap)
 
-    if overlap > max_overlap:
+    # Merging overlapping fragments would create simultaneous duplicate IDs.
+    if overlap > 0:
         return None
 
     # Spatial distance at junction
@@ -326,6 +337,110 @@ def build_candidates(
     return candidates
 
 
+def compute_required_reductions(
+    segments: List[TrackSegment],
+    max_animals: Optional[int],
+) -> int:
+    """Return how many fragment merges are needed to reach the target count."""
+    if max_animals is None:
+        return 0
+    return max(0, len(segments) - max(1, int(max_animals)))
+
+
+def compute_merge_distance_cap(
+    segments: List[TrackSegment],
+    *,
+    max_gap: int = MAX_GAP,
+) -> float:
+    """Return the farthest forward-only merge distance still plausible in time."""
+    max_dist = MAX_DIST
+    targets_by_birth = sorted(segments, key=lambda s: s.frame_birth)
+
+    for source in segments:
+        if source.is_alive_at_end:
+            continue
+        window_end = source.frame_death + max_gap
+        for target in targets_by_birth:
+            if target.track_id == source.track_id:
+                continue
+            if target.frame_birth <= source.frame_death:
+                continue
+            if target.frame_birth > window_end:
+                break
+            dx = target.pos_birth[0] - source.pos_death[0]
+            dy = target.pos_birth[1] - source.pos_death[1]
+            max_dist = max(max_dist, math.sqrt(dx * dx + dy * dy))
+
+    return float(max_dist)
+
+
+def next_merge_search_distance(
+    current_max_dist: float,
+    max_dist_cap: float,
+    *,
+    expansion_step: float = 50.0,
+) -> float:
+    """Return the next merge-radius step, clamped to the computed cap."""
+    if current_max_dist >= max_dist_cap:
+        return float(current_max_dist)
+    return float(min(max_dist_cap, current_max_dist + expansion_step))
+
+
+def build_candidates_for_target_count(
+    segments: List[TrackSegment],
+    *,
+    max_animals: Optional[int],
+    max_gap: int = MAX_GAP,
+    max_overlap: int = MAX_OVERLAP,
+    start_max_dist: float = MAX_DIST,
+    start_max_pred_dist: float = MAX_PRED_DIST,
+    min_score: float = MIN_SCORE,
+    expansion_step: float = 50.0,
+) -> Tuple[Dict[int, List[MergeCandidate]], MergeSearchTuning]:
+    """Build merge candidates and auto-expand distance until target count is reachable."""
+    required_reductions = compute_required_reductions(segments, max_animals)
+    max_dist_cap = compute_merge_distance_cap(segments, max_gap=max_gap)
+    current_max_dist = float(max(start_max_dist, MAX_DIST))
+    current_max_pred_dist = float(max(start_max_pred_dist, MAX_PRED_DIST))
+
+    candidates = build_candidates(
+        segments,
+        max_gap=max_gap,
+        max_overlap=max_overlap,
+        max_dist=current_max_dist,
+        max_pred_dist=current_max_pred_dist,
+        min_score=min_score,
+    )
+
+    while required_reductions > 0 and len(candidates) < required_reductions:
+        next_max_dist = next_merge_search_distance(
+            current_max_dist,
+            max_dist_cap,
+            expansion_step=expansion_step,
+        )
+        if next_max_dist <= current_max_dist:
+            break
+        scale = next_max_dist / max(current_max_dist, 1.0)
+        current_max_dist = next_max_dist
+        current_max_pred_dist *= scale
+        candidates = build_candidates(
+            segments,
+            max_gap=max_gap,
+            max_overlap=max_overlap,
+            max_dist=current_max_dist,
+            max_pred_dist=current_max_pred_dist,
+            min_score=min_score,
+        )
+
+    tuning = MergeSearchTuning(
+        max_dist=current_max_dist,
+        max_pred_dist=current_max_pred_dist,
+        max_dist_cap=max_dist_cap,
+        required_reductions=required_reductions,
+    )
+    return candidates, tuning
+
+
 # ---------------------------------------------------------------------------
 # Swap candidate scoring
 # ---------------------------------------------------------------------------
@@ -343,7 +458,7 @@ def _score_swap_candidate(
     Returns ``None`` if the candidate fails hard gating.
     """
     D = source.frame_death
-    search_start = max(source.frame_birth, D - swap_window)
+    search_start = D
     search_end = min(target.frame_death, D + swap_window)
 
     # Get positions of both tracks in the search window

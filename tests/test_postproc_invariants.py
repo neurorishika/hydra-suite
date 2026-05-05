@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.helpers import postproc_runner
 from tests.helpers.postproc_runner import (
     available_cases,
     load_resolve_fixture,
@@ -137,6 +138,206 @@ def test_merge_theta_avoids_orthogonal_artifact_for_pi_ambiguous_pairs() -> None
         np.abs(np.arctan2(np.sin(theta - np.pi), np.cos(theta - np.pi))),
     )
     assert float(np.max(dist_to_axis)) < 1e-6
+
+
+def test_find_merge_candidates_uses_detection_id_before_spatial_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processing = postproc_runner._processing
+
+    def _unexpected_python_fallback(*args, **kwargs):
+        raise AssertionError(
+            "DetectionID-aware candidate search should stay on the Numba path"
+        )
+
+    monkeypatch.setattr(processing, "NUMBA_AVAILABLE", True)
+    monkeypatch.setattr(
+        processing,
+        "_compute_pairwise_distances_numba",
+        getattr(
+            processing._compute_pairwise_distances_numba,
+            "py_func",
+            processing._compute_pairwise_distances_numba,
+        ),
+    )
+    monkeypatch.setattr(
+        processing,
+        "_compute_all_merge_candidates_numba",
+        getattr(
+            processing._compute_all_merge_candidates_numba,
+            "py_func",
+            processing._compute_all_merge_candidates_numba,
+        ),
+    )
+    monkeypatch.setattr(
+        processing, "_find_merge_candidates_python", _unexpected_python_fallback
+    )
+
+    forward_primary = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 0,
+                "FrameID": 10,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 100001,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 11,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 110001,
+            },
+        ]
+    )
+    backward_primary = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 0,
+                "FrameID": 10,
+                "X": 100.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 100001,
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 11,
+                "X": 100.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 110001,
+            },
+        ]
+    )
+    forward_other = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 1,
+                "FrameID": 20,
+                "X": 5.0,
+                "Y": 5.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 200001,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 21,
+                "X": 6.0,
+                "Y": 5.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 210001,
+            },
+        ]
+    )
+    backward_other = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 1,
+                "FrameID": 20,
+                "X": 50.0,
+                "Y": 50.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 200999,
+            },
+            {
+                "TrajectoryID": 1,
+                "FrameID": 21,
+                "X": 51.0,
+                "Y": 50.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 210999,
+            },
+        ]
+    )
+
+    candidates = processing._find_merge_candidates(
+        [forward_primary, forward_other],
+        [backward_primary, backward_other],
+        agreement_distance=5.0,
+        min_overlap=2,
+    )
+
+    assert any(
+        fi == 0 and bi == 0 and agreeing == 2 and total_common == 2
+        for fi, bi, agreeing, total_common, _identity_agreeing in candidates
+    )
+
+
+def test_find_merge_candidates_python_detection_id_identity_branch_does_not_crash() -> (
+    None
+):
+    processing = postproc_runner._processing
+
+    forward = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 0,
+                "FrameID": 10,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 100001,
+                "IdentityCommitted": 1,
+                "IdentityAssignedLabel": "animal_a",
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 11,
+                "X": 0.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 110001,
+                "IdentityCommitted": 1,
+                "IdentityAssignedLabel": "animal_a",
+            },
+        ]
+    )
+    backward = pd.DataFrame(
+        [
+            {
+                "TrajectoryID": 0,
+                "FrameID": 10,
+                "X": 100.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 100001,
+                "IdentityCommitted": 1,
+                "IdentityAssignedLabel": "animal_a",
+            },
+            {
+                "TrajectoryID": 0,
+                "FrameID": 11,
+                "X": 100.0,
+                "Y": 0.0,
+                "Theta": 0.0,
+                "State": "active",
+                "DetectionID": 110001,
+                "IdentityCommitted": 1,
+                "IdentityAssignedLabel": "animal_a",
+            },
+        ]
+    )
+
+    candidates = processing._find_merge_candidates_python(
+        [forward], [backward], agreement_distance=5.0, min_overlap=2
+    )
+
+    assert candidates == [(0, 0, 2, 2, 0)]
 
 
 def test_different_animals_crossing_are_not_merged_into_one_trajectory() -> None:

@@ -6,6 +6,7 @@ import pandas as pd
 from hydra_suite.refinekit.core.merge_candidates import (
     SwapCandidate,
     build_candidates,
+    build_candidates_for_target_count,
     build_swap_candidates,
     extract_segments,
     predict_position,
@@ -165,8 +166,8 @@ class TestBuildCandidates:
         if 1 in cands:
             assert all(c.target_id != 2 for c in cands[1])
 
-    def test_overlapping_tracks_produce_candidate(self):
-        """Negative gap (overlap) within tolerance."""
+    def test_overlapping_tracks_never_produce_candidate(self):
+        """Overlapping fragments should never be proposed for merge."""
         df = _make_df(
             [
                 (1, 0, 25, 10.0, 10.0, 0.5, 0.0),
@@ -176,11 +177,22 @@ class TestBuildCandidates:
         segs = extract_segments(df, last_frame=50)
         cands = build_candidates(segs, max_overlap=10)
         if 1 in cands:
-            mc_list = [c for c in cands[1] if c.target_id == 2]
-            if mc_list:
-                mc = mc_list[0]
-                assert mc.overlap_frames > 0
-                assert mc.gap_frames < 0
+            assert all(c.target_id != 2 for c in cands[1])
+
+    def test_auto_expand_merge_radius_for_required_reductions(self):
+        df = _make_df(
+            [
+                (1, 0, 20, 10.0, 10.0, 0.5, 0.0),
+                (2, 25, 50, 260.0, 10.0, 0.5, 0.0),
+                (3, 0, 50, 500.0, 300.0, 0.0, 0.0),
+            ]
+        )
+        segs = extract_segments(df, last_frame=50)
+        cands, tuning = build_candidates_for_target_count(segs, max_animals=2)
+
+        assert tuning.max_dist > 200.0
+        assert 1 in cands
+        assert any(c.target_id == 2 for c in cands[1])
 
     def test_candidates_sorted_by_score(self):
         """Candidates for a source should be sorted by score descending."""
@@ -337,6 +349,14 @@ class TestBuildSwapCandidates:
         assert isinstance(sc, SwapCandidate)
         # Swap frame should be near the death frame of track 1
         assert abs(sc.swap_frame - 50) <= 20
+
+    def test_swap_candidate_not_before_source_death(self):
+        df = self._make_swap_scenario()
+        segs = extract_segments(df, last_frame=100)
+        cands = build_swap_candidates(df, segs)
+        sc = cands[1][0]
+
+        assert sc.swap_frame >= 50
 
     def test_swap_score_positive(self):
         df = self._make_swap_scenario()

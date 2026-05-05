@@ -32,26 +32,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.refinekit.gui.overlay_utils import (
+    build_detection_track_map,
+    draw_detections,
+    load_frame_detections,
+    review_overlay_style_from_shape,
+    tab20_bgr,
+)
 from hydra_suite.refinekit.gui.widgets.interactive_canvas import InteractiveCanvas
-
-# ---------------------------------------------------------------------------
-# Palette
-# ---------------------------------------------------------------------------
-
-_PALETTE_BGR = [
-    (255, 64, 64),
-    (64, 255, 64),
-    (64, 64, 255),
-    (255, 255, 64),
-    (255, 64, 255),
-    (64, 255, 255),
-    (168, 64, 255),
-    (255, 168, 64),
-    (64, 168, 255),
-    (168, 255, 64),
-    (255, 64, 168),
-    (64, 255, 168),
-]
 
 # ---------------------------------------------------------------------------
 # Cache / prefetch constants
@@ -69,26 +57,13 @@ _PLAYBACK_FPS = 25
 # ---------------------------------------------------------------------------
 
 
-def _overlay_scale(frame: np.ndarray, scale: float = 1.0):
-    """Return (font_scale, marker_radius, thickness) normalised to image size.
-
-    *scale* is a UI-configurable multiplier (1.0 = default half-size,
-    which is about half of the original baked-in size).
-    """
-    h, w = frame.shape[:2]
-    ref = min(h, w)
-    font_scale = max(0.15, (ref / 1800.0) * scale)
-    radius = max(2, int((ref / 160.0) * scale))
-    thickness = max(1, int((ref / 800.0) * scale))
-    return font_scale, radius, thickness
-
-
 def draw_overlay(
     img: np.ndarray,
     df_by_frame: dict,
     frame_idx: int,
     highlight_ids: Set[int],
     scale_factor: float = 1.0,
+    frame_dets=None,
 ) -> None:
     """Draw trajectory circles and ID labels, normalised to image size.
 
@@ -97,16 +72,35 @@ def draw_overlay(
     rows = df_by_frame.get(frame_idx)
     if rows is None:
         return
-    font_scale, radius, thickness = _overlay_scale(img, scale_factor)
-    highlight_radius = int(radius * 1.7)
+    font_scale, radius, thickness, outline_th = review_overlay_style_from_shape(
+        img.shape,
+        scale_factor,
+    )
+    highlight_radius = int(radius * 1.5)
+
+    if frame_dets is not None and "DetectionID" in rows.columns:
+        det_colors = {}
+        det_map = build_detection_track_map(rows, frame_idx, frame_idx)
+        for det_idx, track_id in det_map.get(frame_idx, {}).items():
+            det_colors[det_idx] = tab20_bgr(track_id)
+        draw_detections(
+            img,
+            frame_dets,
+            frame_idx,
+            0,
+            0,
+            det_colors,
+            thickness=thickness,
+        )
+
     for _, row in rows.iterrows():
         if pd.isna(row["X"]) or pd.isna(row["Y"]):
             continue
         tid = int(row["TrajectoryID"])
         cx = int(round(row["X"]))
         cy = int(round(row["Y"]))
-        colour = _PALETTE_BGR[tid % len(_PALETTE_BGR)]
-        cv2.circle(img, (cx, cy), radius, colour, thickness + 1)
+        colour = tab20_bgr(tid)
+        cv2.circle(img, (cx, cy), radius, colour, outline_th)
         cv2.putText(
             img,
             str(tid),
@@ -114,11 +108,11 @@ def draw_overlay(
             cv2.FONT_HERSHEY_SIMPLEX,
             font_scale,
             colour,
-            max(1, thickness + 1),
+            outline_th,
             cv2.LINE_AA,
         )
         if tid in highlight_ids:
-            cv2.circle(img, (cx, cy), highlight_radius, colour, thickness + 1)
+            cv2.circle(img, (cx, cy), highlight_radius, colour, outline_th)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +212,10 @@ class VideoPlayerWidget(QWidget):
         self._df_by_frame: dict = {}
         self._highlight_ids: Set[int] = set()
         self._marker_scale: float = 1.0
+        self._frame_dets = None
+        self._trajectory_frame_range: Optional[tuple[int, int]] = None
+        self._display_frame_start: int = 0
+        self._display_frame_end: int = 0
 
         self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
 
@@ -305,18 +303,20 @@ class VideoPlayerWidget(QWidget):
         self._stop_prefetch()
         self._video_path = path
         self._cache.clear()
+        self._frame_dets = load_frame_detections(path)
 
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
             self._total_frames = 0
+            self._apply_frame_window()
             return
         self._total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
         self._fps = fps if fps > 0 else _PLAYBACK_FPS
         cap.release()
 
-        self._slider.setMaximum(max(self._total_frames - 1, 0))
-        self.seek_to(0)
+        self._apply_frame_window()
+        self.seek_to(self._display_frame_start)
 
     def load_trajectories(self, df: pd.DataFrame) -> None:
         """Attach a trajectory DataFrame and rebuild the per-frame index used for overlay rendering."""
@@ -326,18 +326,26 @@ class VideoPlayerWidget(QWidget):
             if df is not None
             else {}
         )
+        if df is not None and not df.empty:
+            self._trajectory_frame_range = (
+                int(df["FrameID"].min()),
+                int(df["FrameID"].max()),
+            )
+        else:
+            self._trajectory_frame_range = None
+        self._apply_frame_window()
         self._refresh()
 
     def seek_to(self, frame: int) -> None:
         """Jump to the given frame index, stopping playback if active, and refresh the display."""
-        frame = max(0, min(frame, self._total_frames - 1))
+        frame = max(self._display_frame_start, min(frame, self._display_frame_end))
         if self._is_playing:
             self._stop_playback()
         self._current_frame = frame
         self._slider.blockSignals(True)
         self._slider.setValue(frame)
         self._slider.blockSignals(False)
-        self._frame_label.setText(f"{frame} / {self._total_frames}")
+        self._update_frame_label()
         self._refresh()
 
     def highlight_tracks(self, track_ids: List[int]) -> None:
@@ -360,10 +368,14 @@ class VideoPlayerWidget(QWidget):
             return
         self._stop_prefetch()
         start = self._current_frame
-        if start >= self._total_frames - 1:
-            start = 0
+        if start >= self._display_frame_end:
+            start = self._display_frame_start
         t = _PlaybackThread(
-            self._video_path, start, self._total_frames, self._fps, self
+            self._video_path,
+            start,
+            self._display_frame_end + 1,
+            self._fps,
+            self,
         )
         t.frame_ready.connect(self._on_playback_frame)
         t.finished_playback.connect(self._on_playback_done)
@@ -397,7 +409,7 @@ class VideoPlayerWidget(QWidget):
         self._slider.blockSignals(True)
         self._slider.setValue(idx)
         self._slider.blockSignals(False)
-        self._frame_label.setText(f"{idx} / {self._total_frames}")
+        self._update_frame_label()
         self._show_frame(frame, idx)  # type: ignore[arg-type]
         self.frame_changed.emit(idx)
 
@@ -441,8 +453,8 @@ class VideoPlayerWidget(QWidget):
     def _start_prefetch(self, center: int) -> None:
         if self._video_path is None or self._is_playing:
             return
-        start = max(0, center - _PREFETCH_BEHIND)
-        end = min(self._total_frames - 1, center + _PREFETCH_AHEAD)
+        start = max(self._display_frame_start, center - _PREFETCH_BEHIND)
+        end = min(self._display_frame_end, center + _PREFETCH_AHEAD)
         if self._prefetch_thread_running():
             try:
                 self._prefetch_thread.requestInterruption()
@@ -477,7 +489,8 @@ class VideoPlayerWidget(QWidget):
         if self._is_playing:
             self._stop_playback()
         self._pending_frame = value
-        self._frame_label.setText(f"{value} / {self._total_frames}")
+        self._current_frame = value
+        self._update_frame_label()
         self._seek_timer.start()
         if not self._prefetch_covers(value):
             self._start_prefetch(value)
@@ -509,7 +522,7 @@ class VideoPlayerWidget(QWidget):
         return frame
 
     def _refresh(self) -> None:
-        self._frame_label.setText(f"{self._current_frame} / {self._total_frames}")
+        self._update_frame_label()
         frame = self._read_frame(self._current_frame)
         if frame is None:
             return
@@ -519,12 +532,35 @@ class VideoPlayerWidget(QWidget):
         display = bgr.copy()
         if self._df_by_frame:
             draw_overlay(
-                display, self._df_by_frame, idx, self._highlight_ids, self._marker_scale
+                display,
+                self._df_by_frame,
+                idx,
+                self._highlight_ids,
+                self._marker_scale,
+                self._frame_dets,
             )
         h, w = display.shape[:2]
         rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
         self._canvas.set_pixmap(QPixmap.fromImage(qimg))
+
+    def _apply_frame_window(self) -> None:
+        max_end = max(self._total_frames - 1, 0)
+        if self._trajectory_frame_range is None:
+            start, end = 0, max_end
+        else:
+            start = max(0, min(self._trajectory_frame_range[0], max_end))
+            end = max(start, min(self._trajectory_frame_range[1], max_end))
+        self._display_frame_start = start
+        self._display_frame_end = end
+        self._slider.setRange(start, end)
+        self._current_frame = max(start, min(self._current_frame, end))
+        self._update_frame_label()
+
+    def _update_frame_label(self) -> None:
+        self._frame_label.setText(
+            f"{self._current_frame} [{self._display_frame_start}-{self._display_frame_end}]"
+        )
 
     # ------------------------------------------------------------------
     # Cleanup

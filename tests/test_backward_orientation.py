@@ -132,9 +132,6 @@ def _params(**overrides):
         "VELOCITY_THRESHOLD": 0.5,
         "MAX_ORIENT_DELTA_STOPPED": 30.0,
         "INSTANT_FLIP_ORIENTATION": True,
-        "DIRECTED_ORIENT_SMOOTHING": True,
-        "DIRECTED_ORIENT_FLIP_CONFIDENCE": 0.0,
-        "DIRECTED_ORIENT_FLIP_PERSISTENCE": 3,
         "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": False,
     }
     base.update(overrides)
@@ -178,59 +175,36 @@ def test_undirected_instant_flip_backward_aligns_to_true_motion():
     assert abs(((out - math.pi + math.pi) % (2 * math.pi)) - math.pi) < 1e-6
 
 
-def test_directed_smoothed_flip_motion_supported_uses_negated_motion_in_backward():
-    """Directed mode: _is_flip_motion_supported must use the true (head-first) motion
-    direction. We check the flip_counters side effect because both paths happen to
-    return pi in this scenario (one via flip-not-supported, one via supported-but-
-    blocked-by-hysteresis); the counter is what distinguishes them.
-
-    Setup: processing-motion is +x; old heading is pi (true head); new heading is 0.
-    - With motion_is_reversed=True, true motion is -x (= pi). The new heading (0) is
-      farther from -x than the old heading (pi), so flip is NOT supported and the
-      counter is reset to 0.
-    - With motion_is_reversed=False, processing motion (+x = 0) matches new heading;
-      flip IS supported and the counter increments (then hysteresis blocks the flip
-      because counter < persistence).
-    """
-    deque_r = _make_position_deque((0.0, 0.0), (10.0, 0.0))  # processing motion = +x
-
-    flip_counters_backward = [0]
-    out_backward = smooth_orientation(
+def test_posthoc_passes_directed_heading_through_unchanged():
+    """When a directed source is active for the run, smooth_orientation trusts
+    the caller's resolved theta — no motion override, no flip hysteresis."""
+    deque_r = _make_position_deque((0.0, 0.0), (10.0, 0.0))  # motion = +x
+    out = smooth_orientation(
         r=0,
-        theta=0.0,
+        theta=math.pi,  # heading opposes motion; would normally be flipped
         speed=10.0,
-        p=_params(DIRECTED_ORIENT_FLIP_CONFIDENCE=0.0),
+        p=_params(DIRECTED_ORIENT_POSTHOC_CONSISTENCY=True),
         orientation_last=[math.pi],
         position_deques=[deque_r],
         directed_heading=True,
-        orient_confidence=1.0,
-        heading_flip_counters=flip_counters_backward,
-        motion_is_reversed=True,
     )
-    # Output keeps old direction (pi).
-    assert abs(((out_backward - math.pi + math.pi) % (2 * math.pi)) - math.pi) < 1e-6
-    # Counter must NOT increment: with reversed motion, the flip is not supported.
-    assert flip_counters_backward == [0], (
-        f"With motion_is_reversed=True the flip should not be supported, but the "
-        f"counter became {flip_counters_backward}."
-    )
+    assert abs(out - math.pi) < 1e-6
 
-    flip_counters_forward = [0]
-    out_forward = smooth_orientation(
+
+def test_posthoc_passes_undirected_axis_through_unchanged():
+    """In posthoc mode, low-quality (undirected) frames also pass through.  The
+    caller has already collapsed the OBB axis against the anchor, so motion
+    must not second-guess that choice."""
+    deque_r = _make_position_deque((0.0, 0.0), (10.0, 0.0))  # motion = +x
+    # Caller resolved axis to pi (matches anchor).  Without posthoc, the
+    # undirected motion path would flip it to 0; with posthoc, it must stay pi.
+    out = smooth_orientation(
         r=0,
-        theta=0.0,
+        theta=math.pi,
         speed=10.0,
-        p=_params(DIRECTED_ORIENT_FLIP_CONFIDENCE=0.0),
+        p=_params(DIRECTED_ORIENT_POSTHOC_CONSISTENCY=True),
         orientation_last=[math.pi],
         position_deques=[deque_r],
-        directed_heading=True,
-        orient_confidence=1.0,
-        heading_flip_counters=flip_counters_forward,
-        motion_is_reversed=False,
+        directed_heading=False,
     )
-    # Same pi output (hysteresis blocks the flip), but counter incremented.
-    assert abs(((out_forward - math.pi + math.pi) % (2 * math.pi)) - math.pi) < 1e-6
-    assert flip_counters_forward == [1], (
-        f"With motion_is_reversed=False the flip should be supported and the counter "
-        f"should increment to 1; got {flip_counters_forward}."
-    )
+    assert abs(out - math.pi) < 1e-6

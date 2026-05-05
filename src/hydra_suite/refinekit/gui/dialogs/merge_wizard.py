@@ -34,13 +34,23 @@ from hydra_suite.refinekit.core.correction_writer import CorrectionWriter
 from hydra_suite.refinekit.core.event_types import EventType, SuspicionEvent
 from hydra_suite.refinekit.core.merge_candidates import (
     MergeCandidate,
+    MergeSearchTuning,
     SwapCandidate,
     TrackSegment,
     build_candidates,
     build_swap_candidates,
     extract_segments,
-    update_after_merge,
+    next_merge_search_distance,
 )
+from hydra_suite.refinekit.gui.overlay_utils import (
+    MAIN_TRACK_BGR,
+    build_detection_track_map,
+    context_gray_bgr,
+)
+from hydra_suite.refinekit.gui.overlay_utils import (
+    draw_detections as draw_colored_detections,
+)
+from hydra_suite.refinekit.gui.overlay_utils import review_overlay_style_from_shape
 from hydra_suite.refinekit.gui.widgets.synced_video_grid import SyncedVideoGrid
 
 # Type alias for hypotheses that can be either merge or swap
@@ -53,23 +63,6 @@ _CROP_MARGIN = 80
 _HYPOTHESES_PER_PAGE = 1
 _TRAIL_LENGTH = 15  # frames of visible "tail" behind the head dot
 
-# Overlay colours (BGR)
-_MERGED_COLOR = (0, 220, 0)  # green — the "what-if" merged trail
-_GAP_COLOR = (0, 220, 0)  # same green, dashed in gap
-_CONTEXT_COLOR = (100, 100, 100)  # gray for surrounding tracks
-# Merge hypothesis colours (green family — "join / continue")
-_MERGE_COLORS = [
-    (0, 220, 0),  # vivid green
-    (0, 200, 80),  # green-teal
-    (80, 200, 0),  # yellow-green
-]
-# Swap hypothesis colours (amber/orange family — "identity change")
-_SWAP_COLORS = [
-    (0, 160, 255),  # orange
-    (0, 100, 240),  # red-orange
-    (0, 130, 215),  # amber-orange
-]
-_ORPHAN_COLOR = (80, 80, 80)  # dim gray for the orphaned pre-swap tail
 _SWAP_MARKER_COLOR = (0, 200, 255)  # yellow for swap frame marker
 
 # Detection overlay alpha (0–1); 0.5 gives a translucent ellipse/OBB.
@@ -91,12 +84,16 @@ class MergeWizardModel:
         candidates: Dict[int, List[MergeCandidate]],
         writer: CorrectionWriter,
         swap_candidates: Optional[Dict[int, List[SwapCandidate]]] = None,
+        merge_max_dist: float = 200.0,
+        merge_max_pred_dist: float = 120.0,
     ):
         self._df = df
         self._segments = segments
         self._candidates = candidates
         self._swap_candidates: Dict[int, List[SwapCandidate]] = swap_candidates or {}
         self._writer = writer
+        self._merge_max_dist = merge_max_dist
+        self._merge_max_pred_dist = merge_max_pred_dist
 
         # Order: process most confident hypotheses first (merge + swap)
         all_source_ids = set(candidates.keys()) | set(self._swap_candidates.keys())
@@ -210,30 +207,12 @@ class MergeWizardModel:
                 candidate.swap_frame,
             )
             self._df = self._writer.df
-            # Full rebuild — swap creates a new dead fragment
-            self._rebuild_graph()
         else:
-            # Merge: efficient incremental update
             self._writer.apply_merge([candidate.source_id, candidate.target_id])
             self._df = self._writer.df
-            self._segments, self._candidates = update_after_merge(
-                self._segments,
-                self._candidates,
-                candidate.source_id,
-                candidate.target_id,
-            )
-            # Clean stale swap references
-            self._swap_candidates.pop(candidate.source_id, None)
-            self._swap_candidates.pop(candidate.target_id, None)
-            for k in list(self._swap_candidates.keys()):
-                self._swap_candidates[k] = [
-                    c
-                    for c in self._swap_candidates[k]
-                    if c.target_id not in (candidate.source_id, candidate.target_id)
-                ]
-                if not self._swap_candidates[k]:
-                    del self._swap_candidates[k]
-            self._rebuild_order()
+
+        # Full rebuild keeps search constraints consistent after every accepted edit.
+        self._rebuild_graph()
 
         self._merges_applied += 1
         self._hypothesis_page = 0
@@ -310,12 +289,25 @@ class MergeWizardModel:
         """Rebuild segments, merge candidates, and swap candidates from df."""
         last_frame = int(self._df["FrameID"].max())
         self._segments = extract_segments(self._df, last_frame)
-        self._candidates = build_candidates(self._segments)
+        self._candidates = build_candidates(
+            self._segments,
+            max_dist=self._merge_max_dist,
+            max_pred_dist=self._merge_max_pred_dist,
+        )
         self._swap_candidates = build_swap_candidates(
             self._df,
             self._segments,
         )
         self._rebuild_order()
+
+    def set_merge_search(self, max_dist: float, max_pred_dist: float) -> None:
+        """Reset the wizard with a wider merge-search radius on the current proofread df."""
+        self._merge_max_dist = max_dist
+        self._merge_max_pred_dist = max_pred_dist
+        self._current_idx = 0
+        self._hypothesis_page = 0
+        self._skipped.clear()
+        self._rebuild_graph()
 
     def _rebuild_order(self) -> None:
         """Rebuild merge_order from current candidate dicts."""
@@ -513,9 +505,20 @@ class _FrameDetections:
         * *obb_corners* — list of ``(4, 2)`` float32 arrays (empty when BG-sub).
         """
         try:
-            meas, _sizes, shapes, _conf, obb, _ids, _hints, _dmask, _affines = (
-                self._cache.get_frame(frame_idx)
-            )
+            (
+                meas,
+                _sizes,
+                shapes,
+                _conf,
+                obb,
+                _ids,
+                _hints,
+                _heading_confidences,
+                _dmask,
+                _affines,
+                _canvas_dims,
+                _m_inverse,
+            ) = self._cache.get_frame(frame_idx)
         except Exception:
             return None
         if not meas:
@@ -649,16 +652,17 @@ def _draw_detections(
 
 def _draw_base_overlay(bgr, frame_idx, frame_dets, ox, oy, det_map, ctx_data):
     """Draw detection outlines and context track tails onto *bgr* (shared logic)."""
+    context_color = context_gray_bgr(bgr)
+    _, radius, thickness, _ = review_overlay_style_from_shape(bgr.shape, 1.0)
     if frame_dets is not None:
-        _draw_detections(
+        draw_colored_detections(
             bgr,
             frame_dets,
             frame_idx,
             ox,
             oy,
-            _CONTEXT_COLOR,
-            1,
-            allowed_indices=det_map.get(frame_idx),
+            det_map.get(frame_idx, {}),
+            thickness=max(1, thickness),
         )
     ctx_layer = bgr.copy()
     for c_frames, c_xs, c_ys in ctx_data:
@@ -666,8 +670,15 @@ def _draw_base_overlay(bgr, frame_idx, frame_dets, ox, oy, det_map, ctx_data):
         if cmask.sum() < 2:
             continue
         cpts = np.column_stack((c_xs[cmask] - ox, c_ys[cmask] - oy)).astype(np.int32)
-        cv2.polylines(ctx_layer, [cpts], False, _CONTEXT_COLOR, 1, cv2.LINE_AA)
-        cv2.circle(ctx_layer, tuple(cpts[-1]), 3, _CONTEXT_COLOR, -1, cv2.LINE_AA)
+        cv2.polylines(ctx_layer, [cpts], False, context_color, thickness, cv2.LINE_AA)
+        cv2.circle(
+            ctx_layer,
+            tuple(cpts[-1]),
+            max(2, radius - 1),
+            context_color,
+            -1,
+            cv2.LINE_AA,
+        )
     cv2.addWeighted(ctx_layer, 0.4, bgr, 0.6, 0, bgr)
 
 
@@ -752,11 +763,57 @@ def _make_overlay_fn(
         df, frame_start, frame_end, crop_box, {source_id, target_id}
     )
     _visible_ids = {source_id, target_id} | set(ctx_ids)
-    _det_map = _build_det_index_map(df, _visible_ids, frame_start, frame_end)
+    _det_track_map = build_detection_track_map(df, frame_start, frame_end, _visible_ids)
+    visible_src_mask = (src_frames >= frame_start) & (src_frames <= frame_end)
+    visible_tgt_mask = (tgt_frames >= frame_start) & (tgt_frames <= frame_end)
 
     def overlay(bgr: np.ndarray, frame_idx: int) -> np.ndarray:
-        """Draw merge-candidate overlay: source and target tails with a bridging dashed line."""
-        _draw_base_overlay(bgr, frame_idx, frame_dets, ox, oy, _det_map, ctx_data)
+        """Draw merge-candidate overlay without an interpolated bridge."""
+        font_scale, radius, thickness, _ = review_overlay_style_from_shape(
+            bgr.shape,
+            1.0,
+        )
+        line_thickness = thickness
+        det_colors = {
+            det_idx: MAIN_TRACK_BGR
+            for det_idx, track_id in _det_track_map.get(frame_idx, {}).items()
+            if track_id in {source_id, target_id}
+        }
+        _draw_base_overlay(
+            bgr,
+            frame_idx,
+            frame_dets,
+            ox,
+            oy,
+            {frame_idx: det_colors},
+            ctx_data,
+        )
+
+        if visible_src_mask.sum() >= 2:
+            pts_s_full = np.column_stack(
+                (src_xs[visible_src_mask] - ox, src_ys[visible_src_mask] - oy)
+            ).astype(np.int32)
+            cv2.polylines(
+                bgr,
+                [pts_s_full],
+                False,
+                MAIN_TRACK_BGR,
+                line_thickness,
+                cv2.LINE_AA,
+            )
+
+        if visible_tgt_mask.sum() >= 2:
+            pts_t_full = np.column_stack(
+                (tgt_xs[visible_tgt_mask] - ox, tgt_ys[visible_tgt_mask] - oy)
+            ).astype(np.int32)
+            cv2.polylines(
+                bgr,
+                [pts_t_full],
+                False,
+                MAIN_TRACK_BGR,
+                line_thickness,
+                cv2.LINE_AA,
+            )
 
         # Source tail
         mask_s = _tail_mask(src_frames, frame_idx)
@@ -765,22 +822,16 @@ def _make_overlay_fn(
             pts_s = np.column_stack((src_xs[mask_s] - ox, src_ys[mask_s] - oy)).astype(
                 np.int32
             )
-            cv2.polylines(bgr, [pts_s], False, merged_color, 2, cv2.LINE_AA)
+            cv2.polylines(
+                bgr, [pts_s], False, MAIN_TRACK_BGR, line_thickness, cv2.LINE_AA
+            )
 
-        # Bridge dashed line (visible once source is dead)
-        if pts_s is not None and frame_idx >= src_frames[-1] and len(tgt_frames) > 0:
-            src_last = (int(src_xs[-1] - ox), int(src_ys[-1] - oy))
-            tgt_start = (int(tgt_xs[0] - ox), int(tgt_ys[0] - oy))
-            _draw_dashed_line(bgr, src_last, tgt_start, merged_color, 2, dash_len=6)
-
-        # Target tail
         mask_t = _tail_mask(tgt_frames, frame_idx)
         pts_t = None
         if mask_t.any():
             pts_t = np.column_stack((tgt_xs[mask_t] - ox, tgt_ys[mask_t] - oy)).astype(
                 np.int32
             )
-            cv2.polylines(bgr, [pts_t], False, merged_color, 2, cv2.LINE_AA)
 
         # Head dot + label
         head_pt = _resolve_merge_head(
@@ -797,15 +848,15 @@ def _make_overlay_fn(
             oy,
         )
         if head_pt is not None:
-            cv2.circle(bgr, head_pt, 5, merged_color, -1, cv2.LINE_AA)
+            cv2.circle(bgr, head_pt, radius, MAIN_TRACK_BGR, -1, cv2.LINE_AA)
             cv2.putText(
                 bgr,
-                f"T{source_id}+T{target_id}",
+                f"T{source_id}",
                 (head_pt[0] + 8, head_pt[1] + 4),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                merged_color,
-                1,
+                font_scale,
+                MAIN_TRACK_BGR,
+                max(1, thickness),
                 cv2.LINE_AA,
             )
 
@@ -827,24 +878,28 @@ def _draw_swap_pre_target(
     target_id,
 ):
     """Draw target's pre-swap trail and label."""
+    font_scale, radius, thickness, _ = review_overlay_style_from_shape(bgr.shape, 1.0)
+    line_thickness = thickness
     mask_pre = _tail_mask(tgt_pre_frames, frame_idx)
     pts_pre = None
     if mask_pre.sum() >= 2:
         pts_pre = np.column_stack(
             (tgt_pre_xs[mask_pre] - ox, tgt_pre_ys[mask_pre] - oy)
         ).astype(np.int32)
-        cv2.polylines(bgr, [pts_pre], False, target_pre_color, 2, cv2.LINE_AA)
+        cv2.polylines(
+            bgr, [pts_pre], False, target_pre_color, line_thickness, cv2.LINE_AA
+        )
     if pts_pre is not None and len(pts_pre) > 0 and frame_idx < swap_frame:
         tp = tuple(pts_pre[-1])
-        cv2.circle(bgr, tp, 5, target_pre_color, -1, cv2.LINE_AA)
+        cv2.circle(bgr, tp, radius, target_pre_color, -1, cv2.LINE_AA)
         cv2.putText(
             bgr,
             f"T{target_id}",
             (tp[0] + 8, tp[1] + 4),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            font_scale,
             target_pre_color,
-            1,
+            max(1, thickness),
             cv2.LINE_AA,
         )
 
@@ -853,24 +908,26 @@ def _draw_swap_source(
     bgr, frame_idx, src_frames, src_xs, src_ys, ox, oy, merged_color, source_id
 ):
     """Draw source trail with head label; return pts_s."""
+    font_scale, radius, thickness, _ = review_overlay_style_from_shape(bgr.shape, 1.0)
+    line_thickness = thickness
     mask_s = _tail_mask(src_frames, frame_idx)
     pts_s = None
     if mask_s.any():
         pts_s = np.column_stack((src_xs[mask_s] - ox, src_ys[mask_s] - oy)).astype(
             np.int32
         )
-        cv2.polylines(bgr, [pts_s], False, merged_color, 2, cv2.LINE_AA)
+        cv2.polylines(bgr, [pts_s], False, merged_color, line_thickness, cv2.LINE_AA)
     if pts_s is not None and len(pts_s) > 0 and frame_idx <= src_frames[-1]:
         sp = tuple(pts_s[-1])
-        cv2.circle(bgr, sp, 5, merged_color, -1, cv2.LINE_AA)
+        cv2.circle(bgr, sp, radius, merged_color, -1, cv2.LINE_AA)
         cv2.putText(
             bgr,
             f"T{source_id}",
             (sp[0] + 8, sp[1] - 8),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            font_scale,
             merged_color,
-            1,
+            max(1, thickness),
             cv2.LINE_AA,
         )
     return pts_s
@@ -894,13 +951,11 @@ def _draw_swap_post_and_markers(
     merged_color,
     source_id,
     target_id,
+    target_color,
 ):
-    """Draw bridge, post-swap tail, diamond marker, head label, and orphan label."""
-    # Bridge
-    if frame_idx >= src_frames[-1] and len(tgt_post_frames) > 0 and len(src_frames) > 0:
-        src_end = (int(src_xs[-1] - ox), int(src_ys[-1] - oy))
-        swap_pt = (int(tgt_post_xs[0] - ox), int(tgt_post_ys[0] - oy))
-        _draw_dashed_line(bgr, src_end, swap_pt, merged_color, 2, dash_len=6)
+    """Draw post-swap tail, diamond marker, head label, and orphan label."""
+    font_scale, radius, thickness, _ = review_overlay_style_from_shape(bgr.shape, 1.0)
+    line_thickness = thickness
 
     # Post-swap tail
     mask_post = _tail_mask(tgt_post_frames, frame_idx)
@@ -909,7 +964,7 @@ def _draw_swap_post_and_markers(
         pts_post = np.column_stack(
             (tgt_post_xs[mask_post] - ox, tgt_post_ys[mask_post] - oy)
         ).astype(np.int32)
-        cv2.polylines(bgr, [pts_post], False, merged_color, 2, cv2.LINE_AA)
+        cv2.polylines(bgr, [pts_post], False, merged_color, line_thickness, cv2.LINE_AA)
 
     # Diamond marker at swap frame
     if frame_idx >= swap_frame and len(tgt_post_frames) > 0:
@@ -922,30 +977,30 @@ def _draw_swap_post_and_markers(
     # Head dot + label for the "continued" track after swap
     if pts_post is not None and len(pts_post) > 0:
         head_pt = tuple(pts_post[-1])
-        cv2.circle(bgr, head_pt, 5, merged_color, -1, cv2.LINE_AA)
+        cv2.circle(bgr, head_pt, radius, merged_color, -1, cv2.LINE_AA)
         cv2.putText(
             bgr,
-            f"T{source_id}(was T{target_id})",
+            f"T{source_id}",
             (head_pt[0] + 8, head_pt[1] + 4),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            font_scale,
             merged_color,
-            1,
+            max(1, thickness),
             cv2.LINE_AA,
         )
 
     # Orphan label after swap
     if frame_idx >= swap_frame and len(tgt_pre_frames) > 0:
         oend = (int(tgt_pre_xs[-1] - ox), int(tgt_pre_ys[-1] - oy))
-        cv2.circle(bgr, oend, 3, _ORPHAN_COLOR, -1, cv2.LINE_AA)
+        cv2.circle(bgr, oend, max(2, radius - 1), target_color, -1, cv2.LINE_AA)
         cv2.putText(
             bgr,
-            f"T{target_id}(orphan)",
+            f"T{target_id}",
             (oend[0] + 6, oend[1] - 4),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.35,
-            _ORPHAN_COLOR,
-            1,
+            max(0.3, font_scale * 0.9),
+            target_color,
+            max(1, thickness),
             cv2.LINE_AA,
         )
 
@@ -961,82 +1016,92 @@ def _make_swap_overlay_fn(
     frame_end: int,
     frame_dets: Optional[_FrameDetections] = None,
 ) -> Callable:
-    """Create a 'what if swapped' overlay for one hypothesis panel.
+    """Create a swap overlay that shows only the final accepted result.
 
-    Shows both source and target tracks clearly with short tails so the
-    user can see exactly which identities are involved:
-    * Real detection outlines when *frame_dets* is available.
-    * Context tracks as short gray tails (semi-transparent).
-    * Source trail in *merged_color* (the identity being continued).
-    * Target's pre-swap trail in a distinct colour (cyan).
-    * Target's post-swap trail relabeled in *merged_color* (continuation).
-    * Dashed bridge from source death to target at swap point.
-    * Diamond marker at the swap frame.
+    The hypothesis panel renders a single completed trajectory in pink:
+    source rows before the swap and target rows from the swap onward.
+    No pre-swap target trail, orphan trajectory, or gray context tracks
+    are shown so the user evaluates only the post-acceptance outcome.
     """
     ox, oy = crop_box[0], crop_box[1]
-    _TARGET_PRE_COLOR = (255, 200, 0)  # cyan-ish in BGR for target's own trail
 
     src_frames, src_xs, src_ys = _extract_track_arrays(df, source_id)
     tgt_frames, tgt_xs, tgt_ys = _extract_track_arrays(df, target_id)
 
-    # Split target into pre-swap and post-swap
-    tgt_pre_mask = tgt_frames < swap_frame
+    src_pre_mask = src_frames < swap_frame
     tgt_post_mask = tgt_frames >= swap_frame
 
-    tgt_pre_frames = tgt_frames[tgt_pre_mask]
-    tgt_pre_xs = tgt_xs[tgt_pre_mask]
-    tgt_pre_ys = tgt_ys[tgt_pre_mask]
+    src_pre_frames = src_frames[src_pre_mask]
+    src_pre_xs = src_xs[src_pre_mask]
+    src_pre_ys = src_ys[src_pre_mask]
 
     tgt_post_frames = tgt_frames[tgt_post_mask]
     tgt_post_xs = tgt_xs[tgt_post_mask]
     tgt_post_ys = tgt_ys[tgt_post_mask]
 
-    ctx_ids, ctx_data = _extract_context_data(
-        df, frame_start, frame_end, crop_box, {source_id, target_id}
+    det_track_map = build_detection_track_map(
+        df,
+        frame_start,
+        frame_end,
+        {source_id, target_id},
     )
-    _visible_ids = {source_id, target_id} | set(ctx_ids)
-    _det_map = _build_det_index_map(df, _visible_ids, frame_start, frame_end)
 
     def overlay(bgr: np.ndarray, frame_idx: int) -> np.ndarray:
-        """Draw swap-candidate overlay: pre/post target segments and source trajectory around the swap frame."""
-        _draw_base_overlay(bgr, frame_idx, frame_dets, ox, oy, _det_map, ctx_data)
-
-        _draw_swap_pre_target(
-            bgr,
-            frame_idx,
-            swap_frame,
-            tgt_pre_frames,
-            tgt_pre_xs,
-            tgt_pre_ys,
-            ox,
-            oy,
-            _TARGET_PRE_COLOR,
-            target_id,
+        """Draw only the completed trajectory that would exist after acceptance."""
+        font_scale, radius, thickness, _ = review_overlay_style_from_shape(
+            bgr.shape,
+            1.0,
         )
+        line_thickness = thickness
 
-        _draw_swap_source(
-            bgr, frame_idx, src_frames, src_xs, src_ys, ox, oy, merged_color, source_id
-        )
+        if frame_dets is not None:
+            active_track_id = source_id if frame_idx < swap_frame else target_id
+            det_colors = {
+                det_idx: MAIN_TRACK_BGR
+                for det_idx, track_id in det_track_map.get(frame_idx, {}).items()
+                if track_id == active_track_id
+            }
+            draw_colored_detections(
+                bgr,
+                frame_dets,
+                frame_idx,
+                ox,
+                oy,
+                det_colors,
+                thickness=max(1, thickness),
+            )
 
-        _draw_swap_post_and_markers(
-            bgr,
-            frame_idx,
-            swap_frame,
-            src_frames,
-            src_xs,
-            src_ys,
-            tgt_post_frames,
-            tgt_post_xs,
-            tgt_post_ys,
-            tgt_pre_frames,
-            tgt_pre_xs,
-            tgt_pre_ys,
-            ox,
-            oy,
-            merged_color,
-            source_id,
-            target_id,
-        )
+        final_frames = np.concatenate((src_pre_frames, tgt_post_frames))
+        final_xs = np.concatenate((src_pre_xs, tgt_post_xs))
+        final_ys = np.concatenate((src_pre_ys, tgt_post_ys))
+        mask_final = _tail_mask(final_frames, frame_idx)
+        pts_final = None
+        if mask_final.any():
+            pts_final = np.column_stack(
+                (final_xs[mask_final] - ox, final_ys[mask_final] - oy)
+            ).astype(np.int32)
+            cv2.polylines(
+                bgr,
+                [pts_final],
+                False,
+                MAIN_TRACK_BGR,
+                line_thickness,
+                cv2.LINE_AA,
+            )
+
+        if pts_final is not None and len(pts_final) > 0:
+            head_pt = tuple(pts_final[-1])
+            cv2.circle(bgr, head_pt, radius, MAIN_TRACK_BGR, -1, cv2.LINE_AA)
+            cv2.putText(
+                bgr,
+                f"T{source_id}",
+                (head_pt[0] + 8, head_pt[1] + 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                MAIN_TRACK_BGR,
+                max(1, thickness),
+                cv2.LINE_AA,
+            )
 
         return bgr
 
@@ -1099,15 +1164,27 @@ class MergeWizardDialog(QDialog):
         writer: CorrectionWriter,
         parent=None,
         swap_candidates: Optional[Dict[int, List[SwapCandidate]]] = None,
+        merge_tuning: Optional[MergeSearchTuning] = None,
+        max_animals: Optional[int] = None,
     ):
         super().__init__(parent)
         self._video_path = video_path
+        self._writer = writer
+        self._merge_tuning = merge_tuning or MergeSearchTuning(
+            max_dist=200.0,
+            max_pred_dist=120.0,
+            max_dist_cap=200.0,
+            required_reductions=0,
+        )
+        self._max_animals = max_animals
         self._model = MergeWizardModel(
             df,
             segments,
             candidates,
             writer,
             swap_candidates=swap_candidates,
+            merge_max_dist=self._merge_tuning.max_dist,
+            merge_max_pred_dist=self._merge_tuning.max_pred_dist,
         )
 
         # --- Discover and load the detection cache (read-only) ----------
@@ -1116,7 +1193,7 @@ class MergeWizardDialog(QDialog):
         if cache_path is not None:
             try:
                 cache = DetectionCache(str(cache_path), mode="r")
-                if cache.is_compatible() and cache._loaded_data is not None:
+                if cache.is_compatible():
                     inv_resize = 1.0 / _load_resize_factor(video_path)
                     self._frame_dets = _FrameDetections(cache, inv_resize)
                     logger.info("Detection cache loaded: %s", cache_path)
@@ -1229,6 +1306,13 @@ class MergeWizardDialog(QDialog):
         self._btn_skip.clicked.connect(self._on_skip)
         btn_row.addWidget(self._btn_skip)
 
+        self._btn_expand_radius = QPushButton("Expand Radius")
+        self._btn_expand_radius.setToolTip(
+            "Widen the merge search radius and restart the current wizard pass"
+        )
+        self._btn_expand_radius.clicked.connect(self._on_expand_radius)
+        btn_row.addWidget(self._btn_expand_radius)
+
         btn_row.addStretch()
 
         self._btn_undo = QPushButton("Undo")
@@ -1286,7 +1370,8 @@ class MergeWizardDialog(QDialog):
             f"Track T{source.track_id} died at frame {source.frame_death}  "
             f"\u2014  Hypothesis {hyp_idx} of {total_hyps} ({kind})  |  "
             f"Track {done + 1}/{total}  \u00b7  "
-            f"{n_merged} merged  \u00b7  {n_flagged} flagged"
+            f"{n_merged} merged  \u00b7  {n_flagged} flagged  \u00b7  "
+            f"radius {self._merge_tuning.max_dist:.0f}px/{self._merge_tuning.max_dist_cap:.0f}px"
         )
 
         # Progress
@@ -1340,6 +1425,9 @@ class MergeWizardDialog(QDialog):
         self._btn_prev_page.setEnabled(self._model.has_prev_hypotheses)
         self._btn_next_page.setEnabled(self._model.has_more_hypotheses)
         self._btn_undo.setEnabled(self._model.merges_applied > 0)
+        self._btn_expand_radius.setEnabled(
+            self._merge_tuning.max_dist < self._merge_tuning.max_dist_cap
+        )
 
         # Timeline strip
         self._update_timeline_strip(source, hyps)
@@ -1367,6 +1455,19 @@ class MergeWizardDialog(QDialog):
                     f"  {tag}T{hyp.target_id}: "
                     f"frame {tgt.frame_birth}\u2013{tgt.frame_death}{extra}"
                 )
+        lines.append(
+            f"  Merge radius: {self._merge_tuning.max_dist:.0f}px"
+            + (
+                f" / {self._merge_tuning.max_dist_cap:.0f}px cap"
+                if self._merge_tuning.max_dist_cap > self._merge_tuning.max_dist
+                else ""
+            )
+            + (
+                f"  \u00b7 target animals: {self._max_animals}"
+                if self._max_animals is not None
+                else ""
+            )
+        )
         lines.append(
             "  Keys: Enter/1=Accept  F=Flag  S=Skip  N/P/\u2190/\u2192=Hypothesis  "
             "Space=Play  Ctrl+\u2190/\u2192=Step  Ctrl+Z=Undo"
@@ -1410,10 +1511,6 @@ class MergeWizardDialog(QDialog):
         # Each panel gets the same crop but a single overlay
         crop_boxes = [crop_box]
         hyp = hyps[0]
-        if isinstance(hyp, MergeCandidate):
-            color = _MERGE_COLORS[0]
-        else:
-            color = _SWAP_COLORS[0]
         if isinstance(hyp, SwapCandidate):
             fn = _make_swap_overlay_fn(
                 df,
@@ -1421,7 +1518,7 @@ class MergeWizardDialog(QDialog):
                 hyp.target_id,
                 hyp.swap_frame,
                 crop_box,
-                color,
+                MAIN_TRACK_BGR,
                 frame_start,
                 frame_end,
                 frame_dets=self._frame_dets,
@@ -1432,7 +1529,7 @@ class MergeWizardDialog(QDialog):
                 source.track_id,
                 hyp.target_id,
                 crop_box,
-                color,
+                MAIN_TRACK_BGR,
                 frame_start,
                 frame_end,
                 frame_dets=self._frame_dets,
@@ -1531,6 +1628,27 @@ class MergeWizardDialog(QDialog):
 
     def _on_skip(self) -> None:
         self._model.skip()
+        self._update_view()
+
+    def _on_expand_radius(self) -> None:
+        """Widen merge search and restart browsing on the current proofread dataframe."""
+        next_max_dist = next_merge_search_distance(
+            self._merge_tuning.max_dist,
+            self._merge_tuning.max_dist_cap,
+        )
+        if next_max_dist <= self._merge_tuning.max_dist:
+            return
+
+        scale = next_max_dist / max(self._merge_tuning.max_dist, 1.0)
+        next_max_pred_dist = self._merge_tuning.max_pred_dist * scale
+        self._merge_tuning = MergeSearchTuning(
+            max_dist=next_max_dist,
+            max_pred_dist=next_max_pred_dist,
+            max_dist_cap=self._merge_tuning.max_dist_cap,
+            required_reductions=self._merge_tuning.required_reductions,
+        )
+        self._model.set_merge_search(next_max_dist, next_max_pred_dist)
+        logger.info("Expanded merge radius to %.1f px", next_max_dist)
         self._update_view()
 
     def _on_next_page(self) -> None:

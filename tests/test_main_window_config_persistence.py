@@ -381,6 +381,53 @@ def test_headtail_combo_includes_registry_annotated_classkit_artifact(
     window.close()
 
 
+def test_headtail_selector_ignores_none_and_registered_alias_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+    window = _make_main_window(monkeypatch)
+    window._identity_panel.g_headtail.setChecked(True)
+    window._identity_panel._refresh_yolo_headtail_model_combo()
+
+    combo = window._identity_panel.combo_yolo_headtail_model
+    none_index = combo.findData("__none__")
+    registered_index = combo.findData(
+        "classification/orientation/YOLO/headtail_keep.pt"
+    )
+    assert none_index >= 0
+    assert registered_index >= 0
+
+    add_calls: list[object] = []
+    annotate_calls: list[object] = []
+    sync_calls: list[object] = []
+
+    monkeypatch.setattr(
+        window,
+        "_handle_add_new_headtail_model",
+        lambda: add_calls.append("add"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_annotate_discovered_headtail_model",
+        lambda rel_path: annotate_calls.append(rel_path),
+    )
+    monkeypatch.setattr(
+        window,
+        "_sync_individual_analysis_mode_ui",
+        lambda: sync_calls.append("sync"),
+    )
+
+    window.on_yolo_headtail_model_changed(none_index)
+    window.on_yolo_headtail_model_changed(registered_index)
+
+    assert add_calls == []
+    assert annotate_calls == []
+    assert sync_calls == ["sync", "sync"]
+    window.close()
+
+
 def test_refinekit_prompt_toggle_roundtrip_and_batch_mode_clears_it(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
@@ -858,7 +905,7 @@ def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
     window.close()
 
 
-def test_headtail_runtime_selectors_stay_synchronized(
+def test_headtail_runtime_selector_uses_setup_panel_only(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
@@ -878,19 +925,14 @@ def test_headtail_runtime_selectors_stay_synchronized(
     _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
     window._populate_headtail_runtime_options(preferred="cpu")
 
-    identity_combo = window._identity_panel.combo_headtail_runtime
     setup_combo = window._setup_panel.combo_headtail_runtime
+    assert not hasattr(window._identity_panel, "combo_headtail_runtime")
 
-    identity_idx = identity_combo.findData("onnx_coreml")
     setup_idx = setup_combo.findData("onnx_cpu")
-    assert identity_idx >= 0
+    assert setup_combo.findData("onnx_coreml") >= 0
     assert setup_idx >= 0
-
-    identity_combo.setCurrentIndex(identity_idx)
-    assert setup_combo.currentData() == "onnx_coreml"
-
     setup_combo.setCurrentIndex(setup_idx)
-    assert identity_combo.currentData() == "onnx_cpu"
+    assert window._selected_headtail_runtime() == "onnx_cpu"
     window.close()
 
 
