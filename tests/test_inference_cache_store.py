@@ -142,7 +142,8 @@ def test_headtail_round_trip(tmp_path):
 
     handle2 = HeadTailCacheHandle(path=path, key=key)
     assert handle2.is_valid()
-    h, c, d = handle2.read_frame(0)
+    di, h, c, d = handle2.read_frame(0)
+    assert di.tolist() == [0, 1]
     assert h.shape == (2,)
     assert h[1] == pytest.approx(1.5)
     assert d[0] == 1

@@ -200,6 +200,46 @@ def _select(raw: OBBResult, indices: np.ndarray) -> OBBResult:
     )
 
 
+def filter_with_indices(
+    raw: OBBResult,
+    config: OBBConfig,
+    roi_mask: np.ndarray | None = None,
+) -> tuple[OBBResult, np.ndarray]:
+    """Run the same gates as filter_detections and return (filtered, pre-filter indices).
+
+    Returned indices index into `raw`. They are used as the primary key by downstream
+    caches so that a threshold edit never invalidates HeadTail/CNN/Pose caches —
+    only the OBB detection cache stores pre-filter results; downstream caches are
+    keyed by these indices and re-aligned on load_frame.
+    """
+    n = raw.num_detections
+    if n == 0:
+        return raw, np.zeros(0, dtype=np.int32)
+
+    keep = raw.confidences >= config.confidence_threshold
+    if config.min_object_size > 0:
+        keep = keep & (raw.sizes >= config.min_object_size)
+    if config.max_object_size < float("inf"):
+        keep = keep & (raw.sizes <= config.max_object_size)
+    if roi_mask is not None:
+        h, w = roi_mask.shape[:2]
+        cx = np.clip(raw.centroids[:, 0].astype(np.int32), 0, w - 1)
+        cy = np.clip(raw.centroids[:, 1].astype(np.int32), 0, h - 1)
+        keep = keep & roi_mask[cy, cx].astype(bool)
+
+    indices = np.where(keep)[0]
+    subset = _select(raw, indices)
+    if config.iou_threshold < 1.0 and len(indices) > 1:
+        keep_nms = _obb_nms(subset, np.arange(len(indices)), config.iou_threshold)
+        indices = indices[keep_nms]
+        subset = _select(raw, indices)
+    if config.max_detections > 0 and len(indices) > config.max_detections:
+        order = np.argsort(raw.confidences[indices])[::-1][: config.max_detections]
+        indices = indices[order]
+        subset = _select(raw, indices)
+    return subset, indices.astype(np.int32)
+
+
 def _empty_obb_result(frame_idx: int) -> OBBResult:
     return OBBResult(
         frame_idx=frame_idx,

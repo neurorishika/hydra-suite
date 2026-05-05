@@ -180,6 +180,7 @@ class HeadTailCacheHandle(CacheHandle):
         d = self._data
         mask = d["frame_indices"] == frame_idx
         return (
+            d["det_indices"][mask].astype(np.int32),
             d["heading_hints"][mask],
             d["heading_confidences"][mask],
             d["directed_mask"][mask],
