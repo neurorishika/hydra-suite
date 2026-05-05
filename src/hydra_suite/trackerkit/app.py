@@ -11,6 +11,8 @@ import logging
 import os
 import sys
 
+from hydra_suite.trackerkit.cli import run_tracking_cli
+
 # Fix OpenMP conflict on macOS (PyTorch + OpenCV + NumPy can load multiple OpenMP libraries)
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
@@ -45,14 +47,16 @@ def setup_logging(
     logger.info(f"Working directory: {os.getcwd()}")
 
 
-def parse_arguments() -> object:
+def parse_arguments(argv: list[str] | None = None) -> object:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="TrackerKit - Real-time animal tracking with circular ROI",
+        description="TrackerKit - GUI and basic config-driven tracking CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   trackerkit                    # Launch GUI
+    trackerkit track video.mp4    # Run tracking for one video
+    trackerkit track a.mp4 b.mp4 --keystone-override
   trackerkit --log-level DEBUG  # Launch with debug logging
   trackerkit --no-file-log      # Disable file logging
         """,
@@ -77,7 +81,28 @@ Examples:
 
     parser.add_argument("--version", action="version", version="TrackerKit 1.0.0")
 
-    return parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command")
+    track_parser = subparsers.add_parser(
+        "track",
+        help="Run config-driven tracking on one or more videos",
+    )
+    track_parser.add_argument(
+        "videos",
+        nargs="+",
+        help="One or more video paths. The first video is the keystone for batch fallback.",
+    )
+    track_parser.add_argument(
+        "--config",
+        type=str,
+        help="Optional config file to use for the first video. If it belongs to another video, TrackerKit applies its settings without switching the target video.",
+    )
+    track_parser.add_argument(
+        "--keystone-override",
+        action="store_true",
+        help="Force all later batch videos to use the first video's effective config, matching the GUI keystone override.",
+    )
+
+    return parser.parse_args(argv)
 
 
 def check_dependencies() -> object:
@@ -110,7 +135,7 @@ def check_dependencies() -> object:
     return True
 
 
-def main() -> object:
+def main(argv: list[str] | None = None) -> object:
     """
     Application entry point.
 
@@ -118,7 +143,7 @@ def main() -> object:
     creates Qt application, initializes main window, and starts event loop.
     """
     # Parse command line arguments
-    args = parse_arguments()
+    args = parse_arguments(argv)
 
     # Set up logging
     log_level = getattr(logging, args.log_level.upper())
@@ -133,6 +158,19 @@ def main() -> object:
     # Check dependencies
     if not check_dependencies():
         sys.exit(1)
+
+    if args.command == "track":
+        try:
+            exit_code = run_tracking_cli(
+                args.videos,
+                config_path=args.config,
+                keystone_override=bool(args.keystone_override),
+            )
+        except Exception as e:
+            logger.error("Tracker CLI failed: %s", e, exc_info=True)
+            print(f"Error: {e}")
+            sys.exit(1)
+        sys.exit(exit_code)
 
     try:
         # Import Qt at runtime so package imports don't hard-fail on missing GUI deps.
