@@ -10,19 +10,46 @@ Never touches the original CSV.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 from pathlib import Path
-from typing import List
+from typing import Any, List, Optional
 
 import pandas as pd
 
+from hydra_suite.core.post.processing import interpolate_trajectories
 from hydra_suite.refinekit.core.track_editor_model import EditOp, OpKind
 
 logger = logging.getLogger(__name__)
 
 _NEW_ID_OFFSET = 100_000
+_TRACKING_CSV_SUFFIXES = (
+    "_tracking_final_with_individual",
+    "_tracking_final_with_pose",
+    "_tracking_final",
+    "_tracking_forward_processed",
+    "_tracking_forward",
+    "_tracking_backward_processed",
+    "_tracking_backward",
+)
+
+
+def _config_path_for_csv(source_csv: Path) -> Path:
+    stem = source_csv.stem
+    for suffix in _TRACKING_CSV_SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return source_csv.with_name(f"{stem}_config.json")
+
+
+def _config_value(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in data:
+            return data[key]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -84,20 +111,23 @@ class CorrectionWriter:
         stem = self.source_csv.stem
         self.proofread_path = self.source_csv.with_name(f"{stem}_proofread.csv")
         self._df: pd.DataFrame | None = None
+        self._interpolation_settings = self._load_interpolation_settings()
 
     def open(self) -> None:
         """Create proofread copy if needed, then load it into memory."""
         if not self.proofread_path.exists():
             shutil.copy2(self.source_csv, self.proofread_path)
             logger.info("Created proofread copy: %s", self.proofread_path)
-        self._df = pd.read_csv(self.proofread_path)
+        loaded_df = pd.read_csv(self.proofread_path)
+        self._df = self._normalize_df(loaded_df)
+        if not loaded_df.equals(self._df):
+            self._write_atomic()
 
     def apply_merge(self, track_ids: List[int]) -> None:
         """Merge fragment track IDs into one and persist."""
         if self._df is None:
             raise RuntimeError("Call open() before apply_merge()")
-        self._df = merge_fragments(self._df, track_ids)
-        self._write_atomic()
+        self._commit_df(merge_fragments(self._df, track_ids))
 
     def apply_correction(
         self,
@@ -109,14 +139,15 @@ class CorrectionWriter:
         """Apply the legacy split-and-swap correction workflow and persist."""
         if self._df is None:
             raise RuntimeError("Call open() before apply_correction()")
-        self._df = apply_split_and_swap(
-            self._df,
-            track_a=track_a,
-            track_b=track_b,
-            split_frame=split_frame,
-            swap_post=swap_post,
+        self._commit_df(
+            apply_split_and_swap(
+                self._df,
+                track_a=track_a,
+                track_b=track_b,
+                split_frame=split_frame,
+                swap_post=swap_post,
+            )
         )
-        self._write_atomic()
 
     def apply_swap_merge(
         self,
@@ -146,7 +177,112 @@ class CorrectionWriter:
         mask_relabel = (df["TrajectoryID"] == target_id) & (df["FrameID"] >= swap_frame)
         df.loc[mask_relabel, "TrajectoryID"] = source_id
 
-        self._df = df
+        self._commit_df(df)
+
+    def _load_interpolation_settings(self) -> Optional[dict[str, Any]]:
+        config_path = _config_path_for_csv(self.source_csv)
+        if not config_path.is_file():
+            return None
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError, TypeError, ValueError):
+            logger.warning("Failed to read tracking config from %s", config_path)
+            return None
+
+        method_raw = _config_value(data, "interpolation_method", "INTERPOLATION_METHOD")
+        method = str(method_raw or "none").strip().lower()
+        if method in {"", "none", "null"}:
+            return None
+
+        gap_raw = _config_value(
+            data,
+            "interpolation_max_gap_seconds",
+            "interpolation_max_gap",
+            "INTERPOLATION_MAX_GAP_SECONDS",
+            "INTERPOLATION_MAX_GAP",
+        )
+        try:
+            gap_seconds = float(gap_raw)
+        except (TypeError, ValueError):
+            return None
+        if gap_seconds <= 0:
+            return None
+
+        fps_raw = _config_value(data, "fps", "FPS")
+        try:
+            fps = float(fps_raw)
+        except (TypeError, ValueError):
+            fps = 0.0
+        if fps > 0:
+            max_gap = max(1, int(round(gap_seconds * fps)))
+        else:
+            max_gap = max(1, int(round(gap_seconds)))
+
+        burst_raw = _config_value(
+            data,
+            "heading_flip_max_burst",
+            "HEADING_FLIP_MAX_BURST",
+        )
+        try:
+            heading_flip_max_burst = max(1, int(burst_raw))
+        except (TypeError, ValueError):
+            heading_flip_max_burst = 5
+
+        directed_heading_posthoc = bool(
+            _config_value(
+                data,
+                "DIRECTED_ORIENT_POSTHOC_CONSISTENCY",
+                "directed_orient_posthoc_consistency",
+            )
+        )
+
+        return {
+            "method": method,
+            "max_gap": max_gap,
+            "heading_flip_max_burst": heading_flip_max_burst,
+            "directed_heading_posthoc": directed_heading_posthoc,
+        }
+
+    def _normalize_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        settings = self._interpolation_settings
+        normalized = df.reset_index(drop=True)
+        if settings is None or normalized.empty:
+            return normalized
+
+        required_columns = {"FrameID", "TrajectoryID", "X", "Y"}
+        if not required_columns.issubset(normalized.columns):
+            return normalized
+
+        original_columns = list(normalized.columns)
+        added_theta = False
+        if "Theta" not in normalized.columns:
+            normalized = normalized.copy()
+            normalized["Theta"] = float("nan")
+            added_theta = True
+
+        try:
+            normalized = interpolate_trajectories(
+                normalized,
+                method=settings["method"],
+                max_gap=settings["max_gap"],
+                heading_flip_max_burst=settings["heading_flip_max_burst"],
+                directed_heading_posthoc=settings["directed_heading_posthoc"],
+            )
+        except Exception:
+            logger.exception(
+                "Failed to interpolate RefineKit proofread trajectories using tracking config"
+            )
+            return df.reset_index(drop=True)
+
+        if added_theta:
+            normalized = normalized.drop(columns=["Theta"], errors="ignore")
+        normalized = normalized.reindex(columns=original_columns)
+        return normalized.reset_index(drop=True)
+
+    def _commit_df(self, df: pd.DataFrame) -> None:
+        self._df = self._normalize_df(df)
         self._write_atomic()
 
     def _write_atomic(self) -> None:
@@ -193,8 +329,7 @@ class CorrectionWriter:
             df.loc[df["TrajectoryID"] >= offset, "TrajectoryID"] - offset
         )
 
-        self._df = df.reset_index(drop=True)
-        self._write_atomic()
+        self._commit_df(df.reset_index(drop=True))
 
     def close(self) -> None:
         """Release the in-memory DataFrame."""

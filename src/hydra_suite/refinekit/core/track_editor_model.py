@@ -115,12 +115,21 @@ class TrackEditorModel:
     ) -> None:
         self._full_frame_range = frame_range
         self._view_range = frame_range
-        self._visible_tracks = sorted(visible_tracks)
+        self._starting_tracks = sorted({int(track_id) for track_id in visible_tracks})
+        all_track_ids = self._starting_tracks + [
+            int(track_id)
+            for track_id in df.get("TrajectoryID", pd.Series(dtype=int))
+            .dropna()
+            .tolist()
+        ]
+        self._next_track_id = max(all_track_ids or [0]) + 1
         self._next_frag_id = 0
         self._fragments: List[TrackFragment] = []
-        self._history: List[List[TrackFragment]] = []  # undo stack
+        self._extra_tracks: set[int] = set()
+        self._history: List[tuple[List[TrackFragment], set[int]]] = []  # undo stack
 
         self._build_fragments(df)
+        self._extra_tracks = set(self._starting_tracks) - self._occupied_track_ids()
 
     # ------------------------------------------------------------------
     # Fragment construction
@@ -135,7 +144,7 @@ class TrackEditorModel:
         segment the user is editing.
         """
         fstart, fend = self._full_frame_range
-        sub = df[df["TrajectoryID"].isin(self._visible_tracks)].copy()
+        sub = df[df["TrajectoryID"].isin(self._starting_tracks)].copy()
 
         for tid, grp in sub.groupby("TrajectoryID"):
             frames = sorted(grp["FrameID"].unique())
@@ -173,13 +182,13 @@ class TrackEditorModel:
         """Save current fragment state for undo."""
         import copy
 
-        self._history.append(copy.deepcopy(self._fragments))
+        self._history.append((copy.deepcopy(self._fragments), set(self._extra_tracks)))
 
     def undo(self) -> bool:
         """Restore the previous fragment state. Returns False if nothing to undo."""
         if not self._history:
             return False
-        self._fragments = self._history.pop()
+        self._fragments, self._extra_tracks = self._history.pop()
         return True
 
     @property
@@ -199,9 +208,7 @@ class TrackEditorModel:
     @property
     def visible_tracks(self) -> List[int]:
         """All track IDs that currently have at least one (non-deleted) fragment."""
-        ids = {f.track_id for f in self._fragments if not f.deleted}
-        # Always include the lanes we started with
-        return sorted(ids | set(self._visible_tracks))
+        return sorted(self._occupied_track_ids() | self._extra_tracks)
 
     @property
     def frame_range(self) -> Tuple[int, int]:
@@ -255,6 +262,22 @@ class TrackEditorModel:
                 return True
         return False
 
+    def add_track_lane(self) -> int:
+        """Append a new empty track lane and return its track ID."""
+        self._snapshot()
+        track_id = self._next_track_id
+        self._next_track_id += 1
+        self._extra_tracks.add(track_id)
+        return track_id
+
+    def _occupied_track_ids(self) -> set[int]:
+        return {
+            fragment.track_id for fragment in self._fragments if not fragment.deleted
+        }
+
+    def _trim_empty_extra_tracks(self) -> None:
+        self._extra_tracks.intersection_update(self._occupied_track_ids())
+
     # ------------------------------------------------------------------
     # Edits
     # ------------------------------------------------------------------
@@ -299,6 +322,7 @@ class TrackEditorModel:
             return False
         self._snapshot()
         frag.deleted = True
+        self._trim_empty_extra_tracks()
         return True
 
     def reassign(self, frag_id: int, new_track_id: int) -> bool:
@@ -315,6 +339,7 @@ class TrackEditorModel:
             return False
         self._snapshot()
         frag.track_id = new_track_id
+        self._trim_empty_extra_tracks()
         return True
 
     # ------------------------------------------------------------------

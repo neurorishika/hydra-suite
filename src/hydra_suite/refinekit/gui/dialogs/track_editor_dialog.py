@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSlider,
@@ -327,6 +328,13 @@ class TrackEditorDialog(QDialog):
 
         # Bottom buttons
         btn_row = QHBoxLayout()
+        self._btn_add_track = QPushButton("New Track…")
+        self._btn_add_track.setToolTip(
+            "Add a new empty lane at the bottom of the timeline after confirmation"
+        )
+        self._btn_add_track.clicked.connect(self._on_add_track)
+        btn_row.addWidget(self._btn_add_track)
+
         self._apply_btn = QPushButton("Apply")
         self._apply_btn.setToolTip("Write changes to disk and refresh trajectories")
         self._apply_btn.clicked.connect(self._on_apply)
@@ -363,6 +371,7 @@ class TrackEditorDialog(QDialog):
         self._play_timer = QTimer(self)
         self._play_timer.setInterval(max(1, int(1000.0 / max(self._fps, 1.0))))
         self._play_timer.timeout.connect(self._advance_playback)
+        self._sync_action_buttons()
 
     # ------------------------------------------------------------------
     # Public API
@@ -464,10 +473,27 @@ class TrackEditorDialog(QDialog):
         self._refresh_preview()
 
     def _on_model_changed(self) -> None:
-        self._apply_btn.setEnabled(True)
-        self._undo_btn.setEnabled(self._model.can_undo)
+        self._sync_action_buttons()
         self._timeline.refresh()
         self._refresh_preview()
+
+    def _on_add_track(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Add Track",
+            "Add a new empty track lane at the end of the editor?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._model.add_track_lane()
+        self._sync_action_buttons()
+        self._timeline.refresh()
+
+    def _sync_action_buttons(self) -> None:
+        self._apply_btn.setEnabled(bool(self._model.compute_ops()))
+        self._undo_btn.setEnabled(self._model.can_undo)
 
     def _on_view_start_changed(self, value: int) -> None:
         end = self._view_end_spin.value()

@@ -10,21 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import warnings
 from pathlib import Path
-
-warnings.filterwarnings(
-    "ignore",
-    message=r"\s*\*\*\* Python is at version 3\.10 now\. _PepUnicode_AsString can now be replaced by PyUnicode_AsUTF8! \*\*\*",
-    category=UserWarning,
-    module=r"shibokensupport\.signature\.parser",
-)
-warnings.filterwarnings(
-    "ignore",
-    message=r"\s*\*\*\* Python is at version 3\.10 now\. layout\.py and pyi_generator\.py can now remove old code! \*\*\*",
-    category=UserWarning,
-    module=r"shibokensupport\.signature\.parser",
-)
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QFont, QIcon, QPixmap
