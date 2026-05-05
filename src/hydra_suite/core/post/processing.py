@@ -60,41 +60,60 @@ else:
 
 
 @jit(nopython=True, cache=True)
-def _compute_pairwise_distances_numba(x1, y1, frames1, x2, y2, frames2, threshold):
+def _compute_pairwise_distances_numba(
+    x1,
+    y1,
+    frames1,
+    det1,
+    x2,
+    y2,
+    frames2,
+    det2,
+    threshold,
+    use_detection_id,
+):
     """
-    Compute agreeing frame count between two trajectories using Numba.
+    Compute overlap agreement statistics between two trajectories using Numba.
 
-    Returns (agreeing_count, common_count)
+    Returns (agreeing_count, common_count, detection_id_match_count)
     """
     agreeing = 0
     common = 0
+    detection_id_matches = 0
 
-    # Create frame lookup for trajectory 2
     for i in range(len(frames1)):
         f1 = frames1[i]
         x1_val = x1[i]
         y1_val = y1[i]
+        det1_val = det1[i]
 
-        # Check if NaN
-        if np.isnan(x1_val) or np.isnan(y1_val):
-            continue
-
-        # Find matching frame in trajectory 2
         for j in range(len(frames2)):
             if frames2[j] == f1:
+                common += 1
+
+                if use_detection_id:
+                    det2_val = det2[j]
+                    if not np.isnan(det1_val) and not np.isnan(det2_val):
+                        if det1_val == det2_val:
+                            detection_id_matches += 1
+                            agreeing += 1
+                            break
+
                 x2_val = x2[j]
                 y2_val = y2[j]
+
+                if np.isnan(x1_val) or np.isnan(y1_val):
+                    break
 
                 if np.isnan(x2_val) or np.isnan(y2_val):
                     break
 
-                common += 1
                 dist = np.sqrt((x1_val - x2_val) ** 2 + (y1_val - y2_val) ** 2)
                 if dist <= threshold:
                     agreeing += 1
                 break
 
-    return agreeing, common
+    return agreeing, common, detection_id_matches
 
 
 @jit(nopython=True, cache=True)
@@ -102,15 +121,18 @@ def _compute_all_merge_candidates_numba(
     fwd_x_list,
     fwd_y_list,
     fwd_frames_list,
+    fwd_det_list,
     fwd_starts,
     fwd_ends,
     bwd_x_list,
     bwd_y_list,
     bwd_frames_list,
+    bwd_det_list,
     bwd_starts,
     bwd_ends,
     threshold,
     min_overlap,
+    use_detection_id,
 ):
     """
     Find all merge candidates between forward and backward trajectories.
@@ -137,18 +159,46 @@ def _compute_all_merge_candidates_numba(
         fwd_x = fwd_x_list[f_start:f_end]
         fwd_y = fwd_y_list[f_start:f_end]
         fwd_frames = fwd_frames_list[f_start:f_end]
+        fwd_det = fwd_det_list[f_start:f_end]
 
         for bi in range(n_bwd):
             b_start, b_end = bwd_starts[bi], bwd_ends[bi]
             bwd_x = bwd_x_list[b_start:b_end]
             bwd_y = bwd_y_list[b_start:b_end]
             bwd_frames = bwd_frames_list[b_start:b_end]
+            bwd_det = bwd_det_list[b_start:b_end]
 
-            agreeing, common = _compute_pairwise_distances_numba(
-                fwd_x, fwd_y, fwd_frames, bwd_x, bwd_y, bwd_frames, threshold
+            agreeing, common, detection_id_matches = _compute_pairwise_distances_numba(
+                fwd_x,
+                fwd_y,
+                fwd_frames,
+                fwd_det,
+                bwd_x,
+                bwd_y,
+                bwd_frames,
+                bwd_det,
+                threshold,
+                use_detection_id,
             )
 
-            if agreeing >= min_overlap:
+            if use_detection_id:
+                required_matches = min_overlap
+                if detection_id_matches >= 2:
+                    required_matches = max(2, min_overlap // 2)
+
+                if agreeing < required_matches:
+                    continue
+
+                if detection_id_matches < 2:
+                    if common <= 0:
+                        continue
+                    agreement_ratio = agreeing / common
+                    if agreement_ratio < 0.5:
+                        continue
+            elif agreeing < min_overlap:
+                continue
+
+            if agreeing > 0:
                 candidates_fi[candidate_count] = fi
                 candidates_bi[candidate_count] = bi
                 candidates_agreeing[candidate_count] = agreeing
@@ -167,13 +217,14 @@ def _prepare_trajectory_arrays(traj_dfs):
     """
     Convert list of trajectory DataFrames to flat NumPy arrays for Numba.
 
-    Returns: (x_array, y_array, frames_array, start_indices, end_indices)
+    Returns: (x_array, y_array, frames_array, detection_id_array, start_indices, end_indices)
     """
     if not traj_dfs:
         return (
             np.array([], dtype=np.float64),
             np.array([], dtype=np.float64),
             np.array([], dtype=np.int64),
+            np.array([], dtype=np.float64),
             np.array([], dtype=np.int64),
             np.array([], dtype=np.int64),
         )
@@ -185,6 +236,7 @@ def _prepare_trajectory_arrays(traj_dfs):
     x_array = np.empty(total_size, dtype=np.float64)
     y_array = np.empty(total_size, dtype=np.float64)
     frames_array = np.empty(total_size, dtype=np.int64)
+    detection_id_array = np.empty(total_size, dtype=np.float64)
     starts = np.empty(len(traj_dfs), dtype=np.int64)
     ends = np.empty(len(traj_dfs), dtype=np.int64)
 
@@ -197,10 +249,16 @@ def _prepare_trajectory_arrays(traj_dfs):
         x_array[offset : offset + n] = df["X"].values
         y_array[offset : offset + n] = df["Y"].values
         frames_array[offset : offset + n] = df["FrameID"].values.astype(np.int64)
+        if "DetectionID" in df.columns:
+            detection_id_array[offset : offset + n] = pd.to_numeric(
+                df["DetectionID"], errors="coerce"
+            ).to_numpy(dtype=np.float64, copy=False)
+        else:
+            detection_id_array[offset : offset + n] = np.nan
 
         offset += n
 
-    return x_array, y_array, frames_array, starts, ends
+    return x_array, y_array, frames_array, detection_id_array, starts, ends
 
 
 def _build_frame_lookup(traj_df, require_valid_x=False):
@@ -240,7 +298,8 @@ def _find_merge_candidates_python(
 ):
     """
     Pure Python fallback for finding merge candidates.
-    Used when Numba is not available or for small trajectory counts.
+    Used when Numba is not available, for small trajectory counts, or when
+    DetectionID-aware overlap checks are required.
 
     Optimized with vectorized NumPy operations where possible.
     """
@@ -253,6 +312,7 @@ def _find_merge_candidates_python(
         fwd_y = fwd["Y"].values
         fwd_frame_set = set(fwd_frames)
         fwd_frame_to_idx = {f: i for i, f in enumerate(fwd_frames)}
+        fwd_lookup = None
 
         for bi, bwd in enumerate(backward_dfs):
             bwd_frames = bwd["FrameID"].values
@@ -268,59 +328,65 @@ def _find_merge_candidates_python(
             bwd_x = bwd["X"].values
             bwd_y = bwd["Y"].values
 
-            # Count agreeing frames using vectorized operations.
-            common_frames_list = list(common_frames)
-            fi_indices = np.fromiter(
-                (fwd_frame_to_idx[f] for f in common_frames_list), dtype=np.int64
-            )
-            bi_indices = np.fromiter(
-                (bwd_frame_to_idx[f] for f in common_frames_list), dtype=np.int64
+            pair_has_detection_id = (
+                "DetectionID" in fwd.columns and "DetectionID" in bwd.columns
             )
 
-            fx = fwd_x[fi_indices]
-            fy = fwd_y[fi_indices]
-            bx = bwd_x[bi_indices]
-            by = bwd_y[bi_indices]
+            if pair_has_detection_id:
+                if fwd_lookup is None:
+                    fwd_lookup = _build_frame_lookup(fwd, require_valid_x=False)
+                bwd_lookup = _build_frame_lookup(bwd, require_valid_x=False)
+                agreeing_frames, detection_id_matches = _count_overlap_agreement(
+                    common_frames,
+                    fwd_lookup,
+                    bwd_lookup,
+                    True,
+                    agreement_distance,
+                )
+                required_matches = (
+                    min_overlap
+                    if detection_id_matches < 2
+                    else max(2, min_overlap // 2)
+                )
+                if agreeing_frames < required_matches:
+                    continue
+                if detection_id_matches < 2:
+                    agreement_ratio = agreeing_frames / len(common_frames)
+                    if agreement_ratio < 0.5:
+                        continue
+            else:
+                detection_id_matches = 0
 
-            # Skip pairs where either trajectory has NaN X.
-            valid_mask = (~np.isnan(fx)) & (~np.isnan(bx))
-            if not np.any(valid_mask):
-                continue
-
-            dx = fx[valid_mask] - bx[valid_mask]
-            dy = fy[valid_mask] - by[valid_mask]
-            dist = np.sqrt(dx * dx + dy * dy)
-            agreeing_frames = int(np.count_nonzero(dist <= agreement_distance))
-
-            if agreeing_frames >= min_overlap:
-                identity_agreeing = 0
-                if (
-                    "IdentityCommitted" in fwd.columns
-                    and "IdentityAssignedLabel" in fwd.columns
-                    and "IdentityCommitted" in bwd.columns
-                    and "IdentityAssignedLabel" in bwd.columns
-                ):
-                    fwd_c = fwd["IdentityCommitted"].values
-                    bwd_c = bwd["IdentityCommitted"].values
-                    fwd_lbl = fwd["IdentityAssignedLabel"].values
-                    bwd_lbl = bwd["IdentityAssignedLabel"].values
-                    valid_indices = np.where(valid_mask)[0]
-                    for k_valid, d in zip(valid_indices, dist):
-                        if d > agreement_distance:
-                            continue
-                        fi_k = fi_indices[k_valid]
-                        bi_k = bi_indices[k_valid]
-                        if fwd_c[fi_k] != 1 or bwd_c[bi_k] != 1:
-                            continue
-                        l1 = str(fwd_lbl[fi_k] or "")
-                        l2 = str(bwd_lbl[bi_k] or "")
-                        if l1 and l2 and l1 == l2:
-                            identity_agreeing += 1
-                merge_candidates.append(
-                    (fi, bi, agreeing_frames, len(common_frames), identity_agreeing)
+                # Count agreeing frames using vectorized operations.
+                common_frames_list = list(common_frames)
+                fi_indices = np.fromiter(
+                    (fwd_frame_to_idx[f] for f in common_frames_list), dtype=np.int64
+                )
+                bi_indices = np.fromiter(
+                    (bwd_frame_to_idx[f] for f in common_frames_list), dtype=np.int64
                 )
 
-    return merge_candidates
+                fx = fwd_x[fi_indices]
+                fy = fwd_y[fi_indices]
+                bx = bwd_x[bi_indices]
+                by = bwd_y[bi_indices]
+
+                # Skip pairs where either trajectory has NaN X.
+                valid_mask = (~np.isnan(fx)) & (~np.isnan(bx))
+                if not np.any(valid_mask):
+                    continue
+
+                dx = fx[valid_mask] - bx[valid_mask]
+                dy = fy[valid_mask] - by[valid_mask]
+                dist = np.sqrt(dx * dx + dy * dy)
+                agreeing_frames = int(np.count_nonzero(dist <= agreement_distance))
+
+            if agreeing_frames >= min_overlap:
+                merge_candidates.append((fi, bi, agreeing_frames, len(common_frames)))
+
+    return _enrich_candidates_with_identity(
+        merge_candidates, forward_dfs, backward_dfs, agreement_distance
+    )
 
 
 def _enrich_candidates_with_identity(
@@ -921,13 +987,29 @@ def _drop_source_column(traj_list):
 
 
 def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_overlap):
+    has_detection_id = all("DetectionID" in df.columns for df in forward_dfs) and all(
+        "DetectionID" in df.columns for df in backward_dfs
+    )
+    has_partial_detection_id = (
+        any("DetectionID" in df.columns for df in forward_dfs)
+        and any("DetectionID" in df.columns for df in backward_dfs)
+        and not has_detection_id
+    )
+    if has_partial_detection_id:
+        logger.debug(
+            "Using Python merge candidate search for mixed DetectionID coverage"
+        )
+        return _find_merge_candidates_python(
+            forward_dfs, backward_dfs, agreement_distance, min_overlap
+        )
+
     if NUMBA_AVAILABLE and len(forward_dfs) > 1 and len(backward_dfs) > 1:
         logger.debug("Using Numba-accelerated merge candidate search")
-        fwd_x, fwd_y, fwd_frames, fwd_starts, fwd_ends = _prepare_trajectory_arrays(
-            forward_dfs
+        fwd_x, fwd_y, fwd_frames, fwd_det, fwd_starts, fwd_ends = (
+            _prepare_trajectory_arrays(forward_dfs)
         )
-        bwd_x, bwd_y, bwd_frames, bwd_starts, bwd_ends = _prepare_trajectory_arrays(
-            backward_dfs
+        bwd_x, bwd_y, bwd_frames, bwd_det, bwd_starts, bwd_ends = (
+            _prepare_trajectory_arrays(backward_dfs)
         )
         try:
             fi_arr, bi_arr, agreeing_arr, common_arr = (
@@ -935,15 +1017,18 @@ def _find_merge_candidates(forward_dfs, backward_dfs, agreement_distance, min_ov
                     fwd_x,
                     fwd_y,
                     fwd_frames,
+                    fwd_det,
                     fwd_starts,
                     fwd_ends,
                     bwd_x,
                     bwd_y,
                     bwd_frames,
+                    bwd_det,
                     bwd_starts,
                     bwd_ends,
                     agreement_distance,
                     min_overlap,
+                    has_detection_id,
                 )
             )
             candidates = list(zip(fi_arr, bi_arr, agreeing_arr, common_arr))
