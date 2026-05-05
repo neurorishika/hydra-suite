@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 
 from .cache.keys import (
     apriltag_cache_key,
@@ -37,7 +36,7 @@ from .runtime import RuntimeContext
 from .stages.apriltag import AprilTagModel, run_apriltag
 from .stages.cnn import CNNModel, run_cnn
 from .stages.crops import extract_aabb_crops, extract_canonical_crops
-from .stages.filtering import filter_raw, filter_with_indices
+from .stages.filtering import filter_with_indices
 from .stages.headtail import HeadTailModel, run_headtail
 from .stages.obb import OBBModels, _RawOBBTensors, materialize_tensors, run_obb
 from .stages.pose import PoseModel, run_pose
@@ -168,31 +167,6 @@ def _build_frame_result(
     )
 
 
-def _slice_headtail(ht: HeadTailResult | None, sl: slice) -> HeadTailResult | None:
-    if ht is None or sl.start == sl.stop:
-        return None
-    return HeadTailResult(
-        heading_hints=ht.heading_hints[sl],
-        heading_confidences=ht.heading_confidences[sl],
-        directed_mask=ht.directed_mask[sl],
-        canonical_affines=(
-            ht.canonical_affines[sl] if ht.canonical_affines is not None else None
-        ),
-    )
-
-
-def _slice_cnn(cnn: CNNResult | None, sl: slice) -> CNNResult | None:
-    if cnn is None or sl.start == sl.stop:
-        return None
-    return CNNResult(label=cnn.label, predictions=cnn.predictions[sl.start : sl.stop])
-
-
-def _slice_pose(pose: PoseResult | None, sl: slice) -> PoseResult | None:
-    if pose is None or sl.start == sl.stop:
-        return None
-    return PoseResult(keypoints=pose.keypoints[sl], valid_mask=pose.valid_mask[sl])
-
-
 def _load_headtail_for_indices(
     cache: HeadTailCacheHandle | None,
     frame_idx: int,
@@ -283,9 +257,9 @@ class InferenceRunner:
 
     `caches_all_valid()` returns True only when every enabled cache file exists
     and matches its key. Real-time path runs all stages on a single frame, no I/O.
-    Batch-pass path runs OBB on batched frames, materializes raw tensors for the
-    detection cache, then cross-frame batches HeadTail/CNN/Pose on combined crops
-    before scattering results back per frame for cache writes.
+    Batch-pass path runs OBB on batched frames natively, then iterates per frame
+    for HeadTail/CNN/Pose/AprilTag (no cross-frame crop batching) so each crop's
+    aspect ratio is preserved when stages internally resize to model input size.
     """
 
     def __init__(self, config: InferenceConfig, cache_dir: Path | None = None) -> None:
@@ -310,16 +284,24 @@ class InferenceRunner:
         raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
         raw = raw_list[0]
         if isinstance(raw, _RawOBBTensors):
-            pre_filter = filter_raw(
-                raw, self.config.obb, roi_mask, roi_mask_cuda, self.runtime
-            )
-            filtered_obb, det_indices = filter_with_indices(
-                pre_filter, self.config.obb, roi_mask
-            )
+            raw_obb = materialize_tensors(raw)
         else:
-            filtered_obb, det_indices = filter_with_indices(
-                raw, self.config.obb, roi_mask
-            )
+            raw_obb = raw
+        # Re-stamp detection_ids since materialize_tensors and the CPU OBB path may
+        # generate them with frame_idx=0; ensure consistency.
+        raw_obb = OBBResult(
+            frame_idx=0,
+            centroids=raw_obb.centroids,
+            angles=raw_obb.angles,
+            sizes=raw_obb.sizes,
+            shapes=raw_obb.shapes,
+            confidences=raw_obb.confidences,
+            corners=raw_obb.corners,
+            detection_ids=OBBResult.make_detection_ids(0, raw_obb.num_detections),
+        )
+        filtered_obb, det_indices = filter_with_indices(
+            raw_obb, self.config.obb, roi_mask
+        )
 
         if filtered_obb.num_detections == 0:
             return _build_frame_result(
@@ -460,16 +442,14 @@ class InferenceRunner:
         )
         mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
 
+        # OBB still runs cross-frame natively
         raw_list = run_obb(frames, self._models.obb, self.config.obb, self.runtime)
-
-        all_crops: list[torch.Tensor] = []
-        frame_data: list[tuple[int, np.ndarray, OBBResult, np.ndarray, slice]] = []
-        crop_offset = 0
 
         for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
             obb_result = (
                 materialize_tensors(raw) if isinstance(raw, _RawOBBTensors) else raw
             )
+            # Re-stamp detection_ids for this frame
             obb_result = OBBResult(
                 frame_idx=frame_idx,
                 centroids=obb_result.centroids,
@@ -487,135 +467,69 @@ class InferenceRunner:
 
             filtered_obb, det_indices = filter_with_indices(obb_result, self.config.obb)
             if filtered_obb.num_detections == 0:
-                frame_data.append(
-                    (frame_idx, frame, filtered_obb, det_indices, slice(0, 0))
-                )
                 continue
 
-            crops = extract_canonical_crops(frame, filtered_obb, ar, mg, self.runtime)
-            n_crops = crops.shape[0]
-            all_crops.append(crops)
-            frame_data.append(
-                (
-                    frame_idx,
-                    frame,
-                    filtered_obb,
-                    det_indices,
-                    slice(crop_offset, crop_offset + n_crops),
-                )
+            canonical_crops = extract_canonical_crops(
+                frame, filtered_obb, ar, mg, self.runtime
             )
-            crop_offset += n_crops
 
-        if not all_crops:
-            return
-
-        # Crops may have different spatial sizes between batches. Pad to the
-        # max H,W in this batch before concatenating.
-        max_h = max(c.shape[2] for c in all_crops)
-        max_w = max(c.shape[3] for c in all_crops)
-        padded = []
-        for c in all_crops:
-            ph = max_h - c.shape[2]
-            pw = max_w - c.shape[3]
-            if ph or pw:
-                c = torch.nn.functional.pad(c, (0, pw, 0, ph))
-            padded.append(c)
-        batched_crops = torch.cat(padded, dim=0)
-
-        # Build a synthetic OBBResult covering the whole batch to satisfy
-        # stage signatures that take one. Stage code reads obb.angles for
-        # headtail offset; pass an aggregate by concatenation.
-        non_empty = [fd for fd in frame_data if fd[2].num_detections > 0]
-        agg_centroids = np.concatenate([fd[2].centroids for fd in non_empty])
-        agg_angles = np.concatenate([fd[2].angles for fd in non_empty])
-        agg_sizes = np.concatenate([fd[2].sizes for fd in non_empty])
-        agg_shapes = np.concatenate([fd[2].shapes for fd in non_empty])
-        agg_conf = np.concatenate([fd[2].confidences for fd in non_empty])
-        agg_corners = np.concatenate([fd[2].corners for fd in non_empty])
-        agg_dids = np.concatenate([fd[2].detection_ids for fd in non_empty])
-        agg_obb = OBBResult(
-            frame_idx=-1,
-            centroids=agg_centroids,
-            angles=agg_angles,
-            sizes=agg_sizes,
-            shapes=agg_shapes,
-            confidences=agg_conf,
-            corners=agg_corners,
-            detection_ids=agg_dids,
-        )
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            ht_fut = (
-                pool.submit(
-                    run_headtail,
-                    batched_crops,
-                    agg_obb,
-                    self._models.headtail,
-                    self.config.headtail,
-                    self.runtime,
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                ht_fut = (
+                    pool.submit(
+                        run_headtail,
+                        canonical_crops,
+                        filtered_obb,
+                        self._models.headtail,
+                        self.config.headtail,
+                        self.runtime,
+                    )
+                    if self._models.headtail is not None
+                    else None
                 )
-                if self._models.headtail
-                else None
-            )
-            cnn_futs = [
-                pool.submit(
-                    run_cnn,
-                    batched_crops,
-                    agg_obb,
-                    mdl,
-                    cfg,
-                    self.runtime,
+                cnn_futs = [
+                    pool.submit(
+                        run_cnn, canonical_crops, filtered_obb, mdl, cfg, self.runtime
+                    )
+                    for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
+                ]
+                pose_fut = (
+                    pool.submit(
+                        run_pose,
+                        canonical_crops,
+                        filtered_obb,
+                        self._models.pose,
+                        self.config.pose,
+                        self.runtime,
+                    )
+                    if self._models.pose is not None
+                    else None
                 )
-                for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
-            ]
-            pose_fut = (
-                pool.submit(
-                    run_pose,
-                    batched_crops,
-                    agg_obb,
-                    self._models.pose,
-                    self.config.pose,
-                    self.runtime,
-                )
-                if self._models.pose
-                else None
-            )
-            ht_all = ht_fut.result() if ht_fut else None
-            cnn_all = [f.result() for f in cnn_futs]
-            pose_all = pose_fut.result() if pose_fut else None
+                ht_result = ht_fut.result() if ht_fut else None
+                cnn_results = [f.result() for f in cnn_futs]
+                pose_result = pose_fut.result() if pose_fut else None
 
-        for frame_idx, frame, filtered_obb, det_indices, crop_sl in frame_data:
-            if det_indices.size == 0:
-                continue
-
-            ht_frame = _slice_headtail(ht_all, crop_sl)
-            cnn_frame = [_slice_cnn(r, crop_sl) for r in cnn_all]
-            pose_frame = _slice_pose(pose_all, crop_sl)
-
-            if caches.headtail is not None and ht_frame is not None:
+            if caches.headtail is not None and ht_result is not None:
                 caches.headtail.write_frame(
                     frame_idx,
                     det_indices=det_indices,
-                    heading_hints=ht_frame.heading_hints,
-                    heading_confidences=ht_frame.heading_confidences,
-                    directed_mask=ht_frame.directed_mask,
+                    heading_hints=ht_result.heading_hints,
+                    heading_confidences=ht_result.heading_confidences,
+                    directed_mask=ht_result.directed_mask,
                 )
-            for cache, cnn_result in zip(caches.cnn, cnn_frame):
+            for cache, cnn_result in zip(caches.cnn, cnn_results):
                 if cnn_result is not None:
                     cache.write_frame(frame_idx, predictions=cnn_result.predictions)
-            if caches.pose is not None and pose_frame is not None:
+            if caches.pose is not None and pose_result is not None:
                 caches.pose.write_frame(
                     frame_idx,
                     det_indices=det_indices,
-                    keypoints=pose_frame.keypoints,
-                    valid_mask=pose_frame.valid_mask,
+                    keypoints=pose_result.keypoints,
+                    valid_mask=pose_result.valid_mask,
                 )
 
             if self._models.apriltag is not None:
                 aabb_crops = extract_aabb_crops(
-                    frame,
-                    filtered_obb,
-                    padding=self.config.apriltag.crop_padding,
+                    frame, filtered_obb, padding=self.config.apriltag.crop_padding
                 )
                 at_result = run_apriltag(
                     aabb_crops,

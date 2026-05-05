@@ -151,3 +151,45 @@ def test_load_headtail_aligns_by_det_indices():
     np.testing.assert_allclose(result.heading_hints, [2.0, 4.0])
     np.testing.assert_allclose(result.heading_confidences, [0.9, 0.95])
     np.testing.assert_array_equal(result.directed_mask, [0, 0])
+
+
+def test_run_batch_iterates_frames_and_writes_caches(tmp_path):
+    """Integration test: _run_batch runs per-frame, writes detection cache, and
+    threads detection_ids through to downstream cache writes."""
+    from hydra_suite.core.inference.result import OBBResult
+    from hydra_suite.core.inference.runner import InferenceRunner, _CacheSet
+
+    cfg = _cfg()  # InferenceConfig with no headtail/cnn/pose/apriltag
+
+    # Stub run_obb to return predictable OBBResults for each frame
+    def fake_run_obb(frames, models, obb_config, runtime):
+        return [_make_obb(n=2, frame_idx=i) for i in range(len(frames))]
+
+    # Mock cache handles to record writes
+    detection_cache = MagicMock()
+    detection_cache.is_valid.return_value = False
+    caches = _CacheSet(detection=detection_cache)
+
+    with (
+        patch("hydra_suite.core.inference.runner._load_all_models") as ml,
+        patch("hydra_suite.core.inference.runner.run_obb", side_effect=fake_run_obb),
+    ):
+        ml.return_value = MagicMock(
+            obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None
+        )
+        runner = InferenceRunner(cfg, cache_dir=tmp_path)
+        # Exercise _run_batch directly (skip cv2.VideoCapture)
+        fake_frames = [np.zeros((480, 640, 3), dtype=np.uint8)] * 3
+        runner._run_batch(fake_frames, [0, 1, 2], caches)
+
+    # Detection cache write_frame called once per frame
+    assert detection_cache.write_frame.call_count == 3
+    # Each call passes an OBBResult with detection_ids
+    for call_idx, call in enumerate(detection_cache.write_frame.call_args_list):
+        kwargs = call[1] or {}
+        result = kwargs.get("result")
+        assert isinstance(result, OBBResult)
+        assert result.frame_idx == call_idx
+        assert result.detection_ids.shape == (2,)
+        # IDs follow frame_idx * STRIDE + slot
+        assert result.detection_ids[0] == call_idx * 10000
