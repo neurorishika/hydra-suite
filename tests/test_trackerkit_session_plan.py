@@ -90,7 +90,7 @@ def test_build_batch_video_plan_uses_explicit_config_as_keystone(tmp_path: Path)
     second_video.write_text("", encoding="utf-8")
     third_video.write_text("", encoding="utf-8")
     explicit_config = _touch(tmp_path / "shared_config.json")
-    third_config = _touch(Path(get_video_config_path(str(third_video)) or ""))
+    _touch(Path(get_video_config_path(str(third_video)) or ""))
 
     plan = build_batch_video_plan(
         [str(first_video), str(second_video), str(third_video)],
@@ -100,5 +100,22 @@ def test_build_batch_video_plan_uses_explicit_config_as_keystone(tmp_path: Path)
     assert plan[0].config_path == explicit_config
     assert plan[1].config_path == explicit_config
     assert plan[1].use_keystone_baseline is True
-    assert plan[2].config_path == third_config
-    assert plan[2].use_keystone_baseline is False
+    assert plan[2].config_path == explicit_config
+    assert plan[2].use_keystone_baseline is True
+
+
+def test_build_batch_video_plan_does_not_force_override_for_single_video(
+    tmp_path: Path,
+):
+    video_path = tmp_path / "single.mp4"
+    video_path.write_text("", encoding="utf-8")
+    explicit_config = _touch(tmp_path / "shared_config.json")
+
+    plan = build_batch_video_plan(
+        [str(video_path)],
+        explicit_config_path=explicit_config,
+    )
+
+    assert len(plan) == 1
+    assert plan[0].config_path == explicit_config
+    assert plan[0].use_keystone_baseline is False

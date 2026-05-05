@@ -74,8 +74,9 @@ def build_batch_video_plan(
 
     Rules:
     - first video uses ``explicit_config_path`` when provided
+    - an explicit config on a multi-video batch implicitly enables keystone override
     - otherwise the first video uses its own sidecar config when present
-    - later videos use their own sidecar config unless ``keystone_override`` is on
+    - later videos use their own sidecar config unless keystone override is on
     - later videos without their own config inherit the keystone baseline
     """
 
@@ -84,6 +85,9 @@ def build_batch_video_plan(
         return []
 
     explicit_path = _existing_config_path(explicit_config_path)
+    effective_keystone_override = bool(
+        keystone_override or (explicit_path is not None and len(videos) > 1)
+    )
     first_video = videos[0]
     first_own_config = _existing_config_path(get_video_config_path(first_video))
     first_has_own = first_own_config is not None
@@ -104,7 +108,7 @@ def build_batch_video_plan(
             resolve_video_plan(
                 video_path,
                 keystone_config_path=keystone_config_path,
-                keystone_override=keystone_override,
+                keystone_override=effective_keystone_override,
             )
         )
     return plan

@@ -101,12 +101,12 @@ Examples:
     track_parser.add_argument(
         "--config",
         type=str,
-        help="Optional config file to use for the first video. If it belongs to another video, TrackerKit applies its settings without switching the target video.",
+        help="Optional config file to use for the first video. For multi-video batches, an explicit config automatically becomes the batch keystone config for all videos.",
     )
     track_parser.add_argument(
         "--keystone-override",
         action="store_true",
-        help="Force all later batch videos to use the first video's effective config, matching the GUI keystone override.",
+        help="Force all later batch videos to use the first video's effective config when no explicit batch config was supplied.",
     )
 
     args = parser.parse_args(argv)
