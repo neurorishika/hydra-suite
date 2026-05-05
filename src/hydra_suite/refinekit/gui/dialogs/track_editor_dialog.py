@@ -22,7 +22,7 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -38,6 +38,12 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.refinekit.core.event_types import EventType, SuspicionEvent
 from hydra_suite.refinekit.core.track_editor_model import EditOp, TrackEditorModel
+from hydra_suite.refinekit.gui.overlay_utils import (
+    draw_detections,
+    load_frame_detections,
+    review_overlay_style_from_shape,
+    tab20_bgr,
+)
 from hydra_suite.refinekit.gui.widgets.interactive_canvas import InteractiveCanvas
 from hydra_suite.refinekit.gui.widgets.timeline_editor import (
     PALETTE_RGB,
@@ -48,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 _CONTEXT_FRAMES = 15
 _CROP_MARGIN = 80
+_PLAYBACK_FPS = 25.0
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +181,7 @@ class TrackEditorDialog(QDialog):
         self._df = df
         self._applied = False
         self._edit_ops: List[EditOp] = []
+        self._is_playing = False
 
         self.setWindowTitle("Track Editor")
         self.setMinimumSize(700, 600)
@@ -183,7 +191,9 @@ class TrackEditorDialog(QDialog):
         total_frames = max(
             int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) - 1, event.frame_range[1]
         )
+        fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
+        self._fps = fps if fps and fps > 0 else _PLAYBACK_FPS
 
         self._load_start = max(0, event.frame_range[0] - _CONTEXT_FRAMES)
         self._load_end = min(total_frames, event.frame_range[1] + _CONTEXT_FRAMES)
@@ -196,6 +206,7 @@ class TrackEditorDialog(QDialog):
             video_path,
         )
         self._crop_origin = (self._crop_box[0], self._crop_box[1])
+        self._frame_dets = load_frame_detections(video_path)
 
         # --- Discover tracks that appear inside the crop during the segment ---
         x1, y1, x2, y2 = self._crop_box
@@ -238,6 +249,13 @@ class TrackEditorDialog(QDialog):
 
         # Frame slider
         slider_row = QHBoxLayout()
+        self._btn_play = QPushButton("▶")
+        self._btn_play.setFixedWidth(36)
+        self._btn_play.setToolTip("Play / Pause  (Space)")
+        self._btn_play.clicked.connect(self._toggle_play)
+        self._btn_play.setEnabled(False)
+        slider_row.addWidget(self._btn_play)
+
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setMinimum(self._load_start)
         self._slider.setMaximum(self._load_end)
@@ -262,6 +280,28 @@ class TrackEditorDialog(QDialog):
 
         layout.addLayout(slider_row)
 
+        view_row = QHBoxLayout()
+        view_row.addWidget(QLabel("View"))
+        self._view_start_spin = QSpinBox()
+        self._view_start_spin.setRange(self._load_start, self._load_end)
+        self._view_start_spin.setValue(self._load_start)
+        self._view_start_spin.valueChanged.connect(self._on_view_start_changed)
+        view_row.addWidget(self._view_start_spin)
+
+        view_row.addWidget(QLabel("to"))
+        self._view_end_spin = QSpinBox()
+        self._view_end_spin.setRange(self._load_start, self._load_end)
+        self._view_end_spin.setValue(self._load_end)
+        self._view_end_spin.valueChanged.connect(self._on_view_end_changed)
+        view_row.addWidget(self._view_end_spin)
+
+        self._reset_view_btn = QPushButton("Reset View")
+        self._reset_view_btn.clicked.connect(self._on_reset_view)
+        view_row.addWidget(self._reset_view_btn)
+        view_row.addStretch()
+
+        layout.addLayout(view_row)
+
         # Timeline editor
         self._timeline = TimelineEditorWidget()
         self._timeline.set_model(self._model)
@@ -276,6 +316,7 @@ class TrackEditorDialog(QDialog):
             "<b>Right-click</b> a bar to split · "
             "<b>Drag</b> a bar to move it to another lane · "
             "<b>Delete</b> key to remove · "
+            "<b>Space</b> to play/pause · "
             "<b>Ctrl-Z</b> to undo · "
             "<b>Enter</b> to apply"
         )
@@ -318,6 +359,10 @@ class TrackEditorDialog(QDialog):
         self._loader.progress.connect(self._on_load_progress)
         self._loader.finished.connect(self._on_load_finished)
         self._loader.start()
+
+        self._play_timer = QTimer(self)
+        self._play_timer.setInterval(max(1, int(1000.0 / max(self._fps, 1.0))))
+        self._play_timer.timeout.connect(self._advance_playback)
 
     # ------------------------------------------------------------------
     # Public API
@@ -397,6 +442,7 @@ class TrackEditorDialog(QDialog):
     def _on_load_finished(self) -> None:
         self._progress.hide()
         self._slider.setEnabled(True)
+        self._btn_play.setEnabled(True)
         self._refresh_preview()
 
     # ------------------------------------------------------------------
@@ -423,6 +469,38 @@ class TrackEditorDialog(QDialog):
         self._timeline.refresh()
         self._refresh_preview()
 
+    def _on_view_start_changed(self, value: int) -> None:
+        end = self._view_end_spin.value()
+        if value > end:
+            self._view_end_spin.blockSignals(True)
+            self._view_end_spin.setValue(value)
+            self._view_end_spin.blockSignals(False)
+            end = value
+        if self._model.set_view_range(value, end):
+            self._timeline.refresh()
+
+    def _on_view_end_changed(self, value: int) -> None:
+        start = self._view_start_spin.value()
+        if value < start:
+            self._view_start_spin.blockSignals(True)
+            self._view_start_spin.setValue(value)
+            self._view_start_spin.blockSignals(False)
+            start = value
+        if self._model.set_view_range(start, value):
+            self._timeline.refresh()
+
+    def _on_reset_view(self) -> None:
+        if not self._model.reset_view_range():
+            return
+        full_start, full_end = self._model.full_frame_range
+        self._view_start_spin.blockSignals(True)
+        self._view_end_spin.blockSignals(True)
+        self._view_start_spin.setValue(full_start)
+        self._view_end_spin.setValue(full_end)
+        self._view_start_spin.blockSignals(False)
+        self._view_end_spin.blockSignals(False)
+        self._timeline.refresh()
+
     def _on_undo(self) -> None:
         if self._model.undo():
             self._on_model_changed()
@@ -432,13 +510,43 @@ class TrackEditorDialog(QDialog):
         self._applied = True
         self.accept()
 
+    def _toggle_play(self) -> None:
+        if self._is_playing:
+            self._stop_playback()
+        else:
+            self._start_playback()
+
+    def _start_playback(self) -> None:
+        if not self._loader.frames:
+            return
+        if self._current_frame >= self._load_end:
+            self._slider.setValue(self._load_start)
+        self._is_playing = True
+        self._btn_play.setText("⏸")
+        self._play_timer.start()
+
+    def _stop_playback(self) -> None:
+        self._play_timer.stop()
+        self._is_playing = False
+        self._btn_play.setText("▶")
+
+    def _advance_playback(self) -> None:
+        if self._current_frame >= self._load_end:
+            self._stop_playback()
+            return
+        self._slider.setValue(self._current_frame + 1)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
-        """Handle Enter to apply edits, Ctrl+Z to undo, and F to fit the canvas view."""
+        """Handle play/pause, apply, undo, and fit shortcuts."""
         key = event.key()
         mod = event.modifiers()
         ctrl_or_meta = (
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
         )
+        if key == Qt.Key.Key_Space:
+            if self._btn_play.isEnabled():
+                self._toggle_play()
+            return
         # Enter / Return → Apply (only when Apply is enabled)
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self._apply_btn.isEnabled():
@@ -475,12 +583,11 @@ class TrackEditorDialog(QDialog):
     def _draw_overlays(self, crop: np.ndarray, frame_idx: int) -> None:
         """Draw markers on *crop* using the current fragment model state."""
         ox, oy = self._crop_origin
-        ref = min(crop.shape[:2])
         scale = self._marker_spin.value() / 100.0
-        radius = max(4, int(ref / 40.0 * scale))
-        font_scale = max(0.35, ref / 400.0 * scale)
-        thickness = max(1, int(ref / 200.0 * scale))
-        outline_th = max(1, thickness + 1)
+        font_scale, radius, thickness, outline_th = review_overlay_style_from_shape(
+            crop.shape,
+            scale,
+        )
 
         # Build mapping: original_track_id → current lane for non-deleted
         # fragments covering this frame
@@ -497,6 +604,24 @@ class TrackEditorDialog(QDialog):
             & self._df["TrajectoryID"].isin(self._model.visible_tracks)
         ]
 
+        if self._frame_dets is not None and "DetectionID" in sub.columns:
+            det_colors = {}
+            for _, row in sub.iterrows():
+                current_lane = original_ids.get(int(row["TrajectoryID"]))
+                if current_lane is None or pd.isna(row.get("DetectionID")):
+                    continue
+                det_idx = int(row["DetectionID"]) % 10000
+                det_colors[det_idx] = tab20_bgr(current_lane)
+            draw_detections(
+                crop,
+                self._frame_dets,
+                frame_idx,
+                ox,
+                oy,
+                det_colors,
+                thickness=thickness,
+            )
+
         for _, row in sub.iterrows():
             if pd.isna(row["X"]) or pd.isna(row["Y"]):
                 continue
@@ -508,8 +633,7 @@ class TrackEditorDialog(QDialog):
             if current_lane is None:
                 continue
 
-            b, g, r = _PALETTE_BGR[current_lane % len(_PALETTE_BGR)]
-            color = (b, g, r)
+            color = tab20_bgr(current_lane)
 
             # Filled circle with dark outline for contrast
             cv2.circle(crop, (cx, cy), radius, (0, 0, 0), outline_th, cv2.LINE_AA)
@@ -545,18 +669,21 @@ class TrackEditorDialog(QDialog):
 
     def reject(self):
         """Cancel the dialog, stopping frame loading and discarding all edits."""
+        self._stop_playback()
         self._loader.requestInterruption()
         self._loader.frames.clear()
         super().reject()
 
     def accept(self):
         """Accept the dialog, stopping frame loading while keeping the computed edit ops."""
+        self._stop_playback()
         self._loader.requestInterruption()
         self._loader.frames.clear()
         super().accept()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Stop the frame-loading thread and release cached frames before the dialog closes."""
+        self._stop_playback()
         self._loader.requestInterruption()
         self._loader.frames.clear()
         super().closeEvent(event)

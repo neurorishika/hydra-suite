@@ -315,7 +315,7 @@ def _maybe_downscale_pil(img, max_side: int):
 
 def _enhance_pil_for_pose(img_pil):
     """Apply CLAHE and unsharp mask enhancement to PIL image."""
-    from ..ui.utils import enhance_for_pose
+    from ..gui.utils import enhance_for_pose
 
     # enhance_for_pose expects BGR np array
     arr = np.array(img_pil)  # RGB
@@ -595,7 +595,7 @@ def save_yolo_pose_label(
 
     if bbox_xyxy_px is None:
         # compute from keypoints
-        from ..ui.models import compute_bbox_from_kpts
+        from ..gui.models import compute_bbox_from_kpts
 
         bbox_xyxy_px = compute_bbox_from_kpts(kpts_px, pad_frac, img_w, img_h)
 

@@ -19,30 +19,18 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QKeyEvent, QMouseEvent, QPen
+from PySide6.QtGui import QAction, QColor, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QLabel, QMenu, QScrollArea, QToolTip, QVBoxLayout, QWidget
 
 from hydra_suite.refinekit.core.track_editor_model import (
     TrackEditorModel,
     TrackFragment,
 )
+from hydra_suite.refinekit.gui.overlay_utils import TAB20_RGB
 
 # Colour palette (RGB) — canonical source for all RefineKit views.
 # Import this from other modules to keep colours consistent.
-PALETTE_RGB: List[Tuple[int, int, int]] = [
-    (255, 100, 100),
-    (100, 100, 255),
-    (100, 220, 100),
-    (220, 180, 60),
-    (200, 100, 220),
-    (60, 220, 220),
-    (200, 130, 60),
-    (180, 60, 180),
-    (60, 180, 255),
-    (180, 255, 60),
-    (255, 60, 180),
-    (60, 255, 180),
-]
+PALETTE_RGB: List[Tuple[int, int, int]] = list(TAB20_RGB)
 _DELETED_COLOR = QColor(80, 80, 80, 100)
 _SELECTED_PEN = QPen(QColor(255, 255, 255), 2)
 _TARGET_LANE_PEN = QPen(QColor(0, 200, 0, 140), 2, Qt.PenStyle.DashLine)
@@ -142,9 +130,14 @@ class _TimelineEditorCanvas(QWidget):
         return 0
 
     def _frag_rect(self, frag: TrackFragment) -> QRect:
+        if not self._model:
+            return QRect()
+        view_start, view_end = self._model.frame_range
+        display_start = max(frag.frame_start, view_start)
+        display_end = min(frag.frame_end, view_end)
         row = self._track_to_row(frag.track_id)
-        x1 = self._frame_to_x(frag.frame_start)
-        x2 = self._frame_to_x(frag.frame_end + 1)
+        x1 = self._frame_to_x(display_start)
+        x2 = self._frame_to_x(display_end + 1)
         y = row * _ROW_HEIGHT + _BAR_MARGIN
         return QRect(x1, y, max(x2 - x1, _MIN_BAR_PX), _ROW_HEIGHT - 2 * _BAR_MARGIN)
 
@@ -162,6 +155,93 @@ class _TimelineEditorCanvas(QWidget):
     # ------------------------------------------------------------------
     # Painting
     # ------------------------------------------------------------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        base = self.palette().color(self.backgroundRole())
+        label_bg = base.darker(135)
+        lane_bg = base.lighter(108) if base.lightness() < 128 else base.darker(108)
+        lane_line = base.lighter(120) if base.lightness() < 128 else base.darker(120)
+        text_color = self.palette().color(self.foregroundRole())
+
+        painter.fillRect(self.rect(), base)
+        painter.fillRect(0, 0, _LABEL_WIDTH, self.height(), label_bg)
+        painter.fillRect(
+            _LABEL_WIDTH,
+            0,
+            self.width() - _LABEL_WIDTH,
+            self.height(),
+            lane_bg,
+        )
+        painter.setPen(QPen(lane_line, 1))
+        painter.drawLine(_LABEL_WIDTH, 0, _LABEL_WIDTH, self.height())
+
+        if not self._model:
+            painter.end()
+            return
+
+        tracks = self._model.visible_tracks
+        for row, track_id in enumerate(tracks):
+            top = row * _ROW_HEIGHT
+            painter.setPen(QPen(lane_line, 1))
+            painter.drawLine(
+                0, top + _ROW_HEIGHT - 1, self.width(), top + _ROW_HEIGHT - 1
+            )
+            painter.setPen(QPen(text_color, 1))
+            painter.drawText(
+                6,
+                top,
+                _LABEL_WIDTH - 12,
+                _ROW_HEIGHT,
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                f"T{track_id}",
+            )
+
+        for frag in self._model.fragments:
+            if frag.track_id not in tracks:
+                continue
+            rect = self._frag_rect(frag)
+            if frag.deleted:
+                painter.fillRect(rect, _DELETED_COLOR)
+                painter.setPen(
+                    QPen(QColor(180, 180, 180, 140), 1, Qt.PenStyle.DashLine)
+                )
+                painter.drawRect(rect)
+                continue
+
+            color = QColor(*PALETTE_RGB[frag.track_id % len(PALETTE_RGB)])
+            painter.fillRect(rect, color)
+            border = (
+                color.lighter(140) if color.lightness() < 160 else color.darker(140)
+            )
+            painter.setPen(QPen(border, 1))
+            painter.drawRect(rect)
+
+            if self._selected_frag_id == frag.frag_id:
+                inset = rect.adjusted(1, 1, -1, -1)
+                painter.setPen(_SELECTED_PEN)
+                painter.drawRect(inset)
+
+        if self._dragging and self._drag_target_track is not None:
+            row = self._track_to_row(self._drag_target_track)
+            target_rect = QRect(
+                _LABEL_WIDTH,
+                row * _ROW_HEIGHT + _BAR_MARGIN,
+                self.width() - _LABEL_WIDTH,
+                _ROW_HEIGHT - 2 * _BAR_MARGIN,
+            )
+            painter.fillRect(target_rect, QColor(0, 200, 0, 30))
+            painter.setPen(_TARGET_LANE_PEN)
+            painter.drawRect(target_rect.adjusted(0, 0, -1, -1))
+
+        if self._cursor_frame is not None:
+            x = self._frame_to_x(self._cursor_frame)
+            painter.setPen(QPen(QColor(255, 170, 0), 2))
+            painter.drawLine(x, 0, x, self.height())
+
+        painter.end()
 
     # ------------------------------------------------------------------
     # Mouse events

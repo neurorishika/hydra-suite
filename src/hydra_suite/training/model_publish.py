@@ -815,5 +815,3 @@ def publish_trained_model(
     save_model_registry(reg)
 
     return key, str(dst)
-
-    return key, str(dst)

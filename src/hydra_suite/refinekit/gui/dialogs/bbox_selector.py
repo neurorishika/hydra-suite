@@ -16,7 +16,7 @@ from typing import Optional, Tuple
 
 import cv2
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QImage, QMouseEvent, QPixmap
+from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -51,6 +51,18 @@ class _BboxCanvas(QWidget):
     # ------------------------------------------------------------------
     # Painting
     # ------------------------------------------------------------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._pixmap)
+
+        if self._start is not None and self._end is not None:
+            rect = QRect(self._start, self._end).normalized()
+            painter.fillRect(rect, QColor(0, 170, 255, 40))
+            painter.setPen(QPen(QColor(0, 170, 255), 2))
+            painter.drawRect(rect)
+
+        painter.end()
 
     # ------------------------------------------------------------------
     # Mouse

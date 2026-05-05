@@ -677,6 +677,7 @@ class MainWindow(QMainWindow):
         self.btn_unlabeled_to_labeling.clicked.connect(self._move_unlabeled_to_labeling)
         self.btn_unlabeled_to_all.clicked.connect(self._move_unlabeled_to_all)
         self.btn_random_to_labeling.clicked.connect(self._add_random_to_labeling)
+        self.btn_smart_select.clicked.connect(self.open_smart_select)
         self.btn_delete_frames.clicked.connect(self._delete_selected_frames)
         self.btn_manage_sources_inline.clicked.connect(self.manage_sources)
         self.search_edit.textChanged.connect(self._populate_frames)
