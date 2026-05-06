@@ -358,8 +358,6 @@ temp_reversed/
 # Specific to this project
 # =============================================================================
 
-# Original monolithic file (keep it but don't track changes)
-# multi_tracker_2.py
 
 # Development/testing files
 test_videos/
@@ -407,10 +405,10 @@ models/*/*
 models/model_registry.json
 
 # remove the posekit directory (only at the base)
-posekit/
+/posekit/
 
 # remove .claude directory (only at the base)
-.claude/
+/.claude/
 
 # remove test_classkit.db
 test_classkit.db
