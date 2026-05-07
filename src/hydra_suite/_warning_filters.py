@@ -16,7 +16,7 @@ def install_warning_filters() -> None:
     )
     warnings.filterwarnings(
         "ignore",
-        message=r"\s*\*\* Python is at version 3\.10 now\. layout\.py and pyi_generator\.py can now remove old code! \*\*\*",
+        message=r"\s*\*{3,4} Python is at version 3\.10 now\. layout\.py and pyi_generator\.py can now remove old code! \*{3,4}",
         category=UserWarning,
         module=r"shibokensupport\.signature\.parser",
     )

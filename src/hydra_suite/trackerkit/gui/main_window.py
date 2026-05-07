@@ -391,6 +391,9 @@ class MainWindow(QMainWindow):
         self._session_final_csv_path = None
         self._session_fps_list = []
         self._session_frames_processed = 0
+        self._headless_tracking_mode = False
+        self._headless_tracking_callback = None
+        self._headless_session_error = None
         self._ui_settings = self._load_ui_settings()
         self._ui_state_save_timer = QTimer(self)
         self._ui_state_save_timer.setSingleShot(True)

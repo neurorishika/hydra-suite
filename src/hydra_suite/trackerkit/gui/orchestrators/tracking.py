@@ -30,16 +30,13 @@ from hydra_suite.runtime.compute_runtime import (
     derive_pose_runtime_settings,
 )
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
+from hydra_suite.trackerkit.session_plan import resolve_video_plan
+from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
 )
-from hydra_suite.utils.video_artifacts import (
-    build_detection_cache_path,
-    candidate_artifact_base_dirs,
-    choose_writable_artifact_base_dir,
-    find_existing_detection_cache_path,
-)
+from hydra_suite.utils.video_artifacts import candidate_artifact_base_dirs
 from hydra_suite.utils.video_encoder import VideoEncoder
 
 if TYPE_CHECKING:
@@ -2536,11 +2533,16 @@ class TrackingOrchestrator:
     def _handle_tracking_failed(self):
         """Show error dialog and finalize session when tracking did not finish normally."""
         logger.error("Tracking did not finish normally.")
-        QMessageBox.warning(
-            self._mw,
-            "Tracking Failed",
-            "An error occurred during tracking. Check logs for details.",
-        )
+        if getattr(self._mw, "_headless_tracking_mode", False):
+            self._mw._headless_session_error = (
+                "An error occurred during tracking. Check logs for details."
+            )
+        else:
+            QMessageBox.warning(
+                self._mw,
+                "Tracking Failed",
+                "An error occurred during tracking. Check logs for details.",
+            )
         if self._panels.setup.g_batch.isChecked():
             self._mw.current_batch_index = -1
             logger.info("Batch mode aborted due to error.")
@@ -2673,6 +2675,12 @@ class TrackingOrchestrator:
             return
         self._mw.progress_bar.setVisible(False)
         self._mw.progress_label.setVisible(False)
+        if getattr(self._mw, "_headless_tracking_mode", False):
+            self._mw._headless_session_error = (
+                f"Error during trajectory post-processing: {error_message}"
+            )
+            self._finalize_tracking_session_ui()
+            return
         QMessageBox.critical(
             self._mw,
             "Post-Processing Error",
@@ -3500,22 +3508,20 @@ class TrackingOrchestrator:
                 # keystone config so that videos without per-video configs always
                 # use the keystone parameters, not leftover params from a previous
                 # video that did have its own config.
-                keystone_override = (
-                    self._panels.setup.chk_batch_keystone_override.isChecked()
-                )
-                video_config_path = _get_video_config_path(fp)
-                has_own_config = not keystone_override and bool(
-                    video_config_path and os.path.isfile(video_config_path)
-                )
-                if not has_own_config:
-                    keystone_config_path = _get_video_config_path(
+                plan = resolve_video_plan(
+                    fp,
+                    keystone_config_path=_get_video_config_path(
                         self._mw.batch_videos[0]
-                    )
-                    if keystone_config_path and os.path.isfile(keystone_config_path):
-                        self._mw._config_orch._load_config_from_file(
-                            keystone_config_path
-                        )
-                self._mw._setup_video_file(fp, skip_config_load=not has_own_config)
+                    ),
+                    keystone_override=self._panels.setup.chk_batch_keystone_override.isChecked(),
+                )
+                if plan.use_keystone_baseline and plan.config_path:
+                    self._mw._config_orch._load_config_from_file(plan.config_path)
+                self._mw._setup_video_file(
+                    fp,
+                    skip_config_load=plan.use_keystone_baseline
+                    or not plan.has_own_config,
+                )
 
                 # Small delay to ensure UI updates before starting next
                 logger.info(
@@ -4138,50 +4144,25 @@ class TrackingOrchestrator:
             f"Launching {'backward' if backward_mode else 'forward'} tracking for frame range "
             f"{params.get('START_FRAME')}..{params.get('END_FRAME')}"
         )
-        detection_method = params.get("DETECTION_METHOD", "background_subtraction")
         use_cached_detections = self._panels.setup.chk_use_cached_detections.isChecked()
         if not self._validate_yolo_model_requirements(params, mode_label="tracking"):
             return
 
-        cache_ids = self._get_cache_model_ids(params, detection_method)
-        model_id = cache_ids["inference"]
-        params["INFERENCE_MODEL_ID"] = model_id
-        if cache_ids.get("engine"):
-            params["ENGINE_MODEL_ID"] = cache_ids["engine"]
         csv_dir = (
             os.path.dirname(self._panels.setup.csv_line.text())
             if self._panels.setup.csv_line.text()
             else ""
         )
-        artifact_base_dirs = candidate_artifact_base_dirs(
+        cache_plan = plan_tracking_cache(
             video_path,
-            preferred_base_dirs=[csv_dir],
+            params=params,
+            preferred_output_dir=csv_dir,
+            use_cached_detections=use_cached_detections,
         )
-        artifact_base_dir = choose_writable_artifact_base_dir(
-            video_path,
-            preferred_base_dirs=[csv_dir],
-        )
-        if artifact_base_dir != Path(video_path).parent:
-            logger.warning(
-                "Video directory not writable; using artifact root: %s",
-                artifact_base_dir,
-            )
-
-        existing_detection_cache = find_existing_detection_cache_path(
-            video_path,
-            model_id,
-            artifact_base_dirs=artifact_base_dirs,
-        )
-        if existing_detection_cache is not None:
-            detection_cache_path = str(existing_detection_cache)
-        else:
-            detection_cache_path = str(
-                build_detection_cache_path(
-                    video_path,
-                    model_id,
-                    artifact_base_dir=artifact_base_dir,
-                )
-            )
+        params["INFERENCE_MODEL_ID"] = cache_plan.inference_model_id
+        if cache_plan.engine_model_id:
+            params["ENGINE_MODEL_ID"] = cache_plan.engine_model_id
+        detection_cache_path = cache_plan.detection_cache_path
 
         # Do NOT delete old detection caches; keep all for reuse
         self._mw.current_detection_cache_path = detection_cache_path
@@ -4425,8 +4406,8 @@ class TrackingOrchestrator:
             self._mw._show_summary_on_dataset_done = False
             self._show_session_summary()
 
-    def _show_session_summary(self):
-        """Show a single end-of-session summary dialog listing completed processes."""
+    def _build_session_summary_lines(self) -> list[str]:
+        """Build end-of-session summary lines for GUI and CLI consumers."""
         lines = []
 
         # --- Timing ---
@@ -4495,10 +4476,43 @@ class TrackingOrchestrator:
                     f"\u2717 Dataset generation failed: {result.get('error', 'unknown error')}"
                 )
 
-        # Clean up state
+        return lines
+
+    def _clear_session_summary_state(self) -> None:
+        """Reset per-session summary state after reporting the session."""
+
         self._mw._session_result_dataset = None
         self._mw._dataset_was_started = False
         self._mw._show_summary_on_dataset_done = False
+
+    def _show_session_summary(self):
+        """Show a single end-of-session summary dialog listing completed processes."""
+        lines = self._build_session_summary_lines()
+        error_message = str(
+            getattr(self._mw, "_headless_session_error", "") or ""
+        ).strip()
+        if error_message:
+            lines.extend(["", f"Error: {error_message}"])
+
+        # Clean up state
+        self._clear_session_summary_state()
+
+        if getattr(self._mw, "_headless_tracking_mode", False):
+            callback = getattr(self._mw, "_headless_tracking_callback", None)
+            if callable(callback):
+                callback(
+                    {
+                        "success": not bool(error_message),
+                        "lines": lines,
+                        "error": error_message or None,
+                        "video_path": self._panels.setup.file_line.text() or None,
+                        "csv_path": self._mw._session_final_csv_path
+                        or self._panels.setup.csv_line.text()
+                        or None,
+                    }
+                )
+            self._mw._headless_session_error = None
+            return
 
         QMessageBox.information(self._mw, "Tracking Complete", "\n".join(lines))
 
