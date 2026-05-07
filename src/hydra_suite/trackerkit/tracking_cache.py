@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,14 @@ from hydra_suite.utils.video_artifacts import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_float_for_cache(value: float) -> float | str:
+    if math.isnan(value):
+        return "NaN"
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
+    return float(value)
 
 
 @dataclass(frozen=True)
@@ -45,11 +54,9 @@ def normalize_tracking_cache_value(value: object):
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
-        if np.isnan(value):
-            return "NaN"
-        if np.isinf(value):
-            return "Infinity" if value > 0 else "-Infinity"
-        return float(value)
+        return _normalize_float_for_cache(float(value))
+    if isinstance(value, float):
+        return _normalize_float_for_cache(value)
     if isinstance(value, np.bool_):
         return bool(value)
     if isinstance(value, Path):

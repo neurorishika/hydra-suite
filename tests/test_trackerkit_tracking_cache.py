@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+
 from hydra_suite.trackerkit.tracking_cache import (
     get_tracking_cache_model_ids,
+    normalize_tracking_cache_value,
     plan_tracking_cache,
 )
 from hydra_suite.utils.video_artifacts import build_detection_cache_path
@@ -76,3 +79,22 @@ def test_plan_tracking_cache_populates_model_ids(tmp_path):
     assert plan.inference_model_id.startswith("bgsub_")
     assert plan.engine_model_id is None
     assert plan.detection_cache_path.endswith(f"{plan.inference_model_id}.npz")
+
+
+def test_normalize_tracking_cache_value_handles_native_nonfinite_floats():
+    normalized = normalize_tracking_cache_value(
+        {
+            "nan": float("nan"),
+            "pos_inf": float("inf"),
+            "neg_inf": float("-inf"),
+            "finite": 1.25,
+        }
+    )
+
+    assert normalized == {
+        "finite": 1.25,
+        "nan": "NaN",
+        "neg_inf": "-Infinity",
+        "pos_inf": "Infinity",
+    }
+    assert json.dumps(normalized, sort_keys=True, allow_nan=False)

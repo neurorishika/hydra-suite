@@ -6,7 +6,7 @@ import os
 from typing import Any
 
 import pandas as pd
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 
 from hydra_suite.core.post.processing import interpolate_trajectories
 from hydra_suite.core.tracking import TrackingWorker
@@ -15,6 +15,18 @@ from hydra_suite.trackerkit.cli_config import TrackerCliSession
 from hydra_suite.trackerkit.gui.workers.merge_worker import MergeWorker
 from hydra_suite.trackerkit.gui.workers.postprocess_worker import PostProcessWorker
 from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
+
+
+def ensure_headless_qt_application():
+    """Return a Qt application object suitable for headless worker/event-loop usage."""
+
+    app = QCoreApplication.instance()
+    if app is not None:
+        return app
+
+    app = QCoreApplication([])
+    app.setApplicationName("TrackerKit CLI")
+    return app
 
 
 def build_tracking_csv_header(
@@ -372,6 +384,8 @@ def _run_forward_backward(
 
 def run_headless_tracking_session(session: TrackerCliSession) -> dict[str, Any]:
     """Run a TrackerKit session without GUI state for supported configs."""
+    ensure_headless_qt_application()
+
     cache_plan = plan_tracking_cache(
         session.video_path,
         params=dict(session.params),
