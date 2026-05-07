@@ -78,6 +78,7 @@ class InteractiveCanvas(QWidget):
         self._pan_start: Optional[QPoint] = None
         self._scroll_h0: int = 0
         self._scroll_v0: int = 0
+        self._toolbar: Optional[QHBoxLayout] = None
 
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._build_ui()
@@ -141,7 +142,16 @@ class InteractiveCanvas(QWidget):
         hint.setStyleSheet("color:#6a6a6a; font-size:10px; font-style:italic;")
         ctrl.addWidget(hint)
 
+        ctrl.addStretch(1)
+        self._toolbar = ctrl
+
         root.addLayout(ctrl)
+
+    def add_toolbar_widget(self, widget: QWidget) -> None:
+        """Append an extra control to the right side of the zoom toolbar."""
+        if self._toolbar is None:
+            return
+        self._toolbar.addWidget(widget)
 
     # ------------------------------------------------------------------
     # Public API

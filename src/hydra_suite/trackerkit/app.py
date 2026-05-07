@@ -10,6 +10,9 @@ import argparse
 import logging
 import os
 import sys
+from typing import Sequence
+
+from hydra_suite.trackerkit.cli import run_tracking_cli
 
 # Fix OpenMP conflict on macOS (PyTorch + OpenCV + NumPy can load multiple OpenMP libraries)
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -45,14 +48,17 @@ def setup_logging(
     logger.info(f"Working directory: {os.getcwd()}")
 
 
-def parse_arguments() -> object:
+def parse_arguments(argv: list[str] | None = None) -> object:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="TrackerKit - Real-time animal tracking with circular ROI",
+        description="TrackerKit - GUI and basic config-driven tracking CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   trackerkit                    # Launch GUI
+    trackerkit track video.mp4    # Run tracking for one video
+    trackerkit track a.mp4 b.mp4 --keystone-override
+    trackerkit track --video-list batch.txt
   trackerkit --log-level DEBUG  # Launch with debug logging
   trackerkit --no-file-log      # Disable file logging
         """,
@@ -77,7 +83,100 @@ Examples:
 
     parser.add_argument("--version", action="version", version="TrackerKit 1.0.0")
 
-    return parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command")
+    track_parser = subparsers.add_parser(
+        "track",
+        help="Run config-driven tracking on one or more videos",
+    )
+    track_parser.add_argument(
+        "videos",
+        nargs="*",
+        help="One or more video paths. The first video is the keystone for batch fallback.",
+    )
+    track_parser.add_argument(
+        "--video-list",
+        type=str,
+        help="Optional plain-text batch list file with one video path per line, matching the GUI import/export format.",
+    )
+    track_parser.add_argument(
+        "--config",
+        type=str,
+        help="Optional config file to use for the first video. For multi-video batches, an explicit config automatically becomes the batch keystone config for all videos.",
+    )
+    track_parser.add_argument(
+        "--keystone-override",
+        action="store_true",
+        help="Force all later batch videos to use the first video's effective config when no explicit batch config was supplied.",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.command == "track":
+        videos = getattr(args, "videos", []) or []
+        video_list = getattr(args, "video_list", None)
+        if videos and video_list:
+            track_parser.error(
+                "use either explicit video paths or --video-list, not both"
+            )
+        if not videos and not video_list:
+            track_parser.error("provide at least one video path or --video-list")
+
+    return args
+
+
+def load_video_list(video_list_path: str) -> list[str]:
+    """Load a GUI-format batch list text file, keeping keystone-first ordering."""
+
+    if not os.path.isfile(video_list_path):
+        raise FileNotFoundError(f"Video list not found: {video_list_path}")
+
+    try:
+        with open(video_list_path, "r", encoding="utf-8") as handle:
+            lines = [line.rstrip("\n").strip() for line in handle if line.strip()]
+    except OSError as exc:
+        raise OSError(f"Failed to read video list: {video_list_path}") from exc
+
+    if not lines:
+        raise ValueError(f"Video list contains no video paths: {video_list_path}")
+
+    valid = [path for path in lines if os.path.isfile(path)]
+    missing = [path for path in lines if not os.path.isfile(path)]
+
+    if not valid:
+        raise FileNotFoundError(
+            f"None of the video paths in the list could be found: {video_list_path}"
+        )
+    if lines[0] not in valid:
+        raise FileNotFoundError(
+            f"The keystone video (first line) does not exist: {lines[0]}"
+        )
+
+    if missing:
+        logging.getLogger(__name__).warning(
+            "Skipping %s missing video path(s) from %s",
+            len(missing),
+            video_list_path,
+        )
+
+    return valid
+
+
+def resolve_track_video_inputs(
+    videos: Sequence[str] | None,
+    video_list_path: str | None = None,
+) -> list[str]:
+    """Resolve CLI video inputs from either explicit paths or a batch list file."""
+
+    normalized_videos = [
+        str(path).strip() for path in (videos or []) if str(path).strip()
+    ]
+    if normalized_videos and video_list_path:
+        raise ValueError("Use either explicit video paths or --video-list, not both.")
+    if video_list_path:
+        return load_video_list(video_list_path)
+    if normalized_videos:
+        return normalized_videos
+    raise ValueError("At least one video path or --video-list is required.")
 
 
 def check_dependencies() -> object:
@@ -110,7 +209,7 @@ def check_dependencies() -> object:
     return True
 
 
-def main() -> object:
+def main(argv: list[str] | None = None) -> object:
     """
     Application entry point.
 
@@ -118,7 +217,7 @@ def main() -> object:
     creates Qt application, initializes main window, and starts event loop.
     """
     # Parse command line arguments
-    args = parse_arguments()
+    args = parse_arguments(argv)
 
     # Set up logging
     log_level = getattr(logging, args.log_level.upper())
@@ -133,6 +232,20 @@ def main() -> object:
     # Check dependencies
     if not check_dependencies():
         sys.exit(1)
+
+    if args.command == "track":
+        try:
+            resolved_videos = resolve_track_video_inputs(args.videos, args.video_list)
+            exit_code = run_tracking_cli(
+                resolved_videos,
+                config_path=args.config,
+                keystone_override=bool(args.keystone_override),
+            )
+        except Exception as e:
+            logger.error("Tracker CLI failed: %s", e, exc_info=True)
+            print(f"Error: {e}")
+            sys.exit(1)
+        sys.exit(exit_code)
 
     try:
         # Import Qt at runtime so package imports don't hard-fail on missing GUI deps.

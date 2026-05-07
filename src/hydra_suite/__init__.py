@@ -19,6 +19,10 @@ Key Features:
 
 from importlib import import_module
 
+from hydra_suite._warning_filters import install_warning_filters
+
+install_warning_filters()
+
 try:
     from importlib.metadata import version as _version
 

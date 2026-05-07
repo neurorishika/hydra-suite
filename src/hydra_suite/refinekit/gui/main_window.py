@@ -15,11 +15,14 @@ import pandas as pd
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -32,6 +35,12 @@ from hydra_suite.refinekit.config.schemas import RefineKitConfig
 from hydra_suite.refinekit.core.correction_writer import CorrectionWriter
 from hydra_suite.refinekit.core.event_scorer import EventScorer
 from hydra_suite.refinekit.core.event_types import EventType, SuspicionEvent
+from hydra_suite.refinekit.gui.widgets.kinematics_viewer import (
+    DEFAULT_SERIES_ENABLED,
+    SERIES_SPECS,
+    KinematicsViewerWidget,
+    build_kinematics_cache,
+)
 from hydra_suite.refinekit.gui.widgets.suspicion_queue import SuspicionQueueWidget
 from hydra_suite.refinekit.gui.widgets.timeline_panel import TimelinePanelWidget
 from hydra_suite.refinekit.gui.widgets.video_player import VideoPlayerWidget
@@ -42,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 _VIDEO_FILTER = "Video files (*.mp4 *.avi *.mov *.mkv *.wmv);;All files (*)"
 _MAX_MANUAL_REGION = 300  # max frames for a user-selected manual review region
+_MAX_ACTIVE_KINEMATICS_SERIES = 4
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +79,29 @@ class _ScorerWorker(BaseWorker):
         self.events_ready.emit(events)
 
 
+class _KinematicsWorker(BaseWorker):
+    """Precompute per-track kinematics in the background."""
+
+    progress_changed = Signal(int, int)
+    cache_ready = Signal(object, object)
+
+    def __init__(self, df: pd.DataFrame, parent=None) -> None:
+        super().__init__(parent)
+        self._df = df.copy()
+
+    def execute(self):
+        cache, frame_range = build_kinematics_cache(
+            self._df,
+            progress_callback=lambda done, total: self.progress_changed.emit(
+                done, total
+            ),
+            should_cancel=self.isInterruptionRequested,
+        )
+        if self.isInterruptionRequested():
+            return
+        self.cache_ready.emit(cache, frame_range)
+
+
 class MainWindow(QMainWindow):
     """RefineKit main window."""
 
@@ -84,6 +117,8 @@ class MainWindow(QMainWindow):
         self._df: Optional[pd.DataFrame] = None
         self._scorer: Optional[EventScorer] = None
         self._scorer_worker: Optional[_ScorerWorker] = None
+        self._kinematics_worker: Optional[_KinematicsWorker] = None
+        self._kinematics_toggles: dict[str, QCheckBox] = {}
         # (frame_start, frame_end, track_ids) tuples for deprioritisation
         self._reviewed_regions: List[tuple] = []
 
@@ -394,29 +429,46 @@ class MainWindow(QMainWindow):
         # --- Main layout: suspicion queue | video + timeline ---
         hsplitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left: suspicion queue
+        # Left: suspicion queue + kinematics controls
+        left_panel = QWidget()
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+
         self._queue = SuspicionQueueWidget()
         self._queue.event_selected.connect(self._on_event_selected)
         self._queue.rescore_all_requested.connect(self._on_rescore_all)
         self._queue.merge_wizard_requested.connect(lambda: self._run_merge_wizard())
-        self._queue.setMinimumWidth(260)
-        self._queue.setMaximumWidth(400)
-        hsplitter.addWidget(self._queue)
+        left_layout.addWidget(self._queue, stretch=1)
+        left_layout.addWidget(self._build_kinematics_controls(), stretch=0)
+        left_panel.setMinimumWidth(260)
+        left_panel.setMaximumWidth(400)
+        hsplitter.addWidget(left_panel)
 
-        # Right: video + timeline in vertical splitter
-        vsplitter = QSplitter(Qt.Orientation.Vertical)
+        # Right: video + kinematics + timeline in vertical splitter
+        self._review_splitter = QSplitter(Qt.Orientation.Vertical)
         self._player = VideoPlayerWidget()
-        vsplitter.addWidget(self._player)
+        self._player.frame_changed.connect(self._on_player_frame_changed)
+        self._player.frame_axis_margins_changed.connect(
+            self._on_player_frame_axis_changed
+        )
+        self._review_splitter.addWidget(self._player)
+
+        self._kinematics = KinematicsViewerWidget()
+        self._review_splitter.addWidget(self._kinematics)
 
         self._timeline = TimelinePanelWidget()
         self._timeline.split_requested.connect(self._on_manual_split)
         self._timeline.region_edit_requested.connect(self._on_manual_region_edit)
         self._timeline.track_move_requested.connect(self._on_manual_track_reassign)
-        vsplitter.addWidget(self._timeline)
+        self._timeline.track_selected.connect(self._on_timeline_track_selected)
+        self._review_splitter.addWidget(self._timeline)
 
-        vsplitter.setStretchFactor(0, 3)
-        vsplitter.setStretchFactor(1, 1)
-        hsplitter.addWidget(vsplitter)
+        self._review_splitter.setStretchFactor(0, 4)
+        self._review_splitter.setStretchFactor(1, 1)
+        self._review_splitter.setStretchFactor(2, 2)
+        self._review_splitter.setSizes([640, 0, 180])
+        hsplitter.addWidget(self._review_splitter)
 
         hsplitter.setStretchFactor(0, 0)
         hsplitter.setStretchFactor(1, 1)
@@ -427,6 +479,194 @@ class MainWindow(QMainWindow):
         self._content_stack.addWidget(hsplitter)  # index 1
         root.addWidget(self._content_stack, stretch=1)
         self._update_nav_state()
+
+    def _build_kinematics_controls(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(6, 0, 6, 6)
+        layout.setSpacing(4)
+
+        title = QLabel("Kinematics")
+        title.setStyleSheet("font-weight: 600; color: #9cdcfe;")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Select a timeline track to open the kinematics viewer. Toggle up to 4 traces to overlay."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: #777777; font-size: 10px;")
+        layout.addWidget(subtitle)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(2)
+        for index, (key, label, _color, _default) in enumerate(SERIES_SPECS):
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(DEFAULT_SERIES_ENABLED[key])
+            checkbox.toggled.connect(self._on_kinematics_series_toggled)
+            grid.addWidget(checkbox, index // 2, index % 2)
+            self._kinematics_toggles[key] = checkbox
+        layout.addLayout(grid)
+        self._sync_kinematics_toggle_state()
+
+        self._kinematics_progress = QProgressBar()
+        self._kinematics_progress.setRange(0, 0)
+        self._kinematics_progress.setFormat("Preparing kinematics…")
+        self._kinematics_progress.setFixedHeight(16)
+        self._kinematics_progress.setVisible(False)
+        layout.addWidget(self._kinematics_progress)
+        return panel
+
+    def _load_review_dataframe(self, df: pd.DataFrame) -> None:
+        self._df = df
+        self._player.load_trajectories(df)
+        self._timeline.load_trajectories(df)
+        self._kinematics.set_data(df)
+        self._start_kinematics_precompute(df)
+
+        if df.empty:
+            self._kinematics.set_active_track(None)
+            self._set_kinematics_collapsed(True)
+            return
+
+        current_frame = getattr(
+            self._player, "_current_frame", int(df["FrameID"].min())
+        )
+        self._kinematics.set_current_frame(current_frame)
+        self._timeline.set_current_frame(current_frame)
+        valid_tracks = {
+            int(track_id) for track_id in df["TrajectoryID"].dropna().tolist()
+        }
+        if self._kinematics.active_track_id not in valid_tracks:
+            self._kinematics.set_active_track(None)
+            self._set_kinematics_collapsed(True)
+
+    def _start_kinematics_precompute(self, df: pd.DataFrame) -> None:
+        self._stop_kinematics_precompute()
+        if df.empty:
+            self._kinematics_progress.setVisible(False)
+            self._kinematics.set_loading(False)
+            self._kinematics.set_precomputed_data({}, (0, 0))
+            return
+
+        self._kinematics.set_loading(True)
+        self._kinematics_progress.setRange(0, 0)
+        self._kinematics_progress.setFormat("Preparing kinematics…")
+        self._kinematics_progress.setVisible(True)
+        self.statusBar().showMessage("Preparing kinematics…", 3000)
+
+        worker = _KinematicsWorker(df, self)
+        worker.progress_changed.connect(self._on_kinematics_progress)
+        worker.cache_ready.connect(self._on_kinematics_ready)
+        worker.error.connect(self._on_kinematics_error)
+        worker.finished.connect(self._on_kinematics_worker_finished)
+        self._kinematics_worker = worker
+        worker.start()
+
+    def _stop_kinematics_precompute(self) -> None:
+        worker = self._kinematics_worker
+        if worker is None:
+            return
+        if worker.isRunning():
+            worker.requestInterruption()
+
+    def _on_kinematics_progress(self, done: int, total: int) -> None:
+        if self.sender() is not self._kinematics_worker:
+            return
+        self._kinematics_progress.setRange(0, max(total, 1))
+        self._kinematics_progress.setValue(done)
+        self._kinematics_progress.setFormat("Preparing kinematics… %v / %m")
+        self._kinematics_progress.setVisible(True)
+
+    def _on_kinematics_ready(self, cache: object, frame_range: object) -> None:
+        if self.sender() is not self._kinematics_worker:
+            return
+        self._kinematics.set_precomputed_data(cache, frame_range)
+        self._kinematics_progress.setVisible(False)
+        self.statusBar().showMessage(
+            f"Kinematics ready — {len(cache)} track{'s' if len(cache) != 1 else ''} prepared",
+            4000,
+        )
+
+    def _on_kinematics_error(self, message: str) -> None:
+        if self.sender() is not self._kinematics_worker:
+            return
+        self._kinematics_progress.setVisible(False)
+        self._kinematics.set_loading(False)
+        self.statusBar().showMessage(f"Kinematics precompute failed: {message}", 5000)
+
+    def _on_kinematics_worker_finished(self) -> None:
+        if self.sender() is not self._kinematics_worker:
+            return
+        self._kinematics_worker = None
+
+    def _set_kinematics_collapsed(self, collapsed: bool) -> None:
+        sizes = self._review_splitter.sizes()
+        if len(sizes) != 3:
+            return
+        total = max(sum(sizes), 1)
+        if collapsed:
+            bottom = max(sizes[2], 160)
+            top = max(total - bottom, 1)
+            self._review_splitter.setSizes([top, 0, bottom])
+            return
+        if sizes[1] >= 80:
+            return
+        middle = min(max(total // 4, 140), 220)
+        bottom = max(min(sizes[2], total - middle - 1), 140)
+        top = max(total - middle - bottom, 1)
+        self._review_splitter.setSizes([top, middle, bottom])
+
+    def _on_kinematics_series_toggled(self, checked: bool) -> None:
+        checkbox = self.sender()
+        if (
+            checked
+            and isinstance(checkbox, QCheckBox)
+            and self._checked_kinematics_count() > _MAX_ACTIVE_KINEMATICS_SERIES
+        ):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(False)
+            checkbox.blockSignals(False)
+            self.statusBar().showMessage(
+                f"Show at most {_MAX_ACTIVE_KINEMATICS_SERIES} kinematics traces at once",
+                3000,
+            )
+        self._sync_kinematics_toggle_state()
+        self._kinematics.set_enabled_series(
+            {
+                key: checkbox.isChecked()
+                for key, checkbox in self._kinematics_toggles.items()
+            }
+        )
+
+    def _checked_kinematics_count(self) -> int:
+        return sum(
+            1 for checkbox in self._kinematics_toggles.values() if checkbox.isChecked()
+        )
+
+    def _sync_kinematics_toggle_state(self) -> None:
+        at_limit = self._checked_kinematics_count() >= _MAX_ACTIVE_KINEMATICS_SERIES
+        for checkbox in self._kinematics_toggles.values():
+            checkbox.setEnabled(checkbox.isChecked() or not at_limit)
+
+    def _on_timeline_track_selected(self, track_id: object) -> None:
+        if track_id is None:
+            self._kinematics.set_active_track(None)
+            self._set_kinematics_collapsed(True)
+            return
+        self._kinematics.set_active_track(int(track_id))
+        self._set_kinematics_collapsed(False)
+
+    def _on_player_frame_changed(self, frame: int) -> None:
+        self._kinematics.set_current_frame(frame)
+        self._timeline.set_current_frame(frame)
+
+    def _on_player_frame_axis_changed(
+        self, left_margin: int, right_margin: int
+    ) -> None:
+        self._kinematics.set_frame_axis_margins(left_margin, right_margin)
+        self._timeline.set_frame_axis_margins(left_margin, right_margin)
 
     def _make_welcome_page(self) -> QWidget:
         """Logo/welcome screen shown before any session is loaded."""
@@ -560,11 +800,9 @@ class MainWindow(QMainWindow):
 
         self._writer = CorrectionWriter(csv_path)
         self._writer.open()
-        self._df = self._writer.df
 
         self._player.load_video(video_path)
-        self._player.load_trajectories(self._df)
-        self._timeline.load_trajectories(self._df)
+        self._load_review_dataframe(self._writer.df)
         self._content_stack.setCurrentIndex(1)  # reveal main view before modal flows
 
         # --- Merge wizard: offer automatic fragment stitching ---
@@ -710,9 +948,7 @@ class MainWindow(QMainWindow):
 
         if n > 0:
             # Refresh everything from the writer's updated DataFrame
-            self._df = self._writer.df
-            self._player.load_trajectories(self._df)
-            self._timeline.load_trajectories(self._df)
+            self._load_review_dataframe(self._writer.df)
             # Store flagged events so they survive the upcoming rescore
             self._pending_flagged = flagged
             # Re-run scorer since track structure changed
@@ -858,9 +1094,7 @@ class MainWindow(QMainWindow):
 
         # --- Apply ---
         self._writer.apply_edit_ops(dlg.edit_ops)
-        self._df = self._writer.df
-        self._player.load_trajectories(self._df)
-        self._timeline.load_trajectories(self._df)
+        self._load_review_dataframe(self._writer.df)
 
         # Record reviewed region for deprioritisation
         rr = (dlg.reviewed_range[0], dlg.reviewed_range[1], dlg.reviewed_tracks)
@@ -996,9 +1230,7 @@ class MainWindow(QMainWindow):
                 )
             ]
         )
-        self._df = self._writer.df
-        self._player.load_trajectories(self._df)
-        self._timeline.load_trajectories(self._df)
+        self._load_review_dataframe(self._writer.df)
 
         affected_tracks = [source_id, target_id]
         rescore_range = (
@@ -1047,6 +1279,7 @@ class MainWindow(QMainWindow):
                 self._scorer_worker.events_ready.disconnect()
             except RuntimeError:
                 pass
+        self._stop_kinematics_precompute()
         if self._writer is not None:
             self._writer.close()
             self._writer = None

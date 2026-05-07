@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -199,6 +201,7 @@ class VideoPlayerWidget(QWidget):
     """Interactive video player with trajectory overlay and play/pause."""
 
     frame_changed = Signal(int)
+    frame_axis_margins_changed = Signal(int, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -255,15 +258,9 @@ class VideoPlayerWidget(QWidget):
         self._btn_play.clicked.connect(self._toggle_play)
         ctrl.addWidget(self._btn_play)
 
-        self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setMinimum(0)
-        self._slider.setMaximum(0)
-        self._slider.valueChanged.connect(self._on_slider)
-        ctrl.addWidget(self._slider, stretch=1)
-
         self._frame_label = QLabel("0 / 0")
-        self._frame_label.setMinimumWidth(90)
-        ctrl.addWidget(self._frame_label)
+        self._frame_label.setMinimumWidth(150)
+        self._canvas.add_toolbar_widget(self._frame_label)
 
         marker_spin = QSpinBox()
         marker_spin.setRange(25, 300)
@@ -272,7 +269,13 @@ class VideoPlayerWidget(QWidget):
         marker_spin.setFixedWidth(68)
         marker_spin.setToolTip("Overlay marker size (100% = default)")
         marker_spin.valueChanged.connect(self._on_marker_scale)
-        ctrl.addWidget(marker_spin)
+        self._canvas.add_toolbar_widget(marker_spin)
+
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setMinimum(0)
+        self._slider.setMaximum(0)
+        self._slider.valueChanged.connect(self._on_slider)
+        ctrl.addWidget(self._slider, stretch=1)
 
         root.addLayout(ctrl)
 
@@ -556,10 +559,57 @@ class VideoPlayerWidget(QWidget):
         self._slider.setRange(start, end)
         self._current_frame = max(start, min(self._current_frame, end))
         self._update_frame_label()
+        self._emit_frame_axis_margins_changed()
 
     def _update_frame_label(self) -> None:
         self._frame_label.setText(
             f"{self._current_frame} [{self._display_frame_start}-{self._display_frame_end}]"
+        )
+        self._emit_frame_axis_margins_changed()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._emit_frame_axis_margins_changed()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._emit_frame_axis_margins_changed()
+
+    def _slider_handle_center_x(self, value: int) -> int:
+        option = QStyleOptionSlider()
+        self._slider.initStyleOption(option)
+        option.sliderPosition = value
+        option.sliderValue = value
+        handle_rect = self._slider.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider,
+            option,
+            QStyle.SubControl.SC_SliderHandle,
+            self._slider,
+        )
+        return self._slider.x() + handle_rect.center().x()
+
+    def frame_axis_margins(self) -> tuple[int, int]:
+        if self._slider.width() <= 0:
+            return (0, 0)
+        left = self._slider_handle_center_x(self._slider.minimum())
+        right = self._slider_handle_center_x(self._slider.maximum())
+        return (left, right)
+
+    def _emit_frame_axis_margins_changed(self) -> None:
+        left, right = self.frame_axis_margins()
+        self.frame_axis_margins_changed.emit(left, right)
+
+    def frame_to_slider_x(self, frame: int) -> int:
+        start = self._display_frame_start
+        end = self._display_frame_end
+        axis_start, axis_end = self.frame_axis_margins()
+        axis_end = max(axis_end, axis_start + 1)
+        if end <= start:
+            return axis_start
+        clamped = max(start, min(int(frame), end))
+        span = end - start
+        return int(
+            round(axis_start + ((clamped - start) / span) * (axis_end - axis_start))
         )
 
     # ------------------------------------------------------------------

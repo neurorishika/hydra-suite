@@ -173,6 +173,8 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+    "ignore:\\s*\\*\\*\\* Python is at version 3\\.10 now\\. _PepUnicode_AsString can now be replaced by PyUnicode_AsUTF8! \\*\\*\\*:UserWarning:shibokensupport\\.signature\\.parser",
+    "ignore:\\s*\\*\\*\\* Python is at version 3\\.10 now\\. layout\\.py and pyi_generator\\.py can now remove old code! \\*\\*\\*:UserWarning:shibokensupport\\.signature\\.parser",
 ]
 
 # ============================================================================
