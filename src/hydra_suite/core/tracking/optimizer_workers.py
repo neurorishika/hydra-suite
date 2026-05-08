@@ -14,7 +14,6 @@ import numpy as np
 from PySide6.QtCore import QThread, Signal
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
-from hydra_suite.core.detectors import DetectionFilter
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.identity.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -35,13 +34,52 @@ from hydra_suite.core.identity.pose.features import (
 from hydra_suite.core.identity.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.api import (
+    apply_detection_filter as _apply_detection_filter,
+)
+
+# Correction 21: use new DetectionCacheHandle; fall back to legacy if present.
+try:
+    from hydra_suite.core.inference.cache.detection import (
+        DetectionCacheHandle as DetectionCache,
+    )
+except ImportError:
+    from hydra_suite.data.detection_cache import (
+        DetectionCache,  # type: ignore[no-redef]
+    )
 
 logger = logging.getLogger(__name__)
 
 
 def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
-    """Read a frame from cache and apply detection filtering for preview."""
+    """Read a frame from cache and apply detection filtering for preview.
+
+    Supports both new OBBResult API (Correction 21) and legacy 12-tuple.
+    """
+    frame_data = cache.get_frame(f_idx)
+
+    from hydra_suite.core.inference.result import OBBResult as _OBBResult
+
+    if isinstance(frame_data, _OBBResult):
+        from hydra_suite.core.inference.config import OBBConfig
+
+        conf_threshold = 0.0
+        if hasattr(det_filter, "params"):
+            conf_threshold = float(det_filter.params.get("DETECTION_CONFIDENCE", 0.0))
+        elif hasattr(det_filter, "confidence_threshold"):
+            conf_threshold = float(det_filter.confidence_threshold)
+
+        _cfg = OBBConfig(confidence_threshold=conf_threshold)
+        filtered_obb = _apply_detection_filter(frame_data, _cfg)
+        meas = np.concatenate(
+            [filtered_obb.centroids, filtered_obb.angles[:, None]], axis=1
+        ).tolist()
+        shapes = filtered_obb.shapes.tolist()
+        _confs = filtered_obb.confidences.tolist()
+        detection_ids = filtered_obb.detection_ids.tolist()
+        return meas, shapes, _confs, detection_ids, [], []
+
+    # Legacy 12-tuple path
     (
         raw_meas,
         raw_sizes,
@@ -55,7 +93,7 @@ def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         _raw_canonical_affines,
         _raw_canvas_dims,
         _raw_M_inverse,
-    ) = cache.get_frame(f_idx)
+    ) = frame_data
     if raw_heading_hints:
         filtered = det_filter.filter_raw_detections(
             raw_meas,
@@ -509,7 +547,15 @@ class TrackingPreviewWorker(QThread):
 
             kf_manager = KalmanFilterManager(self.params["MAX_TARGETS"], self.params)
             assigner = TrackAssigner(self.params)
-            det_filter = DetectionFilter(self.params)
+
+            # Correction 21: _ParamsFilter is a lightweight shim that exposes .params
+            # so _preview_filter_cached_detections can read DETECTION_CONFIDENCE from
+            # it regardless of whether the cache returns OBBResult or a legacy 12-tuple.
+            class _ParamsFilter:
+                def __init__(self, p):
+                    self.params = p
+
+            det_filter = _ParamsFilter(self.params)
             _roi_mask = self.params.get("ROI_MASK", None)
 
             N = self.params["MAX_TARGETS"]

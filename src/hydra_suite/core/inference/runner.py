@@ -375,7 +375,7 @@ class InferenceRunner:
             pose_result = pose_fut.result() if pose_fut else None
             at_result = at_fut.result() if at_fut else None
 
-        return _build_frame_result(
+        frame_result = _build_frame_result(
             0,
             filtered_obb,
             det_indices,
@@ -384,6 +384,22 @@ class InferenceRunner:
             pose_result,
             at_result,
         )
+
+        # Task 17g: build StreamingAnalysisPayload for legacy identity consumers.
+        try:
+            from hydra_suite.core.tracking.streaming_payload import (
+                StreamingAnalysisPayload,
+            )
+
+            frame_result.streaming_payload = StreamingAnalysisPayload.from_frame_result(
+                frame_result,
+                runtime_family=str(self.runtime.default_runtime),
+                input_is_bgr=True,
+            )
+        except Exception:
+            pass  # streaming_payload is optional; failures are non-fatal
+
+        return frame_result
 
     def run_batch_pass(self, video_path: Path, progress_cb=None) -> None:
         import cv2

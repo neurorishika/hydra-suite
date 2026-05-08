@@ -100,6 +100,51 @@ class StreamingAnalysisPayload:
             return self.canonical_crops_cpu
         return None
 
+    @classmethod
+    def from_frame_result(
+        cls,
+        frame_result: "FrameResult",  # noqa: F821
+        runtime_family: str = "cpu",
+        input_is_bgr: bool = True,
+    ) -> "StreamingAnalysisPayload":
+        """Construct a StreamingAnalysisPayload from a new-pipeline FrameResult.
+
+        Task 17g / Correction 23: bridges the new InferenceRunner output to the
+        legacy streaming-payload contract consumed by identity analysis workers.
+        """
+        obb = frame_result.obb
+        n = obb.num_detections
+
+        ids = obb.detection_ids.copy()
+        corners = obb.corners.copy()
+
+        ht = frame_result.headtail
+        if ht is not None:
+            heading = ht.heading_hints.copy()
+            conf = ht.heading_confidences.copy()
+            directed = ht.directed_mask.astype(bool).copy()
+            if ht.canonical_affines is not None:
+                affines = ht.canonical_affines.copy()
+            else:
+                affines = np.zeros((n, 2, 3), dtype=np.float32)
+        else:
+            heading = np.zeros(n, dtype=np.float32)
+            conf = np.zeros(n, dtype=np.float32)
+            directed = np.zeros(n, dtype=bool)
+            affines = np.zeros((n, 2, 3), dtype=np.float32)
+
+        return cls(
+            frame_idx=int(obb.frame_idx),
+            detection_ids=ids,
+            obb_corners=corners,
+            headtail_heading=heading,
+            headtail_confidence=conf,
+            headtail_directed=directed,
+            canonical_affines=affines,
+            input_is_bgr=input_is_bgr,
+            runtime_family=runtime_family,
+        )
+
 
 def build_streaming_payload(
     frame_idx: int,

@@ -91,8 +91,10 @@ class PosePredictWorker(QObject):
                 return
 
             # Preferred path: shared runtime API.
+            # Correction 22: import from stable core.inference.api shim, not
+            # the soon-to-be-deleted core.identity.pose.api module directly.
             try:
-                from hydra_suite.core.identity.pose.api import (
+                from hydra_suite.core.inference.api import (
                     build_runtime_config,
                     create_pose_backend_from_config,
                 )
@@ -266,8 +268,10 @@ class BulkPosePredictWorker(QObject):
             )
 
             # Preferred path: shared runtime API with chunked image loading.
+            # Correction 22: import from stable core.inference.api shim, not
+            # the soon-to-be-deleted core.identity.pose.api module directly.
             try:
-                from hydra_suite.core.identity.pose.api import (
+                from hydra_suite.core.inference.api import (
                     build_runtime_config,
                     create_pose_backend_from_config,
                 )

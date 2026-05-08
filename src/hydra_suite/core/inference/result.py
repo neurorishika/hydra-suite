@@ -88,6 +88,10 @@ class FrameResult:
     pose: PoseResult | None
     apriltag: AprilTagResult | None
     resolved_headings: np.ndarray  # (D,) final merged heading per detection
+    # Task 17g: populated by InferenceRunner.run_realtime() for legacy-API
+    # consumers that expect a StreamingAnalysisPayload (identity evidence,
+    # live feature pre-compute workers).  None in batch-pass results.
+    streaming_payload: "StreamingAnalysisPayload | None" = None  # noqa: F821
 
 
 def assemble_resolved_headings(

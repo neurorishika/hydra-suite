@@ -12,7 +12,6 @@ import optuna
 from PySide6.QtCore import QThread, Signal
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
-from hydra_suite.core.detectors import DetectionFilter
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.identity.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -33,7 +32,19 @@ from hydra_suite.core.identity.pose.features import (
 from hydra_suite.core.identity.pose.features import (
     load_pose_context_from_params as _pf_load_pose_context,
 )
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.api import (
+    apply_detection_filter as _apply_detection_filter,
+)
+
+# Correction 21: use new DetectionCacheHandle; fall back to legacy if present.
+try:
+    from hydra_suite.core.inference.cache.detection import (
+        DetectionCacheHandle as DetectionCache,
+    )
+except ImportError:
+    from hydra_suite.data.detection_cache import (
+        DetectionCache,  # type: ignore[no-redef]
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +112,43 @@ def _normalise_scoring_weights(params):
 
 
 def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
-    """Read a frame from detection cache and apply filtering."""
+    """Read a frame from detection cache and apply filtering.
+
+    Supports both new OBBResult API (Correction 21) and legacy 12-tuple.
+    When new cache: uses apply_detection_filter from core/inference/api.
+    When legacy cache: uses legacy DetectionFilter.filter_raw_detections.
+    """
+    frame_data = cache.get_frame(f_idx)
+
+    from hydra_suite.core.inference.result import OBBResult as _OBBResult
+
+    if isinstance(frame_data, _OBBResult):
+        # New pipeline path: use apply_detection_filter shim.
+        # Build a minimal OBBConfig from det_filter params if it has params attribute,
+        # otherwise use defaults.
+        from hydra_suite.core.inference.config import OBBConfig
+
+        conf_threshold = 0.0
+        if hasattr(det_filter, "params"):
+            conf_threshold = float(det_filter.params.get("DETECTION_CONFIDENCE", 0.0))
+        elif hasattr(det_filter, "confidence_threshold"):
+            conf_threshold = float(det_filter.confidence_threshold)
+
+        _cfg = OBBConfig(confidence_threshold=conf_threshold)
+        filtered_obb = _apply_detection_filter(frame_data, _cfg)
+
+        # Convert OBBResult back to the legacy format expected by the tracking loop.
+        meas = np.concatenate(
+            [filtered_obb.centroids, filtered_obb.angles[:, None]], axis=1
+        ).tolist()
+        shapes = filtered_obb.shapes.tolist()
+        _confs = filtered_obb.confidences.tolist()
+        detection_ids = filtered_obb.detection_ids.tolist()
+        _headtail_hints: list = []
+        _headtail_directed: list = []
+        return meas, shapes, _confs, detection_ids, _headtail_hints, _headtail_directed
+
+    # Legacy 12-tuple path
     (
         raw_meas,
         raw_sizes,
@@ -115,7 +162,7 @@ def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         _raw_canonical_affines,
         _raw_canvas_dims,
         _raw_M_inverse,
-    ) = cache.get_frame(f_idx)
+    ) = frame_data
     if raw_heading_hints:
         filtered = det_filter.filter_raw_detections(
             raw_meas,
@@ -837,7 +884,14 @@ class TrackingOptimizer(QThread):
             Maps frame_idx -> (N, 2) float32 array of KF-estimated positions.
             Rows for lost tracks contain NaN.
         """
-        det_filter = DetectionFilter(params)
+
+        # Correction 21: create a lightweight params holder that _filter_cached_detections
+        # reads for confidence threshold when using new OBBResult cache.
+        class _ParamsFilter:
+            def __init__(self, p):
+                self.params = p
+
+        det_filter = _ParamsFilter(params)
         kf_manager = KalmanFilterManager(params["MAX_TARGETS"], params)
         assigner = TrackAssigner(params)
         _roi_mask = params.get("ROI_MASK", None)
