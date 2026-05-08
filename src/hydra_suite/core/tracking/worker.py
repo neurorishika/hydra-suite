@@ -80,18 +80,8 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
-# Feature flag: route run() through the new InferenceRunner-based pipeline.
-# Set USE_NEW_INFERENCE_PIPELINE=0 (env var) to revert to legacy path for debugging.
-# Per Correction 24: backward_mode is respected inside _run_with_new_pipeline —
-# the backward worker refuses to re-run inference and asserts caches exist.
-_env_flag = os.environ.get("USE_NEW_INFERENCE_PIPELINE", "1")
-USE_NEW_INFERENCE_PIPELINE: bool = _env_flag.strip() not in (
-    "0",
-    "false",
-    "False",
-    "no",
-)
-
+# Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
+# pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
 from hydra_suite.core.inference.config import InferenceConfig  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 

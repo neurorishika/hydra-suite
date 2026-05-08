@@ -40,7 +40,7 @@ from hydra_suite.core.inference.api import (
 
 # Correction 21: use new DetectionCacheHandle; fall back to legacy if present.
 try:
-    from hydra_suite.core.inference.cache.detection import (
+    from hydra_suite.core.inference.cache.store import (
         DetectionCacheHandle as DetectionCache,
     )
 except ImportError:

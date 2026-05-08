@@ -1,7 +1,7 @@
-"""Integration tests for worker.py USE_NEW_INFERENCE_PIPELINE flag (Task 17).
+"""Integration tests for worker.py new InferenceRunner pipeline (Tasks 17-18).
 
 Tests verify:
-- Flag exists and is True by default
+- InferenceRunner is imported at module level (flag removed in Task 18)
 - _run_with_new_pipeline calls run_batch_pass when caches are invalid
 - _run_with_new_pipeline skips run_batch_pass when caches are valid
 - _run_realtime_with_new_pipeline calls run_realtime per frame
@@ -39,12 +39,14 @@ def _make_frame_result():
     )
 
 
-def test_worker_uses_new_pipeline_flag():
-    """Verify USE_NEW_INFERENCE_PIPELINE constant exists and is True."""
+def test_worker_imports_inference_runner():
+    """Verify InferenceRunner is importable at module level (flag removed in Task 18)."""
     from hydra_suite.core.tracking import worker
 
-    assert hasattr(worker, "USE_NEW_INFERENCE_PIPELINE")
-    assert worker.USE_NEW_INFERENCE_PIPELINE is True
+    assert hasattr(worker, "InferenceRunner")
+    assert hasattr(worker, "InferenceConfig")
+    # USE_NEW_INFERENCE_PIPELINE flag was removed in Task 18; verify it is gone.
+    assert not hasattr(worker, "USE_NEW_INFERENCE_PIPELINE")
 
 
 def test_run_with_new_pipeline_calls_batch_pass_when_caches_invalid(tmp_path):

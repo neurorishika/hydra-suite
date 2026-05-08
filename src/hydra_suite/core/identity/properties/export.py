@@ -14,11 +14,13 @@ import pandas as pd
 # build_pose_keypoint_labels, etc.) is preserved verbatim.
 try:
     # New pipeline: CNNCache, PoseCache, DetectionCache from core/inference/cache/
-    from hydra_suite.core.inference.cache.cnn import CNNCacheHandle as CNNIdentityCache
-    from hydra_suite.core.inference.cache.detection import (
+    from hydra_suite.core.inference.cache.store import (  # noqa: F401
+        CNNCacheHandle as CNNIdentityCache,
+    )
+    from hydra_suite.core.inference.cache.store import (
         DetectionCacheHandle as DetectedPropertiesCache,
     )
-    from hydra_suite.core.inference.cache.pose import (
+    from hydra_suite.core.inference.cache.store import (
         PoseCacheHandle as IndividualPropertiesCache,
     )
 except ImportError:

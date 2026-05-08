@@ -20,7 +20,7 @@ import pandas as pd
 # needs only one targeted update (the get_frame tuple-unpack → OBBResult access).
 try:
     from hydra_suite.core.inference.cache.base import CacheKey as _CacheKey
-    from hydra_suite.core.inference.cache.detection import (
+    from hydra_suite.core.inference.cache.store import (
         DetectionCacheHandle as _NewDetCache,
     )
 
