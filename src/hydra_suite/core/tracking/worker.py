@@ -1599,10 +1599,25 @@ class TrackingWorker(QThread):
                     "Live tag store ready for InferenceRunner per-frame population."
                 )
 
+            # Build IdentityEvidenceEmitter per CNN phase so populate_live_cnn_store
+            # can push calibrated full-catalog log_probs into the live store. The
+            # online identity decoder reads these via load_evidences() to do
+            # Bayesian updates; without them it can only commit identity on top-1
+            # confidence and dramatically under-commits (regression observed:
+            # 4/26 labels committed, 80/324 rows vs main's 14/26 and 267/329).
+            cnn_evidence_emitters: dict = {}
             for cnn_cfg_dict in p.get("CNN_CLASSIFIERS", []):
                 _cnn_label = str(cnn_cfg_dict.get("label", "cnn_identity"))
                 _live_cnn_store = LiveCNNIdentityStore()
                 live_cnn_caches[_cnn_label] = _live_cnn_store
+                _ev_emitter = self._build_cnn_evidence_emitter(
+                    cnn_cfg_dict, _live_cnn_store, p
+                )
+                if _ev_emitter is not None:
+                    cnn_evidence_emitters[_cnn_label] = _ev_emitter
+                    if not hasattr(self, "_evidence_emitters"):
+                        self._evidence_emitters = []
+                    self._evidence_emitters.append(_ev_emitter)
                 logger.info(
                     "Live CNN store ready for InferenceRunner per-frame population (%s)",
                     _cnn_label,
@@ -2588,6 +2603,11 @@ class TrackingWorker(QThread):
                         _det_ids_arr,
                         actual_frame_index,
                         _cnn_label,
+                        evidence_emitter=(
+                            cnn_evidence_emitters.get(_cnn_label)
+                            if "cnn_evidence_emitters" in locals()
+                            else None
+                        ),
                     )
 
             profiler.tick("features")
@@ -4261,6 +4281,132 @@ class TrackingWorker(QThread):
         """Return the per-video cache directory for InferenceRunner caches."""
         video_path = Path(self.video_path)
         return video_path.parent / f".inference_cache_{video_path.stem}"
+
+    def _build_cnn_evidence_emitter(
+        self,
+        cnn_cfg_dict: dict,
+        live_store,
+        params: dict,
+    ):
+        """Construct an IdentityEvidenceEmitter for one CNN phase, or None on failure.
+
+        The emitter converts per-detection per-factor full posteriors into
+        catalog-level ``IdentityEvidence`` rows (calibrated log_probs over
+        catalog_size). populate_live_cnn_store calls
+        ``emitter.build_frame_evidences`` and pushes the result into the live
+        store via ``update_frame(..., evidences=...)`` so the online identity
+        decoder can read them through ``live_store.load_evidences()``.
+
+        Returns None if CNN classifier metadata can't be resolved (degraded
+        mode: top-1 predictions only — the online decoder will under-commit).
+        """
+        try:
+            from hydra_suite.core.tracking.evidence_emitter import (
+                IdentityEvidenceEmitter,
+                build_evidence_cache_path,
+            )
+        except Exception:
+            return None
+
+        label = str(cnn_cfg_dict.get("label", "cnn_identity"))
+        model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
+        if not model_path:
+            return None
+        # Prefer per-factor labels stored on the config; fall back to loading
+        # the artifact metadata (cheap; reads schema-version header only).
+        factor_labels = cnn_cfg_dict.get("class_names_per_factor") or []
+        factor_labels = [list(f) for f in factor_labels if f]
+        if not factor_labels:
+            try:
+                from hydra_suite.core.identity.classification.backend import (
+                    ClassifierBackend,
+                )
+
+                _backend = ClassifierBackend(
+                    model_path,
+                    str(
+                        cnn_cfg_dict.get(
+                            "compute_runtime",
+                            params.get("CNN_COMPUTE_RUNTIME", "cpu"),
+                        )
+                    ),
+                )
+                _meta = getattr(_backend, "metadata", None)
+                if _meta is not None and hasattr(_meta, "class_names_per_factor"):
+                    factor_labels = [list(f) for f in _meta.class_names_per_factor]
+            except Exception:
+                logger.debug(
+                    "Could not resolve class_names_per_factor for CNN '%s'; "
+                    "evidence emitter disabled.",
+                    label,
+                    exc_info=True,
+                )
+                return None
+        if not factor_labels:
+            return None
+
+        from hydra_suite.core.identity.calibration import CalibrationModel
+        from hydra_suite.core.identity.properties.cache import (
+            compute_classify_cache_id,
+        )
+
+        _calibration_temperature = float(
+            cnn_cfg_dict.get(
+                "calibration_temperature",
+                cnn_cfg_dict.get("temperature", 1.0),
+            )
+        )
+        _calibration_signature = (
+            CalibrationModel(temperature=_calibration_temperature).signature
+            if abs(_calibration_temperature - 1.0) > 1e-6
+            else ""
+        )
+
+        try:
+            classify_id = compute_classify_cache_id(
+                model_path=model_path,
+                compute_runtime=str(
+                    params.get(
+                        "CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu")
+                    )
+                ),
+                inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
+                calibration_signature=_calibration_signature,
+            )
+            start_frame = int(params.get("START_FRAME", 0))
+            end_frame = int(params.get("END_FRAME", -1))
+            if end_frame < 0:
+                end_frame = start_frame
+            cnn_cache_path = self._build_cnn_identity_cache_path(
+                label, classify_id, start_frame, end_frame
+            )
+            ev_path = build_evidence_cache_path(cnn_cache_path, label, "live")
+        except Exception:
+            return None
+
+        try:
+            emitter = IdentityEvidenceEmitter(
+                cache_path=ev_path,
+                source_name=label,
+                class_labels_per_factor=factor_labels,
+                runtime_signature=str(params.get("COMPUTE_RUNTIME", "cpu")),
+                calibration_signature=_calibration_signature,
+            )
+        except Exception:
+            logger.debug(
+                "IdentityEvidenceEmitter construction failed for '%s'",
+                label,
+                exc_info=True,
+            )
+            return None
+
+        live_store.set_catalog_labels(emitter.catalog_labels)
+        logger.info(
+            "Identity evidence emitter enabled for '%s': %s",
+            label,
+            ev_path,
+        )
+        return emitter
 
     def _build_inference_config_from_params(self, params: dict) -> InferenceConfig:
         """Build an InferenceConfig from tracking worker params dict.
