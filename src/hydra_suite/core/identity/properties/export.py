@@ -8,10 +8,30 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
+# Legacy imports replaced by new cache types (Correction 19 / Task 17c).
+# Functions that accept cache objects keep their signatures; callers pass the
+# appropriate new-pipeline cache handle. The column schema (DETECTED_HEADING_COLUMNS,
+# build_pose_keypoint_labels, etc.) is preserved verbatim.
+try:
+    # New pipeline: CNNCache, PoseCache, DetectionCache from core/inference/cache/
+    from hydra_suite.core.inference.cache.cnn import CNNCacheHandle as CNNIdentityCache
+    from hydra_suite.core.inference.cache.detection import (
+        DetectionCacheHandle as DetectedPropertiesCache,
+    )
+    from hydra_suite.core.inference.cache.pose import (
+        PoseCacheHandle as IndividualPropertiesCache,
+    )
+except ImportError:
+    # Fallback to legacy during transition (kept modules still present)
+    try:
+        from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
 
-from .cache import IndividualPropertiesCache
-from .detected_cache import DetectedPropertiesCache
+        from .cache import IndividualPropertiesCache
+        from .detected_cache import DetectedPropertiesCache
+    except ImportError:
+        CNNIdentityCache = None  # type: ignore[assignment,misc]
+        IndividualPropertiesCache = None  # type: ignore[assignment,misc]
+        DetectedPropertiesCache = None  # type: ignore[assignment,misc]
 
 POSE_SUMMARY_COLUMNS = [
     "PoseMeanConf",
