@@ -4422,6 +4422,7 @@ class TrackingWorker(QThread):
             OBBDirectConfig,
             OBBSequentialConfig,
             PoseConfig,
+            PoseSLEAPConfig,
             PoseYOLOConfig,
         )
 
@@ -4534,23 +4535,62 @@ class TrackingWorker(QThread):
                 )
             )
 
-        # Pose
+        # Pose — supports both YOLO-pose and SLEAP backends.
         pose_cfg = None
         if bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
-            pose_model_path = str(
-                params.get("POSE_MODEL_PATH", params.get("YOLO_POSE_MODEL_PATH", ""))
+            pose_model_type = str(params.get("POSE_MODEL_TYPE", "")).strip().lower()
+            pose_runtime = str(
+                params.get("POSE_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+            )
+            common_pose_kwargs = dict(
+                crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
+                suppress_foreign_regions=bool(
+                    params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True)
+                ),
+                min_keypoint_confidence=float(
+                    params.get("POSE_MIN_KPT_CONF_VALID", 0.2)
+                ),
+                min_valid_keypoints=int(
+                    params.get("POSE_DIRECTION_MIN_VALID_KEYPOINTS", 1)
+                ),
+                anterior_keypoints=list(
+                    params.get("POSE_DIRECTION_ANTERIOR_KEYPOINTS", []) or []
+                ),
+                posterior_keypoints=list(
+                    params.get("POSE_DIRECTION_POSTERIOR_KEYPOINTS", []) or []
+                ),
+                ignore_keypoints=list(params.get("POSE_IGNORE_KEYPOINTS", []) or []),
+                overrides_headtail=bool(params.get("POSE_OVERRIDES_HEADTAIL", True)),
+            )
+            sleap_model_path = str(
+                params.get("POSE_SLEAP_MODEL_DIR", params.get("POSE_MODEL_DIR", ""))
                 or ""
             ).strip()
-            if pose_model_path and os.path.exists(pose_model_path):
-                pose_runtime = str(
+            yolo_model_path = str(
+                params.get(
+                    "POSE_YOLO_MODEL_DIR",
                     params.get(
-                        "POSE_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu")
-                    )
+                        "POSE_MODEL_PATH",
+                        params.get("YOLO_POSE_MODEL_PATH", ""),
+                    ),
                 )
+                or ""
+            ).strip()
+            if pose_model_type == "sleap" and sleap_model_path:
+                pose_cfg = PoseConfig(
+                    backend="sleap",
+                    sleap=PoseSLEAPConfig(
+                        model_path=sleap_model_path,
+                        compute_runtime=pose_runtime,
+                        batch_size=int(params.get("POSE_BATCH_SIZE", 4)),
+                    ),
+                    **common_pose_kwargs,
+                )
+            elif yolo_model_path and os.path.exists(yolo_model_path):
                 pose_cfg = PoseConfig(
                     backend="yolo",
                     yolo=PoseYOLOConfig(
-                        model_path=pose_model_path,
+                        model_path=yolo_model_path,
                         compute_runtime=pose_runtime,
                         confidence_threshold=float(
                             params.get("POSE_CONFIDENCE_THRESHOLD", 1e-4)
@@ -4559,28 +4599,7 @@ class TrackingWorker(QThread):
                         max_detections_per_crop=1,
                         batch_size=int(params.get("POSE_BATCH_SIZE", 64)),
                     ),
-                    crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
-                    suppress_foreign_regions=bool(
-                        params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True)
-                    ),
-                    min_keypoint_confidence=float(
-                        params.get("POSE_MIN_KPT_CONF_VALID", 0.2)
-                    ),
-                    min_valid_keypoints=int(
-                        params.get("POSE_DIRECTION_MIN_VALID_KEYPOINTS", 1)
-                    ),
-                    anterior_keypoints=list(
-                        params.get("POSE_DIRECTION_ANTERIOR_KEYPOINTS", []) or []
-                    ),
-                    posterior_keypoints=list(
-                        params.get("POSE_DIRECTION_POSTERIOR_KEYPOINTS", []) or []
-                    ),
-                    ignore_keypoints=list(
-                        params.get("POSE_IGNORE_KEYPOINTS", []) or []
-                    ),
-                    overrides_headtail=bool(
-                        params.get("POSE_OVERRIDES_HEADTAIL", True)
-                    ),
+                    **common_pose_kwargs,
                 )
 
         # AprilTag
