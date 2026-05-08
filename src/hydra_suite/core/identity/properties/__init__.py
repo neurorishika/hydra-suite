@@ -1,11 +1,6 @@
-"""Properties caching and CSV export aggregation.
+"""Properties caching and CSV export aggregation."""
 
-Correction 25 (Task 18a): IndividualPropertiesCache is re-exported with a
-try/except guard so this package remains importable after the legacy cache
-module is removed in Task 18.  New callers should use
-hydra_suite.core.inference.cache.PoseCacheHandle instead.
-"""
-
+from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
 from hydra_suite.core.identity.properties.export import (
     POSE_SUMMARY_COLUMNS,
     augment_trajectories_with_pose_cache,
@@ -18,13 +13,6 @@ from hydra_suite.core.identity.properties.export import (
     merge_interpolated_pose_df,
     pose_wide_columns_for_labels,
 )
-
-try:
-    from hydra_suite.core.identity.properties.cache import (  # noqa: F401
-        IndividualPropertiesCache,
-    )
-except ImportError:
-    IndividualPropertiesCache = None  # type: ignore[assignment,misc]
 
 __all__ = [
     "IndividualPropertiesCache",

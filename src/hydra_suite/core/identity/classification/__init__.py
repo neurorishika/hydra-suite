@@ -1,10 +1,4 @@
-"""Per-detection identity classifiers: AprilTag, CNN, and head-tail direction.
-
-Correction 25 (Task 18a): CNN-related and HeadTail symbols are re-exported with
-try/except guards so this package remains importable after those legacy modules
-are removed in Task 18.  The stable symbols (AprilTag*, ClassifierBackend,
-classifier errors) keep direct imports.
-"""
+"""Per-detection identity classifiers: AprilTag, CNN, and head-tail direction."""
 
 from hydra_suite.core.identity.classification.apriltag import (
     AprilTagConfig,
@@ -14,6 +8,14 @@ from hydra_suite.core.identity.classification.backend import (
     ClassifierBackend,
     ClassifierMetadata,
 )
+from hydra_suite.core.identity.classification.cnn import (
+    ClassPrediction,
+    CNNIdentityBackend,
+    CNNIdentityCache,
+    CNNIdentityConfig,
+    TrackCNNHistory,
+    apply_cnn_identity_cost,
+)
 from hydra_suite.core.identity.classification.errors import (
     ClassifierConfigError,
     ClassifierError,
@@ -21,30 +23,7 @@ from hydra_suite.core.identity.classification.errors import (
     ClassifierRuntimeError,
     HeadTailFormatError,
 )
-
-try:
-    from hydra_suite.core.identity.classification.cnn import (  # noqa: F401
-        ClassPrediction,
-        CNNIdentityBackend,
-        CNNIdentityCache,
-        CNNIdentityConfig,
-        TrackCNNHistory,
-        apply_cnn_identity_cost,
-    )
-except ImportError:
-    ClassPrediction = None  # type: ignore[assignment,misc]
-    CNNIdentityBackend = None  # type: ignore[assignment,misc]
-    CNNIdentityCache = None  # type: ignore[assignment,misc]
-    CNNIdentityConfig = None  # type: ignore[assignment,misc]
-    TrackCNNHistory = None  # type: ignore[assignment,misc]
-    apply_cnn_identity_cost = None  # type: ignore[assignment]
-
-try:
-    from hydra_suite.core.identity.classification.headtail import (  # noqa: F401
-        HeadTailAnalyzer,
-    )
-except ImportError:
-    HeadTailAnalyzer = None  # type: ignore[assignment,misc]
+from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
 __all__ = [
     "AprilTagConfig",
