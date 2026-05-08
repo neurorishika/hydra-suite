@@ -1361,6 +1361,12 @@ class TrackingWorker(QThread):
                 inference_runner.run_batch_pass(
                     Path(self.video_path),
                     progress_cb=self._emit_inference_progress,
+                    start_frame=int(p.get("START_FRAME", 0)),
+                    end_frame=(
+                        int(p.get("END_FRAME", -1))
+                        if int(p.get("END_FRAME", -1)) >= 0
+                        else None
+                    ),
                 )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")

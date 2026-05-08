@@ -401,7 +401,13 @@ class InferenceRunner:
 
         return frame_result
 
-    def run_batch_pass(self, video_path: Path, progress_cb=None) -> None:
+    def run_batch_pass(
+        self,
+        video_path: Path,
+        progress_cb=None,
+        start_frame: int = 0,
+        end_frame: int | None = None,
+    ) -> None:
         import cv2
 
         if self.cache_dir is None:
@@ -413,20 +419,30 @@ class InferenceRunner:
 
         caches = _open_caches(self.config, self.cache_dir)
         self._caches = caches
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        video_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if end_frame is None:
+            end_frame = video_total - 1
+        start_frame = max(0, int(start_frame))
+        end_frame = min(video_total - 1, int(end_frame))
+        range_total = max(0, end_frame - start_frame + 1)
         batch_size = self.config.detection_batch_size
+
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
         frames_buf: list[np.ndarray] = []
         indices_buf: list[int] = []
         processed = 0
+        current_frame_idx = start_frame
 
         try:
-            while True:
+            while current_frame_idx <= end_frame:
                 ret, frame = cap.read()
                 if not ret:
                     break
                 frames_buf.append(frame)
-                indices_buf.append(processed)
+                indices_buf.append(current_frame_idx)
+                current_frame_idx += 1
                 processed += 1
                 if len(frames_buf) == batch_size:
                     self._run_batch(frames_buf, indices_buf, caches)
@@ -434,14 +450,14 @@ class InferenceRunner:
                     indices_buf.clear()
                 if (
                     progress_cb
-                    and total_frames > 0
-                    and processed % max(1, total_frames // 100) == 0
+                    and range_total > 0
+                    and processed % max(1, range_total // 100) == 0
                 ):
-                    progress_cb(processed, total_frames)
+                    progress_cb(processed, range_total)
             if frames_buf:
                 self._run_batch(frames_buf, indices_buf, caches)
             if progress_cb:
-                progress_cb(processed, total_frames)
+                progress_cb(processed, range_total)
         finally:
             cap.release()
             for h in caches.all_handles():
