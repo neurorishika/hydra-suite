@@ -14,7 +14,42 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from ....data.detection_cache import DetectionCache
+# Correction 20 / Task 17d: rewire to new DetectionCache.
+# The new DetectionCacheHandle has a different API (read_frame returns OBBResult).
+# We provide a thin compatibility wrapper so the existing _add_actual_tasks code
+# needs only one targeted update (the get_frame tuple-unpack → OBBResult access).
+try:
+    from hydra_suite.core.inference.cache.base import CacheKey as _CacheKey
+    from hydra_suite.core.inference.cache.detection import (
+        DetectionCacheHandle as _NewDetCache,
+    )
+
+    class DetectionCache:  # type: ignore[no-redef]
+        """Compatibility shim: wraps DetectionCacheHandle to expose legacy-compat API."""
+
+        def __init__(self, path, mode="r"):  # noqa: ARG002
+            # CacheKey with empty values — is_valid() checks path existence only.
+            _key = _CacheKey(
+                schema_version=0,
+                model_path="",
+                model_mtime=0.0,
+                config_hash="",
+            )
+            self._handle = _NewDetCache(path=path, key=_key)
+
+        def is_compatible(self) -> bool:
+            return self._handle.path.exists()
+
+        def get_frame(self, frame_id: int):
+            """Return frame data as OBBResult for use by _add_actual_tasks."""
+            return self._handle.read_frame(frame_id)
+
+        def close(self) -> None:
+            self._handle.close()
+
+except ImportError:
+    from ....data.detection_cache import DetectionCache  # type: ignore[no-redef]
+
 from ....utils.video_encoder import VideoEncoder
 from ...post.processing import _fix_heading_flips
 from ..geometry import ellipse_axes_from_area, ellipse_to_obb_corners
@@ -696,22 +731,42 @@ class OrientedTrackVideoExporter:
             "missing_detected_rows": 0,
             "invalid_geometry_rows": 0,
         }
-        (
-            meas,
-            _sizes,
-            shapes,
-            _confidences,
-            obb_corners,
-            detection_ids,
-            heading_hints,
-            _heading_confidences,
-            directed_mask,
-            _canonical_affines,
-            _canvas_dims,
-            _M_inverse,
-        ) = detection_cache.get_frame(frame_id)
+        # Support both new OBBResult API and legacy 12-tuple.
+        # Correction 20: new cache returns OBBResult; legacy returns a 12-tuple.
+        frame_data = detection_cache.get_frame(frame_id)
+        from hydra_suite.core.inference.result import OBBResult as _OBBResult
+
+        if isinstance(frame_data, _OBBResult):
+            obb = frame_data
+            meas = np.concatenate(
+                [obb.centroids, obb.angles[:, None]], axis=1
+            )  # (D, 3): cx, cy, theta
+            shapes = obb.shapes  # (D, 2)
+            obb_corners = obb.corners  # (D, 4, 2)
+            detection_ids = obb.detection_ids
+            heading_hints = None  # Not stored in OBBResult
+            directed_mask = None
+        else:
+            # Legacy 12-tuple unpack
+            (
+                meas,
+                _sizes,
+                shapes,
+                _confidences,
+                obb_corners,
+                detection_ids,
+                heading_hints,
+                _heading_confidences,
+                directed_mask,
+                _canonical_affines,
+                _canvas_dims,
+                _M_inverse,
+            ) = frame_data
+
         det_index = {}
-        for idx, det_id in enumerate(detection_ids or []):
+        for idx, det_id in enumerate(
+            detection_ids if detection_ids is not None else []
+        ):
             try:
                 det_index[int(det_id)] = idx
             except Exception:
@@ -728,9 +783,14 @@ class OrientedTrackVideoExporter:
                 missing["missing_detected_rows"] += 1
                 continue
             corners = None
-            if obb_corners and idx < len(obb_corners):
+            if obb_corners is not None and idx < len(obb_corners):
                 corners = np.asarray(obb_corners[idx], dtype=np.float32)
-            elif idx < len(meas) and idx < len(shapes):
+            elif (
+                meas is not None
+                and idx < len(meas)
+                and shapes is not None
+                and idx < len(shapes)
+            ):
                 shape = shapes[idx]
                 if shape is not None and len(shape) >= 2:
                     area = float(shape[0])
