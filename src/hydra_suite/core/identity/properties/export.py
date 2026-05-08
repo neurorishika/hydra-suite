@@ -8,32 +8,21 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
-# Legacy imports replaced by new cache types (Correction 19 / Task 17c).
-# Functions that accept cache objects keep their signatures; callers pass the
-# appropriate new-pipeline cache handle. The column schema (DETECTED_HEADING_COLUMNS,
-# build_pose_keypoint_labels, etc.) is preserved verbatim.
-try:
-    # New pipeline: CNNCache, PoseCache, DetectionCache from core/inference/cache/
-    from hydra_suite.core.inference.cache.store import (  # noqa: F401
-        CNNCacheHandle as CNNIdentityCache,
-    )
-    from hydra_suite.core.inference.cache.store import (
-        DetectionCacheHandle as DetectedPropertiesCache,
-    )
-    from hydra_suite.core.inference.cache.store import (
-        PoseCacheHandle as IndividualPropertiesCache,
-    )
-except ImportError:
-    # Fallback to legacy during transition (kept modules still present)
-    try:
-        from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
+# DetectedPropertiesCache, IndividualPropertiesCache, and CNNIdentityCache are
+# legacy combined-schema caches that aggregate detection + head-tail + pose +
+# CNN results in a single .npz. They are NOT structurally interchangeable with
+# the per-type CacheHandle objects in core/inference/cache/store.py — the
+# legacy classes accept ``(cache_path, mode="r"|"w")`` constructors and expose
+# their own ``read_*``/``save_*``/``is_compatible`` API. A previous attempt
+# (Task 17c) aliased the new DetectionCacheHandle to DetectedPropertiesCache,
+# which broke the rich-export path with ``TypeError: ... unexpected keyword
+# argument 'mode'`` at runtime. Until the rich-export path is rewired to read
+# from the new per-type caches directly, this module stays on the legacy
+# classes.
+from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
 
-        from .cache import IndividualPropertiesCache
-        from .detected_cache import DetectedPropertiesCache
-    except ImportError:
-        CNNIdentityCache = None  # type: ignore[assignment,misc]
-        IndividualPropertiesCache = None  # type: ignore[assignment,misc]
-        DetectedPropertiesCache = None  # type: ignore[assignment,misc]
+from .cache import IndividualPropertiesCache
+from .detected_cache import DetectedPropertiesCache
 
 POSE_SUMMARY_COLUMNS = [
     "PoseMeanConf",
