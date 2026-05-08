@@ -2303,9 +2303,10 @@ class TrackingWorker(QThread):
                 _frame_result = inference_runner.load_frame(actual_frame_index)
                 if _frame_result is not None and _frame_result.obb.num_detections > 0:
                     _obb = _frame_result.obb
-                    meas = frame_result_to_meas(
-                        _obb.centroids, _frame_result.resolved_headings
-                    )
+                    # meas carries the OBB axis angle (legacy convention, [0, pi));
+                    # downstream resolve_tracking_theta picks between theta and
+                    # theta+pi using motion history + headtail heading_hints.
+                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
                     shapes = [
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
@@ -2442,9 +2443,8 @@ class TrackingWorker(QThread):
                 _current_frame_result = _frame_result
                 if _frame_result is not None and _frame_result.obb.num_detections > 0:
                     _obb = _frame_result.obb
-                    meas = frame_result_to_meas(
-                        _obb.centroids, _frame_result.resolved_headings
-                    )
+                    # meas carries the OBB axis angle (see cached path above).
+                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
                     shapes = [
                         (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))

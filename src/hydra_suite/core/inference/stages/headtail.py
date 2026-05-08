@@ -78,6 +78,16 @@ def run_headtail(
 
     all_probs = model.backend.predict_batch(np_crops)
 
+    # axis_theta for the head-tail offset map is derived empirically from the
+    # OBB corners with atan2(c[1]-c[0]). Reasoning: the new pipeline's crop
+    # builder rotates by `obb.angles` (folded to [0, pi)), but YOLO's native
+    # xyxyxyxy corners are in the *un-folded* axis ordering, so the canonical
+    # crop the classifier sees is rotated 180 degrees relative to the legacy
+    # detector's crop for ~94 percent of detections. Using atan2 of YOLO's
+    # native corners as axis_theta cancels that flip and recovers legacy parity
+    # for those detections. Falls back to obb.angles if corners are degenerate.
+    signed_axes = _signed_major_axis_from_corners(obb_result.corners)
+
     for i, probs_per_factor in enumerate(all_probs):
         factor_probs = probs_per_factor[0]
         winning_idx = int(np.argmax(factor_probs))
@@ -88,7 +98,10 @@ def run_headtail(
         offset = _label_to_heading_offset(label)
         if offset is None:
             continue
-        hints[i] = obb_result.angles[i] + offset
+        axis_theta = float(obb_result.angles[i])
+        if signed_axes is not None and math.isfinite(float(signed_axes[i])):
+            axis_theta = float(signed_axes[i])
+        hints[i] = (axis_theta + offset) % (2.0 * math.pi)
         confs[i] = winning_conf
         mask[i] = 1
 
@@ -103,6 +116,28 @@ def run_headtail(
 def _label_to_heading_offset(label: str) -> float | None:
     """Map direction label to angle offset relative to OBB major axis."""
     return _DIRECTION_OFFSET.get(label)
+
+
+def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:
+    """Return per-detection major-axis angle from OBB corners, in [-pi, pi].
+
+    Mirrors ``compute_alignment_affine`` in core.canonicalization.crop: picks
+    the longer of the first two edges (c[1]-c[0] vs c[2]-c[1]) and returns
+    ``atan2(major_vec_y, major_vec_x)``. NaN for degenerate boxes.
+    """
+    if corners is None or corners.size == 0 or corners.ndim != 3:
+        return None
+    n = corners.shape[0]
+    out = np.full(n, float("nan"), dtype=np.float32)
+    for i in range(n):
+        c = corners[i].reshape(4, 2)
+        e01 = float(np.linalg.norm(c[1] - c[0]))
+        e12 = float(np.linalg.norm(c[2] - c[1]))
+        if e01 < 1e-3 or e12 < 1e-3:
+            continue
+        major_vec = c[1] - c[0] if e01 >= e12 else c[2] - c[1]
+        out[i] = float(math.atan2(float(major_vec[1]), float(major_vec[0])))
+    return out
 
 
 def _resize_crops(crops: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:

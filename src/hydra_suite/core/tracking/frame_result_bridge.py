@@ -21,16 +21,23 @@ if TYPE_CHECKING:
 
 def frame_result_to_meas(
     centroids: np.ndarray,
-    resolved_headings: np.ndarray,
+    angles: np.ndarray,
 ) -> list:
-    """Convert OBBResult centroids + resolved headings to legacy meas list.
+    """Convert OBBResult centroids + axis angles to legacy meas list.
 
     Each element is a (3,) float32 array [cx, cy, theta] matching the format
     expected by the Kalman filter, Hungarian assigner, and trajectory writer.
 
+    The angle passed here should be the OBB *axis angle* (in [0, pi)) so the
+    downstream tracking layer can call ``resolve_tracking_theta`` to pick
+    between ``theta`` and ``theta + pi`` based on motion history and the
+    head-tail classifier hints (passed separately via ``raw_heading_hints``).
+    Passing the already-merged ``resolved_headings`` here would short-circuit
+    that resolution and produce results inconsistent with legacy parity.
+
     Args:
         centroids: (D, 2) array of [cx, cy] centroid positions.
-        resolved_headings: (D,) array of final merged heading angles in radians.
+        angles: (D,) array of OBB axis angles in radians, in [0, pi).
 
     Returns:
         List of D numpy arrays, each shape (3,) with [cx, cy, theta].
@@ -43,7 +50,7 @@ def frame_result_to_meas(
                 [
                     float(centroids[i, 0]),
                     float(centroids[i, 1]),
-                    float(resolved_headings[i]),
+                    float(angles[i]),
                 ],
                 dtype=np.float32,
             )

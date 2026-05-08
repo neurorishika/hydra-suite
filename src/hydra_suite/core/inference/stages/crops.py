@@ -140,7 +140,6 @@ def _warp_canonical_crop(
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
     )
-    # Pad shorter dim to a uniform size across the batch is handled in the caller
     return crop
 
 

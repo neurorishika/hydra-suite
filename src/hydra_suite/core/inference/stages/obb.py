@@ -28,6 +28,46 @@ class OBBModels:
     detect_model: Any | None = None  # sequential stage-1
     obb_model: Any | None = None  # sequential stage-2
 
+
+def _normalize_obb_geometry(
+    w_arr: np.ndarray, h_arr: np.ndarray, angle_arr: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Canonicalize OBB axis angle and major/minor geometry.
+
+    Mirrors legacy ``_obb_geometry._extract_raw_detections``:
+
+    1. Fold raw angle to [0, pi) — the OBB axis is undirected, so any value
+       outside this half-circle is equivalent to ``angle % pi``.
+    2. When ``w < h``, the YOLO export reports the angle of the *minor*
+       axis. Add 90 degrees so ``angles`` always describes the major axis.
+    3. Compute ``major = max(w, h)``, ``minor = min(w, h)``; size = major*minor
+       (==w*h, since multiplication is commutative) and aspect = major/minor.
+
+    Returns (angles_rad in [0, pi), sizes, aspect_ratio) all as float32.
+    """
+    if angle_arr.size == 0:
+        return (
+            np.zeros(0, dtype=np.float32),
+            np.zeros(0, dtype=np.float32),
+            np.zeros(0, dtype=np.float32),
+        )
+    # YOLO ultralytics exports report theta in radians; some non-standard
+    # exports report degrees. Mirror legacy parity guard.
+    if np.nanmax(np.abs(angle_arr)) > (2.0 * np.pi + 1e-3):
+        angle_rad = np.deg2rad(angle_arr)
+    else:
+        angle_rad = angle_arr
+    angle_deg = np.rad2deg(angle_rad) % 180.0
+    swap_mask = w_arr < h_arr
+    angle_deg = np.where(swap_mask, (angle_deg + 90.0) % 180.0, angle_deg)
+    angles_fixed = np.deg2rad(angle_deg).astype(np.float32)
+    major = np.where(swap_mask, h_arr, w_arr)
+    minor = np.where(swap_mask, w_arr, h_arr)
+    sizes = (major * minor).astype(np.float32)
+    safe_minor = np.where(minor > 0, minor, 1.0)
+    aspect = np.where(minor > 0, major / safe_minor, 1.0).astype(np.float32)
+    return angles_fixed, sizes, aspect
+
     def close(self) -> None:
         pass  # ultralytics models don't need explicit cleanup
 
@@ -204,15 +244,14 @@ def _extract_obb_result(
     corners = corners.copy()
     corners[:, :, 0] += ox
     corners[:, :, 1] += oy
-    w_arr, h_arr = xywhr[:, 2], xywhr[:, 3]
-    sizes = w_arr * h_arr
-    safe_h = np.where(h_arr > 0, h_arr, 1.0)
-    aspect = np.where(h_arr > 0, w_arr / safe_h, 1.0)
+    angles_fixed, sizes, aspect = _normalize_obb_geometry(
+        xywhr[:, 2], xywhr[:, 3], xywhr[:, 4]
+    )
     return OBBResult(
         frame_idx=frame_idx,
         centroids=centroids.astype(np.float32),
-        angles=xywhr[:, 4].astype(np.float32),
-        sizes=sizes.astype(np.float32),
+        angles=angles_fixed,
+        sizes=sizes,
         shapes=np.stack([sizes, aspect], axis=1).astype(np.float32),
         confidences=conf.astype(np.float32),
         corners=corners.astype(np.float32),
@@ -276,15 +315,14 @@ def materialize_tensors(raw: _RawOBBTensors) -> OBBResult:
     xywhr_np = raw.xywhr.cpu().numpy()
     corners_np = raw.corners.cpu().numpy()
     conf_np = raw.conf.cpu().numpy()
-    w_arr, h_arr = xywhr_np[:, 2], xywhr_np[:, 3]
-    sizes = (w_arr * h_arr).astype(np.float32)
-    safe_h = np.where(h_arr > 0, h_arr, 1.0)
-    aspect = np.where(h_arr > 0, w_arr / safe_h, 1.0).astype(np.float32)
+    angles_fixed, sizes, aspect = _normalize_obb_geometry(
+        xywhr_np[:, 2], xywhr_np[:, 3], xywhr_np[:, 4]
+    )
     n = int(len(conf_np))
     return OBBResult(
         frame_idx=raw.frame_idx,
         centroids=xywhr_np[:, :2].astype(np.float32),
-        angles=xywhr_np[:, 4].astype(np.float32),
+        angles=angles_fixed,
         sizes=sizes,
         shapes=np.stack([sizes, aspect], axis=1),
         confidences=conf_np.astype(np.float32),
