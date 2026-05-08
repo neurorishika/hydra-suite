@@ -28,12 +28,11 @@ def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
 
     backend = ClassifierBackend(config.model_path, config.compute_runtime)
     meta = backend.metadata
-    factor_names = [f"factor_{i}" for i in range(len(meta.class_names))]
     return CNNModel(
         backend=backend,
         input_size=(meta.input_size[0], meta.input_size[1]),
-        factor_names=factor_names,
-        factor_class_names=[list(cn) for cn in meta.class_names],
+        factor_names=list(meta.factor_names),
+        factor_class_names=[list(cn) for cn in meta.class_names_per_factor],
     )
 
 

@@ -41,7 +41,7 @@ def load_headtail_model(
     return HeadTailModel(
         backend=backend,
         input_size=input_size,
-        class_names=list(meta.class_names[0]),
+        class_names=list(meta.class_names_per_factor[0]),
     )
 
 
