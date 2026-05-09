@@ -2723,6 +2723,10 @@ class TrackingWorker(QThread):
                     )
 
             if detected_props_cache is not None and detection_ids:
+                n_dets = len(detection_ids)
+                ht_directed = np.asarray(headtail_directed_mask, dtype=np.uint8).reshape(-1)
+                if ht_directed.size != n_dets:
+                    ht_directed = np.zeros(n_dets, dtype=np.uint8)
                 detected_props_cache.add_frame(
                     actual_frame_index,
                     detection_ids=detection_ids,
@@ -2732,7 +2736,7 @@ class TrackingWorker(QThread):
                     heading_directed=detection_directed_mask,
                     headtail_heading=detection_headtail_heading,
                     headtail_confidence=detection_headtail_confidence,
-                    headtail_directed=headtail_directed_mask,
+                    headtail_directed=ht_directed,
                 )
 
             if len(meas) >= params.get("MIN_DETECTIONS_TO_START", 1):
