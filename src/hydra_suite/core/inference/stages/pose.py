@@ -51,9 +51,42 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
         )
 
     assert config.sleap is not None
-    from hydra_suite.core.identity.pose.backends.sleap import SleapExportedBackend
+    from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
+    from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
 
-    backend = SleapExportedBackend(model_path=config.sleap.model_path)
+    sleap_cfg = config.sleap
+    compute_runtime = str(sleap_cfg.compute_runtime or "cpu").lower()
+    if compute_runtime in ("cuda", "onnx_cuda"):
+        runtime_flavor = "onnx_cuda"
+        device = "cuda"
+    elif compute_runtime == "mps":
+        runtime_flavor = "onnx_mps"
+        device = "mps"
+    elif compute_runtime == "tensorrt":
+        runtime_flavor = "tensorrt"
+        device = "cuda"
+    else:
+        runtime_flavor = "onnx_cpu"
+        device = "cpu"
+
+    skeleton_edges = [tuple(e) for e in skeleton.get("edges", [])]
+
+    runtime_cfg = PoseRuntimeConfig(
+        backend_family="sleap",
+        runtime_flavor=runtime_flavor,
+        device=device,
+        batch_size=int(sleap_cfg.batch_size),
+        model_path=str(sleap_cfg.model_path),
+        out_root=".",
+        min_valid_conf=float(config.min_keypoint_confidence),
+        sleap_env=str(sleap_cfg.conda_env),
+        sleap_device=device,
+        sleap_batch=int(sleap_cfg.batch_size),
+        sleap_max_instances=int(sleap_cfg.max_instances),
+        keypoint_names=list(keypoint_names),
+        skeleton_edges=skeleton_edges,
+    )
+    backend = create_pose_backend_from_config(runtime_cfg)
     return PoseModel(backend=backend, n_keypoints=n_kpts, keypoint_names=keypoint_names)
 
 
