@@ -7,6 +7,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from hydra_suite.core.canonicalization.crop import (
+    compute_native_crop_dimensions,
+    compute_alignment_affine,
+    gpu_canonical_crop_batch,
+)
+
 from ..result import OBBResult
 from ..runtime import RuntimeContext
 
@@ -83,19 +89,17 @@ def _extract_canonical_cpu(
     else:
         arr = frame
 
+    padding_fraction = max(0.0, float(margin) - 1.0)
     crops: list[np.ndarray] = []
     for i in range(obb.num_detections):
         crop = _warp_canonical_crop(
             arr,
-            obb.centroids[i],
-            obb.angles[i],
-            obb.sizes[i],
+            obb.corners[i],
             aspect_ratio,
-            margin,
+            padding_fraction,
         )
         crops.append(crop)
 
-    # Pad to uniform size matching the GPU path's batch behavior
     max_h = max(c.shape[0] for c in crops)
     max_w = max(c.shape[1] for c in crops)
     padded: list[np.ndarray] = []
@@ -114,33 +118,33 @@ def _extract_canonical_cpu(
 
 def _warp_canonical_crop(
     frame: np.ndarray,
-    centroid: np.ndarray,
-    angle: float,
-    size: float,
+    corners: np.ndarray,
     aspect_ratio: float,
-    margin: float,
+    padding_fraction: float,
 ) -> np.ndarray:
-    """Extract a rotated crop centred on centroid, aligned so OBB is upright."""
-    side = math.sqrt(size) * margin
-    out_w = max(int(side * aspect_ratio), 4)
-    out_h = max(int(side), 4)
+    """Extract canonical crop using main's corner-triangle affine.
 
-    cx, cy = float(centroid[0]), float(centroid[1])
-    angle_deg = float(np.degrees(angle))
-
-    M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
-    M[0, 2] += out_w / 2 - cx
-    M[1, 2] += out_h / 2 - cy
-
-    crop = cv2.warpAffine(
+    Delegates to ``compute_native_crop_dimensions`` + ``compute_alignment_affine``
+    from ``core.canonicalization.crop`` so the new pipeline produces canvases
+    with native major-axis pixel extent matching main exactly.
+    """
+    canvas_w, canvas_h = compute_native_crop_dimensions(
+        corners, aspect_ratio, padding_fraction
+    )
+    try:
+        M, _ = compute_alignment_affine(
+            corners, canvas_w, canvas_h, padding_fraction
+        )
+    except ValueError:
+        n_ch = frame.shape[2] if frame.ndim == 3 else 1
+        return np.zeros((canvas_h, canvas_w, n_ch), dtype=frame.dtype)
+    return cv2.warpAffine(
         frame,
         M,
-        (out_w, out_h),
+        (canvas_w, canvas_h),
         flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
+        borderMode=cv2.BORDER_REPLICATE,
     )
-    return crop
 
 
 def _extract_canonical_gpu(
@@ -150,27 +154,62 @@ def _extract_canonical_gpu(
     margin: float,
     device: str,
 ) -> torch.Tensor:
-    """Batched affine crop extraction on CUDA tensor via a single grid_sample call.
+    """Batched corner-affine crop extraction on CUDA via gpu_canonical_crop_batch.
 
-    All N crops are extracted in one affine_grid + grid_sample kernel pair.
-    Output size is fixed to the largest canonical crop in the batch — smaller
-    crops are slightly over-padded, which is acceptable for downstream models.
-
-    Theta matrix maps output normalised coords -> input normalised coords:
-      [0,0]: cos * (out_w / W)
-      [0,1]: -sin * (out_h / W)
-      [0,2]: 2*cx/W - 1
-      [1,0]: sin * (out_w / H)
-      [1,1]: cos * (out_h / H)
-      [1,2]: 2*cy/H - 1
+    Mirrors main's headtail GPU path: each detection's M_align is computed via
+    ``compute_alignment_affine`` (corner-triangle), then a single batched
+    ``F.affine_grid`` + ``F.grid_sample`` warp produces all crops at a uniform
+    canvas size = max(native_dims) so smaller OBBs are border-replicated.
     """
     if isinstance(frame, np.ndarray):
         if frame.ndim == 3:
             frame = torch.from_numpy(frame.transpose(2, 0, 1)).float() / 255.0
         frame = frame.to(device)
 
+    if frame.ndim == 4:
+        frame = frame.squeeze(0)  # (C, H, W) — gpu_canonical_crop_batch expects CHW
+
+    n = obb.num_detections
+    padding_fraction = max(0.0, float(margin) - 1.0)
+
+    canvas_dims: list[tuple[int, int]] = []
+    M_aligns: list[np.ndarray] = []
+    for i in range(n):
+        try:
+            cw, ch = compute_native_crop_dimensions(
+                obb.corners[i], aspect_ratio, padding_fraction
+            )
+            M, _ = compute_alignment_affine(
+                obb.corners[i], cw, ch, padding_fraction
+            )
+        except ValueError:
+            cw, ch = 8, 8
+            M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        canvas_dims.append((cw, ch))
+        M_aligns.append(M)
+
+    out_w = max(cd[0] for cd in canvas_dims) if canvas_dims else 8
+    out_h = max(cd[1] for cd in canvas_dims) if canvas_dims else 8
+
+    crops = gpu_canonical_crop_batch(frame, M_aligns, out_w, out_h)
+    return crops
+
+
+# Legacy GPU path kept for reference (no longer used).
+def _extract_canonical_gpu_legacy(
+    frame: torch.Tensor | np.ndarray,
+    obb: OBBResult,
+    aspect_ratio: float,
+    margin: float,
+    device: str,
+) -> torch.Tensor:
+    if isinstance(frame, np.ndarray):
+        if frame.ndim == 3:
+            frame = torch.from_numpy(frame.transpose(2, 0, 1)).float() / 255.0
+        frame = frame.to(device)
+
     if frame.ndim == 3:
-        frame = frame.unsqueeze(0)  # (1, C, H, W)
+        frame = frame.unsqueeze(0)
 
     _, C, H, W = frame.shape
     n = obb.num_detections
@@ -197,10 +236,8 @@ def _extract_canonical_gpu(
             ]
         )
 
-    theta_t = torch.tensor(thetas, dtype=torch.float32, device=device)  # (N, 2, 3)
-
+    theta_t = torch.tensor(thetas, dtype=torch.float32, device=device)
     frame_batch = frame.expand(n, -1, -1, -1)
-
     grid = F.affine_grid(theta_t, (n, C, out_h, out_w), align_corners=False)
     crops = F.grid_sample(
         frame_batch,
