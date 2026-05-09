@@ -2724,9 +2724,18 @@ class TrackingWorker(QThread):
 
             if detected_props_cache is not None and detection_ids:
                 n_dets = len(detection_ids)
-                ht_directed = np.asarray(headtail_directed_mask, dtype=np.uint8).reshape(-1)
-                if ht_directed.size != n_dets:
-                    ht_directed = np.zeros(n_dets, dtype=np.uint8)
+
+                def _pad_to_n(arr, n, fill_value, dtype):
+                    a = np.asarray(arr, dtype=dtype).reshape(-1)
+                    if a.size == n:
+                        return a
+                    out = np.full(n, fill_value, dtype=dtype)
+                    out[: min(a.size, n)] = a[: min(a.size, n)]
+                    return out
+
+                ht_directed = _pad_to_n(headtail_directed_mask, n_dets, 0, np.uint8)
+                ht_heading = _pad_to_n(detection_headtail_heading, n_dets, np.nan, np.float32)
+                ht_conf = _pad_to_n(detection_headtail_confidence, n_dets, 0.0, np.float32)
                 detected_props_cache.add_frame(
                     actual_frame_index,
                     detection_ids=detection_ids,
@@ -2734,8 +2743,8 @@ class TrackingWorker(QThread):
                     theta_resolved=detection_theta_resolved,
                     heading_source=detection_heading_source,
                     heading_directed=detection_directed_mask,
-                    headtail_heading=detection_headtail_heading,
-                    headtail_confidence=detection_headtail_confidence,
+                    headtail_heading=ht_heading,
+                    headtail_confidence=ht_conf,
                     headtail_directed=ht_directed,
                 )
 
