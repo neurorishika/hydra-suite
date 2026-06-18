@@ -73,7 +73,7 @@ run() {  # src outdir config video label skeleton
   [ -n "${6:-}" ] && skel_arg=(--skeleton "$6")
   PYTHONPATH="$1" python "$WT/tools/equivalence/runner.py" \
     --orig-config "$3" --video "$4" --outdir "$2" --runtime "$RUNTIME" --label "$5" \
-    "${skel_arg[@]}"
+    ${skel_arg[@]+"${skel_arg[@]}"}
 }
 
 cmp() {  # a b title
