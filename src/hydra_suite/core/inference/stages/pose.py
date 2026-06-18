@@ -127,12 +127,21 @@ def run_pose(
     min_valid = config.min_valid_keypoints
 
     for i, r in enumerate(raw_results):
-        kpts = r.keypoints.data.cpu().numpy()  # (1, K, 3)
-        if kpts.shape[0] == 0:
+        # Both YOLO and SLEAP backends return the canonical pose.types.PoseResult,
+        # whose `.keypoints` is already a numpy (K, 3) array (x, y, conf) or None.
+        kpts = getattr(r, "keypoints", None)
+        if kpts is None:
             continue
-        kpts = kpts[0]  # (K, 3)
-        kpts_out[i] = kpts
-        n_confident = int(np.sum(kpts[:, 2] >= min_kpt_conf))
+        kpts = np.asarray(kpts, dtype=np.float32)
+        if kpts.ndim == 3:  # tolerate a leading (1, K, 3) batch axis
+            if kpts.shape[0] == 0:
+                continue
+            kpts = kpts[0]
+        if kpts.ndim != 2 or kpts.shape[0] == 0:
+            continue
+        k = min(kpts.shape[0], model.n_keypoints)
+        kpts_out[i, :k] = kpts[:k]
+        n_confident = int(np.sum(kpts[:k, 2] >= min_kpt_conf))
         valid[i] = n_confident >= min_valid
 
     return PoseResult(keypoints=kpts_out, valid_mask=valid)

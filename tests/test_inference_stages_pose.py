@@ -35,13 +35,23 @@ def _obb(n: int) -> OBBResult:
     )
 
 
-def _mock_pose_result(n_kpts: int = 4, conf: float = 0.8) -> MagicMock:
-    """Mock pose-backend result holding a `.keypoints.data` (1, K, 3) tensor accessor."""
-    r = MagicMock()
-    kpts = np.zeros((1, n_kpts, 3), dtype=np.float32)
-    kpts[0, :, 2] = conf
-    r.keypoints.data.cpu.return_value.numpy.return_value = kpts
-    return r
+def _mock_pose_result(n_kpts: int = 4, conf: float = 0.8):
+    """Real backend result: pose.types.PoseResult with `.keypoints` as (K, 3) numpy.
+
+    Both the YOLO and SLEAP backends return this canonical type from
+    predict_batch (NOT an ultralytics Results object).
+    """
+    from hydra_suite.core.identity.pose.types import PoseResult as BackendPoseResult
+
+    kpts = np.zeros((n_kpts, 3), dtype=np.float32)
+    kpts[:, 2] = conf
+    return BackendPoseResult(
+        keypoints=kpts,
+        mean_conf=conf,
+        valid_fraction=1.0,
+        num_valid=n_kpts,
+        num_keypoints=n_kpts,
+    )
 
 
 def test_run_pose_empty_crops():
