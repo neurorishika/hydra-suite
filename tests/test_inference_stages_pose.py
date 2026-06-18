@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -6,7 +7,7 @@ import torch
 from hydra_suite.core.inference.config import PoseConfig, PoseYOLOConfig
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
-from hydra_suite.core.inference.stages.pose import PoseModel, run_pose
+from hydra_suite.core.inference.stages.pose import PoseModel, load_pose_model, run_pose
 
 
 def _cpu_rt():
@@ -71,6 +72,43 @@ def test_run_pose_shape():
     result = run_pose(crops, _obb(2), model, config, _cpu_rt())
     assert result.keypoints.shape == (2, 4, 3)
     assert result.valid_mask.shape == (2,)
+
+
+def test_load_pose_model_reads_canonical_skeleton_keys(tmp_path, monkeypatch):
+    """Regression: load_pose_model must read 'keypoint_names'/'skeleton_edges'
+    (canonical skeleton JSON keys), not the wrong 'keypoints'/'edges' keys.
+    Uses the YOLO branch with a stub backend to avoid loading a real model.
+    """
+    skel = tmp_path / "skel.json"
+    skel.write_text(
+        json.dumps(
+            {
+                "keypoint_names": ["head", "thorax", "abdomen"],
+                "skeleton_edges": [[0, 1], [1, 2]],
+            }
+        )
+    )
+
+    import hydra_suite.core.identity.pose.backends.yolo as yolo_mod
+
+    captured = {}
+
+    class _StubBackend:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(yolo_mod, "YoloNativeBackend", _StubBackend)
+
+    config = PoseConfig(
+        backend="yolo",
+        yolo=PoseYOLOConfig(model_path="/p.pt"),
+        skeleton_file=str(skel),
+    )
+    model = load_pose_model(config, _cpu_rt())
+
+    assert model.keypoint_names == ["head", "thorax", "abdomen"]
+    assert model.n_keypoints == 3
+    assert captured["keypoint_names"] == ["head", "thorax", "abdomen"]
 
 
 def test_run_pose_valid_mask_high_conf():

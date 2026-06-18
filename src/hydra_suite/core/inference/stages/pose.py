@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,8 +22,18 @@ class PoseModel:
 
 
 def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
-    skeleton = _load_skeleton(config.skeleton_file)
-    keypoint_names: list[str] = skeleton.get("keypoints", [])
+    from hydra_suite.core.identity.pose.utils import load_skeleton_from_json
+
+    # Reuse the canonical skeleton loader so both legacy and new pipelines accept
+    # the same JSON formats ("keypoint_names"/"skeleton_edges" and the legacy
+    # "keypoints"/"edges" aliases) and resolve/validate the path identically.
+    if config.skeleton_file:
+        names, edges = load_skeleton_from_json(config.skeleton_file)
+        keypoint_names: list[str] = list(names)
+        skeleton_edges = [tuple(e) for e in edges]
+    else:
+        keypoint_names = []
+        skeleton_edges = []
     n_kpts = len(keypoint_names)
 
     if config.backend == "yolo":
@@ -68,8 +77,6 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
     else:
         runtime_flavor = "onnx_cpu"
         device = "cpu"
-
-    skeleton_edges = [tuple(e) for e in skeleton.get("edges", [])]
 
     runtime_cfg = PoseRuntimeConfig(
         backend_family="sleap",
@@ -129,13 +136,3 @@ def run_pose(
         valid[i] = n_confident >= min_valid
 
     return PoseResult(keypoints=kpts_out, valid_mask=valid)
-
-
-def _load_skeleton(skeleton_file: str) -> dict:
-    if not skeleton_file:
-        return {}
-    try:
-        with open(skeleton_file) as f:
-            return json.load(f)
-    except Exception:
-        return {}

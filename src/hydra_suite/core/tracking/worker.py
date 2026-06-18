@@ -2734,8 +2734,12 @@ class TrackingWorker(QThread):
                     return out
 
                 ht_directed = _pad_to_n(headtail_directed_mask, n_dets, 0, np.uint8)
-                ht_heading = _pad_to_n(detection_headtail_heading, n_dets, np.nan, np.float32)
-                ht_conf = _pad_to_n(detection_headtail_confidence, n_dets, 0.0, np.float32)
+                ht_heading = _pad_to_n(
+                    detection_headtail_heading, n_dets, np.nan, np.float32
+                )
+                ht_conf = _pad_to_n(
+                    detection_headtail_confidence, n_dets, 0.0, np.float32
+                )
                 detected_props_cache.add_frame(
                     actual_frame_index,
                     detection_ids=detection_ids,
@@ -4359,9 +4363,7 @@ class TrackingWorker(QThread):
             return None
 
         from hydra_suite.core.identity.calibration import CalibrationModel
-        from hydra_suite.core.identity.properties.cache import (
-            compute_classify_cache_id,
-        )
+        from hydra_suite.core.identity.properties.cache import compute_classify_cache_id
 
         _calibration_temperature = float(
             cnn_cfg_dict.get(
@@ -4556,6 +4558,7 @@ class TrackingWorker(QThread):
                 params.get("POSE_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
             )
             common_pose_kwargs = dict(
+                skeleton_file=str(params.get("POSE_SKELETON_FILE", "") or "").strip(),
                 crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
                 suppress_foreign_regions=bool(
                     params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True)
