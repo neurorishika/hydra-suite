@@ -29,11 +29,43 @@ always recomputed fresh (`use_cached_detections=False`).
 - `run_matrix.sh` — one-shot: legacy ×1, new ×2, per video, then prints the
   determinism baseline and the equivalence comparison.
 
-## Quick start
+## Portable fixtures (default)
+
+For cross-machine runs without copying the full datasets, the harness ships short
+clips + the exact models they need, hosted as a GitHub Release (only small
+portable files live in git: configs, skeleton, manifest, scripts).
+
+`fixtures/`:
+- `clips/` (gitignored) — short clips, fetched from the release.
+- `configs/` — portable per-clip tracking configs (paths blanked; set at run time).
+- `ooceraea_biroi.json` — pose skeleton (passed via `runner --skeleton`).
+- `manifest.json` — release tag + sha256/size of every asset.
+- `fetch_fixtures.sh` — download + verify clips, extract models into the models dir.
+- `generate_clips.py` / `make_manifest.py` — regenerate fixtures from source data
+  (dev-only; run where the full videos + models exist).
+
+Clips currently cover: `emi_obb_identity` (OBB + identity online decoder) and
+`ant_pose_headtail` (OBB + head-tail + SLEAP pose + identity). No AprilTag clip yet.
+
+On a fresh machine:
+```bash
+conda activate hydra-mps                        # or hydra-suite-cuda
+bash tools/equivalence/fixtures/fetch_fixtures.sh   # downloads clips + models
+bash tools/equivalence/run_matrix.sh                # FIXTURES=1 is the default
+```
+
+To regenerate/refresh the fixtures (on a machine with the full data):
+```bash
+python tools/equivalence/fixtures/generate_clips.py
+python tools/equivalence/fixtures/make_manifest.py
+# then create the release and upload the assets it lists (clips + models.tar.gz)
+```
+
+## Quick start (full local videos)
 
 ```bash
 conda activate hydra-mps          # or hydra-suite-cuda on an NVIDIA box
-bash tools/equivalence/run_matrix.sh
+FIXTURES=0 bash tools/equivalence/run_matrix.sh    # uses $DATA full videos
 ```
 
 Override anything via env vars (see top of `run_matrix.sh`), e.g. force a device:

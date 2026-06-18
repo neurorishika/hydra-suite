@@ -68,7 +68,11 @@ def runtime_overrides(runtime: str) -> dict:
 
 
 def build_config(
-    orig_config_path: str, video_link: Path, outdir: Path, runtime: str
+    orig_config_path: str,
+    video_link: Path,
+    outdir: Path,
+    runtime: str,
+    skeleton: str | None = None,
 ) -> Path:
     with open(orig_config_path) as fh:
         cfg = json.load(fh)
@@ -77,6 +81,8 @@ def build_config(
     cfg["csv_path"] = str(outdir / f"{stem}_tracking.csv")
     cfg["video_output_path"] = str(outdir / f"{stem}_tracking.mp4")
     cfg["use_cached_detections"] = False  # recompute fresh every run
+    if skeleton:
+        cfg["pose_skeleton_file"] = str(Path(skeleton).expanduser().resolve())
     cfg.update(DISABLE)
     cfg.update(runtime_overrides(runtime))
     out_cfg = outdir / "equiv_config.json"
@@ -142,6 +148,11 @@ def main() -> int:
         help="Override all stage runtimes; 'config' keeps the config's own runtime.",
     )
     ap.add_argument("--label", default="run", help="Label recorded in meta.json.")
+    ap.add_argument(
+        "--skeleton",
+        default=None,
+        help="Override pose_skeleton_file (portable clip configs leave it blank).",
+    )
     args = ap.parse_args()
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -154,7 +165,9 @@ def main() -> int:
         video_link.unlink()
     video_link.symlink_to(src.resolve())
 
-    cfg_path = build_config(args.orig_config, video_link, outdir, args.runtime)
+    cfg_path = build_config(
+        args.orig_config, video_link, outdir, args.runtime, skeleton=args.skeleton
+    )
 
     import hydra_suite
 

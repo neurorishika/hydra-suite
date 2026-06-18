@@ -51,15 +51,29 @@ echo "### runtime = $RUNTIME"
 echo "### legacy src = $MAIN_SRC"
 echo "### new    src = $WT_SRC"
 
-# name | video | config
-VIDEOS=(
-  "emi_short|$DATA/ant/emi_short.mp4|$DATA/ant/emi_short_config.json"
-  "ant2|$DATA/ant2/000001_cropped_roi.mp4|$DATA/ant2/000001_cropped_roi_config.json"
-)
+# Target set. FIXTURES=1 (default) uses the committed short clips under
+# fixtures/ (run fetch_fixtures.sh first). FIXTURES=0 uses the full local videos
+# under $DATA. Format: name | video | config | skeleton(optional)
+FIXTURES=${FIXTURES:-1}
+FX="$WT/tools/equivalence/fixtures"
+if [ "$FIXTURES" = "1" ]; then
+  VIDEOS=(
+    "emi_obb_identity|$FX/clips/emi_obb_identity.mp4|$FX/configs/emi_obb_identity.json|"
+    "ant_pose_headtail|$FX/clips/ant_pose_headtail.mp4|$FX/configs/ant_pose_headtail.json|$FX/ooceraea_biroi.json"
+  )
+else
+  VIDEOS=(
+    "emi_short|$DATA/ant/emi_short.mp4|$DATA/ant/emi_short_config.json|"
+    "ant2|$DATA/ant2/000001_cropped_roi.mp4|$DATA/ant2/000001_cropped_roi_config.json|$FX/ooceraea_biroi.json"
+  )
+fi
 
-run() {  # src outdir config video label
+run() {  # src outdir config video label skeleton
+  local skel_arg=()
+  [ -n "${6:-}" ] && skel_arg=(--skeleton "$6")
   PYTHONPATH="$1" python "$WT/tools/equivalence/runner.py" \
-    --orig-config "$3" --video "$4" --outdir "$2" --runtime "$RUNTIME" --label "$5"
+    --orig-config "$3" --video "$4" --outdir "$2" --runtime "$RUNTIME" --label "$5" \
+    "${skel_arg[@]}"
 }
 
 cmp() {  # a b title
@@ -72,14 +86,14 @@ cmp() {  # a b title
 }
 
 for entry in "${VIDEOS[@]}"; do
-  IFS='|' read -r name video config <<< "$entry"
+  IFS='|' read -r name video config skeleton <<< "$entry"
   base="$OUT/$RUNTIME/$name"
   echo; echo "============================================================"
   echo "=== $name  ($RUNTIME)"
   echo "============================================================"
-  run "$MAIN_SRC" "$base/legacy" "$config" "$video" "legacy" || echo "!! legacy run failed"
-  run "$WT_SRC"   "$base/new_a"  "$config" "$video" "new_a"  || echo "!! new_a run failed"
-  run "$WT_SRC"   "$base/new_b"  "$config" "$video" "new_b"  || echo "!! new_b run failed"
+  run "$MAIN_SRC" "$base/legacy" "$config" "$video" "legacy" "$skeleton" || echo "!! legacy run failed"
+  run "$WT_SRC"   "$base/new_a"  "$config" "$video" "new_a"  "$skeleton" || echo "!! new_a run failed"
+  run "$WT_SRC"   "$base/new_b"  "$config" "$video" "new_b"  "$skeleton" || echo "!! new_b run failed"
 
   stem=$(basename "$video"); stem=${stem%.*}
   for kind in forward final; do
