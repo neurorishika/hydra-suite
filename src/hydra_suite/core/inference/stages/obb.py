@@ -28,6 +28,9 @@ class OBBModels:
     detect_model: Any | None = None  # sequential stage-1
     obb_model: Any | None = None  # sequential stage-2
 
+    def close(self) -> None:
+        pass  # ultralytics models don't need explicit cleanup
+
 
 def _normalize_obb_geometry(
     w_arr: np.ndarray, h_arr: np.ndarray, angle_arr: np.ndarray
@@ -67,9 +70,6 @@ def _normalize_obb_geometry(
     safe_minor = np.where(minor > 0, minor, 1.0)
     aspect = np.where(minor > 0, major / safe_minor, 1.0).astype(np.float32)
     return angles_fixed, sizes, aspect
-
-    def close(self) -> None:
-        pass  # ultralytics models don't need explicit cleanup
 
 
 def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:

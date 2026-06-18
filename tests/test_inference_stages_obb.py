@@ -312,3 +312,12 @@ def test_extract_raw_tensors_uses_runtime_device_for_empty_path():
     assert str(raw.xywhr.device) == "cpu"
     assert str(raw.corners.device) == "cpu"
     assert str(raw.conf.device) == "cpu"
+
+
+def test_obb_models_has_callable_close():
+    """Regression: OBBModels.close() must be a real method (it was once defined
+    after a return inside _normalize_obb_geometry, so the class lacked it and
+    InferenceRunner.close() crashed at session teardown)."""
+    models = OBBModels(mode="direct")
+    assert callable(models.close)
+    models.close()  # must not raise
