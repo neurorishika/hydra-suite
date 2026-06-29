@@ -1,7 +1,7 @@
 import numpy as np
 
 from hydra_suite.core.identity.classification.cnn import ClassPrediction
-from hydra_suite.core.tracking.live_features import (
+from hydra_suite.core.tracking.features.live_features import (
     LiveCNNIdentityStore,
     LivePosePropertiesStore,
     LiveTagObservationStore,

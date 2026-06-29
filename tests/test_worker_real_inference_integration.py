@@ -117,7 +117,9 @@ def test_build_inference_config_sets_compute_runtime(tmp_path):
 
 def test_frame_result_to_meas_shapes_and_values():
     """frame_result_to_meas produces correct [cx, cy, theta] arrays."""
-    from hydra_suite.core.tracking.frame_result_bridge import frame_result_to_meas
+    from hydra_suite.core.tracking.ingest.frame_result_bridge import (
+        frame_result_to_meas,
+    )
 
     obb = _make_obb(frame_idx=0, n=2)
     headings = np.array([1.0, 2.0], dtype=np.float32)
@@ -182,8 +184,10 @@ def test_site_f_populate_live_cnn_store_from_frame_result():
         CNNFactorPrediction,
         CNNResult,
     )
-    from hydra_suite.core.tracking.frame_result_bridge import populate_live_cnn_store
-    from hydra_suite.core.tracking.live_features import LiveCNNIdentityStore
+    from hydra_suite.core.tracking.features.live_features import LiveCNNIdentityStore
+    from hydra_suite.core.tracking.ingest.frame_result_bridge import (
+        populate_live_cnn_store,
+    )
 
     store = LiveCNNIdentityStore()
     cnn_result = CNNResult(
@@ -215,8 +219,10 @@ def test_site_f_populate_live_cnn_store_from_frame_result():
 def test_site_f_populate_live_pose_store_from_frame_result():
     """populate_live_pose_store stores keypoints per detection ID."""
     from hydra_suite.core.inference.result import PoseResult
-    from hydra_suite.core.tracking.frame_result_bridge import populate_live_pose_store
-    from hydra_suite.core.tracking.live_features import LivePosePropertiesStore
+    from hydra_suite.core.tracking.features.live_features import LivePosePropertiesStore
+    from hydra_suite.core.tracking.ingest.frame_result_bridge import (
+        populate_live_pose_store,
+    )
 
     store = LivePosePropertiesStore()
     kpts = np.ones((2, 4, 3), dtype=np.float32)
@@ -234,8 +240,10 @@ def test_site_f_populate_live_pose_store_from_frame_result():
 def test_site_f_populate_live_tag_store_from_frame_result():
     """populate_live_tag_store stores AprilTag data per frame."""
     from hydra_suite.core.inference.result import AprilTagResult
-    from hydra_suite.core.tracking.frame_result_bridge import populate_live_tag_store
-    from hydra_suite.core.tracking.live_features import LiveTagObservationStore
+    from hydra_suite.core.tracking.features.live_features import LiveTagObservationStore
+    from hydra_suite.core.tracking.ingest.frame_result_bridge import (
+        populate_live_tag_store,
+    )
 
     store = LiveTagObservationStore()
     at = AprilTagResult(

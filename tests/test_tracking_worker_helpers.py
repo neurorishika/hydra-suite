@@ -140,7 +140,7 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
     )
     identity_dataset_generator.IndividualDatasetGenerator = object
 
-    tag_features = types.ModuleType("hydra_suite.core.tracking.tag_features")
+    tag_features = types.ModuleType("hydra_suite.core.tracking.features.tag_features")
     tag_features.NO_TAG = -1
     tag_features.build_detection_tag_id_list = lambda *_args, **_kwargs: []
     tag_features.build_tag_detection_hamming_map = lambda *_args, **_kwargs: {}
@@ -160,7 +160,7 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
         "hydra_suite.core.assigners.hungarian": assigner,
         "hydra_suite.core.identity.dataset": identity_dataset,
         "hydra_suite.core.identity.dataset.generator": identity_dataset_generator,
-        "hydra_suite.core.tracking.tag_features": tag_features,
+        "hydra_suite.core.tracking.features.tag_features": tag_features,
     }
 
 
@@ -213,10 +213,10 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     properties_cache.compute_filter_settings_hash = lambda *_args, **_kwargs: ""
     properties_cache.compute_individual_properties_id = lambda *_args, **_kwargs: ""
 
-    density = types.ModuleType("hydra_suite.core.tracking.density")
+    density = types.ModuleType("hydra_suite.core.tracking.confidence.density")
     density.get_density_region_flags = lambda *_args, **_kwargs: np.zeros(0, dtype=bool)
 
-    cnn_features = types.ModuleType("hydra_suite.core.tracking.cnn_features")
+    cnn_features = types.ModuleType("hydra_suite.core.tracking.features.cnn_features")
     cnn_features.cnn_build_association_entries = lambda *_args, **_kwargs: (
         None,
         None,
@@ -224,9 +224,9 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     )
     cnn_features.cnn_update_track_history = lambda *_args, **_kwargs: None
 
-    pose_pipeline = types.ModuleType("hydra_suite.core.tracking.pose_pipeline")
+    pose_pipeline = types.ModuleType("hydra_suite.core.tracking.pose.pose_pipeline")
     pose_pipeline.extract_one_crop = lambda *_args, **_kwargs: None
-    live_features = types.ModuleType("hydra_suite.core.tracking.live_features")
+    live_features = types.ModuleType("hydra_suite.core.tracking.features.live_features")
     live_features.LiveCNNIdentityStore = object
     live_features.LivePosePropertiesStore = object
     live_features.LiveTagObservationStore = object
@@ -249,10 +249,10 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
         "hydra_suite.core.identity.pose.api": pose_api,
         "hydra_suite.core.identity.properties": properties_pkg,
         "hydra_suite.core.identity.properties.cache": properties_cache,
-        "hydra_suite.core.tracking.density": density,
-        "hydra_suite.core.tracking.cnn_features": cnn_features,
-        "hydra_suite.core.tracking.live_features": live_features,
-        "hydra_suite.core.tracking.pose_pipeline": pose_pipeline,
+        "hydra_suite.core.tracking.confidence.density": density,
+        "hydra_suite.core.tracking.features.cnn_features": cnn_features,
+        "hydra_suite.core.tracking.features.live_features": live_features,
+        "hydra_suite.core.tracking.pose.pose_pipeline": pose_pipeline,
         "hydra_suite.core.tracking.precompute": precompute,
         "hydra_suite.core.tracking.profiler": profiler,
     }

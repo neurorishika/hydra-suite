@@ -16,8 +16,10 @@ from hydra_suite.core.identity.classification.cnn import (
 from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
 from hydra_suite.core.identity.pose.features import build_pose_detection_keypoint_map
 from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
-from hydra_suite.core.tracking.cnn_features import cnn_build_association_entries
-from hydra_suite.core.tracking.tag_features import build_tag_detection_map
+from hydra_suite.core.tracking.features.cnn_features import (
+    cnn_build_association_entries,
+)
+from hydra_suite.core.tracking.features.tag_features import build_tag_detection_map
 from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.data.tag_observation_cache import TagObservationCache
 from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker

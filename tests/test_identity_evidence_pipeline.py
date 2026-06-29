@@ -4,7 +4,7 @@ import numpy as np
 
 from hydra_suite.core.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.identity.classification.cnn import ClassPrediction
-from hydra_suite.core.tracking.evidence_emitter import IdentityEvidenceEmitter
+from hydra_suite.core.tracking.identity.evidence_emitter import IdentityEvidenceEmitter
 
 
 def _log_probs(*values: float) -> np.ndarray:

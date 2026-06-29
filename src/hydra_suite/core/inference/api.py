@@ -31,7 +31,7 @@ except ImportError:
 def apply_detection_filter(raw: OBBResult, config: OBBConfig) -> OBBResult:
     """Filter raw OBB detections using the same logic the runner uses internally.
 
-    Used by core/tracking/optimizer.py and optimizer_workers.py to score
+    Used by core/tracking/optimization/optimizer.py and optimizer_workers.py to score
     parameter configurations against cached detections. Pure function — no I/O,
     no model loading.
     """

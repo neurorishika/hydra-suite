@@ -586,7 +586,7 @@ class InterpolatedCropsWorker(BaseWorker):
         interp_tag_rows,
     ):
         """Detect AprilTags in all interpolated crops for one frame."""
-        from hydra_suite.core.tracking.pose_pipeline import (
+        from hydra_suite.core.tracking.pose.pose_pipeline import (
             extract_one_crop as _extract_aabb_crop,
         )
 

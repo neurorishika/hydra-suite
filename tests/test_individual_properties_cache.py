@@ -135,7 +135,7 @@ def test_live_pose_store_flush_feeds_rich_export(tmp_path: Path) -> None:
     from hydra_suite.core.identity.properties.export import (
         augment_trajectories_with_pose_cache,
     )
-    from hydra_suite.core.tracking.live_features import LivePosePropertiesStore
+    from hydra_suite.core.tracking.features.live_features import LivePosePropertiesStore
 
     kpt_names = ["head", "thorax", "abdomen"]
     store = LivePosePropertiesStore()

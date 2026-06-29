@@ -905,7 +905,7 @@ def _preview_run_apriltag_overlay(
             AprilTagConfig,
             AprilTagDetector,
         )
-        from hydra_suite.core.tracking.pose_pipeline import (
+        from hydra_suite.core.tracking.pose.pose_pipeline import (
             extract_one_crop as _extract_aabb_crop,
         )
 

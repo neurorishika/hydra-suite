@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from hydra_suite.core.tracking.confidence_density import DensityRegion
-from hydra_suite.core.tracking.density import get_density_region_flags
+from hydra_suite.core.tracking.confidence.confidence_density import DensityRegion
+from hydra_suite.core.tracking.confidence.density import get_density_region_flags
 
 
 def _make_region(frame_start=0, frame_end=100, bbox=(10, 10, 50, 50)):

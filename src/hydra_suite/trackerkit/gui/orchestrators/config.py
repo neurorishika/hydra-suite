@@ -3420,7 +3420,7 @@ class ConfigOrchestrator:
         self, video_path: str, cache_path: str, params: dict
     ):
         """Spin up a DetectionCacheBuilderWorker and show progress in the main window."""
-        from hydra_suite.core.tracking.optimizer_workers import (
+        from hydra_suite.core.tracking.optimization.optimizer_workers import (
             DetectionCacheBuilderWorker,
         )
 

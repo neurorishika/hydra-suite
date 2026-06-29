@@ -43,24 +43,24 @@ from hydra_suite.core.identity.pose.features import (
 from hydra_suite.core.identity.pose.features import (
     resolve_pose_group_indices as _pf_resolve_indices,
 )
-from hydra_suite.core.tracking.density import get_density_region_flags
-from hydra_suite.core.tracking.live_features import (
+from hydra_suite.core.tracking.confidence.density import get_density_region_flags
+from hydra_suite.core.tracking.features.live_features import (
     LiveCNNIdentityStore,
     LivePosePropertiesStore,
     LiveTagObservationStore,
 )
-from hydra_suite.core.tracking.precompute import (
-    AprilTagPrecomputePhase,
-    CNNPrecomputePhase,
-)
-from hydra_suite.core.tracking.profiler import TrackingProfiler
-from hydra_suite.core.tracking.tag_features import (
+from hydra_suite.core.tracking.features.tag_features import (
     NO_TAG,
     build_detection_tag_id_list,
     build_tag_detection_hamming_map,
     build_tag_detection_map,
     get_detection_tag_csv_values,
 )
+from hydra_suite.core.tracking.precompute import (
+    AprilTagPrecomputePhase,
+    CNNPrecomputePhase,
+)
+from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
 from hydra_suite.utils.batch_policy import clamp_realtime_individual_batch_size
 from hydra_suite.utils.frame_prefetcher import FramePrefetcher
@@ -89,7 +89,7 @@ from hydra_suite.core.inference.cache.store import DetectionCacheHandle  # noqa:
 from hydra_suite.core.inference.config import InferenceConfig  # noqa: E402
 from hydra_suite.core.inference.result import OBBResult as _OBBResult  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
-from hydra_suite.core.tracking.frame_result_bridge import (  # noqa: E402
+from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     build_density_cache_dict,
     frame_result_to_meas,
     populate_live_cnn_store,
@@ -822,7 +822,7 @@ class TrackingWorker(QThread):
         finalize_metadata,
     ):
         """Instantiate a PosePipeline from the prepared components."""
-        from hydra_suite.core.tracking.pose_pipeline import PosePipeline
+        from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
 
         _POSE_CROSS_FRAME_BATCH = int(params.get("POSE_PRECOMPUTE_BATCH_SIZE", 64))
         if bool(params.get("TRACKING_REALTIME_MODE", False)):
@@ -1043,7 +1043,7 @@ class TrackingWorker(QThread):
         profiler=None,
     ):
         """Phase 1: Run batched YOLO detection and cache results."""
-        from hydra_suite.core.tracking.detection_phase import (
+        from hydra_suite.core.tracking.ingest.detection_phase import (
             run_batched_detection_phase,
         )
 
@@ -1432,7 +1432,7 @@ class TrackingWorker(QThread):
             # Load density regions sidecar for backward pass
             if density_map_enabled and self.backward_mode and not self._density_regions:
                 try:
-                    from hydra_suite.core.tracking.confidence_density import (
+                    from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
                     )
 
@@ -1565,7 +1565,7 @@ class TrackingWorker(QThread):
             if _regions_path.exists():
                 # Regions already computed — just load them.
                 try:
-                    from hydra_suite.core.tracking.confidence_density import (
+                    from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
                     )
 
@@ -1585,7 +1585,7 @@ class TrackingWorker(QThread):
                 try:
                     import cv2 as _cv2
 
-                    from hydra_suite.core.tracking.confidence_density import (
+                    from hydra_suite.core.tracking.confidence.confidence_density import (
                         compute_density_map_from_cache,
                         export_diagnostic_video,
                         save_regions,
@@ -1879,7 +1879,7 @@ class TrackingWorker(QThread):
                     from hydra_suite.core.identity.classification.cnn import (
                         CNNIdentityCache,
                     )
-                    from hydra_suite.core.tracking.evidence_emitter import (
+                    from hydra_suite.core.tracking.identity.evidence_emitter import (
                         build_evidence_cache_path,
                     )
 
@@ -2754,7 +2754,7 @@ class TrackingWorker(QThread):
                 and not self.backward_mode
             ):
                 try:
-                    from hydra_suite.core.tracking.streaming_payload import (
+                    from hydra_suite.core.tracking.ingest.streaming_payload import (
                         build_streaming_payload,
                     )
 
@@ -4513,7 +4513,7 @@ class TrackingWorker(QThread):
         position_deques,
         directed_heading=False,
     ):
-        from hydra_suite.core.tracking.orientation import smooth_orientation
+        from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         return smooth_orientation(
             r,
@@ -4583,7 +4583,7 @@ class TrackingWorker(QThread):
         mode: top-1 predictions only — the online decoder will under-commit).
         """
         try:
-            from hydra_suite.core.tracking.evidence_emitter import (
+            from hydra_suite.core.tracking.identity.evidence_emitter import (
                 IdentityEvidenceEmitter,
                 build_evidence_cache_path,
             )

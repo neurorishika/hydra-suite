@@ -484,7 +484,7 @@ class InferenceRunner:
 
         # Task 17g: build StreamingAnalysisPayload for legacy identity consumers.
         try:
-            from hydra_suite.core.tracking.streaming_payload import (
+            from hydra_suite.core.tracking.ingest.streaming_payload import (
                 StreamingAnalysisPayload,
             )
 

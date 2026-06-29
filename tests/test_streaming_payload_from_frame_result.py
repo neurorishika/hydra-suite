@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from hydra_suite.core.inference.result import FrameResult, HeadTailResult, OBBResult
-from hydra_suite.core.tracking.streaming_payload import StreamingAnalysisPayload
+from hydra_suite.core.tracking.ingest.streaming_payload import StreamingAnalysisPayload
 
 
 def _make_obb(n: int = 3) -> OBBResult:

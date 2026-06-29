@@ -12,7 +12,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from hydra_suite.core.inference.result import AprilTagResult, CNNResult, PoseResult
-    from hydra_suite.core.tracking.live_features import (
+    from hydra_suite.core.tracking.features.live_features import (
         LiveCNNIdentityStore,
         LivePosePropertiesStore,
         LiveTagObservationStore,

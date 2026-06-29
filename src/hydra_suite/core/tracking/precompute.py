@@ -25,7 +25,7 @@ from hydra_suite.core.identity.classification.cnn import (
     CNNIdentityCache,
     CNNIdentityConfig,
 )
-from hydra_suite.core.tracking.pose_pipeline import extract_one_crop
+from hydra_suite.core.tracking.pose.pose_pipeline import extract_one_crop
 from hydra_suite.data.tag_observation_cache import TagObservationCache
 
 logger = logging.getLogger(__name__)

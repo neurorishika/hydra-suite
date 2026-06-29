@@ -12,7 +12,7 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 import pytest
 
-from hydra_suite.core.tracking.pose_pipeline import (
+from hydra_suite.core.tracking.pose.pose_pipeline import (
     AsyncCacheWriter,
     FrameCropResult,
     PosePipeline,

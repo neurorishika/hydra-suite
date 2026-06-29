@@ -2,7 +2,7 @@
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from hydra_suite.core.tracking.confidence_density import (
+from hydra_suite.core.tracking.confidence.confidence_density import (
     DensityRegion,
     accumulate_frame,
     find_regions,

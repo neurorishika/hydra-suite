@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.tracking.confidence_density import load_regions
+from hydra_suite.core.tracking.confidence.confidence_density import load_regions
 from hydra_suite.refinekit.config.schemas import RefineKitConfig
 from hydra_suite.refinekit.core.correction_writer import CorrectionWriter
 from hydra_suite.refinekit.core.event_scorer import EventScorer

@@ -933,7 +933,7 @@ def test_cnn_phase_close_is_idempotent(tmp_path):
 
 
 def test_pose_pipeline_has_cache_hit_false_when_not_set():
-    from hydra_suite.core.tracking.pose_pipeline import PosePipeline
+    from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
 
     pipeline = PosePipeline(
         pose_backend=None,
@@ -946,7 +946,7 @@ def test_pose_pipeline_has_cache_hit_false_when_not_set():
 
 
 def test_pose_pipeline_has_cache_hit_true_when_set():
-    from hydra_suite.core.tracking.pose_pipeline import PosePipeline
+    from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
 
     pipeline = PosePipeline(
         pose_backend=None,
@@ -959,7 +959,7 @@ def test_pose_pipeline_has_cache_hit_true_when_set():
 
 
 def test_pose_pipeline_finalize_returns_cache_path_on_hit():
-    from hydra_suite.core.tracking.pose_pipeline import PosePipeline
+    from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
 
     pipeline = PosePipeline(
         pose_backend=None,
@@ -973,7 +973,7 @@ def test_pose_pipeline_finalize_returns_cache_path_on_hit():
 
 
 def test_pose_pipeline_process_frame_noop_on_hit():
-    from hydra_suite.core.tracking.pose_pipeline import PosePipeline
+    from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
 
     pipeline = PosePipeline(
         pose_backend=None,
@@ -987,7 +987,7 @@ def test_pose_pipeline_process_frame_noop_on_hit():
 
 
 def test_pose_pipeline_close_idempotent():
-    from hydra_suite.core.tracking.pose_pipeline import PosePipeline
+    from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
 
     pipeline = PosePipeline(
         pose_backend=None,

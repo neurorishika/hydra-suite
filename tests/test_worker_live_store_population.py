@@ -18,16 +18,16 @@ from hydra_suite.core.inference.result import (
     OBBResult,
     PoseResult,
 )
-from hydra_suite.core.tracking.frame_result_bridge import (
+from hydra_suite.core.tracking.features.live_features import (
+    LiveCNNIdentityStore,
+    LivePosePropertiesStore,
+    LiveTagObservationStore,
+)
+from hydra_suite.core.tracking.ingest.frame_result_bridge import (
     frame_result_to_meas,
     populate_live_cnn_store,
     populate_live_pose_store,
     populate_live_tag_store,
-)
-from hydra_suite.core.tracking.live_features import (
-    LiveCNNIdentityStore,
-    LivePosePropertiesStore,
-    LiveTagObservationStore,
 )
 
 # ---- Helpers to build fake FrameResult components ----

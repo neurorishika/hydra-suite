@@ -199,7 +199,7 @@ def _load_optimizer_module():
     }
 
     return load_src_module(
-        "hydra_suite/core/tracking/optimizer.py",
+        "hydra_suite/core/tracking/optimization/optimizer.py",
         "tracking_optimizer_under_test",
         stubs=stubs,
     )

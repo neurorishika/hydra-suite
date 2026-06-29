@@ -190,7 +190,7 @@ class TestDirectedOrientationAnchor:
         """A directed prediction is returned as-is regardless of motion."""
         from collections import deque
 
-        from hydra_suite.core.tracking.orientation import smooth_orientation
+        from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         # Animal moving in +x but model says heading is -x.
         pos_deque = deque([(0.0, 0.0, 0), (5.0, 0.0, 1)], maxlen=2)
@@ -211,7 +211,7 @@ class TestDirectedOrientationAnchor:
         from collections import deque
 
         from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
-        from hydra_suite.core.tracking.orientation import smooth_orientation
+        from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         anchor = math.pi
         axis = 0.0  # axis-only; collapsing against anchor (pi) yields pi
@@ -235,7 +235,7 @@ class TestDirectedOrientationAnchor:
         from collections import deque
 
         from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
-        from hydra_suite.core.tracking.orientation import smooth_orientation
+        from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         params = self._params()
         orientation_last = [0.0]
@@ -297,7 +297,7 @@ class TestUndirectedMotionPath:
         """No directed source: motion direction breaks the 180° ambiguity."""
         from collections import deque
 
-        from hydra_suite.core.tracking.orientation import smooth_orientation
+        from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         pos_deque = deque([(0.0, 0.0, 0), (5.0, 0.0, 1)], maxlen=2)  # motion +x
         # theta points -x (against motion); should be flipped to align with motion.
