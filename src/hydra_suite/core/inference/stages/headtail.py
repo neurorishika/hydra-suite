@@ -32,15 +32,37 @@ class HeadTailModel:
 def load_headtail_model(
     config: HeadTailConfig, runtime: RuntimeContext
 ) -> HeadTailModel:
+    """Load a head-tail classifier, enforcing the legacy head-tail contract.
+
+    Mirrors ``HeadTailAnalyzer._load_model`` (H7 parity):
+    - Rejects multi-head artifacts with ``HeadTailFormatError`` (a multi-head
+      model would otherwise silently load and use only factor 0).
+    - Normalizes the checkpoint's class labels through the canonical alias map
+      (``head_left``, ``north``, ``n``, … → ``left``/``up``/…) via
+      ``validate_headtail_labels``, so non-canonical-but-known labels still map
+      to a heading offset instead of silently becoming undirected.
+    """
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.identity.classification.headtail import (
+        validate_headtail_labels,
+    )
 
     backend = ClassifierBackend(config.model_path, config.compute_runtime)
     meta = backend.metadata
+    if meta.is_multihead:
+        backend.close()
+        raise HeadTailFormatError(
+            "head-tail requires a flat classifier, got multi-head with "
+            f"factors={meta.factor_names!r}"
+        )
+    # Raises HeadTailFormatError if labels are not a subset of the canonical set.
+    normalized = validate_headtail_labels(list(meta.class_names_per_factor[0]))
     input_size = (meta.input_size[0], meta.input_size[1])
     return HeadTailModel(
         backend=backend,
         input_size=input_size,
-        class_names=list(meta.class_names_per_factor[0]),
+        class_names=normalized,
     )
 
 
@@ -120,8 +142,22 @@ def run_headtail(
 
 
 def _label_to_heading_offset(label: str) -> float | None:
-    """Map direction label to angle offset relative to OBB major axis."""
-    return _DIRECTION_OFFSET.get(label)
+    """Map a direction label to its angle offset relative to the OBB major axis.
+
+    Applies canonical alias normalization (``head_left``/``north``/``n``/… →
+    ``left``/``up``/…) before lookup so non-canonical-but-known labels still
+    resolve to an offset (H7 parity). Returns ``None`` for ``unknown`` or any
+    unrecognized token, leaving the detection undirected.
+    """
+    from hydra_suite.core.identity.classification.headtail import (
+        normalize_headtail_label,
+    )
+
+    try:
+        canonical = normalize_headtail_label(label)
+    except ValueError:
+        return None
+    return _DIRECTION_OFFSET.get(canonical)
 
 
 def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:

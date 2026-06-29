@@ -60,6 +60,7 @@ class DetectionCacheHandle(CacheHandle):
     _buffer: list[OBBResult] = field(default_factory=list, repr=False)
     _data: dict | None = field(default=None, repr=False)
     _valid: bool | None = field(default=None, repr=False)
+    _written: set[int] | None = field(default=None, repr=False)
 
     def is_valid(self) -> bool:
         if self._valid is None:
@@ -69,11 +70,62 @@ class DetectionCacheHandle(CacheHandle):
     def write_frame(self, frame_idx: int, *, result: OBBResult, **_) -> None:
         self._buffer.append(result)
 
+    def _ensure_data(self) -> None:
+        if self._data is None:
+            self._data = dict(np.load(self.path))
+
+    def _written_frames(self) -> set[int]:
+        """Set of frame indices actually processed into this cache.
+
+        Recorded explicitly so a frame that was processed but had zero
+        detections (which contributes no rows to ``frame_indices``) is still
+        distinguishable from a frame that was never processed. Falls back to
+        the unique ``frame_indices`` for caches written before this field
+        existed.
+        """
+        if self._written is None:
+            self._ensure_data()
+            d = self._data or {}
+            if "written_frames" in d:
+                self._written = {int(f) for f in d["written_frames"]}
+            else:
+                self._written = {int(f) for f in d.get("frame_indices", [])}
+        return self._written
+
+    def covers_frame_range(self, start_frame: int, end_frame: int) -> bool:
+        """Return True iff every frame in ``[start, end]`` was processed.
+
+        Mirrors legacy ``DetectionCache.covers_frame_range`` so a truncated or
+        interrupted forward pass (valid key, but fewer frames) is not silently
+        reused for a backward/replay pass over a wider range.
+        """
+        if not self.is_valid():
+            return False
+        written = self._written_frames()
+        return all(fi in written for fi in range(int(start_frame), int(end_frame) + 1))
+
+    def get_missing_frames(
+        self, start_frame: int, end_frame: int, max_report: int = 10
+    ) -> list[int]:
+        """Return up to ``max_report`` frame indices missing from ``[start, end]``."""
+        if not self.is_valid():
+            return list(range(int(start_frame), int(end_frame) + 1))[:max_report]
+        written = self._written_frames()
+        missing = [
+            fi
+            for fi in range(int(start_frame), int(end_frame) + 1)
+            if fi not in written
+        ]
+        return missing[:max_report]
+
     def read_frame(self, frame_idx: int) -> OBBResult | None:
         if not self.is_valid():
             return None
-        if self._data is None:
-            self._data = dict(np.load(self.path))
+        # A frame that was never processed must read back as None (KeyError
+        # upstream) rather than a misleading empty "no animals" result.
+        if int(frame_idx) not in self._written_frames():
+            return None
+        self._ensure_data()
         d = self._data
         mask = d["frame_indices"] == frame_idx
         return OBBResult(
@@ -94,6 +146,7 @@ class DetectionCacheHandle(CacheHandle):
                 self.key,
                 frame_count=np.array([0]),
                 frame_indices=np.zeros(0, np.int32),
+                written_frames=np.zeros(0, np.int32),
                 centroids=np.zeros((0, 2), np.float32),
                 angles=np.zeros(0, np.float32),
                 sizes=np.zeros(0, np.float32),
@@ -121,6 +174,9 @@ class DetectionCacheHandle(CacheHandle):
             self.key,
             frame_count=np.array([len(self._buffer)]),
             frame_indices=np.array(fi_list, dtype=np.int32),
+            written_frames=np.array(
+                [r.frame_idx for r in self._buffer], dtype=np.int32
+            ),
             centroids=(
                 np.concatenate(cents) if cents else np.zeros((0, 2), np.float32)
             ),

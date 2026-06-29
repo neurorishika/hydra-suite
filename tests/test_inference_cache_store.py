@@ -120,6 +120,66 @@ def test_detection_schema_version_mismatch_is_invalid(tmp_path):
     assert not DetectionCacheHandle(path=path, key=current_key).is_valid()
 
 
+def test_detection_covers_frame_range_full(tmp_path):
+    """H9: a cache covering every frame in the range reports full coverage,
+    including a processed-but-empty frame (frame 2 has zero detections)."""
+    path = tmp_path / "test.obb.npz"
+    key = _key()
+    handle = DetectionCacheHandle(path=path, key=key)
+    handle.write_frame(0, result=_obb(0, n=2))
+    handle.write_frame(1, result=_obb(1, n=3))
+    handle.write_frame(2, result=_obb(2, n=0))
+    handle.close()
+
+    handle2 = DetectionCacheHandle(path=path, key=key)
+    assert handle2.covers_frame_range(0, 2) is True
+    assert handle2.get_missing_frames(0, 2) == []
+
+
+def test_detection_covers_frame_range_truncated(tmp_path):
+    """H9: a truncated/interrupted forward pass (valid key, fewer frames) must
+    fail coverage so backward/reuse does not silently run a partial set."""
+    path = tmp_path / "test.obb.npz"
+    key = _key()
+    handle = DetectionCacheHandle(path=path, key=key)
+    handle.write_frame(0, result=_obb(0, n=2))
+    handle.write_frame(1, result=_obb(1, n=2))
+    handle.close()
+
+    handle2 = DetectionCacheHandle(path=path, key=key)
+    assert handle2.covers_frame_range(0, 4) is False
+    assert handle2.get_missing_frames(0, 4) == [2, 3, 4]
+
+
+def test_detection_empty_frame_reads_back_empty_not_none(tmp_path):
+    """H9: a processed frame with zero detections reads back as an empty
+    OBBResult (it WAS processed), distinct from an absent frame."""
+    path = tmp_path / "test.obb.npz"
+    key = _key()
+    handle = DetectionCacheHandle(path=path, key=key)
+    handle.write_frame(0, result=_obb(0, n=0))
+    handle.close()
+
+    handle2 = DetectionCacheHandle(path=path, key=key)
+    r0 = handle2.read_frame(0)
+    assert r0 is not None
+    assert r0.num_detections == 0
+
+
+def test_detection_absent_frame_reads_none(tmp_path):
+    """H9: a frame never processed into the cache reads back as None (so
+    load_frame raises KeyError) rather than a misleading empty result."""
+    path = tmp_path / "test.obb.npz"
+    key = _key()
+    handle = DetectionCacheHandle(path=path, key=key)
+    handle.write_frame(0, result=_obb(0, n=2))
+    handle.close()
+
+    handle2 = DetectionCacheHandle(path=path, key=key)
+    assert handle2.read_frame(0) is not None
+    assert handle2.read_frame(5) is None
+
+
 # ---- HeadTailCacheHandle ----
 
 

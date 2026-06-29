@@ -58,6 +58,88 @@ def test_label_to_heading_unknown_returns_none():
     assert _label_to_heading_offset("unknown") is None
 
 
+def test_label_to_heading_normalizes_aliases():
+    # H7: non-canonical-but-known labels resolve via alias normalization
+    # instead of silently becoming undirected.
+    assert _label_to_heading_offset("head_left") == pytest.approx(math.pi)
+    assert _label_to_heading_offset("north") == pytest.approx(-math.pi / 2)
+    assert _label_to_heading_offset("n") == pytest.approx(-math.pi / 2)
+    assert _label_to_heading_offset("E") == pytest.approx(0.0)
+    assert _label_to_heading_offset("south") == pytest.approx(math.pi / 2)
+
+
+def test_label_to_heading_unrecognized_token_returns_none():
+    # H7: a label outside the alias map leaves the detection undirected.
+    assert _label_to_heading_offset("diagonal") is None
+
+
+def _patch_backend(monkeypatch, *, is_multihead, labels, factor_names=("direction",)):
+    """Patch ClassifierBackend used by load_headtail_model with a fake whose
+    metadata reports the given multi-head flag and labels."""
+    import hydra_suite.core.identity.classification.backend as backend_mod
+
+    meta = MagicMock()
+    meta.is_multihead = is_multihead
+    meta.factor_names = list(factor_names)
+    meta.class_names_per_factor = [list(labels)]
+    meta.input_size = (64, 64)
+
+    fake_backend = MagicMock()
+    fake_backend.metadata = meta
+
+    def _ctor(*_args, **_kwargs):
+        return fake_backend
+
+    monkeypatch.setattr(backend_mod, "ClassifierBackend", _ctor)
+    return fake_backend
+
+
+def test_load_headtail_rejects_multihead(monkeypatch):
+    # H7: a multi-head artifact must raise rather than silently use factor 0.
+    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.inference.stages.headtail import load_headtail_model
+
+    fake_backend = _patch_backend(
+        monkeypatch,
+        is_multihead=True,
+        labels=["right", "left"],
+        factor_names=("direction", "species"),
+    )
+    config = HeadTailConfig(model_path="/ht.pt")
+    with pytest.raises(HeadTailFormatError):
+        load_headtail_model(config, _cpu_rt())
+    fake_backend.close.assert_called_once()
+
+
+def test_load_headtail_normalizes_labels(monkeypatch):
+    # H7: aliased checkpoint labels are normalized to the canonical set.
+    from hydra_suite.core.inference.stages.headtail import load_headtail_model
+
+    _patch_backend(
+        monkeypatch,
+        is_multihead=False,
+        labels=["head_right", "head_left", "head_up", "head_down"],
+    )
+    config = HeadTailConfig(model_path="/ht.pt")
+    model = load_headtail_model(config, _cpu_rt())
+    assert model.class_names == ["right", "left", "up", "down"]
+
+
+def test_load_headtail_rejects_noncanonical_labels(monkeypatch):
+    # H7: labels outside the canonical head-tail set fail loudly at load.
+    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.inference.stages.headtail import load_headtail_model
+
+    _patch_backend(
+        monkeypatch,
+        is_multihead=False,
+        labels=["antA", "antB"],
+    )
+    config = HeadTailConfig(model_path="/ht.pt")
+    with pytest.raises(HeadTailFormatError):
+        load_headtail_model(config, _cpu_rt())
+
+
 def test_run_headtail_empty_crops_returns_nan_hints():
     config = HeadTailConfig(model_path="/ht.pt")
     mock_backend = MagicMock()

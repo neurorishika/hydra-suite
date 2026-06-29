@@ -58,15 +58,25 @@ def frame_result_to_meas(
     return meas
 
 
-def _cnn_det_pred_to_class_prediction(pred, factor_names: tuple):  # -> ClassPrediction
+def _cnn_det_pred_to_class_prediction(
+    pred, factor_names: tuple, confidence_threshold: float = 0.0
+):  # -> ClassPrediction
     """Convert a CNNDetectionPrediction to a ClassPrediction for live stores.
 
     For flat single-factor models the top class + confidence are taken from
     argmax(raw_probabilities).  For multi-factor models each factor's top class
     and confidence are recorded independently.
+
+    Mirrors legacy ``CNNClassifier.predict_batch`` (cnn.py:404-407): when the
+    top-class confidence is below ``confidence_threshold`` the class name is
+    collapsed to ``None`` (the confidence is still recorded). The downstream
+    majority vote (``TrackCNNHistory.majority_class``) excludes ``None`` /
+    ``"unknown"``, so without this gate low-confidence guesses would be counted
+    that legacy discarded.
     """
     from hydra_suite.core.identity.classification.cnn import ClassPrediction
 
+    threshold = float(confidence_threshold)
     names = []
     confs = []
     for factor in pred.factors:
@@ -76,13 +86,13 @@ def _cnn_det_pred_to_class_prediction(pred, factor_names: tuple):  # -> ClassPre
             confs.append(0.0)
         else:
             best_idx = int(np.argmax(probs))
-            class_name = (
-                factor.class_names[best_idx]
-                if best_idx < len(factor.class_names)
-                else None
-            )
+            best_conf = float(probs[best_idx])
+            if best_conf >= threshold and 0 <= best_idx < len(factor.class_names):
+                class_name = factor.class_names[best_idx]
+            else:
+                class_name = None
             names.append(class_name)
-            confs.append(float(probs[best_idx]))
+            confs.append(best_conf)
 
     return ClassPrediction(
         det_index=pred.det_index,
@@ -99,6 +109,7 @@ def populate_live_cnn_store(
     frame_idx: int,
     phase_label: str,
     evidence_emitter=None,
+    confidence_threshold: float = 0.0,
 ) -> None:
     """Push CNN predictions from a FrameResult into a LiveCNNIdentityStore.
 
@@ -125,6 +136,10 @@ def populate_live_cnn_store(
             emitter's sidecar cache. When None, only top-1 predictions are
             populated (legacy behaviour) and the online decoder will be
             severely under-informed.
+        confidence_threshold: Per-factor top-class confidence threshold. A
+            factor whose argmax confidence is below this value has its class
+            name collapsed to ``None`` (legacy ``CNNClassifier.predict_batch``
+            parity). Defaults to 0.0 (no gating).
     """
     # Select the right CNN phase by label
     phase_result = None
@@ -143,7 +158,7 @@ def populate_live_cnn_store(
     )
 
     class_preds = [
-        _cnn_det_pred_to_class_prediction(pred, factor_names)
+        _cnn_det_pred_to_class_prediction(pred, factor_names, confidence_threshold)
         for pred in phase_result.predictions
     ]
 

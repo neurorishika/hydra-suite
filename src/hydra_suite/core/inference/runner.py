@@ -297,6 +297,32 @@ class InferenceRunner:
         caches = _open_caches(self.config, self.cache_dir, self._video_sig)
         return all(h.is_valid() for h in caches.all_handles())
 
+    def detection_cache_covers_range(self, start_frame: int, end_frame: int) -> bool:
+        """Return True iff the detection cache spans every frame in the range.
+
+        Key validity alone (``caches_all_valid``) does not guarantee a cache
+        produced by a full forward pass: an interrupted or shorter run yields a
+        valid-keyed cache covering fewer frames. Backward/replay passes must
+        additionally confirm frame-range coverage (legacy parity, H9).
+        """
+        if self.cache_dir is None:
+            return False
+        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+        if caches.detection is None:
+            return False
+        return caches.detection.covers_frame_range(start_frame, end_frame)
+
+    def detection_cache_missing_frames(
+        self, start_frame: int, end_frame: int, max_report: int = 10
+    ) -> list[int]:
+        """Report up to ``max_report`` frames missing from the detection cache."""
+        if self.cache_dir is None:
+            return []
+        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+        if caches.detection is None:
+            return []
+        return caches.detection.get_missing_frames(start_frame, end_frame, max_report)
+
     def run_realtime(
         self,
         frame: np.ndarray,

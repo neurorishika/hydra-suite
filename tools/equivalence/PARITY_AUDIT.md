@@ -1,14 +1,15 @@
 # Legacy → New Inference Pipeline — Static Code-Path Parity Audit
 
-**Date:** 2026-06-26 (audit) · **Updated:** 2026-06-28 (CRITICAL remediation)
+**Date:** 2026-06-26 (audit) · **Updated:** 2026-06-29 (Tier-2 remediation)
 **Legacy tree:** `main` (`src/hydra_suite`)
 **New tree:** `feature/inference-pipeline-redesign` worktree (`src/hydra_suite`)
 
-> **Remediation status (2026-06-28):** All four CRITICAL findings (C1–C4) **and** the
-> Tier-1 HIGH detection-filter findings (**H1, H2, H5, H6**) are **confirmed and fixed**
-> (matching legacy). See the **Remediation log** section and the per-finding
-> **✅ RESOLVED** tags. Still open: H3, H4, H7, H8, H9 and the MEDIUM/LOW/perf items —
-> prioritized in **Next best targets**.
+> **Remediation status (2026-06-29):** All four CRITICAL findings (C1–C4), the Tier-1 HIGH
+> detection-filter findings (**H1, H2, H5, H6**), **and** the Tier-2 classifier/cache
+> findings (**H7, H8, H9**) are **confirmed and fixed** (matching legacy). See the
+> **Remediation log** section and the per-finding **✅ RESOLVED** tags. Still open: **H3,
+> H4** and the MEDIUM/LOW/perf items — the deliberate acceleration drops that need an owner
+> decision before reinstating. Prioritized in **Next best targets**.
 **Scope:** Verify that **every code path** in the legacy inference implementation has an
 equivalent in the redesigned `core/inference/` pipeline. This is a **static** audit
 (reading both trees), complementary to the runtime `run_matrix.sh` equivalence harness.
@@ -47,15 +48,18 @@ equivalent. The two named bug fixes (realtime double-filter, cross-frame crop pa
 and `start_frame/end_frame` handling are correctly in place, and the
 `USE_NEW_INFERENCE_PIPELINE` flag was removed cleanly (no dead branches).
 
-**The redesign is closer to code-path parity but not there yet.** The **4 crash-/
-corruption-level regressions (C1–C4)** and the **Tier-1 detection-filter findings
-(H1/H2/H5/H6)** that decide *which detections enter tracking* are now **fixed** (see
-Remediation log). Still open: **H7, H8, H9** (classifier/cache correctness) and the
-deliberate-or-not **acceleration drops (H3, H4, perf tier)**. The existing equivalence
-harness would **not** catch most of the original regressions — its fixtures don't exercise
-AprilTags, `calibration_temperature ≠ 1.0`, the optimizer, multi-class models, or
+**The redesign is now at functional code-path parity for every correctness finding.** The
+**4 crash-/corruption-level regressions (C1–C4)**, the **Tier-1 detection-filter findings
+(H1/H2/H5/H6)** that decide *which detections enter tracking*, and the **Tier-2
+classifier/cache findings (H7/H8/H9)** are all **fixed** (see Remediation log). Still open
+are only the **deliberate acceleration drops (H3 foreign-region suppression; H4 TRT/ONNX
+auto-export; perf tier)** — design decisions that need an explicit owner call before
+reinstating, not parity bugs. The existing equivalence harness would **not** catch most of
+the original regressions — its fixtures don't exercise AprilTags, `calibration_temperature
+≠ 1.0`, the optimizer, multi-class models, sub-threshold CNN votes, truncated caches, or
 non-default config keys — so extending the harness (multi-class OBB clip, size-cap clip,
-AprilTag clip, temperature run) is now as important as the remaining code fixes.
+AprilTag clip, temperature run, truncated-cache run) is now the highest-value remaining
+work alongside the H3/H4 decision.
 
 ---
 
@@ -99,6 +103,23 @@ deselected). New regression tests: size-based final cap (CPU + CUDA paths), `tar
 forwarding (set + empty→None), and zero-height-drop-without-divz-warning. One obsolete test
 (`...no_divzero_warning_for_zero_height`, which asserted degenerate detections are *kept*)
 was updated to the legacy-parity behavior (dropped).
+
+### HIGH classifier/cache pass (2026-06-29, Tier 2)
+
+| ID | Fix | Files touched |
+|---|---|---|
+| H7 | Head-tail loader now rejects **multi-head** artifacts with `HeadTailFormatError` (was silently using only factor 0) and runs the checkpoint labels through `validate_headtail_labels` (canonical alias normalization: `head_left`/`north`/`n`/… → `left`/`up`/…), matching legacy `HeadTailAnalyzer._load_model` (`headtail.py:253-260`). `_label_to_heading_offset` also normalizes at runtime so aliased labels resolve instead of becoming undirected. | `core/inference/stages/headtail.py` |
+| H8 | CNN top-class predictions below the per-phase `confidence_threshold` now collapse to `None` (confidence retained), matching legacy `CNNClassifier.predict_batch` (`cnn.py:404-407`). The threshold is threaded from each `CNNConfig.confidence_threshold` into `populate_live_cnn_store` → `_cnn_det_pred_to_class_prediction`. Stops `TrackCNNHistory.majority_class` from counting low-confidence guesses legacy discarded. Full posteriors (Bayesian decoder) stay unthresholded, as in legacy. | `core/tracking/frame_result_bridge.py`, `core/tracking/worker.py` |
+| H9 | Detection cache now records **every processed frame index** (`written_frames`), so a processed-but-empty frame is distinguishable from an absent one. `read_frame` returns `None` for an absent frame (→ `load_frame` raises `KeyError`) instead of a misleading empty `OBBResult`. New `covers_frame_range` / `get_missing_frames` (legacy `detection_cache.py:403-433`) are surfaced via runner `detection_cache_covers_range` / `detection_cache_missing_frames`; the worker now refuses a **backward** pass and skips **reuse** when the cache does not cover `[START_FRAME, END_FRAME]` (truncated/interrupted forward passes no longer silently run a partial frame set). Falls back to unique `frame_indices` for pre-existing caches. | `core/inference/cache/store.py`, `core/inference/runner.py`, `core/tracking/worker.py` |
+
+**Verification:** 453 passed / 23 failed across the inference + worker sweep; all 23
+failures are **pre-existing worktree WIP** (unrelated `orchestrators/tracking.py`,
+`live_features.py`, `test_individual_properties_cache.py` changes), confirmed identical via
+two `git stash` baselines (mine-only and all-uncommitted). 12 new regression tests:
+multi-head rejection, label alias normalization, non-canonical-label rejection (H7);
+sub-threshold→None, above-threshold retained, default-threshold-keeps-all (H8); full vs
+truncated `covers_frame_range`, `get_missing_frames`, and empty-frame-reads-empty vs
+absent-frame-reads-None (H9).
 
 ---
 
@@ -236,22 +257,31 @@ No `isfinite` / `isnan` / positivity-drop in `obb.py`; only divide-by-zero guard
 before assignment/Kalman (`_extract_raw_detections:303-332`). NaN centroids/angles can now
 be cached and fed to the tracker.
 
-### H7 — Head-tail multi-head rejection + label normalization removed
+### H7 — Head-tail multi-head rejection + label normalization removed ✅ RESOLVED (2026-06-29)
 - New loader never checks `meta.is_multihead`; a multi-head artifact silently loads and
   only factor 0 is used (`headtail.py:33-45`). Legacy raised `HeadTailFormatError`.
 - New does literal `_DIRECTION_OFFSET.get(label)` (`headtail.py:100-101`) with no alias
   normalization (`head_left`, `north`, `n`, …) that legacy applied via
   `validate_headtail_labels` (`headtail.py:24-97,260`). Non-canonical labels silently
   become undirected.
+- **Fix:** `load_headtail_model` now raises `HeadTailFormatError` on multi-head metadata
+  and normalizes labels via the legacy `validate_headtail_labels` (storing the canonical
+  set); `_label_to_heading_offset` normalizes aliases at runtime via
+  `normalize_headtail_label`. Covered by 3 new tests (multi-head rejection, alias
+  normalization, non-canonical rejection).
 
-### H8 — CNN sub-threshold predictions no longer collapse to None
+### H8 — CNN sub-threshold predictions no longer collapse to None ✅ RESOLVED (2026-06-29)
 `frame_result_bridge._cnn_det_pred_to_class_prediction` (`:78-85`) always emits the argmax
 class name regardless of confidence. Legacy `CNNIdentityBackend.predict_batch` set the
 class to `None` when `best_conf < threshold` (`cnn.py:404-407`). The live-store majority
 vote (`TrackCNNHistory.majority_class`, excludes None/"unknown") now counts
 low-confidence guesses it previously discarded.
+- **Fix:** the per-phase `CNNConfig.confidence_threshold` is now threaded through
+  `populate_live_cnn_store` into `_cnn_det_pred_to_class_prediction`, which collapses a
+  sub-threshold top class to `None` (confidence retained). Full posteriors fed to the
+  Bayesian decoder stay unthresholded (legacy parity). Covered by 3 new tests.
 
-### H9 — Cache validation is key-only; no frame-range coverage check
+### H9 — Cache validation is key-only; no frame-range coverage check ✅ RESOLVED (2026-06-29)
 New `caches_all_valid()` / `is_valid()` only compare the stored `cache_key` string
 (`cache/store.py:38-45,64-67`; `runner.py:294-298`). Legacy additionally required
 `covers_frame_range(start,end)` **and** `get_missing_frames()`
@@ -264,6 +294,14 @@ New `caches_all_valid()` / `is_valid()` only compare the stored `cache_key` stri
   (`store.py:77-88`); `load_frame` only raises `KeyError` when `raw_obb is None`
   (`runner.py:663-664`), which can't happen → a missing frame is silently treated as "no
   animals."
+- **Fix:** the detection cache now persists `written_frames` (every processed frame index,
+  including zero-detection frames) and exposes `covers_frame_range` / `get_missing_frames`;
+  `read_frame` returns `None` for an unprocessed frame (→ `KeyError` upstream) while a
+  processed-but-empty frame still reads back as an empty `OBBResult`. The runner surfaces
+  `detection_cache_covers_range` / `detection_cache_missing_frames`, and the worker gates
+  both the backward pass (hard refuse + missing-frame log) and forward-cache reuse on full
+  `[START_FRAME, END_FRAME]` coverage. Pre-existing caches fall back to unique
+  `frame_indices`. Covered by 4 new tests.
 
 ---
 
@@ -368,8 +406,8 @@ pose/headtail→skip) vs legacy AABB fallback (`precompute.py:530-545`); GAP 4 �
 | Legacy path (file:line) | Covered? | New location | Notes |
 |---|---|---|---|
 | Backend w/ `trt_profile_max_batch=batch_size` (headtail.py:247-251) | PARTIAL | stages/headtail.py:38 | TRT profile max-batch drops to 512 default |
-| Flat-only enforcement (`HeadTailFormatError`) (:253-257) | MISSING | headtail.py:33-45 | See H7 |
-| Label validation/alias normalization (:24-97,260) | MISSING | headtail.py:100-101 | See H7 |
+| Flat-only enforcement (`HeadTailFormatError`) (:253-257) | **RESOLVED** ✅ | headtail.py `load_headtail_model` | H7 fixed 2026-06-29 |
+| Label validation/alias normalization (:24-97,260) | **RESOLVED** ✅ | headtail.py `load_headtail_model` + `_label_to_heading_offset` | H7 fixed 2026-06-29 |
 | Eager warmup at load (:265) | PARTIAL | — | Lazy warmup only |
 | Heading offsets r=0,l=π,u=−π/2,d=+π/2 (:52-57) | YES | headtail.py:15-20 | Identical |
 | `predict_batch` chunking / TRT clamp (:639-743) | MISSING | headtail.py:82 | Whole batch in one call |
@@ -386,7 +424,7 @@ pose/headtail→skip) vs legacy AABB fallback (`precompute.py:530-545`); GAP 4 �
 | Flat (K=1) argmax+conf (cnn.py:56-71,400) | YES | stages/cnn.py:66-75; bridge:61-92 | Matches |
 | Multi-head per-factor split (cnn.py:368-417) | YES | stages/cnn.py:66-75 | Preserved |
 | scoring_mode guard (cnn.py:368-376) | PARTIAL | config.py:74 + evidence.py:175 | Honored only in **dead** `IdentityEvidenceBuilder` |
-| Per-factor conf thresholding → None (cnn.py:404-407) | PARTIAL | bridge:78-85 (no threshold) | See H8 |
+| Per-factor conf thresholding → None (cnn.py:404-407) | **RESOLVED** ✅ | bridge `_cnn_det_pred_to_class_prediction` (threshold threaded from `CNNConfig`) | H8 fixed 2026-06-29 |
 | Raw probs surfaced (cnn.py:482-543) | YES | stages/cnn.py:71; result.py:49 | "store raw, calibrate later" |
 | **Temperature/calibration before evidence** (cnn.py:530; precompute.py:1247) | **MISSING** ✅ | evidence_emitter.py:182-205 (raw) | See C2 |
 | `predict_batch_cuda` (cnn.py:419-480) | MISSING | stages/cnn.py:63 | CPU only |
@@ -511,10 +549,10 @@ via `_to_uint8_image` (handles float32 [0,1] canonical crops).
 | Cache key construction | YES (stronger) | keys.py (model_path+mtime+config_hash+video_signature) | Materially stronger |
 | Backward refuses w/o valid cache (worker:1294) | YES | worker.py:1268-1302; 1366-1375 (bgsub) | Preserved |
 | `use_cached_detections` reuse (worker:1236) | YES | worker.py:1303-1321 | — |
-| **`covers_frame_range`** (:403-416; worker:1257) | **MISSING** | — | See H9 |
-| **`get_missing_frames`** (:422-433; worker:1276) | **MISSING** | — | See H9 |
-| `matches_frame_range` (:418-420) | MISSING | — | No range metadata stored |
-| Missing-frame on read → empty entry (:296-331) | PARTIAL | store.py:72-88 (empty OBBResult, not None) | See H9 |
+| **`covers_frame_range`** (:403-416; worker:1257) | **RESOLVED** ✅ | store.py `covers_frame_range`; runner `detection_cache_covers_range`; worker gates backward + reuse | H9 fixed 2026-06-29 |
+| **`get_missing_frames`** (:422-433; worker:1276) | **RESOLVED** ✅ | store.py `get_missing_frames`; runner `detection_cache_missing_frames` | H9 fixed 2026-06-29 |
+| `matches_frame_range` (:418-420) | PARTIAL | `written_frames` set stored | Coverage via membership, not exact-range metadata |
+| Missing-frame on read → empty entry (:296-331) | **RESOLVED** ✅ | store.py `read_frame` returns None for unprocessed frame (vs empty for processed-empty) | H9 fixed 2026-06-29 |
 | Empty-frame padding to range (worker:4343) | PARTIAL | bgsub worker:2570; OBB runner:563 | No post-hoc fill loop |
 | `savez_compressed` (:257) | PARTIAL | store.py:48-50 (`np.savez`) | Uncompressed; larger files |
 | Tag cache tag_ids/centers/corners/det_indices/**hammings** (tag_observation_cache.py:124) | PARTIAL | AprilTagCacheHandle store.py:401-468 | **hammings NOT carried** (G4) |
@@ -526,7 +564,8 @@ via `_to_uint8_image` (handles float32 [0,1] canonical crops).
 | IdentityEvidenceCache (identity/cache.py) | N/A (legacy retained) | unchanged | Used as-is |
 | float64 det-id back-compat read (:17-47) | N/A (new schema) | — | v2-only |
 
-**Caching gaps:** G1+G2 = **H9** (key-only validation → partial caches silently used);
+**Caching gaps:** G1+G2 = **H9 ✅ RESOLVED** (frame-range coverage now enforced for the OBB
+detection cache; tag cache range remains key-only — see row above);
 G3 (canonical metadata not persisted — verify recomputation matches originally-applied
 transform); G4 (AprilTag `hammings` dropped — corroborates Domain 3); G5 (no float→int
 det-id normalization, low risk on v2-only); **G6 (HIGHEST follow-up):** rich-export
@@ -579,9 +618,13 @@ non-equivalent optima.
 ## Recommended next steps
 
 1. ~~Fix the four CRITICAL items first.~~ **DONE (2026-06-28)** — see Remediation log.
-2. **Restore the HIGH detection-filter paths** (target_classes, aspect-ratio, NaN/finite
-   guard, size-based final cap, foreign-region suppression) — these change *which
-   detections enter tracking*, so they affect every downstream result. **← current front.**
+2. ~~Restore the HIGH detection-filter paths (target_classes, aspect-ratio, NaN/finite
+   guard, size-based final cap).~~ **DONE (2026-06-28, Tier 1)** — see Remediation log.
+   Foreign-region suppression (H3) is the remaining acceleration/behaviour decision (step 3).
+2b. ~~Fix the HIGH classifier/cache paths (CNN sub-threshold→None, head-tail multi-head
+   rejection + label normalization, cache frame-range coverage).~~ **DONE (2026-06-29,
+   Tier 2)** — see Remediation log. **← all correctness findings now fixed; current front is
+   the harness extension (step 5) + the H3/H4 owner decision (step 3).**
 3. **Decide explicitly** on the intentionally-dropped acceleration paths (direct
    ONNX/TRT/PyTorch-CUDA executors, GPU-native head-tail/CNN/pose inference, NVDEC,
    TRT/ONNX auto-export, per-stage runtime independence). If dropped on purpose, the
@@ -609,18 +652,12 @@ H5 size-based final cap + default reconciliation, H6 finite/positive guard). See
 Remediation log. **Still owed:** the harness fixtures that would *catch* regressions here —
 a **multi-class OBB clip** and a **size-cap-exceeded clip** (both current blind spots).
 
-### Tier 2 — classifier/cache correctness (current front; contained, moderate)
-5. **H8 — CNN sub-threshold → None** (`frame_result_bridge.py:78-85`). One-spot fix: emit
-   `None` when `best_conf < threshold` so the majority vote stops counting low-confidence
-   guesses (legacy `cnn.py:404-407`). Cheap, isolated.
-6. **H7 — head-tail multi-head rejection + label normalization** (`stages/headtail.py`).
-   Restore `HeadTailFormatError` on multi-head artifacts and the alias normalization
-   (`head_left`/`north`/`n`…). Two independent sub-fixes.
-7. **H9 — cache frame-range coverage validation** (`cache/{keys,store}.py`, `runner.py`).
-   Largest of this tier: key-only validation lets a truncated/interrupted cache validate,
-   and a missing frame returns an empty `OBBResult` instead of `None`. Needs range metadata
-   stored + `covers_frame_range`/`get_missing_frames` equivalents + a "missing frame ⇒
-   None/refill" decision. Pair with a frame-range-coverage harness fixture.
+### Tier 2 — classifier/cache correctness ✅ DONE (2026-06-29)
+All three fixed to match legacy (H8 CNN sub-threshold→None, H7 head-tail multi-head
+rejection + alias normalization, H9 cache frame-range coverage + absent-vs-empty frame
+distinction). See the Remediation log. **Still owed:** the harness fixtures that would
+*catch* regressions here — a **temperature/sub-threshold CNN clip** and a
+**truncated-cache run** (both current blind spots).
 
 ### Tier 3 — needs an explicit owner decision (do not silently implement)
 8. **H3 — foreign-region suppression** (pose/identity canonical crops). Behavioral change
@@ -640,11 +677,13 @@ a **multi-class OBB clip** and a **size-cap-exceeded clip** (both current blind 
   (`export.py:502,635`), not just constructed. One export-roundtrip test on a clip with
   head-tail enabled settles it.
 
-### Suggested immediate sequence (updated 2026-06-28)
-Tier 1 (C1–C4 + H1/H2/H5/H6) is complete. Next: **H8 (cheap, isolated) → H7 → H9**, then
-the **G6 export-roundtrip test** and the **multi-class + size-cap harness fixtures** so the
-runtime harness can actually catch detection-filter regressions. Defer H3 and the H4/perf
-tier until the owner decides drop-on-purpose vs restore.
+### Suggested immediate sequence (updated 2026-06-29)
+Tier 1 (C1–C4 + H1/H2/H5/H6) **and** Tier 2 (H7/H8/H9) are complete — **every correctness
+finding is now fixed**. Remaining work, in order: (1) the **G6 export-roundtrip test**, then
+(2) the **harness fixtures** that would catch the now-fixed regressions — multi-class OBB,
+size-cap-exceeded, temperature/sub-threshold CNN, AprilTag, and truncated-cache clips. Only
+after that, take the **H3 / H4 / perf-tier owner decision** (drop-on-purpose vs restore);
+these are deliberate acceleration/behaviour trade-offs, not parity bugs.
 
 ---
 
@@ -662,9 +701,9 @@ tier until the owner decides drop-on-purpose vs restore.
 | H4 | HIGH | TensorRT/ONNX auto-export dropped (OBB + YOLO-pose) | ✅ |
 | H5 | HIGH | final detection cap by confidence, not size | ✅ | ✅ fixed 2026-06-28 |
 | H6 | HIGH | NaN/Inf & non-positive-geometry validity guard missing | ✅ | ✅ fixed 2026-06-28 |
-| H7 | HIGH | head-tail multi-head rejection + label normalization removed | cited |
-| H8 | HIGH | CNN sub-threshold predictions no longer collapse to None | cited |
-| H9 | HIGH | cache validation key-only; no frame-range coverage | cited |
+| H7 | HIGH | head-tail multi-head rejection + label normalization removed | ✅ | ✅ fixed 2026-06-29 |
+| H8 | HIGH | CNN sub-threshold predictions no longer collapse to None | ✅ | ✅ fixed 2026-06-29 |
+| H9 | HIGH | cache validation key-only; no frame-range coverage | ✅ | ✅ fixed 2026-06-29 |
 | D1 | MEDIUM | identity sidecar now always written (ignores opt-in flag) | cited |
 | G3 | MEDIUM | canonical affine/canvas/M_inverse not persisted (recomputed) | cited |
 | G4 | MEDIUM | AprilTag hamming dropped | ✅ |

@@ -159,6 +159,99 @@ class TestPopulateLiveCNNStore:
         assert preds[0].class_names[0] == "b"
         assert preds[0].confidences[0] == pytest.approx(0.7, rel=1e-5)
 
+    def test_subthreshold_top_class_collapses_to_none(self):
+        """H8: a top class below confidence_threshold becomes None (legacy
+        CNNClassifier.predict_batch parity), but its confidence is retained."""
+        store = LiveCNNIdentityStore()
+        probs = np.array([0.1, 0.55, 0.35], dtype=np.float32)  # argmax conf 0.55
+        cnn_result = CNNResult(
+            label="test",
+            predictions=[
+                CNNDetectionPrediction(
+                    det_index=0,
+                    factors=[
+                        CNNFactorPrediction(
+                            factor_name="flat",
+                            class_names=["a", "b", "c"],
+                            raw_probabilities=probs,
+                        )
+                    ],
+                )
+            ],
+        )
+        det_ids = np.array([0], dtype=np.int64)
+        populate_live_cnn_store(
+            store,
+            [cnn_result],
+            det_ids,
+            frame_idx=0,
+            phase_label="test",
+            confidence_threshold=0.6,
+        )
+        preds = store.load(0)
+        assert len(preds) == 1
+        assert preds[0].class_names[0] is None
+        assert preds[0].confidences[0] == pytest.approx(0.55, rel=1e-5)
+
+    def test_above_threshold_top_class_retained(self):
+        """H8: a top class at/above the threshold keeps its name."""
+        store = LiveCNNIdentityStore()
+        probs = np.array([0.1, 0.7, 0.2], dtype=np.float32)
+        cnn_result = CNNResult(
+            label="test",
+            predictions=[
+                CNNDetectionPrediction(
+                    det_index=0,
+                    factors=[
+                        CNNFactorPrediction(
+                            factor_name="flat",
+                            class_names=["a", "b", "c"],
+                            raw_probabilities=probs,
+                        )
+                    ],
+                )
+            ],
+        )
+        det_ids = np.array([0], dtype=np.int64)
+        populate_live_cnn_store(
+            store,
+            [cnn_result],
+            det_ids,
+            frame_idx=0,
+            phase_label="test",
+            confidence_threshold=0.6,
+        )
+        preds = store.load(0)
+        assert preds[0].class_names[0] == "b"
+        assert preds[0].confidences[0] == pytest.approx(0.7, rel=1e-5)
+
+    def test_default_threshold_zero_keeps_all_classes(self):
+        """H8: with the default threshold (0.0) no class is gated — preserves
+        prior behaviour for callers that don't pass a threshold."""
+        store = LiveCNNIdentityStore()
+        probs = np.array([0.4, 0.35, 0.25], dtype=np.float32)
+        cnn_result = CNNResult(
+            label="test",
+            predictions=[
+                CNNDetectionPrediction(
+                    det_index=0,
+                    factors=[
+                        CNNFactorPrediction(
+                            factor_name="flat",
+                            class_names=["a", "b", "c"],
+                            raw_probabilities=probs,
+                        )
+                    ],
+                )
+            ],
+        )
+        det_ids = np.array([0], dtype=np.int64)
+        populate_live_cnn_store(
+            store, [cnn_result], det_ids, frame_idx=0, phase_label="test"
+        )
+        preds = store.load(0)
+        assert preds[0].class_names[0] == "a"
+
     def test_no_matching_phase_stores_empty(self):
         store = LiveCNNIdentityStore()
         cnn_result = _make_cnn_result("phase_a")
