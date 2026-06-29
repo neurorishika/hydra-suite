@@ -272,8 +272,10 @@ def test_load_yolo_calls_to_for_native_pt(monkeypatch):
 import warnings
 
 
-def test_extract_obb_result_no_divzero_warning_for_zero_height():
-    """Per code-quality fix: zero-height detections must not raise divide-by-zero warning."""
+def test_extract_obb_result_drops_zero_height_without_divzero_warning():
+    """H6 parity: zero-height (non-positive geometry) detections are dropped
+    (legacy _obb_geometry:303-312), and dropping them must not raise a
+    divide-by-zero RuntimeWarning along the way."""
 
     def _t(arr):
         from unittest.mock import MagicMock
@@ -282,25 +284,28 @@ def test_extract_obb_result_no_divzero_warning_for_zero_height():
         m.cpu.return_value.numpy.return_value = arr
         return m
 
-    # Build a mock with one detection that has h=0 (degenerate but possible from YOLO)
-    xywhr = np.array([[100.0, 100.0, 20.0, 0.0, 0.5]], dtype=np.float32)
-    corners = np.zeros((1, 4, 2), dtype=np.float32)
-    conf = np.full(1, 0.8, dtype=np.float32)
+    # One detection with h=0 (degenerate but possible from YOLO) plus one valid.
+    xywhr = np.array(
+        [[100.0, 100.0, 20.0, 0.0, 0.5], [50.0, 50.0, 18.0, 9.0, 0.3]],
+        dtype=np.float32,
+    )
+    corners = np.zeros((2, 4, 2), dtype=np.float32)
+    conf = np.array([0.8, 0.7], dtype=np.float32)
     from unittest.mock import MagicMock
 
     r = MagicMock()
     r.obb.xywhr = _t(xywhr)
     r.obb.xyxyxyxy = _t(corners)
     r.obb.conf = _t(conf)
-    r.obb.__len__ = lambda self: 1
+    r.obb.__len__ = lambda self: 2
 
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
         # Must NOT raise a RuntimeWarning
         result = _extract_obb_result(r, frame_idx=0)
+    # The degenerate h=0 detection is dropped; the valid one survives.
     assert result.num_detections == 1
-    # Aspect should be the safe-fallback 1.0 when h=0
-    assert result.shapes[0, 1] == pytest.approx(1.0)
+    assert result.confidences[0] == pytest.approx(0.7)
 
 
 def test_extract_raw_tensors_uses_runtime_device_for_empty_path():
@@ -321,3 +326,40 @@ def test_obb_models_has_callable_close():
     models = OBBModels(mode="direct")
     assert callable(models.close)
     models.close()  # must not raise
+
+
+def test_run_direct_forwards_target_classes_to_predict():
+    """H1 parity: OBBConfig.target_classes is passed as `classes=` to predict;
+    empty target_classes maps to None (all classes) — legacy yolo_detector.py."""
+    from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+    from hydra_suite.core.inference.runtime import RuntimeContext
+    from hydra_suite.core.inference.stages.obb import _run_direct
+
+    rt = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        default_runtime="cpu",
+        tensor_on_cuda=False,
+    )
+    captured = {}
+
+    class _Model:
+        def predict(self, frames, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    frames = [np.zeros((8, 8, 3), dtype=np.uint8)]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/m.pt"),
+        target_classes=[2, 3],
+    )
+    _run_direct(frames, _Model(), cfg, rt)
+    assert captured["classes"] == [2, 3]
+
+    captured.clear()
+    cfg_all = OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="/m.pt"))
+    _run_direct(frames, _Model(), cfg_all, rt)
+    assert captured["classes"] is None

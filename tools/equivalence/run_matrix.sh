@@ -60,12 +60,43 @@ if [ "$FIXTURES" = "1" ]; then
   VIDEOS=(
     "emi_obb_identity|$FX/clips/emi_obb_identity.mp4|$FX/configs/emi_obb_identity.json|"
     "ant_pose_headtail|$FX/clips/ant_pose_headtail.mp4|$FX/configs/ant_pose_headtail.json|$FX/ooceraea_biroi.json"
+    "ant_obb_sleap|$FX/clips/ant_obb_sleap.mp4|$FX/configs/ant_obb_sleap.json|$FX/ooceraea_biroi.json"
+    "worm_bgsub|$FX/clips/worm_bgsub.mp4|$FX/configs/worm_bgsub.json|"
+    "ant_cnn_identity|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity.json|$FX/ooceraea_biroi.json"
+    "fly_obb|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb.json|"
   )
 else
   VIDEOS=(
     "emi_short|$DATA/ant/emi_short.mp4|$DATA/ant/emi_short_config.json|"
     "ant2|$DATA/ant2/000001_cropped_roi.mp4|$DATA/ant2/000001_cropped_roi_config.json|$FX/ooceraea_biroi.json"
   )
+fi
+
+# Optionally restrict to specific clips, so you don't rerun the whole matrix.
+# Pass names as arguments or via ONLY="a b" (space- or comma-separated):
+#   bash tools/equivalence/run_matrix.sh ant_pose_headtail worm_bgsub
+#   ONLY=ant_pose_headtail bash tools/equivalence/run_matrix.sh
+_only="${ONLY:-$*}"
+_only="${_only//,/ }"  # allow comma-separated too
+if [ -n "$_only" ]; then
+  _filtered=()
+  for entry in "${VIDEOS[@]}"; do
+    for want in $_only; do
+      if [ "${entry%%|*}" = "$want" ]; then
+        _filtered+=("$entry")
+        break
+      fi
+    done
+  done
+  if [ "${#_filtered[@]}" -eq 0 ]; then
+    echo "!! No clips matched: $_only" >&2
+    printf '   Available:' >&2
+    for e in "${VIDEOS[@]}"; do printf ' %s' "${e%%|*}" >&2; done
+    echo >&2
+    exit 2
+  fi
+  VIDEOS=("${_filtered[@]}")
+  echo "### subset: $_only"
 fi
 
 run() {  # src outdir config video label skeleton
@@ -83,6 +114,30 @@ cmp() {  # a b title
   else
     echo "  (missing CSV: $1 or $2)"
   fi
+}
+
+# Performance gate: the new pipeline must not be meaningfully slower than legacy.
+# Compares wall-clock/fps from each run's meta.json. PERF_TOLERANCE is the max
+# allowed new/legacy time ratio (default 1.25 = new may be up to 25% slower).
+PERF_TOLERANCE=${PERF_TOLERANCE:-1.25}
+perfcmp() {  # legacy_meta new_meta
+  echo "--- PERFORMANCE  legacy vs new_a (tolerance ${PERF_TOLERANCE}x) ---"
+  if [ ! -f "$1" ] || [ ! -f "$2" ]; then
+    echo "  (missing meta.json)"; return
+  fi
+  PERF_TOLERANCE="$PERF_TOLERANCE" python - "$1" "$2" <<'PY'
+import json, os, sys
+leg = json.load(open(sys.argv[1])); new = json.load(open(sys.argv[2]))
+lt, nt = leg.get("tracking_seconds"), new.get("tracking_seconds")
+lf, nf = leg.get("fps"), new.get("fps")
+tol = float(os.environ.get("PERF_TOLERANCE", "1.25"))
+print(f"  legacy: {lt}s ({lf} fps)   new: {nt}s ({nf} fps)")
+if not lt or not nt:
+    print("  (no timing recorded)"); raise SystemExit(0)
+ratio = nt / lt
+verdict = "EQUIVALENT ✅" if ratio <= tol else "SLOWER ❌"
+print(f"  new/legacy time ratio = {ratio:.2f}x  ->  PERFORMANCE: {verdict}")
+PY
 }
 
 for entry in "${VIDEOS[@]}"; do
@@ -105,5 +160,8 @@ for entry in "${VIDEOS[@]}"; do
         "$base/new_a/${stem}_tracking_${kind}.csv" \
         "EQUIVALENCE  legacy vs new_a"
   done
+
+  echo; echo ">>> $name : performance"
+  perfcmp "$base/legacy/meta.json" "$base/new_a/meta.json"
 done
 echo; echo "### done. outputs under $OUT/$RUNTIME/"

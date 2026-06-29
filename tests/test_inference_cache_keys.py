@@ -5,10 +5,13 @@ import torch
 from hydra_suite.core.inference.cache.base import CACHE_SCHEMA_VERSION, CacheKey
 from hydra_suite.core.inference.cache.keys import (
     apriltag_cache_key,
+    bgsub_detection_cache_key,
     cnn_cache_key,
     detection_cache_key,
     headtail_cache_key,
     pose_cache_key,
+    video_signature,
+    with_video_signature,
 )
 from hydra_suite.core.inference.config import (
     AprilTagConfig,
@@ -175,6 +178,61 @@ def test_detection_key_sequential_encodes_both_models():
     )
     k = detection_cache_key(cfg)
     assert "/det.pt" in k.model_path and "/obb.pt" in k.model_path
+
+
+# ---- bgsub_detection_cache_key ----
+
+
+def test_bgsub_key_changes_with_detection_params():
+    k1 = bgsub_detection_cache_key({"SUBTRACTION_THRESHOLD": 25})
+    k2 = bgsub_detection_cache_key({"SUBTRACTION_THRESHOLD": 100})
+    assert k1 != k2
+    assert k1.model_path == "background_subtraction"
+
+
+def test_bgsub_key_stable_for_same_params():
+    params = {"SUBTRACTION_THRESHOLD": 25, "START_FRAME": 0, "END_FRAME": 499}
+    assert bgsub_detection_cache_key(params) == bgsub_detection_cache_key(dict(params))
+
+
+def test_bgsub_key_video_bound():
+    k = bgsub_detection_cache_key({"SUBTRACTION_THRESHOLD": 25})
+    assert with_video_signature(k, "111:222") != with_video_signature(k, "333:444")
+
+
+# ---- video signature binding ----
+
+
+def test_with_video_signature_noop_when_empty():
+    k = detection_cache_key(_obb_direct())
+    assert with_video_signature(k, "") == k
+
+
+def test_with_video_signature_changes_key_and_differs_per_video():
+    k = detection_cache_key(_obb_direct())
+    k_a = with_video_signature(k, "100:111")
+    k_b = with_video_signature(k, "200:222")
+    # Binding a signature changes the key, and different videos yield different
+    # keys — so a cache from one video is never reused for another.
+    assert k_a != k
+    assert k_a != k_b
+    # Only config_hash is mixed; model identity fields are untouched.
+    assert k_a.model_path == k.model_path
+    assert k_a.model_mtime == k.model_mtime
+
+
+def test_video_signature_changes_with_file_size(tmp_path):
+    v = tmp_path / "clip.mp4"
+    v.write_bytes(b"x" * 10)
+    sig_small = video_signature(str(v))
+    v.write_bytes(b"x" * 5000)  # regenerate same name, different content/size
+    sig_big = video_signature(str(v))
+    assert sig_small and sig_big and sig_small != sig_big
+
+
+def test_video_signature_empty_for_missing_or_none():
+    assert video_signature(None) == ""
+    assert video_signature("/no/such/file.mp4") == ""
 
 
 # ---- headtail_cache_key ----

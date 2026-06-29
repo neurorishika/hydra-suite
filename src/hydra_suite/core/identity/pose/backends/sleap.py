@@ -1282,19 +1282,52 @@ class SleapServiceBackend:
                 self._native_in_memory_supported = False
         return bool(self._native_in_memory_supported)
 
+    @staticmethod
+    def _to_uint8_image(crop: np.ndarray) -> np.ndarray:
+        """Coerce a crop to uint8 [0, 255] for SLEAP.
+
+        The inference pipeline's canonical crops are float32 in [0, 1] (the crop
+        builder does ``.float() / 255.0`` so the classifier/CNN backends get
+        normalized input). SLEAP — both the shared-memory transport and the
+        temp-file PNG path — expects 8-bit images; casting a [0, 1] float crop
+        straight to uint8 floors every pixel to 0, producing a blank image with
+        no detectable instances (all-zero keypoints). Scale [0, 1] floats back to
+        [0, 255] before the uint8 cast; pass uint8 / [0, 255] inputs through.
+        """
+        a = np.asarray(crop)
+        if a.dtype == np.uint8:
+            return a
+        a = a.astype(np.float32, copy=False)
+        finite = a[np.isfinite(a)]
+        if finite.size and float(finite.max()) <= 1.0 + 1e-3:
+            a = a * 255.0
+        return np.clip(np.nan_to_num(a), 0.0, 255.0).astype(np.uint8)
+
     def predict_batch(self, crops: Sequence[np.ndarray]) -> List[PoseResult]:
         self._last_profile = {}
         if not crops:
             return []
-        if not self._native_in_memory_enabled():
-            return self._predict_batch_via_temp_files(crops)
+        # Normalize every crop to uint8 [0, 255] up front so both transports
+        # (shared-memory and temp-file) feed SLEAP 8-bit images regardless of the
+        # incoming dtype/range (see _to_uint8_image).
+        crops = [self._to_uint8_image(c) for c in crops]
+        # Prefer zero-copy shared-memory transport: raw uint8 arrays straight to
+        # the service's warm in-process predictor — no PNG encode, no disk write/
+        # read, no decode. (The old sio array-video gate is obsolete now that the
+        # service builds inference tensors from the arrays directly.) Fall back to
+        # temp-file PNGs only if shared memory genuinely fails.
         try:
             return self._predict_batch_via_shared_memory(crops)
         except Exception:
-            logger.debug(
-                "Falling back to temporary-file SLEAP crop transport.",
-                exc_info=True,
-            )
+            # Shared-memory transport failed; fall back to temp-file PNGs. Logged
+            # once at WARNING since the fallback is markedly slower (disk I/O).
+            if not getattr(SleapServiceBackend, "_shm_fallback_logged", False):
+                SleapServiceBackend._shm_fallback_logged = True
+                logger.warning(
+                    "SLEAP shared-memory transport failed; falling back to "
+                    "temp-file transport (slower).",
+                    exc_info=True,
+                )
             return self._predict_batch_via_temp_files(crops)
 
     def consume_last_profile(self) -> Dict[str, float]:

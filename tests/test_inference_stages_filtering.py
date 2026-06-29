@@ -9,6 +9,7 @@ from hydra_suite.core.inference.stages.filtering import (
     filter_detections,
     filter_from_tensors,
     filter_raw,
+    filter_with_indices,
 )
 from hydra_suite.core.inference.stages.obb import _empty_obb_result, _RawOBBTensors
 
@@ -37,16 +38,35 @@ def _make_obb(
     centroids, confidences, sizes=None, corners=None, frame_idx=0
 ) -> OBBResult:
     n = len(confidences)
+    sizes_arr = np.array(sizes or [500.0] * n, dtype=np.float32)
+    if corners is None:
+        # Build a square box around each centroid so the corner-based OBB NMS
+        # (cv2 convex-hull IoU, matching the legacy detector) sees geometrically
+        # consistent boxes. A unit square at the origin for every detection would
+        # make all detections fully overlap and be suppressed to one.
+        corners_list = []
+        for i in range(n):
+            cx, cy = float(centroids[i][0]), float(centroids[i][1])
+            half = max(1.0, float(np.sqrt(max(sizes_arr[i], 1.0))) / 2.0)
+            corners_list.append(
+                [
+                    [cx - half, cy - half],
+                    [cx + half, cy - half],
+                    [cx + half, cy + half],
+                    [cx - half, cy + half],
+                ]
+            )
+        corners_arr = np.array(corners_list, dtype=np.float32)
+    else:
+        corners_arr = np.array(corners, dtype=np.float32)
     return OBBResult(
         frame_idx=frame_idx,
         centroids=np.array(centroids, dtype=np.float32),
         angles=np.zeros(n, dtype=np.float32),
-        sizes=np.array(sizes or [500.0] * n, dtype=np.float32),
+        sizes=sizes_arr,
         shapes=np.ones((n, 2), dtype=np.float32),
         confidences=np.array(confidences, dtype=np.float32),
-        corners=np.array(
-            corners or [[[0, 0], [1, 0], [1, 1], [0, 1]]] * n, dtype=np.float32
-        ),
+        corners=corners_arr,
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
     )
 
@@ -93,6 +113,38 @@ def test_filter_max_size_gate():
     result = filter_detections(raw, _cpu_config(max_object_size=1000.0))
     assert result.num_detections == 1
     assert result.sizes[0] == pytest.approx(50.0)
+
+
+def test_filter_size_gate_uses_ellipse_area_not_rect():
+    """Regression: MIN/MAX_OBJECT_SIZE thresholds are calibrated for ellipse area
+    (pi/4 * w * h), matching the legacy detector (_obb_geometry.py). A box whose
+    RECTANGLE area (sizes = w*h) exceeds the max but whose ELLIPSE area is under it
+    must be KEPT — previously it was wrongly dropped, removing the largest ~19% of
+    detections in crowded scenes."""
+    # rect area 1100 > 1000, but ellipse area 1100 * pi/4 ~= 864 < 1000 -> keep
+    raw = _make_obb([[100, 100]], [0.9], sizes=[1100.0])
+    assert (
+        filter_detections(raw, _cpu_config(max_object_size=1000.0)).num_detections == 1
+    )
+    # ellipse area 2000 * pi/4 ~= 1571 > 1000 -> dropped
+    raw_big = _make_obb([[100, 100]], [0.9], sizes=[2000.0])
+    assert (
+        filter_detections(raw_big, _cpu_config(max_object_size=1000.0)).num_detections
+        == 0
+    )
+
+
+def test_filter_with_indices_size_gate_uses_ellipse_area():
+    """filter_with_indices is the InferenceRunner hot path (batch + realtime +
+    load_frame). It must apply the SAME ellipse-area size gate as filter_detections
+    so crowded scenes keep the same detections as the legacy detector."""
+    # rect area 1100 > 1000 max, but ellipse area ~864 < 1000 -> keep
+    raw = _make_obb([[100, 100]], [0.9], sizes=[1100.0])
+    out, idx = filter_with_indices(raw, _cpu_config(max_object_size=1000.0))
+    assert out.num_detections == 1 and len(idx) == 1
+    raw_big = _make_obb([[100, 100]], [0.9], sizes=[2000.0])  # ellipse ~1571 > 1000
+    out_big, _ = filter_with_indices(raw_big, _cpu_config(max_object_size=1000.0))
+    assert out_big.num_detections == 0
 
 
 def test_filter_roi_mask():
@@ -163,6 +215,20 @@ def test_filter_from_tensors_max_size_gate():
     assert result.sizes[0] == pytest.approx(50.0)
 
 
+def test_filter_from_tensors_size_gate_uses_ellipse_area():
+    """GPU path mirrors the CPU path: size gates compare ellipse area, not rect."""
+    raw = _make_raw_tensors([[100, 100]], [0.9], sizes=[1100.0])  # ellipse ~864
+    out = filter_from_tensors(
+        raw, _cpu_config(max_object_size=1000.0), None, _cuda_rt()
+    )
+    assert out.num_detections == 1
+    raw_big = _make_raw_tensors([[100, 100]], [0.9], sizes=[2000.0])  # ellipse ~1571
+    out_big = filter_from_tensors(
+        raw_big, _cpu_config(max_object_size=1000.0), None, _cuda_rt()
+    )
+    assert out_big.num_detections == 0
+
+
 def test_filter_from_tensors_roi_mask():
     raw = _make_raw_tensors([[50, 50], [300, 300]], [0.9, 0.9])
     mask = torch.zeros(400, 400, dtype=torch.uint8)
@@ -212,3 +278,41 @@ def test_filter_raw_dispatches_to_gpu_path():
     )
     assert isinstance(result, OBBResult)
     assert result.num_detections == 1
+
+
+def test_final_cap_keeps_largest_by_size_not_confidence():
+    """H5 parity: when detections exceed max_detections, legacy keeps the
+    LARGEST (sort by size), not the most confident (_obb_geometry:587-588)."""
+    # 3 well-separated detections; cap to 2. The most confident is the SMALLEST,
+    # so a confidence-based cap would keep it while a size-based cap drops it.
+    centroids = [(50.0, 50.0), (200.0, 200.0), (350.0, 350.0)]
+    confidences = [0.99, 0.80, 0.70]  # smallest box is most confident
+    sizes = [100.0, 900.0, 1600.0]
+    raw = _make_obb(centroids, confidences, sizes=sizes)
+    # iou=1.0 disables NMS so only the size cap decides survivors.
+    cfg = _cpu_config(confidence_threshold=0.0, iou_threshold=1.0, max_detections=2)
+
+    out = filter_detections(raw, cfg)
+    assert out.num_detections == 2
+    kept = sorted(out.sizes.tolist())
+    assert kept == [900.0, 1600.0]  # the two LARGEST, not the most confident
+
+    # filter_with_indices must agree (used for cache keying).
+    out2, idx = filter_with_indices(raw, cfg)
+    assert sorted(out2.sizes.tolist()) == [900.0, 1600.0]
+    assert len(idx) == 2
+
+
+def test_final_cap_size_based_on_cuda_tensor_path():
+    """H5 parity on the CUDA tensor path: cap keeps the largest by size."""
+    centroids = [(50.0, 50.0), (200.0, 200.0), (350.0, 350.0)]
+    confidences = [0.99, 0.80, 0.70]
+    sizes = [100.0, 900.0, 1600.0]
+    raw = _make_raw_tensors(centroids, confidences, sizes=sizes)
+    cfg = _cpu_config(confidence_threshold=0.0, iou_threshold=1.0, max_detections=2)
+
+    out = filter_from_tensors(raw, cfg, None, _cuda_rt())
+    assert out.num_detections == 2
+    # sizes on the tensor path are w*h = (sqrt(size))^2 ≈ size.
+    kept = sorted(round(s) for s in out.sizes.tolist())
+    assert kept == [900, 1600]

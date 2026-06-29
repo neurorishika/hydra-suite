@@ -47,10 +47,19 @@ class OBBConfig:
     sequential: OBBSequentialConfig | None = None
     target_classes: list[int] = field(default_factory=list)
     max_detections: int = 20
+    # Cap on RAW detections per frame, applied at OBB extraction (sorted by
+    # confidence descending, top-k) BEFORE size/aspect/IoU filtering. Mirrors
+    # legacy ``_obb_geometry._raw_detection_cap`` (= 2 * MAX_TARGETS). 0 disables.
+    raw_detection_cap: int = 0
     min_object_size: float = 0.0
     max_object_size: float = float("inf")
+    # Aspect-ratio (major/minor) gate, applied during filtering. Mirrors legacy
+    # ``_obb_geometry`` aspect filtering (ref_ar * min/max multiplier). Defaults
+    # (0, inf) disable the gate.
+    min_aspect_ratio: float = 0.0
+    max_aspect_ratio: float = float("inf")
     confidence_threshold: float = 0.25
-    iou_threshold: float = 0.45
+    iou_threshold: float = 0.7  # legacy YOLO_IOU_THRESHOLD default
 
 
 @dataclass
@@ -193,6 +202,8 @@ def _config_to_dict(config: InferenceConfig) -> dict[str, Any]:
     obb = d["obb"]
     if obb.get("max_object_size") == float("inf"):
         obb["max_object_size"] = None
+    if obb.get("max_aspect_ratio") == float("inf"):
+        obb["max_aspect_ratio"] = None
     return d
 
 
@@ -200,6 +211,8 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     obb_d = d["obb"]
     if obb_d.get("max_object_size") is None:
         obb_d["max_object_size"] = float("inf")
+    if obb_d.get("max_aspect_ratio") is None:
+        obb_d["max_aspect_ratio"] = float("inf")
 
     direct = OBBDirectConfig(**obb_d["direct"]) if obb_d.get("direct") else None
     sequential = (
@@ -211,8 +224,11 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         sequential=sequential,
         target_classes=obb_d.get("target_classes", []),
         max_detections=obb_d.get("max_detections", 20),
+        raw_detection_cap=obb_d.get("raw_detection_cap", 0),
         min_object_size=obb_d.get("min_object_size", 0.0),
         max_object_size=obb_d.get("max_object_size", float("inf")),
+        min_aspect_ratio=obb_d.get("min_aspect_ratio", 0.0),
+        max_aspect_ratio=obb_d.get("max_aspect_ratio", float("inf")),
         confidence_threshold=obb_d.get("confidence_threshold", 0.25),
         iou_threshold=obb_d.get("iou_threshold", 0.45),
     )

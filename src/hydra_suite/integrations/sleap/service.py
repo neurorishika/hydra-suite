@@ -845,6 +845,97 @@ def _predict_with_predictor(pred, labels, batch, max_instances):
                     pass
     return None
 
+def _build_prepared_batch(pred, image_arrays):
+    # Build a _run_inference_on_batch-ready batch directly from in-memory crop
+    # arrays -- no Video, no make_pipeline, no reader thread. Replicates the
+    # provider + _process_batch preprocessing (CHW, uint8, sizematcher, channel
+    # handling). Crops arrive in cv2/BGR order (the temp-file path writes them via
+    # cv2.imwrite, which sleap_io reads back as RGB), so swap BGR->RGB to match.
+    import torch
+    from sleap_nn.data.resizing import apply_sizematcher
+
+    pc = pred.preprocess_config
+    mh, mw = pc["max_height"], pc["max_width"]
+    ensure_rgb = bool(pc.get("ensure_rgb", True))
+    ensure_gray = bool(pc.get("ensure_grayscale", False))
+    imgs, fidxs, vidxs, org_szs, eff_scales = [], [], [], [], []
+    for i, arr in enumerate(image_arrays):
+        a = np.ascontiguousarray(arr)
+        if a.ndim == 2:
+            a = a[:, :, None]
+        if a.shape[2] == 3:
+            a = a[:, :, ::-1]  # BGR -> RGB (match cv2.imwrite -> sio path)
+        H, W = int(a.shape[0]), int(a.shape[1])
+        chw = np.transpose(a, (2, 0, 1))
+        t = torch.from_numpy(np.expand_dims(chw, 0).copy())  # (1, C, H, W) uint8
+        t, eff = apply_sizematcher(t, mh, mw)
+        if ensure_rgb and t.shape[-3] != 3:
+            t = t.repeat(1, 3, 1, 1)
+        elif ensure_gray and t.shape[-3] != 1:
+            import torchvision.transforms.functional as _TF
+
+            t = _TF.rgb_to_grayscale(t, num_output_channels=1)
+        imgs.append(t.unsqueeze(0))  # (1, 1, C, mh, mw)
+        org_szs.append(torch.Tensor([H, W]).unsqueeze(0).unsqueeze(0))  # (1, 1, 2)
+        eff_scales.append(torch.tensor(eff))
+        fidxs.append(i)
+        vidxs.append(0)
+    return imgs, fidxs, vidxs, org_szs, [], eff_scales
+
+
+def _extract_preds_direct(raw, images, num_kpts):
+    # Format raw _run_inference_on_batch output into the SAME structure as
+    # _extract_preds: {str(Path(image)): [(x, y, score)] * num_kpts}. The peaks in
+    # pred_instance_peaks are already final keypoint coordinates (sleap builds
+    # PredictedInstances from them with no further transform).
+    samples = []
+    for ex in raw:
+        pk = np.asarray(ex.get("pred_instance_peaks"))
+        pv = ex.get("pred_peak_values")
+        pv = np.asarray(pv) if pv is not None else None
+        if pk.ndim == 2:  # single (K, 2) -> add batch dim
+            pk = pk[None]
+            pv = None if pv is None else pv[None]
+        for b in range(pk.shape[0]):
+            samples.append((pk[b], None if pv is None else pv[b]))
+    preds = {}
+    for i, path in enumerate(images):
+        kp, vv = samples[i] if i < len(samples) else (None, None)
+        pts = []
+        for j in range(num_kpts):
+            if kp is not None and j < kp.shape[0]:
+                x, y = float(kp[j, 0]), float(kp[j, 1])
+                c = float(vv[j]) if (vv is not None and j < len(vv)) else 1.0
+            else:
+                x, y, c = 0.0, 0.0, 0.0
+            if not (np.isfinite(x) and np.isfinite(y)):
+                pts.append((0.0, 0.0, 0.0))
+            else:
+                pts.append((x, y, c if np.isfinite(c) else 1.0))
+        preds[str(Path(path))] = pts
+    return preds
+
+
+def _run_inference_direct(cfg, image_arrays, images, num_kpts):
+    # Warm in-process SLEAP inference on in-memory crops: no Video, no
+    # make_pipeline (reader thread), no CLI subprocess. ~1-6 ms/frame vs the CLI's
+    # ~6 s. Returns preds in the _extract_preds format, or None to signal the
+    # caller to fall back to the pipeline/CLI path.
+    if image_arrays is None:
+        return None
+    device = _normalize_device(cfg.get("device"))
+    pred = _load_predictor(cfg.get("model_dir"), device)
+    if pred is None:
+        return None
+    if getattr(pred, "inference_model", None) is None:
+        pred._initialize_inference_model()
+    # make_pipeline normally sets this; _run_inference_on_batch requires it.
+    pred.preprocess = True
+    batch = _build_prepared_batch(pred, image_arrays)
+    raw = list(pred._run_inference_on_batch(*batch))
+    return _extract_preds_direct(raw, images, num_kpts)
+
+
 def _run_inference(labels, model_dir, device, batch, max_instances):
     device = _normalize_device(device)
     pred = _load_predictor(model_dir, device)
@@ -2021,6 +2112,53 @@ class Handler(BaseHTTPRequestHandler):
                         f"exported-runtime failed ({runtime_flavor}): {export_exc}; "
                         "falling back to native SLEAP runtime"
                     )
+            # FAST PATH (native runtime, in-memory crops): warm predictor +
+            # _run_inference_on_batch, no Video / make_pipeline / CLI. ~1-6 ms/frame
+            # vs the CLI's ~6 s. Falls through to the pipeline/CLI path on any error
+            # or empty result, so correctness never regresses.
+            if runtime_flavor not in ("onnx", "tensorrt"):
+                # Use the in-memory arrays if the client sent them (shared-memory
+                # transport); otherwise read the temp-file PNGs into arrays so the
+                # direct path applies regardless of transport. cv2.imread returns
+                # BGR, matching what _build_prepared_batch expects.
+                _direct_arrays = image_arrays
+                if _direct_arrays is None:
+                    try:
+                        import cv2 as _cv2
+
+                        _direct_arrays = []
+                        for _p in images:
+                            _im = _cv2.imread(str(_p))
+                            if _im is None:
+                                _direct_arrays = None
+                                break
+                            _direct_arrays.append(_im)
+                    except Exception:
+                        _direct_arrays = None
+            else:
+                _direct_arrays = None
+            if _direct_arrays is not None:
+                try:
+                    _direct_start = time.perf_counter()
+                    direct_preds = _run_inference_direct(
+                        cfg, _direct_arrays, images, max(1, len(names))
+                    )
+                    timings['service_inference_s'] = timings.get(
+                        'service_inference_s', 0.0
+                    ) + (time.perf_counter() - _direct_start)
+                    if direct_preds is not None and any(
+                        len(v) > 0 for v in direct_preds.values()
+                    ):
+                        _log(
+                            f"preds_nonempty="
+                            f"{sum(1 for v in direct_preds.values() if v)}/{len(images)}"
+                            f" runtime=direct"
+                        )
+                        self._json(200, {'ok': True, 'preds': direct_preds, 'timings_s': timings})
+                        return
+                    _log("direct path: no preds; falling back to pipeline/CLI")
+                except Exception as _direct_exc:
+                    _log(f"direct path failed ({_direct_exc}); falling back to pipeline/CLI")
             sk=_make_skeleton(names, edges)
             request_tmp_dir = None
             native_images = images

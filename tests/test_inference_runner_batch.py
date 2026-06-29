@@ -36,6 +36,33 @@ def _make_obb(n: int = 3, frame_idx: int = 0) -> OBBResult:
     )
 
 
+def test_caches_invalidated_when_video_file_changes(tmp_path):
+    """Regression: a detection cache must not be reused after the source video
+    changes under the same name (e.g. a clip regenerated with more frames).
+    Without the video-signature binding this returned a stale, truncated cache.
+    """
+    from hydra_suite.core.inference.runner import InferenceRunner, _open_caches
+
+    cfg = _cfg()
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"x" * 100)
+
+    with patch("hydra_suite.core.inference.runner._load_all_models"):
+        runner = InferenceRunner(cfg, cache_dir=tmp_path, video_path=str(video))
+
+    # Write a detection cache bound to this exact video's signature.
+    caches = _open_caches(cfg, tmp_path, runner._video_sig)
+    caches.detection.write_frame(0, result=_make_obb(2, 0))
+    caches.detection.close()
+    assert runner.caches_all_valid() is True
+
+    # Regenerate the video under the same name with different content/size.
+    video.write_bytes(b"y" * 5000)
+    with patch("hydra_suite.core.inference.runner._load_all_models"):
+        runner2 = InferenceRunner(cfg, cache_dir=tmp_path, video_path=str(video))
+    assert runner2.caches_all_valid() is False
+
+
 def test_run_batch_pass_raises_without_cache_dir():
     from hydra_suite.core.inference.runner import InferenceRunner
 

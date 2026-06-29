@@ -66,8 +66,10 @@ def test_run_headtail_empty_crops_returns_nan_hints():
         input_size=(64, 64),
         class_names=["right", "left", "up", "down", "unknown"],
     )
-    empty_crops = torch.zeros((0, 3, 64, 64))
-    result = run_headtail(empty_crops, _obb(n=2), model, config, _cpu_rt())
+    # Backend yields no predictions -> hints stay NaN, still sized to n.
+    mock_backend.predict_batch.return_value = []
+    frame = np.zeros((128, 128, 3), dtype=np.uint8)
+    result = run_headtail(frame, _obb(n=2), model, config, _cpu_rt())
     assert len(result.heading_hints) == 2
     assert all(math.isnan(h) for h in result.heading_hints)
     assert all(m == 0 for m in result.directed_mask)

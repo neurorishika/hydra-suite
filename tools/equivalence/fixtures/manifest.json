@@ -1,32 +1,64 @@
 {
-  "release_tag": "equiv-fixtures-v1",
+  "release_tag": "equiv-fixtures-v2",
   "repo": "neurorishika/hydra-suite",
   "clips": [
     {
       "name": "emi_obb_identity.mp4",
-      "sha256": "61d326b585d3a00530a9ee3bf14eca3c8b4307f0454c1167bb236f2dfcf688cc",
-      "bytes": 8363987,
+      "sha256": "5c6ffa082106f4e51e62dbe4ef1422d20e08b1d89db9964d54890c0c6dea843b",
+      "bytes": 68547756,
       "config": "configs/emi_obb_identity.json",
       "skeleton": null
     },
     {
       "name": "ant_pose_headtail.mp4",
-      "sha256": "a518783a607ac8c67f61095bbbd5f3f178cde18109e678f9c853d77640fa1fa9",
-      "bytes": 3103544,
+      "sha256": "f296d187ae9b4b63fecad48f4f2766c732939c2f267d937af073e70feaccd5f5",
+      "bytes": 25462063,
       "config": "configs/ant_pose_headtail.json",
       "skeleton": "ooceraea_biroi.json"
+    },
+    {
+      "name": "ant_obb_sleap.mp4",
+      "sha256": "5c6ffa082106f4e51e62dbe4ef1422d20e08b1d89db9964d54890c0c6dea843b",
+      "bytes": 68547756,
+      "config": "configs/ant_obb_sleap.json",
+      "skeleton": "ooceraea_biroi.json"
+    },
+    {
+      "name": "worm_bgsub.mp4",
+      "sha256": "6d7d73d581c5152913997a380b3e511f2a3a972f8c06cd82ea9e12190b96a9a0",
+      "bytes": 10204408,
+      "config": "configs/worm_bgsub.json",
+      "skeleton": null
+    },
+    {
+      "name": "ant_cnn_identity.mp4",
+      "sha256": "d0f32866700c555a1e826e64eee784e376b9ca9d523c08ffe2de0c18e603bbf8",
+      "bytes": 61457763,
+      "config": "configs/ant_cnn_identity.json",
+      "skeleton": "ooceraea_biroi.json"
+    },
+    {
+      "name": "fly_obb.mp4",
+      "sha256": "cd1668ec1de8c5893e0a3ffd8ea74b14abe0f457043d53a069395576d4c996af",
+      "bytes": 3109115,
+      "config": "configs/fly_obb.json",
+      "skeleton": null
     }
   ],
   "models_archive": {
     "name": "models.tar.gz",
-    "sha256": "02cd0fabbed06317cf4e9bf5f040d9a32c0105251b019696bef6ea1b1f415b91",
-    "bytes": 226459254,
+    "sha256": "8a39ee6d7047aed14c6b66e37de299489c47ab0277a75bfcd606c1e8bc827efc",
+    "bytes": 373015093,
     "extract_to": "models_dir"
   },
   "models_contained": [
-    "obb/20260416-165920_26s_obiroi_train36.pt",
-    "obb/20260214-210051_26x_ant_train22.pt",
+    "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag.multihead.json",
+    "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag_flat.pth",
+    "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag_flat_1.pth",
     "classification/orientation/20260429-104937_efficientnet_b0_obiroi_train1.pth",
+    "obb/20260214-210051_26x_ant_train22.pt",
+    "obb/20260416-165920_26s_obiroi_train36.pt",
+    "obb/20260503-171130_26x_fly_train7.pt",
     "pose/SLEAP/20260214-224154_unet_ant_single_instance"
   ]
 }

@@ -63,16 +63,18 @@ def test_run_apriltag_collects_detections():
     config = AprilTagConfig(enabled=True, tag_family="tag36h11")
 
     def _det(tag_id, cx, cy):
-        m = MagicMock()
-        m.tag_id = tag_id
-        m.center = (cx, cy)
-        m.corners = [
-            (cx - 1, cy - 1),
-            (cx + 1, cy - 1),
-            (cx + 1, cy + 1),
-            (cx - 1, cy + 1),
-        ]
-        return m
+        # Lab apriltag fork returns dict-style detections.
+        return {
+            "id": tag_id,
+            "center": (cx, cy),
+            "lb-rb-rt-lt": [
+                (cx - 1, cy - 1),
+                (cx + 1, cy - 1),
+                (cx + 1, cy + 1),
+                (cx - 1, cy + 1),
+            ],
+            "hamming": 0,
+        }
 
     mock_detector = MagicMock()
     mock_detector.detect.side_effect = [
@@ -93,11 +95,13 @@ def test_run_apriltag_max_tag_id_filter():
     config = AprilTagConfig(enabled=True, max_tag_id=10)
 
     def _det(tag_id):
-        m = MagicMock()
-        m.tag_id = tag_id
-        m.center = (0.0, 0.0)
-        m.corners = [(0, 0), (1, 0), (1, 1), (0, 1)]
-        return m
+        # Lab apriltag fork returns dict-style detections.
+        return {
+            "id": tag_id,
+            "center": (0.0, 0.0),
+            "lb-rb-rt-lt": [(0, 0), (1, 0), (1, 1), (0, 1)],
+            "hamming": 0,
+        }
 
     mock_detector = MagicMock()
     mock_detector.detect.return_value = [_det(5), _det(15), _det(8)]

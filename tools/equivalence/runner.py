@@ -165,6 +165,19 @@ def main() -> int:
         video_link.unlink()
     video_link.symlink_to(src.resolve())
 
+    # Purge any derived caches from a previous run in this outdir. This is
+    # CRITICAL for equivalence: the worker reuses an InferenceRunner cache when
+    # caches_all_valid() (a config-hash check that ignores video length/content)
+    # passes, silently overriding our use_cached_detections=False. If the clip
+    # was regenerated with a different frame count under the same name, a stale
+    # cache would be served and detections truncated to the old length. Deleting
+    # the per-video cache dir + legacy cache dir guarantees a fresh detection pass.
+    import shutil
+
+    for stale in (*outdir.glob(".inference_cache_*"), *outdir.glob("*_caches")):
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+
     cfg_path = build_config(
         args.orig_config, video_link, outdir, args.runtime, skeleton=args.skeleton
     )
@@ -182,11 +195,53 @@ def main() -> int:
         args.runtime,
     )
 
+    # Time the full tracking run for the harness's performance check. The new
+    # pipeline must not be slower than legacy: a regression like a cold per-frame
+    # pose service (seconds/frame) shows up here even when the CSVs are equivalent.
+    import time as _time
+
     from hydra_suite.trackerkit.cli import run_tracking_cli
 
+    try:
+        with open(cfg_path) as _fh:
+            _cfg = json.load(_fh)
+        n_frames = int(_cfg.get("end_frame", 0)) - int(_cfg.get("start_frame", 0)) + 1
+    except Exception:
+        n_frames = 0
+
+    # Deterministic seeding so the run is reproducible and legacy-vs-new is
+    # comparable. The bgsub background priming (core/background/model.py) samples
+    # frames via the global `random` module with no seed of its own; without this
+    # both legacy and new pick different frames every run, making worm_bgsub
+    # non-deterministic (new_a != new_b) and never equal to legacy. The bgsub
+    # path is identical code in both checkouts, so seeding identically here yields
+    # an identical background prime. No-op for the YOLO/OBB clips.
+    import random as _random
+
+    import numpy as _np
+
+    _random.seed(0)
+    _np.random.seed(0)
+
+    _t0 = _time.perf_counter()
     rc = run_tracking_cli([str(video_link)], config_path=str(cfg_path))
+    elapsed = _time.perf_counter() - _t0
+
+    meta["tracking_seconds"] = round(elapsed, 3)
+    meta["n_frames"] = n_frames
+    meta["fps"] = round(n_frames / elapsed, 2) if elapsed > 0 and n_frames else None
+    meta["exit_code"] = int(rc)
+    with open(outdir / "meta.json", "w") as fh:
+        json.dump(meta, fh, indent=2)
+
     produced = sorted(p.name for p in outdir.glob("*tracking*.csv"))
-    log.info("exit code: %s  produced CSVs: %s", rc, produced)
+    log.info(
+        "exit code: %s  %.1fs  %.1f fps  produced CSVs: %s",
+        rc,
+        elapsed,
+        (meta["fps"] or 0.0),
+        produced,
+    )
     return rc
 
 

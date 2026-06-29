@@ -5,7 +5,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from ..config import CNNConfig
 from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
@@ -37,25 +36,31 @@ def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
 
 
 def run_cnn(
-    crops: torch.Tensor,
+    frame: "np.ndarray | torch.Tensor",
     obb_result: OBBResult,
     model: CNNModel,
     config: CNNConfig,
     runtime: RuntimeContext,
+    aspect_ratio: float = 2.0,
+    margin: float = 1.3,
 ) -> CNNResult:
     """Run CNN identity classifier; returns raw pre-calibration probabilities.
+
+    Crops are warped directly from the frame to the model input size
+    (extract_classifier_crops), bit-identical to the legacy CNN crop path.
 
     Per Correction 16 / spec audit: temperature and scoring_mode are applied
     at tracking time inside IdentityEvidenceBuilder, NOT here. Cache writes
     receive raw probabilities; calibration changes never invalidate the cache.
     """
-    if crops.shape[0] == 0 or obb_result.num_detections == 0:
+    if obb_result.num_detections == 0:
         return CNNResult(label=config.label, predictions=[])
 
-    resized = _resize(crops, model.input_size)
-    np_crops = [
-        resized[i].permute(1, 2, 0).cpu().numpy() for i in range(resized.shape[0])
-    ]
+    from .crops import extract_classifier_crops
+
+    np_crops = extract_classifier_crops(
+        frame, obb_result, model.input_size, aspect_ratio, margin
+    )
 
     all_probs = model.backend.predict_batch(np_crops)
 
@@ -72,10 +77,3 @@ def run_cnn(
         predictions.append(CNNDetectionPrediction(det_index=det_idx, factors=factors))
 
     return CNNResult(label=config.label, predictions=predictions)
-
-
-def _resize(crops: torch.Tensor, target: tuple[int, int]) -> torch.Tensor:
-    th, tw = target
-    if crops.shape[2] == th and crops.shape[3] == tw:
-        return crops
-    return F.interpolate(crops, size=(th, tw), mode="bilinear", align_corners=False)

@@ -44,8 +44,18 @@ portable files live in git: configs, skeleton, manifest, scripts).
 - `generate_clips.py` / `make_manifest.py` — regenerate fixtures from source data
   (dev-only; run where the full videos + models exist).
 
-Clips currently cover: `emi_obb_identity` (OBB + identity online decoder) and
-`ant_pose_headtail` (OBB + head-tail + SLEAP pose + identity). No AprilTag clip yet.
+Clips currently cover (one representative per demo, ~500 frames each):
+
+| clip | path / features exercised |
+|---|---|
+| `emi_obb_identity` | OBB-direct + identity online decoder |
+| `ant_pose_headtail` | OBB + head-tail + SLEAP pose + identity (realtime) |
+| `ant_obb_sleap` | OBB-direct + SLEAP pose + identity-analysis (no head-tail) |
+| `worm_bgsub` | **background-subtraction** detection path |
+| `ant_cnn_identity` | OBB + **CNN multihead identity** + head-tail + pose-direction |
+| `fly_obb` | OBB-direct, fly, fresh detection |
+
+No AprilTag clip yet (none of the source demos enable AprilTags).
 
 On a fresh machine:
 ```bash
@@ -53,6 +63,15 @@ conda activate hydra-mps                        # or hydra-suite-cuda
 bash tools/equivalence/fixtures/fetch_fixtures.sh   # downloads clips + models
 bash tools/equivalence/run_matrix.sh                # FIXTURES=1 is the default
 ```
+
+Run only specific clips (so you don't rerun the whole matrix) — pass names as
+arguments or via `ONLY=` (space- or comma-separated):
+```bash
+bash tools/equivalence/run_matrix.sh ant_pose_headtail worm_bgsub
+ONLY=ant_pose_headtail bash tools/equivalence/run_matrix.sh
+```
+Clip names: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `worm_bgsub`,
+`ant_cnn_identity`, `fly_obb`.
 
 To regenerate/refresh the fixtures (on a machine with the full data):
 ```bash
@@ -90,6 +109,23 @@ the determinism floor, that gap is a real regression to investigate.
 
 `compare.py` exit code: 0 within tolerance, 1 otherwise (tolerances via
 `--gate`, `--pos-atol`, `--theta-atol`).
+
+## Performance check
+
+Each run records its wall-clock and FPS in `meta.json` (`tracking_seconds`,
+`fps`, `n_frames`), and the matrix prints a **PERFORMANCE** line per video:
+
+```
+>>> ant_pose_headtail : performance
+--- PERFORMANCE  legacy vs new_a (tolerance 1.25x) ---
+  legacy: 4.7s (106.8 fps)   new: 12.3s (40.7 fps)
+  new/legacy time ratio = 2.62x  ->  PERFORMANCE: SLOWER ❌
+```
+
+The new pipeline must not be meaningfully slower than legacy: `PERFORMANCE: SLOWER ❌`
+when `new/legacy` wall-clock ratio exceeds `PERF_TOLERANCE` (default 1.25). This
+catches throughput regressions that the CSV comparison can't — e.g. a cold
+per-frame pose service running seconds/frame even when the trajectories match.
 
 ## Cross-device merge-readiness
 

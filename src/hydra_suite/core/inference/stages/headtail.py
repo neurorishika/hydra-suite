@@ -6,7 +6,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
@@ -46,13 +45,19 @@ def load_headtail_model(
 
 
 def run_headtail(
-    crops: torch.Tensor,
+    frame: "np.ndarray | torch.Tensor",
     obb_result: OBBResult,
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
+    aspect_ratio: float = 2.0,
+    margin: float = 1.3,
 ) -> HeadTailResult:
-    """Classify head-tail orientation per crop. No I/O, no mode branching.
+    """Classify head-tail orientation per detection. No I/O, no mode branching.
+
+    Crops are warped directly from the frame to the classifier input size
+    (extract_classifier_crops), bit-identical to the legacy head-tail path, so
+    direction decisions match legacy at the classifier boundary.
 
     Per Correction 15: canonical_affines is None — affines belong to the crops
     stage, not headtail. Downstream consumers must check for None and recompute
@@ -63,7 +68,7 @@ def run_headtail(
     confs = np.zeros(n, dtype=np.float32)
     mask = np.zeros(n, dtype=np.uint8)
 
-    if crops.shape[0] == 0 or n == 0:
+    if n == 0:
         return HeadTailResult(
             heading_hints=hints,
             heading_confidences=confs,
@@ -71,10 +76,11 @@ def run_headtail(
             canonical_affines=None,
         )
 
-    resized = _resize_crops(crops, model.input_size)
-    np_crops = [
-        resized[i].permute(1, 2, 0).cpu().numpy() for i in range(resized.shape[0])
-    ]
+    from .crops import extract_classifier_crops
+
+    np_crops = extract_classifier_crops(
+        frame, obb_result, model.input_size, aspect_ratio, margin
+    )
 
     all_probs = model.backend.predict_batch(np_crops)
 
@@ -138,11 +144,3 @@ def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:
         major_vec = c[1] - c[0] if e01 >= e12 else c[2] - c[1]
         out[i] = float(math.atan2(float(major_vec[1]), float(major_vec[0])))
     return out
-
-
-def _resize_crops(crops: torch.Tensor, target_size: tuple[int, int]) -> torch.Tensor:
-    """Resize (N, C, H, W) tensor to (N, C, target_H, target_W)."""
-    th, tw = target_size
-    if crops.shape[2] == th and crops.shape[3] == tw:
-        return crops
-    return F.interpolate(crops, size=(th, tw), mode="bilinear", align_corners=False)

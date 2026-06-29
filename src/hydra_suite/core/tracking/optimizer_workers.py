@@ -38,15 +38,11 @@ from hydra_suite.core.inference.api import (
     apply_detection_filter as _apply_detection_filter,
 )
 
-# Correction 21: use new DetectionCacheHandle; fall back to legacy if present.
-try:
-    from hydra_suite.core.inference.cache.store import (
-        DetectionCacheHandle as DetectionCache,
-    )
-except ImportError:
-    from hydra_suite.data.detection_cache import (
-        DetectionCache,  # type: ignore[no-redef]
-    )
+# The detection-cache builder writes via the legacy DetectionCache API
+# (mode="w"/add_frame/save) and the scorer reads it via the same legacy API.
+# The new InferenceRunner DetectionCacheHandle is not a drop-in replacement
+# (different lifecycle/constructor), so bind the legacy class directly.
+from hydra_suite.data.detection_cache import DetectionCache
 
 logger = logging.getLogger(__name__)
 

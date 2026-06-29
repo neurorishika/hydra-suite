@@ -20,13 +20,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
 from hydra_suite.core.identity.cache import IdentityEvidenceCache
 from hydra_suite.core.identity.classification.cnn import ClassPrediction
 from hydra_suite.core.identity.evidence import IdentityEvidence
+
+if TYPE_CHECKING:
+    from hydra_suite.core.identity.calibration import CalibrationModel
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +62,14 @@ class IdentityEvidenceEmitter:
         Runtime string written into each evidence item for provenance.
     calibration_signature:
         Optional calibration model signature.
+    calibration:
+        Optional ``CalibrationModel``. When provided, raw CNN softmax
+        posteriors passed to ``build_frame_evidences`` are temperature-scaled
+        before being mapped to catalog log-priors — reproducing the legacy
+        behaviour where calibration was applied at source in
+        ``predict_batch_posteriors``. Caches still store *raw* probabilities;
+        calibration is applied here at tracking time so changing the
+        temperature never invalidates the detection/CNN cache.
     """
 
     def __init__(
@@ -68,12 +79,14 @@ class IdentityEvidenceEmitter:
         class_labels_per_factor: list[list[str]],
         runtime_signature: str = "",
         calibration_signature: str = "",
+        calibration: "CalibrationModel | None" = None,
     ) -> None:
         import itertools
 
         self._source_name = source_name
         self._runtime_signature = runtime_signature
         self._calibration_signature = calibration_signature
+        self._calibration = calibration
         self._class_labels_per_factor = class_labels_per_factor
 
         non_empty_factors = [fl for fl in class_labels_per_factor if fl]
@@ -262,6 +275,23 @@ class IdentityEvidenceEmitter:
         probs /= probs.sum()
         return np.log(np.clip(probs, 1e-300, None)), observed
 
+    def _calibrate_posterior(self, factor_probs: np.ndarray) -> np.ndarray:
+        """Temperature-scale a raw softmax posterior, returning a probability
+        vector. No-op when no calibration model is configured.
+
+        Mirrors legacy ``predict_batch_posteriors`` (cnn.py): apply
+        ``calibrate_probs`` (log-softmax temperature scaling), then exponentiate
+        and renormalise back to probabilities so the downstream catalog mapping
+        (which expects probabilities) is unchanged.
+        """
+        arr = np.asarray(factor_probs, dtype=np.float64)
+        if self._calibration is None or arr.size == 0:
+            return arr
+        log_p = self._calibration.calibrate_probs(arr[None, :])[0]
+        cal = np.exp(log_p - log_p.max())
+        total = cal.sum()
+        return cal / total if total > 0 else cal
+
     def _build_log_probs_from_posteriors(
         self,
         det_posteriors: Optional[list[np.ndarray]],
@@ -275,7 +305,7 @@ class IdentityEvidenceEmitter:
         for factor_index, factor_probs in enumerate(det_posteriors):
             factor_log, factor_observed = self._factor_log_prob(
                 factor_index,
-                np.asarray(factor_probs, dtype=np.float64),
+                self._calibrate_posterior(factor_probs),
             )
             combined += factor_log
             observed_mask |= factor_observed

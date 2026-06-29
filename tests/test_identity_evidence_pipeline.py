@@ -83,3 +83,54 @@ def test_identity_evidence_emitter_maps_slot_indices_to_stable_detection_ids(
         assert frame[0].detection_id == 420123
     finally:
         cache.close()
+
+
+def test_emitter_internal_calibration_matches_calibrate_at_source() -> None:
+    """C2 regression: applying a CalibrationModel inside the emitter must match
+    the legacy behaviour of calibrating posteriors at source (in
+    ``predict_batch_posteriors``) and feeding an uncalibrated emitter.
+
+    Without this, any run with ``calibration_temperature != 1.0`` feeds
+    uncalibrated identity evidence to the online decoder.
+    """
+    from hydra_suite.core.identity.calibration import CalibrationModel
+
+    labels = [["a", "b", "c"]]
+    raw = np.array([0.7, 0.2, 0.1], dtype=np.float64)
+    preds = [
+        ClassPrediction(
+            det_index=0,
+            factor_names=("identity",),
+            class_names=("a",),
+            confidences=(0.7,),
+        )
+    ]
+
+    temperature = 2.5
+    cal = CalibrationModel(temperature=temperature)
+
+    # New path: emitter calibrates raw posteriors internally.
+    emitter_cal = IdentityEvidenceEmitter(
+        cache_path="unused_cal.npz",
+        source_name="cnn",
+        class_labels_per_factor=labels,
+        calibration=cal,
+    )
+    ev_cal = emitter_cal.build_frame_evidences(0, preds, posteriors=[[raw]])
+
+    # Legacy path: calibrate at source, feed an uncalibrated emitter.
+    log_p = cal.calibrate_probs(raw[None, :])[0]
+    cal_probs = np.exp(log_p - log_p.max())
+    cal_probs /= cal_probs.sum()
+    emitter_raw = IdentityEvidenceEmitter(
+        cache_path="unused_raw.npz",
+        source_name="cnn",
+        class_labels_per_factor=labels,
+    )
+    ev_raw = emitter_raw.build_frame_evidences(0, preds, posteriors=[[cal_probs]])
+
+    np.testing.assert_allclose(ev_cal[0].log_probs, ev_raw[0].log_probs, rtol=1e-9)
+
+    # And calibration must actually change the result vs no calibration.
+    ev_none = emitter_raw.build_frame_evidences(0, preds, posteriors=[[raw]])
+    assert not np.allclose(ev_cal[0].log_probs, ev_none[0].log_probs)

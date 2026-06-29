@@ -77,9 +77,17 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
+from hydra_suite.core.inference.cache.keys import (  # noqa: E402
+    bgsub_detection_cache_key,
+    video_signature,
+    with_video_signature,
+)
+from hydra_suite.core.inference.cache.store import DetectionCacheHandle  # noqa: E402
+
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
 from hydra_suite.core.inference.config import InferenceConfig  # noqa: E402
+from hydra_suite.core.inference.result import OBBResult as _OBBResult  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.frame_result_bridge import (  # noqa: E402
     build_density_cache_dict,
@@ -1247,6 +1255,9 @@ class TrackingWorker(QThread):
         # For background subtraction: legacy detector is kept as-is.
         inference_runner = None  # InferenceRunner for yolo_obb mode
         detection_cache = None  # Legacy cache — only used for background subtraction
+        # Refactor-native detection cache for background subtraction: forward writes
+        # per-frame detections, backward replays them (parity with the OBB path).
+        bgsub_detection_cache = None
         use_cached_detections = False
         cached_frame_indices = set()
         detector = None
@@ -1274,7 +1285,9 @@ class TrackingWorker(QThread):
 
             _cache_dir = self._resolve_cache_dir()
             _cache_dir.mkdir(parents=True, exist_ok=True)
-            inference_runner = InferenceRunner(_inference_cfg, cache_dir=_cache_dir)
+            inference_runner = InferenceRunner(
+                _inference_cfg, cache_dir=_cache_dir, video_path=self.video_path
+            )
 
             if self.backward_mode:
                 if not inference_runner.caches_all_valid():
@@ -1334,16 +1347,41 @@ class TrackingWorker(QThread):
                     self._density_regions = []
 
         else:
-            # ── Background subtraction: legacy detector path ─────────────────
+            # ── Background subtraction ───────────────────────────────────────
+            # Detections are produced live in the forward loop (the adaptive
+            # background model needs sequential frames, so there is no separate
+            # batch pass), and cached via the refactor-native DetectionCacheHandle
+            # so the backward pass can replay them — parity with the OBB path,
+            # which caches through InferenceRunner.
+            _cache_dir = self._resolve_cache_dir()
+            _cache_dir.mkdir(parents=True, exist_ok=True)
+            _bgsub_cache_path = _cache_dir / "bgsub_detection.npz"
+            _bgsub_key = with_video_signature(
+                bgsub_detection_cache_key(p), video_signature(self.video_path)
+            )
+            bgsub_detection_cache = DetectionCacheHandle(
+                path=_bgsub_cache_path, key=_bgsub_key
+            )
             if self.backward_mode:
-                logger.error(
-                    "Backward tracking requires a configured forward detection cache path. "
-                    "Please run forward tracking first."
+                if not bgsub_detection_cache.is_valid():
+                    logger.error(
+                        "Backward tracking requires valid forward bg-sub detections "
+                        "at %s. Please run forward tracking first.",
+                        _bgsub_cache_path,
+                    )
+                    cap.release()
+                    self.finished_signal.emit(False, [], [])
+                    return
+                use_cached_detections = True
+                logger.info(
+                    "Backward pass: replaying cached bg-sub detections from %s",
+                    _bgsub_cache_path,
                 )
-                cap.release()
-                self.finished_signal.emit(False, [], [])
-                return
-            detector = create_detector(p)
+            else:
+                detector = create_detector(p)
+                logger.info(
+                    "Forward pass caching bg-sub detections to %s", _bgsub_cache_path
+                )
 
         # === RUN BATCHED INFERENCE PHASE (if applicable) ===
         # For YOLO OBB: InferenceRunner.run_batch_pass() when caches are not yet valid.
@@ -1573,26 +1611,45 @@ class TrackingWorker(QThread):
         live_tag_obs_cache = None
         live_cnn_caches = {}
 
+        # Live pose store: created whenever the InferenceRunner drives detections
+        # (forward run_realtime OR backward load_frame). Backward mode sets
+        # individual_data_precompute_enabled=False, but it still reads per-frame
+        # keypoints from FrameResult.pose via load_frame and must populate this
+        # store too. Otherwise pose-direction override is dead on the backward
+        # pass and the merged final falls back to head-tail headings for every
+        # detection (legacy reuses its on-disk pose cache on the backward pass,
+        # so ~87% of its headings are pose-derived).
+        _pose_live_store_enabled = (
+            inference_runner is not None
+            and not self.preview_mode
+            and detection_method == "yolo_obb"
+            and bool(p.get("ENABLE_POSE_EXTRACTOR", False))
+        )
+        if _pose_live_store_enabled:
+            live_pose_props_cache = LivePosePropertiesStore()
+            # Use the canonical skeleton loader (same as the pose stage) so both
+            # the modern "keypoint_names"/"skeleton_edges" schema and the legacy
+            # "keypoints"/"edges" aliases resolve. A brittle
+            # `_skel.get("keypoints")` here left the names empty for the modern
+            # schema, which silently disabled pose-direction override.
+            if _inference_cfg.pose and _inference_cfg.pose.skeleton_file:
+                try:
+                    from hydra_suite.core.identity.pose.utils import (
+                        load_skeleton_from_json,
+                    )
+
+                    _names, _ = load_skeleton_from_json(
+                        _inference_cfg.pose.skeleton_file
+                    )
+                    live_pose_keypoint_names = [str(k) for k in _names]
+                except Exception:
+                    live_pose_keypoint_names = []
+            logger.info(
+                "Live pose store ready for InferenceRunner per-frame population."
+            )
+
         if inference_runner is not None and individual_data_precompute_enabled:
-            # Instantiate live stores; they will be populated per-frame from FrameResult.
-            if bool(p.get("ENABLE_POSE_EXTRACTOR", False)):
-                live_pose_props_cache = LivePosePropertiesStore()
-                # Extract pose keypoint names from InferenceConfig skeleton if available
-                if _inference_cfg.pose and _inference_cfg.pose.skeleton_file:
-                    try:
-                        import json as _json
-
-                        with open(_inference_cfg.pose.skeleton_file) as _sf:
-                            _skel = _json.load(_sf)
-                        live_pose_keypoint_names = [
-                            str(k) for k in (_skel.get("keypoints") or [])
-                        ]
-                    except Exception:
-                        live_pose_keypoint_names = []
-                logger.info(
-                    "Live pose store ready for InferenceRunner per-frame population."
-                )
-
+            # Instantiate remaining live stores; populated per-frame from FrameResult.
             if bool(p.get("USE_APRILTAGS", False)):
                 live_tag_obs_cache = LiveTagObservationStore()
                 logger.info(
@@ -2388,6 +2445,46 @@ class TrackingWorker(QThread):
                     raw_canonical_affines = None
                     _current_frame_result = _frame_result
 
+            elif (
+                use_cached_detections
+                and detection_method == "background_subtraction"
+                and bgsub_detection_cache is not None
+            ):
+                # Backward pass: replay cached bg-sub detections (no live frame).
+                _obb = bgsub_detection_cache.read_frame(actual_frame_index)
+                if _obb is not None and _obb.num_detections > 0:
+                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
+                    shapes = [
+                        (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                        for i in range(_obb.num_detections)
+                    ]
+                    detection_confidences = [
+                        float(_obb.confidences[i]) for i in range(_obb.num_detections)
+                    ]
+                    detection_ids = [
+                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
+                    ]
+                else:
+                    meas, sizes, shapes, detection_confidences, detection_ids = (
+                        [],
+                        [],
+                        [],
+                        [],
+                        [],
+                    )
+                filtered_obb_corners = []
+                raw_meas = meas
+                raw_sizes = sizes
+                raw_shapes = shapes
+                raw_confidences = detection_confidences
+                raw_obb_corners = filtered_obb_corners
+                raw_detection_ids = detection_ids
+                raw_heading_hints = []
+                raw_heading_confidences = []
+                raw_directed_mask = []
+                raw_canonical_affines = None
+
             elif detection_method == "background_subtraction" and frame is not None:
                 # Background subtraction detection pipeline
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -2448,13 +2545,37 @@ class TrackingWorker(QThread):
                 raw_directed_mask = []
                 raw_canonical_affines = None
 
+                # Cache this frame's detections so the backward pass can replay
+                # them. Every frame is written (even empty) so the cache covers the
+                # full range; bg-sub has no OBB corners, so they are stored as zeros.
+                if bgsub_detection_cache is not None:
+                    _n = len(meas)
+                    _meas_arr = np.asarray(meas, dtype=np.float32).reshape(_n, 3)
+                    bgsub_detection_cache.write_frame(
+                        actual_frame_index,
+                        result=_OBBResult(
+                            frame_idx=actual_frame_index,
+                            centroids=_meas_arr[:, :2].copy(),
+                            angles=_meas_arr[:, 2].copy(),
+                            sizes=np.asarray(sizes, dtype=np.float32).reshape(_n),
+                            shapes=np.asarray(shapes, dtype=np.float32).reshape(_n, 2),
+                            confidences=np.asarray(
+                                detection_confidences, dtype=np.float32
+                            ).reshape(_n),
+                            corners=np.zeros((_n, 4, 2), dtype=np.float32),
+                            detection_ids=np.asarray(detection_ids, dtype=np.int64),
+                        ),
+                    )
+
             elif (
                 detection_method == "yolo_obb" and frame is not None
             ):  # YOLO OBB realtime detection (non-cached)
                 # InferenceRunner.run_realtime() runs the full inference stack
                 # (OBB + headtail + CNN + pose + AprilTag) on a single frame and
-                # returns a FrameResult.  No legacy detector is used here.
-                _frame_result = inference_runner.run_realtime(frame)
+                # returns a FrameResult.  No legacy detector is used here.  The
+                # frame index is passed so detections are cached per-frame for the
+                # backward pass to replay (realtime + backward support).
+                _frame_result = inference_runner.run_realtime(frame, actual_frame_index)
                 _current_frame_result = _frame_result
                 if _frame_result is not None and _frame_result.obb.num_detections > 0:
                     _obb = _frame_result.obb
@@ -4197,6 +4318,20 @@ class TrackingWorker(QThread):
                 # Backward pass or Phase 2: just close cache (read-only mode)
                 detection_cache.close()
 
+        # Flush the refactor-native bg-sub detection cache on the forward pass:
+        # close() writes the buffered per-frame detections to disk. We deliberately
+        # do NOT close on the backward pass — that handle was read-only, and close()
+        # would flush its empty buffer and overwrite the cache the forward pass wrote.
+        if bgsub_detection_cache is not None and not self.backward_mode:
+            bgsub_detection_cache.close()
+            logger.info("Background-subtraction detection cache saved")
+
+        # Flush the InferenceRunner. On a realtime forward pass this writes the
+        # per-frame detection/headtail/cnn/pose caches to disk so the backward pass
+        # can replay them; close() is a no-op flush for read-only (backward) handles.
+        if inference_runner is not None:
+            inference_runner.close()
+
         # Finalize individual dataset if enabled
         if individual_generator is not None and not stop_requested:
             dataset_path = individual_generator.finalize()
@@ -4371,10 +4506,13 @@ class TrackingWorker(QThread):
                 cnn_cfg_dict.get("temperature", 1.0),
             )
         )
-        _calibration_signature = (
-            CalibrationModel(temperature=_calibration_temperature).signature
+        _calibration_model = (
+            CalibrationModel(temperature=_calibration_temperature)
             if abs(_calibration_temperature - 1.0) > 1e-6
-            else ""
+            else None
+        )
+        _calibration_signature = (
+            _calibration_model.signature if _calibration_model is not None else ""
         )
 
         try:
@@ -4406,6 +4544,7 @@ class TrackingWorker(QThread):
                 class_labels_per_factor=factor_labels,
                 runtime_signature=str(params.get("COMPUTE_RUNTIME", "cpu")),
                 calibration_signature=_calibration_signature,
+                calibration=_calibration_model,
             )
         except Exception:
             logger.debug(
@@ -4454,10 +4593,39 @@ class TrackingWorker(QThread):
             or "yolo26s-obb.pt"
         )
         yolo_conf = float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
-        yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.45))
+        yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
         min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
         max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
-        max_dets = int(params.get("MAX_TARGETS", 20))
+        # Detection caps mirror legacy core/detectors/_obb_geometry:
+        #   * RAW cap = 2 * MAX_TARGETS, applied at OBB extraction sorted by
+        #     confidence, BEFORE size/aspect/IoU filtering.
+        #   * FINAL cap = MAX_TARGETS, applied AFTER filtering, keeping the
+        #     LARGEST detections (filtering sorts the cap by size, not conf).
+        # Setting max_detections = MAX_TARGETS (not 2*MAX_TARGETS) restores the
+        # legacy post-filter count cap (`_obb_geometry:587`) the redesign dropped.
+        max_targets = max(1, int(params.get("MAX_TARGETS", 8)))
+        raw_cap = 2 * max_targets
+        max_dets = max_targets
+
+        # Restrict detections to specific class IDs (legacy YOLO_TARGET_CLASSES;
+        # None/empty == all classes). Threaded into OBBConfig.target_classes and
+        # passed to every model.predict() (legacy yolo_detector.py:489,1078,1665).
+        _target_classes_raw = params.get("YOLO_TARGET_CLASSES", None)
+        target_classes = (
+            [int(c) for c in _target_classes_raw] if _target_classes_raw else []
+        )
+
+        # Aspect-ratio gate (major/minor), mirroring legacy _obb_geometry: only
+        # applied when enabled; bounds = ref_ar * mult. These are power-user
+        # settings stored under ADVANCED_CONFIG (lowercase keys), matching legacy
+        # _advanced_config_value access in core/detectors/_obb_geometry.py.
+        _adv = params.get("ADVANCED_CONFIG", {}) or {}
+        if _adv.get("enable_aspect_ratio_filtering", False):
+            ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
+            min_ar = ref_ar * float(_adv.get("min_aspect_ratio_multiplier", 0.5))
+            max_ar = ref_ar * float(_adv.get("max_aspect_ratio_multiplier", 2.0))
+        else:
+            min_ar, max_ar = 0.0, float("inf")
 
         if obb_mode == "sequential":
             detect_path = str(params.get("YOLO_DETECT_MODEL_PATH", "") or "")
@@ -4474,11 +4642,15 @@ class TrackingWorker(QThread):
                     detect_confidence_threshold=yolo_conf,
                     obb_confidence_threshold=yolo_conf,
                 ),
+                target_classes=target_classes,
                 confidence_threshold=yolo_conf,
                 iou_threshold=yolo_iou,
                 min_object_size=min_obj,
                 max_object_size=max_obj,
+                min_aspect_ratio=min_ar,
+                max_aspect_ratio=max_ar,
                 max_detections=max_dets,
+                raw_detection_cap=raw_cap,
             )
         else:
             obb_cfg = OBBConfig(
@@ -4489,11 +4661,15 @@ class TrackingWorker(QThread):
                     confidence_floor=1e-3,
                     confidence_threshold=yolo_conf,
                 ),
+                target_classes=target_classes,
                 confidence_threshold=yolo_conf,
                 iou_threshold=yolo_iou,
                 min_object_size=min_obj,
                 max_object_size=max_obj,
+                min_aspect_ratio=min_ar,
+                max_aspect_ratio=max_ar,
                 max_detections=max_dets,
+                raw_detection_cap=raw_cap,
             )
 
         # HeadTail
@@ -4518,7 +4694,11 @@ class TrackingWorker(QThread):
                 canonical_aspect_ratio=float(
                     params.get("ADVANCED_CONFIG", {}).get("reference_aspect_ratio", 2.0)
                 ),
-                canonical_margin=float(params.get("INDIVIDUAL_CROP_PADDING", 1.3)),
+                canonical_margin=float(
+                    params.get("ADVANCED_CONFIG", {}).get(
+                        "yolo_headtail_canonical_margin", 1.3
+                    )
+                ),
             )
 
         # CNN phases

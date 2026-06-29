@@ -6,7 +6,7 @@
   "fps": 10.0,
   "reference_body_size": 74.36,
   "start_frame": 0,
-  "end_frame": 59,
+  "end_frame": 499,
   "resize_factor": 1.0,
   "save_confidence_metrics": true,
   "use_cached_detections": false,

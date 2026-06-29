@@ -9,6 +9,15 @@ from ..result import OBBResult
 from ..runtime import RuntimeContext
 from .obb import _RawOBBTensors
 
+# Size gates compare against ELLIPSE area, not the OBB rectangle area. The
+# MIN/MAX_OBJECT_SIZE thresholds are derived from a circular body area
+# (pi*(body/2)**2 in cli_config), and the legacy detector filters on the inscribed
+# ellipse area (shapes[:,0] = pi/4 * w * h) — see core/detectors/_obb_geometry.py.
+# OBBResult.sizes is the rectangle area (w*h = major*minor), which is ~27% larger,
+# so comparing it directly would reject the largest detections the legacy pipeline
+# keeps. Multiply by pi/4 to convert rectangle area -> ellipse area for parity.
+_ELLIPSE_AREA_FRACTION = np.pi / 4.0
+
 
 def filter_raw(
     raw: OBBResult | _RawOBBTensors,
@@ -40,10 +49,17 @@ def filter_detections(
     keep = np.ones(n, dtype=bool)
     keep &= raw.confidences >= config.confidence_threshold
 
+    ellipse_area = raw.sizes * _ELLIPSE_AREA_FRACTION
     if config.min_object_size > 0:
-        keep &= raw.sizes >= config.min_object_size
+        keep &= ellipse_area >= config.min_object_size
     if config.max_object_size < float("inf"):
-        keep &= raw.sizes <= config.max_object_size
+        keep &= ellipse_area <= config.max_object_size
+
+    if config.min_aspect_ratio > 0 or config.max_aspect_ratio < float("inf"):
+        aspect = raw.shapes[:, 1]
+        keep &= (aspect >= config.min_aspect_ratio) & (
+            aspect <= config.max_aspect_ratio
+        )
 
     if roi_mask is not None:
         h, w = roi_mask.shape[:2]
@@ -64,7 +80,9 @@ def filter_detections(
         indices = _obb_nms(raw, indices, config.iou_threshold)
 
     if config.max_detections > 0 and len(indices) > config.max_detections:
-        order = np.argsort(raw.confidences[indices])[::-1][: config.max_detections]
+        # H5 parity: legacy keeps the LARGEST detections (sort by size), not the
+        # most confident — _obb_geometry:587-588.
+        order = np.argsort(raw.sizes[indices])[::-1][: config.max_detections]
         indices = indices[order]
 
     return _select(raw, indices)
@@ -90,11 +108,26 @@ def filter_from_tensors(
 
     w_t = raw.xywhr[:, 2]
     h_t = raw.xywhr[:, 3]
+    # H6 parity: drop non-finite / non-positive-geometry detections (legacy
+    # _obb_geometry:303-312) so NaN/Inf can't reach assignment/Kalman.
+    keep = keep & torch.isfinite(raw.xywhr).all(dim=1) & torch.isfinite(raw.conf)
+    keep = keep & (w_t > 0) & (h_t > 0)
     sizes_t = w_t * h_t
+    ellipse_area_t = sizes_t * _ELLIPSE_AREA_FRACTION
     if config.min_object_size > 0:
-        keep = keep & (sizes_t >= config.min_object_size)
+        keep = keep & (ellipse_area_t >= config.min_object_size)
     if config.max_object_size < float("inf"):
-        keep = keep & (sizes_t <= config.max_object_size)
+        keep = keep & (ellipse_area_t <= config.max_object_size)
+
+    if config.min_aspect_ratio > 0 or config.max_aspect_ratio < float("inf"):
+        major_t = torch.maximum(w_t, h_t)
+        minor_t = torch.minimum(w_t, h_t).clamp_min(1e-6)
+        aspect_t = major_t / minor_t
+        keep = (
+            keep
+            & (aspect_t >= config.min_aspect_ratio)
+            & (aspect_t <= config.max_aspect_ratio)
+        )
 
     if roi_mask_cuda is not None:
         mask_h, mask_w = roi_mask_cuda.shape[:2]
@@ -133,55 +166,79 @@ def filter_from_tensors(
         local_idx = _obb_nms(subset, local_idx, config.iou_threshold)
 
     if config.max_detections > 0 and len(local_idx) > config.max_detections:
-        order = np.argsort(subset.confidences[local_idx])[::-1][: config.max_detections]
+        # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
+        order = np.argsort(subset.sizes[local_idx])[::-1][: config.max_detections]
         local_idx = local_idx[order]
 
     return _select(subset, local_idx)
 
 
 def _obb_nms(raw: OBBResult, indices: np.ndarray, iou_threshold: float) -> np.ndarray:
-    """Greedy NMS over oriented bounding boxes via cv2.rotatedRectangleIntersection."""
+    """Greedy NMS over oriented bounding boxes.
+
+    Mirrors legacy ``_obb_geometry._filter_overlapping_detections`` exactly: the
+    IoU is computed on the OBB corner polygons via ``cv2.convexHull`` +
+    ``cv2.intersectConvexConvex`` (NOT a reconstructed RotatedRect), so the
+    suppression decisions near the IoU threshold match the legacy detector.
+    """
     order = indices[np.argsort(raw.confidences[indices])[::-1]]
+    hulls: dict[int, tuple[np.ndarray, float]] = {}
+    # Axis-aligned bbox per detection for the cheap overlap pre-check (matches
+    # legacy: boxes whose AABBs don't overlap have zero polygon IoU, so the
+    # expensive convex-hull intersection is skipped).
+    bbox_min = raw.corners.min(axis=1)
+    bbox_max = raw.corners.max(axis=1)
+
+    def hull(idx: int) -> tuple[np.ndarray, float]:
+        cached = hulls.get(idx)
+        if cached is None:
+            p = cv2.convexHull(np.asarray(raw.corners[idx], dtype=np.float32)).reshape(
+                -1, 2
+            )
+            cached = (p, float(abs(cv2.contourArea(p))))
+            hulls[idx] = cached
+        return cached
+
     keep: list[int] = []
     suppressed = np.zeros(len(raw.confidences), dtype=bool)
-
     for idx in order:
         if suppressed[idx]:
             continue
         keep.append(int(idx))
-        rect_a = _obb_to_cv2_rect(raw, idx)
+        p1, area1 = hull(idx)
+        if area1 <= 1e-9:
+            continue
+        cmin, cmax = bbox_min[idx], bbox_max[idx]
         for other in order:
             if suppressed[other] or other == idx:
                 continue
-            if _rotated_iou(rect_a, _obb_to_cv2_rect(raw, other)) > iou_threshold:
+            # AABB overlap pre-check (both width and height must overlap).
+            if (
+                cmin[0] >= bbox_max[other, 0]
+                or cmax[0] <= bbox_min[other, 0]
+                or cmin[1] >= bbox_max[other, 1]
+                or cmax[1] <= bbox_min[other, 1]
+            ):
+                continue
+            if _obb_iou_corners(p1, area1, *hull(other)) >= iou_threshold:
                 suppressed[other] = True
 
     return np.array(keep, dtype=int)
 
 
-def _obb_to_cv2_rect(raw: OBBResult, idx: int) -> tuple:
-    """Convert OBBResult entry to cv2 RotatedRect tuple: ((cx, cy), (w, h), angle_deg)."""
-    cx, cy = float(raw.centroids[idx, 0]), float(raw.centroids[idx, 1])
-    corners = raw.corners[idx]
-    w = float(np.linalg.norm(corners[1] - corners[0]))
-    h = float(np.linalg.norm(corners[3] - corners[0]))
-    angle = float(np.degrees(raw.angles[idx]))
-    return (cx, cy), (w, h), angle
-
-
-def _rotated_iou(rect_a: tuple, rect_b: tuple) -> float:
-    """IOU between two cv2 RotatedRect tuples."""
-    try:
-        ret, intersection = cv2.rotatedRectangleIntersection(rect_a, rect_b)
-        if ret == cv2.INTERSECT_NONE or intersection is None:
-            return 0.0
-        inter_area = cv2.contourArea(intersection)
-        _, (wa, ha), _ = rect_a
-        _, (wb, hb), _ = rect_b
-        union = wa * ha + wb * hb - inter_area
-        return float(inter_area / union) if union > 0 else 0.0
-    except Exception:
+def _obb_iou_corners(
+    p1: np.ndarray, area1: float, p2: np.ndarray, area2: float
+) -> float:
+    """IoU of two convex corner polygons (matches legacy _compute_obb_iou_batch)."""
+    if area1 <= 1e-9 or area2 <= 1e-9:
         return 0.0
+    try:
+        inter_area, _ = cv2.intersectConvexConvex(p1, p2)
+        inter_area = float(max(0.0, inter_area))
+    except Exception:
+        inter_area = 0.0
+    union = area1 + area2 - inter_area
+    return float(inter_area / union) if union > 1e-9 else 0.0
 
 
 def _select(raw: OBBResult, indices: np.ndarray) -> OBBResult:
@@ -217,10 +274,18 @@ def filter_with_indices(
         return raw, np.zeros(0, dtype=np.int32)
 
     keep = raw.confidences >= config.confidence_threshold
+    ellipse_area = raw.sizes * _ELLIPSE_AREA_FRACTION
     if config.min_object_size > 0:
-        keep = keep & (raw.sizes >= config.min_object_size)
+        keep = keep & (ellipse_area >= config.min_object_size)
     if config.max_object_size < float("inf"):
-        keep = keep & (raw.sizes <= config.max_object_size)
+        keep = keep & (ellipse_area <= config.max_object_size)
+    if config.min_aspect_ratio > 0 or config.max_aspect_ratio < float("inf"):
+        aspect = raw.shapes[:, 1]
+        keep = (
+            keep
+            & (aspect >= config.min_aspect_ratio)
+            & (aspect <= config.max_aspect_ratio)
+        )
     if roi_mask is not None:
         h, w = roi_mask.shape[:2]
         cx = np.clip(raw.centroids[:, 0].astype(np.int32), 0, w - 1)
@@ -234,7 +299,8 @@ def filter_with_indices(
         indices = indices[keep_nms]
         subset = _select(raw, indices)
     if config.max_detections > 0 and len(indices) > config.max_detections:
-        order = np.argsort(raw.confidences[indices])[::-1][: config.max_detections]
+        # H5 parity: keep the LARGEST detections (sort by size) — _obb_geometry:587-588.
+        order = np.argsort(raw.sizes[indices])[::-1][: config.max_detections]
         indices = indices[order]
         subset = _select(raw, indices)
     return subset, indices.astype(np.int32)

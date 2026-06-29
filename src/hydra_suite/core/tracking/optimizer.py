@@ -36,15 +36,13 @@ from hydra_suite.core.inference.api import (
     apply_detection_filter as _apply_detection_filter,
 )
 
-# Correction 21: use new DetectionCacheHandle; fall back to legacy if present.
-try:
-    from hydra_suite.core.inference.cache.store import (
-        DetectionCacheHandle as DetectionCache,
-    )
-except ImportError:
-    from hydra_suite.data.detection_cache import (
-        DetectionCache,  # type: ignore[no-redef]
-    )
+# The parameter optimizer builds and reads its own detection cache end-to-end
+# through the legacy DetectionCache API (mode="w"/add_frame/save when building,
+# mode="r"/is_compatible/covers_frame_range/get_missing_frames/get_frame when
+# scoring). The new InferenceRunner DetectionCacheHandle has a different
+# lifecycle (key-constructed, write_frame/read_frame/close) and is NOT a drop-in
+# replacement here, so bind the legacy class directly.
+from hydra_suite.data.detection_cache import DetectionCache
 
 logger = logging.getLogger(__name__)
 

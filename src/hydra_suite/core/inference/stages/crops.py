@@ -8,8 +8,8 @@ import torch
 import torch.nn.functional as F
 
 from hydra_suite.core.canonicalization.crop import (
-    compute_native_crop_dimensions,
     compute_alignment_affine,
+    compute_native_crop_dimensions,
     gpu_canonical_crop_batch,
 )
 
@@ -116,6 +116,58 @@ def _extract_canonical_cpu(
     return t
 
 
+def extract_classifier_crops(
+    frame: np.ndarray | torch.Tensor,
+    obb_result: OBBResult,
+    target_size: tuple[int, int],
+    aspect_ratio: float,
+    margin: float,
+) -> list[np.ndarray]:
+    """Warp each OBB directly to the classifier's input size (BGR uint8).
+
+    Bit-identical to the legacy head-tail / CNN crop path
+    (HeadTailAnalyzer._canonicalize_obb + extract_canonical_crop): a SINGLE
+    ``cv2.warpAffine`` maps the padded OBB straight to (target_w, target_h) with
+    INTER_LINEAR + BORDER_REPLICATE. This avoids the double resample of going
+    through the shared native-extent crop tensor + a second (torch) interpolate,
+    which left ~1-2% of head-tail direction decisions flipping vs legacy near the
+    classifier's decision boundary. ``target_size`` is the model's (out_w, out_h)
+    using legacy's index convention (input_size[0], input_size[1]).
+    """
+    if isinstance(frame, torch.Tensor):
+        arr = frame.cpu().numpy()
+        if arr.ndim == 3 and arr.shape[0] == 3:
+            arr = arr.transpose(1, 2, 0)
+        if arr.dtype != np.uint8:
+            arr = (
+                (arr * 255.0).clip(0, 255).astype(np.uint8)
+                if arr.max() <= 1.0
+                else arr.astype(np.uint8)
+            )
+    else:
+        arr = frame
+    out_w, out_h = int(target_size[0]), int(target_size[1])
+    pad = max(0.0, float(margin) - 1.0)
+    n_ch = arr.shape[2] if arr.ndim == 3 else 1
+    crops: list[np.ndarray] = []
+    for i in range(obb_result.num_detections):
+        corners = obb_result.corners[i]
+        try:
+            m_align, _ = compute_alignment_affine(corners, out_w, out_h, pad)
+        except ValueError:
+            crops.append(np.zeros((out_h, out_w, n_ch), dtype=np.uint8))
+            continue
+        crop = cv2.warpAffine(
+            arr,
+            m_align,
+            (out_w, out_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        crops.append(np.ascontiguousarray(crop))
+    return crops
+
+
 def _warp_canonical_crop(
     frame: np.ndarray,
     corners: np.ndarray,
@@ -132,9 +184,7 @@ def _warp_canonical_crop(
         corners, aspect_ratio, padding_fraction
     )
     try:
-        M, _ = compute_alignment_affine(
-            corners, canvas_w, canvas_h, padding_fraction
-        )
+        M, _ = compute_alignment_affine(corners, canvas_w, canvas_h, padding_fraction)
     except ValueError:
         n_ch = frame.shape[2] if frame.ndim == 3 else 1
         return np.zeros((canvas_h, canvas_w, n_ch), dtype=frame.dtype)
@@ -179,9 +229,7 @@ def _extract_canonical_gpu(
             cw, ch = compute_native_crop_dimensions(
                 obb.corners[i], aspect_ratio, padding_fraction
             )
-            M, _ = compute_alignment_affine(
-                obb.corners[i], cw, ch, padding_fraction
-            )
+            M, _ = compute_alignment_affine(obb.corners[i], cw, ch, padding_fraction)
         except ValueError:
             cw, ch = 8, 8
             M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)

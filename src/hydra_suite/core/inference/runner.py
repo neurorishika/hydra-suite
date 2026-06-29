@@ -13,6 +13,8 @@ from .cache.keys import (
     detection_cache_key,
     headtail_cache_key,
     pose_cache_key,
+    video_signature,
+    with_video_signature,
 )
 from .cache.store import (
     AprilTagCacheHandle,
@@ -92,16 +94,24 @@ def _load_all_models(config: InferenceConfig, runtime: RuntimeContext) -> _AllMo
     return _AllModels(obb=obb, headtail=headtail, cnn=cnn, pose=pose, apriltag=apriltag)
 
 
-def _open_caches(config: InferenceConfig, cache_dir: Path) -> _CacheSet:
+def _open_caches(
+    config: InferenceConfig, cache_dir: Path, video_sig: str = ""
+) -> _CacheSet:
+    # Bind every per-video cache to the exact source file so a changed video
+    # (e.g. a clip regenerated under the same name with a different frame count)
+    # invalidates the cache instead of serving stale, truncated detections.
+    def _k(key):
+        return with_video_signature(key, video_sig)
+
     return _CacheSet(
         detection=DetectionCacheHandle(
             path=cache_dir / "detection.npz",
-            key=detection_cache_key(config.obb),
+            key=_k(detection_cache_key(config.obb)),
         ),
         headtail=(
             HeadTailCacheHandle(
                 path=cache_dir / "headtail.npz",
-                key=headtail_cache_key(config.headtail),
+                key=_k(headtail_cache_key(config.headtail)),
             )
             if config.headtail is not None
             else None
@@ -109,7 +119,7 @@ def _open_caches(config: InferenceConfig, cache_dir: Path) -> _CacheSet:
         cnn=[
             CNNCacheHandle(
                 path=cache_dir / f"cnn_{c.label}.npz",
-                key=cnn_cache_key(c),
+                key=_k(cnn_cache_key(c)),
                 label=c.label,
             )
             for c in config.cnn_phases
@@ -117,7 +127,7 @@ def _open_caches(config: InferenceConfig, cache_dir: Path) -> _CacheSet:
         pose=(
             PoseCacheHandle(
                 path=cache_dir / "pose.npz",
-                key=pose_cache_key(config.pose),
+                key=_k(pose_cache_key(config.pose)),
             )
             if config.pose is not None
             else None
@@ -125,7 +135,7 @@ def _open_caches(config: InferenceConfig, cache_dir: Path) -> _CacheSet:
         apriltag=(
             AprilTagCacheHandle(
                 path=cache_dir / "apriltag.npz",
-                key=apriltag_cache_key(config.apriltag),
+                key=_k(apriltag_cache_key(config.apriltag)),
             )
             if config.apriltag.enabled
             else None
@@ -262,58 +272,89 @@ class InferenceRunner:
     aspect ratio is preserved when stages internally resize to model input size.
     """
 
-    def __init__(self, config: InferenceConfig, cache_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        config: InferenceConfig,
+        cache_dir: Path | None = None,
+        video_path: str | Path | None = None,
+    ) -> None:
         self.config = config
         self.cache_dir = cache_dir
+        # Fingerprint of the source video; folded into every cache key so caches
+        # are only reused for the exact file they were computed from.
+        self._video_sig = video_signature(str(video_path) if video_path else None)
         self.runtime = RuntimeContext.from_config(config)
         self._models = _load_all_models(config, self.runtime)
         self._caches: _CacheSet | None = None
+        # True when self._caches was opened for WRITING (realtime persistence);
+        # False when opened read-only by load_frame. close() only flushes when
+        # writable, so a backward (read) pass never overwrites the forward cache.
+        self._caches_writable = False
 
     def caches_all_valid(self) -> bool:
         if self.cache_dir is None:
             return False
-        caches = _open_caches(self.config, self.cache_dir)
+        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
         return all(h.is_valid() for h in caches.all_handles())
 
     def run_realtime(
         self,
         frame: np.ndarray,
+        frame_idx: int = 0,
         roi_mask: np.ndarray | None = None,
         roi_mask_cuda: Any = None,
     ) -> FrameResult:
+        # Lazily open the caches for WRITING so the realtime forward pass persists
+        # detections + downstream results. Backward tracking replays them via
+        # load_frame; without this, realtime + backward gets an empty backward pass.
+        if self._caches is None and self.cache_dir is not None:
+            self._caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+            self._caches_writable = True
+        caches = self._caches if self._caches_writable else None
+
         raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
         raw = raw_list[0]
         if isinstance(raw, _RawOBBTensors):
-            raw_obb = materialize_tensors(raw)
+            raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
         else:
             raw_obb = raw
-        # Re-stamp detection_ids since materialize_tensors and the CPU OBB path may
-        # generate them with frame_idx=0; ensure consistency.
+        # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
+        # CPU OBB path generate them at frame 0) so cached ids are unique per frame.
         raw_obb = OBBResult(
-            frame_idx=0,
+            frame_idx=frame_idx,
             centroids=raw_obb.centroids,
             angles=raw_obb.angles,
             sizes=raw_obb.sizes,
             shapes=raw_obb.shapes,
             confidences=raw_obb.confidences,
             corners=raw_obb.corners,
-            detection_ids=OBBResult.make_detection_ids(0, raw_obb.num_detections),
+            detection_ids=OBBResult.make_detection_ids(
+                frame_idx, raw_obb.num_detections
+            ),
         )
+        if caches is not None and caches.detection is not None:
+            caches.detection.write_frame(frame_idx, result=raw_obb)
+
         filtered_obb, det_indices = filter_with_indices(
             raw_obb, self.config.obb, roi_mask
         )
 
         if filtered_obb.num_detections == 0:
             return _build_frame_result(
-                0, filtered_obb, np.zeros(0, np.int32), None, [], None, None
+                frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
             )
 
         ar = (
             self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
         )
         mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
-        canonical_crops = extract_canonical_crops(
-            frame, filtered_obb, ar, mg, self.runtime
+        # Canonical (native-extent) crops are now only consumed by the pose stage;
+        # head-tail / CNN warp directly from the frame. Skip the extraction
+        # entirely when there is no pose model (e.g. OBB-only / identity clips).
+        canonical_crops = (
+            extract_canonical_crops(frame, filtered_obb, ar, mg, self.runtime)
+            if self._models.pose is not None
+            else None
         )
         aabb_crops = (
             extract_aabb_crops(
@@ -327,11 +368,13 @@ class InferenceRunner:
             ht_fut = (
                 pool.submit(
                     run_headtail,
-                    canonical_crops,
+                    frame,
                     filtered_obb,
                     self._models.headtail,
                     self.config.headtail,
                     self.runtime,
+                    ar,
+                    mg,
                 )
                 if self._models.headtail
                 else None
@@ -339,11 +382,13 @@ class InferenceRunner:
             cnn_futs = [
                 pool.submit(
                     run_cnn,
-                    canonical_crops,
+                    frame,
                     filtered_obb,
                     mdl,
                     cfg,
                     self.runtime,
+                    ar,
+                    mg,
                 )
                 for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
             ]
@@ -355,6 +400,8 @@ class InferenceRunner:
                     self._models.pose,
                     self.config.pose,
                     self.runtime,
+                    ar,
+                    mg,
                 )
                 if self._models.pose
                 else None
@@ -375,8 +422,32 @@ class InferenceRunner:
             pose_result = pose_fut.result() if pose_fut else None
             at_result = at_fut.result() if at_fut else None
 
+        # Persist downstream results (keyed by det_indices) so the backward pass
+        # can replay them via load_frame -- mirrors _run_batch's cache writes.
+        if caches is not None:
+            if caches.headtail is not None and ht_result is not None:
+                caches.headtail.write_frame(
+                    frame_idx,
+                    det_indices=det_indices,
+                    heading_hints=ht_result.heading_hints,
+                    heading_confidences=ht_result.heading_confidences,
+                    directed_mask=ht_result.directed_mask,
+                )
+            for cache, cnn_result in zip(caches.cnn, cnn_results):
+                if cnn_result is not None:
+                    cache.write_frame(frame_idx, predictions=cnn_result.predictions)
+            if caches.pose is not None and pose_result is not None:
+                caches.pose.write_frame(
+                    frame_idx,
+                    det_indices=det_indices,
+                    keypoints=pose_result.keypoints,
+                    valid_mask=pose_result.valid_mask,
+                )
+            if caches.apriltag is not None and at_result is not None:
+                caches.apriltag.write_frame(frame_idx, result=at_result)
+
         frame_result = _build_frame_result(
-            0,
+            frame_idx,
             filtered_obb,
             det_indices,
             ht_result,
@@ -417,7 +488,7 @@ class InferenceRunner:
         if not cap.isOpened():
             raise IOError(f"Cannot open video: {video_path}")
 
-        caches = _open_caches(self.config, self.cache_dir)
+        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
         self._caches = caches
         video_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         if end_frame is None:
@@ -479,7 +550,9 @@ class InferenceRunner:
 
         for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
             obb_result = (
-                materialize_tensors(raw) if isinstance(raw, _RawOBBTensors) else raw
+                materialize_tensors(raw, self.config.obb.raw_detection_cap)
+                if isinstance(raw, _RawOBBTensors)
+                else raw
             )
             # Re-stamp detection_ids for this frame
             obb_result = OBBResult(
@@ -501,26 +574,37 @@ class InferenceRunner:
             if filtered_obb.num_detections == 0:
                 continue
 
-            canonical_crops = extract_canonical_crops(
-                frame, filtered_obb, ar, mg, self.runtime
+            canonical_crops = (
+                extract_canonical_crops(frame, filtered_obb, ar, mg, self.runtime)
+                if self._models.pose is not None
+                else None
             )
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
                 ht_fut = (
                     pool.submit(
                         run_headtail,
-                        canonical_crops,
+                        frame,
                         filtered_obb,
                         self._models.headtail,
                         self.config.headtail,
                         self.runtime,
+                        ar,
+                        mg,
                     )
                     if self._models.headtail is not None
                     else None
                 )
                 cnn_futs = [
                     pool.submit(
-                        run_cnn, canonical_crops, filtered_obb, mdl, cfg, self.runtime
+                        run_cnn,
+                        frame,
+                        filtered_obb,
+                        mdl,
+                        cfg,
+                        self.runtime,
+                        ar,
+                        mg,
                     )
                     for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
                 ]
@@ -532,6 +616,8 @@ class InferenceRunner:
                         self._models.pose,
                         self.config.pose,
                         self.runtime,
+                        ar,
+                        mg,
                     )
                     if self._models.pose is not None
                     else None
@@ -576,7 +662,7 @@ class InferenceRunner:
         if self.cache_dir is None:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
-            self._caches = _open_caches(self.config, self.cache_dir)
+            self._caches = _open_caches(self.config, self.cache_dir, self._video_sig)
 
         raw_obb = (
             self._caches.detection.read_frame(frame_idx)
@@ -610,6 +696,14 @@ class InferenceRunner:
         )
 
     def close(self) -> None:
+        # Flush realtime-written caches to disk so a later backward pass can
+        # replay them. Only when writable: a read-only (load_frame/backward)
+        # handle has an empty buffer and close() would overwrite the cache.
+        if self._caches is not None and self._caches_writable:
+            for h in self._caches.all_handles():
+                h.close()
+            self._caches = None
+            self._caches_writable = False
         self._models.obb.close()
         if self._models.headtail is not None:
             self._models.headtail.close()
