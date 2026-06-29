@@ -56,10 +56,6 @@ from hydra_suite.core.tracking.features.tag_features import (
     build_tag_detection_map,
     get_detection_tag_csv_values,
 )
-from hydra_suite.core.tracking.precompute import (
-    AprilTagPrecomputePhase,
-    CNNPrecomputePhase,
-)
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
 from hydra_suite.utils.batch_policy import clamp_realtime_individual_batch_size
@@ -664,374 +660,6 @@ class TrackingWorker(QThread):
             )
         )
 
-    def _build_tag_cache_path(self, apriltag_id, start_frame, end_frame):
-        """Build an independent, hash-keyed AprilTag cache path."""
-        from hydra_suite.utils.video_artifacts import build_apriltag_cache_path
-
-        return str(
-            build_apriltag_cache_path(
-                self.video_path,
-                apriltag_id,
-                start_frame,
-                end_frame,
-                artifact_base_dir=(
-                    Path(self.detection_cache_path).parent
-                    if self.detection_cache_path
-                    else None
-                ),
-                create_dir=True,
-            )
-        )
-
-    def _build_pose_phase(
-        self,
-        params,
-        start_frame,
-        end_frame,
-        ignore_existing_cache: bool = False,
-    ):
-        """Build the pose precompute phase if enabled. Returns phase or None."""
-        if not bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
-            return None
-
-        from hydra_suite.core.identity.properties.cache import (
-            IndividualPropertiesCache,
-            compute_detection_hash,
-            compute_extractor_hash,
-            compute_filter_settings_hash,
-            compute_individual_properties_id,
-        )
-
-        detection_hash = compute_detection_hash(
-            params.get("INFERENCE_MODEL_ID", ""),
-            self.video_path,
-            start_frame,
-            end_frame,
-            detection_cache_version="2.0",
-        )
-        filter_hash = compute_filter_settings_hash(params)
-        extractor_hash = compute_extractor_hash(params)
-        properties_id = compute_individual_properties_id(
-            detection_hash, filter_hash, extractor_hash
-        )
-        pose_cache_path = self._build_individual_properties_cache_path(
-            properties_id, start_frame, end_frame
-        )
-        self.individual_properties_cache_path = str(pose_cache_path)
-        params["INDIVIDUAL_PROPERTIES_ID"] = properties_id
-        params["INDIVIDUAL_PROPERTIES_CACHE_PATH"] = str(pose_cache_path)
-
-        pose_cache_hit = False
-        if ignore_existing_cache and pose_cache_path.exists():
-            logger.info(
-                "Realtime workflow ignoring existing pose cache: %s",
-                pose_cache_path,
-            )
-        elif pose_cache_path.exists():
-            existing = IndividualPropertiesCache(str(pose_cache_path), mode="r")
-            try:
-                pose_cache_hit = existing.is_compatible()
-            finally:
-                existing.close()
-
-        pose_backend, pose_cache_writer, finalize_metadata = self._prepare_pose_backend(
-            params,
-            pose_cache_hit,
-            pose_cache_path,
-            properties_id,
-            detection_hash,
-            filter_hash,
-            extractor_hash,
-            start_frame,
-            end_frame,
-        )
-
-        return self._create_pose_pipeline(
-            params,
-            pose_backend,
-            pose_cache_writer,
-            pose_cache_hit,
-            pose_cache_path,
-            finalize_metadata,
-        )
-
-    def _prepare_pose_backend(
-        self,
-        params,
-        pose_cache_hit,
-        pose_cache_path,
-        properties_id,
-        detection_hash,
-        filter_hash,
-        extractor_hash,
-        start_frame,
-        end_frame,
-    ):
-        """Prepare pose backend and cache writer when cache is stale."""
-        from hydra_suite.core.identity.pose.api import (
-            build_runtime_config,
-            create_pose_backend_from_config,
-        )
-        from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
-
-        if pose_cache_hit:
-            return None, None, {}
-
-        pose_out_root = str(params.get("INDIVIDUAL_DATASET_OUTPUT_DIR", "")).strip()
-        if not pose_out_root:
-            pose_out_root = str(pose_cache_path.parent)
-
-        pose_config = build_runtime_config(params, out_root=pose_out_root)
-        pose_backend = create_pose_backend_from_config(pose_config)
-        pose_backend.warmup()
-
-        runtime_flavor = str(params.get("POSE_RUNTIME_FLAVOR", "")).lower()
-        if runtime_flavor.startswith("onnx") or runtime_flavor.startswith("tensorrt"):
-            try:
-                resolved = str(
-                    getattr(pose_backend, "exported_model_path", "")
-                    or getattr(pose_backend, "model_path", "")
-                ).strip()
-            except Exception:
-                resolved = ""
-            if resolved:
-                params["POSE_EXPORTED_MODEL_PATH"] = resolved
-                self.pose_exported_model_resolved_signal.emit(resolved)
-
-        pose_cache_writer = IndividualPropertiesCache(str(pose_cache_path), mode="w")
-        keypoint_names = list(getattr(pose_backend, "output_keypoint_names", []) or [])
-        finalize_metadata = {
-            "individual_properties_id": properties_id,
-            "detection_hash": detection_hash,
-            "filter_settings_hash": filter_hash,
-            "extractor_hash": extractor_hash,
-            "pose_keypoint_names": keypoint_names,
-            "start_frame": int(start_frame),
-            "end_frame": int(end_frame),
-            "video_path": str(Path(self.video_path).expanduser().resolve()),
-        }
-        return pose_backend, pose_cache_writer, finalize_metadata
-
-    def _create_pose_pipeline(
-        self,
-        params,
-        pose_backend,
-        pose_cache_writer,
-        pose_cache_hit,
-        pose_cache_path,
-        finalize_metadata,
-    ):
-        """Instantiate a PosePipeline from the prepared components."""
-        from hydra_suite.core.tracking.pose.pose_pipeline import PosePipeline
-
-        _POSE_CROSS_FRAME_BATCH = int(params.get("POSE_PRECOMPUTE_BATCH_SIZE", 64))
-        if bool(params.get("TRACKING_REALTIME_MODE", False)):
-            _POSE_CROSS_FRAME_BATCH = 1
-        _bg_raw = params.get("INDIVIDUAL_BACKGROUND_COLOR", [0, 0, 0])
-        _pose_bg_color = (
-            tuple(int(c) for c in _bg_raw)
-            if isinstance(_bg_raw, (list, tuple)) and len(_bg_raw) == 3
-            else (0, 0, 0)
-        )
-        _suppress_foreign_obb = bool(params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True))
-        _crop_workers = int(params.get("POSE_PIPELINE_CROP_WORKERS", 4))
-        _pre_resize = int(params.get("POSE_PIPELINE_PRE_RESIZE", 0))
-        if _pre_resize <= 0 and pose_backend is not None:
-            _pre_resize = int(getattr(pose_backend, "preferred_input_size", 0) or 0)
-
-        return PosePipeline(
-            pose_backend,
-            pose_cache_writer,
-            cross_frame_batch=_POSE_CROSS_FRAME_BATCH,
-            crop_workers=_crop_workers,
-            pre_resize_target=_pre_resize,
-            bg_color=_pose_bg_color,
-            suppress_foreign_obb=_suppress_foreign_obb,
-            padding_fraction=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
-            cache_hit=pose_cache_hit,
-            cache_path=str(pose_cache_path),
-            finalize_metadata=finalize_metadata,
-        )
-
-    def _build_apriltag_phase(
-        self,
-        params,
-        start_frame,
-        end_frame,
-        ignore_existing_cache: bool = False,
-    ):
-        """Build the AprilTag precompute phase if enabled. Returns phase or None."""
-        if not bool(params.get("USE_APRILTAGS", False)):
-            return None
-
-        from hydra_suite.core.identity.classification.apriltag import AprilTagConfig
-        from hydra_suite.core.identity.properties.cache import compute_apriltag_cache_id
-
-        cfg = AprilTagConfig.from_params(params)
-        apriltag_id = compute_apriltag_cache_id(
-            params,
-            inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
-        )
-        tag_cache_path = self._build_tag_cache_path(apriltag_id, start_frame, end_frame)
-        if tag_cache_path is None:
-            return None
-        try:
-            return AprilTagPrecomputePhase(
-                detector_config=cfg,
-                cache_path=tag_cache_path,
-                start_frame=start_frame,
-                end_frame=end_frame,
-                video_path=str(Path(self.video_path).expanduser().resolve()),
-                ignore_existing_cache=ignore_existing_cache,
-            )
-        except ImportError as exc:
-            logger.warning("AprilTag precompute skipped: %s", exc)
-            self.warning_signal.emit("AprilTag Unavailable", str(exc))
-            return None
-
-    def _build_cnn_phases(
-        self,
-        params,
-        start_frame,
-        end_frame,
-        ignore_existing_cache: bool = False,
-    ):
-        """Build CNN identity precompute phases. Returns list of phases."""
-        phases = []
-        for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
-            label = str(cnn_cfg_dict.get("label", "cnn_identity"))
-            model_path = str(cnn_cfg_dict.get("model_path", ""))
-            if not model_path or not os.path.exists(model_path):
-                logger.warning(
-                    "CNN identity precompute skipped (%s): model not found: %s",
-                    label,
-                    model_path,
-                )
-                continue
-            from hydra_suite.core.identity.calibration import CalibrationModel
-            from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
-            from hydra_suite.core.identity.properties.cache import (
-                compute_classify_cache_id,
-            )
-
-            cnn_cfg = CNNIdentityConfig(
-                model_path=model_path,
-                confidence=float(cnn_cfg_dict.get("confidence", 0.5)),
-                scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
-                batch_size=clamp_realtime_individual_batch_size(
-                    cnn_cfg_dict.get("batch_size", 64),
-                    max_animals=params.get("MAX_TARGETS", 1),
-                    realtime_enabled=params.get("TRACKING_REALTIME_MODE", False),
-                    workflow_mode=params.get("TRACKING_WORKFLOW_MODE", "non_realtime"),
-                ),
-            )
-            calibration_temperature = float(
-                cnn_cfg_dict.get(
-                    "calibration_temperature",
-                    cnn_cfg_dict.get("temperature", 1.0),
-                )
-            )
-            calibration_model = (
-                CalibrationModel(temperature=calibration_temperature)
-                if abs(calibration_temperature - 1.0) > 1e-6
-                else None
-            )
-            classify_id = compute_classify_cache_id(
-                model_path=model_path,
-                compute_runtime=str(
-                    params.get(
-                        "CNN_COMPUTE_RUNTIME",
-                        params.get("COMPUTE_RUNTIME", "cpu"),
-                    )
-                ),
-                inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
-                calibration_signature=(
-                    calibration_model.signature if calibration_model is not None else ""
-                ),
-            )
-            cnn_cache_path = self._build_cnn_identity_cache_path(
-                label, classify_id, start_frame, end_frame
-            )
-            if cnn_cache_path:
-                self.detected_cnn_cache_paths[label] = str(cnn_cache_path)
-                phase = CNNPrecomputePhase(
-                    config=cnn_cfg,
-                    model_path=model_path,
-                    cache_path=cnn_cache_path,
-                    compute_runtime=str(
-                        params.get(
-                            "CNN_COMPUTE_RUNTIME",
-                            params.get("COMPUTE_RUNTIME", "cpu"),
-                        )
-                    ),
-                    name=label,
-                    calibration_model=calibration_model,
-                    ignore_existing_cache=ignore_existing_cache,
-                )
-                phases.append(phase)
-        return phases
-
-    def _build_precompute_phases(
-        self,
-        params: dict,
-        detection_method: str,
-        detection_cache,
-        start_frame: int,
-        end_frame: int,
-    ) -> list:
-        """Build the list of enabled precompute phases for a tracking run.
-
-        Returns [] when precompute should be skipped entirely (backward mode,
-        preview mode, wrong detection method, or no detection cache).
-        """
-        if detection_method != "yolo_obb":
-            return []
-        if self.backward_mode or self.preview_mode:
-            return []
-        if detection_cache is None:
-            return []
-
-        ignore_existing_cache = bool(
-            params.get(
-                "TRACKING_REALTIME_MODE",
-                str(params.get("TRACKING_WORKFLOW_MODE", "non_realtime"))
-                .strip()
-                .lower()
-                == "realtime",
-            )
-        )
-
-        phases = []
-
-        pose_phase = self._build_pose_phase(
-            params,
-            start_frame,
-            end_frame,
-            ignore_existing_cache=ignore_existing_cache,
-        )
-        if pose_phase is not None:
-            phases.append(pose_phase)
-
-        apriltag_phase = self._build_apriltag_phase(
-            params,
-            start_frame,
-            end_frame,
-            ignore_existing_cache=ignore_existing_cache,
-        )
-        if apriltag_phase is not None:
-            phases.append(apriltag_phase)
-
-        phases.extend(
-            self._build_cnn_phases(
-                params,
-                start_frame,
-                end_frame,
-                ignore_existing_cache=ignore_existing_cache,
-            )
-        )
-
-        return phases
-
     def _run_batched_detection_phase(
         self,
         cap,
@@ -1187,21 +815,15 @@ class TrackingWorker(QThread):
             )
         )
         # === Streaming Phase 5/6 ===
-        # Fresh forward YOLO runs now default to streaming-first individual
-        # analysis. Replay/precompute remains available as an explicit fallback
-        # for cached-detection rebuilds or callers that set
-        # FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY.
+        # Forward YOLO runs perform individual analysis (pose, AprilTag, CNN
+        # identity) inline via the InferenceRunner streaming path.
         _streaming_explicitly_requested = bool(
             p.get("ENABLE_STREAMING_INDIVIDUAL_ANALYSIS", False)
-        )
-        _force_individual_replay = bool(
-            p.get("FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY", False)
         )
         streaming_precompute_enabled = bool(
             individual_data_precompute_enabled
             and not self.preview_mode
             and not self.backward_mode
-            and not _force_individual_replay
         )
         effective_realtime_tracking_mode = bool(
             realtime_tracking_mode_requested
@@ -1224,10 +846,6 @@ class TrackingWorker(QThread):
                 logger.info(
                     "Non-realtime YOLO forward runs now default to streaming individual analysis."
                 )
-        elif _force_individual_replay and individual_data_precompute_enabled:
-            logger.info(
-                "Replay individual-analysis fallback enabled: using cached/precompute rebuild path."
-            )
         elif effective_realtime_tracking_mode:
             logger.info(
                 "Realtime workflow enabled: using streaming forward detection/tracking."
@@ -1331,8 +949,8 @@ class TrackingWorker(QThread):
 
         # Initialize detection.
         # For YOLO OBB: InferenceRunner owns detection, caching, and all per-frame
-        # inference (headtail, CNN, pose, AprilTag).  Legacy DetectionCache and
-        # UnifiedPrecompute are not used for this path.
+        # inference (headtail, CNN, pose, AprilTag).  The legacy DetectionCache is
+        # not used for this path.
         # For background subtraction: legacy detector is kept as-is.
         inference_runner = None  # InferenceRunner for yolo_obb mode
         detection_cache = None  # Legacy cache — only used for background subtraction
@@ -1711,8 +1329,7 @@ class TrackingWorker(QThread):
         # === PER-FRAME INFERENCE LIVE STORES ===
         # For YOLO OBB with InferenceRunner: live stores are populated per-frame
         # inside the tracking loop from FrameResult.cnn / .pose / .apriltag.
-        # No UnifiedPrecompute or callback wiring needed; the runner's batch pass
-        # has already cached all inference results.
+        # The runner's batch pass has already cached all inference results.
         props_path = None
         tag_observation_cache_path = None
         live_feature_precompute = None  # kept for legacy bg-subtraction paths

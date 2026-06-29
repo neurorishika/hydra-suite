@@ -230,11 +230,6 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     live_features.LiveCNNIdentityStore = object
     live_features.LivePosePropertiesStore = object
     live_features.LiveTagObservationStore = object
-    precompute = types.ModuleType("hydra_suite.core.tracking.precompute")
-    precompute.AprilTagPrecomputePhase = object
-    precompute.CNNPrecomputePhase = object
-    precompute.CropConfig = object
-    precompute.UnifiedPrecompute = object
     profiler = types.ModuleType("hydra_suite.core.tracking.profiler")
     profiler.TrackingProfiler = object
 
@@ -253,7 +248,6 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
         "hydra_suite.core.tracking.features.cnn_features": cnn_features,
         "hydra_suite.core.tracking.features.live_features": live_features,
         "hydra_suite.core.tracking.pose.pose_pipeline": pose_pipeline,
-        "hydra_suite.core.tracking.precompute": precompute,
         "hydra_suite.core.tracking.profiler": profiler,
     }
 

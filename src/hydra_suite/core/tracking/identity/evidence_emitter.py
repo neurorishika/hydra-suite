@@ -1,14 +1,12 @@
-"""Identity evidence emitter for the streaming and precompute paths.
+"""Identity evidence emitter for the streaming inference path.
 
 Streaming Phases 3 & 4 / Identity Phase 0: converts CNN ``ClassPrediction``
 outputs to ``IdentityEvidence`` objects and accumulates them into an
 ``IdentityEvidenceCache`` sidecar file.
 
-The emitter is wired as a frame-result callback on ``CNNPrecomputePhase``
-(via ``set_frame_result_callback``) and on the live ``LiveCNNIdentityStore``
-equivalent in streaming mode.  It emits the same artifact whether the run
-used batch precompute or streaming live analysis, satisfying the parity
-requirement from the streaming plan.
+The emitter consumes per-frame CNN predictions pushed from the live
+``LiveCNNIdentityStore`` as the InferenceRunner streams them inside the
+tracking loop, producing the identity-evidence sidecar consumed downstream.
 
 The emitter does not require a full ``IdentityCatalog`` to be available at
 construction time. It uses the CNN model's own class labels as the initial
@@ -140,8 +138,7 @@ class IdentityEvidenceEmitter:
     ) -> None:
         """Process one frame's CNN predictions and store evidence.
 
-        This is the callback signature expected by
-        ``CNNPrecomputePhase.set_frame_result_callback()``.
+        Called per frame with the live CNN predictions for that frame.
         """
         self.emit_frame(
             frame_idx,
