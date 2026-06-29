@@ -119,3 +119,66 @@ def test_cache_roundtrip_and_lookup(tmp_path: Path) -> None:
     miss = cache_r.get_detection(10, 999999)
     assert miss is None
     cache_r.close()
+
+
+def test_live_pose_store_flush_feeds_rich_export(tmp_path: Path) -> None:
+    """Regression: pose computed during inference must reach the final CSV.
+
+    The InferenceRunner path only populates an in-memory ``LivePosePropertiesStore``;
+    if that store is never flushed to an ``IndividualPropertiesCache`` (the source
+    the rich-export merge reads), the final output carries no pose columns even
+    though pose ran. This exercises the LiveStore -> cache -> augment path that
+    ``TrackingWorker._flush_live_pose_cache`` performs at end of run.
+    """
+    import pandas as pd
+
+    from hydra_suite.core.identity.properties.export import (
+        augment_trajectories_with_pose_cache,
+    )
+    from hydra_suite.core.tracking.live_features import LivePosePropertiesStore
+
+    kpt_names = ["head", "thorax", "abdomen"]
+    store = LivePosePropertiesStore()
+    kp_a = np.array(
+        [[10.0, 20.0, 0.9], [11.0, 21.0, 0.8], [12.0, 22.0, 0.7]], np.float32
+    )
+    kp_b = np.array(
+        [[30.0, 40.0, 0.95], [31.0, 41.0, 0.6], [32.0, 42.0, 0.5]], np.float32
+    )
+    store.update_frame(0, [100, 101], [kp_a, kp_b])
+    kp_c = np.array(
+        [[15.0, 25.0, 0.9], [16.0, 26.0, 0.9], [17.0, 27.0, 0.9]], np.float32
+    )
+    store.update_frame(1, [100, 102], [kp_c, None])
+
+    # New LiveStore iteration API used by the flush.
+    assert store.get_cached_frames() == [0, 1]
+    assert store.get_raw_frame(0)["detection_ids"] == [100, 101]
+    assert store.get_raw_frame(999) is None
+
+    cache_path = tmp_path / "video_pose_cache_test_0_1.npz"
+    cache_w = mod.IndividualPropertiesCache(str(cache_path), mode="w")
+    for fidx in store.get_cached_frames():
+        raw = store.get_raw_frame(fidx)
+        cache_w.add_frame(
+            fidx, raw["detection_ids"], pose_keypoints=raw["pose_keypoints"]
+        )
+    cache_w.save(metadata={"pose_keypoint_names": kpt_names})
+    cache_w.close()
+
+    df = pd.DataFrame(
+        {
+            "TrackID": [1, 2, 1],
+            "FrameID": [0, 0, 1],
+            "DetectionID": [100, 101, 100],
+            "X": [10.0, 30.0, 15.0],
+            "Y": [20.0, 40.0, 25.0],
+        }
+    )
+    out = augment_trajectories_with_pose_cache(df, str(cache_path))
+    pose_cols = [c for c in out.columns if c.startswith("PoseKpt_")]
+    assert pose_cols, "final dataframe must carry pose columns after the flush"
+
+    row = out[(out.FrameID == 0) & (out.DetectionID == 100)].iloc[0]
+    assert abs(float(row["PoseKpt_head_X"]) - 10.0) < 1e-5
+    assert abs(float(row["PoseKpt_thorax_Y"]) - 21.0) < 1e-5

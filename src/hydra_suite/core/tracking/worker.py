@@ -467,6 +467,87 @@ class TrackingWorker(QThread):
             detection_cache_path=self.detection_cache_path,
         )
 
+    def _flush_live_pose_cache(
+        self,
+        live_store,
+        keypoint_names,
+        params,
+        start_frame,
+        end_frame,
+    ) -> None:
+        """Persist an in-memory pose store to a file-backed properties cache.
+
+        The InferenceRunner path populates ``LivePosePropertiesStore`` per frame
+        for the in-loop direction override but, unlike detected-properties, never
+        wrote it to disk — so the rich-export merge (which reads
+        ``individual_properties_cache_path``) had no source and the final CSV
+        carried no pose columns. This flush mirrors the detected-properties save:
+        it writes one ``IndividualPropertiesCache`` keyed by frame + detection ID
+        and records ``individual_properties_cache_path`` for the GUI handoff.
+        """
+        from hydra_suite.core.identity.properties.cache import (
+            IndividualPropertiesCache,
+            compute_detection_hash,
+            compute_extractor_hash,
+            compute_filter_settings_hash,
+            compute_individual_properties_id,
+        )
+
+        frames = list(live_store.get_cached_frames())
+        if not frames:
+            logger.info("No live pose frames to persist; skipping pose cache flush.")
+            return
+
+        detection_hash = compute_detection_hash(
+            params.get("INFERENCE_MODEL_ID", ""),
+            self.video_path,
+            start_frame,
+            end_frame,
+            detection_cache_version="2.0",
+        )
+        filter_hash = compute_filter_settings_hash(params)
+        extractor_hash = compute_extractor_hash(params)
+        properties_id = compute_individual_properties_id(
+            detection_hash, filter_hash, extractor_hash
+        )
+        pose_cache_path = self._build_individual_properties_cache_path(
+            properties_id, start_frame, end_frame
+        )
+        cache = IndividualPropertiesCache(str(pose_cache_path), mode="w")
+        try:
+            for frame_idx in frames:
+                raw = live_store.get_raw_frame(frame_idx)
+                if raw is None:
+                    continue
+                cache.add_frame(
+                    int(frame_idx),
+                    raw.get("detection_ids", []),
+                    pose_keypoints=raw.get("pose_keypoints", []),
+                )
+            cache.save(
+                metadata={
+                    "individual_properties_id": properties_id,
+                    "detection_hash": detection_hash,
+                    "filter_settings_hash": filter_hash,
+                    "extractor_hash": extractor_hash,
+                    "pose_keypoint_names": [str(k) for k in (keypoint_names or [])],
+                    "start_frame": int(start_frame),
+                    "end_frame": int(end_frame),
+                    "video_path": str(Path(self.video_path).expanduser().resolve()),
+                }
+            )
+        finally:
+            cache.close()
+
+        self.individual_properties_cache_path = str(pose_cache_path)
+        params["INDIVIDUAL_PROPERTIES_ID"] = properties_id
+        params["INDIVIDUAL_PROPERTIES_CACHE_PATH"] = str(pose_cache_path)
+        logger.info(
+            "Persisted %d live pose frames to properties cache: %s",
+            len(frames),
+            pose_cache_path,
+        )
+
     def _build_detected_properties_cache_path(
         self, properties_id: str, start_frame: int, end_frame: int
     ) -> Path:
@@ -1299,6 +1380,24 @@ class TrackingWorker(QThread):
                     cap.release()
                     self.finished_signal.emit(False, [], [])
                     return
+                if not inference_runner.detection_cache_covers_range(
+                    start_frame, end_frame
+                ):
+                    _missing = inference_runner.detection_cache_missing_frames(
+                        start_frame, end_frame
+                    )
+                    logger.error(
+                        "Backward tracking requires a forward-pass cache covering "
+                        "frames %d-%d, but it is incomplete (missing e.g. %s). "
+                        "Please re-run forward tracking over the full range.",
+                        start_frame,
+                        end_frame,
+                        _missing,
+                    )
+                    inference_runner.close()
+                    cap.release()
+                    self.finished_signal.emit(False, [], [])
+                    return
                 use_cached_detections = True
                 logger.info(
                     "Backward pass: using pre-computed InferenceRunner caches from %s",
@@ -1306,7 +1405,11 @@ class TrackingWorker(QThread):
                 )
             elif (
                 not effective_realtime_tracking_mode
+                and self.use_cached_detections
                 and inference_runner.caches_all_valid()
+                and inference_runner.detection_cache_covers_range(
+                    start_frame, end_frame
+                )
             ):
                 use_cached_detections = True
                 logger.info(
@@ -1314,10 +1417,17 @@ class TrackingWorker(QThread):
                 )
             else:
                 use_cached_detections = False
-                logger.info(
-                    "InferenceRunner will compute detections (realtime=%s)",
-                    effective_realtime_tracking_mode,
-                )
+                if not self.use_cached_detections:
+                    logger.info(
+                        "Cache reuse disabled by user; InferenceRunner will recompute "
+                        "detections (realtime=%s)",
+                        effective_realtime_tracking_mode,
+                    )
+                else:
+                    logger.info(
+                        "InferenceRunner will compute detections (realtime=%s)",
+                        effective_realtime_tracking_mode,
+                    )
 
             # Load density regions sidecar for backward pass
             if density_map_enabled and self.backward_mode and not self._density_regions:
@@ -4285,6 +4395,26 @@ class TrackingWorker(QThread):
         if self.video_writer:
             self.video_writer.release()
 
+        # Persist live pose keypoints to a file-backed properties cache so the
+        # rich-export merge can attach pose columns to the final CSV. Only the
+        # in-memory live store carries keypoints in the InferenceRunner path;
+        # without this flush the final output had no pose data even though pose
+        # ran during inference. Skipped on stop/preview and when no frames exist.
+        if (
+            not stop_requested
+            and not self.preview_mode
+            and isinstance(live_pose_props_cache, LivePosePropertiesStore)
+        ):
+            try:
+                self._flush_live_pose_cache(
+                    live_pose_props_cache,
+                    live_pose_keypoint_names,
+                    p,
+                    start_frame,
+                    end_frame,
+                )
+            except Exception:
+                logger.exception("Failed to persist live pose cache for export.")
         if pose_props_cache is not None:
             try:
                 pose_props_cache.close()

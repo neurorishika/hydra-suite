@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -439,6 +440,29 @@ class TrackingOrchestrator:
 
         return sorted(found.values(), key=lambda path: path.name)
 
+    @staticmethod
+    def _iter_inference_cache_dirs(video_path: str, artifact_base_dirs) -> list[Path]:
+        """Return InferenceRunner per-video cache directories for the given video.
+
+        The InferenceRunner (yolo_obb path) stores its caches in a hidden
+        ``.inference_cache_<stem>/`` directory next to the video (see
+        ``TrackingWorker._resolve_cache_dir``). These hold ``detection.npz``,
+        ``headtail.npz``, ``cnn_*.npz``, ``pose.npz``, ``apriltag.npz``. The
+        file-glob in ``_iter_cache_artifact_paths`` never matches them, so they
+        must be discovered and removed explicitly.
+        """
+        stem = Path(video_path).stem.strip() or "video"
+        found: dict[str, Path] = {}
+        for base_dir in artifact_base_dirs:
+            cache_dir = Path(base_dir).expanduser() / f".inference_cache_{stem}"
+            if cache_dir.is_dir():
+                try:
+                    key = str(cache_dir.resolve())
+                except OSError:
+                    key = str(cache_dir)
+                found[key] = cache_dir
+        return sorted(found.values(), key=lambda path: str(path))
+
     def clear_detection_caches(self) -> None:
         """Delete all current-video cache files for the active video."""
         if self._mw._has_active_progress_task():
@@ -469,6 +493,9 @@ class TrackingOrchestrator:
             preferred_base_dirs=[csv_dir],
         )
         cache_paths = self._iter_cache_artifact_paths(video_path, artifact_base_dirs)
+        inference_cache_dirs = self._iter_inference_cache_dirs(
+            video_path, artifact_base_dirs
+        )
 
         current_cache_path = str(
             getattr(self._mw, "current_detection_cache_path", "") or ""
@@ -485,7 +512,7 @@ class TrackingOrchestrator:
             if current_props_cache.exists() and current_props_cache not in cache_paths:
                 cache_paths.append(current_props_cache)
 
-        if not cache_paths:
+        if not cache_paths and not inference_cache_dirs:
             QMessageBox.information(
                 self._mw,
                 "No Caches Found",
@@ -557,6 +584,16 @@ class TrackingOrchestrator:
                     exc_info=True,
                 )
 
+        deleted_dirs = 0
+        for cache_dir in inference_cache_dirs:
+            try:
+                shutil.rmtree(cache_dir)
+                deleted_dirs += 1
+            except FileNotFoundError:
+                pass
+            except Exception:
+                failed.append(str(cache_dir))
+
         if removed_current_cache or (
             current_cache_path and not Path(current_cache_path).expanduser().exists()
         ):
@@ -568,8 +605,9 @@ class TrackingOrchestrator:
             self._mw.current_individual_properties_cache_path = None
 
         logger.info(
-            "Cleared %d cache file(s) for %s%s",
+            "Cleared %d cache file(s) and %d inference cache dir(s) for %s%s",
             deleted,
+            deleted_dirs,
             video_path,
             f"; failed={len(failed)}" if failed else "",
         )
@@ -578,14 +616,16 @@ class TrackingOrchestrator:
             QMessageBox.warning(
                 self._mw,
                 "Cache Cleanup Incomplete",
-                f"Deleted {deleted} cache file(s), but {len(failed)} could not be removed.",
+                f"Deleted {deleted} cache file(s) and {deleted_dirs} inference "
+                f"cache folder(s), but {len(failed)} item(s) could not be removed.",
             )
             return
 
         QMessageBox.information(
             self._mw,
             "Caches Cleared",
-            f"Deleted {deleted} cache file(s) for the current video.",
+            f"Deleted {deleted} cache file(s) and {deleted_dirs} inference "
+            f"cache folder(s) for the current video.",
         )
 
     def on_stats_update(self, stats):

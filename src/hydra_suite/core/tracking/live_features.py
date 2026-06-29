@@ -91,6 +91,29 @@ class LivePosePropertiesStore:
             "pose_keypoints": keypoints,
         }
 
+    def get_cached_frames(self) -> list[int]:
+        """Return sorted frame indices currently held in the store.
+
+        Mirrors ``IndividualPropertiesCache.get_cached_frames`` so the in-memory
+        store can be flushed to a file-backed cache at end of run.
+        """
+        return sorted(self._frames.keys())
+
+    def get_raw_frame(self, frame_idx: int) -> Optional[dict[str, Any]]:
+        """Return the raw ``{detection_ids, pose_keypoints}`` dict for a frame.
+
+        Returns None when the frame was never populated. Unlike ``get_frame``
+        this does not compute summary statistics — it exposes exactly what is
+        needed to persist keypoints to an ``IndividualPropertiesCache``.
+        """
+        frame = self._frames.get(int(frame_idx))
+        if frame is None:
+            return None
+        return {
+            "detection_ids": list(frame.get("detection_ids", [])),
+            "pose_keypoints": list(frame.get("pose_keypoints", [])),
+        }
+
     def close(self) -> None:
         """Match cache interface; nothing to release for in-memory mode."""
 
