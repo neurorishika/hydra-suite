@@ -526,7 +526,12 @@ class InferenceRunner:
             handles["pose"] = caches.pose
         if caches.apriltag is not None:
             handles["apriltag"] = caches.apriltag
-        writer = CacheWriter(handles, self.config.cnn_phases, async_mode=False)
+        # depth>=2 uses an async CacheWriter so cache writes never stall the
+        # compute path; the consumer thread still calls the direct write helpers
+        # (write_detection/write_downstream) in strict window order, so the cache
+        # layout is byte-identical to the synchronous depth=1 writer.
+        async_mode = self.config.pipeline_depth >= 2
+        writer = CacheWriter(handles, self.config.cnn_phases, async_mode=async_mode)
         return Pipeline(stages, self.runtime, writer, depth=self.config.pipeline_depth)
 
     def run_batch_pass(
@@ -554,45 +559,41 @@ class InferenceRunner:
         end_frame = min(video_total - 1, int(end_frame))
         range_total = max(0, end_frame - start_frame + 1)
 
-        batch_size = self.config.detection_batch_size
-
         if start_frame > 0:
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-        frames_buf: list[np.ndarray] = []
-        indices_buf: list[int] = []
-        processed = 0
-        current_frame_idx = start_frame
-
-        # Each filled window is handed to the depth=1 Pipeline (built per window in
-        # _run_batch). The video read loop, range clamping, progress cadence,
-        # signature binding, and final cache close are unchanged from the legacy
-        # path; only the per-frame stage work moved into the Pipeline.
-        try:
-            while current_frame_idx <= end_frame:
+        # The whole pass is now driven by Pipeline.run: it owns the windowing and
+        # (at depth>=2) the producer/consumer double buffer. The video decode is
+        # the producer's first stage and is fed in as a lazy (frame_idx, frame)
+        # generator so frames are never all buffered at once. Range clamping,
+        # progress cadence, signature binding, and the final cache close are
+        # preserved; only the orchestration moved into the Pipeline.
+        def _frame_source():
+            idx = start_frame
+            while idx <= end_frame:
                 ret, frame = cap.read()
                 if not ret:
                     break
-                frames_buf.append(frame)
-                indices_buf.append(current_frame_idx)
-                current_frame_idx += 1
-                processed += 1
-                if len(frames_buf) == batch_size:
-                    self._run_batch(frames_buf, indices_buf, caches)
-                    frames_buf.clear()
-                    indices_buf.clear()
-                if (
-                    progress_cb
-                    and range_total > 0
-                    and processed % max(1, range_total // 100) == 0
-                ):
-                    progress_cb(processed, range_total)
-            if frames_buf:
-                self._run_batch(frames_buf, indices_buf, caches)
-            if progress_cb:
-                progress_cb(processed, range_total)
+                yield idx, frame
+                idx += 1
+
+        pipeline = self._build_pipeline(caches)
+        try:
+            pipeline.run(
+                _frame_source(),
+                range(start_frame, end_frame + 1),
+                progress_cb=progress_cb,
+                range_total=range_total,
+            )
         finally:
             cap.release()
+            # depth>=2 uses an async CacheWriter; flush/close it before closing the
+            # handles so all queued writes land (Pipeline.run already does this on
+            # its own teardown path, but a pre-run failure may skip it).
+            try:
+                pipeline.cache_writer.close()
+            except Exception:
+                pass
             for h in caches.all_handles():
                 h.close()
 
@@ -602,12 +603,12 @@ class InferenceRunner:
         frame_indices: list[int],
         caches: _CacheSet,
     ) -> None:
-        """Process a single window through the depth=1 Pipeline.
+        """Process a single window through the Pipeline (test/legacy seam).
 
-        Retained as the runner's window entry point (the per-frame inner loop and
-        the intra-frame ``ThreadPoolExecutor`` are gone — that work is now the
-        Pipeline's sequential batched stages + scatter). Cache side effects are
-        identical to the legacy path via ``CacheWriter``.
+        No longer used by ``run_batch_pass`` (which now drives the whole pass via
+        ``Pipeline.run``), but retained as a single-window entry point for tests
+        that exercise the per-window stage sequence + cache writes directly.
+        Cache side effects are identical to the full-pass path.
         """
         from .pipeline import BatchWindow
 

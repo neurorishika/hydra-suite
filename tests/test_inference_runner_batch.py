@@ -117,8 +117,23 @@ def test_run_batch_pass_calls_progress_callback(tmp_path):
         mock_caches.all_handles.return_value = []
         mock_open.return_value = mock_caches
         runner = InferenceRunner(cfg, cache_dir=tmp_path)
-        runner._run_batch = MagicMock()
-        with patch("cv2.VideoCapture", return_value=mock_cap):
+
+        # run_batch_pass now drives the whole pass via Pipeline.run; stub it so
+        # this test verifies the runner's read-loop wiring (frame source drained,
+        # range_total, final progress callback) without real OBB/stage work.
+        def fake_run(frame_source, frame_range, progress_cb=None, range_total=0):
+            processed = sum(1 for _ in frame_source)
+            if progress_cb:
+                progress_cb(processed, range_total)
+
+        with (
+            patch("cv2.VideoCapture", return_value=mock_cap),
+            patch(
+                "hydra_suite.core.inference.pipeline.Pipeline.run",
+                side_effect=fake_run,
+                autospec=False,
+            ),
+        ):
             runner.run_batch_pass(
                 tmp_path / "video.mp4",
                 progress_cb=lambda done, total: progress_calls.append((done, total)),

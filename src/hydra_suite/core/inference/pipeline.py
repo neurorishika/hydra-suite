@@ -1,4 +1,4 @@
-"""Inference pipeline orchestrator (depth=1).
+"""Inference pipeline orchestrator (depth=1 synchronous, depth=2 double-buffer).
 
 The :class:`Pipeline` turns a stream of video frames into per-type cache writes
 by running the batch-native stage layer over fixed, frame-indexed windows. Batch
@@ -6,22 +6,35 @@ boundaries are a pure function of frame index (window ``k`` = frames
 ``[k*W, (k+1)*W)``), never of arrival order, so reruns and backward passes see
 identical batching.
 
-This module implements **depth=1 only**: window ``k`` is fully processed before
-window ``k+1`` begins (synchronous, no threads). Depths >1 (pipelined prefetch /
-overlap) and the async ``CacheWriter`` are later tasks; the structure here is
-deliberately shaped so they can be slotted in without changing the windowing or
-the per-window stage sequence.
+Two execution models are implemented:
 
-Numeric contract (depth=1): the per-type caches produced for a given video MUST
-match what the legacy per-frame ``runner._run_batch`` produced — same detections,
-same head-tail / CNN / pose / AprilTag per frame. The batch stage functions were
-proven equivalent to per-frame calls in Task 3; the pose path additionally uses
-``extract_canonical_crops_batch`` (pad-to-window-max, never resize) so pose crops
-are bit-identical to the per-frame ``extract_canonical_crops`` path.
+* **depth=1** — fully synchronous: window ``k`` is OBB'd and fully processed
+  (crops → HT/CNN/pose → AprilTag → scatter → cache write) before window ``k+1``
+  begins. No threads.
+* **depth=2** — double buffer: a PRODUCER thread runs decode+OBB for window
+  ``k+1`` while the MAIN/consumer thread runs crops → individual stages →
+  scatter → cache write for window ``k``. A bounded ``queue.Queue(maxsize=1)``
+  hands ``(window, obb_raw_list)`` producer→consumer (the producer blocks when
+  the queue is full — natural backpressure). The OBB output tensors are synced
+  across threads via ``RuntimeContext.handoff`` (producer) / ``await_handoff``
+  (consumer) on the SAME tensor objects (a detach/clone would create a new key
+  and silently miss the event). Stop is checked only at window boundaries so no
+  window is ever half-written. A supervisor re-raises any stage/producer error
+  to the caller after joining threads and flushing the cache writer.
+
+Numeric contract: the per-type caches produced for a given video MUST match what
+the legacy per-frame ``runner._run_batch`` produced — same detections, same
+head-tail / CNN / pose / AprilTag per frame — AND depth=2 output MUST be
+byte-identical to depth=1. Byte parity holds because (a) batch boundaries are a
+pure function of frame index, (b) the consumer processes windows in strict frame
+order (single consumer pulling a maxsize=1 queue), and (c) the per-window
+downstream + cache-write code path is literally the same method for both depths.
 """
 
 from __future__ import annotations
 
+import queue
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator
 
@@ -112,17 +125,21 @@ class Pipeline:
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
-        # Only the synchronous (depth=1) execution model is implemented. Higher
-        # depths request pipelined prefetch/overlap (a later task); until that
-        # lands they run synchronously here, which is numerically identical —
-        # depth changes *when* windows run, never their per-frame output. The
-        # effective depth is therefore pinned to 1 for execution.
+        # depth=1 -> synchronous (no threads). depth>=2 -> producer/consumer
+        # double buffer. depth>2 (deeper prefetch) is not yet implemented and is
+        # clamped to the depth=2 double-buffer here, which is numerically
+        # identical (depth changes *when* windows run, never their per-frame
+        # output) and keeps a bounded queue of at most one in-flight window.
         self._requested_depth = depth
         self.stages = stages
         self.runtime = runtime
         self.cache_writer = cache_writer
-        self.depth = 1  # execution model: synchronous depth=1
-        self.queue_bound = queue_bound
+        # Effective execution model: 1 (sync) or 2 (double buffer).
+        self.depth = 1 if depth == 1 else 2
+        # Bounded hand-off queue size for depth>=2: maxsize=1 means at most one
+        # produced-but-not-yet-consumed window, so the producer runs exactly one
+        # window ahead of the consumer.
+        self.queue_bound = queue_bound if queue_bound is not None else 1
         self._window_size = (
             int(stages.config.detection_batch_size) if stages is not None else 1
         )
@@ -154,13 +171,46 @@ class Pipeline:
 
     # --- production stage sequence -------------------------------------
 
+    def _run_obb_for_window(self, window: BatchWindow) -> list:
+        """Producer stage: run OBB for one window and hand off its output tensors.
+
+        Returns the raw ``run_obb`` output list (``_RawOBBTensors`` or
+        ``OBBResult`` per frame). On CUDA the raw tensors are passed through
+        ``RuntimeContext.handoff`` so the consumer thread can ``await_handoff``
+        the SAME tensor objects before reading them — the tensor objects are
+        returned unchanged (no detach/clone), preserving the handoff key. On
+        CPU/MPS ``handoff`` is an identity no-op.
+        """
+        cfg = self.stages.config
+        raw_list = run_obb(window.frames, self.stages.obb_models, cfg.obb, self.runtime)
+        for raw in raw_list:
+            if isinstance(raw, _RawOBBTensors):
+                # Same-object handoff: record a CUDA event keyed by each device
+                # tensor. Do NOT detach/clone — that would create a new key.
+                self.runtime.handoff(raw.xywhr)
+                self.runtime.handoff(raw.corners)
+                self.runtime.handoff(raw.conf)
+        return raw_list
+
     def _process_window(self, window: BatchWindow) -> list[FrameResult]:
         """Run OBB → crops → HT/CNN/pose → AprilTag → scatter for one window.
 
-        Cache writes mirror ``runner._run_batch`` exactly (raw stage results, no
-        foreign-keypoint suppression at cache time — that is an assemble-layer
-        concern). The returned :class:`FrameResult`s are the in-memory assembled
-        view via ``scatter``; the runner discards them (parity is in the caches).
+        Synchronous (depth=1) entry point: OBB then downstream in one thread.
+        """
+        raw_list = self._run_obb_for_window(window)
+        return self._process_obb_results(window, raw_list)
+
+    def _process_obb_results(
+        self, window: BatchWindow, raw_list: list
+    ) -> list[FrameResult]:
+        """Consumer stage: crops → HT/CNN/pose → AprilTag → scatter + cache write.
+
+        ``raw_list`` is the OBB output (from ``_run_obb_for_window``) for
+        ``window``. Cache writes mirror ``runner._run_batch`` exactly (raw stage
+        results, no foreign-keypoint suppression at cache time — that is an
+        assemble-layer concern). The returned :class:`FrameResult`s are the
+        in-memory assembled view via ``scatter``; the runner discards them
+        (parity is in the caches).
         """
         from .stages.assemble import scatter
 
@@ -171,8 +221,13 @@ class Pipeline:
         ar = cfg.headtail.canonical_aspect_ratio if cfg.headtail else 2.0
         mg = cfg.headtail.canonical_margin if cfg.headtail else 1.3
 
-        # --- OBB: cross-frame native batch (unchanged from _run_batch) ---
-        raw_list = run_obb(frames, self.stages.obb_models, cfg.obb, self.runtime)
+        # Consumer-side stream-sync: wait on the producer's handoff events for the
+        # SAME tensor objects before the first device read (no-op on CPU/MPS).
+        for raw in raw_list:
+            if isinstance(raw, _RawOBBTensors):
+                self.runtime.await_handoff(raw.xywhr)
+                self.runtime.await_handoff(raw.corners)
+                self.runtime.await_handoff(raw.conf)
 
         # Materialize + re-stamp detection_ids per frame, write detection cache
         # for EVERY frame (including empty), and collect filtered OBBs.
@@ -313,39 +368,195 @@ class Pipeline:
         self,
         frame_source: Iterable,
         frame_range: range,
+        progress_cb: Callable[[int, int], None] | None = None,
+        range_total: int = 0,
     ) -> InferencePassResult:
-        """Drive depth=1 windows over ``frame_source`` for ``frame_range``.
+        """Drive the full pass over ``frame_source`` for ``frame_range``.
 
         ``frame_source`` yields ``(frame_idx, frame)`` pairs in ascending index
         order. Windows are emitted as soon as ``W`` frames have arrived, so the
         whole video is never buffered. ``frame_range`` is informational here
-        (the runner already clamps the read loop); it lets ``run`` cross-check the
-        expected count for the in-memory result.
+        (the runner already clamps the read loop).
+
+        ``progress_cb(processed, range_total)`` is called with the same cadence
+        as the legacy runner read loop (every ``max(1, range_total // 100)``
+        frames read, plus a final call). At depth=1 this runs synchronously;
+        at depth>=2 a producer thread runs decode+OBB one window ahead while this
+        (consumer) thread runs the downstream stages + cache writes.
         """
+        if self.depth == 1:
+            return self._run_sync(frame_source, progress_cb, range_total)
+        return self._run_double_buffer(frame_source, progress_cb, range_total)
+
+    # --- depth=1: synchronous --------------------------------------------
+
+    def _run_sync(
+        self,
+        frame_source: Iterable,
+        progress_cb: Callable[[int, int], None] | None,
+        range_total: int,
+    ) -> InferencePassResult:
         result = InferencePassResult()
+        w = self.window_size
+        step = max(1, range_total // 100) if range_total > 0 else 1
+
+        for window in self._stream_windows(frame_source, w):
+            result.frames_processed += len(window)
+            result.frame_results.extend(self._process_window(window))
+            if progress_cb and range_total > 0:
+                # Mirror the legacy per-frame cadence: emit at each multiple of
+                # ``step`` crossed within this window.
+                self._emit_progress(
+                    progress_cb,
+                    result.frames_processed,
+                    len(window),
+                    step,
+                    range_total,
+                )
+
+        if progress_cb:
+            progress_cb(result.frames_processed, range_total)
+        return result
+
+    # --- depth>=2: producer/consumer double buffer ------------------------
+
+    def _run_double_buffer(
+        self,
+        frame_source: Iterable,
+        progress_cb: Callable[[int, int], None] | None,
+        range_total: int,
+    ) -> InferencePassResult:
+        result = InferencePassResult()
+        w = self.window_size
+        step = max(1, range_total // 100) if range_total > 0 else 1
+
+        # Bounded hand-off: (window, raw_obb_list) producer -> consumer. A
+        # sentinel ``None`` marks end-of-stream. maxsize bounds in-flight windows
+        # so the producer can run at most ``queue_bound`` windows ahead.
+        handoff_q: queue.Queue = queue.Queue(maxsize=max(1, int(self.queue_bound)))
+        stop = threading.Event()
+        producer_error: list[BaseException] = []
+        # Frames read so far (written by producer, read for progress). Guarded by
+        # being the producer's sole responsibility; the consumer only reads it
+        # after the producer has put the corresponding window on the queue.
+        read_counter = {"n": 0}
+
+        def producer() -> None:
+            try:
+                for window in self._stream_windows(frame_source, w):
+                    if stop.is_set():
+                        break
+                    raw_list = self._run_obb_for_window(window)
+                    read_counter["n"] += len(window)
+                    # Carry the running read count so the consumer can emit
+                    # progress with the same cadence as the sync path.
+                    handoff_q.put((window, raw_list, read_counter["n"]))
+            except BaseException as exc:  # noqa: BLE001 -- surfaced via supervisor
+                producer_error.append(exc)
+                stop.set()
+            finally:
+                handoff_q.put(None)  # sentinel (always, even on error)
+
+        producer_thread = threading.Thread(
+            target=producer, name="pipeline-obb-producer", daemon=True
+        )
+        producer_thread.start()
+
+        consumer_error: BaseException | None = None
+        try:
+            while True:
+                item = handoff_q.get()
+                if item is None:  # producer finished or errored
+                    break
+                window, raw_list, read_n = item
+                result.frames_processed += len(window)
+                result.frame_results.extend(self._process_obb_results(window, raw_list))
+                if progress_cb and range_total > 0:
+                    self._emit_progress(
+                        progress_cb,
+                        read_n,
+                        len(window),
+                        step,
+                        range_total,
+                    )
+        except BaseException as exc:  # noqa: BLE001 -- supervisor re-raises
+            consumer_error = exc
+        finally:
+            # Supervisor teardown: stop the producer at the next window boundary,
+            # drain the queue so a blocked producer ``put`` unblocks, then join.
+            stop.set()
+            self._drain_queue(handoff_q)
+            producer_thread.join(timeout=30.0)
+            # Flush + close the (async) cache writer so no write is left pending,
+            # regardless of whether we are unwinding an error or finishing clean.
+            try:
+                self.cache_writer.flush()
+            finally:
+                self.cache_writer.close()
+
+        if consumer_error is not None:
+            raise consumer_error
+        if producer_error:
+            raise producer_error[0]
+
+        if progress_cb:
+            progress_cb(result.frames_processed, range_total)
+        return result
+
+    # --- shared helpers ---------------------------------------------------
+
+    def _stream_windows(self, frame_source: Iterable, w: int) -> Iterator[BatchWindow]:
+        """Yield fixed-size windows from a ``(frame_idx, frame)`` stream.
+
+        Windows close at every ``w`` frames; the final partial window (if any) is
+        yielded at end-of-stream. Boundaries are a pure function of arrival order
+        (which the runner guarantees is ascending frame index), identical to
+        ``_iter_windows`` over a fully materialized list.
+        """
         frames_buf: list = []
         indices_buf: list[int] = []
-        w = self.window_size
-
         for frame_idx, frame in frame_source:
             frames_buf.append(frame)
             indices_buf.append(int(frame_idx))
-            result.frames_processed += 1
             if len(frames_buf) == w:
-                window = BatchWindow(
+                yield BatchWindow(
                     frames=list(frames_buf), frame_indices=list(indices_buf)
                 )
-                result.frame_results.extend(self._process_window(window))
                 frames_buf.clear()
                 indices_buf.clear()
-
         if frames_buf:
-            window = BatchWindow(
-                frames=list(frames_buf), frame_indices=list(indices_buf)
-            )
-            result.frame_results.extend(self._process_window(window))
+            yield BatchWindow(frames=list(frames_buf), frame_indices=list(indices_buf))
 
-        return result
+    @staticmethod
+    def _emit_progress(
+        progress_cb: Callable[[int, int], None],
+        processed_now: int,
+        window_len: int,
+        step: int,
+        range_total: int,
+    ) -> None:
+        """Emit progress at each ``step`` multiple crossed by this window.
+
+        Reproduces the legacy per-frame cadence (``processed % step == 0``)
+        without iterating frame-by-frame: fire once for every ``step`` boundary
+        that falls within ``(processed_now - window_len, processed_now]``.
+        """
+        prev = processed_now - window_len
+        # First multiple of ``step`` strictly greater than ``prev``.
+        first = (prev // step + 1) * step
+        m = first
+        while m <= processed_now:
+            progress_cb(m, range_total)
+            m += step
+
+    @staticmethod
+    def _drain_queue(q: queue.Queue) -> None:
+        """Empty a queue without blocking so a full-blocked producer unblocks."""
+        while True:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
 
     # --- test harness ---------------------------------------------------
 
