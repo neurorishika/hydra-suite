@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import torch
 
 # Max detections per frame; matches the legacy stride used to encode
 # detection IDs as `frame_idx * STRIDE + slot`. Downstream consumers
@@ -33,6 +37,26 @@ class OBBResult:
         return np.arange(num_detections, dtype=np.int64) + np.int64(
             frame_idx
         ) * np.int64(DETECTION_ID_STRIDE)
+
+
+@dataclass
+class CropBatch:
+    """Cross-frame canonical crops shared read-only by head-tail / CNN / pose.
+
+    Row order is detection-id order (frame-index-derived), so batch membership
+    is a pure function of frame index — the reproducibility invariant.
+    """
+    crops: "torch.Tensor"            # (N, C, H, W) device-resident or CPU
+    detection_ids: np.ndarray        # (N,) int64
+    frame_index: np.ndarray          # (N,) int64
+    obb_by_frame: dict               # frame_idx -> OBBResult
+    native_sizes: np.ndarray         # (N, 2) int64 — pre-pad crop h,w
+
+    def frames(self) -> list:
+        return sorted({int(f) for f in self.frame_index.tolist()})
+
+    def select_frame(self, frame_idx: int) -> np.ndarray:
+        return np.nonzero(self.frame_index == int(frame_idx))[0]
 
 
 @dataclass
