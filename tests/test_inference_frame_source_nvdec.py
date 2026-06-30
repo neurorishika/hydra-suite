@@ -150,19 +150,28 @@ def test_make_frame_source_returns_cpu_when_use_nvdec_false(tiny_video):
         src.close()
 
 
-def test_make_frame_source_falls_back_to_cpu_when_nvdec_import_fails(tiny_video):
-    """make_frame_source gracefully falls back to CpuFrameReader when PyNvVideoCodec
-    is unavailable (the case on this MPS machine) — must never raise.
-    """
-    import sys
+def test_make_frame_source_falls_back_to_cpu_when_nvdec_unavailable(
+    tiny_video, monkeypatch
+):
+    """make_frame_source must fall back to CpuFrameReader (never raise) when the
+    NVDEC reader cannot be constructed.
 
+    We FORCE the NvdecFrameReader construction to fail so the fallback is
+    exercised deterministically on ANY host — both NVDEC-less dev machines and
+    NVDEC-capable CUDA boxes (where the un-forced path would legitimately return
+    an NvdecFrameReader). This isolates the except->CpuFrameReader fallback logic
+    rather than depending on whether PyNvVideoCodec happens to be installed.
+    """
+    import hydra_suite.core.inference.sources as sources_mod
     from hydra_suite.core.inference.sources import CpuFrameReader, make_frame_source
 
-    # Simulate use_nvdec=True but on a non-CUDA machine where the import fails.
-    # On this dev machine PyNvVideoCodec is absent, so the fallback is exercised
-    # without any monkey-patching.
+    def _boom(*args, **kwargs):
+        raise RuntimeError("forced NVDEC construction failure")
+
+    monkeypatch.setattr(sources_mod, "NvdecFrameReader", _boom)
+
     runtime = _FakeRuntime(use_nvdec=True, device="cuda:0")
-    # This must NOT raise regardless of whether PyNvVideoCodec is installed.
+    # This must NOT raise even though the NVDEC reader construction fails.
     src = make_frame_source(tiny_video, runtime, start_frame=0)
     try:
         assert isinstance(
