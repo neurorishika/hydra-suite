@@ -541,14 +541,17 @@ class InferenceRunner:
         start_frame: int = 0,
         end_frame: int | None = None,
     ) -> None:
-        from .sources import CpuFrameReader
+        from .sources import make_frame_source
 
         if self.cache_dir is None:
             raise RuntimeError("cache_dir must be set before calling run_batch_pass")
 
-        # CpuFrameReader opens the capture, clamps start/end to video bounds, and
-        # seeks to start_frame — identical to the previous inline cv2 generator.
-        frame_source = CpuFrameReader(video_path, start_frame, end_frame)
+        # make_frame_source selects NvdecFrameReader when runtime.use_nvdec is True
+        # and the decoder is available; otherwise falls back to CpuFrameReader.
+        # Clamping and seeking are handled inside each reader implementation.
+        frame_source = make_frame_source(
+            video_path, self.runtime, start_frame, end_frame
+        )
 
         caches = _open_caches(self.config, self.cache_dir, self._video_sig)
         self._caches = caches
