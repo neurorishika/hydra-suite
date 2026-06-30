@@ -47,10 +47,9 @@ class RuntimeContext:
         if self.cuda_mode and self.tensor_on_cuda:
             import torch
 
-            if torch.cuda.is_available():
-                event = torch.cuda.Event()
-                event.record(torch.cuda.current_stream())
-                _HANDOFF_EVENTS[tensor] = event
+            event = torch.cuda.Event()
+            event.record(torch.cuda.current_stream())
+            _HANDOFF_EVENTS[tensor] = event
         return tensor
 
     def await_handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
@@ -73,10 +72,9 @@ class RuntimeContext:
         if self.cuda_mode and self.tensor_on_cuda:
             import torch
 
-            if torch.cuda.is_available():
-                event = _HANDOFF_EVENTS.get(tensor)
-                if event is not None:
-                    torch.cuda.current_stream().wait_event(event)  # type: ignore[arg-type]
+            event = _HANDOFF_EVENTS.get(tensor)
+            if event is not None:
+                torch.cuda.current_stream().wait_event(event)  # type: ignore[arg-type]
         return tensor
 
     @staticmethod
