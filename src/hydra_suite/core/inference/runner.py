@@ -541,26 +541,22 @@ class InferenceRunner:
         start_frame: int = 0,
         end_frame: int | None = None,
     ) -> None:
-        import cv2
+        from .sources import CpuFrameReader
 
         if self.cache_dir is None:
             raise RuntimeError("cache_dir must be set before calling run_batch_pass")
 
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise IOError(f"Cannot open video: {video_path}")
+        # CpuFrameReader opens the capture, clamps start/end to video bounds, and
+        # seeks to start_frame — identical to the previous inline cv2 generator.
+        frame_source = CpuFrameReader(video_path, start_frame, end_frame)
 
         caches = _open_caches(self.config, self.cache_dir, self._video_sig)
         self._caches = caches
-        video_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if end_frame is None:
-            end_frame = video_total - 1
-        start_frame = max(0, int(start_frame))
-        end_frame = min(video_total - 1, int(end_frame))
-        range_total = max(0, end_frame - start_frame + 1)
 
-        if start_frame > 0:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        # Recover the clamped bounds from the reader so range_total matches.
+        start_frame = frame_source._start_frame
+        end_frame = frame_source._end_frame
+        range_total = frame_source.frame_count
 
         # The whole pass is now driven by Pipeline.run: it owns the windowing and
         # (at depth>=2) the producer/consumer double buffer. The video decode is
@@ -568,25 +564,16 @@ class InferenceRunner:
         # generator so frames are never all buffered at once. Range clamping,
         # progress cadence, signature binding, and the final cache close are
         # preserved; only the orchestration moved into the Pipeline.
-        def _frame_source():
-            idx = start_frame
-            while idx <= end_frame:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                yield idx, frame
-                idx += 1
-
         pipeline = self._build_pipeline(caches)
         try:
             pipeline.run(
-                _frame_source(),
+                frame_source,
                 range(start_frame, end_frame + 1),
                 progress_cb=progress_cb,
                 range_total=range_total,
             )
         finally:
-            cap.release()
+            frame_source.close()
             # depth>=2 uses an async CacheWriter; flush/close it before closing the
             # handles so all queued writes land (Pipeline.run already does this on
             # its own teardown path, but a pre-run failure may skip it).
