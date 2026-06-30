@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ..config import HeadTailConfig
-from ..result import CropBatch, HeadTailResult, OBBResult
+from ..result import HeadTailResult, OBBResult
 from ..runtime import RuntimeContext
 
 _DIRECTION_OFFSET: dict[str, float] = {
@@ -202,42 +202,39 @@ def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:
 
 
 def run_headtail_batch(
-    batch: CropBatch,
+    frames: "list",
+    obb_results: "list[OBBResult]",
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
     aspect_ratio: float = 2.0,
     margin: float = 1.3,
 ) -> "dict[int, HeadTailResult]":
-    """Run head-tail classification over a CropBatch; return one HeadTailResult per frame.
+    """Run head-tail classification over a window; return one HeadTailResult per frame.
 
-    Runs the backend ONCE over all crops in batch (cross-frame perf win), then
-    splits results per frame via batch.select_frame. Per-detection assembly
-    delegates to _assemble_headtail_result (DRY with run_headtail).
-
-    crops in batch are canonical-size (uniform H×W). We convert to numpy and
-    pass directly to predict_batch; both YOLO and flat classifiers accept HWC
-    uint8 numpy arrays of any (H, W) — the model's own resizing applies.
+    Builds classifier crops internally via extract_classifier_crops_batch (single
+    warpAffine to model.input_size, BGR uint8 — bit-identical to the per-frame
+    run_headtail path). Runs the backend ONCE over all crops (cross-frame perf win),
+    then splits per frame via batch.select_frame. Assembly delegates to
+    _assemble_headtail_result (DRY with run_headtail).
     """
-    import cv2
+    from .crops import extract_classifier_crops_batch
 
-    # Build per-crop numpy arrays from batch.crops (NCHW float [0,1])
+    batch = extract_classifier_crops_batch(
+        frames, obb_results, model.input_size, aspect_ratio, margin
+    )
+
+    # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for predict_batch
     n_total = batch.crops.shape[0]
-    out_h, out_w = int(model.input_size[0]), int(model.input_size[1])
     np_crops: list[np.ndarray] = []
     for i in range(n_total):
         hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
-        img = (hwc * 255.0).clip(0, 255).astype(np.uint8)
-        if img.shape[0] != out_h or img.shape[1] != out_w:
-            img = cv2.resize(img, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
-        np_crops.append(img)
+        np_crops.append((hwc * 255.0).clip(0, 255).astype(np.uint8))
 
     all_probs = model.backend.predict_batch(np_crops) if np_crops else []
 
     results: dict[int, HeadTailResult] = {}
     prob_offset = 0
-    # Iterate over all frames in obb_by_frame (sorted for reproducibility),
-    # including frames with 0 detections that have no rows in batch.frame_index.
     for frame_idx in sorted(batch.obb_by_frame):
         obb = batch.obb_by_frame[frame_idx]
         rows = batch.select_frame(frame_idx)

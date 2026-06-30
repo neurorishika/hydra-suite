@@ -11,7 +11,6 @@ from ..result import (
     CNNDetectionPrediction,
     CNNFactorPrediction,
     CNNResult,
-    CropBatch,
     OBBResult,
 )
 from ..runtime import RuntimeContext
@@ -103,30 +102,33 @@ def _assemble_cnn_result(
 
 
 def run_cnn_batch(
-    batch: CropBatch,
+    frames: "list",
+    obb_results: "list[OBBResult]",
     model: "CNNModel",
     config: CNNConfig,
     runtime: RuntimeContext,
     aspect_ratio: float = 2.0,
     margin: float = 1.3,
 ) -> "dict[int, CNNResult]":
-    """Run CNN classifier over a CropBatch; return one CNNResult per frame.
+    """Run CNN classifier over a window; return one CNNResult per frame.
 
-    Runs the backend ONCE over all crops in batch (cross-frame perf win), then
-    splits results per frame via batch.select_frame. Per-detection assembly
-    delegates to _assemble_cnn_result (DRY with run_cnn).
+    Builds classifier crops internally via extract_classifier_crops_batch (single
+    warpAffine to model.input_size, BGR uint8 — bit-identical to the per-frame
+    run_cnn path). Runs the backend ONCE over all crops (cross-frame perf win),
+    then splits per frame via batch.select_frame. Assembly delegates to
+    _assemble_cnn_result (DRY with run_cnn).
     """
-    import cv2
+    from .crops import extract_classifier_crops_batch
 
-    out_h, out_w = int(model.input_size[0]), int(model.input_size[1])
+    batch = extract_classifier_crops_batch(
+        frames, obb_results, model.input_size, aspect_ratio, margin
+    )
+
     n_total = batch.crops.shape[0]
     np_crops: list[np.ndarray] = []
     for i in range(n_total):
         hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
-        img = (hwc * 255.0).clip(0, 255).astype(np.uint8)
-        if img.shape[0] != out_h or img.shape[1] != out_w:
-            img = cv2.resize(img, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
-        np_crops.append(img)
+        np_crops.append((hwc * 255.0).clip(0, 255).astype(np.uint8))
 
     all_probs = model.backend.predict_batch(np_crops) if np_crops else []
 

@@ -335,6 +335,63 @@ def _extract_canonical_window(
     return crops_t, sizes
 
 
+def extract_classifier_crops_batch(
+    frames: list,
+    obb_results: list[OBBResult],
+    target_size: tuple[int, int],
+    aspect_ratio: float,
+    margin: float,
+) -> CropBatch:
+    """Extract classifier crops across a window of frames into a single CropBatch.
+
+    For each frame calls extract_classifier_crops (single warpAffine to model
+    input size, BGR uint8), then stacks results in detection-id order. HT and
+    CNN models may have different input sizes, so each calls this independently.
+    native_sizes reflects the classifier crop (h, w) = (target_size[1], target_size[0]).
+    """
+    out_w, out_h = int(target_size[0]), int(target_size[1])
+    crops_list: list[torch.Tensor] = []
+    det_ids: list[np.ndarray] = []
+    frame_idx_list: list[np.ndarray] = []
+    native_sizes_list: list[np.ndarray] = []
+
+    for frame, obb in zip(frames, obb_results):
+        if obb.detection_ids.shape[0] == 0:
+            continue
+        np_crops = extract_classifier_crops(
+            frame, obb, target_size, aspect_ratio, margin
+        )
+        # Convert list of HWC uint8 numpy arrays -> (N, C, H, W) float [0,1] tensor
+        stacked = np.stack(np_crops, axis=0)  # (N, H, W, C)
+        crops_t = torch.from_numpy(stacked).permute(0, 3, 1, 2).float() / 255.0
+        crops_list.append(crops_t)
+        det_ids.append(obb.detection_ids)
+        frame_idx_list.append(
+            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
+        )
+        native_sizes_list.append(
+            np.full((obb.detection_ids.shape[0], 2), [out_h, out_w], np.int64)
+        )
+
+    if not crops_list:
+        empty = torch.zeros((0, 3, out_h, out_w))
+        return CropBatch(
+            empty,
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            {o.frame_idx: o for o in obb_results},
+            np.zeros((0, 2), np.int64),
+        )
+
+    return CropBatch(
+        crops=torch.cat(crops_list, dim=0),
+        detection_ids=np.concatenate(det_ids),
+        frame_index=np.concatenate(frame_idx_list),
+        obb_by_frame={o.frame_idx: o for o in obb_results},
+        native_sizes=np.concatenate(native_sizes_list),
+    )
+
+
 def extract_crops(
     frames: list,
     obb_results: list[OBBResult],
