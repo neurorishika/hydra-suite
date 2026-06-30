@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
+import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,6 +47,33 @@ from .stages.filtering import filter_with_indices
 from .stages.headtail import HeadTailModel, run_headtail
 from .stages.obb import OBBModels, _RawOBBTensors, materialize_tensors, run_obb
 from .stages.pose import PoseModel, run_pose
+
+logger = logging.getLogger(__name__)
+
+# Opt-in realtime per-stage profiler (HYDRA_RT_PROFILE=1). Accumulates wall-clock
+# per stage across run_realtime calls and logs a steady-state breakdown every
+# 100 frames. Zero overhead when the env var is unset.
+_RT_PROF_ACC: dict[str, float] = {}
+
+
+def _rt_prof_on() -> bool:
+    return bool(os.environ.get("HYDRA_RT_PROFILE"))
+
+
+def _rt_prof_add(section: str, dt: float) -> None:
+    _RT_PROF_ACC[section] = _RT_PROF_ACC.get(section, 0.0) + dt
+
+
+def _rt_prof_flush() -> None:
+    n = _RT_PROF_ACC.get("frames", 0.0)
+    if n <= 0 or n % 100 != 0:
+        return
+    parts = " ".join(
+        f"{k}={1000 * v / n:.1f}ms/f"
+        for k, v in sorted(_RT_PROF_ACC.items())
+        if k != "frames"
+    )
+    logger.warning("RT_PROFILE after %d frames: %s", int(n), parts)
 
 
 @dataclass
@@ -340,6 +370,8 @@ class InferenceRunner:
             self._caches_writable = True
         caches = self._caches if self._caches_writable else None
 
+        _prof = _rt_prof_on()
+        _ts = time.perf_counter() if _prof else 0.0
         raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
         raw = raw_list[0]
         if isinstance(raw, _RawOBBTensors):
@@ -363,11 +395,19 @@ class InferenceRunner:
         if caches is not None and caches.detection is not None:
             caches.detection.write_frame(frame_idx, result=raw_obb)
 
+        if _prof:
+            _now = time.perf_counter()
+            _rt_prof_add("obb", _now - _ts)
+            _ts = _now
+
         filtered_obb, det_indices = filter_with_indices(
             raw_obb, self.config.obb, roi_mask
         )
 
         if filtered_obb.num_detections == 0:
+            if _prof:
+                _rt_prof_add("frames", 1)
+                _rt_prof_flush()
             return _build_frame_result(
                 frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
             )
@@ -394,6 +434,11 @@ class InferenceRunner:
             if self._models.apriltag
             else []
         )
+
+        if _prof:
+            _now = time.perf_counter()
+            _rt_prof_add("crops", _now - _ts)
+            _ts = _now
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             ht_fut = (
@@ -453,6 +498,11 @@ class InferenceRunner:
             pose_result = pose_fut.result() if pose_fut else None
             at_result = at_fut.result() if at_fut else None
 
+        if _prof:
+            _now = time.perf_counter()
+            _rt_prof_add("individual", _now - _ts)
+            _ts = _now
+
         # Persist downstream results (keyed by det_indices) so the backward pass
         # can replay them via load_frame -- mirrors _run_batch's cache writes.
         if caches is not None:
@@ -500,6 +550,11 @@ class InferenceRunner:
             )
         except Exception:
             pass  # streaming_payload is optional; failures are non-fatal
+
+        if _prof:
+            _rt_prof_add("finalize", time.perf_counter() - _ts)
+            _rt_prof_add("frames", 1)
+            _rt_prof_flush()
 
         return frame_result
 
