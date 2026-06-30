@@ -1,8 +1,20 @@
 from __future__ import annotations
 
+import weakref
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .config import CUDA_RUNTIMES, ComputeRuntime, InferenceConfig
+
+if TYPE_CHECKING:
+    import torch as _torch
+
+# Module-level WeakKeyDictionary mapping tensors to their recorded CUDA events.
+# Using weakref so that tensors are not kept alive by the event registry.
+# On CPU/MPS paths, this dict is never written to.
+_HANDOFF_EVENTS: "weakref.WeakKeyDictionary[_torch.Tensor, object]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 @dataclass(frozen=True)
@@ -14,6 +26,58 @@ class RuntimeContext:
     # True ONLY for native PyTorch "cuda" runtime; onnx_cuda and tensorrt use
     # GPU compute but return CPU numpy arrays from inference calls.
     tensor_on_cuda: bool = False
+
+    def handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
+        """Producer-side stream-sync: record a CUDA event on the current stream.
+
+        On CUDA, records a ``torch.cuda.Event`` on ``torch.cuda.current_stream()``
+        and stores it in the module-level ``_HANDOFF_EVENTS`` WeakKeyDictionary
+        keyed by *tensor*.  The consumer must call :meth:`await_handoff` before
+        reading the tensor to ensure the GPU work is complete on its stream.
+
+        On CPU/MPS this is an identity no-op — the tensor is returned unchanged
+        and no state is written to ``_HANDOFF_EVENTS``.
+
+        Args:
+            tensor: The tensor being handed off from the producer thread.
+
+        Returns:
+            The same tensor object (never a copy).
+        """
+        if self.cuda_mode and self.tensor_on_cuda:
+            import torch
+
+            if torch.cuda.is_available():
+                event = torch.cuda.Event()
+                event.record(torch.cuda.current_stream())
+                _HANDOFF_EVENTS[tensor] = event
+        return tensor
+
+    def await_handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
+        """Consumer-side stream-sync: wait on the event recorded by :meth:`handoff`.
+
+        On CUDA, looks up the event stored by :meth:`handoff` and calls
+        ``current_stream.wait_event(event)`` so that the consuming stream does
+        not read the tensor until all producer-side GPU work is done.  If no
+        event was recorded for this tensor (e.g. it was produced without
+        going through :meth:`handoff`), this is a safe no-op.
+
+        On CPU/MPS this is always an identity no-op.
+
+        Args:
+            tensor: The tensor received by the consumer thread.
+
+        Returns:
+            The same tensor object (never a copy).
+        """
+        if self.cuda_mode and self.tensor_on_cuda:
+            import torch
+
+            if torch.cuda.is_available():
+                event = _HANDOFF_EVENTS.get(tensor)
+                if event is not None:
+                    torch.cuda.current_stream().wait_event(event)  # type: ignore[arg-type]
+        return tensor
 
     @staticmethod
     def from_config(config: InferenceConfig) -> "RuntimeContext":
