@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ..config import PoseConfig
-from ..result import OBBResult, PoseResult
+from ..result import CropBatch, OBBResult, PoseResult
 from ..runtime import RuntimeContext
 
 logger = logging.getLogger(__name__)
@@ -204,9 +204,26 @@ def run_pose(
 
     raw_results = model.backend.predict_batch(np_crops)
 
+    return _assemble_pose_result(
+        raw_results, affines, n, model, config, invert_keypoints
+    )
+
+
+def _assemble_pose_result(
+    raw_results: list,
+    affines: "list[np.ndarray | None]",
+    n: int,
+    model: "PoseModel",
+    config: "PoseConfig",
+    invert_keypoints_fn: "Any",
+) -> PoseResult:
+    """Assemble PoseResult from raw backend predictions.
+
+    Shared by run_pose and run_pose_batch so per-detection logic is never duplicated.
+    affines[i] is the inverse affine mapping crop coords back to image coords (or None).
+    """
     kpts_out = np.zeros((n, model.n_keypoints, 3), dtype=np.float32)
     valid = np.zeros(n, dtype=bool)
-
     min_kpt_conf = config.min_keypoint_confidence
     min_valid = config.min_valid_keypoints
 
@@ -227,12 +244,105 @@ def run_pose(
             continue
         k = min(kpts.shape[0], model.n_keypoints)
         kpts = kpts[:k].copy()
-        # Map crop-space (x, y) -> image coordinates; keep confidence column.
         m_inv = affines[i] if i < len(affines) else None
         if m_inv is not None:
-            kpts[:, :2] = invert_keypoints(kpts[:, :2].astype(np.float32), m_inv)
+            kpts[:, :2] = invert_keypoints_fn(kpts[:, :2].astype(np.float32), m_inv)
         kpts_out[i, :k] = kpts
         n_confident = int(np.sum(kpts[:, 2] >= min_kpt_conf))
         valid[i] = n_confident >= min_valid
 
     return PoseResult(keypoints=kpts_out, valid_mask=valid)
+
+
+def run_pose_batch(
+    batch: CropBatch,
+    model: PoseModel,
+    config: PoseConfig,
+    runtime: RuntimeContext,
+    aspect_ratio: float = _CANONICAL_ASPECT_RATIO,
+    margin: float = _CANONICAL_MARGIN,
+) -> "dict[int, PoseResult]":
+    """Run pose estimation over a CropBatch; return one PoseResult per frame.
+
+    Runs the backend ONCE over all crops in batch (cross-frame perf win), then
+    splits results per frame via batch.select_frame. Uses batch.native_sizes to
+    undo per-crop padding exactly as run_pose does. Delegates per-detection
+    assembly to _assemble_pose_result (DRY with run_pose).
+
+    Calls predict_batch_cuda when batch.crops.is_cuda and backend supports it.
+    """
+    import cv2
+
+    from hydra_suite.core.canonicalization.crop import (
+        compute_alignment_affine,
+        compute_native_crop_dimensions,
+        invert_keypoints,
+    )
+
+    pad = max(0.0, float(margin) - 1.0)
+    n_total = batch.crops.shape[0]
+
+    np_crops: list[np.ndarray] = []
+    affines_all: list[np.ndarray | None] = []
+
+    for i in range(n_total):
+        hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
+        # Undo bottom/right zero-padding using batch.native_sizes
+        if i < len(batch.native_sizes):
+            native_h, native_w = int(batch.native_sizes[i, 0]), int(
+                batch.native_sizes[i, 1]
+            )
+            hwc = hwc[:native_h, :native_w]
+
+        # Compute inverse affine for this crop using its OBB corners
+        frame_idx = int(batch.frame_index[i])
+        obb = batch.obb_by_frame.get(frame_idx)
+        m_inv = None
+        if obb is not None:
+            rows = batch.select_frame(frame_idx)
+            # local index of crop i within its frame
+            local_idx = int(np.searchsorted(rows, i))
+            if (
+                local_idx < len(rows)
+                and rows[local_idx] == i
+                and local_idx < obb.num_detections
+            ):
+                corners = obb.corners[local_idx]
+                try:
+                    cw, ch = compute_native_crop_dimensions(corners, aspect_ratio, pad)
+                    m_align, _ = compute_alignment_affine(
+                        corners, int(cw), int(ch), pad
+                    )
+                    m_inv = cv2.invertAffineTransform(m_align)
+                except Exception:
+                    m_inv = None
+
+        np_crops.append(np.ascontiguousarray(hwc))
+        affines_all.append(m_inv)
+
+    if batch.crops.is_cuda and hasattr(model.backend, "predict_batch_cuda"):
+        raw_results = model.backend.predict_batch_cuda(batch.crops)
+    else:
+        raw_results = model.backend.predict_batch(np_crops) if np_crops else []
+
+    results: dict[int, PoseResult] = {}
+    prob_offset = 0
+    for frame_idx in sorted(batch.obb_by_frame):
+        obb = batch.obb_by_frame[frame_idx]
+        rows = batch.select_frame(frame_idx)
+        n = len(rows)
+        if n == 0:
+            results[frame_idx] = PoseResult(
+                keypoints=np.zeros(
+                    (obb.num_detections, model.n_keypoints, 3), dtype=np.float32
+                ),
+                valid_mask=np.zeros(obb.num_detections, dtype=bool),
+            )
+            continue
+        frame_raw = raw_results[prob_offset : prob_offset + n]
+        frame_affines = affines_all[prob_offset : prob_offset + n]
+        prob_offset += n
+        results[frame_idx] = _assemble_pose_result(
+            frame_raw, frame_affines, n, model, config, invert_keypoints
+        )
+    return results

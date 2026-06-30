@@ -7,7 +7,13 @@ import numpy as np
 import torch
 
 from ..config import CNNConfig
-from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
+from ..result import (
+    CNNDetectionPrediction,
+    CNNFactorPrediction,
+    CNNResult,
+    CropBatch,
+    OBBResult,
+)
 from ..runtime import RuntimeContext
 
 
@@ -64,6 +70,20 @@ def run_cnn(
 
     all_probs = model.backend.predict_batch(np_crops)
 
+    return _assemble_cnn_result(all_probs, model, config)
+
+
+def _assemble_cnn_result(
+    all_probs: list,
+    model: "CNNModel",
+    config: CNNConfig,
+    det_index_offset: int = 0,
+) -> CNNResult:
+    """Assemble CNNResult from raw backend predictions.
+
+    Shared by run_cnn and run_cnn_batch to keep per-detection logic DRY.
+    det_index_offset allows batch path to assign correct global detection indices.
+    """
     predictions: list[CNNDetectionPrediction] = []
     for det_idx, probs_per_factor in enumerate(all_probs):
         factors = [
@@ -74,6 +94,48 @@ def run_cnn(
             )
             for k in range(len(probs_per_factor))
         ]
-        predictions.append(CNNDetectionPrediction(det_index=det_idx, factors=factors))
-
+        predictions.append(
+            CNNDetectionPrediction(
+                det_index=det_index_offset + det_idx, factors=factors
+            )
+        )
     return CNNResult(label=config.label, predictions=predictions)
+
+
+def run_cnn_batch(
+    batch: CropBatch,
+    model: "CNNModel",
+    config: CNNConfig,
+    runtime: RuntimeContext,
+    aspect_ratio: float = 2.0,
+    margin: float = 1.3,
+) -> "dict[int, CNNResult]":
+    """Run CNN classifier over a CropBatch; return one CNNResult per frame.
+
+    Runs the backend ONCE over all crops in batch (cross-frame perf win), then
+    splits results per frame via batch.select_frame. Per-detection assembly
+    delegates to _assemble_cnn_result (DRY with run_cnn).
+    """
+    import cv2
+
+    out_h, out_w = int(model.input_size[0]), int(model.input_size[1])
+    n_total = batch.crops.shape[0]
+    np_crops: list[np.ndarray] = []
+    for i in range(n_total):
+        hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
+        img = (hwc * 255.0).clip(0, 255).astype(np.uint8)
+        if img.shape[0] != out_h or img.shape[1] != out_w:
+            img = cv2.resize(img, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+        np_crops.append(img)
+
+    all_probs = model.backend.predict_batch(np_crops) if np_crops else []
+
+    results: dict[int, CNNResult] = {}
+    prob_offset = 0
+    for frame_idx in sorted(batch.obb_by_frame):
+        rows = batch.select_frame(frame_idx)
+        n = len(rows)
+        frame_probs = all_probs[prob_offset : prob_offset + n]
+        prob_offset += n
+        results[frame_idx] = _assemble_cnn_result(frame_probs, model, config)
+    return results

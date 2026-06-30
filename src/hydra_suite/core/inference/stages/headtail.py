@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from ..config import HeadTailConfig
-from ..result import HeadTailResult, OBBResult
+from ..result import CropBatch, HeadTailResult, OBBResult
 from ..runtime import RuntimeContext
 
 _DIRECTION_OFFSET: dict[str, float] = {
@@ -86,15 +86,12 @@ def run_headtail(
     if needed.
     """
     n = obb_result.num_detections
-    hints = np.full(n, float("nan"), dtype=np.float32)
-    confs = np.zeros(n, dtype=np.float32)
-    mask = np.zeros(n, dtype=np.uint8)
 
     if n == 0:
         return HeadTailResult(
-            heading_hints=hints,
-            heading_confidences=confs,
-            directed_mask=mask,
+            heading_hints=np.full(n, float("nan"), dtype=np.float32),
+            heading_confidences=np.zeros(n, dtype=np.float32),
+            directed_mask=np.zeros(n, dtype=np.uint8),
             canonical_affines=None,
         )
 
@@ -116,7 +113,29 @@ def run_headtail(
     # for those detections. Falls back to obb.angles if corners are degenerate.
     signed_axes = _signed_major_axis_from_corners(obb_result.corners)
 
+    return _assemble_headtail_result(all_probs, obb_result, model, config, signed_axes)
+
+
+def _assemble_headtail_result(
+    all_probs: list,
+    obb_result: OBBResult,
+    model: "HeadTailModel",
+    config: HeadTailConfig,
+    signed_axes: "np.ndarray | None",
+) -> HeadTailResult:
+    """Assemble HeadTailResult from raw backend predictions.
+
+    Shared by run_headtail and run_headtail_batch so the per-detection logic
+    is never duplicated.
+    """
+    n = obb_result.num_detections
+    hints = np.full(n, float("nan"), dtype=np.float32)
+    confs = np.zeros(n, dtype=np.float32)
+    mask = np.zeros(n, dtype=np.uint8)
+
     for i, probs_per_factor in enumerate(all_probs):
+        if i >= n:
+            break
         factor_probs = probs_per_factor[0]
         winning_idx = int(np.argmax(factor_probs))
         winning_conf = float(factor_probs[winning_idx])
@@ -180,3 +199,63 @@ def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:
         major_vec = c[1] - c[0] if e01 >= e12 else c[2] - c[1]
         out[i] = float(math.atan2(float(major_vec[1]), float(major_vec[0])))
     return out
+
+
+def run_headtail_batch(
+    batch: CropBatch,
+    model: HeadTailModel,
+    config: HeadTailConfig,
+    runtime: RuntimeContext,
+    aspect_ratio: float = 2.0,
+    margin: float = 1.3,
+) -> "dict[int, HeadTailResult]":
+    """Run head-tail classification over a CropBatch; return one HeadTailResult per frame.
+
+    Runs the backend ONCE over all crops in batch (cross-frame perf win), then
+    splits results per frame via batch.select_frame. Per-detection assembly
+    delegates to _assemble_headtail_result (DRY with run_headtail).
+
+    crops in batch are canonical-size (uniform H×W). We convert to numpy and
+    pass directly to predict_batch; both YOLO and flat classifiers accept HWC
+    uint8 numpy arrays of any (H, W) — the model's own resizing applies.
+    """
+    import cv2
+
+    # Build per-crop numpy arrays from batch.crops (NCHW float [0,1])
+    n_total = batch.crops.shape[0]
+    out_h, out_w = int(model.input_size[0]), int(model.input_size[1])
+    np_crops: list[np.ndarray] = []
+    for i in range(n_total):
+        hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
+        img = (hwc * 255.0).clip(0, 255).astype(np.uint8)
+        if img.shape[0] != out_h or img.shape[1] != out_w:
+            img = cv2.resize(img, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+        np_crops.append(img)
+
+    all_probs = model.backend.predict_batch(np_crops) if np_crops else []
+
+    results: dict[int, HeadTailResult] = {}
+    prob_offset = 0
+    # Iterate over all frames in obb_by_frame (sorted for reproducibility),
+    # including frames with 0 detections that have no rows in batch.frame_index.
+    for frame_idx in sorted(batch.obb_by_frame):
+        obb = batch.obb_by_frame[frame_idx]
+        rows = batch.select_frame(frame_idx)
+        n = len(rows)
+        if n == 0:
+            results[frame_idx] = HeadTailResult(
+                heading_hints=np.full(
+                    obb.num_detections, float("nan"), dtype=np.float32
+                ),
+                heading_confidences=np.zeros(obb.num_detections, dtype=np.float32),
+                directed_mask=np.zeros(obb.num_detections, dtype=np.uint8),
+                canonical_affines=None,
+            )
+            continue
+        frame_probs = all_probs[prob_offset : prob_offset + n]
+        prob_offset += n
+        signed_axes = _signed_major_axis_from_corners(obb.corners)
+        results[frame_idx] = _assemble_headtail_result(
+            frame_probs, obb, model, config, signed_axes
+        )
+    return results
