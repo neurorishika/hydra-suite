@@ -174,7 +174,8 @@ whole window's crops.
 ### 2. Batching unit — fixed frame window
 
 `BatchWindow` = `W = InferenceConfig.detection_batch_size` consecutive frames. OBB runs on
-the W frames at once. All detections across the window form one `CropBatch`. This makes
+the W frames at once. All detections across the window form the per-family `CropBatch`es
+(classifier crops for HT/CNN, canonical crops for pose — see §4). This makes
 batch boundaries a pure function of frame index. Larger W ⇒ bigger crop batches ⇒ better GPU
 utilization, at higher per-window memory; it is the primary throughput/memory tradeoff knob
 alongside `pipeline_depth`.
@@ -200,15 +201,32 @@ class Pipeline:
 Queues are **bounded** (default derived from depth) to provide backpressure: a slow consumer
 cannot let a fast producer balloon memory.
 
-### 4. GPU-native unified crop extraction + foreign suppression
+### 4. GPU-native batched crop extraction + foreign suppression
 
-- **One** `gpu_canonical_crop_batch` call per window (CUDA: single `affine_grid` +
-  `grid_sample`; CPU/MPS: batched `cv2.warpAffine` fallback) produces canonical crops shared
-  read-only by head-tail, CNN, and pose. Today only pose uses the GPU batch path; head-tail
-  and CNN go through per-crop `extract_classifier_crops` (warpAffine) — these are unified
-  onto the shared `CropBatch`. The dead `_extract_canonical_gpu_legacy` is removed.
-- **Foreign-region suppression** is applied inside the extractor: the full set of OBB corners
-  in the window is passed in, and `_apply_foreign_mask_canonical`
+**Two crop families, not one** (CORRECTION 2026-06-30 — see note). Head-tail/CNN and pose
+require *different* crop extractions; sharing a single tensor would regress the bit-parity
+already achieved on the 4 clips. Both families are batched cross-frame (one `predict_batch`
+per stage per window — the perf win is unchanged).
+
+- **Classifier crops** → head-tail + CNN. Produced by `extract_classifier_crops` (a single
+  `cv2.warpAffine` mapping the padded OBB straight to model input size, BGR uint8,
+  INTER_LINEAR + BORDER_REPLICATE). This is **bit-identical to the legacy HT/CNN path**; the
+  codebase comment in `extract_classifier_crops` documents that the shared-tensor double
+  resample flips ~1–2% of head-tail decisions near the classifier boundary. These crops are
+  **unmasked** (legacy HT/CNN classification crops were unmasked). Batched via
+  `extract_classifier_crops_batch(frames, obb_results, target_size, aspect, margin) ->
+  CropBatch`. On CPU/MPS this uses cv2 (the parity path); a GPU-native warp-to-input variant
+  is a **separately-validated CUDA throughput add** (not bit-identical to cv2, so parity is
+  per-executor).
+- **Canonical crops** → pose. **One** `gpu_canonical_crop_batch` call per window (CUDA:
+  single `affine_grid` + `grid_sample`; CPU/MPS: batched `cv2.warpAffine`), produced by
+  `extract_crops(...) -> CropBatch`. **Foreign-masked** when enabled. The dead
+  `_extract_canonical_gpu_legacy` is removed.
+
+- **Foreign-region suppression** is applied **only to the canonical (pose) crops** — legacy
+  masked the precompute canonical crops feeding pose/identity, not the HT/CNN classification
+  crops. The full set of OBB corners in the window is passed into the extractor, and
+  `_apply_foreign_mask_canonical`
   (`core/canonicalization/crop.py:559`) blacks out neighbor polygons (CUDA: rasterized mask
   pass; CPU: `cv2.fillPoly`). Gated on `PoseConfig.suppress_foreign_regions`, **default on**.
   The pose-cache key already includes `suppress_foreign_regions`/`background_color`, so
