@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from hydra_suite.core.canonicalization.crop import (
+    _apply_foreign_mask_canonical,
     compute_alignment_affine,
     compute_native_crop_dimensions,
     gpu_canonical_crop_batch,
@@ -261,6 +262,8 @@ def _extract_canonical_window(
     aspect_ratio: float,
     out_size: tuple[int, int],
     runtime: RuntimeContext,
+    suppress_foreign: bool = False,
+    background_color: tuple[int, int, int] = (0, 0, 0),
 ) -> tuple[torch.Tensor, np.ndarray]:
     """Extract canonical crops for all detections in one frame.
 
@@ -269,9 +272,13 @@ def _extract_canonical_window(
     int64 array of ``[h, w]`` before padding to ``out_size``.
 
     GPU path (tensor_on_cuda): calls ``gpu_canonical_crop_batch`` with
-    ``out_size`` so crops are already at the target resolution.
+    ``out_size`` so crops are already at the target resolution.  When
+    ``suppress_foreign=True`` on CUDA, the masking is applied on CPU after
+    warping (round-trip) because on-device polygon rasterisation is
+    non-trivial; this is documented as a follow-up optimisation.
     CPU/MPS path: calls ``_warp_canonical_crop`` per detection, records
-    native sizes, then pads each crop to ``out_size``.
+    native sizes, applies ``_apply_foreign_mask_canonical`` when
+    ``suppress_foreign=True``, then resizes each crop to ``out_size``.
     """
     out_w, out_h = int(out_size[0]), int(out_size[1])
     n = obb.num_detections
@@ -303,13 +310,67 @@ def _extract_canonical_window(
             M_aligns.append(M)
 
         crops = gpu_canonical_crop_batch(frame, M_aligns, out_w, out_h)
+
+        if suppress_foreign and n > 1:
+            # CUDA follow-up: on-device polygon rasterisation is non-trivial;
+            # apply masking via CPU round-trip for now.
+            crops_np = (crops.cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+            # crops_np is (N, C, H, W); convert to HWC per crop for fillPoly
+            for i in range(n):
+                crop_hwc = crops_np[i].transpose(1, 2, 0)
+                foreign = [obb.corners[j] for j in range(n) if j != i]
+                _apply_foreign_mask_canonical(
+                    crop_hwc, M_aligns[i], foreign, background_color
+                )
+                crops_np[i] = crop_hwc.transpose(2, 0, 1)
+            crops = torch.from_numpy(crops_np).float().to(crops.device) / 255.0
+
         sizes = np.array([[h, w] for h, w in native_hw], dtype=np.int64)
         return crops, sizes
 
     # --- CPU / MPS path ---
     # Use shared helpers: frame conversion + per-detection warp loop.
     arr = _frame_as_hwc_numpy(frame)
-    raw_crops = _warp_crops_for_obb(arr, obb, aspect_ratio, padding_fraction)
+
+    # Build per-detection affine matrices alongside crops so we can call
+    # _apply_foreign_mask_canonical (which needs M_align to project foreign
+    # corners into canonical space) without recomputing them.
+    raw_crops: list[np.ndarray] = []
+    M_aligns_cpu: list[np.ndarray] = []
+    for i in range(n):
+        corners = obb.corners[i]
+        canvas_w, canvas_h = compute_native_crop_dimensions(
+            corners, aspect_ratio, padding_fraction
+        )
+        try:
+            M, _ = compute_alignment_affine(
+                corners, canvas_w, canvas_h, padding_fraction
+            )
+        except ValueError:
+            n_ch = arr.shape[2] if arr.ndim == 3 else 1
+            raw_crops.append(np.zeros((canvas_h, canvas_w, n_ch), dtype=arr.dtype))
+            M_aligns_cpu.append(
+                np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+            )
+            continue
+        crop = cv2.warpAffine(
+            arr,
+            M,
+            (canvas_w, canvas_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        raw_crops.append(crop)
+        M_aligns_cpu.append(M)
+
+    if suppress_foreign and n > 1:
+        # Apply foreign-region suppression in canonical space using the existing
+        # cv2.fillPoly helper from core.canonicalization.crop.
+        for i in range(n):
+            foreign = [obb.corners[j] for j in range(n) if j != i]
+            _apply_foreign_mask_canonical(
+                raw_crops[i], M_aligns_cpu[i], foreign, background_color
+            )
 
     native_hw_list: list[tuple[int, int]] = [
         (c.shape[0], c.shape[1]) for c in raw_crops
@@ -401,11 +462,18 @@ def extract_crops(
     canonical_aspect_ratio: float,
     out_size: tuple[int, int],
     runtime: RuntimeContext,
+    suppress_foreign: bool = False,
+    background_color: tuple[int, int, int] = (0, 0, 0),
 ) -> CropBatch:
     """Extract canonical crops across a window of frames into a single CropBatch.
 
     Concatenates detections in input order (frames ascending, detections in
     OBBResult order = detection-id order) — the reproducibility invariant.
+
+    When ``suppress_foreign=True``, each crop has the OTHER detections' OBB
+    polygons in the same frame blacked out (filled with ``background_color``).
+    This applies only to these canonical/pose crops; head-tail/CNN classifier
+    crops (``extract_classifier_crops_batch``) are intentionally unmasked.
 
     GPU path (tensor_on_cuda): crops are device-resident CUDA tensors.
     CPU/MPS path: crops are CPU tensors.
@@ -419,7 +487,14 @@ def extract_crops(
         if obb.detection_ids.shape[0] == 0:
             continue
         frame_crops, sizes = _extract_canonical_window(
-            frame, obb, canonical_margin, canonical_aspect_ratio, out_size, runtime
+            frame,
+            obb,
+            canonical_margin,
+            canonical_aspect_ratio,
+            out_size,
+            runtime,
+            suppress_foreign=suppress_foreign,
+            background_color=background_color,
         )
         crops_list.append(frame_crops)  # (n_i, C, H, W)
         det_ids.append(obb.detection_ids)
