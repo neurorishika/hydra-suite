@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import concurrent.futures
 import logging
 import os
 import time
@@ -482,21 +481,18 @@ class InferenceRunner:
                 self.config.apriltag,
             )
 
-        if os.environ.get("HYDRA_RT_SEQUENTIAL"):
-            ht_result = _do_ht()
-            cnn_results = _do_cnn()
-            pose_result = _do_pose()
-            at_result = _do_at()
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                ht_fut = pool.submit(_do_ht)
-                cnn_fut = pool.submit(_do_cnn)
-                pose_fut = pool.submit(_do_pose)
-                at_fut = pool.submit(_do_at)
-                ht_result = ht_fut.result()
-                cnn_results = cnn_fut.result()
-                pose_result = pose_fut.result()
-                at_result = at_fut.result()
+        # Run the individual-analysis stages SEQUENTIALLY, not in a per-frame
+        # ThreadPoolExecutor. Profiling on CUDA (RT_PROFILE) showed the per-frame
+        # pool cost ~834 ms/frame vs ~37 ms/frame sequential (a 22x regression):
+        # spinning up a fresh 4-thread pool every frame and driving CUDA / the
+        # onnxruntime SLEAP backend from short-lived worker threads serialises on
+        # the GIL and the default CUDA stream while paying thread + context setup
+        # each frame, with no real parallelism on a single GPU. Sequential brings
+        # realtime back to legacy parity (~137 ms/frame total incl. frame read).
+        ht_result = _do_ht()
+        cnn_results = _do_cnn()
+        pose_result = _do_pose()
+        at_result = _do_at()
 
         if _prof:
             _now = time.perf_counter()
