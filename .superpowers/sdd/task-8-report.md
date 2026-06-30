@@ -57,3 +57,26 @@ PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE python -m pytest tests/test_inference_d
 1. **`_fake_run_obb` always returns `frame_idx=0`** — the pipeline's re-stamp loop overwrites this with the real frame index, so detection_ids in the cache are correct (`frame_idx * 10000 + slot`). This is consistent with the existing `test_run_batch_iterates_frames_and_writes_caches` pattern.
 2. **Only `detection.npz` is written** — headtail/cnn/pose/apriltag require real model shapes that are non-trivial to stub at the cache-write level. The depth-invariance property applies equally to any enabled cache type; when Tasks 11/12 add real concurrency, those caches can be added if needed.
 3. **Video encoding reproducibility**: tested explicitly — two `cv2.VideoWriter` calls with identical frames to different temp paths produce byte-identical MP4 files (same fourcc, size, mtime-insensitive content). Only the cache key was mtime-sensitive, which is now bypassed.
+
+## Fix: cover HT/CNN/pose caches
+
+**Commit**: `98b3f36 test: extend depth-invariance harness to cover headtail/CNN/pose caches`
+
+**Status**: DONE — `test_depth1_is_deterministic_across_runs` passes and now asserts detection + headtail + cnn + pose caches are all present and byte-identical across runs.
+
+**Test command + result**:
+```
+PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_inference_depth_invariance.py -v
+1 passed in 3.32s
+```
+
+**What changed**:
+- `InferenceConfig` now enables `headtail`, `cnn_phases=[CNNConfig(label="stub_cnn")]`, and `pose` (YOLO backend with stub paths).
+- `_AllModels` stub carries `HeadTailModel`, `CNNModel`, and `PoseModel` instances (MagicMock backends — never called).
+- Six new patch targets in the pipeline namespace: `run_headtail_batch`, `run_cnn_batch`, `extract_canonical_crops_batch`, `run_pose_batch` — all patched to deterministic stubs that return results keyed by frame_idx, seeded by `np.random.default_rng(frame_idx * 100 + seed)`.
+- `extract_canonical_crops_batch` is also patched (stub `CropBatch` with correct `obb_by_frame`) so no real torch crop extraction runs; `run_pose_batch` stub reads `crop_batch.obb_by_frame` to derive frame indices.
+- The test asserts `{"detection.npz", "headtail.npz", "cnn_stub_cnn.npz", "pose.npz"} ⊆ a.keys()` before the equality check, so a silent cache-omission regression fails immediately.
+
+**Hash dict now includes**: `detection.npz`, `headtail.npz`, `cnn_stub_cnn.npz`, `pose.npz`.
+
+**Concerns**: None. All stubs are pure functions of frame_idx with fixed seeds; no wall-clock, no RNG state leaks across calls.
