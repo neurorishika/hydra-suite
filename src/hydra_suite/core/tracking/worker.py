@@ -4431,6 +4431,14 @@ class TrackingWorker(QThread):
                     params.get("COMPUTE_RUNTIME", "cpu"),
                 )
             )
+            logger.warning(
+                "DIAG runtimes: COMPUTE_RUNTIME=%r HEADTAIL_COMPUTE_RUNTIME=%r "
+                "CNN_COMPUTE_RUNTIME=%r ht_runtime=%r",
+                params.get("COMPUTE_RUNTIME"),
+                params.get("HEADTAIL_COMPUTE_RUNTIME"),
+                params.get("CNN_COMPUTE_RUNTIME"),
+                ht_runtime,
+            )
             headtail_cfg = HeadTailConfig(
                 model_path=headtail_model_path,
                 compute_runtime=ht_runtime,
