@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import math
-
 import cv2
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from hydra_suite.core.canonicalization.crop import (
     compute_alignment_affine,
@@ -13,7 +10,7 @@ from hydra_suite.core.canonicalization.crop import (
     gpu_canonical_crop_batch,
 )
 
-from ..result import OBBResult
+from ..result import CropBatch, OBBResult
 from ..runtime import RuntimeContext
 
 
@@ -243,55 +240,139 @@ def _extract_canonical_gpu(
     return crops
 
 
-# Legacy GPU path kept for reference (no longer used).
-def _extract_canonical_gpu_legacy(
-    frame: torch.Tensor | np.ndarray,
+def _extract_canonical_window(
+    frame: np.ndarray | torch.Tensor,
     obb: OBBResult,
-    aspect_ratio: float,
     margin: float,
-    device: str,
-) -> torch.Tensor:
-    if isinstance(frame, np.ndarray):
-        if frame.ndim == 3:
-            frame = torch.from_numpy(frame.transpose(2, 0, 1)).float() / 255.0
-        frame = frame.to(device)
+    aspect_ratio: float,
+    out_size: tuple[int, int],
+    runtime: RuntimeContext,
+) -> tuple[torch.Tensor, np.ndarray]:
+    """Extract canonical crops for all detections in one frame.
 
-    if frame.ndim == 3:
-        frame = frame.unsqueeze(0)
+    Delegates to the existing GPU or CPU canonical routine and returns
+    ``(crops_tensor, native_sizes)`` where ``native_sizes`` is ``(n, 2)``
+    int64 array of ``[h, w]`` before padding to ``out_size``.
 
-    _, C, H, W = frame.shape
+    GPU path (tensor_on_cuda): calls ``gpu_canonical_crop_batch`` with
+    ``out_size`` so crops are already at the target resolution.
+    CPU/MPS path: calls ``_warp_canonical_crop`` per detection, records
+    native sizes, then pads each crop to ``out_size``.
+    """
+    out_w, out_h = int(out_size[0]), int(out_size[1])
     n = obb.num_detections
+    padding_fraction = max(0.0, float(margin) - 1.0)
 
-    sides = [math.sqrt(float(obb.sizes[i])) * margin for i in range(n)]
-    out_ws = [max(int(s * aspect_ratio), 4) for s in sides]
-    out_hs = [max(int(s), 4) for s in sides]
-    out_w = max(out_ws)
-    out_h = max(out_hs)
+    if runtime.tensor_on_cuda:
+        # --- GPU path ---
+        if isinstance(frame, np.ndarray):
+            if frame.ndim == 3:
+                frame = torch.from_numpy(frame.transpose(2, 0, 1)).float() / 255.0
+            frame = frame.to(runtime.device)
+        if frame.ndim == 4:
+            frame = frame.squeeze(0)
 
-    thetas = []
+        M_aligns: list[np.ndarray] = []
+        native_hw: list[tuple[int, int]] = []
+        for i in range(n):
+            try:
+                cw, ch = compute_native_crop_dimensions(
+                    obb.corners[i], aspect_ratio, padding_fraction
+                )
+                M, _ = compute_alignment_affine(
+                    obb.corners[i], cw, ch, padding_fraction
+                )
+            except ValueError:
+                cw, ch = out_w, out_h
+                M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+            native_hw.append((ch, cw))
+            M_aligns.append(M)
+
+        crops = gpu_canonical_crop_batch(frame, M_aligns, out_w, out_h)
+        sizes = np.array([[h, w] for h, w in native_hw], dtype=np.int64)
+        return crops, sizes
+
+    # --- CPU / MPS path ---
+    if isinstance(frame, torch.Tensor):
+        arr = frame.cpu().numpy()
+        if arr.ndim == 3 and arr.shape[0] == 3:
+            arr = arr.transpose(1, 2, 0)
+    else:
+        arr = frame
+
+    raw_crops: list[np.ndarray] = []
+    native_hw_list: list[tuple[int, int]] = []
     for i in range(n):
-        cx = float(obb.centroids[i, 0])
-        cy = float(obb.centroids[i, 1])
-        angle = float(obb.angles[i])
-        cos_a = math.cos(-angle)
-        sin_a = math.sin(-angle)
-        ncx = 2.0 * cx / W - 1.0
-        ncy = 2.0 * cy / H - 1.0
-        thetas.append(
-            [
-                [cos_a * (out_w / W), -sin_a * (out_h / W), ncx],
-                [sin_a * (out_w / H), cos_a * (out_h / H), ncy],
-            ]
+        crop = _warp_canonical_crop(arr, obb.corners[i], aspect_ratio, padding_fraction)
+        native_hw_list.append((crop.shape[0], crop.shape[1]))
+        raw_crops.append(crop)
+
+    # Pad each crop to out_size
+    padded: list[np.ndarray] = []
+    for crop in raw_crops:
+        pad_h = max(0, out_h - crop.shape[0])
+        pad_w = max(0, out_w - crop.shape[1])
+        if pad_h > 0 or pad_w > 0:
+            crop = np.pad(crop, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant")
+        # Crop down if native size exceeds out_size
+        padded.append(crop[:out_h, :out_w])
+
+    stacked = np.stack(padded, axis=0)  # (N, H, W, C)
+    crops_t = torch.from_numpy(stacked).permute(0, 3, 1, 2).float() / 255.0
+    sizes = np.array([[h, w] for h, w in native_hw_list], dtype=np.int64)
+    return crops_t, sizes
+
+
+def extract_crops(
+    frames: list,
+    obb_results: list[OBBResult],
+    *,
+    canonical_margin: float,
+    canonical_aspect_ratio: float,
+    out_size: tuple[int, int],
+    runtime: RuntimeContext,
+) -> CropBatch:
+    """Extract canonical crops across a window of frames into a single CropBatch.
+
+    Concatenates detections in input order (frames ascending, detections in
+    OBBResult order = detection-id order) — the reproducibility invariant.
+
+    GPU path (tensor_on_cuda): crops are device-resident CUDA tensors.
+    CPU/MPS path: crops are CPU tensors.
+    """
+    crops_list: list[torch.Tensor] = []
+    det_ids: list[np.ndarray] = []
+    frame_idx_list: list[np.ndarray] = []
+    native_sizes: list[np.ndarray] = []
+
+    for frame, obb in zip(frames, obb_results):
+        if obb.detection_ids.shape[0] == 0:
+            continue
+        frame_crops, sizes = _extract_canonical_window(
+            frame, obb, canonical_margin, canonical_aspect_ratio, out_size, runtime
+        )
+        crops_list.append(frame_crops)  # (n_i, C, H, W)
+        det_ids.append(obb.detection_ids)
+        frame_idx_list.append(
+            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
+        )
+        native_sizes.append(sizes)
+
+    if not crops_list:
+        device = runtime.device if runtime.cuda_mode else "cpu"
+        empty = torch.zeros((0, 3, out_size[1], out_size[0]), device=device)
+        return CropBatch(
+            empty,
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            {o.frame_idx: o for o in obb_results},
+            np.zeros((0, 2), np.int64),
         )
 
-    theta_t = torch.tensor(thetas, dtype=torch.float32, device=device)
-    frame_batch = frame.expand(n, -1, -1, -1)
-    grid = F.affine_grid(theta_t, (n, C, out_h, out_w), align_corners=False)
-    crops = F.grid_sample(
-        frame_batch,
-        grid,
-        mode="bilinear",
-        padding_mode="zeros",
-        align_corners=False,
+    return CropBatch(
+        crops=torch.cat(crops_list, dim=0),
+        detection_ids=np.concatenate(det_ids),
+        frame_index=np.concatenate(frame_idx_list),
+        obb_by_frame={o.frame_idx: o for o in obb_results},
+        native_sizes=np.concatenate(native_sizes),
     )
-    return crops
