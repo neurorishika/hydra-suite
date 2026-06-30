@@ -1,13 +1,20 @@
-"""Frame-ordered cache writer for the inference pipeline.
+"""Cache writer for the inference pipeline.
 
-Accepts ``FrameResult`` objects submitted in any order and writes them to the
-per-type ``CacheHandle``s in strictly ascending frame-index order.  This is
-needed for depth>1 pipelined runs where windows can complete out of order; for
-depth=1 (synchronous) the ordering guarantee is free because frames already
-arrive in order.
+The pipeline has a SINGLE in-order consumer that calls ``write_detection`` /
+``write_downstream`` in strictly ascending window order.  Because writes are
+already produced in order, no reordering buffer is needed — a FIFO is enough.
 
-``close()`` stops the worker thread (async mode) and flushes the buffer, but
-does **not** close the caller-owned handles.  The runner is responsible for
+Two modes:
+
+* ``async_mode=False`` — writes happen inline on the calling (consumer) thread.
+* ``async_mode=True`` — a single worker thread drains a FIFO ``queue.Queue``;
+  ``write_detection`` / ``write_downstream`` enqueue a write item and return
+  immediately, so disk I/O never stalls compute (spec §7).  The worker writes
+  to the handles in FIFO order (== window order, since the consumer enqueues in
+  order), so the on-disk cache layout is byte-identical to sync mode.
+
+``close()`` drains + joins the worker (async) and surfaces any worker exception,
+but does **not** close the caller-owned handles.  The runner is responsible for
 closing handles in its own ``finally`` block (see ``runner.run_batch_pass``).
 """
 
@@ -15,14 +22,11 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from ..result import FrameResult
+from typing import Any
 
 
 class CacheWriter:
-    """Ordered-buffer cache writer supporting sync and async (threaded) modes.
+    """FIFO cache writer supporting sync (inline) and async (threaded) modes.
 
     Parameters
     ----------
@@ -35,13 +39,9 @@ class CacheWriter:
         CNN phase config list in phase order.  Used to match CNN results to
         the correct per-phase handle (keyed by ``"cnn_<label>"``).
     async_mode:
-        When *True* a single worker thread drains the ordered buffer; all
-        ``write_frame`` calls on the underlying handles happen in that thread.
-        When *False* draining happens inline in ``submit``/``flush``.
-    start_frame:
-        The first frame index expected.  Defaults to 0.  The cursor advances
-        monotonically; if a submitted frame has a lower index than the cursor
-        it is silently ignored (already written).
+        When *True* a single worker thread drains a FIFO queue of write items;
+        ``write_detection`` / ``write_downstream`` enqueue and return without
+        blocking on disk I/O.  When *False* writes happen inline.
     """
 
     def __init__(
@@ -55,8 +55,6 @@ class CacheWriter:
         self._handles = handles
         self._cnn_configs = cnn_configs
         self._async_mode = async_mode
-        self._next_expected: int = start_frame
-        self._buffer: dict[int, FrameResult] = {}
         self._closed = False
         self._worker_error: BaseException | None = None
 
@@ -65,61 +63,19 @@ class CacheWriter:
             self._worker = threading.Thread(target=self._worker_loop, daemon=True)
             self._worker.start()
 
-    # --- public API --------------------------------------------------------
-
-    def submit(self, frame_result: FrameResult) -> None:
-        """Buffer ``frame_result`` and drain any contiguous-ready frames."""
-        if self._closed:
-            raise RuntimeError("CacheWriter is closed")
-        if self._async_mode:
-            self._queue.put(frame_result)
-        else:
-            self._buffer[frame_result.frame_idx] = frame_result
-            self._drain_sync()
-
-    def flush(self) -> None:
-        """Drain everything currently buffered (in order)."""
-        if self._async_mode:
-            self._queue.join()
-            if self._worker_error is not None:
-                raise self._worker_error
-        else:
-            self._drain_all_sync()
-
-    def close(self) -> None:
-        """Flush + stop the worker thread (async).  Does NOT close handles."""
-        if self._closed:
-            return
-        self._closed = True
-        if self._async_mode:
-            self._queue.join()
-            self._queue.put(None)  # sentinel
-            self._worker.join()
-            if self._worker_error is not None:
-                raise self._worker_error
-        else:
-            self._drain_all_sync()
-
-    # --- write helpers used by both paths ----------------------------------
+    # --- public write API --------------------------------------------------
 
     def write_detection(self, frame_idx: int, obb_result: Any) -> None:
-        """Write an OBB result directly (bypasses the ordered buffer).
+        """Write (or enqueue) a detection OBB result for ``frame_idx``.
 
-        Detection writes come from the pipeline one-at-a-time in ascending
-        frame order within a window, so no reordering is needed.
-
-        .. note::
-            When depth>1 / async mode is wired (Task 11), detection and
-            downstream writes for the same frame can reach handles in
-            inconsistent relative order via this bypass — because detection
-            is written here while downstream results travel through the
-            ordered ``submit`` buffer.  Task 11 must either route detection
-            through the same ordered ``submit`` path (preferred) or accept
-            this documented caveat and ensure consumers tolerate it.
+        Called by the single in-order consumer in ascending window order, so no
+        reordering is needed.  In async mode the write is offloaded to the
+        worker thread (FIFO order == window order); in sync mode it happens
+        inline on the caller's thread.
         """
-        h = self._handles.get("detection")
-        if h is not None:
-            h.write_frame(frame_idx, result=obb_result)
+        self._enqueue_or_write(
+            {"kind": "detection", "frame_idx": frame_idx, "obb": obb_result}
+        )
 
     def write_downstream(
         self,
@@ -131,66 +87,68 @@ class CacheWriter:
         pose: Any | None,
         apriltag: Any | None,
     ) -> None:
-        """Write downstream (non-detection) results directly.
+        """Write (or enqueue) downstream (non-detection) results for ``frame_idx``.
 
-        Like ``write_detection``, these come in ascending order within a
-        window, so no reordering buffer is needed.
+        Like ``write_detection`` these arrive in ascending window order from the
+        single consumer; async mode offloads to the worker, sync writes inline.
         """
-        self._write_to_handles(
-            frame_idx,
-            det_indices=det_indices,
-            headtail=headtail,
-            cnn_results=cnn_results,
-            pose=pose,
-            apriltag=apriltag,
+        self._enqueue_or_write(
+            {
+                "kind": "downstream",
+                "frame_idx": frame_idx,
+                "det_indices": det_indices,
+                "headtail": headtail,
+                "cnn_results": cnn_results,
+                "pose": pose,
+                "apriltag": apriltag,
+            }
         )
 
-    # --- internal ordering logic -------------------------------------------
+    def flush(self) -> None:
+        """Block until all enqueued writes have landed (async); no-op (sync)."""
+        if self._async_mode:
+            self._queue.join()
+            if self._worker_error is not None:
+                raise self._worker_error
 
-    def _drain_sync(self) -> None:
-        """Emit all frames >= next_expected that are contiguous."""
-        while self._next_expected in self._buffer:
-            fr = self._buffer.pop(self._next_expected)
-            self._write_frame_result(fr)
-            self._next_expected += 1
-
-    def _drain_all_sync(self) -> None:
-        """Emit all buffered frames in sorted order (ignoring gaps)."""
-        if not self._buffer:
+    def close(self) -> None:
+        """Drain + stop the worker thread (async).  Does NOT close handles."""
+        if self._closed:
             return
-        last = max(self._buffer)
-        for idx in sorted(self._buffer):
-            self._write_frame_result(self._buffer[idx])
-        self._buffer.clear()
-        # Advance cursor past everything we just emitted so a subsequent
-        # submit/flush does not re-drain the same frames.
-        self._next_expected = last + 1
+        self._closed = True
+        if self._async_mode:
+            self._queue.join()
+            self._queue.put(None)  # sentinel
+            self._worker.join()
+            if self._worker_error is not None:
+                raise self._worker_error
 
-    def _write_frame_result(self, fr: FrameResult) -> None:
-        """Map a FrameResult to handle write_frame calls (single authoritative mapping).
+    # --- internal ----------------------------------------------------------
 
-        Both the ordered-buffer drain path and the async worker use this method
-        exclusively — there is no second copy of the FrameResult→handle mapping.
-        The detection write is included here so that ``submit``-routed results
-        (used in async/depth>1 mode) produce the same cache layout as the direct
-        ``write_detection`` / ``write_downstream`` calls used by depth=1.
-        """
-        import numpy as np
+    def _enqueue_or_write(self, item: dict) -> None:
+        if self._closed:
+            raise RuntimeError("CacheWriter is closed")
+        if self._async_mode:
+            self._queue.put(item)
+        else:
+            self._apply(item)
 
-        h_det = self._handles.get("detection")
-        if h_det is not None:
-            h_det.write_frame(fr.frame_idx, result=fr.obb)
-
-        det_indices = np.array(fr.filtered_indices, dtype=np.int32)
-
-        self._write_to_handles(
-            fr.frame_idx,
-            det_indices=det_indices,
-            headtail=fr.headtail,
-            cnn_results=fr.cnn,
-            pose=fr.pose,
-            apriltag=fr.apriltag,
-        )
+    def _apply(self, item: dict) -> None:
+        """Execute a single write item against the handles."""
+        kind = item["kind"]
+        if kind == "detection":
+            h = self._handles.get("detection")
+            if h is not None:
+                h.write_frame(item["frame_idx"], result=item["obb"])
+        else:  # downstream
+            self._write_to_handles(
+                item["frame_idx"],
+                det_indices=item["det_indices"],
+                headtail=item["headtail"],
+                cnn_results=item["cnn_results"],
+                pose=item["pose"],
+                apriltag=item["apriltag"],
+            )
 
     def _write_to_handles(
         self,
@@ -202,12 +160,7 @@ class CacheWriter:
         pose: Any | None,
         apriltag: Any | None,
     ) -> None:
-        """Write non-detection results to their respective handles.
-
-        This is the single implementation of the downstream FrameResult→handle
-        mapping.  Called by both ``_write_frame_result`` (ordered-buffer drain)
-        and ``write_downstream`` (direct/depth=1 path).
-        """
+        """Single implementation of the downstream FrameResult→handle mapping."""
         import numpy as np
 
         h_ht = self._handles.get("headtail")
@@ -246,8 +199,7 @@ class CacheWriter:
             try:
                 if item is None:  # sentinel: time to exit
                     break
-                self._buffer[item.frame_idx] = item
-                self._drain_sync()
+                self._apply(item)
             except BaseException as exc:  # noqa: BLE001
                 if self._worker_error is None:
                     self._worker_error = exc

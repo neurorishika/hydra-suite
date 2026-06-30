@@ -126,9 +126,14 @@ def _cpu_or_mps_device() -> str:
 
 
 def _nvdec_available() -> bool:
+    # NvdecFrameReader uses PyNvVideoCodec + cupy, not torchvision's video
+    # backend — probe the libraries the reader actually imports.  (CUDA-only;
+    # validate on mehek.  make_frame_source already falls back if construction
+    # fails, but the probe should test the right deps.)
     try:
-        import torchvision
+        import cupy  # noqa: F401
+        import PyNvVideoCodec  # noqa: F401
 
-        return torchvision.get_video_backend() == "cuda"
+        return True
     except Exception:
         return False

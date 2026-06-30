@@ -376,6 +376,9 @@ class InferenceRunner:
             self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
         )
         mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
+        # Realtime intentionally does NOT foreign-mask pose crops or apply
+        # keypoint suppression (the batch/cached path does both) — this is the
+        # realtime/batch boundary.
         # Canonical (native-extent) crops are now only consumed by the pose stage;
         # head-tail / CNN warp directly from the frame. Skip the extraction
         # entirely when there is no pose model (e.g. OBB-only / identity clips).
@@ -606,6 +609,12 @@ class InferenceRunner:
         pipeline._process_window(
             BatchWindow(frames=list(frames), frame_indices=list(frame_indices))
         )
+        # _process_window enqueues writes; an async (depth>=2) writer offloads
+        # them to its worker thread. The full pass flushes via Pipeline.run's
+        # teardown; this direct-seam path must flush so the writes land before
+        # the caller inspects the handles.
+        pipeline.cache_writer.flush()
+        pipeline.cache_writer.close()
 
     def load_frame(self, frame_idx: int) -> FrameResult:
         if self.cache_dir is None:

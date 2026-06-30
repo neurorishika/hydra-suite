@@ -126,7 +126,6 @@ def test_depth2_stage_exception_propagates_and_cleans_up():
     writer = CacheWriter({}, [], async_mode=True)
 
     pipe = Pipeline.__new__(Pipeline)
-    pipe._requested_depth = 2
     pipe.stages = PipelineStages(
         config=type("C", (), {})(),
         obb_models=None,
@@ -157,9 +156,9 @@ def test_depth2_stage_exception_propagates_and_cleans_up():
         pipe.run(iter(frames), range(0, 6))
 
     # Writer was flushed + closed by the supervisor: a second close is a no-op
-    # and submitting raises (closed), proving the worker thread was stopped.
+    # and writing raises (closed), proving the worker thread was stopped.
     with pytest.raises(RuntimeError, match="closed"):
-        writer.submit(object())  # type: ignore[arg-type]
+        writer.write_detection(0, object())  # type: ignore[arg-type]
 
 
 def test_depth2_producer_exception_propagates_without_hang():
@@ -178,7 +177,6 @@ def test_depth2_producer_exception_propagates_without_hang():
     writer = CacheWriter({}, [], async_mode=True)
 
     pipe = Pipeline.__new__(Pipeline)
-    pipe._requested_depth = 2
     pipe.stages = PipelineStages(
         config=type("C", (), {})(),
         obb_models=None,

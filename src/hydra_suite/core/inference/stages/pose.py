@@ -281,17 +281,34 @@ def run_pose_batch(
 
     pad = max(0.0, float(margin) - 1.0)
     n_total = batch.crops.shape[0]
+    on_cuda = batch.crops.is_cuda and hasattr(model.backend, "predict_batch_cuda")
 
     np_crops: list[np.ndarray] = []
+    # CUDA: must slice to native extent (see run_pose docstring) — validate on mehek.
+    # Mirror the CPU native-slice but keep tensors on-device (C×H×W) so the model
+    # sees the ant filling the frame, consistent with the native-computed m_inv.
+    cuda_crops: list[Any] = []
     affines_all: list[np.ndarray | None] = []
 
     for i in range(n_total):
-        hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
-        # Undo bottom/right zero-padding using batch.native_sizes
+        # Native extent for this crop (padding is bottom/right zeros).
         if i < len(batch.native_sizes):
             native_h, native_w = int(batch.native_sizes[i, 0]), int(
                 batch.native_sizes[i, 1]
             )
+        else:
+            native_h, native_w = (
+                int(batch.crops.shape[2]),
+                int(batch.crops.shape[3]),
+            )
+
+        if on_cuda:
+            # Slice the device tensor (C, H, W) to its native extent — no
+            # host round-trip. predict_batch_cuda accepts a list of C×H×W
+            # CUDA tensors (see SleapExportedBackend.predict_batch_cuda).
+            cuda_crops.append(batch.crops[i, :, :native_h, :native_w])
+        else:
+            hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
             hwc = hwc[:native_h, :native_w]
 
         # Compute inverse affine for this crop using its OBB corners
@@ -318,11 +335,14 @@ def run_pose_batch(
                 except Exception:
                     m_inv = None
 
-        np_crops.append(np.ascontiguousarray(hwc))
+        if not on_cuda:
+            np_crops.append(np.ascontiguousarray(hwc))
         affines_all.append(m_inv)
 
-    if batch.crops.is_cuda and hasattr(model.backend, "predict_batch_cuda"):
-        raw_results = model.backend.predict_batch_cuda(batch.crops)
+    if on_cuda:
+        # Feed NATIVE-sized device crops (not the window-padded batch.crops) so
+        # the model input matches the native-extent m_inv back-projection.
+        raw_results = model.backend.predict_batch_cuda(cuda_crops)
     else:
         raw_results = model.backend.predict_batch(np_crops) if np_crops else []
 
