@@ -340,10 +340,6 @@ class InferenceRunner:
             self._caches_writable = True
         caches = self._caches if self._caches_writable else None
 
-        import time as _t
-
-        _g = globals().setdefault("_RT_PROF", {})
-        _t0 = _t.perf_counter()
         raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
         raw = raw_list[0]
         if isinstance(raw, _RawOBBTensors):
@@ -367,8 +363,6 @@ class InferenceRunner:
         if caches is not None and caches.detection is not None:
             caches.detection.write_frame(frame_idx, result=raw_obb)
 
-        _g["obb"] = _g.get("obb", 0.0) + (_t.perf_counter() - _t0)
-        _t1 = _t.perf_counter()
         filtered_obb, det_indices = filter_with_indices(
             raw_obb, self.config.obb, roi_mask
         )
@@ -458,15 +452,6 @@ class InferenceRunner:
             cnn_results = [f.result() for f in cnn_futs]
             pose_result = pose_fut.result() if pose_fut else None
             at_result = at_fut.result() if at_fut else None
-        _g["crops_pool"] = _g.get("crops_pool", 0.0) + (_t.perf_counter() - _t1)
-        _g["n"] = _g.get("n", 0) + 1
-        if _g["n"] % 100 == 0:
-            logger.warning(
-                "RT_PROF after %d frames: obb=%.1fms/f crops+individual=%.1fms/f",
-                _g["n"],
-                1000 * _g["obb"] / _g["n"],
-                1000 * _g["crops_pool"] / _g["n"],
-            )
 
         # Persist downstream results (keyed by det_indices) so the backward pass
         # can replay them via load_frame -- mirrors _run_batch's cache writes.
