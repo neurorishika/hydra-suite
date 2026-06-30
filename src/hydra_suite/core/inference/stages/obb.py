@@ -6,11 +6,11 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import torch
-from ultralytics import YOLO
 
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext
+from ..runtime_artifacts import load_obb_executor
 
 logger = logging.getLogger(__name__)
 
@@ -141,15 +141,25 @@ def _corners_from_xywhr(
 def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
     if config.mode == "direct":
         assert config.direct is not None
-        m = _load_yolo(config.direct.model_path, config.direct.compute_runtime)
+        m = _load_yolo(
+            config.direct.model_path,
+            config.direct.compute_runtime,
+            auto_export=config.direct.auto_export,
+            max_det=config.max_detections,
+        )
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
     detect = _load_yolo(
         config.sequential.detect_model_path,
         config.sequential.detect_compute_runtime,
+        auto_export=config.sequential.auto_export,
+        max_det=config.max_detections,
     )
     obb = _load_yolo(
-        config.sequential.obb_model_path, config.sequential.obb_compute_runtime
+        config.sequential.obb_model_path,
+        config.sequential.obb_compute_runtime,
+        auto_export=config.sequential.auto_export,
+        max_det=config.max_detections,
     )
     return OBBModels(mode="sequential", detect_model=detect, obb_model=obb)
 
@@ -413,16 +423,29 @@ def _merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
     )
 
 
-def _load_yolo(model_path: str, compute_runtime: ComputeRuntime) -> Any:
-    model = YOLO(model_path)
-    # Only native PyTorch models support .to(). ONNX and TensorRT artifacts
-    # (.onnx, .engine) ignore .to() — their execution provider is set at
-    # predict() time via device=. CoreML provider activates when device="mps".
-    if compute_runtime == "cuda":
-        model.to("cuda:0")
-    elif compute_runtime == "mps":
-        model.to("mps")
-    return model
+def _load_yolo(
+    model_path: str,
+    compute_runtime: ComputeRuntime,
+    *,
+    auto_export: bool = True,
+    max_det: int = 20,
+) -> Any:
+    """Load the OBB executor for ``model_path`` under ``compute_runtime``.
+
+    Thin delegator to :func:`load_obb_executor`:
+      * cpu/mps/cuda → a plain ultralytics ``YOLO`` model (``.to()``-moved as
+        before; CPU does not call ``.to()`` so CPU byte-parity is preserved).
+      * onnx_*/tensorrt → a direct ONNX/TRT executor (auto-exporting ``.onnx``/
+        ``.engine`` from ``.pt`` on first load when ``auto_export``); when no
+        artifact exists and ``auto_export`` is False, a clear error is raised
+        instead of silently running PyTorch (parity finding H4).
+    """
+    return load_obb_executor(
+        model_path,
+        compute_runtime,
+        auto_export=auto_export,
+        max_det=max_det,
+    )
 
 
 def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBResult:

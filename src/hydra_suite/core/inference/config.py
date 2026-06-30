@@ -22,6 +22,10 @@ class OBBDirectConfig:
     compute_runtime: ComputeRuntime = "cpu"
     confidence_floor: float = 1e-3
     confidence_threshold: float = 0.25
+    # Auto-export .onnx/.engine from a .pt source on first load for onnx_*/
+    # tensorrt runtimes. When False and no artifact exists, loading raises a
+    # clear error instead of silently running PyTorch (parity finding H4).
+    auto_export: bool = True
 
 
 @dataclass
@@ -30,6 +34,8 @@ class OBBSequentialConfig:
     obb_model_path: str
     detect_compute_runtime: ComputeRuntime = "cpu"
     obb_compute_runtime: ComputeRuntime = "cpu"
+    # See OBBDirectConfig.auto_export.
+    auto_export: bool = True
     detect_confidence_threshold: float = 1e-3
     obb_confidence_threshold: float = 1e-3
     detect_image_size: int = 0
