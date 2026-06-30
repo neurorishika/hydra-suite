@@ -25,6 +25,7 @@ from .cache.store import (
     PoseCacheHandle,
 )
 from .config import InferenceConfig
+from .pipeline import Pipeline, PipelineStages
 from .result import (
     AprilTagResult,
     CNNResult,
@@ -73,6 +74,58 @@ class _CacheSet:
         if self.apriltag is not None:
             handles.append(self.apriltag)
         return handles
+
+
+class _SyncCacheWriter:
+    """Synchronous per-frame cache writer used by the depth=1 Pipeline.
+
+    Wraps a ``_CacheSet`` and exposes the exact write side effects the legacy
+    ``_run_batch`` performed: a detection write per frame, plus head-tail / CNN /
+    pose / AprilTag writes keyed by ``det_indices`` for non-empty frames. Raw
+    stage results are written (no foreign-keypoint suppression) so the caches are
+    byte-for-byte equivalent to the legacy path. The async ``CacheWriter`` (Task
+    10) will later replace this with a queued writer behind the same interface.
+    """
+
+    def __init__(self, caches: _CacheSet, cnn_configs: list) -> None:
+        self._caches = caches
+        self._cnn_configs = cnn_configs
+
+    def write_detection(self, frame_idx: int, obb_result: OBBResult) -> None:
+        if self._caches.detection is not None:
+            self._caches.detection.write_frame(frame_idx, result=obb_result)
+
+    def write_downstream(
+        self,
+        frame_idx: int,
+        *,
+        det_indices: np.ndarray,
+        headtail: HeadTailResult | None,
+        cnn_results: list[CNNResult],
+        pose: PoseResult | None,
+        apriltag: AprilTagResult | None,
+    ) -> None:
+        caches = self._caches
+        if caches.headtail is not None and headtail is not None:
+            caches.headtail.write_frame(
+                frame_idx,
+                det_indices=det_indices,
+                heading_hints=headtail.heading_hints,
+                heading_confidences=headtail.heading_confidences,
+                directed_mask=headtail.directed_mask,
+            )
+        for cache, cnn_result in zip(caches.cnn, cnn_results):
+            if cnn_result is not None:
+                cache.write_frame(frame_idx, predictions=cnn_result.predictions)
+        if caches.pose is not None and pose is not None:
+            caches.pose.write_frame(
+                frame_idx,
+                det_indices=det_indices,
+                keypoints=pose.keypoints,
+                valid_mask=pose.valid_mask,
+            )
+        if caches.apriltag is not None and apriltag is not None:
+            caches.apriltag.write_frame(frame_idx, result=apriltag)
 
 
 def _load_all_models(config: InferenceConfig, runtime: RuntimeContext) -> _AllModels:
@@ -498,6 +551,24 @@ class InferenceRunner:
 
         return frame_result
 
+    def _build_pipeline(self, caches: _CacheSet) -> Pipeline:
+        """Construct the depth=1 Pipeline that drives the batch stage layer.
+
+        The Pipeline owns the per-window stage sequence (OBB → crops → HT/CNN/pose
+        → AprilTag → scatter); cache writes go through a ``_SyncCacheWriter`` that
+        reproduces ``_run_batch``'s exact raw-result side effects.
+        """
+        stages = PipelineStages(
+            config=self.config,
+            obb_models=self._models.obb,
+            headtail_model=self._models.headtail,
+            cnn_models=self._models.cnn,
+            pose_model=self._models.pose,
+            apriltag_model=self._models.apriltag,
+        )
+        writer = _SyncCacheWriter(caches, self.config.cnn_phases)
+        return Pipeline(stages, self.runtime, writer, depth=self.config.pipeline_depth)
+
     def run_batch_pass(
         self,
         video_path: Path,
@@ -522,6 +593,7 @@ class InferenceRunner:
         start_frame = max(0, int(start_frame))
         end_frame = min(video_total - 1, int(end_frame))
         range_total = max(0, end_frame - start_frame + 1)
+
         batch_size = self.config.detection_batch_size
 
         if start_frame > 0:
@@ -532,6 +604,10 @@ class InferenceRunner:
         processed = 0
         current_frame_idx = start_frame
 
+        # Each filled window is handed to the depth=1 Pipeline (built per window in
+        # _run_batch). The video read loop, range clamping, progress cadence,
+        # signature binding, and final cache close are unchanged from the legacy
+        # path; only the per-frame stage work moved into the Pipeline.
         try:
             while current_frame_idx <= end_frame:
                 ret, frame = cap.read()
@@ -566,123 +642,19 @@ class InferenceRunner:
         frame_indices: list[int],
         caches: _CacheSet,
     ) -> None:
-        ar = (
-            self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
+        """Process a single window through the depth=1 Pipeline.
+
+        Retained as the runner's window entry point (the per-frame inner loop and
+        the intra-frame ``ThreadPoolExecutor`` are gone — that work is now the
+        Pipeline's sequential batched stages + scatter). Cache side effects are
+        identical to the legacy path via ``_SyncCacheWriter``.
+        """
+        from .pipeline import BatchWindow
+
+        pipeline = self._build_pipeline(caches)
+        pipeline._process_window(
+            BatchWindow(frames=list(frames), frame_indices=list(frame_indices))
         )
-        mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
-
-        # OBB still runs cross-frame natively
-        raw_list = run_obb(frames, self._models.obb, self.config.obb, self.runtime)
-
-        for frame, frame_idx, raw in zip(frames, frame_indices, raw_list):
-            obb_result = (
-                materialize_tensors(raw, self.config.obb.raw_detection_cap)
-                if isinstance(raw, _RawOBBTensors)
-                else raw
-            )
-            # Re-stamp detection_ids for this frame
-            obb_result = OBBResult(
-                frame_idx=frame_idx,
-                centroids=obb_result.centroids,
-                angles=obb_result.angles,
-                sizes=obb_result.sizes,
-                shapes=obb_result.shapes,
-                confidences=obb_result.confidences,
-                corners=obb_result.corners,
-                detection_ids=OBBResult.make_detection_ids(
-                    frame_idx, obb_result.num_detections
-                ),
-            )
-            if caches.detection is not None:
-                caches.detection.write_frame(frame_idx, result=obb_result)
-
-            filtered_obb, det_indices = filter_with_indices(obb_result, self.config.obb)
-            if filtered_obb.num_detections == 0:
-                continue
-
-            canonical_crops = (
-                extract_canonical_crops(frame, filtered_obb, ar, mg, self.runtime)
-                if self._models.pose is not None
-                else None
-            )
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                ht_fut = (
-                    pool.submit(
-                        run_headtail,
-                        frame,
-                        filtered_obb,
-                        self._models.headtail,
-                        self.config.headtail,
-                        self.runtime,
-                        ar,
-                        mg,
-                    )
-                    if self._models.headtail is not None
-                    else None
-                )
-                cnn_futs = [
-                    pool.submit(
-                        run_cnn,
-                        frame,
-                        filtered_obb,
-                        mdl,
-                        cfg,
-                        self.runtime,
-                        ar,
-                        mg,
-                    )
-                    for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
-                ]
-                pose_fut = (
-                    pool.submit(
-                        run_pose,
-                        canonical_crops,
-                        filtered_obb,
-                        self._models.pose,
-                        self.config.pose,
-                        self.runtime,
-                        ar,
-                        mg,
-                    )
-                    if self._models.pose is not None
-                    else None
-                )
-                ht_result = ht_fut.result() if ht_fut else None
-                cnn_results = [f.result() for f in cnn_futs]
-                pose_result = pose_fut.result() if pose_fut else None
-
-            if caches.headtail is not None and ht_result is not None:
-                caches.headtail.write_frame(
-                    frame_idx,
-                    det_indices=det_indices,
-                    heading_hints=ht_result.heading_hints,
-                    heading_confidences=ht_result.heading_confidences,
-                    directed_mask=ht_result.directed_mask,
-                )
-            for cache, cnn_result in zip(caches.cnn, cnn_results):
-                if cnn_result is not None:
-                    cache.write_frame(frame_idx, predictions=cnn_result.predictions)
-            if caches.pose is not None and pose_result is not None:
-                caches.pose.write_frame(
-                    frame_idx,
-                    det_indices=det_indices,
-                    keypoints=pose_result.keypoints,
-                    valid_mask=pose_result.valid_mask,
-                )
-
-            if self._models.apriltag is not None:
-                aabb_crops = extract_aabb_crops(
-                    frame, filtered_obb, padding=self.config.apriltag.crop_padding
-                )
-                at_result = run_apriltag(
-                    aabb_crops,
-                    filtered_obb,
-                    self._models.apriltag,
-                    self.config.apriltag,
-                )
-                if caches.apriltag is not None and at_result is not None:
-                    caches.apriltag.write_frame(frame_idx, result=at_result)
 
     def load_frame(self, frame_idx: int) -> FrameResult:
         if self.cache_dir is None:

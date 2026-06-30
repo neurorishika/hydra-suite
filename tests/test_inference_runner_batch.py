@@ -199,7 +199,9 @@ def test_run_batch_iterates_frames_and_writes_caches(tmp_path):
 
     with (
         patch("hydra_suite.core.inference.runner._load_all_models") as ml,
-        patch("hydra_suite.core.inference.runner.run_obb", side_effect=fake_run_obb),
+        # OBB now runs inside the depth=1 Pipeline (_process_window), so patch the
+        # symbol in the pipeline module's namespace, not the runner's.
+        patch("hydra_suite.core.inference.pipeline.run_obb", side_effect=fake_run_obb),
     ):
         ml.return_value = MagicMock(
             obb=MagicMock(), headtail=None, cnn=[], pose=None, apriltag=None

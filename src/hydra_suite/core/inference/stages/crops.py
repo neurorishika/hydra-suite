@@ -454,6 +454,94 @@ def extract_classifier_crops_batch(
     )
 
 
+def extract_canonical_crops_batch(
+    frames: list,
+    obb_results: list[OBBResult],
+    canonical_aspect_ratio: float,
+    canonical_margin: float,
+    runtime: RuntimeContext,
+) -> CropBatch:
+    """Window-level canonical pose crops, bit-identical to ``extract_canonical_crops``.
+
+    The per-frame batch-pass path builds pose crops via ``extract_canonical_crops``
+    (native-extent warp, padded to the per-frame max, never resized). ``run_pose``
+    then recovers each detection's native crop with
+    ``compute_native_crop_dimensions`` and slices ``[:ch, :cw]``.
+
+    ``extract_crops`` cannot reproduce that numerically: it warps to native extent
+    then *resizes* every crop to a fixed ``out_size``, so ``run_pose_batch``'s
+    ``native_sizes`` slice recovers a resampled (not bit-identical) crop. That
+    would break the depth=1 correctness contract (pose keypoints must match the
+    old ``_run_batch`` exactly).
+
+    This builder instead warps each detection to its native extent (via the same
+    ``extract_canonical_crops`` CPU/GPU routine) and pads — never resizes — to the
+    WINDOW-wide max canvas, recording each crop's native ``[h, w]`` in
+    ``native_sizes``. ``run_pose_batch`` slices back to native, recovering the
+    exact pixels ``run_pose`` would have seen. Verified maxabsdiff == 0 vs the
+    per-frame path.
+    """
+    per_frame: list[torch.Tensor] = []
+    det_ids: list[np.ndarray] = []
+    frame_idx_list: list[np.ndarray] = []
+    native_sizes_list: list[np.ndarray] = []
+
+    for frame, obb in zip(frames, obb_results):
+        if obb.detection_ids.shape[0] == 0:
+            continue
+        # extract_canonical_crops pads each frame's crops to that frame's own max.
+        crops = extract_canonical_crops(
+            frame, obb, canonical_aspect_ratio, canonical_margin, runtime
+        )
+        per_frame.append(crops)
+        det_ids.append(obb.detection_ids)
+        frame_idx_list.append(
+            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
+        )
+        # Native pre-pad dims per detection (mirrors run_pose recovery).
+        pad = max(0.0, float(canonical_margin) - 1.0)
+        sizes = np.zeros((obb.num_detections, 2), np.int64)
+        for i in range(obb.num_detections):
+            cw, ch = compute_native_crop_dimensions(
+                obb.corners[i], canonical_aspect_ratio, pad
+            )
+            sizes[i] = (ch, cw)
+        native_sizes_list.append(sizes)
+
+    if not per_frame:
+        device = runtime.device if runtime.cuda_mode else "cpu"
+        empty = torch.zeros((0, 3, 8, 8), device=device)
+        return CropBatch(
+            empty,
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            {o.frame_idx: o for o in obb_results},
+            np.zeros((0, 2), np.int64),
+        )
+
+    # Each frame's crop tensor is padded to that frame's max; concatenating
+    # across frames needs a single window-wide canvas, so pad every frame's
+    # tensor up to the window max (bottom/right zeros, same convention as
+    # extract_canonical_crops).
+    max_h = max(t.shape[2] for t in per_frame)
+    max_w = max(t.shape[3] for t in per_frame)
+    padded: list[torch.Tensor] = []
+    for t in per_frame:
+        ph = max_h - t.shape[2]
+        pw = max_w - t.shape[3]
+        if ph or pw:
+            t = torch.nn.functional.pad(t, (0, pw, 0, ph))
+        padded.append(t)
+
+    return CropBatch(
+        crops=torch.cat(padded, dim=0),
+        detection_ids=np.concatenate(det_ids),
+        frame_index=np.concatenate(frame_idx_list),
+        obb_by_frame={o.frame_idx: o for o in obb_results},
+        native_sizes=np.concatenate(native_sizes_list),
+    )
+
+
 def extract_crops(
     frames: list,
     obb_results: list[OBBResult],
