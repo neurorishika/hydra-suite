@@ -73,29 +73,43 @@ def extract_aabb_crops(
     return crops
 
 
+def _frame_as_hwc_numpy(frame: np.ndarray | torch.Tensor) -> np.ndarray:
+    """Convert a frame (numpy HWC or torch CHW/HWC) to a HWC uint8/float numpy array."""
+    if isinstance(frame, torch.Tensor):
+        arr = frame.cpu().numpy()
+        if arr.ndim == 3 and arr.shape[0] == 3:
+            arr = arr.transpose(1, 2, 0)
+        return arr
+    return frame
+
+
+def _warp_crops_for_obb(
+    arr: np.ndarray,
+    obb: OBBResult,
+    aspect_ratio: float,
+    padding_fraction: float,
+) -> list[np.ndarray]:
+    """Warp each detection in *obb* to its native canonical extent.
+
+    Returns a list of HWC numpy arrays, one per detection, at the native
+    (un-resized) crop size produced by :func:`_warp_canonical_crop`.
+    """
+    crops: list[np.ndarray] = []
+    for i in range(obb.num_detections):
+        crop = _warp_canonical_crop(arr, obb.corners[i], aspect_ratio, padding_fraction)
+        crops.append(crop)
+    return crops
+
+
 def _extract_canonical_cpu(
     frame: np.ndarray | torch.Tensor,
     obb: OBBResult,
     aspect_ratio: float,
     margin: float,
 ) -> torch.Tensor:
-    if isinstance(frame, torch.Tensor):
-        arr = frame.cpu().numpy()
-        if arr.ndim == 3 and arr.shape[0] == 3:
-            arr = arr.transpose(1, 2, 0)
-    else:
-        arr = frame
-
+    arr = _frame_as_hwc_numpy(frame)
     padding_fraction = max(0.0, float(margin) - 1.0)
-    crops: list[np.ndarray] = []
-    for i in range(obb.num_detections):
-        crop = _warp_canonical_crop(
-            arr,
-            obb.corners[i],
-            aspect_ratio,
-            padding_fraction,
-        )
-        crops.append(crop)
+    crops = _warp_crops_for_obb(arr, obb, aspect_ratio, padding_fraction)
 
     max_h = max(c.shape[0] for c in crops)
     max_w = max(c.shape[1] for c in crops)
@@ -293,31 +307,29 @@ def _extract_canonical_window(
         return crops, sizes
 
     # --- CPU / MPS path ---
-    if isinstance(frame, torch.Tensor):
-        arr = frame.cpu().numpy()
-        if arr.ndim == 3 and arr.shape[0] == 3:
-            arr = arr.transpose(1, 2, 0)
-    else:
-        arr = frame
+    # Use shared helpers: frame conversion + per-detection warp loop.
+    arr = _frame_as_hwc_numpy(frame)
+    raw_crops = _warp_crops_for_obb(arr, obb, aspect_ratio, padding_fraction)
 
-    raw_crops: list[np.ndarray] = []
-    native_hw_list: list[tuple[int, int]] = []
-    for i in range(n):
-        crop = _warp_canonical_crop(arr, obb.corners[i], aspect_ratio, padding_fraction)
-        native_hw_list.append((crop.shape[0], crop.shape[1]))
-        raw_crops.append(crop)
+    native_hw_list: list[tuple[int, int]] = [
+        (c.shape[0], c.shape[1]) for c in raw_crops
+    ]
 
-    # Pad each crop to out_size
-    padded: list[np.ndarray] = []
+    # Resize each native crop to out_size, matching the GPU path which warps
+    # directly to (out_w, out_h) via affine_grid+grid_sample (bilinear,
+    # padding_mode="border").  For crops smaller than out_size this replicates
+    # the border; for crops larger than out_size this down-scales — both agree
+    # with the GPU path and avoid the previous silent pixel-loss hard-crop.
+    resized: list[np.ndarray] = []
     for crop in raw_crops:
-        pad_h = max(0, out_h - crop.shape[0])
-        pad_w = max(0, out_w - crop.shape[1])
-        if pad_h > 0 or pad_w > 0:
-            crop = np.pad(crop, ((0, pad_h), (0, pad_w), (0, 0)), mode="constant")
-        # Crop down if native size exceeds out_size
-        padded.append(crop[:out_h, :out_w])
+        if crop.shape[0] == out_h and crop.shape[1] == out_w:
+            resized.append(crop)
+        else:
+            resized.append(
+                cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+            )
 
-    stacked = np.stack(padded, axis=0)  # (N, H, W, C)
+    stacked = np.stack(resized, axis=0)  # (N, H, W, C)
     crops_t = torch.from_numpy(stacked).permute(0, 3, 1, 2).float() / 255.0
     sizes = np.array([[h, w] for h, w in native_hw_list], dtype=np.int64)
     return crops_t, sizes
