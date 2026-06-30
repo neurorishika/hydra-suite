@@ -77,58 +77,6 @@ class _CacheSet:
         return handles
 
 
-class _SyncCacheWriter:
-    """Synchronous per-frame cache writer used by the depth=1 Pipeline.
-
-    Wraps a ``_CacheSet`` and exposes the exact write side effects the legacy
-    ``_run_batch`` performed: a detection write per frame, plus head-tail / CNN /
-    pose / AprilTag writes keyed by ``det_indices`` for non-empty frames. Raw
-    stage results are written (no foreign-keypoint suppression) so the caches are
-    byte-for-byte equivalent to the legacy path. The async ``CacheWriter`` (Task
-    10) will later replace this with a queued writer behind the same interface.
-    """
-
-    def __init__(self, caches: _CacheSet, cnn_configs: list) -> None:
-        self._caches = caches
-        self._cnn_configs = cnn_configs
-
-    def write_detection(self, frame_idx: int, obb_result: OBBResult) -> None:
-        if self._caches.detection is not None:
-            self._caches.detection.write_frame(frame_idx, result=obb_result)
-
-    def write_downstream(
-        self,
-        frame_idx: int,
-        *,
-        det_indices: np.ndarray,
-        headtail: HeadTailResult | None,
-        cnn_results: list[CNNResult],
-        pose: PoseResult | None,
-        apriltag: AprilTagResult | None,
-    ) -> None:
-        caches = self._caches
-        if caches.headtail is not None and headtail is not None:
-            caches.headtail.write_frame(
-                frame_idx,
-                det_indices=det_indices,
-                heading_hints=headtail.heading_hints,
-                heading_confidences=headtail.heading_confidences,
-                directed_mask=headtail.directed_mask,
-            )
-        for cache, cnn_result in zip(caches.cnn, cnn_results):
-            if cnn_result is not None:
-                cache.write_frame(frame_idx, predictions=cnn_result.predictions)
-        if caches.pose is not None and pose is not None:
-            caches.pose.write_frame(
-                frame_idx,
-                det_indices=det_indices,
-                keypoints=pose.keypoints,
-                valid_mask=pose.valid_mask,
-            )
-        if caches.apriltag is not None and apriltag is not None:
-            caches.apriltag.write_frame(frame_idx, result=apriltag)
-
-
 def _load_all_models(config: InferenceConfig, runtime: RuntimeContext) -> _AllModels:
     from .stages.apriltag import load_apriltag_model
     from .stages.cnn import load_cnn_model
@@ -659,7 +607,7 @@ class InferenceRunner:
         Retained as the runner's window entry point (the per-frame inner loop and
         the intra-frame ``ThreadPoolExecutor`` are gone — that work is now the
         Pipeline's sequential batched stages + scatter). Cache side effects are
-        identical to the legacy path via ``_SyncCacheWriter``.
+        identical to the legacy path via ``CacheWriter``.
         """
         from .pipeline import BatchWindow
 

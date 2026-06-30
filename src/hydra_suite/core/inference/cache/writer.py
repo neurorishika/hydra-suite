@@ -58,6 +58,7 @@ class CacheWriter:
         self._next_expected: int = start_frame
         self._buffer: dict[int, FrameResult] = {}
         self._closed = False
+        self._worker_error: BaseException | None = None
 
         if async_mode:
             self._queue: queue.Queue = queue.Queue()
@@ -80,6 +81,8 @@ class CacheWriter:
         """Drain everything currently buffered (in order)."""
         if self._async_mode:
             self._queue.join()
+            if self._worker_error is not None:
+                raise self._worker_error
         else:
             self._drain_all_sync()
 
@@ -92,6 +95,8 @@ class CacheWriter:
             self._queue.join()
             self._queue.put(None)  # sentinel
             self._worker.join()
+            if self._worker_error is not None:
+                raise self._worker_error
         else:
             self._drain_all_sync()
 
@@ -102,6 +107,15 @@ class CacheWriter:
 
         Detection writes come from the pipeline one-at-a-time in ascending
         frame order within a window, so no reordering is needed.
+
+        .. note::
+            When depth>1 / async mode is wired (Task 11), detection and
+            downstream writes for the same frame can reach handles in
+            inconsistent relative order via this bypass — because detection
+            is written here while downstream results travel through the
+            ordered ``submit`` buffer.  Task 11 must either route detection
+            through the same ordered ``submit`` path (preferred) or accept
+            this documented caveat and ensure consumers tolerate it.
         """
         h = self._handles.get("detection")
         if h is not None:
@@ -122,7 +136,7 @@ class CacheWriter:
         Like ``write_detection``, these come in ascending order within a
         window, so no reordering buffer is needed.
         """
-        self._write_downstream_to_handles(
+        self._write_to_handles(
             frame_idx,
             det_indices=det_indices,
             headtail=headtail,
@@ -142,54 +156,43 @@ class CacheWriter:
 
     def _drain_all_sync(self) -> None:
         """Emit all buffered frames in sorted order (ignoring gaps)."""
+        if not self._buffer:
+            return
+        last = max(self._buffer)
         for idx in sorted(self._buffer):
             self._write_frame_result(self._buffer[idx])
         self._buffer.clear()
-        # Advance cursor past everything we just emitted.
-        if self._buffer:
-            self._next_expected = max(self._buffer) + 1
+        # Advance cursor past everything we just emitted so a subsequent
+        # submit/flush does not re-drain the same frames.
+        self._next_expected = last + 1
 
     def _write_frame_result(self, fr: FrameResult) -> None:
-        """Map a FrameResult to handle write_frame calls."""
+        """Map a FrameResult to handle write_frame calls (single authoritative mapping).
+
+        Both the ordered-buffer drain path and the async worker use this method
+        exclusively — there is no second copy of the FrameResult→handle mapping.
+        The detection write is included here so that ``submit``-routed results
+        (used in async/depth>1 mode) produce the same cache layout as the direct
+        ``write_detection`` / ``write_downstream`` calls used by depth=1.
+        """
+        import numpy as np
+
         h_det = self._handles.get("detection")
         if h_det is not None:
             h_det.write_frame(fr.frame_idx, result=fr.obb)
 
-        det_indices = fr.filtered_indices
+        det_indices = np.array(fr.filtered_indices, dtype=np.int32)
 
-        h_ht = self._handles.get("headtail")
-        if h_ht is not None and fr.headtail is not None:
-            import numpy as np
+        self._write_to_handles(
+            fr.frame_idx,
+            det_indices=det_indices,
+            headtail=fr.headtail,
+            cnn_results=fr.cnn,
+            pose=fr.pose,
+            apriltag=fr.apriltag,
+        )
 
-            h_ht.write_frame(
-                fr.frame_idx,
-                det_indices=np.array(det_indices, dtype=np.int32),
-                heading_hints=fr.headtail.heading_hints,
-                heading_confidences=fr.headtail.heading_confidences,
-                directed_mask=fr.headtail.directed_mask,
-            )
-
-        for cfg, cnn_result in zip(self._cnn_configs, fr.cnn):
-            h_cnn = self._handles.get(f"cnn_{cfg.label}")
-            if h_cnn is not None and cnn_result is not None:
-                h_cnn.write_frame(fr.frame_idx, predictions=cnn_result.predictions)
-
-        h_pose = self._handles.get("pose")
-        if h_pose is not None and fr.pose is not None:
-            import numpy as np
-
-            h_pose.write_frame(
-                fr.frame_idx,
-                det_indices=np.array(det_indices, dtype=np.int32),
-                keypoints=fr.pose.keypoints,
-                valid_mask=fr.pose.valid_mask,
-            )
-
-        h_at = self._handles.get("apriltag")
-        if h_at is not None and fr.apriltag is not None:
-            h_at.write_frame(fr.frame_idx, result=fr.apriltag)
-
-    def _write_downstream_to_handles(
+    def _write_to_handles(
         self,
         frame_idx: int,
         *,
@@ -199,11 +202,19 @@ class CacheWriter:
         pose: Any | None,
         apriltag: Any | None,
     ) -> None:
+        """Write non-detection results to their respective handles.
+
+        This is the single implementation of the downstream FrameResult→handle
+        mapping.  Called by both ``_write_frame_result`` (ordered-buffer drain)
+        and ``write_downstream`` (direct/depth=1 path).
+        """
+        import numpy as np
+
         h_ht = self._handles.get("headtail")
         if h_ht is not None and headtail is not None:
             h_ht.write_frame(
                 frame_idx,
-                det_indices=det_indices,
+                det_indices=np.asarray(det_indices, dtype=np.int32),
                 heading_hints=headtail.heading_hints,
                 heading_confidences=headtail.heading_confidences,
                 directed_mask=headtail.directed_mask,
@@ -218,7 +229,7 @@ class CacheWriter:
         if h_pose is not None and pose is not None:
             h_pose.write_frame(
                 frame_idx,
-                det_indices=det_indices,
+                det_indices=np.asarray(det_indices, dtype=np.int32),
                 keypoints=pose.keypoints,
                 valid_mask=pose.valid_mask,
             )
@@ -232,9 +243,13 @@ class CacheWriter:
     def _worker_loop(self) -> None:
         while True:
             item = self._queue.get()
-            if item is None:  # sentinel: time to exit
+            try:
+                if item is None:  # sentinel: time to exit
+                    break
+                self._buffer[item.frame_idx] = item
+                self._drain_sync()
+            except BaseException as exc:  # noqa: BLE001
+                if self._worker_error is None:
+                    self._worker_error = exc
+            finally:
                 self._queue.task_done()
-                break
-            self._buffer[item.frame_idx] = item
-            self._drain_sync()
-            self._queue.task_done()

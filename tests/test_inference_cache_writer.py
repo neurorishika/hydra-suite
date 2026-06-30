@@ -222,3 +222,62 @@ def test_double_close_is_idempotent():
     w = CacheWriter({"detection": h}, [], async_mode=False)
     w.close()
     w.close()  # second call must be a no-op
+
+
+# ---------------------------------------------------------------------------
+# Tests: Fix 2 — _drain_all_sync cursor advance
+# ---------------------------------------------------------------------------
+
+
+def test_flush_then_submit_no_duplicates():
+    """submit after flush must not re-write already-flushed frames.
+
+    Regression for the _drain_all_sync cursor bug: after flush() drains frames
+    0 and 2 (with a gap at 1), submitting frame 3 must write [3] only — not
+    re-emit 0 or 2 again.
+    """
+    h = _RecordingHandle()
+    w = CacheWriter({"detection": h}, [], async_mode=False)
+    # Submit 0 and 2; frame 1 is missing so contiguous drain stops at 0.
+    w.submit(_fr(0))
+    w.submit(_fr(2))
+    # After this flush: frames 0 and 2 are written; cursor must advance to 3.
+    w.flush()
+    assert h.frames == [0, 2], "flush must drain 0 and 2 in sorted order"
+    # Now submit frame 3; it should be written once, immediately.
+    w.submit(_fr(3))
+    w.close()
+    assert h.frames == [0, 2, 3], "frame 3 must appear exactly once, no duplicates"
+    # Verify no frame appears more than once.
+    assert len(h.frames) == len(set(h.frames)), "duplicate writes detected"
+
+
+# ---------------------------------------------------------------------------
+# Tests: Fix 3 — async worker exception surfacing
+# ---------------------------------------------------------------------------
+
+
+class _RaisingHandle:
+    """A handle whose write_frame always raises RuntimeError."""
+
+    def write_frame(self, frame_idx: int, **kw):
+        raise RuntimeError(f"write_frame failed for frame {frame_idx}")
+
+    def close(self):
+        pass
+
+
+def test_async_worker_exception_surfaces_on_close():
+    """An exception in the async worker must surface from close(), not hang.
+
+    Regression for the task_done() omission: if write_frame raises, close()
+    must NOT deadlock and must re-raise the worker's exception.
+    """
+    import pytest
+
+    h = _RaisingHandle()
+    w = CacheWriter({"detection": h}, [], async_mode=True)
+    # Submit a frame that will trigger write_frame, which raises.
+    w.submit(_fr(0))
+    with pytest.raises(RuntimeError, match="write_frame failed"):
+        w.close()
