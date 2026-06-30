@@ -73,14 +73,15 @@ def test_round_trip_with_cnn_phases():
 
 
 def test_runtime_validation_rejects_cuda_cpu_mix():
+    config = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cuda"),
+        ),
+        headtail=HeadTailConfig(model_path="/ht.pt", compute_runtime="cpu"),
+    )
     with pytest.raises(InferenceConfigError, match="Cannot mix"):
-        InferenceConfig(
-            obb=OBBConfig(
-                mode="direct",
-                direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cuda"),
-            ),
-            headtail=HeadTailConfig(model_path="/ht.pt", compute_runtime="cpu"),
-        )
+        config._validate_runtime_consistency()
 
 
 def test_runtime_validation_accepts_cuda_group():

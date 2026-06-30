@@ -166,7 +166,13 @@ class InferenceConfig:
             json.dump(_config_to_dict(self), f, indent=2)
 
     def __post_init__(self) -> None:
-        self._validate_runtime_consistency()
+        self._validate_pipeline_depth()
+
+    def _validate_pipeline_depth(self) -> None:
+        if self.pipeline_depth < 1:
+            raise InferenceConfigError(
+                f"pipeline_depth must be >= 1, got {self.pipeline_depth}"
+            )
 
     def _collect_all_runtimes(self) -> set[str]:
         runtimes: set[str] = set()
@@ -187,10 +193,6 @@ class InferenceConfig:
         return runtimes
 
     def _validate_runtime_consistency(self) -> None:
-        if self.pipeline_depth < 1:
-            raise InferenceConfigError(
-                f"pipeline_depth must be >= 1, got {self.pipeline_depth}"
-            )
         runtimes = self._collect_all_runtimes()
         uses_cuda = bool(runtimes & CUDA_RUNTIMES)
         uses_cpu = bool(runtimes & CPU_RUNTIMES)
