@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import weakref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -9,12 +8,18 @@ from .config import CUDA_RUNTIMES, ComputeRuntime, InferenceConfig
 if TYPE_CHECKING:
     import torch as _torch
 
-# Module-level WeakKeyDictionary mapping tensors to their recorded CUDA events.
-# Using weakref so that tensors are not kept alive by the event registry.
-# On CPU/MPS paths, this dict is never written to.
-_HANDOFF_EVENTS: "weakref.WeakKeyDictionary[_torch.Tensor, object]" = (
-    weakref.WeakKeyDictionary()
-)
+# Module-level map from a tensor's id() to its recorded CUDA event.
+#
+# IMPORTANT: the key is ``id(tensor)``, NOT the tensor itself. A torch tensor
+# cannot be used as a dict key here because ``Tensor.__eq__`` returns an
+# element-wise tensor (not a bool), so any dict key comparison — which
+# ``WeakKeyDictionary.get``/``__setitem__`` perform — raises "Boolean value of
+# Tensor with more than one value is ambiguous". The producer keeps the tensor
+# alive (it sits in the producer→consumer queue) between ``handoff`` and
+# ``await_handoff``, so its id is stable across the handoff; ``await_handoff``
+# pops the entry so the map never accumulates and an id is never reused while an
+# entry is live. On CPU/MPS paths this dict is never touched.
+_HANDOFF_EVENTS: "dict[int, object]" = {}
 
 
 @dataclass(frozen=True)
@@ -31,8 +36,8 @@ class RuntimeContext:
         """Producer-side stream-sync: record a CUDA event on the current stream.
 
         On CUDA, records a ``torch.cuda.Event`` on ``torch.cuda.current_stream()``
-        and stores it in the module-level ``_HANDOFF_EVENTS`` WeakKeyDictionary
-        keyed by *tensor*.  The consumer must call :meth:`await_handoff` before
+        and stores it in the module-level ``_HANDOFF_EVENTS`` map keyed by
+        ``id(tensor)``.  The consumer must call :meth:`await_handoff` before
         reading the tensor to ensure the GPU work is complete on its stream.
 
         On CPU/MPS this is an identity no-op — the tensor is returned unchanged
@@ -49,7 +54,7 @@ class RuntimeContext:
 
             event = torch.cuda.Event()
             event.record(torch.cuda.current_stream())
-            _HANDOFF_EVENTS[tensor] = event
+            _HANDOFF_EVENTS[id(tensor)] = event
         return tensor
 
     def await_handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
@@ -72,7 +77,7 @@ class RuntimeContext:
         if self.cuda_mode and self.tensor_on_cuda:
             import torch
 
-            event = _HANDOFF_EVENTS.get(tensor)
+            event = _HANDOFF_EVENTS.pop(id(tensor), None)
             if event is not None:
                 torch.cuda.current_stream().wait_event(event)  # type: ignore[arg-type]
         return tensor
