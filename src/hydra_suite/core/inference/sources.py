@@ -305,6 +305,22 @@ class NvdecFrameReader(FrameSource):
             if self._start_frame > 0:
                 dec.seek_to_index(self._start_frame)
 
+            # Trial-decode the first frame to validate NVDEC can actually decode
+            # this stream on THIS GPU before committing to the NVDEC path. Some
+            # GPUs reject clips above a per-frame macroblock limit ("MBCount not
+            # supported", error 801) — that failure surfaces HERE at the first
+            # get_batch_frames, not at decoder creation. Raising now lets
+            # make_frame_source fall back to CpuFrameReader gracefully instead of
+            # crashing mid-pass. The decoded frame is cached and yielded first by
+            # __iter__ so the trial does not consume a frame.
+            self._primed_frame = None
+            if self._frame_count > 0:
+                first_batch = dec.get_batch_frames(1)
+                if first_batch:
+                    self._primed_frame = self._nvdec_frame_to_cuda_tensor(
+                        first_batch[0]
+                    ).clone()
+
         except Exception:
             # Decoder was created but setup failed — release the hardware context
             # before re-raising so no decode slot is leaked.
@@ -360,6 +376,13 @@ class NvdecFrameReader(FrameSource):
 
         idx = self._start_frame
         end = self._end_frame
+        # Yield the frame primed during construction (the trial-decode that
+        # validated NVDEC works on this GPU) first, so the validation decode is
+        # not wasted. It was already cloned, so it is safe to yield directly.
+        if self._primed_frame is not None:
+            yield idx, self._primed_frame
+            self._primed_frame = None
+            idx += 1
         while idx <= end:
             batch = self._dec.get_batch_frames(1)
             if not batch:

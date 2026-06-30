@@ -126,6 +126,17 @@ def _cpu_or_mps_device() -> str:
 
 
 def _nvdec_available() -> bool:
+    # Operator kill-switch: HYDRA_DISABLE_NVDEC forces the CPU decode path even
+    # on a CUDA box with PyNvVideoCodec installed.  Useful when NVDEC is flaky
+    # for a given GPU/codec/resolution (e.g. an RTX 6000 Ada rejects clips whose
+    # per-frame macroblock count exceeds its NVDEC limit), and required for
+    # apples-to-apples equivalence runs (legacy uses CPU decode on the
+    # PyTorch-CUDA path, so both sides must decode identically).
+    import os
+
+    if os.environ.get("HYDRA_DISABLE_NVDEC"):
+        return False
+
     # NvdecFrameReader uses PyNvVideoCodec + cupy, not torchvision's video
     # backend — probe the libraries the reader actually imports.  (CUDA-only;
     # validate on mehek.  make_frame_source already falls back if construction

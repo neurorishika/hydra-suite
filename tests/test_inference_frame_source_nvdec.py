@@ -150,6 +150,21 @@ def test_make_frame_source_returns_cpu_when_use_nvdec_false(tiny_video):
         src.close()
 
 
+def test_hydra_disable_nvdec_env_forces_cpu(monkeypatch):
+    """HYDRA_DISABLE_NVDEC is an operator kill-switch: _nvdec_available() returns
+    False even where PyNvVideoCodec+cupy are importable. This forces the CPU
+    decode path (used for flaky-NVDEC GPUs and for apples-to-apples equivalence
+    runs against the legacy CPU-decode path)."""
+    from hydra_suite.core.inference.runtime import _nvdec_available
+
+    monkeypatch.setenv("HYDRA_DISABLE_NVDEC", "1")
+    assert _nvdec_available() is False
+    monkeypatch.delenv("HYDRA_DISABLE_NVDEC", raising=False)
+    # Without the flag, the result reflects real library availability (True on a
+    # PyNvVideoCodec box, False otherwise) — we only assert it does not raise.
+    assert isinstance(_nvdec_available(), bool)
+
+
 def test_make_frame_source_falls_back_to_cpu_when_nvdec_unavailable(
     tiny_video, monkeypatch
 ):
