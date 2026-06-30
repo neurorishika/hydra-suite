@@ -49,9 +49,11 @@ import statistics
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from unittest.mock import patch
 
 # Conda/torch builds often link libomp twice; without this, OpenMP aborts the
 # process ("OMP Error #15"). Must be set before torch is imported.
@@ -148,6 +150,35 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 # ---------------------------------------------------------------------------
+# NVDEC per-combo toggle
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _nvdec_override(force_off: bool):
+    """Context manager that controls the NVDEC availability probe per combo.
+
+    When *force_off* is True, monkeypatches
+    ``hydra_suite.core.inference.runtime._nvdec_available`` to always return
+    ``False`` so that ``RuntimeContext.from_config`` builds a non-NVDEC context
+    for this run — CPU decode is used even on a capable CUDA box.
+
+    When *force_off* is False, the real probe runs (NVDEC used iff available).
+
+    This is scoped to the ``with`` block and restored on exit, so each combo
+    gets an independent, honest measurement of the nvdec axis.
+    """
+    if force_off:
+        with patch(
+            "hydra_suite.core.inference.runtime._nvdec_available",
+            return_value=False,
+        ):
+            yield
+    else:
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Config matrix
 # ---------------------------------------------------------------------------
 
@@ -218,9 +249,9 @@ def _patch_combo_into_config(
     - When trt=on: set all compute_runtime fields to "tensorrt", auto_export=True
     - When trt=off (and not CUDA): set to "cpu"
     - When trt=off but NVDEC=on: set to "cuda" (NVDEC + PyTorch CUDA, no TRT)
-    - nvdec is set via runtime.use_nvdec, which is derived automatically from
-      RuntimeContext.from_config() when compute_runtime is a CUDA-group runtime.
-      We don't need to set it explicitly; make_frame_source reads runtime.use_nvdec.
+    - NVDEC on/off is enforced per-combo by patching the _nvdec_available probe
+      (see _nvdec_override context manager) rather than in the config dict.
+      make_frame_source reads runtime.use_nvdec which comes from that probe.
     """
     import copy
 
@@ -237,21 +268,27 @@ def _patch_combo_into_config(
 
     # Patch all runtime fields that InferenceConfig._collect_all_runtimes() reads.
     # We don't validate runtime consistency here; InferenceConfig does it.
-    _set_runtime_fields(cfg, target_runtime)
+    _set_runtime_fields(cfg, target_runtime, auto_export=combo.trt)
     return cfg
 
 
-def _set_runtime_fields(cfg: dict, runtime: str) -> None:
-    """Recursively set all compute_runtime fields to *runtime*."""
+def _set_runtime_fields(cfg: dict, runtime: str, auto_export: bool = False) -> None:
+    """Recursively set all compute_runtime fields to *runtime*.
+
+    *auto_export* is only meaningful for TRT/ONNX runtimes and is set only when
+    ``combo.trt`` is True — it tells the runner to build the engine artifact on
+    first use.  For CPU/CUDA runtimes it has no effect, so we leave it False to
+    avoid confusing the InferenceConfig validator.
+    """
     # OBB
     obb = cfg.get("obb", {})
     if obb.get("direct"):
         obb["direct"]["compute_runtime"] = runtime
-        obb["direct"]["auto_export"] = True
+        obb["direct"]["auto_export"] = auto_export
     if obb.get("sequential"):
         obb["sequential"]["detect_compute_runtime"] = runtime
         obb["sequential"]["obb_compute_runtime"] = runtime
-        obb["sequential"]["auto_export"] = True
+        obb["sequential"]["auto_export"] = auto_export
     # HeadTail
     if cfg.get("headtail"):
         cfg["headtail"]["compute_runtime"] = runtime
@@ -349,6 +386,10 @@ def _run_combo(
 
     fps_values: list[float] = []
     total_runs = warmup + repeats
+    # nvdec=off combos force the NVDEC probe to return False so the decode path
+    # is CPU (cv2) even on a capable CUDA box.  nvdec=on combos run the real
+    # probe; NVDEC is used iff the hardware + PyNvVideoCodec are present.
+    force_nvdec_off = not combo.nvdec
 
     for run_idx in range(total_runs):
         is_warmup = run_idx < warmup
@@ -357,22 +398,27 @@ def _run_combo(
 
         cache_tmp = Path(tempfile.mkdtemp(prefix="hydra_bench_"))
         try:
-            runner = InferenceRunner(cfg, cache_dir=cache_tmp, video_path=video_path)
-            t0 = time.perf_counter()
-            try:
-                runner.run_batch_pass(video_path, progress_cb=progress_cb)
-            except Exception as exc:
-                runner.close()
-                shutil.rmtree(cache_tmp, ignore_errors=True)
-                return RunResult(
-                    combo=combo,
-                    status=f"error:{type(exc).__name__}",
-                    fps_values=fps_values,
-                    median_fps=statistics.median(fps_values) if fps_values else None,
-                    error_msg=str(exc),
+            with _nvdec_override(force_off=force_nvdec_off):
+                runner = InferenceRunner(
+                    cfg, cache_dir=cache_tmp, video_path=video_path
                 )
-            elapsed = time.perf_counter() - t0
-            runner.close()
+                t0 = time.perf_counter()
+                try:
+                    runner.run_batch_pass(video_path, progress_cb=progress_cb)
+                except Exception as exc:
+                    runner.close()
+                    shutil.rmtree(cache_tmp, ignore_errors=True)
+                    return RunResult(
+                        combo=combo,
+                        status=f"error:{type(exc).__name__}",
+                        fps_values=fps_values,
+                        median_fps=(
+                            statistics.median(fps_values) if fps_values else None
+                        ),
+                        error_msg=str(exc),
+                    )
+                elapsed = time.perf_counter() - t0
+                runner.close()
         finally:
             shutil.rmtree(cache_tmp, ignore_errors=True)
 
