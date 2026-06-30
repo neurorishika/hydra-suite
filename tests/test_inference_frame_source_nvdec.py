@@ -18,7 +18,14 @@ import pytest
 
 
 def _write_tiny_video(path: Path, n_frames: int = 5, width: int = 16, height: int = 12):
-    """Write a tiny BGR video with ``n_frames`` solid-colour frames."""
+    """Write a tiny BGR video with ``n_frames`` solid-colour frames.
+
+    NOTE: The MJPEG codec is used for portability on all platforms (including MPS
+    dev machines that lack x264).  MJPEG may not engage hardware NVDEC on all
+    NVIDIA GPUs — only a subset of Turing/Ampere/Ada cards support MJPEG NVDEC.
+    For the real ``mehek`` hardware-decode run, prefer an H.264 or H.265 clip
+    so NVDEC engagement is guaranteed.
+    """
     import cv2
 
     fourcc = cv2.VideoWriter_fourcc(*"MJPG")
@@ -179,3 +186,113 @@ def test_make_frame_source_respects_frame_range(tiny_video):
         assert src.frame_count == 3
     finally:
         src.close()
+
+
+# ---------------------------------------------------------------------------
+# cv2-probe frame count helper — CPU-testable (no CUDA needed)
+# ---------------------------------------------------------------------------
+
+
+def _nvdec_effective_end_frame(
+    total_frames_from_metadata: int,
+    end_frame_arg: "int | None",
+    cv2_total: int,
+    start_frame: int = 0,
+) -> tuple[int, int]:
+    """Pure helper that replicates the NvdecFrameReader end_frame resolution logic.
+
+    Returns ``(effective_end_frame, effective_frame_count)`` given:
+
+    * ``total_frames_from_metadata``: what ``meta.num_frames`` reported (0 = absent).
+    * ``end_frame_arg``: the caller-supplied ``end_frame`` (``None`` = whole video).
+    * ``cv2_total``: what ``cv2.CAP_PROP_FRAME_COUNT`` would report for the same file.
+    * ``start_frame``: start of the requested range (default 0).
+
+    This mirrors the branching in ``NvdecFrameReader.__init__`` so it can be
+    unit-tested on CPU without constructing a real decoder.
+    """
+    import sys
+
+    total_frames = total_frames_from_metadata
+
+    if end_frame_arg is None and total_frames <= 0:
+        # cv2 probe branch
+        if cv2_total > 0:
+            total_frames = cv2_total
+        else:
+            total_frames = sys.maxsize  # open-ended sentinel
+
+    if end_frame_arg is None:
+        eff_end = total_frames - 1
+    else:
+        if total_frames > 0 and total_frames < sys.maxsize:
+            eff_end = min(total_frames - 1, int(end_frame_arg))
+        else:
+            eff_end = int(end_frame_arg)
+
+    eff_count = max(0, eff_end - start_frame + 1)
+    return eff_end, eff_count
+
+
+def test_nvdec_frame_count_probe_metadata_present():
+    """When metadata reports num_frames > 0, cv2 probe is not used."""
+    end, count = _nvdec_effective_end_frame(
+        total_frames_from_metadata=10, end_frame_arg=None, cv2_total=999
+    )
+    assert end == 9, f"expected 9, got {end}"
+    assert count == 10, f"expected 10, got {count}"
+
+
+def test_nvdec_frame_count_probe_metadata_absent_cv2_succeeds():
+    """When metadata is missing (0) and end_frame=None, cv2 probe gives the count."""
+    end, count = _nvdec_effective_end_frame(
+        total_frames_from_metadata=0, end_frame_arg=None, cv2_total=5
+    )
+    assert end == 4, f"expected 4, got {end}"
+    assert count == 5, f"expected 5, got {count}"
+
+
+def test_nvdec_frame_count_probe_metadata_absent_cv2_also_fails():
+    """When both metadata and cv2 return 0, open-ended sentinel is used."""
+    import sys
+
+    end, count = _nvdec_effective_end_frame(
+        total_frames_from_metadata=0, end_frame_arg=None, cv2_total=0
+    )
+    # open-ended: end_frame = sys.maxsize - 1, count = sys.maxsize
+    assert end == sys.maxsize - 1
+    assert count == sys.maxsize
+
+
+def test_nvdec_frame_count_explicit_end_frame_with_metadata():
+    """Explicit end_frame is clamped to metadata total when metadata is present."""
+    end, count = _nvdec_effective_end_frame(
+        total_frames_from_metadata=5, end_frame_arg=10, cv2_total=999
+    )
+    assert end == 4, f"expected 4 (clamped), got {end}"
+    assert count == 5, f"expected 5, got {count}"
+
+
+def test_nvdec_frame_count_no_silent_single_frame_on_missing_metadata(tiny_video):
+    """Regression guard: end_frame=None + missing metadata must NOT yield frame_count=1.
+
+    The old code set end_frame = start_frame when total_frames=0 and end_frame=None,
+    silently truncating whole-video passes to a single frame.  This test uses the
+    pure helper to confirm the cv2-probe branch gives the real count instead.
+    """
+    import cv2
+
+    # Determine real frame count via cv2 (our fixture video has 5 frames).
+    cap = cv2.VideoCapture(str(tiny_video))
+    cv2_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    end, count = _nvdec_effective_end_frame(
+        total_frames_from_metadata=0,  # simulate absent NVDEC metadata
+        end_frame_arg=None,
+        cv2_total=cv2_total,
+    )
+    assert count > 1, (
+        f"frame_count must not be 1 when metadata is absent and end_frame=None; "
+        f"cv2 reported {cv2_total} frames, got count={count}"
+    )

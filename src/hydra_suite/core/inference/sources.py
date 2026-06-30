@@ -235,30 +235,81 @@ class NvdecFrameReader(FrameSource):
         self._device = device
         self._cp = cp
 
+        # TODO: multi-GPU — parse device index from runtime.device instead of gpuid=0
         dec = nvc.CreateSimpleDecoder(
             encSource=str(self._video_path),
             gpuid=0,
             useDeviceMemory=True,
             outputColorType=nvc.OutputColorType.RGB,
         )
-        meta = dec.get_stream_metadata()
 
-        total_frames: int = int(meta.num_frames) if hasattr(meta, "num_frames") else 0
-
-        self._start_frame: int = max(0, int(start_frame))
-        if end_frame is None:
-            self._end_frame = (
-                (total_frames - 1) if total_frames > 0 else self._start_frame
+        try:
+            meta = dec.get_stream_metadata()
+            total_frames: int = (
+                int(meta.num_frames) if hasattr(meta, "num_frames") else 0
             )
-        else:
-            if total_frames > 0:
-                self._end_frame = min(total_frames - 1, int(end_frame))
-            else:
-                self._end_frame = int(end_frame)
-        self._frame_count = max(0, self._end_frame - self._start_frame + 1)
 
-        if self._start_frame > 0:
-            dec.seek_to_index(self._start_frame)
+            self._start_frame: int = max(0, int(start_frame))
+
+            if end_frame is None and total_frames <= 0:
+                # MJPEG / variable-length / metadata-absent stream: decoder did not
+                # report a frame count.  Probe with cv2 (same approach as
+                # CpuFrameReader) so we have a concrete upper bound for progress
+                # reporting and the __iter__ loop.  If cv2 also returns 0, we log a
+                # WARNING and fall back to decode-until-exhausted (end_frame=None
+                # sentinel stored as sys.maxsize so __iter__ runs until the decoder
+                # returns an empty batch).
+                import cv2
+
+                probe = cv2.VideoCapture(str(self._video_path))
+                cv2_total = (
+                    int(probe.get(cv2.CAP_PROP_FRAME_COUNT)) if probe.isOpened() else 0
+                )
+                probe.release()
+
+                if cv2_total > 0:
+                    total_frames = cv2_total
+                    logger.debug(
+                        "NvdecFrameReader: stream metadata missing frame count for %s; "
+                        "cv2 probe reports %d frames",
+                        self._video_path,
+                        total_frames,
+                    )
+                else:
+                    import sys
+
+                    logger.warning(
+                        "NvdecFrameReader: frame count unknown for %s (neither NVDEC "
+                        "metadata nor cv2 CAP_PROP_FRAME_COUNT could determine it). "
+                        "Reader will iterate until the decoder returns no frames.",
+                        self._video_path,
+                    )
+                    # Use maxsize as an open-ended sentinel; __iter__ stops on empty batch.
+                    total_frames = sys.maxsize
+
+            if end_frame is None:
+                self._end_frame = total_frames - 1
+            else:
+                if total_frames > 0:
+                    import sys
+
+                    if total_frames < sys.maxsize:
+                        self._end_frame = min(total_frames - 1, int(end_frame))
+                    else:
+                        self._end_frame = int(end_frame)
+                else:
+                    self._end_frame = int(end_frame)
+
+            self._frame_count = max(0, self._end_frame - self._start_frame + 1)
+
+            if self._start_frame > 0:
+                dec.seek_to_index(self._start_frame)
+
+        except Exception:
+            # Decoder was created but setup failed — release the hardware context
+            # before re-raising so no decode slot is leaked.
+            dec = None  # PyNvVideoCodec decoder GC'd on dereference
+            raise
 
         self._dec = dec
         self._closed = False
@@ -365,8 +416,9 @@ def make_frame_source(
             logger.debug("make_frame_source: using NvdecFrameReader for %s", video_path)
             return reader
         except Exception as exc:
-            logger.info(
-                "make_frame_source: NVDEC unavailable (%s), falling back to CpuFrameReader",
+            logger.warning(
+                "make_frame_source: NVDEC unavailable (%s), falling back to CpuFrameReader "
+                "(use_nvdec=True was requested but could not be satisfied)",
                 exc,
             )
 
