@@ -454,12 +454,59 @@ def extract_classifier_crops_batch(
     )
 
 
+def _apply_foreign_mask_canonical_batch(
+    crops: torch.Tensor,
+    obb: OBBResult,
+    aspect_ratio: float,
+    margin: float,
+    background_color: tuple[int, int, int],
+) -> torch.Tensor:
+    """Black out foreign OBB polygons in each crop of one frame's crop tensor.
+
+    ``crops`` is ``(N, C, H, W)`` float [0, 1] (the per-frame tensor padded to that
+    frame's max canvas, top-left origin). For each detection ``i`` the OTHER
+    detections (detection-id order) are projected into ``i``'s canonical space via
+    its ``M_align`` and filled with ``background_color`` using the shared
+    ``_apply_foreign_mask_canonical`` helper (cv2.fillPoly on a HWC uint8 view).
+
+    The crop tensor may be CUDA-resident; masking uses a CPU round-trip
+    (on-device polygon rasterisation is non-trivial) — same documented approach
+    the old resize-based ``extract_crops`` used.
+    """
+    n = obb.num_detections
+    padding_fraction = max(0.0, float(margin) - 1.0)
+
+    m_aligns: list[np.ndarray] = []
+    for i in range(n):
+        try:
+            cw, ch = compute_native_crop_dimensions(
+                obb.corners[i], aspect_ratio, padding_fraction
+            )
+            M, _ = compute_alignment_affine(obb.corners[i], cw, ch, padding_fraction)
+        except ValueError:
+            M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        m_aligns.append(M)
+
+    device = crops.device
+    crops_np = (crops.detach().cpu().numpy() * 255.0).clip(0, 255).astype(np.uint8)
+    # crops_np is (N, C, H, W); operate per crop as a HWC view for fillPoly.
+    for i in range(n):
+        crop_hwc = np.ascontiguousarray(crops_np[i].transpose(1, 2, 0))
+        foreign = [obb.corners[j] for j in range(n) if j != i]
+        _apply_foreign_mask_canonical(crop_hwc, m_aligns[i], foreign, background_color)
+        crops_np[i] = crop_hwc.transpose(2, 0, 1)
+
+    return torch.from_numpy(crops_np).float().to(device) / 255.0
+
+
 def extract_canonical_crops_batch(
     frames: list,
     obb_results: list[OBBResult],
     canonical_aspect_ratio: float,
     canonical_margin: float,
     runtime: RuntimeContext,
+    suppress_foreign: bool = False,
+    background_color: tuple[int, int, int] = (0, 0, 0),
 ) -> CropBatch:
     """Window-level canonical pose crops, bit-identical to ``extract_canonical_crops``.
 
@@ -468,18 +515,29 @@ def extract_canonical_crops_batch(
     then recovers each detection's native crop with
     ``compute_native_crop_dimensions`` and slices ``[:ch, :cw]``.
 
-    ``extract_crops`` cannot reproduce that numerically: it warps to native extent
-    then *resizes* every crop to a fixed ``out_size``, so ``run_pose_batch``'s
-    ``native_sizes`` slice recovers a resampled (not bit-identical) crop. That
-    would break the depth=1 correctness contract (pose keypoints must match the
-    old ``_run_batch`` exactly).
+    The resize-based ``extract_crops`` (now removed) could not reproduce that
+    numerically: it warped to native extent then *resized* every crop to a fixed
+    ``out_size``, so ``run_pose_batch``'s ``native_sizes`` slice recovered a
+    resampled (not bit-identical) crop. That would break the depth=1 correctness
+    contract (pose keypoints must match the old ``_run_batch`` exactly).
 
     This builder instead warps each detection to its native extent (via the same
     ``extract_canonical_crops`` CPU/GPU routine) and pads — never resizes — to the
     WINDOW-wide max canvas, recording each crop's native ``[h, w]`` in
     ``native_sizes``. ``run_pose_batch`` slices back to native, recovering the
-    exact pixels ``run_pose`` would have seen. Verified maxabsdiff == 0 vs the
-    per-frame path.
+    exact pixels ``run_pose`` would have seen.
+
+    Foreign-region suppression (``suppress_foreign=True``): to match legacy, each
+    pose crop has the OTHER detections' OBB polygons in the SAME frame blacked out
+    (filled with ``background_color``) in canonical space, via
+    ``_apply_foreign_mask_canonical`` (same approach the old resize-based path
+    used). The foreign set is the other detections in detection-id order
+    (deterministic). Masking is a no-op for single-detection frames. The masking
+    is applied to each detection's native crop (sliced out of the per-frame padded
+    tensor) using its ``M_align``; padding is bottom/right zeros so ``M_align``
+    still maps frame coords into the crop's top-left origin correctly. On CUDA the
+    masking uses a CPU round-trip (on-device polygon rasterisation is non-trivial),
+    documented as a follow-up optimisation — same as the old path.
     """
     per_frame: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
@@ -493,6 +551,14 @@ def extract_canonical_crops_batch(
         crops = extract_canonical_crops(
             frame, obb, canonical_aspect_ratio, canonical_margin, runtime
         )
+        if suppress_foreign and obb.num_detections > 1:
+            crops = _apply_foreign_mask_canonical_batch(
+                crops,
+                obb,
+                canonical_aspect_ratio,
+                canonical_margin,
+                background_color,
+            )
         per_frame.append(crops)
         det_ids.append(obb.detection_ids)
         frame_idx_list.append(
@@ -539,73 +605,4 @@ def extract_canonical_crops_batch(
         frame_index=np.concatenate(frame_idx_list),
         obb_by_frame={o.frame_idx: o for o in obb_results},
         native_sizes=np.concatenate(native_sizes_list),
-    )
-
-
-def extract_crops(
-    frames: list,
-    obb_results: list[OBBResult],
-    *,
-    canonical_margin: float,
-    canonical_aspect_ratio: float,
-    out_size: tuple[int, int],
-    runtime: RuntimeContext,
-    suppress_foreign: bool = False,
-    background_color: tuple[int, int, int] = (0, 0, 0),
-) -> CropBatch:
-    """Extract canonical crops across a window of frames into a single CropBatch.
-
-    Concatenates detections in input order (frames ascending, detections in
-    OBBResult order = detection-id order) — the reproducibility invariant.
-
-    When ``suppress_foreign=True``, each crop has the OTHER detections' OBB
-    polygons in the same frame blacked out (filled with ``background_color``).
-    This applies only to these canonical/pose crops; head-tail/CNN classifier
-    crops (``extract_classifier_crops_batch``) are intentionally unmasked.
-
-    GPU path (tensor_on_cuda): crops are device-resident CUDA tensors.
-    CPU/MPS path: crops are CPU tensors.
-    """
-    crops_list: list[torch.Tensor] = []
-    det_ids: list[np.ndarray] = []
-    frame_idx_list: list[np.ndarray] = []
-    native_sizes: list[np.ndarray] = []
-
-    for frame, obb in zip(frames, obb_results):
-        if obb.detection_ids.shape[0] == 0:
-            continue
-        frame_crops, sizes = _extract_canonical_window(
-            frame,
-            obb,
-            canonical_margin,
-            canonical_aspect_ratio,
-            out_size,
-            runtime,
-            suppress_foreign=suppress_foreign,
-            background_color=background_color,
-        )
-        crops_list.append(frame_crops)  # (n_i, C, H, W)
-        det_ids.append(obb.detection_ids)
-        frame_idx_list.append(
-            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
-        )
-        native_sizes.append(sizes)
-
-    if not crops_list:
-        device = runtime.device if runtime.cuda_mode else "cpu"
-        empty = torch.zeros((0, 3, out_size[1], out_size[0]), device=device)
-        return CropBatch(
-            empty,
-            np.zeros(0, np.int64),
-            np.zeros(0, np.int64),
-            {o.frame_idx: o for o in obb_results},
-            np.zeros((0, 2), np.int64),
-        )
-
-    return CropBatch(
-        crops=torch.cat(crops_list, dim=0),
-        detection_ids=np.concatenate(det_ids),
-        frame_index=np.concatenate(frame_idx_list),
-        obb_by_frame={o.frame_idx: o for o in obb_results},
-        native_sizes=np.concatenate(native_sizes),
     )

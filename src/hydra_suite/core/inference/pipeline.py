@@ -244,8 +244,20 @@ class Pipeline:
 
         pose: dict[int, Any] | None = None
         if self.stages.pose_model is not None:
+            suppress_foreign = (
+                cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
+            )
+            background_color = (
+                cfg.pose.background_color if cfg.pose is not None else (0, 0, 0)
+            )
             crop_batch = extract_canonical_crops_batch(
-                nonempty_frames, nonempty_obbs, ar, mg, self.runtime
+                nonempty_frames,
+                nonempty_obbs,
+                ar,
+                mg,
+                self.runtime,
+                suppress_foreign=suppress_foreign,
+                background_color=background_color,
             )
             pose = run_pose_batch(
                 crop_batch, self.stages.pose_model, cfg.pose, self.runtime

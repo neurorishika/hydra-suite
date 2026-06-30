@@ -3,7 +3,7 @@ import torch
 
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
-from hydra_suite.core.inference.stages.crops import extract_crops
+from hydra_suite.core.inference.stages.crops import extract_canonical_crops_batch
 
 
 def _two_adjacent_obbs():
@@ -37,23 +37,21 @@ def test_foreign_mask_blacks_out_neighbor_pixels():
         tensor_on_cuda=False,
         default_runtime="cpu",
     )
-    masked = extract_crops(
+    masked = extract_canonical_crops_batch(
         [frame],
         [obb],
-        canonical_margin=1.5,
-        canonical_aspect_ratio=1.0,
-        out_size=(32, 32),
-        runtime=rt,
+        1.0,
+        1.5,
+        rt,
         suppress_foreign=True,
         background_color=(0, 0, 0),
     )
-    plain = extract_crops(
+    plain = extract_canonical_crops_batch(
         [frame],
         [obb],
-        canonical_margin=1.5,
-        canonical_aspect_ratio=1.0,
-        out_size=(32, 32),
-        runtime=rt,
+        1.0,
+        1.5,
+        rt,
         suppress_foreign=False,
     )
     # masking must zero strictly more pixels than the unmasked crop
