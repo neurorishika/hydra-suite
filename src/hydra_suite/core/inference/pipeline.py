@@ -1,4 +1,4 @@
-"""Inference pipeline orchestrator (depth=1 synchronous, depth=2 double-buffer).
+"""Inference pipeline orchestrator (depth=1 synchronous, depth>=2 deep prefetch).
 
 The :class:`Pipeline` turns a stream of video frames into per-type cache writes
 by running the batch-native stage layer over fixed, frame-indexed windows. Batch
@@ -11,24 +11,31 @@ Two execution models are implemented:
 * **depth=1** — fully synchronous: window ``k`` is OBB'd and fully processed
   (crops → HT/CNN/pose → AprilTag → scatter → cache write) before window ``k+1``
   begins. No threads.
-* **depth=2** — double buffer: a PRODUCER thread runs decode+OBB for window
-  ``k+1`` while the MAIN/consumer thread runs crops → individual stages →
-  scatter → cache write for window ``k``. A bounded ``queue.Queue(maxsize=1)``
-  hands ``(window, obb_raw_list)`` producer→consumer (the producer blocks when
-  the queue is full — natural backpressure). The OBB output tensors are synced
-  across threads via ``RuntimeContext.handoff`` (producer) / ``await_handoff``
-  (consumer) on the SAME tensor objects (a detach/clone would create a new key
-  and silently miss the event). Stop is checked only at window boundaries so no
-  window is ever half-written. A supervisor re-raises any stage/producer error
-  to the caller after joining threads and flushing the cache writer.
+* **depth>=2** — deep prefetch: a single PRODUCER thread runs decode+OBB and
+  pushes ``(window, obb_raw_list)`` onto a bounded
+  ``queue.Queue(maxsize=depth-1)``, while a SINGLE in-order consumer (the calling
+  thread) pulls windows in strict ascending order and runs crops → individual
+  stages → scatter → cache write. ``maxsize=depth-1`` lets the producer run up to
+  ``depth-1`` windows ahead (depth=2 is the classic double buffer with one
+  in-flight window; depth=4 allows three). The producer blocks when the queue is
+  full — natural backpressure. depth scales *only* the prefetch runway; it never
+  adds a second consumer and never reorders windows. The OBB output tensors are
+  synced across threads via ``RuntimeContext.handoff`` (producer) /
+  ``await_handoff`` (consumer) on the SAME tensor objects (a detach/clone would
+  create a new key and silently miss the event). Stop is checked only at window
+  boundaries so no window is ever half-written. A supervisor re-raises any
+  stage/producer error to the caller after joining threads and flushing the
+  cache writer.
 
 Numeric contract: the per-type caches produced for a given video MUST match what
 the legacy per-frame ``runner._run_batch`` produced — same detections, same
-head-tail / CNN / pose / AprilTag per frame — AND depth=2 output MUST be
-byte-identical to depth=1. Byte parity holds because (a) batch boundaries are a
-pure function of frame index, (b) the consumer processes windows in strict frame
-order (single consumer pulling a maxsize=1 queue), and (c) the per-window
-downstream + cache-write code path is literally the same method for both depths.
+head-tail / CNN / pose / AprilTag per frame — AND output MUST be byte-identical
+across ALL depths. Byte parity holds for any depth because (a) batch boundaries
+are a pure function of frame index, (b) there is always exactly ONE consumer
+processing windows in strict frame order (a deeper queue only buffers more
+produced windows, it does not reorder or parallelize consumption), and (c) the
+per-window downstream + cache-write code path is literally the same method for
+every depth.
 """
 
 from __future__ import annotations
@@ -112,7 +119,12 @@ class _TestFrame:
 
 
 class Pipeline:
-    """Synchronous (depth=1) inference orchestrator over frame-indexed windows."""
+    """Inference orchestrator over frame-indexed windows.
+
+    depth=1 runs fully synchronously; depth>=2 runs a producer (decode+OBB)
+    ahead of a single in-order consumer via a bounded queue (``maxsize=depth-1``).
+    All depths produce byte-identical caches.
+    """
 
     def __init__(
         self,
@@ -126,20 +138,25 @@ class Pipeline:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
         # depth=1 -> synchronous (no threads). depth>=2 -> producer/consumer
-        # double buffer. depth>2 (deeper prefetch) is not yet implemented and is
-        # clamped to the depth=2 double-buffer here, which is numerically
-        # identical (depth changes *when* windows run, never their per-frame
-        # output) and keeps a bounded queue of at most one in-flight window.
-        self._requested_depth = depth
+        # with a single in-order consumer and a bounded prefetch queue. Increasing
+        # depth deepens the prefetch (the OBB producer may run up to ``depth-1``
+        # windows ahead) but never changes per-frame output: there is still ONE
+        # consumer pulling windows in strict ascending order and writing caches
+        # in-order, so output is byte-identical across all depths.
         self.stages = stages
         self.runtime = runtime
         self.cache_writer = cache_writer
-        # Effective execution model: 1 (sync) or 2 (double buffer).
-        self.depth = 1 if depth == 1 else 2
-        # Bounded hand-off queue size for depth>=2: maxsize=1 means at most one
-        # produced-but-not-yet-consumed window, so the producer runs exactly one
-        # window ahead of the consumer.
-        self.queue_bound = queue_bound if queue_bound is not None else 1
+        # Effective execution model: 1 (sync) or N>=2 (deep prefetch). depth
+        # takes effect directly — no clamping.
+        self.depth = depth
+        # Bounded hand-off queue size for depth>=2. The default scales with depth:
+        # ``maxsize = depth - 1`` lets the producer run up to ``depth-1`` windows
+        # ahead of the single consumer (depth=2 -> 1, the classic double buffer;
+        # depth=4 -> 3). An explicit ``queue_bound`` overrides this.
+        if queue_bound is not None:
+            self.queue_bound = queue_bound
+        else:
+            self.queue_bound = max(1, depth - 1)
         self._window_size = (
             int(stages.config.detection_batch_size) if stages is not None else 1
         )
@@ -381,8 +398,9 @@ class Pipeline:
         ``progress_cb(processed, range_total)`` is called with the same cadence
         as the legacy runner read loop (every ``max(1, range_total // 100)``
         frames read, plus a final call). At depth=1 this runs synchronously;
-        at depth>=2 a producer thread runs decode+OBB one window ahead while this
-        (consumer) thread runs the downstream stages + cache writes.
+        at depth>=2 a producer thread runs decode+OBB up to ``depth-1`` windows
+        ahead (bounded queue) while this single in-order consumer thread runs the
+        downstream stages + cache writes.
         """
         if self.depth == 1:
             return self._run_sync(frame_source, progress_cb, range_total)
@@ -574,13 +592,13 @@ class Pipeline:
         frame-indexed windows the production ``run`` would build.
         """
         pipe = cls.__new__(cls)
-        if depth != 1:
-            raise NotImplementedError("Pipeline.for_test supports depth=1 only")
+        if depth < 1:
+            raise ValueError(f"Pipeline.for_test depth must be >= 1, got {depth}")
         pipe.stages = None
         pipe.runtime = None
         pipe.cache_writer = None
         pipe.depth = depth
-        pipe.queue_bound = None
+        pipe.queue_bound = max(1, depth - 1)
         pipe._window_size = int(window_size)
         pipe._test_stage = stage
         return pipe

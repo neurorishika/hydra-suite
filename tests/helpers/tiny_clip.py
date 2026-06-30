@@ -7,8 +7,9 @@ written into *out_dir*.
 
 Designed so Tasks 11/12 can call it with ``depth=2`` or ``depth=4`` and assert
 the returned dicts are equal to the depth=1 result (byte-identical caches).
-For THIS task only depth=1 is exercised; depth>1 currently degrades to depth=1
-(real concurrency lands later).
+depth is passed straight through to ``InferenceConfig.pipeline_depth`` and takes
+full effect: depth=1 is synchronous, depth>=2 uses the producer/consumer deep
+prefetch (bounded queue of ``depth-1`` windows).
 
 Stub strategy
 -------------
@@ -290,8 +291,8 @@ def run_pipeline_to_caches(out_dir: Path, depth: int = 1) -> dict[str, str]:
     out_dir:
         Directory to receive the cache ``.npz`` files.  Created if absent.
     depth:
-        ``pipeline_depth`` passed to ``InferenceConfig``.  Currently depth>1
-        degrades to depth=1 (Tasks 11/12 add real concurrency).
+        ``pipeline_depth`` passed to ``InferenceConfig``.  depth=1 is
+        synchronous; depth>=2 uses the producer/consumer deep prefetch.
 
     Returns
     -------
