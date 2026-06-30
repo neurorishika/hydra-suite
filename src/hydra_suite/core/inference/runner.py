@@ -554,8 +554,8 @@ class InferenceRunner:
         self._caches = caches
 
         # Recover the clamped bounds from the reader so range_total matches.
-        start_frame = frame_source._start_frame
-        end_frame = frame_source._end_frame
+        start_frame = frame_source.start_frame
+        end_frame = frame_source.end_frame
         range_total = frame_source.frame_count
 
         # The whole pass is now driven by Pipeline.run: it owns the windowing and

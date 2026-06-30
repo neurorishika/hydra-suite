@@ -165,3 +165,27 @@ def test_cpu_frame_reader_bad_path():
 
     with pytest.raises(IOError):
         CpuFrameReader("/nonexistent/no_such_file.avi")
+
+
+def test_cpu_frame_reader_public_range_properties(tiny_video):
+    """start_frame and end_frame are publicly accessible after clamping."""
+    _, CpuFrameReader = _import()
+
+    reader = CpuFrameReader(tiny_video, start_frame=1, end_frame=3)
+    try:
+        assert reader.start_frame == 1
+        assert reader.end_frame == 3
+        # Verify that accessing the properties doesn't require private attribute access.
+        assert reader.frame_count == 3
+    finally:
+        reader.close()
+
+
+def test_cpu_frame_reader_closed_iteration_yields_nothing(tiny_video):
+    """Iterating after close() yields nothing instead of crashing."""
+    _, CpuFrameReader = _import()
+
+    reader = CpuFrameReader(tiny_video)
+    reader.close()
+    pairs = list(reader)  # Should yield nothing, not crash
+    assert pairs == []

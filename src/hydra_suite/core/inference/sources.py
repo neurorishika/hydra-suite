@@ -51,6 +51,18 @@ class FrameSource(ABC):
         """Total number of frames in the requested range."""
         ...
 
+    @property
+    @abstractmethod
+    def start_frame(self) -> int:
+        """First frame index (inclusive, 0-based, after clamping to video bounds)."""
+        ...
+
+    @property
+    @abstractmethod
+    def end_frame(self) -> int:
+        """Last frame index (inclusive, 0-based, after clamping to video bounds)."""
+        ...
+
     @abstractmethod
     def close(self) -> None:
         """Release underlying resources."""
@@ -120,6 +132,14 @@ class CpuFrameReader(FrameSource):
     def frame_count(self) -> int:
         return self._frame_count
 
+    @property
+    def start_frame(self) -> int:
+        return self._start_frame
+
+    @property
+    def end_frame(self) -> int:
+        return self._end_frame
+
     def __iter__(self) -> Iterator[tuple[int, np.ndarray]]:
         """Yield ``(frame_index, frame)`` pairs from ``start_frame`` to ``end_frame``.
 
@@ -127,6 +147,8 @@ class CpuFrameReader(FrameSource):
         exactly as the legacy inline generator did.
         """
         cap = self._cap
+        if cap is None:
+            return
         idx = self._start_frame
         end = self._end_frame
         while idx <= end:

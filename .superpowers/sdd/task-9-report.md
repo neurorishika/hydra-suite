@@ -65,3 +65,15 @@ $ PYTHONPATH=src ... pytest tests/test_inference_runtime.py tests/test_inference
 3. **Thread safety of WeakKeyDictionary:** CPython's GIL protects single-item dict operations, so concurrent writes from separate producer threads to different keys are safe. If two threads `handoff` the *same* tensor simultaneously (unlikely in this pipeline's single-producer model), the second write would overwrite the first event. This is benign for the expected usage pattern.
 
 4. **`await_handoff` without `handoff`:** Confirmed safe no-op — `_HANDOFF_EVENTS.get(tensor)` returns `None` and no CUDA API is called.
+
+## Fix: remove redundant is_available() gate
+
+**Status:** DONE
+
+**Commit:** `ffe2ee7` — fix: Remove redundant torch.cuda.is_available() gate in stream-sync methods
+
+**Test command:** `PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_inference_stream_sync.py -v`
+
+**Test results:** 4 passed (test_handoff_is_identity_on_cpu, test_handoff_does_not_attach_state_on_cpu, test_await_handoff_without_prior_handoff_is_safe, test_handoff_returns_tensor_unchanged_on_cpu)
+
+CPU tests confirmed passing; no change to CPU/MPS code paths (gates still false on non-CUDA runtimes).
