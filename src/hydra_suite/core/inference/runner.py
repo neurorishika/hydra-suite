@@ -24,6 +24,7 @@ from .cache.store import (
     HeadTailCacheHandle,
     PoseCacheHandle,
 )
+from .cache.writer import CacheWriter
 from .config import InferenceConfig
 from .pipeline import Pipeline, PipelineStages
 from .result import (
@@ -555,8 +556,8 @@ class InferenceRunner:
         """Construct the depth=1 Pipeline that drives the batch stage layer.
 
         The Pipeline owns the per-window stage sequence (OBB → crops → HT/CNN/pose
-        → AprilTag → scatter); cache writes go through a ``_SyncCacheWriter`` that
-        reproduces ``_run_batch``'s exact raw-result side effects.
+        → AprilTag → scatter); cache writes go through a ``CacheWriter`` (sync mode)
+        that reproduces ``_run_batch``'s exact raw-result side effects.
         """
         stages = PipelineStages(
             config=self.config,
@@ -566,7 +567,18 @@ class InferenceRunner:
             pose_model=self._models.pose,
             apriltag_model=self._models.apriltag,
         )
-        writer = _SyncCacheWriter(caches, self.config.cnn_phases)
+        handles: dict[str, CacheHandle] = {}
+        if caches.detection is not None:
+            handles["detection"] = caches.detection
+        if caches.headtail is not None:
+            handles["headtail"] = caches.headtail
+        for cnn_cfg, cnn_handle in zip(self.config.cnn_phases, caches.cnn):
+            handles[f"cnn_{cnn_cfg.label}"] = cnn_handle
+        if caches.pose is not None:
+            handles["pose"] = caches.pose
+        if caches.apriltag is not None:
+            handles["apriltag"] = caches.apriltag
+        writer = CacheWriter(handles, self.config.cnn_phases, async_mode=False)
         return Pipeline(stages, self.runtime, writer, depth=self.config.pipeline_depth)
 
     def run_batch_pass(
