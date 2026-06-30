@@ -347,7 +347,8 @@ def extract_classifier_crops_batch(
     For each frame calls extract_classifier_crops (single warpAffine to model
     input size, BGR uint8), then stacks results in detection-id order. HT and
     CNN models may have different input sizes, so each calls this independently.
-    native_sizes reflects the classifier crop (h, w) = (target_size[1], target_size[0]).
+    target_size is (out_w, out_h) per legacy convention (index 0 = width).
+    native_sizes rows are [out_h, out_w], reflecting the classifier crop dimensions.
     """
     out_w, out_h = int(target_size[0]), int(target_size[1])
     crops_list: list[torch.Tensor] = []

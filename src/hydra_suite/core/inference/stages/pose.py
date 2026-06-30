@@ -302,6 +302,7 @@ def run_pose_batch(
             rows = batch.select_frame(frame_idx)
             # local index of crop i within its frame
             local_idx = int(np.searchsorted(rows, i))
+            # rows is sorted from select_frame; rows[local_idx] == i confirms exact hit
             if (
                 local_idx < len(rows)
                 and rows[local_idx] == i

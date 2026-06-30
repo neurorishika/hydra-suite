@@ -87,23 +87,6 @@ def _obb(frame_idx: int, n: int, distinct: bool = False) -> OBBResult:
     )
 
 
-def _make_batch(obb0: OBBResult, obb1: OBBResult) -> CropBatch:
-    """Build a 2-frame CropBatch with obb0 at frame 0, obb1 at frame 1."""
-    n0, n1 = obb0.num_detections, obb1.num_detections
-    n_total = n0 + n1
-    crops = torch.zeros(n_total, 3, 16, 16)
-    det_ids = np.concatenate([obb0.detection_ids, obb1.detection_ids])
-    frame_idx = np.array([0] * n0 + [1] * n1, np.int64)
-    native_sizes = np.array([[16, 16]] * n_total, np.int64)
-    return CropBatch(
-        crops=crops,
-        detection_ids=det_ids,
-        frame_index=frame_idx,
-        obb_by_frame={0: obb0, 1: obb1},
-        native_sizes=native_sizes,
-    )
-
-
 def _frame_for_obb(obb: OBBResult, value: int = 128) -> np.ndarray:
     """Build a 100×100 frame with a distinct fill value per detection, for content sensitivity."""
     frame = np.zeros((100, 100, 3), dtype=np.uint8)
