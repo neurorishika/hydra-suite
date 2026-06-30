@@ -148,6 +148,7 @@ class InferenceConfig:
     pose: PoseConfig | None = None
     apriltag: AprilTagConfig = field(default_factory=AprilTagConfig)
     detection_batch_size: int = 1
+    pipeline_depth: int = 2
     realtime: bool = False
     use_cache: bool = True
     cache_dir: str | None = None
@@ -163,6 +164,9 @@ class InferenceConfig:
     def to_json(self, path: str) -> None:
         with open(path, "w") as f:
             json.dump(_config_to_dict(self), f, indent=2)
+
+    def __post_init__(self) -> None:
+        self._validate_runtime_consistency()
 
     def _collect_all_runtimes(self) -> set[str]:
         runtimes: set[str] = set()
@@ -183,6 +187,10 @@ class InferenceConfig:
         return runtimes
 
     def _validate_runtime_consistency(self) -> None:
+        if self.pipeline_depth < 1:
+            raise InferenceConfigError(
+                f"pipeline_depth must be >= 1, got {self.pipeline_depth}"
+            )
         runtimes = self._collect_all_runtimes()
         uses_cuda = bool(runtimes & CUDA_RUNTIMES)
         uses_cpu = bool(runtimes & CPU_RUNTIMES)
@@ -264,6 +272,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         pose=pose,
         apriltag=apriltag,
         detection_batch_size=d.get("detection_batch_size", 1),
+        pipeline_depth=d.get("pipeline_depth", 2),
         realtime=d.get("realtime", False),
         use_cache=d.get("use_cache", True),
         cache_dir=d.get("cache_dir"),
