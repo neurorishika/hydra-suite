@@ -440,63 +440,63 @@ class InferenceRunner:
             _rt_prof_add("crops", _now - _ts)
             _ts = _now
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            ht_fut = (
-                pool.submit(
-                    run_headtail,
-                    frame,
-                    filtered_obb,
-                    self._models.headtail,
-                    self.config.headtail,
-                    self.runtime,
-                    ar,
-                    mg,
-                )
-                if self._models.headtail
-                else None
+        def _do_ht() -> HeadTailResult | None:
+            if not self._models.headtail:
+                return None
+            return run_headtail(
+                frame,
+                filtered_obb,
+                self._models.headtail,
+                self.config.headtail,
+                self.runtime,
+                ar,
+                mg,
             )
-            cnn_futs = [
-                pool.submit(
-                    run_cnn,
-                    frame,
-                    filtered_obb,
-                    mdl,
-                    cfg,
-                    self.runtime,
-                    ar,
-                    mg,
-                )
+
+        def _do_cnn() -> list[CNNResult]:
+            return [
+                run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, ar, mg)
                 for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
             ]
-            pose_fut = (
-                pool.submit(
-                    run_pose,
-                    canonical_crops,
-                    filtered_obb,
-                    self._models.pose,
-                    self.config.pose,
-                    self.runtime,
-                    ar,
-                    mg,
-                )
-                if self._models.pose
-                else None
+
+        def _do_pose() -> PoseResult | None:
+            if not self._models.pose:
+                return None
+            return run_pose(
+                canonical_crops,
+                filtered_obb,
+                self._models.pose,
+                self.config.pose,
+                self.runtime,
+                ar,
+                mg,
             )
-            at_fut = (
-                pool.submit(
-                    run_apriltag,
-                    aabb_crops,
-                    filtered_obb,
-                    self._models.apriltag,
-                    self.config.apriltag,
-                )
-                if self._models.apriltag
-                else None
+
+        def _do_at() -> AprilTagResult | None:
+            if not self._models.apriltag:
+                return None
+            return run_apriltag(
+                aabb_crops,
+                filtered_obb,
+                self._models.apriltag,
+                self.config.apriltag,
             )
-            ht_result = ht_fut.result() if ht_fut else None
-            cnn_results = [f.result() for f in cnn_futs]
-            pose_result = pose_fut.result() if pose_fut else None
-            at_result = at_fut.result() if at_fut else None
+
+        if os.environ.get("HYDRA_RT_SEQUENTIAL"):
+            ht_result = _do_ht()
+            cnn_results = _do_cnn()
+            pose_result = _do_pose()
+            at_result = _do_at()
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                ht_fut = pool.submit(_do_ht)
+                cnn_fut = pool.submit(_do_cnn)
+                pose_fut = pool.submit(_do_pose)
+                at_fut = pool.submit(_do_at)
+                ht_result = ht_fut.result()
+                cnn_results = cnn_fut.result()
+                pose_result = pose_fut.result()
+                at_result = at_fut.result()
 
         if _prof:
             _now = time.perf_counter()
