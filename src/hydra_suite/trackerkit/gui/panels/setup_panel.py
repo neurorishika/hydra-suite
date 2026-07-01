@@ -621,15 +621,27 @@ class SetupPanel(QWidget):
         self.combo_runtime_tier.currentIndexChanged.connect(
             self._main_window._on_runtime_tier_changed
         )
+        # §5.4 fallback indicator: shown under the tier selector when GPU-Fast is
+        # active, noting that stages without a fast artifact run on the native GPU.
         self.lbl_runtime_fallback = QLabel("")
         self.lbl_runtime_fallback.setWordWrap(True)
+        self.lbl_runtime_fallback.setStyleSheet("color: gray; font-size: 10px;")
+        self.lbl_runtime_fallback.setVisible(False)
 
         scale_card = self._create_performance_control_card("Scale", self.spin_resize)
         self._performance_base_control_cards.append(scale_card)
         self._performance_control_cards.append(scale_card)
+        # Stack the tier combo and the fallback hint in one container so the hint
+        # renders inside the "Compute tier" card.
+        _tier_container = QWidget()
+        _tier_layout = QVBoxLayout(_tier_container)
+        _tier_layout.setContentsMargins(0, 0, 0, 0)
+        _tier_layout.setSpacing(2)
+        _tier_layout.addWidget(self.combo_runtime_tier)
+        _tier_layout.addWidget(self.lbl_runtime_fallback)
         tier_card = self._create_performance_control_card(
             "Compute tier",
-            self.combo_runtime_tier,
+            _tier_container,
         )
         self._performance_base_control_cards.append(tier_card)
         self._performance_control_cards.append(tier_card)

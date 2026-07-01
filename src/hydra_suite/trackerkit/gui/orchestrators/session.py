@@ -1066,10 +1066,40 @@ class SessionOrchestrator:
             tier = self._mw._setup_panel.combo_runtime_tier.currentData()
             if tier and hasattr(self._mw, "config"):
                 self._mw.config.runtime_tier = str(tier)
+        self._update_runtime_fallback_hint()
         self._on_runtime_context_changed()
+
+    def _update_runtime_fallback_hint(self) -> None:
+        """Populate the GPU-Fast fallback hint (spec §5.4) under the tier selector.
+
+        Informational only: at configuration time we cannot know which stages
+        have a fast (TensorRT/CoreML) artifact, so we state the best-effort
+        contract when GPU-Fast is selected and clear the hint otherwise.
+        """
+        panel = getattr(self._mw, "_setup_panel", None)
+        lbl = getattr(panel, "lbl_runtime_fallback", None)
+        if lbl is None:
+            return
+        tier = None
+        if panel is not None and hasattr(panel, "combo_runtime_tier"):
+            tier = panel.combo_runtime_tier.currentData()
+        if str(tier) == "gpu_fast":
+            from hydra_suite.runtime.resolver import detect_platform
+
+            platform = detect_platform()
+            fast = "TensorRT" if platform.has_cuda else "CoreML"
+            lbl.setText(
+                f"GPU-Fast: uses {fast} where a fast artifact exists, "
+                "else the native GPU per stage."
+            )
+            lbl.setVisible(True)
+        else:
+            lbl.setText("")
+            lbl.setVisible(False)
 
     def _on_runtime_context_changed(self, *_args):
         """Sync dependent controls when the runtime tier or context changes."""
+        self._update_runtime_fallback_hint()
         self._mw._refresh_benchmark_recommendations()
         selected_runtime = self._selected_compute_runtime()
         self._mw._update_obb_mode_warning()
