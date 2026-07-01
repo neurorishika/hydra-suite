@@ -6,6 +6,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
@@ -13,6 +14,129 @@ from ..runtime import RuntimeContext, runtime_to_compute_runtime
 from ..runtime_artifacts import load_obb_executor
 
 logger = logging.getLogger(__name__)
+
+_FALLBACK_IMGSZ = 1024
+
+
+def _resolve_imgsz(model: Any) -> int:
+    """Read the input image size from a loaded ultralytics YOLO model.
+
+    Tries the documented attributes in order of preference:
+      1. ``model.overrides["imgsz"]`` — set from the .pt checkpoint args at
+         load time and patched by predict() kwargs.
+      2. ``model.model.args["imgsz"]`` — the Ultralytics Trainer-style dict
+         stored in the inner nn.Module after load.
+
+    Falls back to ``_FALLBACK_IMGSZ`` (1024) with a warning if neither
+    attribute resolves to a positive integer.
+    """
+    try:
+        v = getattr(model, "overrides", {}).get("imgsz", 0)
+        if isinstance(v, (int, float)) and int(v) > 0:
+            return int(v)
+        # overrides may store a list when different h/w are used
+        if isinstance(v, (list, tuple)) and len(v) > 0 and int(v[0]) > 0:
+            return int(v[0])
+    except Exception:
+        pass
+    try:
+        v = model.model.args["imgsz"]
+        if isinstance(v, (int, float)) and int(v) > 0:
+            return int(v)
+        if isinstance(v, (list, tuple)) and len(v) > 0 and int(v[0]) > 0:
+            return int(v[0])
+    except Exception:
+        pass
+    logger.warning(
+        "Could not read imgsz from ultralytics model (checked overrides and "
+        "model.args); falling back to %d. Detections will be correct only if "
+        "the actual model input size is %d.",
+        _FALLBACK_IMGSZ,
+        _FALLBACK_IMGSZ,
+    )
+    return _FALLBACK_IMGSZ
+
+
+def _gpu_letterbox_batch(
+    cuda_frames: list,
+    imgsz: int,
+) -> tuple[torch.Tensor, list[tuple[float, float, float]]]:
+    """Letterbox a list of CUDA HWC uint8 RGB tensors into a single batched tensor.
+
+    Mirrors ``_DirectOBBRuntime._preprocess_cuda_batch`` (detectors package)
+    but is kept local to avoid a cross-module import that would violate the
+    layer boundary (inference → detectors is not permitted).
+
+    Each frame is scaled so that ``max(H, W)`` fits within ``imgsz`` (aspect-
+    ratio-preserving), then symmetrically padded to ``(imgsz, imgsz)`` with
+    grey (114/255).  The result is normalised to float32 ``[0, 1]``.
+
+    Returns
+    -------
+    batched : torch.Tensor
+        Shape ``(B, 3, imgsz, imgsz)``, float32, on the same CUDA device as the
+        input frames.
+    params : list of (r, pad_left, pad_top)
+        Per-frame letterbox parameters needed to invert the transform on the
+        model outputs.  ``r`` is the scale factor; ``pad_left`` and ``pad_top``
+        are the integer pixel offsets of the content region inside ``imgsz``.
+    """
+    processed: list[torch.Tensor] = []
+    params: list[tuple[float, float, float]] = []
+    for frame in cuda_frames:
+        H, W = int(frame.shape[0]), int(frame.shape[1])
+        r = min(imgsz / H, imgsz / W)
+        new_h = int(H * r)
+        new_w = int(W * r)
+        # HWC uint8 → NCHW float32
+        t = frame.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
+        if new_h != H or new_w != W:
+            t = F.interpolate(t, size=(new_h, new_w), mode="bilinear", align_corners=False)
+        pad_top = (imgsz - new_h) // 2
+        pad_left = (imgsz - new_w) // 2
+        pad_bot = imgsz - new_h - pad_top
+        pad_right = imgsz - new_w - pad_left
+        if pad_top or pad_bot or pad_left or pad_right:
+            t = F.pad(t, (pad_left, pad_right, pad_top, pad_bot), value=114.0)
+        processed.append(t.squeeze(0).mul_(1.0 / 255.0))
+        params.append((float(r), float(pad_left), float(pad_top)))
+    return torch.stack(processed, dim=0), params
+
+
+def _invert_letterbox_on_result(result: Any, r: float, pad_left: float, pad_top: float) -> None:
+    """Invert the letterbox transform on a single ultralytics Results object in-place.
+
+    When ``model.predict`` receives a pre-letterboxed ``(B,3,imgsz,imgsz)``
+    float32 tensor, ultralytics treats ``orig_shape == tensor_shape == imgsz``
+    and therefore does NOT rescale boxes back to original-frame coordinates.
+    This function applies the inverse letterbox so that downstream extract
+    functions (``_extract_raw_tensors``, ``_extract_obb_result``) always see
+    original-frame coordinates, exactly as they would on the numpy list path.
+
+    Inverse formula (all on-device tensor ops, no .cpu() call):
+        x_orig = (x_lb - pad_left) / r
+        y_orig = (y_lb - pad_top)  / r
+        w_orig = w_lb / r
+        h_orig = h_lb / r
+        angle  = unchanged
+
+    We mutate the backing ``result.obb.data`` tensor directly rather than the
+    ``xywhr`` / ``xyxyxyxy`` properties. In ultralytics ``OBB.xywhr`` is a slice
+    of ``data`` (a view — mutation would persist) but ``xyxyxyxy`` is RECOMPUTED
+    from ``data`` on every access (mutating the returned tensor is discarded).
+    Writing through ``data`` (columns 0-3 = cx, cy, w, h; col 4 = angle) is the
+    single source of truth: both ``xywhr`` and the recomputed corners then
+    reflect original-frame coordinates, independent of ultralytics version.
+    """
+    obb = result.obb
+    if obb is None or len(obb) == 0:
+        return
+    data = obb.data  # (N, >=5): cx, cy, w, h, angle, [conf, cls]
+    data[:, 0] = (data[:, 0] - pad_left) / r  # cx
+    data[:, 1] = (data[:, 1] - pad_top) / r   # cy
+    data[:, 2] = data[:, 2] / r               # w
+    data[:, 3] = data[:, 3] / r               # h
+    # angle (col 4) and conf/cls (cols 5+) are unchanged
 
 
 def _valid_detection_mask(
@@ -200,14 +324,39 @@ def _run_direct(
     runtime: RuntimeContext,
 ) -> list[OBBResult | _RawOBBTensors]:
     conf_floor = config.direct.confidence_floor if config.direct else 1e-3
-    results = model.predict(
-        frames,
-        conf=conf_floor,
-        iou=1.0,
-        classes=config.target_classes or None,
-        verbose=False,
-        device=runtime.device,
-    )
+
+    # Detect the CUDA-tensor frame case: NvdecFrameReader yields a list of
+    # CUDA torch.Tensors (HWC uint8 RGB).  Ultralytics does NOT accept a list
+    # of tensors as a prediction source (raises TypeError inside check_source /
+    # autocast_list).  We GPU-letterbox the list into a single batched tensor,
+    # run predict on that, then invert the letterbox on each result so that
+    # downstream extract functions see original-frame coordinates — identical
+    # to what the numpy list path produces.
+    if frames and isinstance(frames[0], torch.Tensor) and frames[0].is_cuda:
+        imgsz = _resolve_imgsz(model)
+        batched, lb_params = _gpu_letterbox_batch(frames, imgsz)
+        results = model.predict(
+            batched,
+            conf=conf_floor,
+            iou=1.0,
+            classes=config.target_classes or None,
+            verbose=False,
+            device=runtime.device,
+        )
+        # Invert letterbox so coordinates are in original-frame space before
+        # the extract functions read them.
+        for result, (r, pad_left, pad_top) in zip(results, lb_params):
+            _invert_letterbox_on_result(result, r, pad_left, pad_top)
+    else:
+        results = model.predict(
+            frames,
+            conf=conf_floor,
+            iou=1.0,
+            classes=config.target_classes or None,
+            verbose=False,
+            device=runtime.device,
+        )
+
     # Only native PyTorch "cuda" runtime leaves tensors on device.
     # onnx_cuda and tensorrt: predict() returns CPU numpy regardless of GPU use.
     if runtime.tensor_on_cuda:
