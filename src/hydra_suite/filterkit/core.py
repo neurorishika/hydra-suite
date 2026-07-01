@@ -952,3 +952,29 @@ class FilterKitCore:
         selected_indices = sorted(set(closest))
 
         return [valid_items[i] for i in selected_indices]
+
+    def expand_to_full_frames(
+        self,
+        kept_dataset: List[Dict[str, Any]],
+        full_dataset: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Expand a kept selection to include every individual detected in each
+        selected frame, sourced from the original unfiltered dataset.
+        """
+        if not kept_dataset:
+            return []
+
+        kept_frame_ids = {item["frame_idx"] for item in kept_dataset}
+        groups = self._group_dataset_by_frame(full_dataset)
+
+        expanded: List[Dict[str, Any]] = []
+        seen_det_ids: set = set()
+        for frame_id in sorted(kept_frame_ids):
+            for item in sorted(groups.get(frame_id, []), key=lambda i: i["det_idx"]):
+                if item["det_id"] in seen_det_ids:
+                    continue
+                seen_det_ids.add(item["det_id"])
+                expanded.append(item)
+
+        return expanded

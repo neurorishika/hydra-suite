@@ -241,3 +241,37 @@ def test_filterkit_diversity_sample_default_behavior_unchanged(tmp_path) -> None
         item["path"] for item in by_frame_explicit_false
     ]
     assert len(by_frame_default) <= 3
+
+
+def test_filterkit_expand_to_full_frames_restores_filtered_companions() -> None:
+    core = FilterKitCore()
+    full_dataset = [
+        {"det_id": 1, "frame_idx": 0, "det_idx": 0, "path": "/tmp/a.png"},
+        {"det_id": 2, "frame_idx": 0, "det_idx": 1, "path": "/tmp/b.png"},
+        {"det_id": 3, "frame_idx": 1, "det_idx": 0, "path": "/tmp/c.png"},
+    ]
+    # Simulate quality filtering having dropped det_id=2 (blurry companion).
+    kept = [full_dataset[0]]
+
+    expanded = core.expand_to_full_frames(kept, full_dataset)
+
+    assert {item["det_id"] for item in expanded} == {1, 2}
+    assert all(item["frame_idx"] == 0 for item in expanded)
+
+
+def test_filterkit_expand_to_full_frames_empty_kept_returns_empty() -> None:
+    core = FilterKitCore()
+    assert core.expand_to_full_frames([], [{"det_id": 1, "frame_idx": 0}]) == []
+
+
+def test_filterkit_expand_to_full_frames_deduplicates_by_det_id() -> None:
+    core = FilterKitCore()
+    full_dataset = [
+        {"det_id": 1, "frame_idx": 0, "det_idx": 0},
+        {"det_id": 2, "frame_idx": 0, "det_idx": 1},
+    ]
+    kept = [full_dataset[0], full_dataset[1]]  # both already present
+
+    expanded = core.expand_to_full_frames(kept, full_dataset)
+
+    assert len(expanded) == 2
