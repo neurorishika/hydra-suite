@@ -875,9 +875,9 @@ class ClassifierBackend:
         (e.g. ``'var_23'``). We therefore index the prediction dict by position
         — taking the first value — rather than by a hardcoded name.
 
-        CoreML requires NHWC layout, but the exporters in this codebase use
-        ``ct.TensorType(name="input", ...)`` so we feed the batch as-is in NCHW
-        and let coremltools handle the layout (it was traced with NCHW input).
+        The model was traced with an NCHW ``ct.TensorType(name="input", ...)``
+        input, so we feed the preprocessed batch as-is in NCHW under the "input"
+        key — no layout transpose is needed.
         """
         results: list[np.ndarray] = []
         for i in range(batch_np.shape[0]):
