@@ -2199,6 +2199,7 @@ class ConfigOrchestrator:
             "USE_CUSTOM_OBB_IOU_FILTERING": True,
             "YOLO_TARGET_CLASSES": yolo_cls,
             "COMPUTE_RUNTIME": compute_runtime,
+            "RUNTIME_TIER": self._mw._selected_runtime_tier(),
             "CNN_COMPUTE_RUNTIME": cnn_runtime,
             "YOLO_DEVICE": runtime_detection["yolo_device"],
             "ENABLE_GPU_BACKGROUND": runtime_detection["enable_gpu_background"],

@@ -54,10 +54,36 @@ _POSE_FLAVOR = {
 }
 
 
+# The redesign selects compute per pipeline via a single `runtime_tier`
+# (cpu|gpu|gpu_fast); the legacy per-stage `compute_runtime` fields are inert.
+_TIERS = {"cpu", "gpu", "gpu_fast"}
+
+
 def runtime_overrides(runtime: str) -> dict:
     if runtime == "config":
         return {}  # leave the config's own runtime untouched
+    if runtime in _TIERS:
+        # New taxonomy: one tier drives the whole pipeline. Also set a
+        # tier-consistent legacy compute_runtime so the worker derives the same
+        # tier even on a params path that doesn't thread RUNTIME_TIER
+        # (migrate_runtime_to_tier: cpu->cpu, cuda->gpu, tensorrt->gpu_fast).
+        _legacy = {"cpu": "cpu", "gpu": "cuda", "gpu_fast": "tensorrt"}[runtime]
+        return {
+            "runtime_tier": runtime,
+            "compute_runtime": _legacy,
+            "cnn_runtime": _legacy,
+            "headtail_runtime": _legacy,
+            "pose_runtime_flavor": _POSE_FLAVOR.get(_legacy, "cpu"),
+            "pose_sleap_device": _POSE_FLAVOR.get(_legacy, "cpu"),
+            "enable_tensorrt": runtime == "gpu_fast",
+        }
+    # Legacy per-stage runtime string: map it to a tier (so it still takes
+    # effect post-redesign) AND keep the old fields for older code paths.
+    from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+    tier = migrate_runtime_to_tier({runtime})
     return {
+        "runtime_tier": tier,
         "compute_runtime": runtime,
         "cnn_runtime": runtime,
         "headtail_runtime": runtime,
@@ -144,7 +170,17 @@ def main() -> int:
     ap.add_argument(
         "--runtime",
         default="config",
-        choices=["config", "cpu", "mps", "cuda", "onnx_cpu", "onnx_cuda", "tensorrt"],
+        choices=[
+            "config",
+            "cpu",
+            "gpu",
+            "gpu_fast",
+            "mps",
+            "cuda",
+            "onnx_cpu",
+            "onnx_cuda",
+            "tensorrt",
+        ],
         help="Override all stage runtimes; 'config' keeps the config's own runtime.",
     )
     ap.add_argument("--label", default="run", help="Label recorded in meta.json.")

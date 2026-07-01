@@ -1391,13 +1391,22 @@ class MainWindow(QMainWindow):
             self._session_orch._on_runtime_tier_changed()
 
     def _selected_runtime_tier(self) -> str:
-        """Return the currently selected runtime tier id."""
+        """Return the currently selected runtime tier id.
+
+        Prefers the GUI selector; falls back to the loaded config's
+        ``runtime_tier`` (headless CLI runs have no populated combo) before the
+        ``"gpu"`` default.
+        """
         if hasattr(self, "_setup_panel") and hasattr(
             self._setup_panel, "combo_runtime_tier"
         ):
             data = self._setup_panel.combo_runtime_tier.currentData()
             if data:
                 return str(data)
+        cfg = getattr(self, "config", None)
+        cfg_tier = getattr(cfg, "runtime_tier", None) if cfg is not None else None
+        if cfg_tier:
+            return str(cfg_tier)
         return "gpu"
 
     def _selected_compute_runtime(self) -> str:

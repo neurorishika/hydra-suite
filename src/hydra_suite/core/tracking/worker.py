@@ -58,7 +58,6 @@ from hydra_suite.core.tracking.features.tag_features import (
 )
 from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
-from hydra_suite.utils.batch_policy import clamp_realtime_individual_batch_size
 from hydra_suite.utils.frame_prefetcher import FramePrefetcher
 from hydra_suite.utils.geometry import estimate_detection_crop_quality
 from hydra_suite.utils.image_processing import (
@@ -4328,6 +4327,18 @@ class TrackingWorker(QThread):
         )
 
         compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
+        # Pipeline-wide compute tier drives backend/device selection in the
+        # redesign (per-stage compute_runtime fields are inert). Prefer an
+        # explicit RUNTIME_TIER param; otherwise derive it from the legacy
+        # per-stage runtime so old params still take effect.
+        from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+        _raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+        runtime_tier = (
+            _raw_tier
+            if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+            else migrate_runtime_to_tier({compute_runtime})
+        )
         obb_mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
         if obb_mode not in {"direct", "sequential"}:
             obb_mode = "direct"
@@ -4567,6 +4578,7 @@ class TrackingWorker(QThread):
             detection_batch_size=batch_size,
             realtime=False,
             use_cache=True,
+            runtime_tier=runtime_tier,
         )
 
     def _emit_inference_progress(self, done: int, total: int) -> None:
