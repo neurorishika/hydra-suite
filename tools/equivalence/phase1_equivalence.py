@@ -1,16 +1,18 @@
 """Phase-1 numeric equivalence probe (native-GPU exact wins).
 
-Phase 1 only changes numerics on CUDA (channels_last + inference_mode + pinned
-H2D on the classifier native path, channels_last on the torch OBB executor).
-CPU/MPS paths are unchanged by construction. This script runs the affected
-production code paths on deterministic, seeded inputs and dumps the raw outputs
-to JSON so the SAME script can be run in two source trees (pre-Phase-1 base vs
-post-Phase-1 HEAD) on the SAME CUDA box and the outputs diffed.
+Phase 1 as shipped only wraps compute in ``inference_mode`` (classifier + crop
+paths) and adds pinned/``non_blocking`` H2D for classifier crops — all
+determinism-preserving. (An earlier ``channels_last`` attempt was reverted after
+CUDA verification showed it was a no-op on the real classifier and crashed OBB
+inference.) This script runs the affected production code paths on deterministic,
+seeded inputs and dumps the raw outputs to JSON so the SAME script can be run in
+two source trees (pre-Phase-1 base vs post-Phase-1 HEAD) on the SAME box and the
+outputs diffed.
 
 Equivalence criterion: classifier logits and OBB detection geometry at HEAD must
-match base within a small tolerance (channels_last reorders reductions, so exact
-bit-equality is not expected — the spec allows the ~0.006 px / 1e-3 rel-tol
-device-invariance envelope).
+match base. The shipped changes are transport/graph-only (no compute reorder), so
+outputs are expected bit-exact; the harness still tolerates the spec's ~0.006 px
+/ 1e-3 rel-tol device-invariance envelope.
 
 Usage (run in each tree, then diff the two JSON files):
     PYTHONPATH=src python tools/equivalence/phase1_equivalence.py \
