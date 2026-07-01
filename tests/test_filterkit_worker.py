@@ -81,6 +81,12 @@ def test_filterworker_preserve_full_frames_expands_and_restores_companions(
             1,
         }, f"frame {frame_id} missing a companion after expansion: {det_idxs}"
 
+    selected_paths = {item["path"] for item in selected}
+    removed_paths = {item["path"] for item in result["removed_examples"]}
+    assert not (
+        selected_paths & removed_paths
+    ), "restored companions must not remain listed as removed"
+
 
 def test_filterworker_preserve_full_frames_off_matches_baseline(tmp_path) -> None:
     dataset_root = _build_identity_dataset(

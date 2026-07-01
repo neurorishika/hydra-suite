@@ -267,13 +267,17 @@ class FilterWorker(BaseWorker):
         stats["after_diversity"] = len(dataset)
         return dataset
 
-    def _run_expansion_stage(self, dataset, stats, full_dataset):
+    def _run_expansion_stage(self, dataset, stats, full_dataset, removed_examples):
         if not self.config.get("preserve_full_frames"):
             stats["after_expansion"] = len(dataset)
             return dataset
 
         self.status.emit("Expanding selection to all individuals per frame...")
         expanded = self.core.expand_to_full_frames(dataset, full_dataset)
+        expanded_paths = {item.get("path") for item in expanded}
+        removed_examples[:] = [
+            item for item in removed_examples if item.get("path") not in expanded_paths
+        ]
         stats["after_expansion"] = len(expanded)
         self.status.emit(f"Expanded to {len(expanded)} crops across selected frames")
         return expanded
@@ -326,7 +330,9 @@ class FilterWorker(BaseWorker):
             if self._should_abort():
                 return
 
-            dataset = self._run_expansion_stage(dataset, stats, full_dataset)
+            dataset = self._run_expansion_stage(
+                dataset, stats, full_dataset, removed_examples
+            )
             if self._should_abort():
                 return
 

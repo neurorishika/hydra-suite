@@ -904,6 +904,10 @@ class FilterKitCore:
         of per-crop features, and returns every crop belonging to each
         selected frame (n_samples is then a frame count, not a crop count).
         """
+        # When by_frame=True, n_samples is a frame count; this crop-count
+        # guard is still safe because crops >= frames, so it can only
+        # trigger in the "no sampling needed" case (see _diversity_sample_by_frame
+        # for the actual frame-count gate).
         if not dataset or len(dataset) <= n_samples:
             return dataset
 
