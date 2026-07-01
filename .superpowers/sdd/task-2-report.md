@@ -1,3 +1,90 @@
+# Task 2 Report — CoreML `.mlpackage` Exporters (tiny + torchvision/timm)
+
+---
+
+> **NOTE**: This file previously held a different task-2 report from an earlier branch iteration. That content is preserved below the separator. The active report is above it.
+
+---
+
+## Status: DONE
+
+**Commit:** `f1667e3` — `feat(training): CoreML .mlpackage exporters for tiny + torchvision/timm classifiers`
+
+---
+
+## What Was Built
+
+### Files Modified
+- `src/hydra_suite/training/torchvision_model.py`: added `export_torchvision_to_coreml(model, ckpt, mlpackage_path) -> Path`
+- `src/hydra_suite/training/tiny_model.py`: added `export_tiny_to_coreml(model, ckpt, mlpackage_path) -> Path`
+- `tests/test_classifier_coreml_export.py`: 4 tests covering both exporters, explicit + default input sizes
+
+---
+
+## Conversion Approach
+
+**torch.jit.trace + coremltools.convert** — the direct path from the brief worked without fallback.
+
+Pre-implementation probe test confirmed:
+```
+Trace: OK
+Convert: OK
+Save: OK, exists = True
+```
+
+Pipeline per exporter:
+1. `model.eval()`
+2. `torch.jit.trace(model, dummy)` — dummy shape `(1, 3, H, W)`
+3. `ct.convert(traced, inputs=[ct.TensorType(name="input", shape=ct.Shape(shape=(ct.RangeDim(1, 512), 3, H, W)))], compute_units=ct.ComputeUnit.ALL, minimum_deployment_target=ct.target.macOS13)`
+4. `mlmodel.save(str(mlpackage_path))`
+
+---
+
+## Test Results (RED → GREEN)
+
+RED: `ImportError: cannot import name 'export_torchvision_to_coreml'` (before implementation)
+
+GREEN:
+```
+platform darwin -- Python 3.13.12, pytest-9.0.2
+4 tests collected, 4 PASSED in 3.84s
+
+tests/test_classifier_coreml_export.py::test_export_torchvision_to_coreml_writes_mlpackage PASSED
+tests/test_classifier_coreml_export.py::test_export_tiny_to_coreml_writes_mlpackage PASSED
+tests/test_classifier_coreml_export.py::test_export_torchvision_to_coreml_default_input_size PASSED
+tests/test_classifier_coreml_export.py::test_export_tiny_to_coreml_default_input_size PASSED
+```
+
+Real `.mlpackage` bundles produced on disk. `pytest.importorskip("coremltools")` ensures SKIP on machines without coremltools.
+
+---
+
+## Torch/CoreML Version Compatibility
+
+- **torch:** 2.11.0 (above coremltools 9.0 tested max of 2.7.0)
+- **coremltools:** 9.0
+
+Warnings observed (non-fatal):
+- `Torch version 2.11.0 has not been tested with coremltools. Torch 2.7.0 is the most recent version that has been tested.`
+- `torch.jit.trace is deprecated. Please switch to torch.compile or torch.export.` (DeprecationWarning — not an error)
+- Output tensor renamed from `'23'` to `'var_23'` (coremltools normalizes numeric names)
+
+None of these blocked conversion.
+
+---
+
+## Concerns / Future Work
+
+1. **`torch.jit.trace` deprecation**: coremltools 9.0 doesn't yet consume `torch.export` programs, so trace is the only viable path today. Update when coremltools adds export support.
+2. **Output tensor renaming**: downstream inference code reading CoreML output by name should use `'var_23'` (or index by position).
+3. **Batch axis upper bound**: `RangeDim(1, 512)` — make configurable if larger batches are needed.
+
+---
+
+# Previous Task-2 Report (InferenceConfig.runtime_tier) — archived below
+
+---
+
 # Task 2 Report: `InferenceConfig.runtime_tier` + Hard-Cutover Legacy Migration
 
 ---
