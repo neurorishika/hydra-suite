@@ -825,14 +825,90 @@ class FilterKitCore:
 
         return kept_items
 
+    def _group_dataset_by_frame(
+        self, dataset: List[Dict[str, Any]]
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        groups: Dict[int, List[Dict[str, Any]]] = {}
+        for item in dataset:
+            groups.setdefault(item["frame_idx"], []).append(item)
+        return groups
+
+    def compute_avg_individuals_per_frame(self, dataset: List[Dict[str, Any]]) -> float:
+        if not dataset:
+            return 1.0
+        unique_frames = {item["frame_idx"] for item in dataset}
+        if not unique_frames:
+            return 1.0
+        return len(dataset) / len(unique_frames)
+
+    def _extract_gray_feature(self, path: str, feature_size=(32, 32)):
+        img = cv2.imread(path)
+        if img is None:
+            return None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+        return cv2.resize(gray, feature_size).flatten()
+
+    def _diversity_sample_by_frame(
+        self, dataset: List[Dict[str, Any]], n_frames: int
+    ) -> List[Dict[str, Any]]:
+        groups = self._group_dataset_by_frame(dataset)
+        frame_ids = sorted(groups)
+        if len(frame_ids) <= n_frames:
+            return dataset
+
+        frame_features = []
+        valid_frame_ids = []
+        for frame_id in frame_ids:
+            member_features = []
+            for item in groups[frame_id]:
+                feature = self._extract_gray_feature(item["path"])
+                if feature is not None:
+                    member_features.append(feature.astype(np.float64))
+            if not member_features:
+                continue
+            frame_features.append(np.mean(member_features, axis=0))
+            valid_frame_ids.append(frame_id)
+
+        if not frame_features:
+            return []
+
+        X = np.array(frame_features)
+        n_clusters = min(n_frames, len(valid_frame_ids))
+        kmeans = MiniBatchKMeans(
+            n_clusters=n_clusters, random_state=42, n_init=3, batch_size=1024
+        )
+        kmeans.fit(X)
+
+        from sklearn.metrics import pairwise_distances_argmin_min
+
+        closest, _ = pairwise_distances_argmin_min(kmeans.cluster_centers_, X)
+        selected_frame_ids = {valid_frame_ids[i] for i in sorted(set(closest))}
+
+        return [
+            item
+            for frame_id in frame_ids
+            if frame_id in selected_frame_ids
+            for item in groups[frame_id]
+        ]
+
     def diversity_sample(
-        self, dataset: List[Dict[str, Any]], n_samples: int
+        self,
+        dataset: List[Dict[str, Any]],
+        n_samples: int,
+        by_frame: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Select diverse samples using MiniBatchKMeans on resized images.
+
+        If by_frame is True, clusters on per-frame averaged features instead
+        of per-crop features, and returns every crop belonging to each
+        selected frame (n_samples is then a frame count, not a crop count).
         """
         if not dataset or len(dataset) <= n_samples:
             return dataset
+
+        if by_frame:
+            return self._diversity_sample_by_frame(dataset, n_samples)
 
         # Extract features (32x32 resized image)
         feature_size = (32, 32)
