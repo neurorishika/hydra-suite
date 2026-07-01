@@ -9,7 +9,7 @@ import torch
 
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
-from ..runtime import RuntimeContext
+from ..runtime import RuntimeContext, runtime_to_compute_runtime
 from ..runtime_artifacts import load_obb_executor
 
 logger = logging.getLogger(__name__)
@@ -139,26 +139,37 @@ def _corners_from_xywhr(
 
 
 def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
+    # Derive backend from the RuntimeContext (which reflects runtime_tier via
+    # from_config). Per-stage compute_runtime fields are deprecated in favor of
+    # runtime_tier; they are kept in place for serialization only.
+    compute_runtime = runtime_to_compute_runtime(runtime)
+    if compute_runtime == "tensorrt":
+        logger.warning(
+            "Runtime fallback may apply for OBB stage: "
+            "gpu_fast (TensorRT) requested — artifact availability governs actual backend."
+        )
     if config.mode == "direct":
         assert config.direct is not None
+        auto_export = config.direct.auto_export
         m = _load_yolo(
             config.direct.model_path,
-            config.direct.compute_runtime,
-            auto_export=config.direct.auto_export,
+            compute_runtime,
+            auto_export=auto_export,
             max_det=config.max_detections,
         )
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
+    auto_export = config.sequential.auto_export
     detect = _load_yolo(
         config.sequential.detect_model_path,
-        config.sequential.detect_compute_runtime,
-        auto_export=config.sequential.auto_export,
+        compute_runtime,
+        auto_export=auto_export,
         max_det=config.max_detections,
     )
     obb = _load_yolo(
         config.sequential.obb_model_path,
-        config.sequential.obb_compute_runtime,
-        auto_export=config.sequential.auto_export,
+        compute_runtime,
+        auto_export=auto_export,
         max_det=config.max_detections,
     )
     return OBBModels(mode="sequential", detect_model=detect, obb_model=obb)

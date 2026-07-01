@@ -9,7 +9,7 @@ import torch
 
 from ..config import PoseConfig
 from ..result import CropBatch, OBBResult, PoseResult
-from ..runtime import RuntimeContext
+from ..runtime import RuntimeContext, runtime_to_compute_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -75,14 +75,19 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
         skeleton_edges = []
     n_kpts = len(keypoint_names)
 
+    # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
+    # Per-stage compute_runtime fields are deprecated in favor of runtime_tier;
+    # kept in place for serialization only.
+    compute_runtime = runtime_to_compute_runtime(runtime)
+
     if config.backend == "yolo":
         assert config.yolo is not None
         from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
 
         device = (
             "cuda:0"
-            if config.yolo.compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
-            else ("mps" if config.yolo.compute_runtime == "mps" else "cpu")
+            if compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
+            else ("mps" if compute_runtime == "mps" else "cpu")
         )
         backend = YoloNativeBackend(
             model_path=config.yolo.model_path,
@@ -104,7 +109,6 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
     from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
 
     sleap_cfg = config.sleap
-    compute_runtime = str(sleap_cfg.compute_runtime or "cpu").lower()
     if compute_runtime in ("cuda", "onnx_cuda"):
         runtime_flavor = "onnx_cuda"
         device = "cuda"

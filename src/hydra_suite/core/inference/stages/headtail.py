@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any
@@ -9,7 +10,9 @@ import torch
 
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
-from ..runtime import RuntimeContext
+from ..runtime import RuntimeContext, runtime_to_compute_runtime
+
+logger = logging.getLogger(__name__)
 
 _DIRECTION_OFFSET: dict[str, float] = {
     "right": 0.0,
@@ -48,7 +51,10 @@ def load_headtail_model(
         validate_headtail_labels,
     )
 
-    backend = ClassifierBackend(config.model_path, config.compute_runtime)
+    # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
+    # config.compute_runtime is deprecated in favor of runtime_tier; kept for serialization.
+    compute_runtime = runtime_to_compute_runtime(runtime)
+    backend = ClassifierBackend(config.model_path, compute_runtime)
     meta = backend.metadata
     if meta.is_multihead:
         backend.close()

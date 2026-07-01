@@ -9,14 +9,16 @@ from hydra_suite.core.inference.config import (
     OBBDirectConfig,
 )
 from hydra_suite.core.inference.runtime import RuntimeContext
+from hydra_suite.runtime.resolver import PlatformInfo
 
 
 def _cpu_config() -> InferenceConfig:
     return InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cpu"),
-        )
+            direct=OBBDirectConfig(model_path="/m.pt"),
+        ),
+        runtime_tier="cpu",
     )
 
 
@@ -24,8 +26,9 @@ def _mps_config() -> InferenceConfig:
     return InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="mps"),
-        )
+            direct=OBBDirectConfig(model_path="/m.pt"),
+        ),
+        runtime_tier="gpu",  # gpu tier on MPS-only host → device="mps", cuda_mode=False
     )
 
 
@@ -33,29 +36,50 @@ def _cuda_config() -> InferenceConfig:
     return InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cuda"),
-        )
+            direct=OBBDirectConfig(model_path="/m.pt"),
+        ),
+        runtime_tier="gpu",  # gpu tier on CUDA host → cuda_mode=True, tensor_on_cuda=True
     )
 
 
+def _gpu_fast_config() -> InferenceConfig:
+    return InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path="/m.pt"),
+        ),
+        runtime_tier="gpu_fast",  # TensorRT: cuda_mode=True, tensor_on_cuda=False
+    )
+
+
+_no_gpu = PlatformInfo(has_cuda=False, has_mps=False)
+_mps_only = PlatformInfo(has_cuda=False, has_mps=True)
+_cuda_host = PlatformInfo(has_cuda=True, has_mps=False)
+
+
 def test_cpu_config_produces_cpu_mode():
-    ctx = RuntimeContext.from_config(_cpu_config())
+    # cpu tier: never CUDA regardless of platform
+    with patch("hydra_suite.runtime.resolver.detect_platform", return_value=_cuda_host):
+        ctx = RuntimeContext.from_config(_cpu_config())
     assert ctx.cuda_mode is False
-    assert ctx.device == "cpu"
+    # device is "mps" on Apple Silicon, "cpu" elsewhere — both are non-CUDA
+    assert ctx.device in ("mps", "cpu")
     assert ctx.use_nvdec is False
     assert ctx.default_runtime == "cpu"
 
 
 def test_mps_config_produces_cpu_mode():
-    # MPS is CPU-group — cuda_mode should be False.
-    # On Apple Silicon hosts the device may resolve to "mps", elsewhere "cpu".
-    ctx = RuntimeContext.from_config(_mps_config())
+    # gpu tier on MPS-only host: cuda_mode=False, device=mps
+    with patch("hydra_suite.runtime.resolver.detect_platform", return_value=_mps_only):
+        ctx = RuntimeContext.from_config(_mps_config())
     assert ctx.cuda_mode is False
     assert ctx.device in ("mps", "cpu")
 
 
 def test_cuda_config_produces_cuda_mode():
+    # gpu tier on CUDA host: cuda_mode=True
     with (
+        patch("hydra_suite.runtime.resolver.detect_platform", return_value=_cuda_host),
         patch(
             "hydra_suite.core.inference.runtime._cuda_device_available",
             return_value="cuda:0",
@@ -71,6 +95,7 @@ def test_cuda_config_produces_cuda_mode():
 
 def test_cuda_without_nvdec():
     with (
+        patch("hydra_suite.runtime.resolver.detect_platform", return_value=_cuda_host),
         patch(
             "hydra_suite.core.inference.runtime._cuda_device_available",
             return_value="cuda:0",
@@ -93,8 +118,9 @@ def test_frozen_dataclass():
 
 
 def test_tensor_on_cuda_true_only_for_native_cuda():
-    # tensor_on_cuda True: pure cuda runtime only
+    # tensor_on_cuda True: gpu tier (native torch) on CUDA host
     with (
+        patch("hydra_suite.runtime.resolver.detect_platform", return_value=_cuda_host),
         patch(
             "hydra_suite.core.inference.runtime._cuda_device_available",
             return_value="cuda:0",
@@ -106,14 +132,9 @@ def test_tensor_on_cuda_true_only_for_native_cuda():
         ctx = RuntimeContext.from_config(_cuda_config())
     assert ctx.tensor_on_cuda is True
 
-    # tensor_on_cuda False: onnx_cuda uses GPU but returns CPU numpy
-    onnx_cuda_cfg = InferenceConfig(
-        obb=OBBConfig(
-            mode="direct",
-            direct=OBBDirectConfig(model_path="/m.onnx", compute_runtime="onnx_cuda"),
-        )
-    )
+    # tensor_on_cuda False: gpu_fast (TensorRT) on CUDA host returns CPU numpy
     with (
+        patch("hydra_suite.runtime.resolver.detect_platform", return_value=_cuda_host),
         patch(
             "hydra_suite.core.inference.runtime._cuda_device_available",
             return_value="cuda:0",
@@ -122,26 +143,6 @@ def test_tensor_on_cuda_true_only_for_native_cuda():
             "hydra_suite.core.inference.runtime._nvdec_available", return_value=False
         ),
     ):
-        ctx2 = RuntimeContext.from_config(onnx_cuda_cfg)
+        ctx2 = RuntimeContext.from_config(_gpu_fast_config())
     assert ctx2.cuda_mode is True  # CUDA group
-    assert ctx2.tensor_on_cuda is False  # but outputs are CPU numpy
-
-    # tensor_on_cuda False: tensorrt also returns CPU numpy
-    trt_cfg = InferenceConfig(
-        obb=OBBConfig(
-            mode="direct",
-            direct=OBBDirectConfig(model_path="/m.engine", compute_runtime="tensorrt"),
-        )
-    )
-    with (
-        patch(
-            "hydra_suite.core.inference.runtime._cuda_device_available",
-            return_value="cuda:0",
-        ),
-        patch(
-            "hydra_suite.core.inference.runtime._nvdec_available", return_value=False
-        ),
-    ):
-        ctx3 = RuntimeContext.from_config(trt_cfg)
-    assert ctx3.cuda_mode is True
-    assert ctx3.tensor_on_cuda is False
+    assert ctx2.tensor_on_cuda is False  # TensorRT returns CPU numpy

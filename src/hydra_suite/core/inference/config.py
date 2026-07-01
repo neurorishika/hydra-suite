@@ -82,6 +82,8 @@ def _collect_legacy_runtime_strings(d: dict) -> set[str]:
 @dataclass
 class OBBDirectConfig:
     model_path: str
+    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
+    # Kept for serialization round-trip; no longer read by stage loaders.
     compute_runtime: ComputeRuntime = "cpu"
     confidence_floor: float = 1e-3
     confidence_threshold: float = 0.25
@@ -95,6 +97,8 @@ class OBBDirectConfig:
 class OBBSequentialConfig:
     detect_model_path: str
     obb_model_path: str
+    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
+    # Kept for serialization round-trip; no longer read by stage loaders.
     detect_compute_runtime: ComputeRuntime = "cpu"
     obb_compute_runtime: ComputeRuntime = "cpu"
     # See OBBDirectConfig.auto_export.
@@ -134,6 +138,8 @@ class OBBConfig:
 @dataclass
 class HeadTailConfig:
     model_path: str
+    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
+    # Kept for serialization round-trip; no longer read by stage loaders.
     compute_runtime: ComputeRuntime = "cpu"
     confidence_threshold: float = 0.5
     candidate_confidence_threshold: float | None = None
@@ -146,6 +152,8 @@ class HeadTailConfig:
 class CNNConfig:
     label: str
     model_path: str
+    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
+    # Kept for serialization round-trip; no longer read by stage loaders.
     compute_runtime: ComputeRuntime = "cpu"
     confidence_threshold: float = 0.5
     batch_size: int = 64
@@ -158,6 +166,8 @@ class CNNConfig:
 @dataclass
 class PoseYOLOConfig:
     model_path: str
+    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
+    # Kept for serialization round-trip; no longer read by stage loaders.
     compute_runtime: ComputeRuntime = "cpu"
     confidence_threshold: float = 1e-4
     iou_threshold: float = 0.7
@@ -168,6 +178,8 @@ class PoseYOLOConfig:
 @dataclass
 class PoseSLEAPConfig:
     model_path: str
+    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
+    # Kept for serialization round-trip; no longer read by stage loaders.
     compute_runtime: ComputeRuntime = "cpu"
     conda_env: str = "sleap"
     batch_size: int = 4

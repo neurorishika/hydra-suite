@@ -7,13 +7,8 @@ import numpy as np
 import torch
 
 from ..config import CNNConfig
-from ..result import (
-    CNNDetectionPrediction,
-    CNNFactorPrediction,
-    CNNResult,
-    OBBResult,
-)
-from ..runtime import RuntimeContext
+from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
+from ..runtime import RuntimeContext, runtime_to_compute_runtime
 
 
 @dataclass
@@ -30,7 +25,10 @@ class CNNModel:
 def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(config.model_path, config.compute_runtime)
+    # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
+    # config.compute_runtime is deprecated in favor of runtime_tier; kept for serialization.
+    compute_runtime = runtime_to_compute_runtime(runtime)
+    backend = ClassifierBackend(config.model_path, compute_runtime)
     meta = backend.metadata
     return CNNModel(
         backend=backend,

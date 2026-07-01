@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .config import CUDA_RUNTIMES, ComputeRuntime, InferenceConfig
+from .config import ComputeRuntime, InferenceConfig
 
 if TYPE_CHECKING:
     import torch as _torch
@@ -84,14 +84,15 @@ class RuntimeContext:
 
     @staticmethod
     def from_config(config: InferenceConfig) -> "RuntimeContext":
-        runtimes = config._collect_all_runtimes()
-        cuda_mode = bool(runtimes & CUDA_RUNTIMES)
-        # tensor_on_cuda: only native PyTorch "cuda" leaves model outputs as
-        # live CUDA device tensors. ONNX Runtime CUDAExecutionProvider and
-        # TensorRT both produce CPU numpy from the inference call.
-        tensor_on_cuda = "cuda" in runtimes and not (
-            runtimes & {"onnx_cuda", "tensorrt"}
-        )
+        from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+        platform = detect_platform()
+        resolver = RuntimeResolver(config.runtime_tier, platform)
+        # gpu_native: "torch" backend means native PyTorch (keeps tensors on CUDA).
+        # "tensorrt" backend (gpu_fast tier) returns CPU numpy from inference calls.
+        gpu_native = resolver.resolve("obb").backend == "torch"
+        cuda_mode = config.runtime_tier in ("gpu", "gpu_fast") and platform.has_cuda
+        tensor_on_cuda = cuda_mode and gpu_native
         if cuda_mode:
             device = _cuda_device_available()
             nvdec = _nvdec_available()
@@ -106,6 +107,21 @@ class RuntimeContext:
             default_runtime=default,
             tensor_on_cuda=tensor_on_cuda,
         )
+
+
+def runtime_to_compute_runtime(runtime: RuntimeContext) -> "ComputeRuntime":
+    """Translate a RuntimeContext (derived from runtime_tier) to a compute_runtime string.
+
+    Used by stage loaders to get the single-string runtime expected by existing
+    backend factories, without reading the deprecated per-stage compute_runtime fields.
+    """
+    if runtime.cuda_mode:
+        if runtime.tensor_on_cuda:
+            return "cuda"  # native torch GPU tier
+        return "tensorrt"  # gpu_fast tier: TensorRT returns CPU numpy
+    if runtime.device == "mps":
+        return "mps"
+    return "cpu"
 
 
 def _cuda_device_available() -> str:
