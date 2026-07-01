@@ -295,15 +295,16 @@ def gpu_canonical_crop(
         0
     )  # (1, 2, 3)
 
-    grid = F.affine_grid(theta_t, (1, C, canvas_h, canvas_w), align_corners=True)
-    crop = F.grid_sample(
-        frame_chw.unsqueeze(0),
-        grid,
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
-    )
-    return crop.squeeze(0)  # (C, canvas_h, canvas_w)
+    with torch.inference_mode():
+        grid = F.affine_grid(theta_t, (1, C, canvas_h, canvas_w), align_corners=True)
+        crop = F.grid_sample(
+            frame_chw.unsqueeze(0),
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )
+        return crop.squeeze(0)  # (C, canvas_h, canvas_w)
 
 
 def gpu_canonical_crop_batch(
@@ -379,19 +380,20 @@ def gpu_canonical_crop_batch(
         thetas_np, dtype=torch.float32, device=frame_chw.device
     )  # (N, 2, 3)
 
-    # ONE affine_grid call + ONE grid_sample call for all N crops.
-    grid = F.affine_grid(
-        thetas_t, (N, C, canvas_h, canvas_w), align_corners=True
-    )  # (N, canvas_h, canvas_w, 2)
-    frame_expanded = frame_chw.unsqueeze(0).expand(N, -1, -1, -1)  # (N, C, H, W)
-    crops = F.grid_sample(
-        frame_expanded.contiguous(),
-        grid,
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
-    )  # (N, C, canvas_h, canvas_w)
-    return crops
+    with torch.inference_mode():
+        # ONE affine_grid call + ONE grid_sample call for all N crops.
+        grid = F.affine_grid(
+            thetas_t, (N, C, canvas_h, canvas_w), align_corners=True
+        )  # (N, canvas_h, canvas_w, 2)
+        frame_expanded = frame_chw.unsqueeze(0).expand(N, -1, -1, -1)  # (N, C, H, W)
+        crops = F.grid_sample(
+            frame_expanded.contiguous(),
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )  # (N, C, canvas_h, canvas_w)
+        return crops
 
 
 def apply_headtail_rotation(
