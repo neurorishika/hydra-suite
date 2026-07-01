@@ -16,7 +16,25 @@ torch = pytest.importorskip("torch")
 from hydra_suite.core.identity.pose.backends.sleap import (
     SleapExportedBackend,
     SleapServiceBackend,
+    _prepare_export_crop,
 )
+
+
+def test_prepare_export_crop_scales_float_unit_crops_not_black():
+    # THE real fix: the onnx_cuda/tensorrt CPU path hands float32 [0,1] crops to
+    # predict_batch -> _prepare_export_crop. A plain uint8 cast floored them to
+    # black (valid_mask=0). Must scale to [0,255].
+    crop = np.full((8, 8, 3), 0.5, dtype=np.float32)
+    arr, _ = _prepare_export_crop(crop, (8, 8), 3)
+    assert arr.dtype == np.uint8
+    assert int(arr.max()) == 127  # 0.5*255, NOT 0 (the bug)
+
+
+def test_prepare_export_crop_passes_uint8_through():
+    crop = np.full((8, 8, 3), 200, dtype=np.uint8)
+    arr, _ = _prepare_export_crop(crop, (8, 8), 3)
+    assert arr.dtype == np.uint8
+    assert int(arr.max()) == 200  # unchanged
 
 
 def _capture_cpu_crops(crops):

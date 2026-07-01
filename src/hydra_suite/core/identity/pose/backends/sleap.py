@@ -224,7 +224,18 @@ def _prepare_export_crop(
     input_hw: Tuple[int, int],
     input_channels: Optional[int],
 ) -> Tuple[np.ndarray, ExportTransform]:
-    arr = np.asarray(crop, dtype=np.uint8)
+    # The pipeline's canonical crops are float32 [0, 1]; casting them straight to
+    # uint8 floors every pixel to 0 (all-black image → SLEAP returns zero-conf
+    # keypoints). Scale [0, 1] floats to [0, 255] before the cast; pass uint8 /
+    # [0, 255] inputs through. Mirrors SleapServiceBackend._to_uint8_image; this
+    # is the shared choke point for the onnx_cuda/tensorrt exported CPU path.
+    arr = np.asarray(crop)
+    if arr.dtype != np.uint8:
+        a = arr.astype(np.float32)
+        finite = a[np.isfinite(a)]
+        if finite.size and float(finite.max()) <= 1.0 + 1e-3:
+            a = a * 255.0
+        arr = np.clip(np.nan_to_num(a), 0.0, 255.0).astype(np.uint8)
     if arr.ndim == 2:
         arr = arr[:, :, None]
     if arr.ndim != 3:
