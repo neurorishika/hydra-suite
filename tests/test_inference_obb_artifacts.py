@@ -2,14 +2,18 @@
 
 These tests assert the *selection logic* of ``load_obb_executor`` on CPU using a
 FAKE exporter + FAKE executor factory injected via the module's hooks. They do
-NOT require a real CUDA / ONNX Runtime / TensorRT installation.
+NOT require a real CUDA / TensorRT installation.
 
-The H4 bug being guarded against: when ``COMPUTE_RUNTIME`` is ``onnx_*`` or
-``tensorrt`` the old ``_load_yolo`` silently loaded a PyTorch ``.pt`` model and
-ran it on PyTorch — never using the requested ONNX/TRT runtime. The correct
-behaviour is to auto-export the artifact (when ``auto_export=True``) and run a
-direct executor, or raise a CLEAR error (when ``auto_export=False`` and no
-artifact exists) — never a silent PyTorch fallback.
+The H4 bug being guarded against: when ``COMPUTE_RUNTIME`` is ``tensorrt`` the
+old ``_load_yolo`` silently loaded a PyTorch ``.pt`` model and ran it on PyTorch
+— never using the requested TRT runtime. The correct behaviour is to auto-export
+the artifact (when ``auto_export=True``) and run a direct executor, or raise a
+CLEAR error (when ``auto_export=False`` and no artifact exists) — never a silent
+PyTorch fallback.
+
+onnx_* runtimes raise ArtifactExportError immediately — OBB no longer supports
+the ONNX path; the production pipeline (runtime_to_compute_runtime) never emits
+onnx_* for OBB.
 
 Real-export tests (which need ultralytics + a CUDA box) are guarded so they SKIP
 locally.
@@ -157,23 +161,14 @@ def test_tensorrt_no_auto_export_missing_engine_raises_clear_error(
     assert fake_loader["executor"] == 0
 
 
-def test_onnx_cuda_auto_export_triggers_export_once(fake_loader, tmp_path):
-    """onnx_cuda mirrors tensorrt: auto-export ONNX once, return direct executor."""
+def test_onnx_cuda_raises_unsupported(fake_loader, tmp_path):
+    """onnx_cuda is not supported for OBB — production pipeline never emits it."""
     pt = tmp_path / "model.pt"
     pt.write_bytes(b"x")
-    adapter = load_obb_executor(str(pt), "onnx_cuda", auto_export=True)
-    assert isinstance(adapter._executor, _FakeExecutor)
-    assert adapter._executor.runtime == "onnx"
-    assert fake_loader["export"] == 1
-    assert fake_loader["executor"] == 1
-
-
-def test_onnx_cuda_no_auto_export_missing_artifact_raises(fake_loader, tmp_path):
-    pt = tmp_path / "model.pt"
-    pt.write_bytes(b"x")
-    with pytest.raises(ArtifactExportError):
-        load_obb_executor(str(pt), "onnx_cuda", auto_export=False)
+    with pytest.raises(ArtifactExportError, match="Unsupported compute_runtime"):
+        load_obb_executor(str(pt), "onnx_cuda", auto_export=True)
     assert fake_loader["export"] == 0
+    assert fake_loader["executor"] == 0
 
 
 def test_explicit_engine_path_used_directly(fake_loader, tmp_path):
@@ -187,13 +182,14 @@ def test_explicit_engine_path_used_directly(fake_loader, tmp_path):
     assert adapter._executor.runtime == "tensorrt"
 
 
-def test_explicit_onnx_path_used_directly(fake_loader, tmp_path):
+def test_explicit_onnx_path_with_onnx_cpu_raises_unsupported(fake_loader, tmp_path):
+    """onnx_cpu is not a supported OBB runtime — raises immediately."""
     onnx = tmp_path / "prebuilt.onnx"
     onnx.write_bytes(b"prebuilt")
-    adapter = load_obb_executor(str(onnx), "onnx_cpu", auto_export=False)
-    assert isinstance(adapter._executor, _FakeExecutor)
+    with pytest.raises(ArtifactExportError, match="Unsupported compute_runtime"):
+        load_obb_executor(str(onnx), "onnx_cpu", auto_export=False)
     assert fake_loader["export"] == 0
-    assert adapter._executor.runtime == "onnx"
+    assert fake_loader["executor"] == 0
 
 
 # ---------------------------------------------------------------------------

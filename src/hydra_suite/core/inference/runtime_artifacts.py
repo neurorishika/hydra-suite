@@ -1,4 +1,4 @@
-"""OBB runtime-artifact loading: ONNX/TensorRT/CoreML auto-export + direct executor.
+"""OBB runtime-artifact loading: TensorRT/CoreML auto-export + direct executor.
 
 This is a CLEAN port of the load + auto-export + direct-executor selection logic
 from the legacy ``core/detectors/_runtime_artifacts.py`` (``_try_load_onnx_model``,
@@ -16,16 +16,19 @@ inference pipeline:
       - cpu/mps/cuda → returns a plain PyTorch (ultralytics ``YOLO``) model,
         ``.to()``-moved to the device. This keeps CPU/MPS behaviour byte-identical
         to the previous ``_load_yolo``.
-      - onnx_*/tensorrt → loads (or auto-exports then loads) the ``.onnx``/``.engine``
-        artifact and returns a direct CUDA executor wrapped in a YOLO-compatible
+      - tensorrt → loads (or auto-exports then loads) the ``.engine``
+        artifact and returns a direct TRT executor wrapped in a YOLO-compatible
         adapter so the geometry-extraction stage is unchanged.
-      - onnx_*/tensorrt with ``auto_export=False`` and a missing artifact →
+      - tensorrt with ``auto_export=False`` and a missing artifact →
         raises :class:`ArtifactExportError` (a CLEAR error, never a silent
         PyTorch fallback — that silent fallback was parity-audit finding H4).
       - coreml → exports (or reuses) a ``.mlpackage`` via ultralytics CoreML
         export with fixed ``imgsz`` (avoids the dynamic-shape E5RT failure seen
         with ``onnx_coreml``) then loads it back via ``YOLO(mlpackage_path)``
         (Apple Silicon only).
+
+Note: onnx_* runtimes are NOT supported for OBB. The production pipeline
+(runtime_to_compute_runtime) only emits {cpu, mps, cuda, tensorrt, coreml}.
 
 Square-letterbox parity: the direct executors (ported in
 ``core/detectors/_direct_obb_runtime.py``) use ``LetterBox(auto=False)`` so the
@@ -51,7 +54,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Compute-runtime → direct-executor runtime name.
-_ONNX_RUNTIMES: frozenset[str] = frozenset({"onnx_cpu", "onnx_cuda", "onnx_coreml"})
 _TENSORRT_RUNTIMES: frozenset[str] = frozenset({"tensorrt"})
 _TORCH_RUNTIMES: frozenset[str] = frozenset({"cpu", "mps", "cuda"})
 _COREML_RUNTIMES: frozenset[str] = frozenset({"coreml"})
@@ -126,12 +128,12 @@ def _export_artifact(
     imgsz: int,
     batch_size: int,
 ) -> Path:
-    """Export a ``.pt`` model to an ``.onnx``/``.engine`` artifact.
+    """Export a ``.pt`` model to a ``.engine``/``.mlpackage`` artifact.
 
-    Ported from legacy ``_try_load_onnx_model`` / ``_try_load_tensorrt_model``
-    export blocks. Runs ultralytics ``model.export(...)`` (CUDA-only for TRT) and
-    copies the exported file to ``artifact_path``. ``runtime`` is the direct
-    runtime name (``"onnx"`` or ``"tensorrt"``).
+    Ported from legacy ``_try_load_tensorrt_model`` export blocks. Runs
+    ultralytics ``model.export(...)`` (CUDA-only for TRT) and copies the
+    exported file to ``artifact_path``. ``runtime`` is the direct runtime name
+    (``"tensorrt"`` or ``"coreml"``).
 
     This function only runs on a machine with ultralytics (and, for TRT, a CUDA
     device); the tests inject a fake in its place.
@@ -142,24 +144,10 @@ def _export_artifact(
     # CoreML does not use the CBC direct executor, so skip the raw-head override.
     if runtime != "coreml":
         # Force raw-head (end2end=False) export so the direct executor's NMS path
-        # matches the TRT/ONNX raw-CBC contract (legacy _yolo_runtime_export_profile).
+        # matches the TRT raw-CBC contract (legacy _yolo_runtime_export_profile).
         _force_raw_head(base_model)
 
-    if runtime == "onnx":
-        logger.info(
-            "Exporting YOLO OBB model to ONNX runtime artifact (imgsz=%d)...", imgsz
-        )
-        export_path = base_model.export(
-            format="onnx",
-            imgsz=imgsz,
-            dynamic=False,
-            simplify=False,
-            nms=False,
-            opset=17,
-            batch=int(batch_size),
-            verbose=False,
-        )
-    elif runtime == "tensorrt":
+    if runtime == "tensorrt":
         logger.info(
             "Building TensorRT OBB engine (imgsz=%d, batch=%d) — one-time export...",
             imgsz,
@@ -255,18 +243,14 @@ def _create_direct_executor(
 
 def _direct_runtime_name(compute_runtime: str) -> str:
     """Map a compute-runtime to the direct-executor runtime name."""
-    if compute_runtime in _ONNX_RUNTIMES:
-        return "onnx"
     if compute_runtime in _TENSORRT_RUNTIMES:
         return "tensorrt"
     raise ArtifactExportError(
-        f"compute_runtime {compute_runtime!r} is not an ONNX/TensorRT runtime"
+        f"compute_runtime {compute_runtime!r} is not a TensorRT runtime"
     )
 
 
 def _artifact_suffix(runtime: str) -> str:
-    if runtime == "onnx":
-        return ".onnx"
     if runtime == "coreml":
         return ".mlpackage"
     return ".engine"
@@ -385,14 +369,16 @@ def load_obb_executor(
     Parameters
     ----------
     model_path:
-        Path to a ``.pt`` source checkpoint, or an explicit ``.onnx``/``.engine``
+        Path to a ``.pt`` source checkpoint, or an explicit ``.engine``
         artifact.
     compute_runtime:
         One of ``cpu``/``mps``/``cuda`` (→ plain PyTorch model) or
-        ``onnx_cpu``/``onnx_cuda``/``onnx_coreml``/``tensorrt`` (→ direct
-        executor, auto-exporting from ``.pt`` on first load when ``auto_export``).
+        ``tensorrt`` (→ direct TRT executor, auto-exporting from ``.pt`` on
+        first load when ``auto_export``) or ``coreml`` (→ CoreML mlpackage).
+        onnx_* runtimes are not supported for OBB — the production pipeline
+        (runtime_to_compute_runtime) never emits them.
     auto_export:
-        When True (default), missing ``.onnx``/``.engine`` artifacts are exported
+        When True (default), missing ``.engine`` artifacts are exported
         from the source ``.pt`` on first load. When False, a missing artifact
         raises :class:`ArtifactExportError` (NO silent PyTorch fallback — H4).
     max_det:
@@ -402,14 +388,14 @@ def load_obb_executor(
     Returns
     -------
     A plain ultralytics ``YOLO`` model (cpu/mps/cuda) or a
-    :class:`DirectExecutorAdapter` wrapping an ONNX/TRT direct executor.
+    :class:`DirectExecutorAdapter` wrapping a TRT direct executor.
     """
     runtime = str(compute_runtime).strip().lower()
 
     if runtime in _TORCH_RUNTIMES:
         return _load_torch_executor(model_path, runtime)
 
-    if runtime in _ONNX_RUNTIMES or runtime in _TENSORRT_RUNTIMES:
+    if runtime in _TENSORRT_RUNTIMES:
         return _load_direct_executor(
             model_path, runtime, auto_export=auto_export, max_det=max_det
         )

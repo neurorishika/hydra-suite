@@ -20,6 +20,7 @@ from hydra_suite.utils.gpu_utils import (
     TORCH_CUDA_AVAILABLE,
 )
 
+# onnx_* entries kept for legacy-config migration only — not user-selectable.
 CANONICAL_RUNTIMES: List[str] = [
     "cpu",
     "mps",
@@ -36,7 +37,7 @@ COREML_PROVIDER_OPTIONS = {
 }
 
 
-def _best_explicit_onnx_runtime() -> str:
+def _best_explicit_onnx_runtime() -> str:  # legacy-config migration only
     if ONNXRUNTIME_CUDA_AVAILABLE and _cuda_like_available():
         return "onnx_cuda"
     if ONNXRUNTIME_COREML_AVAILABLE and MPS_AVAILABLE:
@@ -46,7 +47,9 @@ def _best_explicit_onnx_runtime() -> str:
     return "onnx_cpu"
 
 
-def _normalize_runtime(runtime: str) -> str:
+def _normalize_runtime(
+    runtime: str,
+) -> str:  # onnx_* aliases kept for legacy-config migration
     rt = str(runtime or "cpu").strip().lower().replace("-", "_")
     if rt in {"", "auto"}:
         # Canonical runtime set intentionally excludes auto.
