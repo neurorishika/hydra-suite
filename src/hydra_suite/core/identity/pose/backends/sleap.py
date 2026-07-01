@@ -775,7 +775,7 @@ class SleapExportedBackend:
         if is_native_engine:
             try:
                 return _DirectTensorRTEngine(model_path)
-            except RuntimeError as exc:
+            except Exception as exc:  # incl. ImportError when tensorrt is absent
                 logger.warning(
                     "TensorRT engine at %s failed to deserialize (stale/version "
                     "mismatch: %s). Attempting to rebuild from ONNX.",
@@ -797,7 +797,7 @@ class SleapExportedBackend:
                 if _build_trt_engine_from_onnx(onnx_path, rebuilt):
                     try:
                         return _DirectTensorRTEngine(rebuilt)
-                    except RuntimeError as build_exc:
+                    except Exception as build_exc:  # incl. ImportError
                         logger.warning(
                             "Rebuilt TRT engine at %s still fails: %s. "
                             "Falling back to ORT TensorRT-EP.",
@@ -816,7 +816,7 @@ class SleapExportedBackend:
                     # Update model_path so the next warmup / profile reflects it
                     self.model_path = engine_path
                     return engine
-                except RuntimeError as exc:
+                except Exception as exc:  # incl. ImportError when tensorrt is absent
                     logger.warning(
                         "Freshly built TRT engine at %s fails to deserialize: %s. "
                         "Falling back to ORT TensorRT-EP.",
