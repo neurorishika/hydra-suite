@@ -98,7 +98,7 @@ def test_inference_runner_init_loads_models():
         return_value=mock_models,
     ) as mock_load:
         runner = InferenceRunner(cfg)
-    mock_load.assert_called_once_with(cfg, runner.runtime)
+    mock_load.assert_called_once_with(cfg, runner.runtime, cache_only=False)
     assert runner._models is mock_models
 
 
