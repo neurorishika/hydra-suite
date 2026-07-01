@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,6 +10,10 @@ import torch
 from ..config import CNNConfig
 from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
+
+logger = logging.getLogger(__name__)
+
+_GPU_FAST_RUNTIMES = frozenset({"tensorrt"})
 
 
 @dataclass
@@ -28,6 +33,12 @@ def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
     # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
     # config.compute_runtime is deprecated in favor of runtime_tier; kept for serialization.
     compute_runtime = runtime_to_compute_runtime(runtime)
+    if compute_runtime in _GPU_FAST_RUNTIMES:
+        logger.warning(
+            "CNN stage: gpu_fast (%s) requested — "
+            "best-effort native-CUDA fallback applies if TRT artifact is unavailable.",
+            compute_runtime,
+        )
     backend = ClassifierBackend(config.model_path, compute_runtime)
     meta = backend.metadata
     return CNNModel(

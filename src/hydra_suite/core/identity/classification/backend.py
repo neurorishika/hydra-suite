@@ -1115,11 +1115,37 @@ class ClassifierBackend:
             results.append(per_factor)
         return results
 
+    def _ensure_loaded_best_effort(self) -> None:
+        """Load with best-effort TRT→native-CUDA fallback for gpu_fast tier.
+
+        Calls ``_ensure_loaded()``; if the ONNX/TRT path raises for any reason,
+        logs a WARNING and reloads natively on the same GPU device.  Never falls
+        back to CPU — if the native GPU device is unavailable the exception
+        propagates.
+        """
+        if self._loaded:
+            return
+        if not self._uses_onnx():
+            self._ensure_loaded()
+            return
+        try:
+            self._ensure_loaded()
+        except Exception as exc:  # noqa: BLE001
+            native_device = _torch_device(self._compute_runtime)
+            logger.warning(
+                "GPU-Fast classifier backend failed (%s); falling back to native %s",
+                exc,
+                native_device,
+            )
+            self._model = self._loader.load(self._model_path, native_device)
+            self._active_execution_backend = "native"
+            self._loaded = True
+
     def predict_batch(self, crops: list[np.ndarray]) -> list[list[np.ndarray]]:
         """Run inference on ``crops``. Returns ``[N_crops][K_factors]`` probability vectors."""
         if not crops:
             return []
-        self._ensure_loaded()
+        self._ensure_loaded_best_effort()
         try:
             if self._active_execution_backend == "onnx":
                 batch_np = self._preprocess(crops)

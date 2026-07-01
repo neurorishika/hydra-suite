@@ -10,7 +10,7 @@ import torch
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
-from ..runtime_artifacts import load_obb_executor
+from ..runtime_artifacts import ArtifactExportError, load_obb_executor
 
 logger = logging.getLogger(__name__)
 
@@ -450,13 +450,31 @@ def _load_yolo(
         ``.engine`` from ``.pt`` on first load when ``auto_export``); when no
         artifact exists and ``auto_export`` is False, a clear error is raised
         instead of silently running PyTorch (parity finding H4).
+
+    For ``compute_runtime="tensorrt"`` (gpu_fast tier), if the TRT artifact is
+    unavailable or the build fails, falls back to native ``"cuda"`` and logs a
+    WARNING.  Never falls back to CPU — stays on GPU device.
     """
-    return load_obb_executor(
-        model_path,
-        compute_runtime,
-        auto_export=auto_export,
-        max_det=max_det,
-    )
+    try:
+        return load_obb_executor(
+            model_path,
+            compute_runtime,
+            auto_export=auto_export,
+            max_det=max_det,
+        )
+    except ArtifactExportError as exc:
+        if str(compute_runtime) != "tensorrt":
+            raise
+        logger.warning(
+            "GPU-Fast OBB TensorRT artifact unavailable (%s); falling back to native cuda",
+            exc,
+        )
+        return load_obb_executor(
+            model_path,
+            "cuda",
+            auto_export=False,
+            max_det=max_det,
+        )
 
 
 def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBResult:
