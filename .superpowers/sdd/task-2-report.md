@@ -1,102 +1,140 @@
-# Task 2 Report: Unified Cross-Frame GPU-native Crop Extraction
+# Task 2 Report: `InferenceConfig.runtime_tier` + Hard-Cutover Legacy Migration
+
+---
 
 ## TDD RED/GREEN Evidence
 
 ### RED (Step 2)
+
 ```
-PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE .../python -m pytest tests/test_inference_extract_crops_batch.py -v
-ERROR: ImportError: cannot import name 'extract_crops' from 'hydra_suite.core.inference.stages.crops'
+KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py -v
+
+ERROR collecting tests/test_inference_config_tier_migration.py
+ImportError: cannot import name 'migrate_runtime_to_tier' from 'hydra_suite.core.inference.config'
+1 error
 ```
-Confirmed fail as expected.
+
+Confirmed fail as expected — function did not exist yet.
 
 ### GREEN (Step 4)
+
 ```
-PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE .../python -m pytest tests/test_inference_extract_crops_batch.py tests/test_inference_stages_crops.py -v
-tests/test_inference_extract_crops_batch.py::test_extract_crops_concatenates_window_in_detection_id_order PASSED
-tests/test_inference_stages_crops.py::test_extract_canonical_crops_returns_tensor PASSED
-tests/test_inference_stages_crops.py::test_extract_canonical_crops_empty_obb PASSED
-tests/test_inference_stages_crops.py::test_extract_aabb_crops_returns_list PASSED
-tests/test_inference_stages_crops.py::test_extract_aabb_crops_empty_obb PASSED
-tests/test_inference_stages_crops.py::test_canonical_and_aabb_same_count PASSED
-tests/test_inference_stages_crops.py::test_onnx_cuda_uses_cpu_path PASSED
-tests/test_inference_stages_crops.py::test_canonical_crops_dtype_normalized PASSED
-8 passed in 4.03s
+KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py tests/test_inference_config.py -v
+
+tests/test_inference_config_tier_migration.py::test_cpu_maps_to_cpu PASSED
+tests/test_inference_config_tier_migration.py::test_cuda_and_mps_map_to_gpu PASSED
+tests/test_inference_config_tier_migration.py::test_onnx_and_tensorrt_map_to_gpu_fast PASSED
+tests/test_inference_config_tier_migration.py::test_mixed_takes_highest_tier PASSED
+tests/test_inference_config_tier_migration.py::test_empty_defaults_to_gpu PASSED
+tests/test_inference_config.py::test_from_json_round_trip PASSED
+tests/test_inference_config.py::test_round_trip_with_headtail PASSED
+tests/test_inference_config.py::test_round_trip_with_cnn_phases PASSED
+tests/test_inference_config.py::test_runtime_validation_rejects_cuda_cpu_mix PASSED
+tests/test_inference_config.py::test_runtime_validation_accepts_cuda_group PASSED
+tests/test_inference_config.py::test_runtime_validation_accepts_cpu_group PASSED
+tests/test_inference_config.py::test_from_json_validates_on_load PASSED
+tests/test_inference_config.py::test_sequential_config_round_trip PASSED
+
+13 passed in 2.20s
 ```
-
-## Files Changed
-
-- **Modified**: `src/hydra_suite/core/inference/stages/crops.py`
-  - Added import of `CropBatch` from `..result`
-  - Removed unused `math` and `torch.nn.functional as F` imports
-  - Added `_extract_canonical_window(frame, obb, margin, aspect_ratio, out_size, runtime) -> (tensor, native_sizes_array)` helper
-  - Added `extract_crops(frames, obb_results, *, canonical_margin, canonical_aspect_ratio, out_size, runtime) -> CropBatch`
-  - Deleted `_extract_canonical_gpu_legacy` (dead code, 45 lines)
-
-- **Created**: `tests/test_inference_extract_crops_batch.py`
-  - `test_extract_crops_concatenates_window_in_detection_id_order`: verifies 2+1 detections across 2 frames, correct shape, detection_ids, frame_index, and frames() output
-
-## Brief Deviation
-
-The brief's `_runtime_cpu()` factory omitted the required `default_runtime` field of `RuntimeContext`. Fixed in the test file by adding `default_runtime="cpu"` (consistent with how existing `test_inference_stages_crops.py` constructs the object).
-
-## Self-Review
-
-- Reproducibility invariant satisfied: concatenation is frames-ascending, detections in OBBResult input order.
-- GPU path delegates to `_extract_canonical_gpu` primitives (`compute_native_crop_dimensions` + `compute_alignment_affine` + `gpu_canonical_crop_batch`).
-- CPU/MPS path delegates to `_warp_canonical_crop` per detection; pads to `out_size` after recording native sizes.
-- Empty-window case returns zero-row CropBatch on correct device.
-- No affine math reimplemented.
-- Dead `_extract_canonical_gpu_legacy` removed cleanly.
-- `black` and `isort` applied (file unchanged — already compliant).
-
-## Concerns
-
-None. All tests pass, no regressions in existing crops tests.
-
-## Commit
-
-`2e6ee24 feat(inference): unified cross-frame GPU-native crop extraction (extract_crops -> CropBatch); drop dead legacy gpu path`
 
 ---
 
-## Fix pass (review findings)
+## Files Changed
 
-### Test command and output
+- **Modified**: `src/hydra_suite/core/inference/config.py`
+  - Added `import logging` and `from hydra_suite.runtime.resolver import RuntimeTier`
+  - Added module-level `migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier` — maps legacy runtime strings to tier; empty set → "gpu"
+  - Added module-level `_collect_legacy_runtime_strings(d: dict) -> set[str]` — reads raw dict sub-keys (obb.direct, obb.sequential, headtail, cnn_phases, pose.yolo, pose.sleap)
+  - Added `runtime_tier: RuntimeTier = "gpu"` field to `InferenceConfig` dataclass (after `pipeline_depth`)
+  - Wired `_dict_to_config` to derive `runtime_tier` from legacy per-stage runtimes when absent, with one-line warning log
+
+- **Created**: `tests/test_inference_config_tier_migration.py`
+  - 5 tests: cpu, cuda/mps, onnx/tensorrt, mixed, empty-set
+
+---
+
+## `test_inference_config.py` Adjustments
+
+No adjustments required. All 8 existing tests passed without modification. The new `runtime_tier` field has a default of `"gpu"`, so round-trip tests that write configs (which include `runtime_tier` in the dict) load back correctly. The `_dict_to_config` migration path is exercised transparently.
+
+---
+
+## Self-Review
+
+- `migrate_runtime_to_tier(set())` returns "gpu" (special-cased with early return before any set intersection logic).
+- `migrate_runtime_to_tier` priority order: gpu_fast > gpu > cpu (consistent with the brief).
+- Migration only logs when legacy runtimes are actually present (not for empty-set / new configs).
+- Per-stage `compute_runtime` fields are preserved intact (Task 3 will remove them).
+- `RuntimeTier` imported from `hydra_suite.runtime.resolver` — no local redefinition.
+- pre-commit hooks (black, ruff, flake8, isort) all passed.
+
+---
+
+## Concerns
+
+None. All 13 tests pass, no regressions.
+
+---
+
+## Commit
+
+`633ddab feat(config): add runtime_tier with hard-cutover legacy migration`
+
+---
+
+## Review Fix: Pose Sub-Dict Mutation Before Legacy Runtime Collection
+
+### Root Cause
+
+In `_dict_to_config`, `pose_d.pop("yolo", None)` and `pose_d.pop("sleap", None)` were called at lines 324–325 — before the `_collect_legacy_runtime_strings(d)` call at line 342. Because `_collect_legacy_runtime_strings` reads `d["pose"]["yolo"]` and `d["pose"]["sleap"]` from the raw dict, those keys were already gone by the time it ran. A legacy config with `pose.yolo.compute_runtime="tensorrt"` would therefore miss the pose runtime, see only `{'cpu'}` (from the OBB stage), and yield `runtime_tier='cpu'` instead of `'gpu_fast'`.
+
+### Fix Applied
+
+Moved the `runtime_tier` derivation block (the `_collect_legacy_runtime_strings(d)` call + `migrate_runtime_to_tier` + warning log) to BEFORE the `pose_d.pop()` mutations in `_dict_to_config`. The `apriltag` construction was left in its original relative position after the pose block. No logic was changed — only execution order.
+
+**File**: `src/hydra_suite/core/inference/config.py` (`_dict_to_config`)
+
+### RED Evidence (new tests, before fix)
 
 ```
-PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_inference_extract_crops_batch.py tests/test_inference_crops.py -v
+KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py -v
 
-============================= test session starts ==============================
-platform darwin -- Python 3.13.12, pytest-8.x, pluggy-1.x
-collected 2 items
+FAILED tests/test_inference_config_tier_migration.py::test_pose_yolo_tensorrt_migrates_to_gpu_fast
+  AssertionError: Expected 'gpu_fast', got 'cpu'
+  WARNING: Migrated legacy per-stage runtimes {'cpu'} -> runtime_tier='cpu'
 
-tests/test_inference_extract_crops_batch.py::test_extract_crops_concatenates_window_in_detection_id_order PASSED [ 50%]
-tests/test_inference_crops.py::test_oversize_native_crop_is_resized_not_truncated PASSED [100%]
+FAILED tests/test_inference_config_tier_migration.py::test_pose_sleap_onnx_cuda_migrates_to_gpu_fast
+  AssertionError: Expected 'gpu_fast', got 'cpu'
+  WARNING: Migrated legacy per-stage runtimes {'cpu'} -> runtime_tier='cpu'
 
-============================== 2 passed in 3.40s ===============================
+2 failed, 5 passed
 ```
 
-### Finding 1 (DRY) — what changed
+### GREEN Evidence (after fix)
 
-Extracted two private helpers from the duplicated code in `_extract_canonical_window`'s CPU branch:
+```
+KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py tests/test_inference_config.py -v
 
-- `_frame_as_hwc_numpy(frame)` — the tensor→numpy CHW→HWC conversion that was copy-pasted into every function that accepts a `np.ndarray | torch.Tensor` frame.
-- `_warp_crops_for_obb(arr, obb, aspect_ratio, padding_fraction)` — the per-detection `_warp_canonical_crop` loop that previously existed independently in `_extract_canonical_cpu` and `_extract_canonical_window`.
+tests/test_inference_config_tier_migration.py::test_pose_yolo_tensorrt_migrates_to_gpu_fast PASSED
+tests/test_inference_config_tier_migration.py::test_pose_sleap_onnx_cuda_migrates_to_gpu_fast PASSED
+tests/test_inference_config_tier_migration.py::test_cpu_maps_to_cpu PASSED
+tests/test_inference_config_tier_migration.py::test_cuda_and_mps_map_to_gpu PASSED
+tests/test_inference_config_tier_migration.py::test_onnx_and_tensorrt_map_to_gpu_fast PASSED
+tests/test_inference_config_tier_migration.py::test_mixed_takes_highest_tier PASSED
+tests/test_inference_config_tier_migration.py::test_empty_defaults_to_gpu PASSED
+tests/test_inference_config.py::test_from_json_round_trip PASSED
+tests/test_inference_config.py::test_round_trip_with_headtail PASSED
+tests/test_inference_config.py::test_round_trip_with_cnn_phases PASSED
+tests/test_inference_config.py::test_runtime_validation_rejects_cuda_cpu_mix PASSED
+tests/test_inference_config.py::test_runtime_validation_accepts_cuda_group PASSED
+tests/test_inference_config.py::test_runtime_validation_accepts_cpu_group PASSED
+tests/test_inference_config.py::test_from_json_validates_on_load PASSED
+tests/test_inference_config.py::test_sequential_config_round_trip PASSED
 
-Both `_extract_canonical_cpu` and `_extract_canonical_window` CPU branch now call these helpers. No warp/affine math was reimplemented.
+15 passed in 2.28s
+```
 
-### Finding 2 (Correctness — CPU/GPU divergence on oversize crops) — what changed
+### Commit
 
-**GPU path semantics confirmed:** `gpu_canonical_crop_batch` uses PyTorch `F.affine_grid` + `F.grid_sample` with `mode="bilinear"` and `padding_mode="border"` to warp each detection directly to `(out_w, out_h)`. Crops larger than `out_size` are downscaled; crops smaller than `out_size` have their border pixels replicated. No hard-crop, no zero-padding.
-
-**CPU fix:** Replaced the old `crop[:out_h, :out_w]` hard-crop (which silently discarded pixels for oversize crops and recorded the wrong native dimensions) with `cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_LINEAR)`. This matches the GPU path's bilinear resize-to-target behavior. `native_sizes` continues to record the true native pre-resize `(h, w)` in both paths, consistent with the GPU path.
-
-### New test
-
-`tests/test_inference_crops.py::test_oversize_native_crop_is_resized_not_truncated`
-
-Constructs a 120×60 px OBB in a 256×256 frame (native crop >> 32×32 `out_size`), runs `_extract_canonical_window` on the CPU path, and asserts:
-1. Output shape is exactly `(1, 3, 32, 32)`.
-2. `native_sizes` records dimensions strictly larger than `out_size` (proving a resize occurred).
-3. The crop is not all-zero (content was preserved).
-4. Last row and column are not all-zero (no hard-crop/zero-pad artifact).
+(see git SHA in commit below)

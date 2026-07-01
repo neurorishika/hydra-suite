@@ -318,6 +318,17 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
 
     cnn_phases = [CNNConfig(**c) for c in d.get("cnn_phases", [])]
 
+    raw_tier = d.get("runtime_tier")
+    if raw_tier is None:
+        legacy = _collect_legacy_runtime_strings(d)
+        raw_tier = migrate_runtime_to_tier(legacy)
+        if legacy:
+            logging.getLogger(__name__).warning(
+                "Migrated legacy per-stage runtimes %s -> runtime_tier=%r",
+                legacy,
+                raw_tier,
+            )
+
     pose_d = d.get("pose")
     pose = None
     if pose_d:
@@ -336,17 +347,6 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     if isinstance(at_d.get("unsharp_kernel"), list):
         at_d["unsharp_kernel"] = tuple(at_d["unsharp_kernel"])
     apriltag = AprilTagConfig(**at_d) if at_d else AprilTagConfig()
-
-    raw_tier = d.get("runtime_tier")
-    if raw_tier is None:
-        legacy = _collect_legacy_runtime_strings(d)
-        raw_tier = migrate_runtime_to_tier(legacy)
-        if legacy:
-            logging.getLogger(__name__).warning(
-                "Migrated legacy per-stage runtimes %s -> runtime_tier=%r",
-                legacy,
-                raw_tier,
-            )
 
     return InferenceConfig(
         obb=obb,
