@@ -18,6 +18,8 @@ def test_obb_torch_executor_cuda_channels_last(tmp_path):
     pt = str(tmp_path / "yolov8n-obb.pt")
     YOLO("yolov8n-obb.pt").save(pt)  # ultralytics resolves/downloads the base model
     exe = load_obb_executor(pt, compute_runtime="cuda", auto_export=False, max_det=100)
-    # The wrapped torch model should be in channels_last on CUDA.
-    p = next(exe.model.parameters())
-    assert p.is_contiguous(memory_format=torch.channels_last)
+    # The wrapped torch model should be in channels_last on CUDA. Assert on a 4D
+    # conv weight — 1D tensors (biases) are vacuously contiguous in every format,
+    # so `next(...parameters())` alone could pass without the conversion.
+    conv_w = next(t for t in exe.model.parameters() if t.dim() == 4)
+    assert conv_w.is_contiguous(memory_format=torch.channels_last)
