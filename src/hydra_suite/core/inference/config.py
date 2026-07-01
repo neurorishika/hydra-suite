@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
+
+from hydra_suite.runtime.resolver import RuntimeTier
 
 ComputeRuntime = Literal[
     "cpu", "mps", "cuda", "onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt"
@@ -14,6 +17,66 @@ CPU_RUNTIMES: frozenset[str] = frozenset({"cpu", "mps", "onnx_cpu", "onnx_coreml
 
 class InferenceConfigError(ValueError):
     pass
+
+
+def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
+    """Map legacy per-stage runtime strings to a single pipeline tier.
+
+    cpu -> "cpu"; cuda/mps -> "gpu"; onnx_*/tensorrt -> "gpu_fast".
+    Mixed sets take the highest tier present (gpu_fast > gpu > cpu).
+    Empty set defaults to "gpu" (the field default).
+    """
+    if not runtimes:
+        return "gpu"
+    fast = {"onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt"}
+    gpu = {"cuda", "mps"}
+    if runtimes & fast:
+        return "gpu_fast"
+    if runtimes & gpu:
+        return "gpu"
+    return "cpu"
+
+
+def _collect_legacy_runtime_strings(d: dict) -> set[str]:
+    """Extract compute_runtime strings from a raw config dict (before sub-objects exist)."""
+    runtimes: set[str] = set()
+    obb_d = d.get("obb", {})
+    direct_d = obb_d.get("direct")
+    if direct_d and isinstance(direct_d, dict):
+        rt = direct_d.get("compute_runtime")
+        if rt:
+            runtimes.add(rt)
+    seq_d = obb_d.get("sequential")
+    if seq_d and isinstance(seq_d, dict):
+        rt = seq_d.get("detect_compute_runtime")
+        if rt:
+            runtimes.add(rt)
+        rt = seq_d.get("obb_compute_runtime")
+        if rt:
+            runtimes.add(rt)
+    ht_d = d.get("headtail")
+    if ht_d and isinstance(ht_d, dict):
+        rt = ht_d.get("compute_runtime")
+        if rt:
+            runtimes.add(rt)
+    for phase_d in d.get("cnn_phases", []):
+        if isinstance(phase_d, dict):
+            rt = phase_d.get("compute_runtime")
+            if rt:
+                runtimes.add(rt)
+    pose_d = d.get("pose")
+    if pose_d and isinstance(pose_d, dict):
+        yolo_d = pose_d.get("yolo")
+        if yolo_d and isinstance(yolo_d, dict):
+            rt = yolo_d.get("compute_runtime")
+            if rt:
+                runtimes.add(rt)
+        sleap_d = pose_d.get("sleap")
+        if sleap_d and isinstance(sleap_d, dict):
+            rt = sleap_d.get("compute_runtime")
+            if rt:
+                runtimes.add(rt)
+    return runtimes
 
 
 @dataclass
@@ -155,6 +218,7 @@ class InferenceConfig:
     apriltag: AprilTagConfig = field(default_factory=AprilTagConfig)
     detection_batch_size: int = 1
     pipeline_depth: int = 2
+    runtime_tier: RuntimeTier = "gpu"
     realtime: bool = False
     use_cache: bool = True
     cache_dir: str | None = None
@@ -273,6 +337,17 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         at_d["unsharp_kernel"] = tuple(at_d["unsharp_kernel"])
     apriltag = AprilTagConfig(**at_d) if at_d else AprilTagConfig()
 
+    raw_tier = d.get("runtime_tier")
+    if raw_tier is None:
+        legacy = _collect_legacy_runtime_strings(d)
+        raw_tier = migrate_runtime_to_tier(legacy)
+        if legacy:
+            logging.getLogger(__name__).warning(
+                "Migrated legacy per-stage runtimes %s -> runtime_tier=%r",
+                legacy,
+                raw_tier,
+            )
+
     return InferenceConfig(
         obb=obb,
         headtail=headtail,
@@ -281,6 +356,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         apriltag=apriltag,
         detection_batch_size=d.get("detection_batch_size", 1),
         pipeline_depth=d.get("pipeline_depth", 2),
+        runtime_tier=raw_tier,
         realtime=d.get("realtime", False),
         use_cache=d.get("use_cache", True),
         cache_dir=d.get("cache_dir"),
