@@ -144,3 +144,25 @@ def test_filterkit_load_dataset_accepts_detected_and_interpolated_flat_names(
     assert dataset[1]["trajectory_id"] == 1
     assert dataset[1]["det_id"] < 0
     assert dataset[1]["annotations"][0]["filename"] == interp_name
+
+
+def test_filterkit_load_images_from_root_parses_identity_filenames(tmp_path) -> None:
+    dataset_root = tmp_path / "dataset"
+    images_dir = dataset_root / "images"
+    images_dir.mkdir(parents=True)
+    (images_dir / "did101.jpg").write_bytes(b"x")
+    (images_dir / "did202.jpg").write_bytes(b"y")
+    (images_dir / "plain_frame_007.png").write_bytes(b"z")
+
+    source_kind, items = FilterKitCore().load_images_from_root(dataset_root)
+
+    assert source_kind == "images"
+    by_name = {item["filename"]: item for item in items}
+    assert by_name["did101.jpg"]["frame_idx"] == 0
+    assert by_name["did101.jpg"]["det_idx"] == 101
+    assert by_name["did101.jpg"]["detection_id"] == 101
+    assert by_name["did202.jpg"]["frame_idx"] == 0
+    assert by_name["did202.jpg"]["det_idx"] == 202
+    # Non-matching filenames keep the sequential fallback.
+    assert by_name["plain_frame_007.png"]["det_idx"] == 0
+    assert by_name["plain_frame_007.png"]["source_type"] == "images"

@@ -599,8 +599,24 @@ class FilterKitCore:
         source_kind, image_paths = collect_images_for_root(Path(root))
         items: List[Dict[str, Any]] = []
         for idx, path in enumerate(image_paths):
-            items.append(
-                {
+            parsed = parse_identity_image_filename(path.name)
+            if parsed is not None:
+                item: Dict[str, Any] = {
+                    "path": str(path),
+                    "filename": path.name,
+                    "det_id": int(parsed["det_id"]),
+                    "frame_idx": int(parsed["frame_idx"]),
+                    "det_idx": int(parsed["det_idx"]),
+                    "annotations": [],
+                    "source_type": str(parsed.get("source_type", source_kind)),
+                    "interpolated": bool(parsed.get("interpolated", False)),
+                }
+                if parsed.get("detection_id") is not None:
+                    item["detection_id"] = int(parsed["detection_id"])
+                if parsed.get("trajectory_id") is not None:
+                    item["trajectory_id"] = int(parsed["trajectory_id"])
+            else:
+                item = {
                     "path": str(path),
                     "filename": path.name,
                     "det_id": idx,
@@ -610,7 +626,7 @@ class FilterKitCore:
                     "source_type": source_kind,
                     "interpolated": False,
                 }
-            )
+            items.append(item)
         return source_kind, items
 
     def load_dataset(self, folder_path: str) -> List[Dict[str, Any]]:
