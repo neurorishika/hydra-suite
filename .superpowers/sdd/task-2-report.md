@@ -137,4 +137,4 @@ tests/test_inference_config.py::test_sequential_config_round_trip PASSED
 
 ### Commit
 
-(see git SHA in commit below)
+`a8e36b5 fix(config): collect legacy pose runtimes before pose_d mutation in _dict_to_config`
