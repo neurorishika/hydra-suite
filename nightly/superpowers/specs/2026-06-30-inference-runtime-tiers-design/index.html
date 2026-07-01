@@ -1,0 +1,2199 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-06-30-inference-runtime-tiers-design/">
+      
+      
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>Inference Runtime Tiers — Unified Design - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#inference-runtime-tiers-unified-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Inference Runtime Tiers — Unified Design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/inference-fast-mode-future/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode (Deferred)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Motivation
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-north-star-principle" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. North-Star Principle
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-the-three-user-facing-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. The Three User-Facing Tiers
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-central-component-runtimeresolver" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Central Component: RuntimeResolver
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-user-facing-changes-gui-ui-matches-the-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. User-Facing Changes (GUI) — "UI matches the backend"
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-migration-hard-cutover" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. Migration (Hard Cutover)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-fast-mode-export-coverage-hard-requirement" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. Fast-Mode Export Coverage (hard requirement)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-phasing" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. Phasing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Phasing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-native-gpu-exact-wins-independent-ships-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1 — Native-GPU exact wins (independent, ships first)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-runtime-tier-taxonomy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2 — Runtime tier taxonomy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-native-coreml-fast-mode-apple" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3 — Native CoreML fast-mode (Apple)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      9. Testing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      10. Error Handling
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      11. Non-Goals
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-06-30-inference-runtime-tiers-design.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="inference-runtime-tiers-unified-design">Inference Runtime Tiers — Unified Design<a class="headerlink" href="#inference-runtime-tiers-unified-design" title="Permanent link">&para;</a></h1>
+<p><strong>Status:</strong> Approved design (north star). Implemented in phases; each phase gets
+its own implementation plan derived from this document.</p>
+<p><strong>Date:</strong> 2026-06-30</p>
+<p><strong>Supersedes for runtime selection:</strong> the 7-runtime <code>compute_runtime</code> model
+(<code>cpu</code>, <code>mps</code>, <code>cuda</code>, <code>onnx_cpu</code>, <code>onnx_cuda</code>, <code>onnx_coreml</code>, <code>tensorrt</code>) and
+per-stage runtime selection.</p>
+<hr />
+<h2 id="1-motivation">1. Motivation<a class="headerlink" href="#1-motivation" title="Permanent link">&para;</a></h2>
+<p>The inference pipeline currently exposes <strong>seven</strong> compute runtimes, selectable
+<strong>per stage</strong> (OBB, head-tail, CNN, pose each carry their own
+<code>compute_runtime</code>). Benchmarking (<code>tools/equivalence/opt_microbench.py</code>, CUDA
+RTX 6000 Ada + Apple M3 Max, 2026-06-30) showed most of these options are
+dominated or broken:</p>
+<ul>
+<li><code>onnx_cuda</code> classifier: <strong>12% slower</strong> than native <code>cuda</code> — strictly dominated.</li>
+<li><code>onnx_cpu</code> for OBB: <strong>broken on non-CUDA hosts</strong> — the direct OBB executor
+  hardcodes <code>cuda:0</code> staging and requires <code>CUDAExecutionProvider</code>
+  (<code>_direct_obb_runtime.py:76,402-410</code>).</li>
+<li><code>onnx_coreml</code> for OBB: fails on dynamic shapes (E5RT unbounded dimension).</li>
+<li><code>tensorrt</code> classifier: only <strong>4.5% faster</strong> than native <code>cuda</code>, and non-exact.</li>
+<li><code>onnx_coreml</code> <strong>classifier</strong> on Mac: <strong>1.4–1.7× faster</strong> than native MPS — a
+  genuine win, the one ONNX case worth keeping.</li>
+</ul>
+<p>Per-stage selection also permits inefficient mixing (e.g. <code>cuda</code> OBB +
+<code>onnx_cuda</code> classifier + <code>tensorrt</code> pose) that forces avoidable data movement.</p>
+<p>Exact (determinism-preserving) GPU optimizations have narrow headroom: <code>channels_last</code>
+gives <strong>+11%</strong> on CUDA CNN compute but is <strong>−54% (harmful) on MPS</strong>;
+<code>inference_mode</code> ≈ <code>no_grad</code> (already present); pinned/<code>non_blocking</code> H2D is
++14% on a copy that is tiny relative to compute. The large (2–5×) speedups live
+only in non-exact fp16 paths (TensorRT / CoreML).</p>
+<h2 id="2-north-star-principle">2. North-Star Principle<a class="headerlink" href="#2-north-star-principle" title="Permanent link">&para;</a></h2>
+<p><strong>One runtime tier for the entire pipeline, auto-resolved to the best backend
+per platform.</strong> Native tiers are exact and device-invariant; the fast tier
+trades bit-exactness for speed. No tensor data crosses devices within a run.</p>
+<h2 id="3-the-three-user-facing-tiers">3. The Three User-Facing Tiers<a class="headerlink" href="#3-the-three-user-facing-tiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Tier</th>
+<th>CUDA host resolves to</th>
+<th>Apple host resolves to</th>
+<th>CPU-only host</th>
+<th>Numerics contract</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CPU</strong></td>
+<td>torch CPU</td>
+<td>torch CPU</td>
+<td>torch CPU</td>
+<td>Exact / bit-reproducible</td>
+</tr>
+<tr>
+<td><strong>GPU</strong></td>
+<td>torch CUDA + exact wins (<code>channels_last</code>, pinned H2D, <code>inference_mode</code>)</td>
+<td>torch MPS</td>
+<td>falls back to CPU tier</td>
+<td>Exact; device-invariant within existing ~0.006 px FP-noise envelope</td>
+</tr>
+<tr>
+<td><strong>GPU-Fast</strong></td>
+<td>TensorRT fp16 engines per stage; native-CUDA fallback per stage</td>
+<td>CoreML <code>.mlpackage</code> (YOLO) + CoreML classifier path; native-MPS fallback</td>
+<td>falls back to CPU tier</td>
+<td><strong>Not</strong> bit-identical to native; <strong>deterministic run-to-run</strong>; labeled "may reduce accuracy"</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Rules:</strong></p>
+<ul>
+<li><strong>Pipeline-wide, single tier.</strong> One <code>InferenceConfig.runtime_tier</code> value
+  applies to every stage. No per-stage runtime field exists.</li>
+<li><strong>Best-effort fast-mode.</strong> In <code>GPU-Fast</code>, any stage lacking a fast artifact
+  (export unsupported, export failed, or no benefit) runs <strong>native-GPU on the
+  same device</strong> — never CPU. Logged, never a hard crash.</li>
+<li><strong>AprilTag exception.</strong> AprilTag always runs on CPU (a C-library detector, not
+  a GPU model). It is exempt from the tier and is the sole stage that reads a
+  CPU-side frame; this is inherent to AprilTag and independent of the tier.</li>
+</ul>
+<h2 id="4-central-component-runtimeresolver">4. Central Component: <code>RuntimeResolver</code><a class="headerlink" href="#4-central-component-runtimeresolver" title="Permanent link">&para;</a></h2>
+<p>A new component in the <code>runtime/</code> layer is the single authority mapping
+<strong>(tier, platform, stage, artifact availability) → (backend, device)</strong>. It
+absorbs logic currently scattered across <code>_pipeline_supports_runtime</code>,
+<code>allowed_runtimes_for_pipelines</code>, <code>derive_onnx_execution_providers</code>, and the
+per-stage <code>compute_runtime</code> fields.</p>
+<ul>
+<li>Stages ask the resolver what to load; stages no longer carry runtime strings.</li>
+<li>The resolver is pure/deterministic and unit-testable in isolation: given a
+  tier, a detected platform, a stage key, and a callable reporting artifact
+  availability, it returns the concrete backend + device (or the native-GPU
+  fallback).</li>
+<li>Platform detection reuses <code>hydra_suite.utils.gpu_utils</code> / existing
+  availability flags.</li>
+</ul>
+<p><strong>Interface sketch</strong> (names finalized during planning):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">RuntimeTier</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="s2">&quot;gpu&quot;</span><span class="p">,</span> <span class="s2">&quot;gpu_fast&quot;</span><span class="p">]</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">class</span><span class="w"> </span><span class="nc">ResolvedBackend</span><span class="p">:</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">backend</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;torch&quot;</span><span class="p">,</span> <span class="s2">&quot;tensorrt&quot;</span><span class="p">,</span> <span class="s2">&quot;coreml&quot;</span><span class="p">]</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="s2">&quot;mps&quot;</span><span class="p">]</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">used_fallback</span><span class="p">:</span> <span class="nb">bool</span>          <span class="c1"># True if fast-mode fell back to native-GPU</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="k">class</span><span class="w"> </span><span class="nc">RuntimeResolver</span><span class="p">:</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tier</span><span class="p">:</span> <span class="n">RuntimeTier</span><span class="p">,</span> <span class="n">platform</span><span class="p">:</span> <span class="n">PlatformInfo</span><span class="p">):</span> <span class="o">...</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">resolve</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stage</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">artifact_available</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="nb">bool</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">ResolvedBackend</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<h2 id="5-user-facing-changes-gui-ui-matches-the-backend">5. User-Facing Changes (GUI) — "UI matches the backend"<a class="headerlink" href="#5-user-facing-changes-gui-ui-matches-the-backend" title="Permanent link">&para;</a></h2>
+<p>The GUI is a first-class deliverable: whenever the backend runtime model
+changes, the UI changes in the same phase so the two never drift. No phase that
+alters user-facing runtimes may merge without its UI update.</p>
+<p><strong>5.1 Remove the old options.</strong> <code>onnx_cpu</code>, <code>onnx_cuda</code>, <code>onnx_coreml</code>,
+<code>tensorrt</code> are removed as user-facing runtimes. CoreML, ORT, and TensorRT
+survive only as <strong>internal fast-mode backends</strong> the resolver selects.</p>
+<p><strong>5.2 Collapse to one tier selector.</strong> The three trackerkit dropdowns
+(<code>combo_compute_runtime</code>, <code>combo_headtail_runtime</code>, <code>combo_cnn_runtime</code> in
+<code>trackerkit/gui/panels/setup_panel.py</code>) and the posekit <code>combo_pred_runtime</code>
+(<code>posekit/gui/main_window.py</code>) are replaced by <strong>one tier selector</strong>, bound to
+<code>InferenceConfig.runtime_tier</code> (and the kit config schema). The old per-stage
+combos and their signal wiring are deleted.</p>
+<p><strong>5.3 Platform-aware labels.</strong> The selector shows only what the host supports,
+labeled by the backend the resolver will actually use:</p>
+<ul>
+<li>CUDA host: <code>CPU</code> / <code>GPU (CUDA)</code> / <code>GPU-Fast (TensorRT)</code></li>
+<li>Apple host: <code>CPU</code> / <code>GPU (Metal)</code> / <code>GPU-Fast (CoreML)</code></li>
+<li>CPU-only host: <code>CPU</code> only (GPU tiers hidden/disabled)</li>
+</ul>
+<p>Labels are derived from the same <code>RuntimeResolver</code>/platform detection as the
+backend, so the dropdown text is always truthful about the selected backend.</p>
+<p><strong>5.4 Reflect resolution + fallback.</strong> When <code>GPU-Fast</code> is selected, the panel
+surfaces the resolver outcome — a concise, read-only indicator (e.g. status
+line / tooltip) noting when a stage fell back to native-GPU (<code>used_fallback</code>)
+so the user understands what actually ran. Non-blocking; informational.</p>
+<p><strong>5.5 No stale state.</strong> <code>allowed_runtimes_for_pipelines</code>-driven population is
+replaced by resolver-driven tier enumeration; removing a runtime from the
+backend removes it from every kit's UI in the same change.</p>
+<h2 id="6-migration-hard-cutover">6. Migration (Hard Cutover)<a class="headerlink" href="#6-migration-hard-cutover" title="Permanent link">&para;</a></h2>
+<p>Per-stage <code>compute_runtime</code> fields are replaced by a single pipeline-level
+<code>runtime_tier</code>. On loading any legacy config, values are mapped:</p>
+<table>
+<thead>
+<tr>
+<th>Legacy per-stage value</th>
+<th>New tier</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cpu</code></td>
+<td><code>CPU</code></td>
+</tr>
+<tr>
+<td><code>cuda</code>, <code>mps</code></td>
+<td><code>GPU</code></td>
+</tr>
+<tr>
+<td><code>onnx_cpu</code>, <code>onnx_cuda</code>, <code>onnx_coreml</code>, <code>tensorrt</code></td>
+<td><code>GPU-Fast</code></td>
+</tr>
+</tbody>
+</table>
+<p>If a legacy config mixed values across stages, the highest tier present wins
+(<code>GPU-Fast</code> &gt; <code>GPU</code> &gt; <code>CPU</code>), and a one-line warning is logged. Per-stage fields
+are dropped after mapping. Applies both to the new <code>InferenceConfig</code>
+(<code>from_json</code>) and to trackerkit's on-<code>main</code> config format via its translation
+layer into <code>InferenceConfig</code>.</p>
+<h2 id="7-fast-mode-export-coverage-hard-requirement">7. Fast-Mode Export Coverage (hard requirement)<a class="headerlink" href="#7-fast-mode-export-coverage-hard-requirement" title="Permanent link">&para;</a></h2>
+<p>Every model family the pipeline can run must have a fast-mode path, or a
+logged native-GPU fallback. Coverage matrix:</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>arch id(s)</th>
+<th>ONNX exporter (→ TensorRT)</th>
+<th>CoreML exporter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>YOLO detect/pose/cls</td>
+<td><code>yolo</code>, <code>yolo_multihead</code>, <code>classifier_multihead</code></td>
+<td>exists: ultralytics <code>.export(format="onnx")</code></td>
+<td>exists: ultralytics <code>.export(format="coreml")</code></td>
+</tr>
+<tr>
+<td>Tiny classifier</td>
+<td><code>tinyclassifier</code></td>
+<td>exists: <code>export_tiny_to_onnx</code></td>
+<td><strong>new (P3):</strong> <code>export_tiny_to_coreml</code></td>
+</tr>
+<tr>
+<td>torchvision + timm classifier</td>
+<td><code>resnet50</code>, <code>convnext_tiny</code>, <code>efficientnet_b0</code>, …</td>
+<td>exists: <code>export_torchvision_to_onnx</code></td>
+<td><strong>new (P3):</strong> <code>export_torchvision_to_coreml</code></td>
+</tr>
+<tr>
+<td>SLEAP pose</td>
+<td>(SLEAP)</td>
+<td>exists (SLEAP export)</td>
+<td>native-GPU fallback (out of scope for new CoreML)</td>
+</tr>
+<tr>
+<td>AprilTag</td>
+<td>—</td>
+<td>N/A (CPU-only)</td>
+<td>N/A</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Multihead classifiers export <strong>per-factor backend</strong>.</li>
+<li>TensorRT engines are built from the ONNX peer (all three classifier families
+  already have ONNX exporters), so P2 covers every family on CUDA.</li>
+<li>CoreML exporters for tiny + torchvision/timm are the new P3 deliverable; until
+  then, Apple <code>GPU-Fast</code> falls back to native-MPS for those families
+  (best-effort rule, §3).</li>
+</ul>
+<h2 id="8-phasing">8. Phasing<a class="headerlink" href="#8-phasing" title="Permanent link">&para;</a></h2>
+<p>Each phase is a separate implementation plan; all share this document.</p>
+<h3 id="phase-1-native-gpu-exact-wins-independent-ships-first">Phase 1 — Native-GPU exact wins (independent, ships first)<a class="headerlink" href="#phase-1-native-gpu-exact-wins-independent-ships-first" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>channels_last</code> <strong>gated on the actual torch device == cuda</strong> (never applied on
+  MPS, where it regresses 54%). Applies to the conv-heavy classifier and
+  YOLO/OBB torch paths.</li>
+<li><code>inference_mode</code> around GPU crop extraction (<code>canonicalization/crop.py</code>
+  <code>grid_sample</code>, lines 299/387); upgrade classifier <code>no_grad</code> → <code>inference_mode</code>.</li>
+<li>Pinned + <code>non_blocking=True</code> H2D for crop uploads (CUDA only).</li>
+<li>No taxonomy change: gated on device, not tier — lands immediately.</li>
+<li>Expected: ~11% CNN compute on CUDA; MPS/CPU unchanged; numerics within the
+  existing device-invariance envelope (documented caveat: <code>channels_last</code> is not
+  bit-identical to the prior CUDA output but stays within ~0.006 px FP noise).</li>
+<li>Measured 2026-06-30: +11% CNN compute on CUDA (channels_last); MPS/CPU unchanged; classifier logits within 1e-3 rel-tol of pre-change CUDA output.</li>
+</ul>
+<h3 id="phase-2-runtime-tier-taxonomy">Phase 2 — Runtime tier taxonomy<a class="headerlink" href="#phase-2-runtime-tier-taxonomy" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Introduce <code>RuntimeResolver</code> + <code>InferenceConfig.runtime_tier</code>.</li>
+<li>Single tier pipeline-wide; remove per-stage <code>compute_runtime</code>.</li>
+<li>TensorRT becomes the CUDA <code>GPU-Fast</code> backend (wire existing auto-export in
+  <code>runtime_artifacts.py</code>); best-effort native-CUDA fallback per stage.</li>
+<li>Remove ONNX/TensorRT as user-facing runtimes; collapse GUI to one tier
+  selector (§5.1–5.5) in <strong>both</strong> trackerkit and posekit, delete the old
+  per-stage combos + wiring, and update each kit's config schema
+  (<code>&lt;kit&gt;/config/schemas.py</code>) to carry <code>runtime_tier</code>. <strong>The UI change ships in
+  this phase, not later</strong> — backend and UI move together.</li>
+<li>Hard-cutover migration (§6).</li>
+<li>Phase 1 exact wins fold under the resolved <code>GPU</code> tier.</li>
+</ul>
+<h3 id="phase-3-native-coreml-fast-mode-apple">Phase 3 — Native CoreML fast-mode (Apple)<a class="headerlink" href="#phase-3-native-coreml-fast-mode-apple" title="Permanent link">&para;</a></h3>
+<ul>
+<li>ultralytics <code>.mlpackage</code> export for YOLO OBB/pose.</li>
+<li>New <code>export_tiny_to_coreml</code> and <code>export_torchvision_to_coreml</code> (covers timm).</li>
+<li>CoreML artifact auto-management mirroring the TensorRT pattern.</li>
+<li>Wire CoreML backends into <code>GPU-Fast</code> on Apple; best-effort native-MPS fallback.</li>
+<li><strong>UI:</strong> the <code>GPU-Fast (CoreML)</code> label (§5.3) becomes live on Apple hosts once
+  the CoreML backend is wired; the fallback indicator (§5.4) reflects any
+  family that still uses native-MPS.</li>
+</ul>
+<h2 id="9-testing">9. Testing<a class="headerlink" href="#9-testing" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Resolver:</strong> unit tests for every (tier × platform × artifact-availability)
+  combination → expected <code>ResolvedBackend</code>, including fallback paths.</li>
+<li><strong>Migration:</strong> mapping tests for each legacy value and the mixed-config
+  highest-tier rule.</li>
+<li><strong>Exactness (P1/P2):</strong> CPU and GPU tiers preserve existing equivalence +
+  device-invariance guarantees (reuse <code>tools/equivalence</code>).</li>
+<li><strong>Fast-mode determinism (P2/P3):</strong> same input → identical output across two
+  runs (deterministic, though not bit-identical to native).</li>
+<li><strong>Export coverage (P2/P3):</strong> each classifier family (yolo/tiny/torchvision+timm,
+  including multihead per-factor) exports and runs under the fast tier, or logs
+  a native-GPU fallback.</li>
+<li><strong>GUI:</strong> tier selector shows correct platform-specific labels (§5.3), hides
+  unavailable tiers, binds to <code>runtime_tier</code> in the kit config schema, and the
+  old per-stage combos are gone from both trackerkit and posekit; the
+  resolution/fallback indicator (§5.4) renders when <code>GPU-Fast</code> is selected.</li>
+</ul>
+<h2 id="10-error-handling">10. Error Handling<a class="headerlink" href="#10-error-handling" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Fast-mode export/build failure → logged warning + native-GPU fallback on the
+  same device (never CPU, never crash).</li>
+<li>Requesting a GPU tier on a CPU-only host → resolves to CPU tier with a logged
+  notice (GUI hides the option, but config-loaded/headless runs degrade
+  gracefully).</li>
+<li>Migration of an unrecognized legacy runtime string → maps to <code>GPU</code> if it is in
+  the CUDA/MPS family else <code>CPU</code>, with a warning.</li>
+</ul>
+<h2 id="11-non-goals">11. Non-Goals<a class="headerlink" href="#11-non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>TF32 and cudnn.benchmark are <strong>not</strong> enabled (they break determinism without
+  belonging to the fast-mode export model); may be revisited as a separate
+  fast-mode sub-option later.</li>
+<li><code>onnx_rocm</code> and generic ONNX portability are out of scope; ONNX remains an
+  internal IR for TensorRT engine builds only.</li>
+<li>SLEAP internal runtime handling is unchanged beyond tier mapping.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

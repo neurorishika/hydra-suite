@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/reference/api-index/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/developer-guide/inference-fast-mode-future/">
       
       
-        <link rel="prev" href="../../developer-guide/contributing/">
+        <link rel="prev" href="../performance-tuning/">
       
       
-        <link rel="next" href="../ui-components-hydra/">
+        <link rel="next" href="../confidence-metrics/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -24,7 +24,7 @@
     
     
       
-        <title>API Index - HYDRA Suite Docs</title>
+        <title>Inference Fast Mode (Deferred) - HYDRA Suite Docs</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#api-index" class="md-skip">
+        <a href="#deferred-non-exact-fast-mode-levers" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              API Index
+              Inference Fast Mode (Deferred)
             
           </span>
         </div>
@@ -276,11 +276,13 @@
         
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -294,13 +296,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../reference/api-index/" class="md-tabs__link">
           
   
   Reference
@@ -940,27 +940,30 @@
       
   
   
+    
   
   
+  
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -971,7 +974,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Developer Guide
@@ -985,7 +988,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/architecture/" class="md-nav__link">
+      <a href="../architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1006,7 +1009,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/module-map/" class="md-nav__link">
+      <a href="../module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1027,7 +1030,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+      <a href="../data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1048,7 +1051,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1069,7 +1072,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+      <a href="../tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1090,7 +1093,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+      <a href="../gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1111,7 +1114,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+      <a href="../runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1132,7 +1135,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+      <a href="../dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1153,7 +1156,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+      <a href="../performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1171,10 +1174,19 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../developer-guide/inference-fast-mode-future/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -1183,6 +1195,7 @@
   
 
       </a>
+      
     </li>
   
 
@@ -1195,7 +1208,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+      <a href="../confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1216,7 +1229,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+      <a href="../extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1237,7 +1250,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+      <a href="../extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1258,7 +1271,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/code-health/" class="md-nav__link">
+      <a href="../code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1279,7 +1292,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/publishing/" class="md-nav__link">
+      <a href="../publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1300,7 +1313,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/contributing/" class="md-nav__link">
+      <a href="../contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1325,30 +1338,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -1359,7 +1369,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             Reference
@@ -1370,30 +1380,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    API Index
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../reference/api-index/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1402,53 +1392,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      Scope
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#intentionally-limited-areas" class="md-nav__link">
-    <span class="md-ellipsis">
-      Intentionally Limited Areas
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#api-sections" class="md-nav__link">
-    <span class="md-ellipsis">
-      API Sections
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1461,7 +1404,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ui-components-hydra/" class="md-nav__link">
+      <a href="../../reference/ui-components-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1482,7 +1425,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ui-components-posekit/" class="md-nav__link">
+      <a href="../../reference/ui-components-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1503,7 +1446,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-app/" class="md-nav__link">
+      <a href="../../reference/api-app/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1524,7 +1467,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-core/" class="md-nav__link">
+      <a href="../../reference/api-core/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1545,7 +1488,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-data/" class="md-nav__link">
+      <a href="../../reference/api-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1566,7 +1509,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-gui/" class="md-nav__link">
+      <a href="../../reference/api-gui/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1587,7 +1530,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-widgets/" class="md-nav__link">
+      <a href="../../reference/api-widgets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1608,7 +1551,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-posekit/" class="md-nav__link">
+      <a href="../../reference/api-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1629,7 +1572,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../api-utils/" class="md-nav__link">
+      <a href="../../reference/api-utils/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1650,7 +1593,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../cli-reference/" class="md-nav__link">
+      <a href="../../reference/cli-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1671,7 +1614,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../technical-reference/" class="md-nav__link">
+      <a href="../../reference/technical-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1692,7 +1635,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../changelog/" class="md-nav__link">
+      <a href="../../reference/changelog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1713,7 +1656,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../faq/" class="md-nav__link">
+      <a href="../../reference/faq/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1754,41 +1697,6 @@
     
   
   
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#scope" class="md-nav__link">
-    <span class="md-ellipsis">
-      Scope
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#intentionally-limited-areas" class="md-nav__link">
-    <span class="md-ellipsis">
-      Intentionally Limited Areas
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#api-sections" class="md-nav__link">
-    <span class="md-ellipsis">
-      API Sections
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
 </nav>
                   </div>
                 </div>
@@ -1802,7 +1710,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/reference/api-index.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/inference-fast-mode-future.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1810,28 +1718,42 @@
   
 
 
-<h1 id="api-index">API Index<a class="headerlink" href="#api-index" title="Permanent link">&para;</a></h1>
-<p>This section mixes narrative notes with auto-generated API documentation.</p>
-<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Auto docs are generated with <code>mkdocstrings</code> from source under <code>src/</code>.</li>
-<li>The focus is runtime modules that are intended as stable entry surfaces.</li>
-</ul>
-<h2 id="intentionally-limited-areas">Intentionally Limited Areas<a class="headerlink" href="#intentionally-limited-areas" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Some very large UI internals are documented at module level only.</li>
-<li>For complex GUI behavior details, use the User/Developer guides in addition to API pages.</li>
-</ul>
-<h2 id="api-sections">API Sections<a class="headerlink" href="#api-sections" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Launcher: bootstrap and entry point APIs</li>
-<li>TrackerKit GUI: tracking interface, orchestrators, panels, workers</li>
-<li>Core: tracking pipeline algorithms</li>
-<li>Data: outputs/cache/dataset APIs</li>
-<li>PoseKit: pose-labeling app modules</li>
-<li>Widgets: shared UI base classes (BaseWorker, BaseDialog, WelcomePage)</li>
-<li>Utils: shared helper utilities</li>
-</ul>
+<h1 id="deferred-non-exact-fast-mode-levers">Deferred: non-exact "fast mode" levers<a class="headerlink" href="#deferred-non-exact-fast-mode-levers" title="Permanent link">&para;</a></h1>
+<p>Phase 1 shipped the exact (determinism-preserving) GPU wins. The larger
+speedups require changing numerics and are intentionally deferred to the
+<code>GPU-Fast</code> tier (spec §3) or a future sub-option:</p>
+<table>
+<thead>
+<tr>
+<th>Lever</th>
+<th>Measured (RTX 6000 Ada, efficientnet_b0 b64, 2026-06-30)</th>
+<th>Why deferred</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>channels_last</code> (CUDA)</td>
+<td>+11% CNN compute — SHIPPED in Phase 1 (exact-within-envelope)</td>
+<td>n/a</td>
+</tr>
+<tr>
+<td>TensorRT fp16</td>
+<td>classifier −4.5%; OBB fp16 larger</td>
+<td>non bit-identical → GPU-Fast tier</td>
+</tr>
+<tr>
+<td>TF32 matmul</td>
+<td>not benchmarked in isolation</td>
+<td>breaks fp32 determinism; not in fast-mode export model</td>
+</tr>
+<tr>
+<td>cudnn.benchmark</td>
+<td>not benchmarked</td>
+<td>run-to-run nondeterminism</td>
+</tr>
+</tbody>
+</table>
+<p>MPS note: <code>channels_last</code> REGRESSES MPS by ~54% (b64) and is never applied there.</p>
 
 
 
