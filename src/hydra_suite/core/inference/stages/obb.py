@@ -447,10 +447,10 @@ def _load_yolo(
     Thin delegator to :func:`load_obb_executor`:
       * cpu/mps/cuda → a plain ultralytics ``YOLO`` model (``.to()``-moved as
         before; CPU does not call ``.to()`` so CPU byte-parity is preserved).
-      * onnx_*/tensorrt → a direct ONNX/TRT executor (auto-exporting ``.onnx``/
-        ``.engine`` from ``.pt`` on first load when ``auto_export``); when no
-        artifact exists and ``auto_export`` is False, a clear error is raised
-        instead of silently running PyTorch (parity finding H4).
+      * tensorrt → a direct TensorRT executor (auto-exporting the ``.engine``
+        from ``.pt`` on first load when ``auto_export``); coreml → the
+        ``.mlpackage``. When no artifact exists and ``auto_export`` is False, a
+        clear error is raised instead of silently running PyTorch (finding H4).
 
     For ``compute_runtime="tensorrt"`` (gpu_fast tier), if the TRT artifact is
     unavailable or the build fails, falls back to native ``"cuda"`` and logs a

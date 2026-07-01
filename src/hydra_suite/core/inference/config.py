@@ -88,8 +88,9 @@ class OBBDirectConfig:
     compute_runtime: ComputeRuntime = "cpu"
     confidence_floor: float = 1e-3
     confidence_threshold: float = 0.25
-    # Auto-export .onnx/.engine from a .pt source on first load for onnx_*/
-    # tensorrt runtimes. When False and no artifact exists, loading raises a
+    # Auto-export the .engine (TensorRT) / .mlpackage (CoreML) artifact from a
+    # .pt source on first load for the gpu_fast runtimes. When False and no
+    # artifact exists, loading raises a
     # clear error instead of silently running PyTorch (parity finding H4).
     auto_export: bool = True
 
