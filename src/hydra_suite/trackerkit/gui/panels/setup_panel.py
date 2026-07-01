@@ -869,8 +869,8 @@ class SetupPanel(QWidget):
             self.chk_use_cached_detections.setChecked(False)
         self.chk_use_cached_detections.setEnabled(not realtime_enabled)
         self._sync_batch_policy_controls()
-        # NOTE: _populate_compute_runtime_options and _on_runtime_context_changed
-        # are called after panel construction in main_window.py
+        # NOTE: the compute-tier selector is populated at panel construction;
+        # _on_runtime_context_changed is called afterward in main_window.py
 
     def _create_performance_control_card(self, title: str, widget: QWidget) -> QFrame:
         """Build a compact labeled card for one performance control."""
