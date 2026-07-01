@@ -132,6 +132,7 @@ class FilterWorker(BaseWorker):
             "after_temporal": loaded_count,
             "after_dedup": loaded_count,
             "after_diversity": loaded_count,
+            "after_expansion": loaded_count,
         }
         return dataset, stats, [], []
 
@@ -226,17 +227,27 @@ class FilterWorker(BaseWorker):
         stats["after_dedup"] = len(dataset)
         return dataset, duplicate_clusters
 
-    def _run_diversity_stage(self, dataset, stats, removed_examples):
+    def _run_diversity_stage(self, dataset, stats, removed_examples, full_dataset):
         if not self.config.get("diversity_enabled"):
             self.progress.emit(95, "Step 6/7 skipped: diversity sampling disabled")
             stats["after_diversity"] = len(dataset)
             return dataset
 
+        preserve_full_frames = bool(self.config.get("preserve_full_frames", False))
         target = self.config.get("diversity_target", 1000)
-        if len(dataset) <= target:
+
+        if preserve_full_frames:
+            avg_individuals = self.core.compute_avg_individuals_per_frame(full_dataset)
+            n_samples = max(1, round(target / avg_individuals))
+            current_units = len({item["frame_idx"] for item in dataset})
+        else:
+            n_samples = target
+            current_units = len(dataset)
+
+        if current_units <= n_samples:
             self.progress.emit(
                 95,
-                f"Step 6/7 skipped: current set ({len(dataset):,}) <= target ({target:,})",
+                f"Step 6/7 skipped: current set ({current_units:,}) <= target ({n_samples:,})",
             )
             stats["after_diversity"] = len(dataset)
             return dataset
@@ -244,7 +255,9 @@ class FilterWorker(BaseWorker):
         self.progress.emit(85, "Step 6/7: Running diversity sampling")
         self.status.emit(f"Applying diversity sampling (target={target})...")
         before = list(dataset)
-        dataset = self.core.diversity_sample(dataset, target)
+        dataset = self.core.diversity_sample(
+            dataset, n_samples, by_frame=preserve_full_frames
+        )
         self._extend_removed_examples(before, dataset, "diversity", removed_examples)
         self.status.emit(f"Remaining after diversity: {len(dataset)}")
         self.progress.emit(
@@ -253,6 +266,17 @@ class FilterWorker(BaseWorker):
         )
         stats["after_diversity"] = len(dataset)
         return dataset
+
+    def _run_expansion_stage(self, dataset, stats, full_dataset):
+        if not self.config.get("preserve_full_frames"):
+            stats["after_expansion"] = len(dataset)
+            return dataset
+
+        self.status.emit("Expanding selection to all individuals per frame...")
+        expanded = self.core.expand_to_full_frames(dataset, full_dataset)
+        stats["after_expansion"] = len(expanded)
+        self.status.emit(f"Expanded to {len(expanded)} crops across selected frames")
+        return expanded
 
     def _finalize_result(self, dataset, stats, removed_examples, duplicate_clusters):
         for item in dataset:
@@ -276,6 +300,7 @@ class FilterWorker(BaseWorker):
             dataset, stats, removed_examples, duplicate_clusters = (
                 self._initialize_run_state()
             )
+            full_dataset = list(dataset)
             if self._should_abort():
                 return
 
@@ -295,7 +320,13 @@ class FilterWorker(BaseWorker):
             if self._should_abort():
                 return
 
-            dataset = self._run_diversity_stage(dataset, stats, removed_examples)
+            dataset = self._run_diversity_stage(
+                dataset, stats, removed_examples, full_dataset
+            )
+            if self._should_abort():
+                return
+
+            dataset = self._run_expansion_stage(dataset, stats, full_dataset)
             if self._should_abort():
                 return
 
@@ -1432,22 +1463,24 @@ class FilterKitWindow(QMainWindow):
             return
 
         loaded = s.get("loaded", 0)
-        final_count = s.get("after_diversity", 0)
+        final_count = s.get("after_expansion", s.get("after_diversity", 0))
         removed = max(0, loaded - final_count)
 
-        self.lbl_summary.setText(
-            "\n".join(
-                [
-                    "Run Summary:",
-                    f"• Loaded: {loaded:,}",
-                    f"• After quality: {s.get('after_quality', loaded):,}",
-                    f"• After temporal: {s.get('after_temporal', loaded):,}",
-                    f"• After dedup: {s.get('after_dedup', loaded):,}",
-                    f"• After diversity: {final_count:,}",
-                    f"• Total removed: {removed:,}",
-                ]
-            )
-        )
+        lines = [
+            "Run Summary:",
+            f"• Loaded: {loaded:,}",
+            f"• After quality: {s.get('after_quality', loaded):,}",
+            f"• After temporal: {s.get('after_temporal', loaded):,}",
+            f"• After dedup: {s.get('after_dedup', loaded):,}",
+            f"• After diversity: {s.get('after_diversity', loaded):,}",
+        ]
+        if s.get("after_expansion", s.get("after_diversity")) != s.get(
+            "after_diversity"
+        ):
+            lines.append(f"• After frame expansion: {final_count:,}")
+        lines.append(f"• Total removed: {removed:,}")
+
+        self.lbl_summary.setText("\n".join(lines))
 
     def load_previews(self):
         self.list_preview.clear()
