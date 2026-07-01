@@ -94,18 +94,41 @@ class RuntimeResolver:
     def resolve(self, stage: str, artifact_available: Callable[[], bool]) -> ResolvedBackend: ...
 ```
 
-## 5. What Is Removed (the "confusing options" cleanup)
+## 5. User-Facing Changes (GUI) — "UI matches the backend"
 
-- `onnx_cpu`, `onnx_cuda`, `onnx_coreml`, `tensorrt` are **removed as
-  user-facing runtimes**. CoreML, ORT, and TensorRT survive only as **internal
-  fast-mode backends** the resolver selects.
-- The GUI collapses the three trackerkit dropdowns (`combo_compute_runtime`,
-  `combo_headtail_runtime`, `combo_cnn_runtime` in
-  `trackerkit/gui/panels/setup_panel.py`) and the posekit `combo_pred_runtime`
-  into **one tier selector**, labeled per platform:
-  - CUDA host: `CPU` / `GPU (CUDA)` / `GPU-Fast (TensorRT)`
-  - Apple host: `CPU` / `GPU (Metal)` / `GPU-Fast (CoreML)`
-  - CPU-only host: `CPU` (GPU tiers hidden/disabled)
+The GUI is a first-class deliverable: whenever the backend runtime model
+changes, the UI changes in the same phase so the two never drift. No phase that
+alters user-facing runtimes may merge without its UI update.
+
+**5.1 Remove the old options.** `onnx_cpu`, `onnx_cuda`, `onnx_coreml`,
+`tensorrt` are removed as user-facing runtimes. CoreML, ORT, and TensorRT
+survive only as **internal fast-mode backends** the resolver selects.
+
+**5.2 Collapse to one tier selector.** The three trackerkit dropdowns
+(`combo_compute_runtime`, `combo_headtail_runtime`, `combo_cnn_runtime` in
+`trackerkit/gui/panels/setup_panel.py`) and the posekit `combo_pred_runtime`
+(`posekit/gui/main_window.py`) are replaced by **one tier selector**, bound to
+`InferenceConfig.runtime_tier` (and the kit config schema). The old per-stage
+combos and their signal wiring are deleted.
+
+**5.3 Platform-aware labels.** The selector shows only what the host supports,
+labeled by the backend the resolver will actually use:
+
+- CUDA host: `CPU` / `GPU (CUDA)` / `GPU-Fast (TensorRT)`
+- Apple host: `CPU` / `GPU (Metal)` / `GPU-Fast (CoreML)`
+- CPU-only host: `CPU` only (GPU tiers hidden/disabled)
+
+Labels are derived from the same `RuntimeResolver`/platform detection as the
+backend, so the dropdown text is always truthful about the selected backend.
+
+**5.4 Reflect resolution + fallback.** When `GPU-Fast` is selected, the panel
+surfaces the resolver outcome — a concise, read-only indicator (e.g. status
+line / tooltip) noting when a stage fell back to native-GPU (`used_fallback`)
+so the user understands what actually ran. Non-blocking; informational.
+
+**5.5 No stale state.** `allowed_runtimes_for_pipelines`-driven population is
+replaced by resolver-driven tier enumeration; removing a runtime from the
+backend removes it from every kit's UI in the same change.
 
 ## 6. Migration (Hard Cutover)
 
@@ -166,7 +189,10 @@ Each phase is a separate implementation plan; all share this document.
 - TensorRT becomes the CUDA `GPU-Fast` backend (wire existing auto-export in
   `runtime_artifacts.py`); best-effort native-CUDA fallback per stage.
 - Remove ONNX/TensorRT as user-facing runtimes; collapse GUI to one tier
-  selector (§5).
+  selector (§5.1–5.5) in **both** trackerkit and posekit, delete the old
+  per-stage combos + wiring, and update each kit's config schema
+  (`<kit>/config/schemas.py`) to carry `runtime_tier`. **The UI change ships in
+  this phase, not later** — backend and UI move together.
 - Hard-cutover migration (§6).
 - Phase 1 exact wins fold under the resolved `GPU` tier.
 
@@ -175,6 +201,9 @@ Each phase is a separate implementation plan; all share this document.
 - New `export_tiny_to_coreml` and `export_torchvision_to_coreml` (covers timm).
 - CoreML artifact auto-management mirroring the TensorRT pattern.
 - Wire CoreML backends into `GPU-Fast` on Apple; best-effort native-MPS fallback.
+- **UI:** the `GPU-Fast (CoreML)` label (§5.3) becomes live on Apple hosts once
+  the CoreML backend is wired; the fallback indicator (§5.4) reflects any
+  family that still uses native-MPS.
 
 ## 9. Testing
 
@@ -189,8 +218,10 @@ Each phase is a separate implementation plan; all share this document.
 - **Export coverage (P2/P3):** each classifier family (yolo/tiny/torchvision+timm,
   including multihead per-factor) exports and runs under the fast tier, or logs
   a native-GPU fallback.
-- **GUI:** tier selector shows correct platform-specific labels and hides
-  unavailable tiers.
+- **GUI:** tier selector shows correct platform-specific labels (§5.3), hides
+  unavailable tiers, binds to `runtime_tier` in the kit config schema, and the
+  old per-stage combos are gone from both trackerkit and posekit; the
+  resolution/fallback indicator (§5.4) renders when `GPU-Fast` is selected.
 
 ## 10. Error Handling
 
