@@ -539,6 +539,9 @@ class ClassifierBackend:
         rt = self._compute_runtime
         return rt.startswith("onnx_") or rt == "tensorrt"
 
+    def _uses_coreml(self) -> bool:
+        return self._compute_runtime == "coreml"
+
     def _uses_factor_backends(self) -> bool:
         return self._metadata.arch in ("yolo_multihead", "classifier_multihead")
 
@@ -562,7 +565,9 @@ class ClassifierBackend:
         if self._loaded:
             return
         try:
-            if self._uses_onnx() and not self._uses_factor_backends():
+            if self._uses_coreml() and not self._uses_factor_backends():
+                self._load_coreml()
+            elif self._uses_onnx() and not self._uses_factor_backends():
                 if self._should_fallback_to_native_runtime():
                     native_device = _torch_device(self._compute_runtime)
                     logger.warning(
@@ -809,6 +814,85 @@ class ClassifierBackend:
             self._model.run(None, {inp.name: dummy})  # JIT pass 2
         except Exception:
             pass
+
+    def _derive_coreml_peer(self) -> Path:
+        """Return (creating if necessary) the CoreML .mlpackage peer for this artifact."""
+        src = Path(self._model_path)
+        peer = src.with_suffix(".mlpackage")
+        if peer.exists():
+            return peer
+        h, w = self._metadata.input_size
+        if self._uses_factor_backends():
+            # Per-factor export: each factor backend derives its own peer.
+            # This method should only be called for flat (non-bundle) artifacts.
+            raise ClassifierRuntimeError(
+                f"{self._model_path!r}: cannot derive a single CoreML peer for a "
+                "multihead bundle — export each factor model individually"
+            )
+        if self._metadata.arch == "yolo":
+            from ultralytics import YOLO
+
+            YOLO(str(src)).export(format="coreml", imgsz=max(h, w))
+            return peer
+        if self._metadata.arch == "tinyclassifier":
+            from hydra_suite.training.tiny_model import (
+                export_tiny_to_coreml,
+                load_tiny_classifier,
+            )
+
+            model, ckpt = load_tiny_classifier(str(src), device="cpu")
+            export_tiny_to_coreml(model, ckpt, str(peer))
+            return peer
+        # torchvision / timm arch
+        from hydra_suite.training.torchvision_model import (
+            export_torchvision_to_coreml,
+            load_torchvision_classifier,
+        )
+
+        model, ckpt = load_torchvision_classifier(str(src), device="cpu")
+        export_torchvision_to_coreml(model, ckpt, str(peer))
+        return peer
+
+    def _load_coreml(self) -> None:
+        """Load the .mlpackage via coremltools and cache the output feature name."""
+        import coremltools
+
+        peer = self._derive_coreml_peer()
+        self._model = coremltools.models.MLModel(str(peer))
+        # Resolve and cache the output feature name at load time so _forward_coreml
+        # does not need to inspect the spec on every call.
+        output_descs = self._model.output_description._fd_spec
+        if output_descs:
+            self._coreml_output_name: str | None = output_descs[0].name
+        else:
+            self._coreml_output_name = None
+        self._active_execution_backend = "coreml"
+
+    def _forward_coreml(self, batch_np: np.ndarray) -> np.ndarray:
+        """Run a preprocessed (N, 3, H, W) float32 batch through the CoreML model.
+
+        The output feature name assigned by coremltools varies by model graph
+        (e.g. ``'var_23'``). We therefore index the prediction dict by position
+        — taking the first value — rather than by a hardcoded name.
+
+        CoreML requires NHWC layout, but the exporters in this codebase use
+        ``ct.TensorType(name="input", ...)`` so we feed the batch as-is in NCHW
+        and let coremltools handle the layout (it was traced with NCHW input).
+        """
+        results: list[np.ndarray] = []
+        for i in range(batch_np.shape[0]):
+            single = batch_np[i : i + 1]  # (1, 3, H, W)
+            pred = self._model.predict({"input": single})
+            if (
+                self._coreml_output_name is not None
+                and self._coreml_output_name in pred
+            ):
+                logits = pred[self._coreml_output_name]
+            else:
+                # Fallback: take first value by position regardless of key name.
+                logits = next(iter(pred.values()))
+            results.append(np.asarray(logits, dtype=np.float32).reshape(-1))
+        return np.stack(results, axis=0)
 
     def _uses_imagenet_normalization(self) -> bool:
         """Return True when the checkpoint expects ImageNet mean/std normalization."""
@@ -1116,24 +1200,27 @@ class ClassifierBackend:
         return results
 
     def _ensure_loaded_best_effort(self) -> None:
-        """Load with best-effort TRT→native-CUDA fallback for gpu_fast tier.
+        """Load with best-effort TRT→native fallback for gpu_fast / coreml tiers.
 
-        Calls ``_ensure_loaded()``; if the ONNX/TRT path raises for any reason,
-        logs a WARNING and reloads natively on the same GPU device.  Never falls
-        back to CPU — if the native GPU device is unavailable the exception
+        Calls ``_ensure_loaded()``; if the ONNX/TRT or CoreML path raises for any
+        reason, logs a WARNING and reloads natively on the same device.  Never
+        falls back to CPU — if the native device is unavailable the exception
         propagates.
         """
         if self._loaded:
             return
-        if not self._uses_onnx():
+        if not self._uses_onnx() and not self._uses_coreml():
             self._ensure_loaded()
             return
         try:
             self._ensure_loaded()
         except Exception as exc:  # noqa: BLE001
             native_device = _torch_device(self._compute_runtime)
+            if not native_device or native_device == "cpu":
+                # coreml only makes sense on Apple Silicon; fall back to mps
+                native_device = "mps"
             logger.warning(
-                "GPU-Fast classifier backend failed (%s); falling back to native %s",
+                "Accelerated classifier backend failed (%s); falling back to native %s",
                 exc,
                 native_device,
             )
@@ -1147,7 +1234,10 @@ class ClassifierBackend:
             return []
         self._ensure_loaded_best_effort()
         try:
-            if self._active_execution_backend == "onnx":
+            if self._active_execution_backend == "coreml":
+                batch_np = self._preprocess(crops)
+                logits = self._forward_coreml(batch_np)
+            elif self._active_execution_backend == "onnx":
                 batch_np = self._preprocess(crops)
                 logits = self._forward_onnx(batch_np)
             elif self._metadata.arch == "yolo":
