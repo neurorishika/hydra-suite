@@ -844,7 +844,7 @@ class SleapExportedBackend:
     def predict_batch_cuda(self, crops: Sequence[Any]) -> List[PoseResult]:
         """GPU-native counterpart of :meth:`predict_batch`.
 
-        Accepts a sequence of ``C×H×W`` CUDA float32 tensors (BGR, ``[0, 255]``
+        Accepts a sequence of ``C×H×W`` CUDA float32 tensors (BGR, ``[0, 1]``
         range) produced by the NVDec→:func:`~hydra_suite.core.canonicalization.crop.gpu_canonical_crop`
         pipeline.
 
@@ -856,10 +856,19 @@ class SleapExportedBackend:
             return []
 
         if not isinstance(self._runner, _DirectTensorRTEngine):
-            # ONNX has a hard numpy boundary — fall back to the CPU path.
-            cpu_crops = [
-                c.permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy() for c in crops
-            ]
+            # ONNX has a hard numpy boundary — convert to uint8 [0,255] numpy and
+            # forward to predict_batch (whose _prepare_export_crop casts to uint8
+            # and then divides by 255). CRITICAL: the canonical crops are float32
+            # [0, 1], so a direct uint8 cast floors every pixel to 0 (all-black
+            # image → SLEAP returns zero-confidence keypoints). Scale by 255 first
+            # (only when in [0,1]; pass [0,255] through) — mirrors _to_uint8_image.
+            def _crop_to_u8(c):
+                t = c.float()
+                if float(t.max()) <= 1.0 + 1e-3:
+                    t = t * 255.0
+                return t.permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy()
+
+            cpu_crops = [_crop_to_u8(c) for c in crops]
             return self.predict_batch(cpu_crops)
 
         self._last_profile = {}
