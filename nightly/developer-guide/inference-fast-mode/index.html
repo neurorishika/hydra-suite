@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/developer-guide/inference-fast-mode-future/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/developer-guide/inference-fast-mode/">
       
       
         <link rel="prev" href="../performance-tuning/">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Inference Fast Mode (Deferred) - HYDRA Suite Docs</title>
+        <title>Inference Fast Mode - HYDRA Suite Docs</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#deferred-non-exact-fast-mode-levers" class="md-skip">
+        <a href="#inference-fast-mode" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Inference Fast Mode (Deferred)
+              Inference Fast Mode
             
           </span>
         </div>
@@ -1186,15 +1186,114 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
-    Inference Fast Mode (Deferred)
+    Inference Fast Mode
   </span>
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#fast-mode-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fast-Mode Tiers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fast-Mode Tiers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cuda-tensorrt" class="md-nav__link">
+    <span class="md-ellipsis">
+      CUDA → TensorRT
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apple-silicon-coreml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Apple Silicon → CoreML
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coverage-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Coverage Matrix
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-effort-native-gpu-fallback-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best-Effort Native-GPU Fallback Contract
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#determinism-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      Determinism Note
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-was-intentionally-not-shipped" class="md-nav__link">
+    <span class="md-ellipsis">
+      What Was Intentionally Not Shipped
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -1697,6 +1796,83 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#fast-mode-tiers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fast-Mode Tiers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fast-Mode Tiers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cuda-tensorrt" class="md-nav__link">
+    <span class="md-ellipsis">
+      CUDA → TensorRT
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#apple-silicon-coreml" class="md-nav__link">
+    <span class="md-ellipsis">
+      Apple Silicon → CoreML
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#coverage-matrix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Coverage Matrix
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-effort-native-gpu-fallback-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best-Effort Native-GPU Fallback Contract
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#determinism-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      Determinism Note
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-was-intentionally-not-shipped" class="md-nav__link">
+    <span class="md-ellipsis">
+      What Was Intentionally Not Shipped
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -1710,7 +1886,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/inference-fast-mode-future.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/developer-guide/inference-fast-mode.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1718,50 +1894,167 @@
   
 
 
-<h1 id="deferred-non-exact-fast-mode-levers">Deferred: non-exact "fast mode" levers<a class="headerlink" href="#deferred-non-exact-fast-mode-levers" title="Permanent link">&para;</a></h1>
-<p>Phase 1 shipped only the safe, determinism-preserving GPU cleanups
-(<code>inference_mode</code> around crop extraction and the classifier forward paths;
-pinned/<code>non_blocking</code> H2D for classifier crop uploads). The larger speedups
-require changing numerics and are intentionally deferred to the <code>GPU-Fast</code> tier
-(spec §3) or a future sub-option:</p>
+<h1 id="inference-fast-mode">Inference Fast Mode<a class="headerlink" href="#inference-fast-mode" title="Permanent link">&para;</a></h1>
+<p>This page documents the <strong>shipped</strong> fast-mode tiers for the HYDRA Suite inference
+pipeline.  Phase 1 established determinism-preserving GPU cleanups; Phase 3 adds
+native accelerator export for both CUDA (TensorRT) and Apple Silicon (CoreML).</p>
+<hr />
+<h2 id="fast-mode-tiers">Fast-Mode Tiers<a class="headerlink" href="#fast-mode-tiers" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Tier</th>
+<th>Format</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NVIDIA GPU</td>
+<td>TensorRT fp32</td>
+<td><code>.engine</code></td>
+<td>Shipped (Phase 2/3)</td>
+</tr>
+<tr>
+<td>Apple Silicon</td>
+<td>CoreML</td>
+<td><code>.mlpackage</code></td>
+<td>Shipped (Phase 3)</td>
+</tr>
+<tr>
+<td>CPU / other</td>
+<td>Native PyTorch</td>
+<td>in-memory</td>
+<td>Always available (best-effort)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cuda-tensorrt">CUDA → TensorRT<a class="headerlink" href="#cuda-tensorrt" title="Permanent link">&para;</a></h3>
+<p>On CUDA hardware the pipeline auto-exports the detector (OBB model) to a TensorRT
+<code>.engine</code> file on first run.  The artifact is cached next to the source <code>.pt</code> file
+and reused on subsequent runs.</p>
+<ul>
+<li>Format: TensorRT FP32 engine</li>
+<li>Precision: fp32 (numerically close to the PyTorch baseline but NOT bit-identical
+  — kernel fusion reorders ops; see the Determinism note below)</li>
+<li>Trigger: <code>compute_runtime = "tensorrt"</code> in TrackerKit / ClassKit config</li>
+<li>Artifact path: <code>&lt;model&gt;.engine</code> adjacent to the source <code>.pt</code></li>
+</ul>
+<h3 id="apple-silicon-coreml">Apple Silicon → CoreML<a class="headerlink" href="#apple-silicon-coreml" title="Permanent link">&para;</a></h3>
+<p>On Apple Silicon (MPS) the pipeline auto-exports both the OBB detector and all
+classifier families to CoreML <code>.mlpackage</code> bundles on first run.</p>
+<ul>
+<li>Format: CoreML <code>.mlpackage</code> (directory bundle)</li>
+<li>Compute units: <code>ALL</code> (Neural Engine + CPU + GPU)</li>
+<li>Minimum deployment target: macOS 13</li>
+<li>Trigger: <code>compute_runtime = "coreml"</code> in TrackerKit / ClassKit config</li>
+<li>Artifact path: <code>&lt;model&gt;.mlpackage</code> adjacent to the source <code>.pt</code> / <code>.pth</code></li>
+</ul>
+<hr />
+<h2 id="coverage-matrix">Coverage Matrix<a class="headerlink" href="#coverage-matrix" title="Permanent link">&para;</a></h2>
+<p>The following table shows which classifier families have a shipped CoreML exporter.
+All families are covered — no family is left without a CoreML export path (spec §7
+hard requirement).</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Exporter function</th>
+<th>Test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TinyClassifier</td>
+<td><code>training.tiny_model.export_tiny_to_coreml</code></td>
+<td><code>test_fastmode_coverage_matrix.py::test_tinyclassifier_family_exports_coreml</code></td>
+</tr>
+<tr>
+<td>Torchvision (resnet18, efficientnet_b0, mobilenet_v3_small, …)</td>
+<td><code>training.torchvision_model.export_torchvision_to_coreml</code></td>
+<td><code>…::test_torchvision_resnet18_family_exports_coreml</code></td>
+</tr>
+<tr>
+<td>TIMM (timm/*)</td>
+<td><code>training.torchvision_model.export_torchvision_to_coreml</code> (same path)</td>
+<td><code>…::test_timm_family_exports_coreml</code></td>
+</tr>
+<tr>
+<td>YOLO / OBB (ultralytics)</td>
+<td><code>ultralytics YOLO.export(format="coreml")</code></td>
+<td><code>…::test_yolo_obb_family_exports_coreml</code></td>
+</tr>
+</tbody>
+</table>
+<p>All four families export a real <code>.mlpackage</code> directory bundle on Apple Silicon.  The
+coverage-matrix test (<code>tests/test_fastmode_coverage_matrix.py</code>) is skipped
+automatically on non-Mac platforms and when <code>coremltools</code> is absent.</p>
+<hr />
+<h2 id="best-effort-native-gpu-fallback-contract">Best-Effort Native-GPU Fallback Contract<a class="headerlink" href="#best-effort-native-gpu-fallback-contract" title="Permanent link">&para;</a></h2>
+<p>When a CoreML or TensorRT artifact cannot be produced (missing dependency, export
+error, unsupported model variant), the pipeline falls back to native PyTorch GPU
+inference rather than crashing:</p>
+<ol>
+<li>The runtime resolver detects that <code>coreml</code> / <code>tensorrt</code> is requested.</li>
+<li>If the <code>.mlpackage</code> / <code>.engine</code> artifact is missing and <code>auto_export=True</code>, an
+   export is attempted.</li>
+<li>If the export fails, a warning is logged and the resolver downgrades to the next
+   available runtime (<code>mps</code> → <code>cpu</code> on Apple, <code>cuda</code> → <code>cpu</code> on NVIDIA).</li>
+<li>The fallback is surfaced in the TrackerKit status bar (Phase 3, Task 7).</li>
+</ol>
+<p>This contract means the pipeline is never hard-blocked by an export failure — it
+degrades gracefully at the cost of losing the accelerated code path.</p>
+<hr />
+<h2 id="determinism-note">Determinism Note<a class="headerlink" href="#determinism-note" title="Permanent link">&para;</a></h2>
+<p>CoreML and TensorRT inference is <strong>not bit-identical</strong> to the PyTorch baseline:</p>
+<ul>
+<li>CoreML: the Neural Engine may use reduced-precision arithmetic internally even
+  for fp32 models.  Run-to-run results on the same hardware are <strong>deterministic</strong>
+  (same input → same output), but the exact values may differ from a PyTorch CPU
+  or MPS run by small floating-point rounding errors.</li>
+<li>TensorRT fp32: also deterministic run-to-run but may differ slightly from PyTorch
+  due to kernel fusion and cuDNN algorithm selection.</li>
+</ul>
+<p>Identity classification thresholds and tracking assignment logic are robust to these
+small numerical differences.  The determinism test suite (<code>test_coreml_determinism.py</code>)
+verifies run-to-run reproducibility on Apple Silicon.</p>
+<hr />
+<h2 id="what-was-intentionally-not-shipped">What Was Intentionally Not Shipped<a class="headerlink" href="#what-was-intentionally-not-shipped" title="Permanent link">&para;</a></h2>
+<p>The table below lists levers that were evaluated and deferred:</p>
 <table>
 <thead>
 <tr>
 <th>Lever</th>
-<th>Measured (RTX 6000 Ada, 2026-06-30)</th>
-<th>Status / why deferred</th>
+<th>Reason not shipped</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>channels_last</code> (CUDA)</td>
-<td>classifier EfficientNet-B0 @96×96 b64: <strong>+0.15% (no-op)</strong>; breaks OBB inference (ultralytics <code>fuse_conv_and_bn</code> <code>.view()</code> on channels_last → RuntimeError)</td>
-<td><strong>NOT shipped.</strong> The +11% seen in a synthetic 224×224 microbench did not generalize to the real 96×96 classifier, and it is unsafe for the OBB path. Reverted after CUDA verification.</td>
+<td>No-op on real 96×96 classifier crops; breaks OBB inference (<code>fuse_conv_and_bn</code> <code>.view()</code> error on channels-last tensors)</td>
+</tr>
+<tr>
+<td><code>channels_last</code> (MPS)</td>
+<td>~54% regression at batch 64</td>
 </tr>
 <tr>
 <td>TensorRT fp16</td>
-<td>classifier −4.5%; OBB fp16 larger</td>
-<td>non bit-identical → <code>GPU-Fast</code> tier (Phase 2)</td>
+<td>Non-bit-identical (−4.5% accuracy risk on small-crop classifiers); deferred to an explicit <code>GPU-Fast-fp16</code> sub-option</td>
 </tr>
 <tr>
 <td>TF32 matmul</td>
-<td>not benchmarked in isolation</td>
-<td>breaks fp32 determinism; not in fast-mode export model</td>
+<td>Breaks fp32 determinism guarantee</td>
 </tr>
 <tr>
-<td>cudnn.benchmark</td>
-<td>not benchmarked</td>
-<td>run-to-run nondeterminism</td>
+<td><code>cudnn.benchmark</code></td>
+<td>Run-to-run nondeterminism</td>
 </tr>
 </tbody>
 </table>
-<p>MPS note: <code>channels_last</code> also REGRESSES MPS by ~54% (b64) and was never applied there.</p>
-<p><strong>Phase 1 net result:</strong> the inference pipeline was already well-optimized for
-exact inference (batching, GPU crops, NVDEC, warmup, <code>no_grad</code> already present).
-The only remaining exact lever with apparent headroom — <code>channels_last</code> — proved
-to be a no-op on the real classifier and unsafe for OBB on CUDA, so Phase 1 ships
-as correctness-preserving <code>inference_mode</code>/pinned cleanups with no measurable
-throughput change. The real speedups live in the deferred <code>GPU-Fast</code> tier.</p>
+<p>Phase 1 shipped only safety-preserving cleanups (<code>inference_mode</code>, pinned/non-blocking
+H2D uploads) because the real pipeline was already well-optimized and the only
+remaining exact lever (<code>channels_last</code>) proved unsafe.</p>
 
 
 
