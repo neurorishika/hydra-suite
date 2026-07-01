@@ -232,6 +232,25 @@ class TestInvertLetterbox:
         r, pad_left, pad_top = self._lb_params()
         _invert_letterbox_on_result(result, r, pad_left, pad_top)  # should not raise
 
+    def test_inference_tensor_inplace_allowed(self):
+        """Regression: ultralytics predict() runs under torch.inference_mode(), so
+        result.obb.data is an *inference tensor*. Mutating it in-place outside
+        InferenceMode raises 'Inplace update to inference tensor ...'. The invert
+        helper must handle this (it re-enters inference_mode)."""
+        r, pad_left, pad_top = self._lb_params()
+        # Build the backing data AS AN INFERENCE TENSOR (created inside the
+        # context), exactly as ultralytics returns it.
+        with torch.inference_mode():
+            data = torch.tensor(
+                [[320.0, 320.0, 64.0, 32.0, 0.5, 0.9, 0.0]], dtype=torch.float32
+            )
+        assert data.is_inference()  # precondition: reproduces the real state
+        result = _FakeResult(data)
+        # Must not raise, and must actually apply the inversion.
+        _invert_letterbox_on_result(result, r, pad_left, pad_top)
+        got_cx = float(result.obb.xywhr[0, 0])
+        assert abs(got_cx - (320.0 - pad_left) / r) < 1e-4
+
 
 # ---------------------------------------------------------------------------
 # Test 3: _resolve_imgsz reads from model.overrides

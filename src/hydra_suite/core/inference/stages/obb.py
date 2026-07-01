@@ -132,11 +132,16 @@ def _invert_letterbox_on_result(result: Any, r: float, pad_left: float, pad_top:
     if obb is None or len(obb) == 0:
         return
     data = obb.data  # (N, >=5): cx, cy, w, h, angle, [conf, cls]
-    data[:, 0] = (data[:, 0] - pad_left) / r  # cx
-    data[:, 1] = (data[:, 1] - pad_top) / r   # cy
-    data[:, 2] = data[:, 2] / r               # w
-    data[:, 3] = data[:, 3] / r               # h
-    # angle (col 4) and conf/cls (cols 5+) are unchanged
+    # ultralytics runs predict() under torch.inference_mode(), so `data` is an
+    # "inference tensor" that cannot be mutated in-place outside that context
+    # ("Inplace update to inference tensor outside InferenceMode is not
+    # allowed"). Re-enter inference_mode to perform the in-place coord inversion.
+    with torch.inference_mode():
+        data[:, 0] = (data[:, 0] - pad_left) / r  # cx
+        data[:, 1] = (data[:, 1] - pad_top) / r   # cy
+        data[:, 2] = data[:, 2] / r               # w
+        data[:, 3] = data[:, 3] / r               # h
+        # angle (col 4) and conf/cls (cols 5+) are unchanged
 
 
 def _valid_detection_mask(
