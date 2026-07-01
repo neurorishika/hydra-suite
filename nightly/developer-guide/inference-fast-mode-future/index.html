@@ -1719,27 +1719,29 @@
 
 
 <h1 id="deferred-non-exact-fast-mode-levers">Deferred: non-exact "fast mode" levers<a class="headerlink" href="#deferred-non-exact-fast-mode-levers" title="Permanent link">&para;</a></h1>
-<p>Phase 1 shipped the exact (determinism-preserving) GPU wins. The larger
-speedups require changing numerics and are intentionally deferred to the
-<code>GPU-Fast</code> tier (spec §3) or a future sub-option:</p>
+<p>Phase 1 shipped only the safe, determinism-preserving GPU cleanups
+(<code>inference_mode</code> around crop extraction and the classifier forward paths;
+pinned/<code>non_blocking</code> H2D for classifier crop uploads). The larger speedups
+require changing numerics and are intentionally deferred to the <code>GPU-Fast</code> tier
+(spec §3) or a future sub-option:</p>
 <table>
 <thead>
 <tr>
 <th>Lever</th>
-<th>Measured (RTX 6000 Ada, efficientnet_b0 b64, 2026-06-30)</th>
-<th>Why deferred</th>
+<th>Measured (RTX 6000 Ada, 2026-06-30)</th>
+<th>Status / why deferred</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>channels_last</code> (CUDA)</td>
-<td>+11% CNN compute — SHIPPED in Phase 1 (exact-within-envelope)</td>
-<td>n/a</td>
+<td>classifier EfficientNet-B0 @96×96 b64: <strong>+0.15% (no-op)</strong>; breaks OBB inference (ultralytics <code>fuse_conv_and_bn</code> <code>.view()</code> on channels_last → RuntimeError)</td>
+<td><strong>NOT shipped.</strong> The +11% seen in a synthetic 224×224 microbench did not generalize to the real 96×96 classifier, and it is unsafe for the OBB path. Reverted after CUDA verification.</td>
 </tr>
 <tr>
 <td>TensorRT fp16</td>
 <td>classifier −4.5%; OBB fp16 larger</td>
-<td>non bit-identical → GPU-Fast tier</td>
+<td>non bit-identical → <code>GPU-Fast</code> tier (Phase 2)</td>
 </tr>
 <tr>
 <td>TF32 matmul</td>
@@ -1753,7 +1755,13 @@ speedups require changing numerics and are intentionally deferred to the
 </tr>
 </tbody>
 </table>
-<p>MPS note: <code>channels_last</code> REGRESSES MPS by ~54% (b64) and is never applied there.</p>
+<p>MPS note: <code>channels_last</code> also REGRESSES MPS by ~54% (b64) and was never applied there.</p>
+<p><strong>Phase 1 net result:</strong> the inference pipeline was already well-optimized for
+exact inference (batching, GPU crops, NVDEC, warmup, <code>no_grad</code> already present).
+The only remaining exact lever with apparent headroom — <code>channels_last</code> — proved
+to be a no-op on the real classifier and unsafe for OBB on CUDA, so Phase 1 ships
+as correctness-preserving <code>inference_mode</code>/pinned cleanups with no measurable
+throughput change. The real speedups live in the deferred <code>GPU-Fast</code> tier.</p>
 
 
 

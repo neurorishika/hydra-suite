@@ -1865,11 +1865,14 @@ dominated or broken:</p>
 </ul>
 <p>Per-stage selection also permits inefficient mixing (e.g. <code>cuda</code> OBB +
 <code>onnx_cuda</code> classifier + <code>tensorrt</code> pose) that forces avoidable data movement.</p>
-<p>Exact (determinism-preserving) GPU optimizations have narrow headroom: <code>channels_last</code>
-gives <strong>+11%</strong> on CUDA CNN compute but is <strong>−54% (harmful) on MPS</strong>;
-<code>inference_mode</code> ≈ <code>no_grad</code> (already present); pinned/<code>non_blocking</code> H2D is
-+14% on a copy that is tiny relative to compute. The large (2–5×) speedups live
-only in non-exact fp16 paths (TensorRT / CoreML).</p>
+<p>Exact (determinism-preserving) GPU optimizations have essentially no headroom on
+the real models: <code>channels_last</code> looked promising in a synthetic 224×224
+microbench (+11%) but proved a <strong>no-op on the real 96×96 classifier (+0.15%)</strong>,
+<strong>−54% (harmful) on MPS</strong>, and it <strong>crashes OBB inference</strong> on CUDA (ultralytics
+<code>fuse_conv_and_bn</code> <code>.view()</code> incompatibility) — so it was removed after
+verification. <code>inference_mode</code> ≈ <code>no_grad</code> (already present); pinned/<code>non_blocking</code>
+H2D is +14% on a copy that is tiny relative to compute. The large (2–5×) speedups
+live only in the non-exact fp16 paths (TensorRT / CoreML).</p>
 <h2 id="2-north-star-principle">2. North-Star Principle<a class="headerlink" href="#2-north-star-principle" title="Permanent link">&para;</a></h2>
 <p><strong>One runtime tier for the entire pipeline, auto-resolved to the best backend
 per platform.</strong> Native tiers are exact and device-invariant; the fast tier
@@ -1895,7 +1898,7 @@ trades bit-exactness for speed. No tensor data crosses devices within a run.</p>
 </tr>
 <tr>
 <td><strong>GPU</strong></td>
-<td>torch CUDA + exact wins (<code>channels_last</code>, pinned H2D, <code>inference_mode</code>)</td>
+<td>torch CUDA + exact wins (<code>inference_mode</code>, pinned H2D)</td>
 <td>torch MPS</td>
 <td>falls back to CPU tier</td>
 <td>Exact; device-invariant within existing ~0.006 px FP-noise envelope</td>
@@ -2064,17 +2067,19 @@ logged native-GPU fallback. Coverage matrix:</p>
 <p>Each phase is a separate implementation plan; all share this document.</p>
 <h3 id="phase-1-native-gpu-exact-wins-independent-ships-first">Phase 1 — Native-GPU exact wins (independent, ships first)<a class="headerlink" href="#phase-1-native-gpu-exact-wins-independent-ships-first" title="Permanent link">&para;</a></h3>
 <ul>
-<li><code>channels_last</code> <strong>gated on the actual torch device == cuda</strong> (never applied on
-  MPS, where it regresses 54%). Applies to the conv-heavy classifier and
-  YOLO/OBB torch paths.</li>
 <li><code>inference_mode</code> around GPU crop extraction (<code>canonicalization/crop.py</code>
   <code>grid_sample</code>, lines 299/387); upgrade classifier <code>no_grad</code> → <code>inference_mode</code>.</li>
-<li>Pinned + <code>non_blocking=True</code> H2D for crop uploads (CUDA only).</li>
+<li>Pinned + <code>non_blocking=True</code> H2D for classifier crop uploads (CUDA only).</li>
 <li>No taxonomy change: gated on device, not tier — lands immediately.</li>
-<li>Expected: ~11% CNN compute on CUDA; MPS/CPU unchanged; numerics within the
-  existing device-invariance envelope (documented caveat: <code>channels_last</code> is not
-  bit-identical to the prior CUDA output but stays within ~0.006 px FP noise).</li>
-<li>Measured 2026-06-30: +11% CNN compute on CUDA (channels_last); MPS/CPU unchanged; classifier logits within 1e-3 rel-tol of pre-change CUDA output.</li>
+<li><code>channels_last</code> was attempted but <strong>removed after CUDA verification</strong>: it was a
+  no-op on the real classifier (EfficientNet-B0 @96×96: +0.15%, bit-exact output)
+  and it <em>crashed</em> real OBB inference (ultralytics <code>fuse_conv_and_bn</code> <code>.view()</code> is
+  incompatible with a channels_last layout). The +11% seen earlier was a synthetic
+  224×224 microbench that did not generalize. See
+  <code>docs/developer-guide/inference-fast-mode-future.md</code>.</li>
+<li>Measured 2026-06-30 (mehek RTX 6000 Ada): classifier output <strong>bit-exact</strong> base
+  vs HEAD; no throughput change. Net: Phase 1 ships as correctness-preserving
+  cleanups — the pipeline was already optimal for the real models.</li>
 </ul>
 <h3 id="phase-2-runtime-tier-taxonomy">Phase 2 — Runtime tier taxonomy<a class="headerlink" href="#phase-2-runtime-tier-taxonomy" title="Permanent link">&para;</a></h3>
 <ul>
