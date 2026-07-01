@@ -918,3 +918,38 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
     assert headtail_targets[0].current_runtime == "onnx_coreml"
     assert headtail_targets[0].current_batch_size == 32
     assert headtail_targets[0].supports_batch_apply is True
+
+
+def test_collect_active_targets_no_longer_calls_deleted_compute_runtime_options_method() -> (
+    None
+):
+    """Regression: collect_active_targets must NOT call _compute_runtime_options_for_current_ui.
+
+    Before the tier-model fix this raised AttributeError because the method was
+    deleted in Task 6.  The mock below has NO such attribute — if the code tries
+    to call it, AttributeError is raised and the test fails.
+    """
+    main_window = SimpleNamespace(
+        _detection_panel=SimpleNamespace(
+            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
+        ),
+        _identity_panel=SimpleNamespace(
+            spin_pose_batch=SimpleNamespace(value=lambda: 4),
+        ),
+        _setup_panel=SimpleNamespace(spin_max_targets=SimpleNamespace(value=lambda: 8)),
+        # _compute_runtime_options_for_current_ui intentionally absent
+        _selected_compute_runtime=lambda: "cpu",
+        _is_yolo_detection_mode=lambda: False,
+        _get_selected_yolo_model_path=lambda: "",
+        _get_selected_yolo_detect_model_path=lambda: "",
+        _get_selected_yolo_crop_obb_model_path=lambda: "",
+        _identity_config=lambda: {"cnn_classifiers": []},
+        _is_pose_inference_enabled=lambda: False,
+        _selected_cnn_runtime=lambda: "cpu",
+    )
+
+    targets, notices = benchmarking.collect_active_targets(main_window)
+
+    assert isinstance(targets, list)
+    assert isinstance(notices, list)

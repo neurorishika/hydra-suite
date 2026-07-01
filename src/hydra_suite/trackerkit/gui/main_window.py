@@ -1385,12 +1385,6 @@ class MainWindow(QMainWindow):
             return "sleap"
         return txt
 
-    def _runtime_pipelines_for_current_ui(self):
-        """Return active pipeline keys for runtime intersection."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._runtime_pipelines_for_current_ui()
-        return []
-
     def _on_runtime_tier_changed(self, _index: int = 0) -> None:
         """Store the selected tier and refresh dependent controls."""
         if hasattr(self, "_session_orch"):

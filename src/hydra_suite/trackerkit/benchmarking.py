@@ -21,10 +21,12 @@ from hydra_suite.paths import get_config_dir
 from hydra_suite.runtime.compute_runtime import (
     _normalize_runtime,
     allowed_runtimes_for_pipelines,
+    available_tiers,
     derive_pose_runtime_settings,
     runtime_label,
     supported_runtimes_for_pipeline,
 )
+from hydra_suite.runtime.resolver import detect_platform
 from hydra_suite.trackerkit.gui.model_utils import (
     resolve_model_path,
     resolve_pose_model_path,
@@ -35,6 +37,25 @@ logger = logging.getLogger(__name__)
 
 _CACHE_VERSION = "1.1"
 _RECOMMENDATION_MARGIN = 0.05
+
+
+def _tiers_to_compute_runtimes(tiers: list, platform) -> list[str]:
+    """Map runtime tier ids to canonical compute_runtime strings, deduplicating."""
+    seen: list[str] = []
+    for tier in tiers:
+        if tier == "gpu_fast":
+            rt = (
+                "tensorrt"
+                if platform.has_cuda
+                else ("mps" if platform.has_mps else "cpu")
+            )
+        elif tier == "gpu":
+            rt = "cuda" if platform.has_cuda else ("mps" if platform.has_mps else "cpu")
+        else:
+            rt = "cpu"
+        if rt not in seen:
+            seen.append(rt)
+    return seen
 
 
 def _emit_benchmark_message(
@@ -649,9 +670,10 @@ def collect_active_targets(
     ):
         return targets, notices
 
-    detection_runtimes = [
-        value for _label, value in main_window._compute_runtime_options_for_current_ui()
-    ]
+    _platform = detect_platform()
+    detection_runtimes = _tiers_to_compute_runtimes(
+        available_tiers(_platform), _platform
+    )
     max_targets = max(1, int(main_window._setup_panel.spin_max_targets.value()))
     current_detection_runtime = main_window._selected_compute_runtime()
     current_detection_batch = int(
