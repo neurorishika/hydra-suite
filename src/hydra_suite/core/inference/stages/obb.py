@@ -10,7 +10,7 @@ import torch
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
-from ..runtime_artifacts import ArtifactExportError, load_obb_executor
+from ..runtime_artifacts import load_obb_executor
 
 logger = logging.getLogger(__name__)
 
@@ -462,17 +462,19 @@ def _load_yolo(
             auto_export=auto_export,
             max_det=max_det,
         )
-    except ArtifactExportError as exc:
+    except (
+        Exception
+    ) as exc:  # best-effort GPU-Fast fallback (spec §3: never a hard crash)
         if str(compute_runtime) != "tensorrt":
             raise
         logger.warning(
-            "GPU-Fast OBB TensorRT artifact unavailable (%s); falling back to native cuda",
+            "GPU-Fast OBB TensorRT load/build failed (%s); falling back to native CUDA",
             exc,
         )
         return load_obb_executor(
             model_path,
             "cuda",
-            auto_export=False,
+            auto_export=auto_export,
             max_det=max_det,
         )
 

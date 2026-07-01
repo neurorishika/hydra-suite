@@ -115,3 +115,45 @@ def test_obb_gpu_fast_falls_back_to_cuda_when_trt_artifact_missing(
     assert any(
         "fall" in r.message.lower() for r in caplog.records
     ), f"Expected a fallback WARNING; got: {[r.message for r in caplog.records]}"
+
+
+def test_obb_gpu_fast_falls_back_to_cuda_when_trt_build_crashes(
+    monkeypatch, caplog, tmp_path
+):
+    """OBB loader falls back to native cuda when TRT raises a plain RuntimeError.
+
+    This covers the auto_export=True path where ultralytics raises RuntimeError
+    (not ArtifactExportError) mid-build.  Before the fix only ArtifactExportError
+    was caught, so a RuntimeError propagated as a hard crash.
+    """
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    calls: list[str] = []
+
+    def fake_load_obb_executor(model_path, compute_runtime, *, auto_export, max_det):
+        calls.append(str(compute_runtime))
+        if compute_runtime == "tensorrt":
+            raise RuntimeError("TRT build failed")
+        # Native-CUDA attempt succeeds — return a sentinel.
+        return "CUDA_MODEL_AFTER_BUILD_CRASH"
+
+    monkeypatch.setattr(obb_mod, "load_obb_executor", fake_load_obb_executor)
+
+    fake_pt = tmp_path / "model.pt"
+    fake_pt.write_text("fake")
+
+    with caplog.at_level(logging.WARNING):
+        result = obb_mod._load_yolo(
+            str(fake_pt),
+            "tensorrt",
+            auto_export=True,
+            max_det=20,
+        )
+
+    assert (
+        result == "CUDA_MODEL_AFTER_BUILD_CRASH"
+    ), f"Expected CUDA_MODEL_AFTER_BUILD_CRASH sentinel, got {result!r}"
+    assert calls == ["tensorrt", "cuda"], f"Unexpected call sequence: {calls}"
+    assert any(
+        "fall" in r.message.lower() for r in caplog.records
+    ), f"Expected a fallback WARNING; got: {[r.message for r in caplog.records]}"
