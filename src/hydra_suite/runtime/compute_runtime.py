@@ -158,6 +158,32 @@ def _append_provider(providers: list[object], provider: object) -> None:
     providers.append(provider)
 
 
+def _tensorrt_ep_cache_options() -> dict:
+    """Provider options that make the ORT TensorRT-EP plan persist across runs.
+
+    Without a cache path ORT rebuilds the TensorRT engine on every session — a
+    ~8-16 s stall each time the SLEAP (or any) ONNX model is loaded via the
+    TensorRT-EP fallback. Pointing the engine + timing cache at a stable
+    per-machine directory pays that build cost once. Engines are keyed by model
+    + shape profile, so distinct models never collide. fp16 is deliberately NOT
+    enabled here — keypoint/OBB precision must stay ~identical to native CUDA.
+    """
+    try:
+        from hydra_suite.paths import get_data_dir
+
+        cache_dir = get_data_dir() / "trt_engine_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache = str(cache_dir)
+    except Exception:  # pragma: no cover - path resolution should not fail
+        return {}
+    return {
+        "trt_engine_cache_enable": True,
+        "trt_engine_cache_path": cache,
+        "trt_timing_cache_enable": True,
+        "trt_timing_cache_path": cache,
+    }
+
+
 def derive_onnx_execution_providers(
     compute_runtime: str,
     include_cpu_fallback: bool = True,
@@ -167,7 +193,10 @@ def derive_onnx_execution_providers(
     providers: list[object] = []
 
     if rt == "tensorrt":
-        _append_provider(providers, "TensorrtExecutionProvider")
+        _append_provider(
+            providers,
+            ("TensorrtExecutionProvider", _tensorrt_ep_cache_options()),
+        )
         _append_provider(providers, "CUDAExecutionProvider")
     elif rt == "onnx_cuda":
         _append_provider(providers, "CUDAExecutionProvider")
