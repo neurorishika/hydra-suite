@@ -109,7 +109,17 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
     from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
 
     sleap_cfg = config.sleap
-    if compute_runtime in ("cuda", "onnx_cuda"):
+    # Debug/A-B override: force the SLEAP runtime flavor independent of the tier
+    # (e.g. HYDRA_SLEAP_FLAVOR=native|onnx_cuda|tensorrt|onnx_cpu). Lets us run
+    # the full pipeline with identical crops across flavors to verify the
+    # exported models reproduce native SLEAP keypoints. Unset in normal use.
+    import os as _os
+
+    _flavor_override = _os.environ.get("HYDRA_SLEAP_FLAVOR", "").strip().lower()
+    if _flavor_override:
+        runtime_flavor = _flavor_override
+        device = "cpu" if _flavor_override == "onnx_cpu" else "cuda"
+    elif compute_runtime in ("cuda", "onnx_cuda"):
         runtime_flavor = "onnx_cuda"
         device = "cuda"
     elif compute_runtime in ("mps", "coreml"):
