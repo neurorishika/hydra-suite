@@ -365,6 +365,66 @@ class _DirectOnnxSession:
         self._session = None
 
 
+def _build_trt_engine_from_onnx(
+    onnx_path: Path,
+    engine_path: Path,
+    workspace_gb: float = 4.0,
+) -> bool:
+    """Build a native TensorRT engine from an ONNX file and serialize it.
+
+    Returns True when the engine was built and written to *engine_path*; False
+    when building is not feasible in the current environment (CUDA / TensorRT not
+    available or import fails).  Never raises — callers fall back to ORT-TRT-EP.
+
+    This function requires CUDA and the ``tensorrt`` package.  On non-CUDA
+    platforms (e.g. macOS/MPS) it returns False immediately without attempting
+    any imports so the code path is safe to unit-test with mocks.
+    """
+    try:
+        import tensorrt as trt  # noqa: PLC0415
+    except Exception:
+        return False
+
+    trt_logger = trt.Logger(trt.Logger.WARNING)
+    try:
+        builder = trt.Builder(trt_logger)
+        network_flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+        network = builder.create_network(network_flags)
+        parser = trt.OnnxParser(network, trt_logger)
+        onnx_bytes = onnx_path.read_bytes()
+        if not parser.parse(onnx_bytes):
+            msgs = [parser.get_error(i).desc() for i in range(parser.num_errors)]
+            logger.warning(
+                "TRT ONNX parser failed for %s: %s", onnx_path, "; ".join(msgs)
+            )
+            return False
+
+        config = builder.create_builder_config()
+        workspace_bytes = int(workspace_gb * (1 << 30))
+        if hasattr(config, "set_memory_pool_limit"):
+            config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_bytes)
+        elif hasattr(config, "max_workspace_size"):
+            config.max_workspace_size = workspace_bytes
+
+        plan = builder.build_serialized_network(network, config)
+        if plan is None:
+            logger.warning(
+                "TRT build_serialized_network returned None for %s", onnx_path
+            )
+            return False
+
+        engine_path.write_bytes(bytes(plan))
+        logger.info(
+            "Built native TensorRT engine from ONNX: %s -> %s",
+            onnx_path,
+            engine_path,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("Failed to build TensorRT engine from %s: %s", onnx_path, exc)
+        return False
+
+
 class _DirectTensorRTEngine:
     def __init__(self, model_path: Path) -> None:
         import tensorrt as trt
@@ -661,11 +721,8 @@ class SleapExportedBackend:
         self._input_channels = metadata_channels
         self._output_names: List[str] = []
 
-        if self.runtime_flavor == "tensorrt" and self.model_path.suffix.lower() in {
-            ".engine",
-            ".trt",
-        }:
-            self._runner = _DirectTensorRTEngine(self.model_path)
+        if self.runtime_flavor == "tensorrt":
+            self._runner = self._init_tensorrt_runner(self.model_path)
         else:
             canonical_runtime = _canonical_export_runtime(
                 self.runtime_request,
@@ -689,6 +746,110 @@ class SleapExportedBackend:
             raise RuntimeError(
                 "SLEAP exported runtime requires fixed input shape metadata or explicit export_input_hw."
             )
+
+    def _init_tensorrt_runner(
+        self, model_path: Path
+    ) -> "_DirectTensorRTEngine | _DirectOnnxSession":
+        """Select the best backend when runtime_flavor == 'tensorrt'.
+
+        Decision tree
+        -------------
+        1. If *model_path* is a native ``.engine``/``.trt`` file → attempt to
+           deserialize directly.  On version-mismatch / stale-engine the
+           ``deserialize_cuda_engine`` call returns ``None`` and
+           ``_DirectTensorRTEngine`` raises; in that case fall through to (2).
+        2. If *model_path* is an ``.onnx`` file (fallback from
+           ``_resolve_export_model_path`` when no ``.trt`` was found) OR after a
+           stale-engine failure → attempt to build a fresh native TRT engine from
+           the ONNX via :func:`_build_trt_engine_from_onnx` and deserialize it.
+        3. If building is not feasible (CUDA absent, TRT import fails, builder
+           error) → fall back to ``_DirectOnnxSession`` with the ORT TensorRT-EP.
+           Emit a WARNING so operators know which slow path is active.
+
+        The ONNX path from step 2/3 is stored beside the resolved ``model_path``
+        directory with a ``.trt`` suffix so the next startup skips the build.
+        """
+        is_native_engine = model_path.suffix.lower() in {".engine", ".trt"}
+        is_onnx = model_path.suffix.lower() == ".onnx"
+
+        if is_native_engine:
+            try:
+                return _DirectTensorRTEngine(model_path)
+            except RuntimeError as exc:
+                logger.warning(
+                    "TensorRT engine at %s failed to deserialize (stale/version "
+                    "mismatch: %s). Attempting to rebuild from ONNX.",
+                    model_path,
+                    exc,
+                )
+                # Locate a sibling .onnx to rebuild from
+                onnx_siblings = sorted(model_path.parent.rglob("*.onnx"))
+                if not onnx_siblings:
+                    logger.warning(
+                        "No sibling ONNX file found in %s — cannot rebuild TRT "
+                        "engine. Falling back to ORT TensorRT-EP (slow: ~8 s init "
+                        "overhead per session).",
+                        model_path.parent,
+                    )
+                    return self._ort_trt_ep_fallback()
+                onnx_path = onnx_siblings[0]
+                rebuilt = model_path  # rebuild in-place
+                if _build_trt_engine_from_onnx(onnx_path, rebuilt):
+                    try:
+                        return _DirectTensorRTEngine(rebuilt)
+                    except RuntimeError as build_exc:
+                        logger.warning(
+                            "Rebuilt TRT engine at %s still fails: %s. "
+                            "Falling back to ORT TensorRT-EP.",
+                            rebuilt,
+                            build_exc,
+                        )
+                        return self._ort_trt_ep_fallback()
+                return self._ort_trt_ep_fallback()
+
+        if is_onnx:
+            # No .trt engine exists yet — attempt to build one beside the .onnx
+            engine_path = model_path.with_suffix(".trt")
+            if _build_trt_engine_from_onnx(model_path, engine_path):
+                try:
+                    engine = _DirectTensorRTEngine(engine_path)
+                    # Update model_path so the next warmup / profile reflects it
+                    self.model_path = engine_path
+                    return engine
+                except RuntimeError as exc:
+                    logger.warning(
+                        "Freshly built TRT engine at %s fails to deserialize: %s. "
+                        "Falling back to ORT TensorRT-EP.",
+                        engine_path,
+                        exc,
+                    )
+            return self._ort_trt_ep_fallback()
+
+        # Unknown suffix — best-effort ONNX session
+        return self._ort_trt_ep_fallback()
+
+    def _ort_trt_ep_fallback(self) -> "_DirectOnnxSession":
+        """Return an ORT session using the TensorRT ExecutionProvider.
+
+        This is the ~8 s per-session initialisation path.  Callers emit a
+        WARNING before calling this so the cost is visible in logs.
+        """
+        logger.warning(
+            "SLEAP pose backend falling back to ORT TensorRT-EP (ONNX Runtime "
+            "TensorRT ExecutionProvider). This incurs ~8 s of plan-cache "
+            "initialisation per session. To avoid this cost ensure a valid "
+            "native TRT engine is present beside the ONNX export, or that CUDA "
+            "and TensorRT are available for on-the-fly engine build."
+        )
+        # The model path may still be .onnx if we got here from the missing-engine
+        # branch; _resolve_export_model_path already returned it.  If we arrived
+        # from a stale .trt rebuild-fail, look for a sibling .onnx.
+        onnx_path = self.model_path
+        if onnx_path.suffix.lower() not in {".onnx"}:
+            siblings = sorted(self.model_path.parent.rglob("*.onnx"))
+            if siblings:
+                onnx_path = siblings[0]
+        return _DirectOnnxSession(onnx_path, "tensorrt")
 
     @property
     def preferred_input_size(self) -> int:
