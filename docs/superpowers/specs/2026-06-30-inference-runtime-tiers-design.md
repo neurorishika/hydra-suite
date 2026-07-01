@@ -31,11 +31,14 @@ dominated or broken:
 Per-stage selection also permits inefficient mixing (e.g. `cuda` OBB +
 `onnx_cuda` classifier + `tensorrt` pose) that forces avoidable data movement.
 
-Exact (determinism-preserving) GPU optimizations have narrow headroom: `channels_last`
-gives **+11%** on CUDA CNN compute but is **−54% (harmful) on MPS**;
-`inference_mode` ≈ `no_grad` (already present); pinned/`non_blocking` H2D is
-+14% on a copy that is tiny relative to compute. The large (2–5×) speedups live
-only in non-exact fp16 paths (TensorRT / CoreML).
+Exact (determinism-preserving) GPU optimizations have essentially no headroom on
+the real models: `channels_last` looked promising in a synthetic 224×224
+microbench (+11%) but proved a **no-op on the real 96×96 classifier (+0.15%)**,
+**−54% (harmful) on MPS**, and it **crashes OBB inference** on CUDA (ultralytics
+`fuse_conv_and_bn` `.view()` incompatibility) — so it was removed after
+verification. `inference_mode` ≈ `no_grad` (already present); pinned/`non_blocking`
+H2D is +14% on a copy that is tiny relative to compute. The large (2–5×) speedups
+live only in the non-exact fp16 paths (TensorRT / CoreML).
 
 ## 2. North-Star Principle
 
@@ -48,7 +51,7 @@ trades bit-exactness for speed. No tensor data crosses devices within a run.
 | Tier | CUDA host resolves to | Apple host resolves to | CPU-only host | Numerics contract |
 |---|---|---|---|---|
 | **CPU** | torch CPU | torch CPU | torch CPU | Exact / bit-reproducible |
-| **GPU** | torch CUDA + exact wins (`channels_last`, pinned H2D, `inference_mode`) | torch MPS | falls back to CPU tier | Exact; device-invariant within existing ~0.006 px FP-noise envelope |
+| **GPU** | torch CUDA + exact wins (`inference_mode`, pinned H2D) | torch MPS | falls back to CPU tier | Exact; device-invariant within existing ~0.006 px FP-noise envelope |
 | **GPU-Fast** | TensorRT fp16 engines per stage; native-CUDA fallback per stage | CoreML `.mlpackage` (YOLO) + CoreML classifier path; native-MPS fallback | falls back to CPU tier | **Not** bit-identical to native; **deterministic run-to-run**; labeled "may reduce accuracy" |
 
 **Rules:**
@@ -172,17 +175,19 @@ logged native-GPU fallback. Coverage matrix:
 Each phase is a separate implementation plan; all share this document.
 
 ### Phase 1 — Native-GPU exact wins (independent, ships first)
-- `channels_last` **gated on the actual torch device == cuda** (never applied on
-  MPS, where it regresses 54%). Applies to the conv-heavy classifier and
-  YOLO/OBB torch paths.
 - `inference_mode` around GPU crop extraction (`canonicalization/crop.py`
   `grid_sample`, lines 299/387); upgrade classifier `no_grad` → `inference_mode`.
-- Pinned + `non_blocking=True` H2D for crop uploads (CUDA only).
+- Pinned + `non_blocking=True` H2D for classifier crop uploads (CUDA only).
 - No taxonomy change: gated on device, not tier — lands immediately.
-- Expected: ~11% CNN compute on CUDA; MPS/CPU unchanged; numerics within the
-  existing device-invariance envelope (documented caveat: `channels_last` is not
-  bit-identical to the prior CUDA output but stays within ~0.006 px FP noise).
-- Measured 2026-06-30: +11% CNN compute on CUDA (channels_last); MPS/CPU unchanged; classifier logits within 1e-3 rel-tol of pre-change CUDA output.
+- `channels_last` was attempted but **removed after CUDA verification**: it was a
+  no-op on the real classifier (EfficientNet-B0 @96×96: +0.15%, bit-exact output)
+  and it *crashed* real OBB inference (ultralytics `fuse_conv_and_bn` `.view()` is
+  incompatible with a channels_last layout). The +11% seen earlier was a synthetic
+  224×224 microbench that did not generalize. See
+  `docs/developer-guide/inference-fast-mode-future.md`.
+- Measured 2026-06-30 (mehek RTX 6000 Ada): classifier output **bit-exact** base
+  vs HEAD; no throughput change. Net: Phase 1 ships as correctness-preserving
+  cleanups — the pipeline was already optimal for the real models.
 
 ### Phase 2 — Runtime tier taxonomy
 - Introduce `RuntimeResolver` + `InferenceConfig.runtime_tier`.

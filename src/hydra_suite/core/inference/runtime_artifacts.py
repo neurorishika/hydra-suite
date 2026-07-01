@@ -388,16 +388,9 @@ def load_obb_executor(
 
 def _load_torch_executor(model_path: str, runtime: str) -> Any:
     """Load a plain PyTorch YOLO model (byte-parity with previous ``_load_yolo``)."""
-    import torch
-
     model = _load_torch_model(model_path)
     if runtime == "cuda":
         model.to("cuda:0")
-        # channels_last is a CUDA tensor-core win; MPS/CPU left untouched.
-        try:
-            model.model = model.model.to(memory_format=torch.channels_last)
-        except Exception:  # best-effort: ultralytics may override memory format
-            pass
     elif runtime == "mps":
         model.to("mps")
     # cpu: no .to() call (matches previous behaviour and CPU byte-parity).
