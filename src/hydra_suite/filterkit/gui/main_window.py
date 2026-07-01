@@ -885,9 +885,23 @@ class FilterKitWindow(QMainWindow):
         layout.addWidget(self.chk_diversity)
         layout.addWidget(QLabel("Target selected image count:"))
         layout.addWidget(self.spin_diversity)
+        self.lbl_diversity_help = QLabel(
+            "Uses clustering to preserve visual variety. Set to your expected labeling budget."
+        )
+        self.lbl_diversity_help.setWordWrap(True)
+        self.lbl_diversity_help.setStyleSheet("color: #6a6a6a;")
+        layout.addWidget(self.lbl_diversity_help)
+
+        self.chk_preserve_full_frames = QCheckBox(
+            "Preserve all individuals per frame (for full-frame pose reconstruction)"
+        )
+        layout.addWidget(self.chk_preserve_full_frames)
         self._add_help(
             layout,
-            "Uses clustering to preserve visual variety. Set to your expected labeling budget.",
+            "Selects diverse frames instead of diverse crops, then exports every "
+            "individual detected in each selected frame — even ones that would "
+            "otherwise be dropped by quality/dedup/temporal filtering. Target "
+            "count becomes an approximate final crop count.",
         )
 
         self.chk_quality = QCheckBox("Drop low-quality crops")
@@ -923,6 +937,9 @@ class FilterKitWindow(QMainWindow):
         self.cmb_dedup_method.currentIndexChanged.connect(self._on_dedup_method_changed)
         self.chk_preserve_color.stateChanged.connect(self.update_live_estimate)
         self.chk_diversity.stateChanged.connect(self.update_live_estimate)
+        self.chk_preserve_full_frames.stateChanged.connect(
+            self._on_preserve_full_frames_toggled
+        )
         self.chk_quality.stateChanged.connect(self.update_live_estimate)
         self.spin_temporal.valueChanged.connect(self.update_live_estimate)
         self.spin_dedup.valueChanged.connect(self.update_live_estimate)
@@ -948,6 +965,19 @@ class FilterKitWindow(QMainWindow):
                 self.spin_dedup.setValue(2)
             self.spin_dedup.setSuffix(" bits")
             self.lbl_dedup_threshold.setText("Similarity threshold (Hamming bits):")
+        self.update_live_estimate()
+
+    def _on_preserve_full_frames_toggled(self):
+        if self.chk_preserve_full_frames.isChecked():
+            self.lbl_diversity_help.setText(
+                "Uses clustering to preserve visual variety. Target is now an "
+                "approximate final crop count — the tool back-solves how many "
+                "frames to select from the average individuals per frame."
+            )
+        else:
+            self.lbl_diversity_help.setText(
+                "Uses clustering to preserve visual variety. Set to your expected labeling budget."
+            )
         self.update_live_estimate()
 
     def _build_run_group(self, parent_layout):
@@ -1272,6 +1302,7 @@ class FilterKitWindow(QMainWindow):
         self.spin_color_threshold.setValue(8)
         self.chk_diversity.setChecked(cfg["diversity"][0])
         self.spin_diversity.setValue(cfg["diversity"][1])
+        self.chk_preserve_full_frames.setChecked(False)
         self.chk_quality.setChecked(cfg["quality"][0])
         self.spin_quality_blur.setValue(cfg["quality"][1])
         self.spin_quality_contrast.setValue(cfg["quality"][2])
@@ -1309,6 +1340,7 @@ class FilterKitWindow(QMainWindow):
         self.spin_color_threshold.setValue(8)
         self.chk_diversity.setChecked(True)
         self.spin_diversity.setValue(diversity_target)
+        self.chk_preserve_full_frames.setChecked(False)
         self.chk_quality.setChecked(False)
 
         self.update_live_estimate()
@@ -1369,6 +1401,7 @@ class FilterKitWindow(QMainWindow):
             "color_threshold": self.spin_color_threshold.value(),
             "diversity_enabled": self.chk_diversity.isChecked(),
             "diversity_target": self.spin_diversity.value(),
+            "preserve_full_frames": self.chk_preserve_full_frames.isChecked(),
             "quality_enabled": self.chk_quality.isChecked(),
             "quality_min_blur": self.spin_quality_blur.value(),
             "quality_min_contrast": self.spin_quality_contrast.value(),
