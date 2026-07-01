@@ -422,6 +422,20 @@ def _select_loader(path: str):
     )
 
 
+def _apply_cuda_memory_format(model, device_str):
+    """Convert a native nn.Module to channels_last on CUDA only.
+
+    channels_last is a CUDA tensor-core win (~11% on conv nets) but REGRESSES
+    MPS (~54% slower) — so it is applied strictly when device_str == "cuda".
+    Returns the (possibly converted) model.
+    """
+    if device_str.startswith("cuda"):
+        import torch
+
+        return model.to(memory_format=torch.channels_last)
+    return model
+
+
 def _torch_device(compute_runtime: str) -> str:
     rt = compute_runtime
     if rt in ("cuda", "onnx_cuda", "tensorrt"):
@@ -591,6 +605,7 @@ class ClassifierBackend:
                 # for ~45 s on Ada/Hopper GPUs (e.g. EfficientNet-B0 head-tail).
                 if not self._uses_factor_backends():
                     device_str = _torch_device(self._compute_runtime)
+                    self._model = _apply_cuda_memory_format(self._model, device_str)
                     if device_str.startswith("cuda"):
                         self._warmup_native_cuda_model()
         except ClassifierError:
@@ -678,7 +693,10 @@ class ClassifierBackend:
                 pass  # silently fall back to providers without profile options
 
         is_gpu_requested = any(
-            any(kw in (p if isinstance(p, str) else p[0]).lower() for kw in ("cuda", "tensorrt"))
+            any(
+                kw in (p if isinstance(p, str) else p[0]).lower()
+                for kw in ("cuda", "tensorrt")
+            )
             for p in providers
         )
         try:
@@ -850,9 +868,15 @@ class ClassifierBackend:
         import torch
 
         device = _torch_device(self._compute_runtime)
-        t = torch.from_numpy(batch_np).to(device)
-        with torch.no_grad():
-            logits = self._model(t).detach().cpu().numpy()
+        t = torch.from_numpy(batch_np)
+        if device.startswith("cuda") and torch.cuda.is_available():
+            # Pinned staging enables async DMA; channels_last matches the model.
+            t = t.pin_memory().to(device, non_blocking=True)
+            t = t.to(memory_format=torch.channels_last)
+        else:
+            t = t.to(device)
+        with torch.inference_mode():
+            logits = self._model(t).float().cpu().numpy()
         return logits
 
     def _forward_yolo(self, crops: list[np.ndarray]) -> np.ndarray:
@@ -1020,12 +1044,15 @@ class ClassifierBackend:
     def _forward_torch_cuda(self, batch_cuda):
         """Run the torch model on a device-resident batch; returns logits on device.
 
-        Unlike :meth:`_forward_torch`, no host↔device transfers occur.  The
-        returned tensor stays on the same device as ``batch_cuda``.
+        No host<->device transfers occur. The returned tensor stays on the same
+        device as ``batch_cuda``. On CUDA the batch is converted to channels_last
+        to match the model's memory format.
         """
         import torch
 
-        with torch.no_grad():
+        if batch_cuda.is_cuda:
+            batch_cuda = batch_cuda.to(memory_format=torch.channels_last)
+        with torch.inference_mode():
             return self._model(batch_cuda).detach()
 
     def predict_batch_cuda(
