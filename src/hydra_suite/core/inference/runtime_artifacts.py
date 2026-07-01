@@ -1,4 +1,4 @@
-"""OBB runtime-artifact loading: ONNX/TensorRT auto-export + direct CUDA executor.
+"""OBB runtime-artifact loading: ONNX/TensorRT/CoreML auto-export + direct executor.
 
 This is a CLEAN port of the load + auto-export + direct-executor selection logic
 from the legacy ``core/detectors/_runtime_artifacts.py`` (``_try_load_onnx_model``,
@@ -22,6 +22,10 @@ inference pipeline:
       - onnx_*/tensorrt with ``auto_export=False`` and a missing artifact →
         raises :class:`ArtifactExportError` (a CLEAR error, never a silent
         PyTorch fallback — that silent fallback was parity-audit finding H4).
+      - coreml → exports (or reuses) a ``.mlpackage`` via ultralytics CoreML
+        export with fixed ``imgsz`` (avoids the dynamic-shape E5RT failure seen
+        with ``onnx_coreml``) then loads it back via ``YOLO(mlpackage_path)``
+        (Apple Silicon only).
 
 Square-letterbox parity: the direct executors (ported in
 ``core/detectors/_direct_obb_runtime.py``) use ``LetterBox(auto=False)`` so the
@@ -50,6 +54,7 @@ logger = logging.getLogger(__name__)
 _ONNX_RUNTIMES: frozenset[str] = frozenset({"onnx_cpu", "onnx_cuda", "onnx_coreml"})
 _TENSORRT_RUNTIMES: frozenset[str] = frozenset({"tensorrt"})
 _TORCH_RUNTIMES: frozenset[str] = frozenset({"cpu", "mps", "cuda"})
+_COREML_RUNTIMES: frozenset[str] = frozenset({"coreml"})
 
 _DEFAULT_IMGSZ = 640
 _DEFAULT_BATCH_SIZE = 1
@@ -134,9 +139,11 @@ def _export_artifact(
     from ultralytics import YOLO
 
     base_model = YOLO(str(pt_path))
-    # Force raw-head (end2end=False) export so the direct executor's NMS path
-    # matches the TRT/ONNX raw-CBC contract (legacy _yolo_runtime_export_profile).
-    _force_raw_head(base_model)
+    # CoreML does not use the CBC direct executor, so skip the raw-head override.
+    if runtime != "coreml":
+        # Force raw-head (end2end=False) export so the direct executor's NMS path
+        # matches the TRT/ONNX raw-CBC contract (legacy _yolo_runtime_export_profile).
+        _force_raw_head(base_model)
 
     if runtime == "onnx":
         logger.info(
@@ -166,6 +173,15 @@ def _export_artifact(
             batch=int(batch_size),
             verbose=False,
         )
+    elif runtime == "coreml":
+        logger.info(
+            "Exporting YOLO OBB model to CoreML .mlpackage (imgsz=%d)...", imgsz
+        )
+        export_path = base_model.export(
+            format="coreml",
+            imgsz=imgsz,
+            nms=False,
+        )
     else:  # pragma: no cover - guarded by callers
         raise ArtifactExportError(f"Unsupported export runtime: {runtime}")
 
@@ -185,7 +201,13 @@ def _export_artifact(
     if not out_path.exists():
         raise ArtifactExportError(f"Export produced no output file: {out_path}")
     if out_path != artifact_path:
-        shutil.copy2(str(out_path), str(artifact_path))
+        if out_path.is_dir():
+            # .mlpackage is a directory — use copytree.
+            if artifact_path.exists():
+                shutil.rmtree(str(artifact_path))
+            shutil.copytree(str(out_path), str(artifact_path))
+        else:
+            shutil.copy2(str(out_path), str(artifact_path))
     return artifact_path
 
 
@@ -243,12 +265,20 @@ def _direct_runtime_name(compute_runtime: str) -> str:
 
 
 def _artifact_suffix(runtime: str) -> str:
-    return ".onnx" if runtime == "onnx" else ".engine"
+    if runtime == "onnx":
+        return ".onnx"
+    if runtime == "coreml":
+        return ".mlpackage"
+    return ".engine"
 
 
 def _artifact_path_for(pt_path: Path, runtime: str) -> Path:
     """Derive the artifact path for a ``.pt`` source + direct runtime name."""
+    pt_path = Path(pt_path)
     suffix = _artifact_suffix(runtime)
+    if runtime == "coreml":
+        # CoreML uses a bare stem (no batch suffix) since batch is always 1.
+        return pt_path.with_suffix(".mlpackage")
     return pt_path.with_name(f"{pt_path.stem}_b{_DEFAULT_BATCH_SIZE}{suffix}")
 
 
@@ -276,7 +306,8 @@ def _artifact_is_fresh(artifact_path: Path, source_pt: Path) -> bool:
 
     Clean analogue of legacy ``_artifact_is_fresh``: a cached artifact is reused
     only when it exists and was built from the current ``.pt`` (by recorded
-    source mtime). Missing/stale markers force a rebuild.
+    source mtime). Missing/stale markers force a rebuild. Handles both file
+    artifacts (.onnx/.engine) and directory artifacts (.mlpackage).
     """
     if not artifact_path.exists():
         return False
@@ -383,6 +414,9 @@ def load_obb_executor(
             model_path, runtime, auto_export=auto_export, max_det=max_det
         )
 
+    if runtime in _COREML_RUNTIMES:
+        return _load_coreml_executor(model_path, auto_export=auto_export)
+
     raise ArtifactExportError(f"Unsupported compute_runtime: {compute_runtime!r}")
 
 
@@ -395,6 +429,49 @@ def _load_torch_executor(model_path: str, runtime: str) -> Any:
         model.to("mps")
     # cpu: no .to() call (matches previous behaviour and CPU byte-parity).
     return model
+
+
+def _load_coreml_executor(model_path: str, *, auto_export: bool) -> Any:
+    """Load (or auto-export) a CoreML ``.mlpackage`` and return a YOLO model.
+
+    Uses a fixed ``imgsz`` export (``nms=False``) so CoreML sees a static input
+    shape — avoiding the E5RT dynamic-shape failure that ``onnx_coreml`` hit.
+    Apple Silicon only; will raise if coremltools is absent.
+    """
+    resolved = Path(model_path).expanduser().resolve()
+    suffix = resolved.suffix.lower()
+
+    if suffix == ".mlpackage":
+        if not resolved.exists():
+            raise ArtifactExportError(
+                f"CoreML artifact not found: {resolved}. "
+                "Provide a valid .mlpackage or use a .pt source with auto_export=True."
+            )
+        return _load_torch_model(str(resolved))
+
+    artifact_path = _artifact_path_for(resolved, "coreml")
+
+    if _artifact_is_fresh(artifact_path, resolved):
+        logger.info("Reusing cached CoreML artifact: %s", artifact_path.name)
+    else:
+        if not auto_export:
+            raise ArtifactExportError(
+                "compute_runtime='coreml' requested but no fresh .mlpackage exists "
+                f"for {resolved.name} and auto_export=False. "
+                "Provide a prebuilt .mlpackage or enable auto_export."
+            )
+        imgsz = _resolve_imgsz(resolved)
+        _export_artifact(
+            pt_path=resolved,
+            artifact_path=artifact_path,
+            runtime="coreml",
+            imgsz=imgsz,
+            batch_size=_DEFAULT_BATCH_SIZE,
+        )
+        _write_fresh_marker(artifact_path, resolved)
+        logger.info("Exported CoreML artifact: %s", artifact_path)
+
+    return _load_torch_model(str(artifact_path))
 
 
 def _load_direct_executor(
