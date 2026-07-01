@@ -365,6 +365,12 @@ class _DirectOnnxSession:
         self._session = None
 
 
+# Max batch the native SLEAP TRT optimization profile supports. Matches the
+# classifier backend's ORT-TRT-EP profile ceiling so both paths accept the same
+# crop-batch range.
+_TRT_PROFILE_MAX_BATCH = 512
+
+
 def _build_trt_engine_from_onnx(
     onnx_path: Path,
     engine_path: Path,
@@ -405,6 +411,40 @@ def _build_trt_engine_from_onnx(
             config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_bytes)
         elif hasattr(config, "max_workspace_size"):
             config.max_workspace_size = workspace_bytes
+
+        # The SLEAP UNet ONNX exports a dynamic leading (batch) dim. TensorRT
+        # refuses to build a network with dynamic inputs unless an optimization
+        # profile pins the min/opt/max shapes — without it,
+        # build_serialized_network fails with "no optimization profile has been
+        # defined" and we drop to the slow ORT-TRT-EP fallback every session.
+        # Mirror the classifier backend's 1 / 64 / max convention (fp32 kept —
+        # fp16 is deferred to preserve keypoint precision).
+        profile = builder.create_optimization_profile()
+        has_dynamic = False
+        for idx in range(network.num_inputs):
+            inp = network.get_input(idx)
+            shape = list(inp.shape)
+            if not any(int(d) < 0 for d in shape):
+                continue
+            # Only the leading batch dim may be dynamic; a dynamic H/W/C would
+            # need a concrete size we can't infer, so bail to ORT-EP instead of
+            # building a wrong engine.
+            if any(int(d) < 0 for d in shape[1:]):
+                logger.warning(
+                    "TRT build: input %s has dynamic non-batch dims %s; cannot "
+                    "build a native engine — using ORT-TRT-EP.",
+                    inp.name,
+                    shape,
+                )
+                return False
+            static = [int(d) for d in shape[1:]]
+            min_shape = tuple([1, *static])
+            opt_shape = tuple([min(64, _TRT_PROFILE_MAX_BATCH), *static])
+            max_shape = tuple([_TRT_PROFILE_MAX_BATCH, *static])
+            profile.set_shape(inp.name, min_shape, opt_shape, max_shape)
+            has_dynamic = True
+        if has_dynamic:
+            config.add_optimization_profile(profile)
 
         plan = builder.build_serialized_network(network, config)
         if plan is None:
