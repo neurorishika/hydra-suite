@@ -162,8 +162,11 @@ def bench_obb_runtimes(
                 else ("mps" if rt == "mps" else "cpu")
             )
 
+            # Pass a LIST of frames: ultralytics tolerates a bare array, but the
+            # direct ONNX/TRT executor expects a list (a bare HWC array is
+            # iterated row-wise -> "expected 3, got 2" unpack error).
             def _call(exe=exe):
-                exe.predict(frame, conf=0.2, iou=0.5, imgsz=imgsz, verbose=False)
+                exe.predict([frame], conf=0.2, iou=0.5, imgsz=imgsz, verbose=False)
 
             stats = _time_ms(_call, dev, warmup, repeats)
             row.update(stats)
