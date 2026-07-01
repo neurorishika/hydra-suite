@@ -106,7 +106,21 @@ class _CacheSet:
         return handles
 
 
-def _load_all_models(config: InferenceConfig, runtime: RuntimeContext) -> _AllModels:
+def _load_all_models(
+    config: InferenceConfig,
+    runtime: RuntimeContext,
+    *,
+    cache_only: bool = False,
+) -> _AllModels:
+    """Load all inference models.
+
+    When *cache_only* is True the runner will only be used for cache replay
+    (``load_frame``/``caches_all_valid``/``detection_cache_covers_range``).
+    In that mode every model besides the OBB detector is skipped: OBB is
+    required to look up cache-key validity; HeadTail, CNN, Pose, and AprilTag
+    models are never invoked during replay so we avoid the expensive backend
+    initialisation (notably the ~8 s per-session SLEAP/ORT-TRT-EP init).
+    """
     from .stages.apriltag import load_apriltag_model
     from .stages.cnn import load_cnn_model
     from .stages.headtail import load_headtail_model
@@ -114,6 +128,13 @@ def _load_all_models(config: InferenceConfig, runtime: RuntimeContext) -> _AllMo
     from .stages.pose import load_pose_model
 
     obb = load_obb_models(config.obb, runtime)
+    if cache_only:
+        logger.debug(
+            "InferenceRunner cache_only=True: skipping HeadTail/CNN/Pose/AprilTag "
+            "model init (backward/replay pass reads from cache only)."
+        )
+        return _AllModels(obb=obb, headtail=None, cnn=[], pose=None, apriltag=None)
+
     headtail = (
         load_headtail_model(config.headtail, runtime)
         if config.headtail is not None
@@ -301,6 +322,13 @@ class InferenceRunner:
     Batch-pass path runs OBB on batched frames natively, then iterates per frame
     for HeadTail/CNN/Pose/AprilTag (no cross-frame crop batching) so each crop's
     aspect ratio is preserved when stages internally resize to model input size.
+
+    Pass ``cache_only=True`` when the runner will only be used for cache replay
+    (backward/replay passes that call ``load_frame``, ``caches_all_valid``, or
+    ``detection_cache_covers_range``).  In that mode the expensive HeadTail, CNN,
+    Pose (including SLEAP), and AprilTag backends are never initialised — only the
+    lightweight OBB model wrapper is loaded so cache-key validation still works.
+    This eliminates the ~8 s per-session SLEAP/ORT-TRT-EP init on backward passes.
     """
 
     def __init__(
@@ -308,14 +336,16 @@ class InferenceRunner:
         config: InferenceConfig,
         cache_dir: Path | None = None,
         video_path: str | Path | None = None,
+        cache_only: bool = False,
     ) -> None:
         self.config = config
         self.cache_dir = cache_dir
+        self.cache_only = cache_only
         # Fingerprint of the source video; folded into every cache key so caches
         # are only reused for the exact file they were computed from.
         self._video_sig = video_signature(str(video_path) if video_path else None)
         self.runtime = RuntimeContext.from_config(config)
-        self._models = _load_all_models(config, self.runtime)
+        self._models = _load_all_models(config, self.runtime, cache_only=cache_only)
         self._caches: _CacheSet | None = None
         # True when self._caches was opened for WRITING (realtime persistence);
         # False when opened read-only by load_frame. close() only flushes when

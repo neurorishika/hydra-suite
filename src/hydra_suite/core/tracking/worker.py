@@ -983,8 +983,15 @@ class TrackingWorker(QThread):
 
             _cache_dir = self._resolve_cache_dir()
             _cache_dir.mkdir(parents=True, exist_ok=True)
+            # Backward (replay) passes only call load_frame / caches_all_valid —
+            # they never invoke run_realtime or run_batch_pass.  Skip loading
+            # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
+            # mode to avoid the ~8 s per-session SLEAP/ORT-TRT-EP init cost.
             inference_runner = InferenceRunner(
-                _inference_cfg, cache_dir=_cache_dir, video_path=self.video_path
+                _inference_cfg,
+                cache_dir=_cache_dir,
+                video_path=self.video_path,
+                cache_only=self.backward_mode,
             )
 
             if self.backward_mode:
@@ -4390,6 +4397,10 @@ class TrackingWorker(QThread):
             crop_path = str(
                 params.get("YOLO_CROP_OBB_MODEL_PATH", "") or direct_model_path
             )
+            # YOLO_SEQ_* keys mirror the legacy per-stage sequential-OBB knobs
+            # (yolo_detector.py:_seq_*); threading them through here keeps the
+            # redesign's sequential pipeline config-driven instead of silently
+            # falling back to OBBSequentialConfig's dataclass defaults.
             obb_cfg = OBBConfig(
                 mode="sequential",
                 sequential=OBBSequentialConfig(
@@ -4397,8 +4408,24 @@ class TrackingWorker(QThread):
                     obb_model_path=crop_path,
                     detect_compute_runtime=compute_runtime,
                     obb_compute_runtime=compute_runtime,
-                    detect_confidence_threshold=yolo_conf,
+                    detect_confidence_threshold=float(
+                        params.get("YOLO_SEQ_DETECT_CONF_THRESHOLD", 0.25)
+                    ),
                     obb_confidence_threshold=yolo_conf,
+                    detect_image_size=int(params.get("YOLO_SEQ_DETECT_IMGSZ", 0)),
+                    crop_pad_ratio=float(params.get("YOLO_SEQ_CROP_PAD_RATIO", 0.15)),
+                    min_crop_size_px=float(
+                        params.get("YOLO_SEQ_MIN_CROP_SIZE_PX", 64.0)
+                    ),
+                    enforce_square_crop=bool(
+                        params.get("YOLO_SEQ_ENFORCE_SQUARE_CROP", True)
+                    ),
+                    stage2_image_size=int(params.get("YOLO_SEQ_STAGE2_IMGSZ", 160)),
+                    stage2_batch_size=(
+                        int(params["YOLO_SEQ_INDIVIDUAL_BATCH_SIZE"])
+                        if params.get("YOLO_SEQ_INDIVIDUAL_BATCH_SIZE")
+                        else None
+                    ),
                 ),
                 target_classes=target_classes,
                 confidence_threshold=yolo_conf,
