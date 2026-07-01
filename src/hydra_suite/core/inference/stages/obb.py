@@ -143,10 +143,11 @@ def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
     # from_config). Per-stage compute_runtime fields are deprecated in favor of
     # runtime_tier; they are kept in place for serialization only.
     compute_runtime = runtime_to_compute_runtime(runtime)
-    if compute_runtime == "tensorrt":
+    if compute_runtime in ("tensorrt", "coreml"):
         logger.warning(
             "Runtime fallback may apply for OBB stage: "
-            "gpu_fast (TensorRT) requested — artifact availability governs actual backend."
+            "gpu_fast (%s) requested — artifact availability governs actual backend.",
+            compute_runtime,
         )
     if config.mode == "direct":
         assert config.direct is not None
@@ -465,6 +466,17 @@ def _load_yolo(
     except (
         Exception
     ) as exc:  # best-effort GPU-Fast fallback (spec §3: never a hard crash)
+        if str(compute_runtime) == "coreml":
+            logger.warning(
+                "GPU-Fast OBB CoreML load/build failed (%s); falling back to native MPS",
+                exc,
+            )
+            return load_obb_executor(
+                model_path,
+                "mps",
+                auto_export=auto_export,
+                max_det=max_det,
+            )
         if str(compute_runtime) != "tensorrt":
             raise
         logger.warning(

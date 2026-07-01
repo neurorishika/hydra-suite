@@ -59,7 +59,8 @@ class RuntimeResolver:
                 return ResolvedBackend("tensorrt", "cuda", False)
             return ResolvedBackend("torch", "cuda", used_fallback=True)
         if self.platform.has_mps:
-            # Phase 2: CoreML not wired yet -> native MPS fallback.
+            if artifact_available():
+                return ResolvedBackend("coreml", "mps", False)
             return ResolvedBackend("torch", "mps", used_fallback=True)
         return ResolvedBackend("torch", "cpu", used_fallback=True)
 

@@ -34,10 +34,18 @@ def test_gpu_fast_cuda_without_artifact_falls_back_to_native_cuda():
     )
 
 
-def test_gpu_fast_mac_phase2_falls_back_to_native_mps():
-    # CoreML not wired until Phase 3 -> Phase 2 resolves Apple fast to native MPS.
+def test_gpu_fast_mac_with_artifact_is_coreml():
     r = RuntimeResolver("gpu_fast", MAC)
-    assert r.resolve("obb") == ResolvedBackend("torch", "mps", True)
+    assert r.resolve("obb", artifact_available=lambda: True) == ResolvedBackend(
+        "coreml", "mps", False
+    )
+
+
+def test_gpu_fast_mac_without_artifact_falls_back_to_native_mps():
+    r = RuntimeResolver("gpu_fast", MAC)
+    assert r.resolve("cnn", artifact_available=lambda: False) == ResolvedBackend(
+        "torch", "mps", True
+    )
 
 
 def test_gpu_tier_on_cpu_only_host_degrades_to_cpu():

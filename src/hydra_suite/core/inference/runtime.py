@@ -31,6 +31,8 @@ class RuntimeContext:
     # True ONLY for native PyTorch "cuda" runtime; onnx_cuda and tensorrt use
     # GPU compute but return CPU numpy arrays from inference calls.
     tensor_on_cuda: bool = False
+    # True when the resolver selected CoreML (Apple gpu_fast + artifact available).
+    coreml_mode: bool = False
 
     def handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
         """Producer-side stream-sync: record a CUDA event on the current stream.
@@ -88,9 +90,13 @@ class RuntimeContext:
 
         platform = detect_platform()
         resolver = RuntimeResolver(config.runtime_tier, platform)
+        # Resolve OBB stage to determine backend type (artifact_available defaults
+        # to True so CoreML is selected on Apple gpu_fast when artifacts exist).
+        resolved = resolver.resolve("obb")
         # gpu_native: "torch" backend means native PyTorch (keeps tensors on CUDA).
-        # "tensorrt" backend (gpu_fast tier) returns CPU numpy from inference calls.
-        gpu_native = resolver.resolve("obb").backend == "torch"
+        # "tensorrt" and "coreml" backends return CPU numpy from inference calls.
+        gpu_native = resolved.backend == "torch"
+        coreml_mode = resolved.backend == "coreml"
         cuda_mode = config.runtime_tier in ("gpu", "gpu_fast") and platform.has_cuda
         tensor_on_cuda = cuda_mode and gpu_native
         if cuda_mode:
@@ -106,6 +112,7 @@ class RuntimeContext:
             use_nvdec=nvdec,
             default_runtime=default,
             tensor_on_cuda=tensor_on_cuda,
+            coreml_mode=coreml_mode,
         )
 
 
@@ -119,6 +126,8 @@ def runtime_to_compute_runtime(runtime: RuntimeContext) -> "ComputeRuntime":
         if runtime.tensor_on_cuda:
             return "cuda"  # native torch GPU tier
         return "tensorrt"  # gpu_fast tier: TensorRT returns CPU numpy
+    if runtime.coreml_mode:
+        return "coreml"  # Apple gpu_fast with CoreML artifact available
     if runtime.device == "mps":
         return "mps"
     return "cpu"

@@ -87,7 +87,7 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
         device = (
             "cuda:0"
             if compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
-            else ("mps" if compute_runtime == "mps" else "cpu")
+            else ("mps" if compute_runtime in ("mps", "coreml") else "cpu")
         )
         backend = YoloNativeBackend(
             model_path=config.yolo.model_path,
@@ -112,7 +112,7 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
     if compute_runtime in ("cuda", "onnx_cuda"):
         runtime_flavor = "onnx_cuda"
         device = "cuda"
-    elif compute_runtime == "mps":
+    elif compute_runtime in ("mps", "coreml"):
         # On Apple Silicon, ONNX Runtime has no MPS provider and its CoreML
         # provider fails on SLEAP's UNet (dynamic-shape "ios18.max_pool" /
         # "unbounded dimension" errors). Use SLEAP's native TensorFlow runtime

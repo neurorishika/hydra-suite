@@ -13,7 +13,7 @@ from ..runtime import RuntimeContext, runtime_to_compute_runtime
 
 logger = logging.getLogger(__name__)
 
-_GPU_FAST_RUNTIMES = frozenset({"tensorrt"})
+_GPU_FAST_RUNTIMES = frozenset({"tensorrt", "coreml"})
 
 
 @dataclass

@@ -86,3 +86,15 @@ def test_gpu_tier_on_no_gpu_host_falls_back_to_cpu():
     assert ctx.cuda_mode is False
     # device is "mps" on Apple Silicon, "cpu" elsewhere
     assert ctx.device in ("mps", "cpu")
+
+
+def test_gpu_fast_tier_on_mps_host_is_coreml():
+    """Apple gpu_fast with artifact available → coreml_mode=True, compute_runtime='coreml'."""
+    from hydra_suite.core.inference.runtime import runtime_to_compute_runtime
+
+    with patch("hydra_suite.runtime.resolver.detect_platform", return_value=_mps_host):
+        ctx = RuntimeContext.from_config(_cfg("gpu_fast"))
+    assert ctx.cuda_mode is False
+    assert ctx.coreml_mode is True
+    assert ctx.tensor_on_cuda is False
+    assert runtime_to_compute_runtime(ctx) == "coreml"
