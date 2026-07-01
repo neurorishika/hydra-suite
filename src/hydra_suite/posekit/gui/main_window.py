@@ -75,10 +75,13 @@ from .project import (
 )
 from .runtimes import (
     CANONICAL_RUNTIMES,
-    allowed_runtimes_for_pipelines,
+    available_tiers,
+    canonical_runtime_to_tier,
     derive_pose_runtime_settings,
+    detect_platform,
     infer_compute_runtime_from_legacy,
-    runtime_label,
+    tier_label,
+    tier_to_canonical_runtime,
 )
 from .utils import (
     enhance_for_pose,
@@ -1396,6 +1399,7 @@ class MainWindow(QMainWindow):
             "pred_conf": float(self.sp_pred_conf.value()),
             "pred_weights": self.pred_weights_edit.text().strip(),
             "pred_backend": self.combo_pred_backend.currentText().strip(),
+            "runtime_tier": self._selected_tier(),
             "compute_runtime": self._selected_compute_runtime(),
             "pred_runtime": self._selected_compute_runtime(),
             "pred_exported_model": "",
@@ -1433,20 +1437,28 @@ class MainWindow(QMainWindow):
 
     def _apply_pred_runtime_setting(self, settings):
         runtime_setting = str(
-            settings.get("compute_runtime", settings.get("pred_runtime", ""))
+            settings.get(
+                "runtime_tier",
+                settings.get("compute_runtime", settings.get("pred_runtime", "")),
+            )
         ).strip()
         if not runtime_setting:
             return
-        canonical_runtime = runtime_setting
-        if canonical_runtime not in CANONICAL_RUNTIMES:
-            canonical_runtime = infer_compute_runtime_from_legacy(
-                yolo_device="auto",
-                enable_tensorrt=False,
-                pose_runtime_flavor=runtime_setting,
-            )
-        self._populate_pred_runtime_options(
-            self._pred_backend(), preferred=canonical_runtime
-        )
+        # If a tier id is stored directly, use it; otherwise migrate a legacy runtime.
+        platform = detect_platform()
+        if runtime_setting in available_tiers(platform):
+            preferred_tier = runtime_setting
+        else:
+            # Legacy path: canonicalise the runtime string then map to tier.
+            canonical_runtime = runtime_setting
+            if canonical_runtime not in CANONICAL_RUNTIMES:
+                canonical_runtime = infer_compute_runtime_from_legacy(
+                    yolo_device="auto",
+                    enable_tensorrt=False,
+                    pose_runtime_flavor=runtime_setting,
+                )
+            preferred_tier = canonical_runtime_to_tier(canonical_runtime)
+        self._populate_pred_runtime_options(preferred_tier=preferred_tier)
 
     def _apply_pred_batch_setting(self, settings):
         if "pred_batch" in settings:
@@ -4214,43 +4226,60 @@ class MainWindow(QMainWindow):
         except Exception:
             return "yolo"
 
-    def _selected_compute_runtime(self) -> str:
+    def _selected_tier(self) -> str:
+        """Return the currently selected runtime tier id (e.g. ``'cpu'``, ``'gpu'``)."""
         if hasattr(self, "combo_pred_runtime"):
             data = self.combo_pred_runtime.currentData()
             if data:
-                value = str(data).strip().lower()
-                if value in CANONICAL_RUNTIMES:
-                    return value
-            txt = self.combo_pred_runtime.currentText().strip().lower()
-            if txt in CANONICAL_RUNTIMES:
-                return txt
+                return str(data).strip().lower()
         return "cpu"
 
-    def _pred_runtime_options_for_backend(self, backend: str) -> List[Tuple[str, str]]:
-        pipeline = (
-            "sleap_pose" if str(backend).strip().lower() == "sleap" else "yolo_pose"
-        )
-        allowed = allowed_runtimes_for_pipelines([pipeline]) or ["cpu"]
-        return [(runtime_label(rt), rt) for rt in allowed if rt in CANONICAL_RUNTIMES]
+    def _selected_compute_runtime(self) -> str:
+        """Return the canonical compute runtime for the currently selected tier."""
+        if hasattr(self, "combo_pred_runtime"):
+            data = self.combo_pred_runtime.currentData()
+            tier = str(data).strip().lower() if data else ""
+            if not tier:
+                # Fall back to text if itemData is absent (legacy combo entries).
+                txt = self.combo_pred_runtime.currentText().strip().lower()
+                # If the text is already a canonical runtime, return it directly.
+                if txt in CANONICAL_RUNTIMES:
+                    return txt
+                tier = txt
+            # Map tier → canonical runtime using detected platform.
+            platform = detect_platform()
+            return tier_to_canonical_runtime(tier, platform)
+        return "cpu"
 
     def _populate_pred_runtime_options(
-        self, backend: str, preferred: Optional[str] = None
+        self, backend: str = "", preferred_tier: Optional[str] = None
     ):
+        """Populate the runtime combo with platform-level tiers (cpu / gpu / gpu_fast).
+
+        The *backend* argument is kept for call-site compatibility but is ignored —
+        tiers are platform-level, not per-pipeline.  *preferred_tier* is the tier
+        id (``"cpu"``, ``"gpu"``, ``"gpu_fast"``) to pre-select; if ``None`` the
+        current selection is preserved.
+        """
         if not hasattr(self, "combo_pred_runtime"):
             return
         combo = self.combo_pred_runtime
-        selected = (
-            str(preferred or self._selected_compute_runtime() or "cpu").strip().lower()
-        )
-        options = self._pred_runtime_options_for_backend(backend)
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
+        platform = detect_platform()
+        tiers = available_tiers(platform)
+        # Determine which tier to pre-select.
+        current_data = combo.currentData()
+        current_tier = str(current_data).strip().lower() if current_data else ""
+        if preferred_tier and preferred_tier in tiers:
+            selected_tier = preferred_tier
+        elif current_tier in tiers:
+            selected_tier = current_tier
+        else:
+            selected_tier = tiers[0]
         combo.blockSignals(True)
         combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
+        for t in tiers:
+            combo.addItem(tier_label(t, platform), t)
+        idx = combo.findData(selected_tier)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
         combo.blockSignals(False)
 
@@ -4318,9 +4347,6 @@ class MainWindow(QMainWindow):
         if self._bulk_prediction_locked:
             return
         backend = self._pred_backend()
-        self._populate_pred_runtime_options(
-            backend=backend, preferred=self._selected_compute_runtime()
-        )
         is_sleap = backend == "sleap"
         if hasattr(self, "yolo_pred_widget"):
             self.yolo_pred_widget.setVisible(not is_sleap)
