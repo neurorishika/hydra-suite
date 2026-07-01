@@ -1066,7 +1066,8 @@ class SessionOrchestrator:
             tier = self._mw._setup_panel.combo_runtime_tier.currentData()
             if tier and hasattr(self._mw, "config"):
                 self._mw.config.runtime_tier = str(tier)
-        self._update_runtime_fallback_hint()
+        # _on_runtime_context_changed() refreshes the fallback hint, so no direct
+        # _update_runtime_fallback_hint() call is needed here (avoids double-run).
         self._on_runtime_context_changed()
 
     def _update_runtime_fallback_hint(self) -> None:
