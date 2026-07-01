@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from hydra_suite.core.inference.config import migrate_runtime_to_tier
 from hydra_suite.runtime.compute_runtime import (
     derive_detection_runtime_settings,
     derive_pose_runtime_settings,
@@ -475,34 +476,39 @@ class ConfigOrchestrator:
         else:
             self._panels.detection.line_yolo_classes.clear()
 
-        compute_runtime_cfg = (
-            str(
-                get_cfg(
-                    "compute_runtime",
-                    default=infer_compute_runtime_from_legacy(
-                        yolo_device=str(get_cfg("yolo_device", default="auto")),
-                        enable_tensorrt=bool(get_cfg("enable_tensorrt", default=False)),
-                        pose_runtime_flavor=str(
-                            get_cfg("pose_runtime_flavor", default="auto")
+        # Load runtime_tier: prefer new key, fall back to migrating legacy compute_runtime.
+        raw_tier = get_cfg("runtime_tier", default=None)
+        if raw_tier is None:
+            legacy_runtime = (
+                str(
+                    get_cfg(
+                        "compute_runtime",
+                        default=infer_compute_runtime_from_legacy(
+                            yolo_device=str(get_cfg("yolo_device", default="auto")),
+                            enable_tensorrt=bool(
+                                get_cfg("enable_tensorrt", default=False)
+                            ),
+                            pose_runtime_flavor=str(
+                                get_cfg("pose_runtime_flavor", default="auto")
+                            ),
                         ),
-                    ),
+                    )
                 )
+                .strip()
+                .lower()
             )
-            .strip()
-            .lower()
-        )
-        self._mw._populate_compute_runtime_options(preferred=compute_runtime_cfg)
+            raw_tier = migrate_runtime_to_tier({legacy_runtime})
+        tier = str(raw_tier).strip()
+        if hasattr(self._panels.setup, "combo_runtime_tier"):
+            combo = self._panels.setup.combo_runtime_tier
+            idx = combo.findData(tier)
+            if idx >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
+        if hasattr(self._mw, "config"):
+            self._mw.config.runtime_tier = tier
         self._mw._on_runtime_context_changed()
-        self._mw._populate_headtail_runtime_options(
-            preferred=str(get_cfg("headtail_runtime", default=compute_runtime_cfg))
-            .strip()
-            .lower()
-        )
-        self._mw._populate_cnn_runtime_options(
-            preferred=str(get_cfg("cnn_runtime", default=compute_runtime_cfg))
-            .strip()
-            .lower()
-        )
 
         # TensorRT batch size is still configurable (runtime-derived usage).
         self._panels.detection.spin_tensorrt_batch.setValue(
@@ -1632,6 +1638,7 @@ class ConfigOrchestrator:
         # === COMPUTE RUNTIME ===
         runtime_detection = derive_detection_runtime_settings(compute_runtime)
         cfg["compute_runtime"] = compute_runtime
+        cfg["runtime_tier"] = self._mw._selected_runtime_tier()
         # Keep legacy fields writable for backward compatibility.
         if not preset_mode:
             cfg["yolo_device"] = runtime_detection["yolo_device"]
@@ -3764,7 +3771,12 @@ class ConfigOrchestrator:
             else "detection_sequential"
         )
         if detection is not None:
-            _set_combo_data(self._panels.setup.combo_compute_runtime, detection.runtime)
+            # Translate recommended runtime to the nearest tier and set tier combo.
+            rec_tier = migrate_runtime_to_tier({detection.runtime})
+            if hasattr(self._panels.setup, "combo_runtime_tier"):
+                idx = self._panels.setup.combo_runtime_tier.findData(rec_tier)
+                if idx >= 0:
+                    self._panels.setup.combo_runtime_tier.setCurrentIndex(idx)
             self._panels.detection.chk_enable_yolo_batching.setChecked(True)
             self._panels.detection.combo_yolo_batch_mode.setCurrentIndex(1)
             self._panels.detection.spin_yolo_batch_size.setValue(
@@ -3780,7 +3792,6 @@ class ConfigOrchestrator:
 
         headtail = recommendations.get("headtail")
         if headtail is not None:
-            _set_combo_data(self._panels.setup.combo_headtail_runtime, headtail.runtime)
             if hasattr(self._panels.identity, "spin_headtail_batch"):
                 self._panels.identity.spin_headtail_batch.setValue(
                     int(headtail.batch_size)
@@ -3801,18 +3812,6 @@ class ConfigOrchestrator:
             if str(key).startswith("cnn_")
         ]
         if cnn_recommendations:
-            shared_runtimes = {
-                recommendation.runtime for recommendation in cnn_recommendations
-            }
-            if len(shared_runtimes) == 1:
-                _set_combo_data(
-                    self._panels.setup.combo_cnn_runtime,
-                    cnn_recommendations[0].runtime,
-                )
-            else:
-                notes.append(
-                    "CNN runtime recommendations differed across classifiers, so the shared CNN runtime selector was left unchanged."
-                )
             rows = self._panels.identity._cnn_classifier_rows()
             for index, row in enumerate(rows):
                 recommendation = recommendations.get(f"cnn_{index}")
@@ -3822,32 +3821,6 @@ class ConfigOrchestrator:
         self._panels.detection._sync_batch_policy_controls()
         self._panels.identity._sync_realtime_individual_batch_ui()
         return notes
-
-    # =========================================================================
-    # COMPUTE RUNTIME (DELEGATE)
-    # =========================================================================
-
-    def _populate_compute_runtime_options(self, preferred=None):
-        """Populate the compute runtime combo box with valid options for the current UI state."""
-        if not hasattr(self._mw, "_setup_panel"):
-            return
-        combo = self._mw._setup_panel.combo_compute_runtime
-        selected = (
-            str(preferred or self._mw._selected_compute_runtime() or "cpu")
-            .strip()
-            .lower()
-        )
-        options = self._mw._compute_runtime_options_for_current_ui()
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
-        combo.blockSignals(True)
-        combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.blockSignals(False)
 
     # =========================================================================
     # MODEL MANAGEMENT

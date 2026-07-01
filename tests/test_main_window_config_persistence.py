@@ -719,30 +719,27 @@ def test_preview_detection_restores_analyze_individual_controls(
     window.close()
 
 
-def test_compute_runtime_tooltip_explains_coreml_hidden_for_sleap(
+def test_tier_combo_exists_and_old_per_stage_combos_removed(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
 ) -> None:
-    monkeypatch.setattr(session_module, "ONNXRUNTIME_COREML_AVAILABLE", True)
-    monkeypatch.setattr(session_module, "MPS_AVAILABLE", True)
+    """combo_runtime_tier replaces the three old per-stage runtime combos."""
+    from PySide6.QtWidgets import QComboBox, QLabel
 
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        window._session_orch,
-        "_compute_runtime_options_for_current_ui",
-        lambda: [("CPU", "cpu"), ("MPS", "mps"), ("ONNX (CPU)", "onnx_cpu")],
-    )
-    monkeypatch.setattr(
-        window._session_orch,
-        "_runtime_pipelines_for_current_ui",
-        lambda: ["yolo_obb_detection", "sleap_pose"],
-    )
-
-    window._on_runtime_context_changed()
-
-    tooltip = window._setup_panel.combo_compute_runtime.toolTip()
-    assert "ONNX (CoreML) is available in this environment" in tooltip
-    assert "current enabled pipeline combination" in tooltip
+    panel = window._setup_panel
+    assert hasattr(panel, "combo_runtime_tier"), "combo_runtime_tier missing"
+    assert isinstance(panel.combo_runtime_tier, QComboBox)
+    assert panel.combo_runtime_tier.count() >= 1
+    assert hasattr(panel, "lbl_runtime_fallback"), "lbl_runtime_fallback missing"
+    assert isinstance(panel.lbl_runtime_fallback, QLabel)
+    assert not hasattr(
+        panel, "combo_compute_runtime"
+    ), "old combo_compute_runtime present"
+    assert not hasattr(
+        panel, "combo_headtail_runtime"
+    ), "old combo_headtail_runtime present"
+    assert not hasattr(panel, "combo_cnn_runtime"), "old combo_cnn_runtime present"
     window.close()
 
 
@@ -775,36 +772,25 @@ def test_setup_panel_pose_runtime_visibility_tracks_pose_enable(
     window.close()
 
 
-def test_setup_panel_headtail_and_cnn_runtime_visibility_tracks_enablement(
+def test_setup_panel_single_tier_combo_always_visible(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """The single compute-tier combo is always visible regardless of identity config."""
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
+    panel = window._setup_panel
+
+    window._identity_panel.g_identity.setChecked(False)
+    window._sync_individual_analysis_mode_ui()
+    assert panel.combo_runtime_tier.isHidden() is False
 
     window._identity_panel.g_identity.setChecked(True)
-    window._identity_panel.g_headtail.setChecked(False)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_headtail_runtime.isHidden() is True
-    assert window._setup_panel.combo_cnn_runtime.isHidden() is True
-
     window._identity_panel.g_headtail.setChecked(True)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_headtail_runtime.isHidden() is True
-
     _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
     window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_headtail_runtime.isHidden() is False
-
-    window._identity_panel._add_cnn_classifier_row()
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_cnn_runtime.isHidden() is True
-
-    cnn_row = window._identity_panel._cnn_classifier_rows()[0]
-    _select_first_nonempty_model(cnn_row.combo_model)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_cnn_runtime.isHidden() is False
+    assert panel.combo_runtime_tier.isHidden() is False
     window.close()
 
 
@@ -817,25 +803,19 @@ def test_setup_panel_performance_runtime_cards_reflow_when_visibility_changes(
     window = _make_main_window(monkeypatch)
     panel = window._setup_panel
     grid = panel.performance_control_grid
-    headtail_card = panel._performance_optional_control_cards[
-        panel.combo_headtail_runtime
-    ]
     pose_card = panel._performance_optional_control_cards[
         panel.combo_pose_runtime_flavor
     ]
 
-    window._set_form_row_visible(None, panel.combo_headtail_runtime, True)
+    # With pose hidden, grid row 1 should be empty.
+    window._set_form_row_visible(None, panel.combo_pose_runtime_flavor, False)
+    qapp.processEvents()
+    assert grid.itemAtPosition(1, 0) is None
+
+    # Show pose: should reflow into row 1.
     window._set_form_row_visible(None, panel.combo_pose_runtime_flavor, True)
     qapp.processEvents()
-
-    assert grid.itemAtPosition(1, 0).widget() is headtail_card
-    assert grid.itemAtPosition(1, 1).widget() is pose_card
-
-    window._set_form_row_visible(None, panel.combo_headtail_runtime, False)
-    qapp.processEvents()
-
     assert grid.itemAtPosition(1, 0).widget() is pose_card
-    assert grid.itemAtPosition(1, 1) is None
     window.close()
 
 
@@ -866,73 +846,39 @@ def test_saved_config_preserves_selected_pose_runtime_flavor(
     window.close()
 
 
-def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
+def test_saved_config_preserves_runtime_tier(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+    """Saving config persists the selected runtime_tier."""
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda pipeline: (
-            ["cpu", "mps", "onnx_coreml", "onnx_cpu"]
-            if pipeline == "head_tail"
-            else ["cpu", "mps", "onnx_cpu"]
-        ),
-    )
+    combo = window._setup_panel.combo_runtime_tier
+    # Select the first tier (cpu) explicitly.
+    combo.setCurrentIndex(0)
+    first_tier = combo.currentData()
 
-    window._identity_panel.g_identity.setChecked(True)
-    window._identity_panel.g_headtail.setChecked(True)
-    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
-    window._identity_panel._add_cnn_classifier_row()
-    window._populate_headtail_runtime_options(preferred="onnx_coreml")
-    window._populate_cnn_runtime_options(preferred="onnx_cpu")
-
-    headtail_idx = window._setup_panel.combo_headtail_runtime.findData("onnx_coreml")
-    cnn_idx = window._setup_panel.combo_cnn_runtime.findData("onnx_cpu")
-    assert headtail_idx >= 0
-    assert cnn_idx >= 0
-    window._setup_panel.combo_headtail_runtime.setCurrentIndex(headtail_idx)
-    window._setup_panel.combo_cnn_runtime.setCurrentIndex(cnn_idx)
-
-    config_path = tmp_path / "aux_runtime.json"
+    config_path = tmp_path / "tier_runtime.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved_cfg["headtail_runtime"] == "onnx_coreml"
-    assert saved_cfg["cnn_runtime"] == "onnx_cpu"
+    assert saved_cfg["runtime_tier"] == first_tier
     window.close()
 
 
-def test_headtail_runtime_selector_uses_setup_panel_only(
+def test_headtail_runtime_derives_from_tier_combo(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """_selected_headtail_runtime() returns the same value as the tier-derived compute runtime."""
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda pipeline: (
-            ["cpu", "onnx_coreml", "onnx_cpu"] if pipeline == "head_tail" else ["cpu"]
-        ),
-    )
 
-    window._identity_panel.g_identity.setChecked(True)
-    window._identity_panel.g_headtail.setChecked(True)
-    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
-    window._populate_headtail_runtime_options(preferred="cpu")
-
-    setup_combo = window._setup_panel.combo_headtail_runtime
-    assert not hasattr(window._identity_panel, "combo_headtail_runtime")
-
-    setup_idx = setup_combo.findData("onnx_cpu")
-    assert setup_combo.findData("onnx_coreml") >= 0
-    assert setup_idx >= 0
-    setup_combo.setCurrentIndex(setup_idx)
-    assert window._selected_headtail_runtime() == "onnx_cpu"
+    # headtail and cnn combos no longer exist on setup panel.
+    assert not hasattr(window._setup_panel, "combo_headtail_runtime")
+    assert not hasattr(window._setup_panel, "combo_cnn_runtime")
+    # _selected_headtail_runtime delegates to _selected_compute_runtime (tier-derived).
+    assert window._selected_headtail_runtime() == window._selected_compute_runtime()
     window.close()
 
 
@@ -1302,15 +1248,17 @@ def test_sequential_crop_batch_roundtrip_persists(
     reloaded_window.close()
 
 
-def test_benchmark_recommendations_surface_in_runtime_and_batch_ui(
+def test_benchmark_recommendations_update_batch_ui(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """Benchmark recommendations update batch policy controls via sync."""
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
 
     window = _make_main_window(monkeypatch)
     window._detection_panel.combo_detection_method.setCurrentIndex(1)
+    # OBB mode defaults to index 0 (direct), so recommendation key must be detection_direct.
     window._benchmark_recommendations = {
         "detection_direct": BenchmarkRecommendation(
             target_key="detection_direct",
@@ -1326,13 +1274,8 @@ def test_benchmark_recommendations_surface_in_runtime_and_batch_ui(
         )
     }
 
-    window._populate_compute_runtime_options(preferred="cpu")
-    texts = [
-        window._setup_panel.combo_compute_runtime.itemText(index)
-        for index in range(window._setup_panel.combo_compute_runtime.count())
-    ]
-
-    assert any("(Recommended)" in text for text in texts)
+    # _sync_batch_policy_controls reads _current_detection_benchmark_recommendation()
+    # directly from _benchmark_recommendations — no populate call needed.
     window._detection_panel._sync_batch_policy_controls()
     assert (
         "Benchmark recommendation"

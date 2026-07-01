@@ -606,61 +606,33 @@ class SetupPanel(QWidget):
             "1.0 = full resolution, 0.5 = half resolution (4× faster).\n"
             "All body-size-based parameters auto-scale with this value."
         )
-        self.combo_compute_runtime = QComboBox()
-        self.combo_compute_runtime.setFixedHeight(30)
-        self.combo_compute_runtime.setToolTip(
-            "Detection runtime for the primary tracking detector.\n"
-            "Only runtimes compatible with the active detection pipeline are shown."
+        from hydra_suite.runtime.compute_runtime import available_tiers, tier_label
+        from hydra_suite.runtime.resolver import detect_platform
+
+        self.combo_runtime_tier = QComboBox()
+        self.combo_runtime_tier.setFixedHeight(30)
+        self.combo_runtime_tier.setToolTip(
+            "Compute tier for the whole pipeline.\n"
+            "CPU · GPU (exact) · GPU-Fast (max speed, some accuracy loss)."
         )
-        self.combo_compute_runtime.currentIndexChanged.connect(
-            self._main_window._on_runtime_context_changed
+        _platform = detect_platform()
+        for _tier in available_tiers(_platform):
+            self.combo_runtime_tier.addItem(tier_label(_tier, _platform), _tier)
+        self.combo_runtime_tier.currentIndexChanged.connect(
+            self._main_window._on_runtime_tier_changed
         )
+        self.lbl_runtime_fallback = QLabel("")
+        self.lbl_runtime_fallback.setWordWrap(True)
+
         scale_card = self._create_performance_control_card("Scale", self.spin_resize)
         self._performance_base_control_cards.append(scale_card)
         self._performance_control_cards.append(scale_card)
-        detection_card = self._create_performance_control_card(
-            "Detection runtime",
-            self.combo_compute_runtime,
+        tier_card = self._create_performance_control_card(
+            "Compute tier",
+            self.combo_runtime_tier,
         )
-        self._performance_base_control_cards.append(detection_card)
-        self._performance_control_cards.append(detection_card)
-
-        self.combo_headtail_runtime = QComboBox()
-        self.combo_headtail_runtime.setFixedHeight(30)
-        self.combo_headtail_runtime.setToolTip(
-            "Head-tail runtime for oriented crop classification.\n"
-            "Visible only when head-tail analysis is enabled."
-        )
-        self.combo_headtail_runtime.currentIndexChanged.connect(
-            lambda _index: self._main_window._sync_headtail_runtime_selection(
-                self.combo_headtail_runtime
-            )
-        )
-        self._register_optional_performance_control(
-            self.combo_headtail_runtime,
-            "Head-tail runtime",
-        )
-        self._main_window._set_form_row_visible(
-            self.form_performance,
-            self.combo_headtail_runtime,
-            False,
-        )
-
-        self.combo_cnn_runtime = QComboBox()
-        self.combo_cnn_runtime.setFixedHeight(30)
-        self.combo_cnn_runtime.setToolTip(
-            "CNN identity runtime for per-animal classifiers.\n"
-            "Visible only when at least one CNN classifier is configured."
-        )
-        self._register_optional_performance_control(
-            self.combo_cnn_runtime,
-            "CNN runtime",
-        )
-        self._main_window._set_form_row_visible(
-            self.form_performance,
-            self.combo_cnn_runtime,
-            False,
-        )
+        self._performance_base_control_cards.append(tier_card)
+        self._performance_control_cards.append(tier_card)
 
         self.combo_pose_runtime_flavor = QComboBox()
         self.combo_pose_runtime_flavor.setFixedHeight(30)

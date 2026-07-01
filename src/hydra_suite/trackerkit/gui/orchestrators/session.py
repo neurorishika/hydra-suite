@@ -13,15 +13,13 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 from hydra_suite.runtime.compute_runtime import (
-    CANONICAL_RUNTIMES,
-    allowed_runtimes_for_pipelines,
     derive_detection_runtime_settings,
     derive_pose_runtime_settings,
     runtime_label,
     supported_runtimes_for_pipeline,
 )
+from hydra_suite.runtime.resolver import detect_platform
 from hydra_suite.utils.geometry import fit_circle_to_points
-from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, ONNXRUNTIME_COREML_AVAILABLE
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.config.schemas import TrackerConfig
@@ -770,21 +768,6 @@ class SessionOrchestrator:
             self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
         )
         self._mw._populate_pose_runtime_flavor_options(backend=backend)
-        if hasattr(self._mw, "_setup_panel") and hasattr(
-            self._mw._setup_panel, "form_performance"
-        ):
-            if hasattr(self._mw._setup_panel, "combo_headtail_runtime"):
-                self._mw._set_form_row_visible(
-                    self._mw._setup_panel.form_performance,
-                    self._mw._setup_panel.combo_headtail_runtime,
-                    bool(self._is_headtail_compute_enabled()),
-                )
-            if hasattr(self._mw._setup_panel, "combo_cnn_runtime"):
-                self._mw._set_form_row_visible(
-                    self._mw._setup_panel.form_performance,
-                    self._mw._setup_panel.combo_cnn_runtime,
-                    bool(self._has_cnn_identity_enabled()),
-                )
         if (
             hasattr(self._mw, "_setup_panel")
             and hasattr(self._mw._setup_panel, "form_performance")
@@ -1021,205 +1004,33 @@ class SessionOrchestrator:
     # RUNTIME / COMPUTE OPTIONS
     # =========================================================================
 
-    def _runtime_pipelines_for_current_ui(self):
-        """Return the active detection pipelines for the detection runtime selector."""
-        pipelines = []
-        if self._mw._is_yolo_detection_mode():
-            pipelines.append("yolo_obb_detection")
-        return pipelines
+    @staticmethod
+    def _tier_to_compute_runtime(tier: str) -> str:
+        """Derive a canonical compute_runtime string from a RuntimeTier id."""
+        platform = detect_platform()
+        if tier == "gpu_fast":
+            if platform.has_cuda:
+                return "tensorrt"
+            if platform.has_mps:
+                return "mps"
+            return "cpu"
+        if tier == "gpu":
+            if platform.has_cuda:
+                return "cuda"
+            if platform.has_mps:
+                return "mps"
+            return "cpu"
+        return "cpu"
 
-    def _compute_runtime_options_for_current_ui(self):
-        """Return (label, value) pairs for the compute runtime combo."""
-        allowed = allowed_runtimes_for_pipelines(
-            self._runtime_pipelines_for_current_ui()
-        )
-        if not allowed:
-            allowed = ["cpu"]
-        recommended = None
-        recommendation = self._mw._current_detection_benchmark_recommendation()
-        if recommendation is not None:
-            recommended = recommendation.runtime
-        options = []
-        for runtime in allowed:
-            if runtime not in CANONICAL_RUNTIMES:
-                continue
-            label = runtime_label(runtime)
-            if runtime == recommended:
-                label += " (Recommended)"
-            options.append((label, runtime))
-        return options
-
-    def _update_compute_runtime_tooltip(self) -> None:
-        """Explain when CoreML is available in the env but filtered by UI state."""
+    def _selected_compute_runtime(self) -> str:
+        """Derive a concrete compute_runtime string from the selected tier combo."""
         if not hasattr(self._mw, "_setup_panel"):
-            return
-        combo = self._mw._setup_panel.combo_compute_runtime
-        tooltip = (
-            "Detection runtime for the primary tracking detector.\n"
-            "Only runtimes compatible with the enabled non-pose pipelines are shown."
-        )
-        runtime_values = {
-            value for _label, value in self._compute_runtime_options_for_current_ui()
-        }
-        pipelines = self._runtime_pipelines_for_current_ui()
-        if (
-            ONNXRUNTIME_COREML_AVAILABLE
-            and MPS_AVAILABLE
-            and "onnx_coreml" not in runtime_values
-        ):
-            if "sleap_pose" in pipelines:
-                tooltip += (
-                    "\n\nONNX (CoreML) is available in this environment, but it is hidden "
-                    "because the current enabled pipeline combination does not support it."
-                )
-            else:
-                tooltip += (
-                    "\n\nONNX (CoreML) is available in this environment, but it is hidden "
-                    "because the current enabled pipeline combination does not support it."
-                )
-        combo.setToolTip(tooltip)
-        if hasattr(self._mw._setup_panel, "combo_headtail_runtime"):
-            self._mw._setup_panel.combo_headtail_runtime.setToolTip(
-                HEADTAIL_RUNTIME_TOOLTIP
-            )
-        if hasattr(self._mw._setup_panel, "combo_cnn_runtime"):
-            self._mw._setup_panel.combo_cnn_runtime.setToolTip(CNN_RUNTIME_TOOLTIP)
-        if hasattr(self._mw._setup_panel, "combo_pose_runtime_flavor"):
-            self._mw._setup_panel.combo_pose_runtime_flavor.setToolTip(
-                POSE_RUNTIME_TOOLTIP
-            )
-
-    def _headtail_runtime_options(self):
-        """Return (label, value) pairs for the head-tail runtime combo."""
-        allowed = supported_runtimes_for_pipeline("head_tail")
-        if not allowed:
-            allowed = ["cpu"]
-        recommended = None
-        recommendation = self._mw._current_headtail_benchmark_recommendation()
-        if recommendation is not None:
-            recommended = recommendation.runtime
-        return [
-            (
-                runtime_label(runtime)
-                + (" (Recommended)" if runtime == recommended else ""),
-                runtime,
-            )
-            for runtime in allowed
-        ]
-
-    def _populate_headtail_runtime_options(self, preferred=None):
-        """Populate the setup-tab head-tail runtime combo with native options."""
-        selected = (
-            str(
-                preferred
-                or self._selected_headtail_runtime()
-                or self._selected_compute_runtime()
-            )
-            .strip()
-            .lower()
-        )
-        options = self._headtail_runtime_options()
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
-
-        if hasattr(self._mw, "_setup_panel") and hasattr(
-            self._mw._setup_panel, "combo_headtail_runtime"
-        ):
-            combo = self._mw._setup_panel.combo_headtail_runtime
-            combo.blockSignals(True)
-            combo.clear()
-            for label, value in options:
-                combo.addItem(label, value)
-            idx = combo.findData(selected)
-            combo.setCurrentIndex(idx if idx >= 0 else 0)
-            combo.blockSignals(False)
-
-    def _selected_headtail_runtime(self) -> str:
-        """Return the currently selected head-tail runtime key.
-
-        Uses the setup-tab performance combo when available, then falls back to
-        the main detection runtime.
-        """
-        if hasattr(self._mw, "_setup_panel") and hasattr(
-            self._mw._setup_panel, "combo_headtail_runtime"
-        ):
-            data = self._mw._setup_panel.combo_headtail_runtime.currentData()
-            if data:
-                return str(data).strip().lower()
-        return self._selected_compute_runtime()
-
-    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
-        """Normalize setup-tab head-tail runtime state after combo changes."""
-        if source_combo is None:
-            return
-        data = source_combo.currentData()
-        selected = (
-            str(data).strip().lower() if data else self._selected_compute_runtime()
-        )
-        index = source_combo.findData(selected)
-        if index < 0 or source_combo.currentIndex() == index:
-            return
-        source_combo.blockSignals(True)
-        source_combo.setCurrentIndex(index)
-        source_combo.blockSignals(False)
-
-    def _cnn_runtime_options(self):
-        """Return (label, value) pairs for the CNN runtime combo."""
-        allowed = allowed_runtimes_for_pipelines([])
-        if not allowed:
-            allowed = ["cpu"]
-        recommended = None
-        recommendation = self._mw._current_cnn_runtime_recommendation()
-        if recommendation is not None:
-            recommended = recommendation.runtime
-        return [
-            (
-                runtime_label(runtime)
-                + (" (Recommended)" if runtime == recommended else ""),
-                runtime,
-            )
-            for runtime in allowed
-            if runtime in CANONICAL_RUNTIMES
-        ]
-
-    def _populate_cnn_runtime_options(self, preferred=None):
-        """Populate the CNN runtime combo with available runtimes."""
-        if not hasattr(self._mw, "_setup_panel") or not hasattr(
-            self._mw._setup_panel, "combo_cnn_runtime"
-        ):
-            return
-        combo = self._mw._setup_panel.combo_cnn_runtime
-        selected = (
-            str(
-                preferred
-                or self._selected_cnn_runtime()
-                or self._selected_compute_runtime()
-            )
-            .strip()
-            .lower()
-        )
-        options = self._cnn_runtime_options()
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
-        combo.blockSignals(True)
-        combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.blockSignals(False)
-
-    def _selected_cnn_runtime(self) -> str:
-        """Return the currently selected CNN runtime key."""
-        if hasattr(self._mw, "_setup_panel") and hasattr(
-            self._mw._setup_panel, "combo_cnn_runtime"
-        ):
-            data = self._mw._setup_panel.combo_cnn_runtime.currentData()
-            if data:
-                return str(data).strip().lower()
-        return self._selected_compute_runtime()
+            return "cpu"
+        if not hasattr(self._mw._setup_panel, "combo_runtime_tier"):
+            return "cpu"
+        data = self._mw._setup_panel.combo_runtime_tier.currentData()
+        tier = str(data).strip() if data else "gpu"
+        return self._tier_to_compute_runtime(tier)
 
     def _has_cnn_identity_enabled(self) -> bool:
         """Return True when CNN identity analysis is configured and enabled."""
@@ -1229,18 +1040,6 @@ class SessionOrchestrator:
         ):
             return False
         return bool(self._mw._identity_config().get("cnn_classifiers", []))
-
-    def _selected_compute_runtime(self) -> str:
-        """Return the currently selected compute runtime key."""
-        if not hasattr(self._mw, "_setup_panel"):
-            return "cpu"
-        data = self._mw._setup_panel.combo_compute_runtime.currentData()
-        if data:
-            return str(data).strip().lower()
-        txt = self._mw._setup_panel.combo_compute_runtime.currentText().strip().lower()
-        if txt in CANONICAL_RUNTIMES:
-            return txt
-        return "cpu"
 
     def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
@@ -1259,12 +1058,19 @@ class SessionOrchestrator:
             return "cuda"
         return rt
 
+    def _on_runtime_tier_changed(self) -> None:
+        """Handle tier combo change: store tier to config and refresh dependent controls."""
+        if hasattr(self._mw, "_setup_panel") and hasattr(
+            self._mw._setup_panel, "combo_runtime_tier"
+        ):
+            tier = self._mw._setup_panel.combo_runtime_tier.currentData()
+            if tier and hasattr(self._mw, "config"):
+                self._mw.config.runtime_tier = str(tier)
+        self._on_runtime_context_changed()
+
     def _on_runtime_context_changed(self, *_args):
-        """Update runtime combo and sync dependent controls when context changes."""
+        """Sync dependent controls when the runtime tier or context changes."""
         self._mw._refresh_benchmark_recommendations()
-        previous = self._selected_compute_runtime()
-        self._mw._populate_compute_runtime_options(preferred=previous)
-        self._update_compute_runtime_tooltip()
         selected_runtime = self._selected_compute_runtime()
         self._mw._update_obb_mode_warning()
         derived = derive_detection_runtime_settings(selected_runtime)
@@ -1280,10 +1086,6 @@ class SessionOrchestrator:
             )
         if hasattr(self._mw, "_detection_panel"):
             self._mw._detection_panel._sync_batch_policy_controls()
-        self._populate_headtail_runtime_options(
-            preferred=self._selected_headtail_runtime()
-        )
-        self._populate_cnn_runtime_options(preferred=self._selected_cnn_runtime())
         if hasattr(self._mw, "_identity_panel"):
             self._mw._populate_pose_runtime_flavor_options(
                 backend=self._mw._identity_panel.combo_pose_model_type.currentText()

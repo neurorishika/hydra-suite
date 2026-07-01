@@ -921,7 +921,6 @@ class MainWindow(QMainWindow):
         # =====================================================================
         # Setup panel bootstrap
         self._populate_preset_combo()
-        self._populate_compute_runtime_options(preferred="cpu")
         self._on_runtime_context_changed()
 
         # Detection panel bootstrap
@@ -1392,58 +1391,33 @@ class MainWindow(QMainWindow):
             return self._session_orch._runtime_pipelines_for_current_ui()
         return []
 
-    def _compute_runtime_options_for_current_ui(self):
-        """Return (label, value) pairs for the compute runtime combo."""
+    def _on_runtime_tier_changed(self, _index: int = 0) -> None:
+        """Store the selected tier and refresh dependent controls."""
         if hasattr(self, "_session_orch"):
-            return self._session_orch._compute_runtime_options_for_current_ui()
-        return []
+            self._session_orch._on_runtime_tier_changed()
 
-    def _populate_compute_runtime_options(self, preferred=None):
-        self._config_orch._populate_compute_runtime_options(preferred=preferred)
+    def _selected_runtime_tier(self) -> str:
+        """Return the currently selected runtime tier id."""
+        if hasattr(self, "_setup_panel") and hasattr(
+            self._setup_panel, "combo_runtime_tier"
+        ):
+            data = self._setup_panel.combo_runtime_tier.currentData()
+            if data:
+                return str(data)
+        return "gpu"
 
     def _selected_compute_runtime(self) -> str:
-        """Return the currently selected compute runtime key."""
+        """Derive a concrete compute_runtime string from the selected tier."""
         if hasattr(self, "_session_orch"):
             return self._session_orch._selected_compute_runtime()
         return "cpu"
 
-    def _headtail_runtime_options(self):
-        """Return (label, value) pairs for the head-tail runtime combo."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._headtail_runtime_options()
-        return []
-
-    def _populate_headtail_runtime_options(self, preferred=None):
-        """Populate the head-tail runtime combo."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._populate_headtail_runtime_options(preferred=preferred)
-
     def _selected_headtail_runtime(self) -> str:
-        """Return the currently selected head-tail runtime key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_headtail_runtime()
+        """Return the runtime key for head-tail (same as detection tier runtime)."""
         return self._selected_compute_runtime()
 
-    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
-        """Keep duplicated head-tail runtime selectors synchronized."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._sync_headtail_runtime_selection(source_combo)
-
-    def _cnn_runtime_options(self):
-        """Return (label, value) pairs for the CNN runtime combo."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._cnn_runtime_options()
-        return []
-
-    def _populate_cnn_runtime_options(self, preferred=None):
-        """Populate the CNN runtime combo."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._populate_cnn_runtime_options(preferred=preferred)
-
     def _selected_cnn_runtime(self) -> str:
-        """Return the currently selected CNN runtime key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_cnn_runtime()
+        """Return the runtime key for CNN identity (same as detection tier runtime)."""
         return self._selected_compute_runtime()
 
     def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
