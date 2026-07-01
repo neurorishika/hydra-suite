@@ -21,7 +21,8 @@ On CUDA hardware the pipeline auto-exports the detector (OBB model) to a TensorR
 and reused on subsequent runs.
 
 * Format: TensorRT FP32 engine
-* Precision: fp32 (bit-identical to PyTorch baseline within fp32 rounding)
+* Precision: fp32 (numerically close to the PyTorch baseline but NOT bit-identical
+  — kernel fusion reorders ops; see the Determinism note below)
 * Trigger: `compute_runtime = "tensorrt"` in TrackerKit / ClassKit config
 * Artifact path: `<model>.engine` adjacent to the source `.pt`
 
