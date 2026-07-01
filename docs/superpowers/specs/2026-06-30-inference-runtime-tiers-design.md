@@ -182,6 +182,7 @@ Each phase is a separate implementation plan; all share this document.
 - Expected: ~11% CNN compute on CUDA; MPS/CPU unchanged; numerics within the
   existing device-invariance envelope (documented caveat: `channels_last` is not
   bit-identical to the prior CUDA output but stays within ~0.006 px FP noise).
+- Measured 2026-06-30: +11% CNN compute on CUDA (channels_last); MPS/CPU unchanged; classifier logits within 1e-3 rel-tol of pre-change CUDA output.
 
 ### Phase 2 — Runtime tier taxonomy
 - Introduce `RuntimeResolver` + `InferenceConfig.runtime_tier`.

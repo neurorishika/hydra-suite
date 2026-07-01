@@ -121,6 +121,7 @@ nav:
   - Runtime Integration: developer-guide/runtime-integration.md
   - CUDA Dependency Updates: developer-guide/dependency-cuda-updates.md
   - Performance Tuning: developer-guide/performance-tuning.md
+  - Inference Fast Mode (Deferred): developer-guide/inference-fast-mode-future.md
   - Confidence Metrics: developer-guide/confidence-metrics.md
   - Extending Detection: developer-guide/extending-detection.md
   - Extending Identity: developer-guide/extending-identity.md
