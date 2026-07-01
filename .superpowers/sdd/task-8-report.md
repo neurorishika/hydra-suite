@@ -1,82 +1,104 @@
-# Task 8 Report: Depth-Invariance Test Harness
+# Task 8 Report: End-to-End Legacy-Config → runtime_tier Migration Test
 
 ## Status
-DONE — `test_depth1_is_deterministic_across_runs` passes.
 
-## Files Created
-- `tests/helpers/tiny_clip.py` — harness
-- `tests/test_inference_depth_invariance.py` — test
+DONE — 9 new tests all GREEN; no new failures introduced vs. pre-existing baseline.
 
-## How the Tiny Clip + Stubs Work
+---
 
-**Tiny clip**: 6-frame 64×64 MP4 written via `cv2.VideoWriter` with deterministic pixel content
-(frame `i` fills uniformly with `(i*40) % 256`). Written to a `NamedTemporaryFile` and deleted after the pass.
+## Test File Created
 
-**Stub models**: `_load_all_models` is patched to return an `_AllModels` with:
-- `obb=OBBModels(mode="direct", direct_model=MagicMock())` — real structure, never called
-- `headtail=None`, `cnn=[]`, `pose=None`, `apriltag=None` — all disabled
+`tests/test_runtime_tier_end_to_end.py` — 9 test cases covering the full migration path.
 
-**Stub `run_obb`**: `hydra_suite.core.inference.pipeline.run_obb` is patched with `_fake_run_obb`, which returns 2-detection `OBBResult`s seeded from `np.random.default_rng(0)` (frame_idx=0 for all; the pipeline re-stamps real frame indices). This produces stable, deterministic OBB geometry.
+### Test Cases
 
-**Config**: `InferenceConfig(detection_batch_size=2, pipeline_depth=depth)` — 6 frames with batch=2 → 3 windows, exercising multiple pipeline iterations.
+| Test | Config | Expected tier |
+|---|---|---|
+| `test_legacy_tensorrt_obb_direct_migrates_to_gpu_fast` | `obb.direct.compute_runtime="tensorrt"` (full `from_json` round-trip) | `gpu_fast` |
+| `test_legacy_all_cpu_migrates_to_cpu` | obb + headtail + cnn_phases all `cpu` | `cpu` |
+| `test_legacy_cuda_obb_migrates_to_gpu` | `obb.direct.compute_runtime="cuda"` | `gpu` |
+| `test_legacy_mps_obb_migrates_to_gpu` | `obb.direct.compute_runtime="mps"` | `gpu` |
+| `test_legacy_pose_yolo_tensorrt_migrates_to_gpu_fast` | `pose.yolo.compute_runtime="tensorrt"` (via `_dict_to_config` — mixed-group config skips validation) | `gpu_fast` |
+| `test_legacy_pose_sleap_onnx_cuda_migrates_to_gpu_fast` | `pose.sleap.compute_runtime="onnx_cuda"` (via `_dict_to_config`) | `gpu_fast` |
+| `test_legacy_pose_yolo_cuda_with_obb_cuda_full_roundtrip` | pose+obb both `cuda` (full `from_json`) | `gpu` |
+| `test_legacy_sequential_tensorrt_migrates_to_gpu_fast` | sequential OBB with `obb_compute_runtime="tensorrt"` (full `from_json`) | `gpu_fast` |
+| `test_explicit_runtime_tier_is_preserved` | `runtime_tier="gpu_fast"` present in JSON — migration must be skipped | `gpu_fast` |
 
-## What Caches Get Written
+### RED Evidence (TDD gate)
 
-Only `detection.npz` — because headtail/cnn/pose/apriltag are all disabled. The detection cache stores one `OBBResult` per frame (6 frames total), serialised via `np.savez`.
+Tests were written before running — the code under test (`_collect_legacy_runtime_strings`, `migrate_runtime_to_tier`, `_dict_to_config`, `from_json`) was implemented in Tasks 1–2 of Phase 2. The new test file adds integration-level coverage that was not present before:
 
-## Stability Key: Video Signature
+- No test previously called `from_json` with a legacy config and asserted `runtime_tier`.
+- `test_inference_config_tier_migration.py` tested `_dict_to_config` directly but never
+  exercised the JSON I/O path.
+- The pose-stage tests (`pose.yolo`, `pose.sleap`) are an explicit regression guard for the
+  Task 2 ordering fix (migration must read pose runtimes from the raw dict, before
+  `PoseConfig` objects are constructed).
 
-The video signature (`video_signature()`) uses `st_size:st_mtime_ns` of the file. Since two separate `run_pipeline_to_caches` calls write to different temp files at different times, `mtime_ns` differs → different cache keys → different `.npz` bytes. Fix: pass `video_path=None` to `InferenceRunner.__init__` (which makes `_video_sig=""`, a no-op signature). The actual video path is only passed to `run_batch_pass` for `cv2.VideoCapture`. Both runs then share the empty signature → identical cache keys → byte-identical `.npz` files.
+### GREEN
 
-## TDD Evidence
-
-Step 2 — test collected but `ModuleNotFoundError` on helper:
 ```
-ERROR collecting tests/test_inference_depth_invariance.py
-E   ModuleNotFoundError: No module named 'tests.helpers.tiny_clip'
-```
-
-Step 4 — after implementing helper (before signature fix), assertion failure:
-```
-AssertionError: assert {'detection.npz': '45283268...'} == {'detection.npz': '4ce31db5...'}
-```
-
-Step 4b — after passing `video_path=None` to constructor:
-```
-1 passed in 3.28s
+tests/test_runtime_tier_end_to_end.py - 9 passed in 2.25s
 ```
 
-Final:
-```
-PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE python -m pytest tests/test_inference_depth_invariance.py -xvs
-1 passed in 3.33s
-```
+---
 
-## Concerns
+## Broad Subset Run
 
-1. **`_fake_run_obb` always returns `frame_idx=0`** — the pipeline's re-stamp loop overwrites this with the real frame index, so detection_ids in the cache are correct (`frame_idx * 10000 + slot`). This is consistent with the existing `test_run_batch_iterates_frames_and_writes_caches` pattern.
-2. **Only `detection.npz` is written** — headtail/cnn/pose/apriltag require real model shapes that are non-trivial to stub at the cache-write level. The depth-invariance property applies equally to any enabled cache type; when Tasks 11/12 add real concurrency, those caches can be added if needed.
-3. **Video encoding reproducibility**: tested explicitly — two `cv2.VideoWriter` calls with identical frames to different temp paths produce byte-identical MP4 files (same fourcc, size, mtime-insensitive content). Only the cache key was mtime-sensitive, which is now bypassed.
-
-## Fix: cover HT/CNN/pose caches
-
-**Commit**: `98b3f36 test: extend depth-invariance harness to cover headtail/CNN/pose caches`
-
-**Status**: DONE — `test_depth1_is_deterministic_across_runs` passes and now asserts detection + headtail + cnn + pose caches are all present and byte-identical across runs.
-
-**Test command + result**:
-```
-PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_inference_depth_invariance.py -v
-1 passed in 3.32s
+Command:
+```bash
+KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/ \
+  -k "inference or runtime or config or classifier or obb or resolver or tier" \
+  -q -p no:cacheprovider --ignore=tests/test_identity_postprocess.py
 ```
 
-**What changed**:
-- `InferenceConfig` now enables `headtail`, `cnn_phases=[CNNConfig(label="stub_cnn")]`, and `pose` (YOLO backend with stub paths).
-- `_AllModels` stub carries `HeadTailModel`, `CNNModel`, and `PoseModel` instances (MagicMock backends — never called).
-- Six new patch targets in the pipeline namespace: `run_headtail_batch`, `run_cnn_batch`, `extract_canonical_crops_batch`, `run_pose_batch` — all patched to deterministic stubs that return results keyed by frame_idx, seeded by `np.random.default_rng(frame_idx * 100 + seed)`.
-- `extract_canonical_crops_batch` is also patched (stub `CropBatch` with correct `obb_by_frame`) so no real torch crop extraction runs; `run_pose_batch` stub reads `crop_batch.obb_by_frame` to derive frame indices.
-- The test asserts `{"detection.npz", "headtail.npz", "cnn_stub_cnn.npz", "pose.npz"} ⊆ a.keys()` before the equality check, so a silent cache-omission regression fails immediately.
+Result: **565 passed, 20 failed, 3 skipped, 1553 deselected** (4m 42s)
 
-**Hash dict now includes**: `detection.npz`, `headtail.npz`, `cnn_stub_cnn.npz`, `pose.npz`.
+### All 20 Failures Are Pre-Existing
 
-**Concerns**: None. All stubs are pure functions of frame_idx with fixed seeds; no wall-clock, no RNG state leaks across calls.
+No source files were modified by Task 8 (only `tests/test_runtime_tier_end_to_end.py` was
+added as an untracked file). All failures existed on HEAD before this task. Confirmed by:
+- `git diff --name-only HEAD` shows no source changes introduced by Task 8.
+- The failures span `test_classkit_main_window.py`, `test_classkit_extended_training.py`,
+  `test_classkit_training_dialog.py`, `test_detectkit_main_window.py`,
+  `test_main_window_config_persistence.py`, `test_runtime_api_sleap_export.py`,
+  `test_tracking_worker_realtime_live_features.py`, `test_interpolated_crops_worker.py`,
+  `test_classifier_backend.py` — none overlap with inference config / migration code.
+
+### Known Pre-Existing List (from task brief) — All Present
+
+| Test | In run? |
+|---|---|
+| `tests/test_identity_postprocess.py` collection error | Excluded via `--ignore` (collection-phase failure) |
+| `test_classifier_metadata_fields` | YES — FAILED (pre-existing) |
+| `test_backend_falls_back_to_native_torch_when_onnx_accelerator_missing` | YES — FAILED (pre-existing, MPS env lacks CUDA) |
+| `test_interpolated_worker_uses_split_cnn_and_headtail_runtimes` | YES — FAILED (pre-existing) |
+| `final_canonical_media_export` test | NOT in this `-k` subset |
+
+### Additional Pre-Existing Failures (not listed in brief but confirmed pre-existing by source audit)
+
+- `test_classkit_main_window.py` — 4 failures (unrelated classkit GUI dispatch)
+- `test_classkit_extended_training.py` — 2 failures (torchvision classifier roundtrip)
+- `test_classkit_training_dialog.py` — 1 failure (MPS onnx_coreml pref)
+- `test_detectkit_main_window.py` — 1 failure (inference overlay)
+- `test_main_window_config_persistence.py` — 7 failures (trackerkit config persistence)
+- `test_runtime_api_sleap_export.py` — 1 failure (SLEAP native backend)
+- `test_tracking_worker_realtime_live_features.py` — 1 failure (backward cached YOLO)
+
+**Conclusion: 0 new failures introduced by Phase 2 Task 8.**
+
+---
+
+## Commit
+
+SHA: (see git log after commit)
+Subject: `test(runtime): end-to-end legacy-config migration to runtime_tier`
+
+Files committed:
+- `tests/test_runtime_tier_end_to_end.py` (new, 9 tests)
+
+---
+
+## Report Path
+
+`.superpowers/sdd/task-8-report.md`
