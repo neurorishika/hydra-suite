@@ -515,3 +515,57 @@ def test_move_unlabeled_to_labeling_no_selection_shows_info(monkeypatch):
 
     assert len(info_calls) == 1
     assert window.labeling_frames == set()
+
+
+def test_move_unlabeled_to_all_individual_mode_unchanged():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png"), Path("b.png")],
+        labeling_frames={0, 1},
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    MainWindow._move_unlabeled_to_all(window)
+
+    assert window.labeling_frames == set()
+
+
+def test_move_unlabeled_to_all_frame_mode_skips_partially_labeled_frame(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    info_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append(a)),
+    )
+
+    is_labeled_map = {
+        Path("did10000.jpg"): False,
+        Path("did10001.jpg"): True,  # one instance on frame 1 is labeled
+        Path("did20000.jpg"): False,
+    }
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames={0, 1, 2},
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: is_labeled_map[p],
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    MainWindow._move_unlabeled_to_all(window)
+
+    # Frame (src_a, 1) has a labeled instance -> kept entirely (idx 0 and 1 stay).
+    # Frame (src_a, 2) has no labeled instance -> reverted (idx 2 removed).
+    assert window.labeling_frames == {0, 1}
+    assert len(info_calls) == 1

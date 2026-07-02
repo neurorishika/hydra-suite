@@ -2706,15 +2706,48 @@ class MainWindow(QMainWindow):
     def _move_unlabeled_to_all(self):
         """Move unlabeled frames from the current source back to the source browser."""
         unlabeled_to_remove = []
-        for idx in list(self.labeling_frames):
-            if self._matches_current_source(idx) and not self._is_labeled(
-                self.image_paths[idx]
-            ):
-                unlabeled_to_remove.append(idx)
+        skipped_frames = 0
+
+        if self.config.frame_mode:
+            groups = group_indices_by_frame(
+                [p.name for p in self.image_paths],
+                [self._source_id_for_index(i) for i in range(len(self.image_paths))],
+            )
+            idx_to_key = {i: key for key, idxs in groups.items() for i in idxs}
+            candidate_keys = set()
+            for idx in self.labeling_frames:
+                if self._matches_current_source(idx) and not self._is_labeled(
+                    self.image_paths[idx]
+                ):
+                    key = idx_to_key.get(idx)
+                    if key is not None:
+                        candidate_keys.add(key)
+            for key in candidate_keys:
+                frame_indices = groups[key]
+                if any(self._is_labeled(self.image_paths[i]) for i in frame_indices):
+                    skipped_frames += 1
+                    continue
+                unlabeled_to_remove.extend(
+                    i for i in frame_indices if i in self.labeling_frames
+                )
+        else:
+            for idx in list(self.labeling_frames):
+                if self._matches_current_source(idx) and not self._is_labeled(
+                    self.image_paths[idx]
+                ):
+                    unlabeled_to_remove.append(idx)
+
         for idx in unlabeled_to_remove:
-            self.labeling_frames.remove(idx)
+            self.labeling_frames.discard(idx)
         self._populate_frames()
         self._select_frame_in_list(self.current_index, trigger_load=False)
+        if skipped_frames:
+            QMessageBox.information(
+                self,
+                "Frames kept",
+                f"{skipped_frames} frame(s) were kept in the labeling set "
+                "because at least one instance on each is already labeled.",
+            )
 
     def _on_frame_mode_toggled(self, checked: bool) -> None:
         """Persist the Frame Mode checkbox state to the runtime config."""
