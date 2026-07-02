@@ -647,7 +647,37 @@ class SmartSelectDialog(QDialog):
         if dialog.exec_() == QDialog.Accepted:
             explorer_selected = dialog.selected_indices
             if explorer_selected:
-                global_selected = [self._eligible_indices[i] for i in explorer_selected]
+                global_selected = {self._eligible_indices[i] for i in explorer_selected}
+
+                companion_count = 0
+                frame_count = len(global_selected)
+                if self.frame_mode:
+                    keys = {
+                        self._idx_to_frame_key[i]
+                        for i in global_selected
+                        if i in self._idx_to_frame_key
+                    }
+                    expanded = {
+                        idx for key in keys for idx in self._frame_groups.get(key, [])
+                    }
+                    companions = expanded - global_selected
+                    companion_count = len(companions)
+                    frame_count = len(keys)
+                    if companions:
+                        reply = QMessageBox.question(
+                            self,
+                            "Added from Explorer",
+                            f"This will add {frame_count} frame(s) comprising "
+                            f"{len(expanded)} total instance(s), including "
+                            f"{companion_count} companion instance(s), to the "
+                            "labeling set. Continue?",
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        if reply != QMessageBox.Yes:
+                            return
+                    global_selected = expanded
+
                 existing = set(self.selected_indices)
                 for idx in global_selected:
                     if idx not in existing:
@@ -656,7 +686,8 @@ class SmartSelectDialog(QDialog):
                 QMessageBox.information(
                     self,
                     "Added from Explorer",
-                    f"Added {len(explorer_selected)} frames.",
+                    f"Added {len(global_selected)} instance(s) from "
+                    f"{frame_count} frame(s).",
                 )
 
     def _save_csv(self):

@@ -15,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from hydra_suite.posekit.gui.dialogs.exploration import SmartSelectDialog  # noqa: E402
 
@@ -98,3 +98,110 @@ def test_smart_select_dialog_preview_renders_one_line_per_frame(qapp, tmp_path):
     assert text.startswith("[frame 1] covers clusters")
     assert "2 instances" in text
     assert sorted(dialog.selected_indices) == [0, 1]
+
+
+def test_open_explorer_frame_mode_expands_and_confirms(qapp, monkeypatch):
+    dialog = _make_dialog(
+        qapp,
+        True,
+        [Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
+        ["src_a", "src_a", "src_a"],
+    )
+    dialog._eligible_indices = [0, 1, 2]
+    dialog._emb = np.zeros((3, 4), dtype=np.float32)
+    dialog._cluster = np.array([0, 1, 0])
+    dialog.selected_indices = []
+
+    class _FakeExplorer:
+        def __init__(self, **kwargs):
+            pass
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        selected_indices = [
+            0
+        ]  # local index 0 -> global index 0 (frame with companion 1)
+
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog",
+        _FakeExplorer,
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes)
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    dialog._open_explorer()
+
+    assert sorted(dialog.selected_indices) == [0, 1]
+
+
+def test_open_explorer_frame_mode_cancel_adds_nothing(qapp, monkeypatch):
+    dialog = _make_dialog(
+        qapp,
+        True,
+        [Path("did10000.jpg"), Path("did10001.jpg")],
+        ["src_a", "src_a"],
+    )
+    dialog._eligible_indices = [0, 1]
+    dialog._emb = np.zeros((2, 4), dtype=np.float32)
+    dialog._cluster = np.array([0, 1])
+    dialog.selected_indices = []
+
+    class _FakeExplorer:
+        def __init__(self, **kwargs):
+            pass
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        selected_indices = [0]
+
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog",
+        _FakeExplorer,
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No)
+    )
+
+    dialog._open_explorer()
+
+    assert dialog.selected_indices == []
+
+
+def test_open_explorer_individual_mode_unchanged(qapp, monkeypatch):
+    dialog = _make_dialog(qapp, False, [Path("a.png"), Path("b.png")])
+    dialog._eligible_indices = [0, 1]
+    dialog._emb = np.zeros((2, 4), dtype=np.float32)
+    dialog._cluster = np.array([0, 1])
+    dialog.selected_indices = []
+
+    class _FakeExplorer:
+        def __init__(self, **kwargs):
+            pass
+
+        def exec_(self):
+            return QDialog.Accepted
+
+        selected_indices = [0]
+
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.dialogs.exploration.EmbeddingExplorerDialog",
+        _FakeExplorer,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm outside frame mode")
+            )
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    dialog._open_explorer()
+
+    assert dialog.selected_indices == [0]
