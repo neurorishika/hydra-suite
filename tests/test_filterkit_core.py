@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import cv2
 import numpy as np
 
 from hydra_suite.filterkit.core import FilterKitCore
@@ -144,3 +145,158 @@ def test_filterkit_load_dataset_accepts_detected_and_interpolated_flat_names(
     assert dataset[1]["trajectory_id"] == 1
     assert dataset[1]["det_id"] < 0
     assert dataset[1]["annotations"][0]["filename"] == interp_name
+
+
+def test_filterkit_load_images_from_root_parses_identity_filenames(tmp_path) -> None:
+    dataset_root = tmp_path / "dataset"
+    images_dir = dataset_root / "images"
+    images_dir.mkdir(parents=True)
+    (images_dir / "did101.jpg").write_bytes(b"x")
+    (images_dir / "did202.jpg").write_bytes(b"y")
+    (images_dir / "plain_frame_007.png").write_bytes(b"z")
+
+    source_kind, items = FilterKitCore().load_images_from_root(dataset_root)
+
+    assert source_kind == "images"
+    by_name = {item["filename"]: item for item in items}
+    assert by_name["did101.jpg"]["frame_idx"] == 0
+    assert by_name["did101.jpg"]["det_idx"] == 101
+    assert by_name["did101.jpg"]["detection_id"] == 101
+    assert by_name["did202.jpg"]["frame_idx"] == 0
+    assert by_name["did202.jpg"]["det_idx"] == 202
+    # Non-matching filenames keep the sequential fallback.
+    assert by_name["plain_frame_007.png"]["det_idx"] == 0
+    assert by_name["plain_frame_007.png"]["source_type"] == "images"
+
+
+def _write_gray_image(path, value: int) -> None:
+    img = np.full((10, 10), value, dtype=np.uint8)
+    cv2.imwrite(str(path), img)
+
+
+def test_filterkit_compute_avg_individuals_per_frame() -> None:
+    core = FilterKitCore()
+    dataset = [
+        {"frame_idx": 0},
+        {"frame_idx": 0},
+        {"frame_idx": 1},
+        {"frame_idx": 2},
+        {"frame_idx": 2},
+    ]
+    assert core.compute_avg_individuals_per_frame(dataset) == 5 / 3
+
+
+def test_filterkit_compute_avg_individuals_per_frame_empty_dataset() -> None:
+    core = FilterKitCore()
+    assert core.compute_avg_individuals_per_frame([]) == 1.0
+
+
+def test_filterkit_diversity_sample_by_frame_keeps_all_individuals_per_frame(
+    tmp_path,
+) -> None:
+    core = FilterKitCore()
+    # 4 frames, 2 individuals each. Frames 0/1 are visually similar (dark);
+    # frames 2/3 are visually similar (bright) — two well-separated clusters.
+    values = {0: 10, 1: 12, 2: 200, 3: 205}
+    dataset = []
+    for frame_id, value in values.items():
+        for det_idx in range(2):
+            path = tmp_path / f"f{frame_id}_d{det_idx}.png"
+            _write_gray_image(path, value)
+            dataset.append(
+                {
+                    "path": str(path),
+                    "filename": path.name,
+                    "det_id": frame_id * 10000 + det_idx,
+                    "frame_idx": frame_id,
+                    "det_idx": det_idx,
+                }
+            )
+
+    selected = core.diversity_sample(dataset, 2, by_frame=True)
+
+    selected_frames = {item["frame_idx"] for item in selected}
+    assert len(selected_frames) == 2
+    # One frame from the dark cluster, one from the bright cluster.
+    assert len(selected_frames & {0, 1}) == 1
+    assert len(selected_frames & {2, 3}) == 1
+    # Every selected frame keeps both of its individuals.
+    for frame_id in selected_frames:
+        crops = [item for item in selected if item["frame_idx"] == frame_id]
+        assert len(crops) == 2
+
+
+def test_filterkit_diversity_sample_default_behavior_unchanged(tmp_path) -> None:
+    core = FilterKitCore()
+    dataset = []
+    for i in range(6):
+        path = tmp_path / f"img{i}.png"
+        _write_gray_image(path, i * 40)
+        dataset.append({"path": str(path), "filename": path.name, "frame_idx": i})
+
+    by_frame_default = core.diversity_sample(dataset, 3)
+    by_frame_explicit_false = core.diversity_sample(dataset, 3, by_frame=False)
+
+    assert [item["path"] for item in by_frame_default] == [
+        item["path"] for item in by_frame_explicit_false
+    ]
+    assert len(by_frame_default) <= 3
+
+
+def test_filterkit_expand_to_full_frames_restores_filtered_companions() -> None:
+    core = FilterKitCore()
+    full_dataset = [
+        {"det_id": 1, "frame_idx": 0, "det_idx": 0, "path": "/tmp/a.png"},
+        {"det_id": 2, "frame_idx": 0, "det_idx": 1, "path": "/tmp/b.png"},
+        {"det_id": 3, "frame_idx": 1, "det_idx": 0, "path": "/tmp/c.png"},
+    ]
+    # Simulate quality filtering having dropped det_id=2 (blurry companion).
+    kept = [full_dataset[0]]
+
+    expanded = core.expand_to_full_frames(kept, full_dataset)
+
+    assert {item["det_id"] for item in expanded} == {1, 2}
+    assert all(item["frame_idx"] == 0 for item in expanded)
+
+
+def test_filterkit_expand_to_full_frames_empty_kept_returns_empty() -> None:
+    core = FilterKitCore()
+    assert core.expand_to_full_frames([], [{"det_id": 1, "frame_idx": 0}]) == []
+
+
+def test_filterkit_expand_to_full_frames_deduplicates_by_det_id() -> None:
+    core = FilterKitCore()
+    full_dataset = [
+        {"det_id": 1, "frame_idx": 0, "det_idx": 0},
+        {"det_id": 2, "frame_idx": 0, "det_idx": 1},
+    ]
+    kept = [full_dataset[0], full_dataset[1]]  # both already present
+
+    expanded = core.expand_to_full_frames(kept, full_dataset)
+
+    assert len(expanded) == 2
+
+
+def test_filterkit_expand_to_full_frames_handles_multiple_distinct_frames() -> None:
+    """Verify expand_to_full_frames correctly handles multiple frames with distinct det_ids.
+
+    This test locks in the invariant that det_id is globally unique across frames
+    (derived from detection_id where frame_idx = detection_id // 10000,
+    det_idx = detection_id % 10000), confirming that the global dedup-by-det_id
+    is safe and does not cause unintended cross-frame collisions.
+    """
+    core = FilterKitCore()
+    full_dataset = [
+        {"det_id": 10000, "frame_idx": 1, "det_idx": 0, "path": "/tmp/f1_d0.png"},
+        {"det_id": 10001, "frame_idx": 1, "det_idx": 1, "path": "/tmp/f1_d1.png"},
+        {"det_id": 20000, "frame_idx": 2, "det_idx": 0, "path": "/tmp/f2_d0.png"},
+        {"det_id": 20001, "frame_idx": 2, "det_idx": 1, "path": "/tmp/f2_d1.png"},
+    ]
+    # Only one individual from each frame survived filtering.
+    kept = [full_dataset[0], full_dataset[2]]
+
+    expanded = core.expand_to_full_frames(kept, full_dataset)
+
+    assert {item["det_id"] for item in expanded} == {10000, 10001, 20000, 20001}
+    assert {item["frame_idx"] for item in expanded} == {1, 2}
+    assert len(expanded) == 4

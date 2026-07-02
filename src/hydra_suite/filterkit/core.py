@@ -599,8 +599,24 @@ class FilterKitCore:
         source_kind, image_paths = collect_images_for_root(Path(root))
         items: List[Dict[str, Any]] = []
         for idx, path in enumerate(image_paths):
-            items.append(
-                {
+            parsed = parse_identity_image_filename(path.name)
+            if parsed is not None:
+                item: Dict[str, Any] = {
+                    "path": str(path),
+                    "filename": path.name,
+                    "det_id": int(parsed["det_id"]),
+                    "frame_idx": int(parsed["frame_idx"]),
+                    "det_idx": int(parsed["det_idx"]),
+                    "annotations": [],
+                    "source_type": str(parsed.get("source_type", source_kind)),
+                    "interpolated": bool(parsed.get("interpolated", False)),
+                }
+                if parsed.get("detection_id") is not None:
+                    item["detection_id"] = int(parsed["detection_id"])
+                if parsed.get("trajectory_id") is not None:
+                    item["trajectory_id"] = int(parsed["trajectory_id"])
+            else:
+                item = {
                     "path": str(path),
                     "filename": path.name,
                     "det_id": idx,
@@ -610,7 +626,7 @@ class FilterKitCore:
                     "source_type": source_kind,
                     "interpolated": False,
                 }
-            )
+            items.append(item)
         return source_kind, items
 
     def load_dataset(self, folder_path: str) -> List[Dict[str, Any]]:
@@ -809,14 +825,94 @@ class FilterKitCore:
 
         return kept_items
 
+    def _group_dataset_by_frame(
+        self, dataset: List[Dict[str, Any]]
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        groups: Dict[int, List[Dict[str, Any]]] = {}
+        for item in dataset:
+            groups.setdefault(item["frame_idx"], []).append(item)
+        return groups
+
+    def compute_avg_individuals_per_frame(self, dataset: List[Dict[str, Any]]) -> float:
+        if not dataset:
+            return 1.0
+        unique_frames = {item["frame_idx"] for item in dataset}
+        if not unique_frames:
+            return 1.0
+        return len(dataset) / len(unique_frames)
+
+    def _extract_gray_feature(self, path: str, feature_size=(32, 32)):
+        img = cv2.imread(path)
+        if img is None:
+            return None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
+        return cv2.resize(gray, feature_size).flatten()
+
+    def _diversity_sample_by_frame(
+        self, dataset: List[Dict[str, Any]], n_frames: int
+    ) -> List[Dict[str, Any]]:
+        groups = self._group_dataset_by_frame(dataset)
+        frame_ids = sorted(groups)
+        if len(frame_ids) <= n_frames:
+            return dataset
+
+        frame_features = []
+        valid_frame_ids = []
+        for frame_id in frame_ids:
+            member_features = []
+            for item in groups[frame_id]:
+                feature = self._extract_gray_feature(item["path"])
+                if feature is not None:
+                    member_features.append(feature.astype(np.float64))
+            if not member_features:
+                continue
+            frame_features.append(np.mean(member_features, axis=0))
+            valid_frame_ids.append(frame_id)
+
+        if not frame_features:
+            return []
+
+        X = np.array(frame_features)
+        n_clusters = min(n_frames, len(valid_frame_ids))
+        kmeans = MiniBatchKMeans(
+            n_clusters=n_clusters, random_state=42, n_init=3, batch_size=1024
+        )
+        kmeans.fit(X)
+
+        from sklearn.metrics import pairwise_distances_argmin_min
+
+        closest, _ = pairwise_distances_argmin_min(kmeans.cluster_centers_, X)
+        selected_frame_ids = {valid_frame_ids[i] for i in sorted(set(closest))}
+
+        return [
+            item
+            for frame_id in frame_ids
+            if frame_id in selected_frame_ids
+            for item in groups[frame_id]
+        ]
+
     def diversity_sample(
-        self, dataset: List[Dict[str, Any]], n_samples: int
+        self,
+        dataset: List[Dict[str, Any]],
+        n_samples: int,
+        by_frame: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Select diverse samples using MiniBatchKMeans on resized images.
+
+        If by_frame is True, clusters on per-frame averaged features instead
+        of per-crop features, and returns every crop belonging to each
+        selected frame (n_samples is then a frame count, not a crop count).
         """
+        # When by_frame=True, n_samples is a frame count; this crop-count
+        # guard is still safe because crops >= frames, so it can only
+        # trigger in the "no sampling needed" case (see _diversity_sample_by_frame
+        # for the actual frame-count gate).
         if not dataset or len(dataset) <= n_samples:
             return dataset
+
+        if by_frame:
+            return self._diversity_sample_by_frame(dataset, n_samples)
 
         # Extract features (32x32 resized image)
         feature_size = (32, 32)
@@ -860,3 +956,29 @@ class FilterKitCore:
         selected_indices = sorted(set(closest))
 
         return [valid_items[i] for i in selected_indices]
+
+    def expand_to_full_frames(
+        self,
+        kept_dataset: List[Dict[str, Any]],
+        full_dataset: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Expand a kept selection to include every individual detected in each
+        selected frame, sourced from the original unfiltered dataset.
+        """
+        if not kept_dataset:
+            return []
+
+        kept_frame_ids = {item["frame_idx"] for item in kept_dataset}
+        groups = self._group_dataset_by_frame(full_dataset)
+
+        expanded: List[Dict[str, Any]] = []
+        seen_det_ids: set = set()
+        for frame_id in sorted(kept_frame_ids):
+            for item in sorted(groups.get(frame_id, []), key=lambda i: i["det_idx"]):
+                if item["det_id"] in seen_det_ids:
+                    continue
+                seen_det_ids.add(item["det_id"])
+                expanded.append(item)
+
+        return expanded

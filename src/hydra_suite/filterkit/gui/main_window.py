@@ -132,6 +132,7 @@ class FilterWorker(BaseWorker):
             "after_temporal": loaded_count,
             "after_dedup": loaded_count,
             "after_diversity": loaded_count,
+            "after_expansion": loaded_count,
         }
         return dataset, stats, [], []
 
@@ -226,17 +227,27 @@ class FilterWorker(BaseWorker):
         stats["after_dedup"] = len(dataset)
         return dataset, duplicate_clusters
 
-    def _run_diversity_stage(self, dataset, stats, removed_examples):
+    def _run_diversity_stage(self, dataset, stats, removed_examples, full_dataset):
         if not self.config.get("diversity_enabled"):
             self.progress.emit(95, "Step 6/7 skipped: diversity sampling disabled")
             stats["after_diversity"] = len(dataset)
             return dataset
 
+        preserve_full_frames = bool(self.config.get("preserve_full_frames", False))
         target = self.config.get("diversity_target", 1000)
-        if len(dataset) <= target:
+
+        if preserve_full_frames:
+            avg_individuals = self.core.compute_avg_individuals_per_frame(full_dataset)
+            n_samples = max(1, round(target / avg_individuals))
+            current_units = len({item["frame_idx"] for item in dataset})
+        else:
+            n_samples = target
+            current_units = len(dataset)
+
+        if current_units <= n_samples:
             self.progress.emit(
                 95,
-                f"Step 6/7 skipped: current set ({len(dataset):,}) <= target ({target:,})",
+                f"Step 6/7 skipped: current set ({current_units:,}) <= target ({n_samples:,})",
             )
             stats["after_diversity"] = len(dataset)
             return dataset
@@ -244,7 +255,9 @@ class FilterWorker(BaseWorker):
         self.progress.emit(85, "Step 6/7: Running diversity sampling")
         self.status.emit(f"Applying diversity sampling (target={target})...")
         before = list(dataset)
-        dataset = self.core.diversity_sample(dataset, target)
+        dataset = self.core.diversity_sample(
+            dataset, n_samples, by_frame=preserve_full_frames
+        )
         self._extend_removed_examples(before, dataset, "diversity", removed_examples)
         self.status.emit(f"Remaining after diversity: {len(dataset)}")
         self.progress.emit(
@@ -253,6 +266,21 @@ class FilterWorker(BaseWorker):
         )
         stats["after_diversity"] = len(dataset)
         return dataset
+
+    def _run_expansion_stage(self, dataset, stats, full_dataset, removed_examples):
+        if not self.config.get("preserve_full_frames"):
+            stats["after_expansion"] = len(dataset)
+            return dataset
+
+        self.status.emit("Expanding selection to all individuals per frame...")
+        expanded = self.core.expand_to_full_frames(dataset, full_dataset)
+        expanded_paths = {item.get("path") for item in expanded}
+        removed_examples[:] = [
+            item for item in removed_examples if item.get("path") not in expanded_paths
+        ]
+        stats["after_expansion"] = len(expanded)
+        self.status.emit(f"Expanded to {len(expanded)} crops across selected frames")
+        return expanded
 
     def _finalize_result(self, dataset, stats, removed_examples, duplicate_clusters):
         for item in dataset:
@@ -276,6 +304,7 @@ class FilterWorker(BaseWorker):
             dataset, stats, removed_examples, duplicate_clusters = (
                 self._initialize_run_state()
             )
+            full_dataset = list(dataset)
             if self._should_abort():
                 return
 
@@ -295,7 +324,15 @@ class FilterWorker(BaseWorker):
             if self._should_abort():
                 return
 
-            dataset = self._run_diversity_stage(dataset, stats, removed_examples)
+            dataset = self._run_diversity_stage(
+                dataset, stats, removed_examples, full_dataset
+            )
+            if self._should_abort():
+                return
+
+            dataset = self._run_expansion_stage(
+                dataset, stats, full_dataset, removed_examples
+            )
             if self._should_abort():
                 return
 
@@ -854,9 +891,23 @@ class FilterKitWindow(QMainWindow):
         layout.addWidget(self.chk_diversity)
         layout.addWidget(QLabel("Target selected image count:"))
         layout.addWidget(self.spin_diversity)
+        self.lbl_diversity_help = QLabel(
+            "Uses clustering to preserve visual variety. Set to your expected labeling budget."
+        )
+        self.lbl_diversity_help.setWordWrap(True)
+        self.lbl_diversity_help.setStyleSheet("color: #6a6a6a;")
+        layout.addWidget(self.lbl_diversity_help)
+
+        self.chk_preserve_full_frames = QCheckBox(
+            "Preserve all individuals per frame (for full-frame pose reconstruction)"
+        )
+        layout.addWidget(self.chk_preserve_full_frames)
         self._add_help(
             layout,
-            "Uses clustering to preserve visual variety. Set to your expected labeling budget.",
+            "Selects diverse frames instead of diverse crops, then exports every "
+            "individual detected in each selected frame — even ones that would "
+            "otherwise be dropped by quality/dedup/temporal filtering. Target "
+            "count becomes an approximate final crop count.",
         )
 
         self.chk_quality = QCheckBox("Drop low-quality crops")
@@ -892,6 +943,9 @@ class FilterKitWindow(QMainWindow):
         self.cmb_dedup_method.currentIndexChanged.connect(self._on_dedup_method_changed)
         self.chk_preserve_color.stateChanged.connect(self.update_live_estimate)
         self.chk_diversity.stateChanged.connect(self.update_live_estimate)
+        self.chk_preserve_full_frames.stateChanged.connect(
+            self._on_preserve_full_frames_toggled
+        )
         self.chk_quality.stateChanged.connect(self.update_live_estimate)
         self.spin_temporal.valueChanged.connect(self.update_live_estimate)
         self.spin_dedup.valueChanged.connect(self.update_live_estimate)
@@ -917,6 +971,19 @@ class FilterKitWindow(QMainWindow):
                 self.spin_dedup.setValue(2)
             self.spin_dedup.setSuffix(" bits")
             self.lbl_dedup_threshold.setText("Similarity threshold (Hamming bits):")
+        self.update_live_estimate()
+
+    def _on_preserve_full_frames_toggled(self):
+        if self.chk_preserve_full_frames.isChecked():
+            self.lbl_diversity_help.setText(
+                "Uses clustering to preserve visual variety. Target is now an "
+                "approximate final crop count — the tool back-solves how many "
+                "frames to select from the average individuals per frame."
+            )
+        else:
+            self.lbl_diversity_help.setText(
+                "Uses clustering to preserve visual variety. Set to your expected labeling budget."
+            )
         self.update_live_estimate()
 
     def _build_run_group(self, parent_layout):
@@ -1241,6 +1308,7 @@ class FilterKitWindow(QMainWindow):
         self.spin_color_threshold.setValue(8)
         self.chk_diversity.setChecked(cfg["diversity"][0])
         self.spin_diversity.setValue(cfg["diversity"][1])
+        self.chk_preserve_full_frames.setChecked(False)
         self.chk_quality.setChecked(cfg["quality"][0])
         self.spin_quality_blur.setValue(cfg["quality"][1])
         self.spin_quality_contrast.setValue(cfg["quality"][2])
@@ -1278,6 +1346,7 @@ class FilterKitWindow(QMainWindow):
         self.spin_color_threshold.setValue(8)
         self.chk_diversity.setChecked(True)
         self.spin_diversity.setValue(diversity_target)
+        self.chk_preserve_full_frames.setChecked(False)
         self.chk_quality.setChecked(False)
 
         self.update_live_estimate()
@@ -1338,6 +1407,7 @@ class FilterKitWindow(QMainWindow):
             "color_threshold": self.spin_color_threshold.value(),
             "diversity_enabled": self.chk_diversity.isChecked(),
             "diversity_target": self.spin_diversity.value(),
+            "preserve_full_frames": self.chk_preserve_full_frames.isChecked(),
             "quality_enabled": self.chk_quality.isChecked(),
             "quality_min_blur": self.spin_quality_blur.value(),
             "quality_min_contrast": self.spin_quality_contrast.value(),
@@ -1432,22 +1502,24 @@ class FilterKitWindow(QMainWindow):
             return
 
         loaded = s.get("loaded", 0)
-        final_count = s.get("after_diversity", 0)
+        final_count = s.get("after_expansion", s.get("after_diversity", 0))
         removed = max(0, loaded - final_count)
 
-        self.lbl_summary.setText(
-            "\n".join(
-                [
-                    "Run Summary:",
-                    f"• Loaded: {loaded:,}",
-                    f"• After quality: {s.get('after_quality', loaded):,}",
-                    f"• After temporal: {s.get('after_temporal', loaded):,}",
-                    f"• After dedup: {s.get('after_dedup', loaded):,}",
-                    f"• After diversity: {final_count:,}",
-                    f"• Total removed: {removed:,}",
-                ]
-            )
-        )
+        lines = [
+            "Run Summary:",
+            f"• Loaded: {loaded:,}",
+            f"• After quality: {s.get('after_quality', loaded):,}",
+            f"• After temporal: {s.get('after_temporal', loaded):,}",
+            f"• After dedup: {s.get('after_dedup', loaded):,}",
+            f"• After diversity: {s.get('after_diversity', loaded):,}",
+        ]
+        if s.get("after_expansion", s.get("after_diversity")) != s.get(
+            "after_diversity"
+        ):
+            lines.append(f"• After frame expansion: {final_count:,}")
+        lines.append(f"• Total removed: {removed:,}")
+
+        self.lbl_summary.setText("\n".join(lines))
 
     def load_previews(self):
         self.list_preview.clear()
