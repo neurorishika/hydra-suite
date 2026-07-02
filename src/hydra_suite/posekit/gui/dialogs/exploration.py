@@ -6,7 +6,7 @@ Exploration dialogs: Smart Select, Embedding Explorer, Frame Metadata.
 import csv
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
@@ -35,12 +35,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.posekit.core.frame_grouping import (
+    FRAME_MODE_CONFIRMATION_TEMPLATE,
+    group_indices_by_frame,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ...core.extensions import (
     EmbeddingWorker,
     cluster_embeddings_cosine,
     pick_frames_stratified,
+    select_frames_by_cluster_coverage,
 )
 from .utils import _load_dialog_settings, _save_dialog_settings, get_available_devices
 
@@ -50,19 +55,42 @@ logger = logging.getLogger("pose_label.dialogs.exploration")
 class SmartSelectDialog(QDialog):
     """Dialog for smart frame selection using embeddings and clustering."""
 
-    def __init__(self, parent, project, image_paths: List[Path], is_labeled_fn) -> None:
+    def __init__(
+        self,
+        parent,
+        project,
+        image_paths: List[Path],
+        is_labeled_fn,
+        frame_mode: bool = False,
+        source_ids: Optional[List[Any]] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Smart Select (Embeddings)")
         self.setMinimumSize(QSize(720, 420))
         self.project = project
         self.image_paths = image_paths
         self.is_labeled_fn = is_labeled_fn
+        self.frame_mode = frame_mode
+        self._frame_groups = group_indices_by_frame(
+            [p.name for p in image_paths],
+            source_ids if source_ids is not None else [None] * len(image_paths),
+        )
+        self._idx_to_frame_key = {
+            i: key for key, idxs in self._frame_groups.items() for i in idxs
+        }
 
         self._emb = None
         self._eligible_indices = None
         self._cluster = None
 
         layout = QVBoxLayout(self)
+
+        if self.frame_mode:
+            lbl_frame_mode = QLabel(
+                "Frame Mode is ON — results grouped by source frame"
+            )
+            lbl_frame_mode.setStyleSheet("font-weight: bold;")
+            layout.addWidget(lbl_frame_mode)
 
         # --- scope
         scope_row = QHBoxLayout()
@@ -189,6 +217,18 @@ class SmartSelectDialog(QDialog):
         sel_row.addWidget(self.strategy_combo, 1)
 
         layout.addLayout(sel_row)
+
+        if self.frame_mode:
+            self.min_per_spin.setEnabled(False)
+            self.min_per_spin.setToolTip(
+                "Not used in Frame Mode — frame selection uses greedy "
+                "cluster-coverage instead of per-cluster quotas."
+            )
+            self.strategy_combo.setEnabled(False)
+            self.strategy_combo.setToolTip(
+                "Not used in Frame Mode — frame selection uses greedy "
+                "cluster-coverage instead of per-cluster quotas."
+            )
 
         self.k_spin.valueChanged.connect(self._update_min_frames)
         self.min_per_spin.valueChanged.connect(self._update_min_frames)
@@ -374,6 +414,10 @@ class SmartSelectDialog(QDialog):
         return sorted(idxs)
 
     def _update_min_frames(self):
+        if self.frame_mode:
+            # Frame Mode doesn't use min_per_spin's per-cluster quota, so
+            # the k * min_per lower bound on "frames to add" doesn't apply.
+            return
         min_frames = self.k_spin.value() * self.min_per_spin.value()
         self.n_spin.setMinimum(min_frames)
         if self.n_spin.value() < min_frames:
@@ -498,6 +542,47 @@ class SmartSelectDialog(QDialog):
         self.btn_explorer.setEnabled(True)
         self.lbl_status.setText("Clusters saved. Use Export → Split method to apply.")
 
+        if self.frame_mode:
+            frame_key_of_index = {
+                idx: self._idx_to_frame_key[idx]
+                for idx in self._eligible_indices
+                if idx in self._idx_to_frame_key
+            }
+            selected_keys = select_frames_by_cluster_coverage(
+                cluster_id=cluster,
+                eligible_indices=self._eligible_indices,
+                frame_key_of_index=frame_key_of_index,
+                want_n_frames=n,
+            )
+            self.selected_indices = sorted(
+                idx for key in selected_keys for idx in self._frame_groups.get(key, [])
+            )
+
+            lines = []
+            for key in selected_keys[:300]:
+                frame_indices = self._frame_groups.get(key, [])
+                cluster_ids_in_frame = sorted(
+                    {
+                        int(cluster[self._eligible_indices.index(i)])
+                        for i in frame_indices
+                        if i in self._eligible_indices
+                    }
+                )
+                labeled_count = sum(
+                    1
+                    for i in frame_indices
+                    if self.is_labeled_fn and self.is_labeled_fn(self.image_paths[i])
+                )
+                cluster_str = ",".join(str(c) for c in cluster_ids_in_frame)
+                lines.append(
+                    f"[frame {key[1]}] covers clusters {{{cluster_str}}} — "
+                    f"{len(frame_indices)} instances ({labeled_count} labeled)"
+                )
+            if len(selected_keys) > 300:
+                lines.append(f"... ({len(selected_keys) - 300} more)")
+            self.preview.setPlainText("\n".join(lines))
+            return
+
         picked = pick_frames_stratified(
             emb=self._emb,
             cluster_id=cluster,
@@ -565,7 +650,38 @@ class SmartSelectDialog(QDialog):
         if dialog.exec_() == QDialog.Accepted:
             explorer_selected = dialog.selected_indices
             if explorer_selected:
-                global_selected = [self._eligible_indices[i] for i in explorer_selected]
+                global_selected = {self._eligible_indices[i] for i in explorer_selected}
+
+                companion_count = 0
+                frame_count = len(global_selected)
+                if self.frame_mode:
+                    keys = {
+                        self._idx_to_frame_key[i]
+                        for i in global_selected
+                        if i in self._idx_to_frame_key
+                    }
+                    expanded = {
+                        idx for key in keys for idx in self._frame_groups.get(key, [])
+                    }
+                    companions = expanded - global_selected
+                    companion_count = len(companions)
+                    frame_count = len(keys)
+                    if companions:
+                        reply = QMessageBox.question(
+                            self,
+                            "Added from Explorer",
+                            FRAME_MODE_CONFIRMATION_TEMPLATE.format(
+                                frame_count=frame_count,
+                                total_count=len(expanded),
+                                companion_count=companion_count,
+                            ),
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        if reply != QMessageBox.Yes:
+                            return
+                    global_selected = expanded
+
                 existing = set(self.selected_indices)
                 for idx in global_selected:
                     if idx not in existing:
@@ -574,7 +690,8 @@ class SmartSelectDialog(QDialog):
                 QMessageBox.information(
                     self,
                     "Added from Explorer",
-                    f"Added {len(explorer_selected)} frames.",
+                    f"Added {len(global_selected)} instance(s) from "
+                    f"{frame_count} frame(s).",
                 )
 
     def _save_csv(self):

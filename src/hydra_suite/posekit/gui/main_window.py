@@ -52,6 +52,10 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.posekit.config.schemas import PoseKitConfig
+from hydra_suite.posekit.core.frame_grouping import (
+    FRAME_MODE_CONFIRMATION_TEMPLATE,
+    group_indices_by_frame,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .canvas import FrameListDelegate, PoseCanvas
@@ -216,8 +220,13 @@ class MainWindow(QMainWindow):
         self.btn_unlabeled_to_all = left.btn_unlabeled_to_all
         self.btn_random_to_labeling = left.btn_random_to_labeling
         self.spin_random_count = left.spin_random_count
+        self.lbl_random_count = left.lbl_random_count
         self.btn_smart_select = left.btn_smart_select
         self.btn_delete_frames = left.btn_delete_frames
+        self.chk_frame_mode = left.chk_frame_mode
+        self.chk_frame_mode.setChecked(self.config.frame_mode)
+        self._update_random_count_label(self.config.frame_mode)
+        self.chk_frame_mode.toggled.connect(self._on_frame_mode_toggled)
 
         # Canvas
         # Load UI settings - will be applied after widgets are created
@@ -2684,35 +2693,116 @@ class MainWindow(QMainWindow):
         logger.debug("Rebuild labeling set (after): %s", sorted(self.labeling_frames))
 
     def _move_unlabeled_to_labeling(self):
-        """Move unlabeled frames from the current source into the labeling set."""
-        for idx, img_path in enumerate(self.image_paths):
-            if (
-                self._matches_current_source(idx)
-                and not self._is_labeled(img_path)
-                and idx not in self.labeling_frames
-            ):
-                self.labeling_frames.add(idx)
-        self._populate_frames()
-        self._select_frame_in_list(self.current_index, trigger_load=False)
+        """Move the selected unlabeled frames into the labeling set."""
+        candidates = [
+            idx
+            for idx in self._collect_selected_indices()
+            if self._matches_current_source(idx)
+            and not self._is_labeled(self.image_paths[idx])
+            and idx not in self.labeling_frames
+        ]
+        if not candidates:
+            QMessageBox.information(
+                self, "No frames", "Select one or more unlabeled frames first."
+            )
+            return
+        self._add_indices_to_labeling(candidates, "Unlabeled to Labeling")
 
     def _move_unlabeled_to_all(self):
         """Move unlabeled frames from the current source back to the source browser."""
         unlabeled_to_remove = []
-        for idx in list(self.labeling_frames):
-            if self._matches_current_source(idx) and not self._is_labeled(
-                self.image_paths[idx]
-            ):
-                unlabeled_to_remove.append(idx)
+        skipped_frames = 0
+
+        if self.config.frame_mode:
+            groups = group_indices_by_frame(
+                [p.name for p in self.image_paths],
+                [self._source_id_for_index(i) for i in range(len(self.image_paths))],
+            )
+            idx_to_key = {i: key for key, idxs in groups.items() for i in idxs}
+            candidate_keys = set()
+            for idx in self.labeling_frames:
+                if self._matches_current_source(idx) and not self._is_labeled(
+                    self.image_paths[idx]
+                ):
+                    key = idx_to_key.get(idx)
+                    if key is not None:
+                        candidate_keys.add(key)
+            for key in candidate_keys:
+                frame_indices = groups[key]
+                if any(self._is_labeled(self.image_paths[i]) for i in frame_indices):
+                    skipped_frames += 1
+                    continue
+                unlabeled_to_remove.extend(
+                    i for i in frame_indices if i in self.labeling_frames
+                )
+        else:
+            for idx in list(self.labeling_frames):
+                if self._matches_current_source(idx) and not self._is_labeled(
+                    self.image_paths[idx]
+                ):
+                    unlabeled_to_remove.append(idx)
+
         for idx in unlabeled_to_remove:
-            self.labeling_frames.remove(idx)
+            self.labeling_frames.discard(idx)
         self._populate_frames()
         self._select_frame_in_list(self.current_index, trigger_load=False)
+        if skipped_frames:
+            QMessageBox.information(
+                self,
+                "Frames kept",
+                f"{skipped_frames} frame(s) were kept in the labeling set "
+                "because at least one instance on each is already labeled.",
+            )
+
+    def _on_frame_mode_toggled(self, checked: bool) -> None:
+        """Persist the Frame Mode checkbox state to the runtime config."""
+        self.config.frame_mode = bool(checked)
+        self._update_random_count_label(self.config.frame_mode)
+
+    def _update_random_count_label(self, frame_mode: bool) -> None:
+        """Relabel the Random Selection count spinbox for Frame Mode."""
+        if frame_mode:
+            self.lbl_random_count.setText("Frames")
+            self.lbl_random_count.setToolTip(
+                "Number of source frames to sample (each frame's "
+                "individuals are added together)."
+            )
+        else:
+            self.lbl_random_count.setText("Count")
+            self.lbl_random_count.setToolTip("Number of unlabeled crops to sample.")
 
     def _add_random_to_labeling(self):
         """Add random unlabeled frames from All Frames list to labeling set."""
         import random
 
         count = self.spin_random_count.value()
+
+        if self.config.frame_mode:
+            groups = group_indices_by_frame(
+                [p.name for p in self.image_paths],
+                [self._source_id_for_index(i) for i in range(len(self.image_paths))],
+            )
+            candidate_keys = [
+                key
+                for key, idxs in groups.items()
+                if any(
+                    self._matches_current_source(i)
+                    and not self._is_labeled(self.image_paths[i])
+                    and i not in self.labeling_frames
+                    for i in idxs
+                )
+            ]
+            if not candidate_keys:
+                QMessageBox.information(
+                    self,
+                    "No frames",
+                    "No unlabeled frames available in All Frames list.",
+                )
+                return
+            chosen_keys = random.sample(candidate_keys, min(count, len(candidate_keys)))
+            to_add = [idx for key in chosen_keys for idx in groups[key]]
+            self._add_indices_to_labeling(to_add, "Random Selection")
+            return
 
         # Get all unlabeled frames from the current source browser.
         candidates = []
@@ -2732,14 +2822,7 @@ class MainWindow(QMainWindow):
 
         # Randomly select up to 'count' frames
         to_add = random.sample(candidates, min(count, len(candidates)))
-        for idx in to_add:
-            self.labeling_frames.add(idx)
-
-        self._populate_frames()
-        self._select_frame_in_list(self.current_index, trigger_load=False)
-        QMessageBox.information(
-            self, "Added frames", f"Added {len(to_add)} frames to labeling set."
-        )
+        self._add_indices_to_labeling(to_add, "Random Selection")
 
     def _on_kpt_selected(self, row: int):
         if row < 0:
@@ -3437,6 +3520,31 @@ class MainWindow(QMainWindow):
         img_path = self.image_paths[self.current_index]
         label_path = self._label_path_for(img_path)
 
+        companions: set = set()
+        if self.config.frame_mode and self.current_index not in self.labeling_frames:
+            expanded, frame_count = self._frame_expansion({self.current_index})
+            companions = expanded - {self.current_index}
+            if companions:
+                reply = QMessageBox.question(
+                    self,
+                    "Add frame to labeling set",
+                    FRAME_MODE_CONFIRMATION_TEMPLATE.format(
+                        frame_count=frame_count,
+                        total_count=len(expanded),
+                        companion_count=len(companions),
+                    ),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply != QMessageBox.Yes:
+                    self._ann = self._load_ann_from_disk(self.current_index)
+                    self._rebuild_canvas()
+                    self._dirty = False
+                    self.statusBar().showMessage(
+                        "Save canceled — edits discarded.", 3000
+                    )
+                    return
+
         cls = int(self.class_combo.currentIndex())
         self._ann.cls = cls
 
@@ -3457,6 +3565,9 @@ class MainWindow(QMainWindow):
         if self._autosave_timer.isActive():
             self._autosave_timer.stop()
         self._dirty = False
+
+        if companions:
+            self.labeling_frames.update(companions)
 
         # Only refresh UI if we're staying on the current frame
         if refresh_ui:
@@ -3940,7 +4051,16 @@ class MainWindow(QMainWindow):
 
     def open_smart_select(self: object) -> object:
         """open_smart_select method documentation."""
-        dlg = SmartSelectDialog(self, self.project, self.image_paths, self._is_labeled)
+        dlg = SmartSelectDialog(
+            self,
+            self.project,
+            self.image_paths,
+            self._is_labeled,
+            frame_mode=self.config.frame_mode,
+            source_ids=[
+                self._source_id_for_index(i) for i in range(len(self.image_paths))
+            ],
+        )
         if dlg.exec() != QDialog.Accepted or not getattr(dlg, "_did_add", False):
             return
 
@@ -3949,18 +4069,69 @@ class MainWindow(QMainWindow):
         if not picked:
             return
 
-        self._add_indices_to_labeling(picked, "Smart Select")
+        # Smart Select's own preview already discloses the full frame
+        # expansion, so no second confirmation is shown here.
+        self._add_indices_to_labeling(picked, "Smart Select", disclosed=True)
 
-    def _add_indices_to_labeling(self, indices: List[int], title: str):
-        if not indices:
-            return
-        for idx in indices:
-            self.labeling_frames.add(int(idx))
+    def _frame_expansion(self, indices: set) -> tuple:
+        """Return (expanded_indices, distinct_frame_count) for the frames touched by `indices`."""
+        groups = group_indices_by_frame(
+            [p.name for p in self.image_paths],
+            [self._source_id_for_index(i) for i in range(len(self.image_paths))],
+        )
+        idx_to_key = {i: key for key, idxs in groups.items() for i in idxs}
+        keys = {idx_to_key[i] for i in indices if i in idx_to_key}
+        expanded: set = set()
+        for key in keys:
+            expanded.update(groups[key])
+        return expanded, len(keys)
+
+    def _add_indices_to_labeling(
+        self, indices: List[int], title: str, disclosed: bool = False
+    ) -> bool:
+        """Add `indices` to the labeling set.
+
+        In Frame Mode, expands `indices` to every companion instance
+        sharing a frame with any of them, and — unless `disclosed` is
+        True (the caller already showed the user the full expansion) —
+        confirms via a dialog before committing. Returns True if
+        anything was added or there was nothing to add, False if the
+        user canceled a Frame Mode confirmation.
+        """
+        to_add = {int(idx) for idx in indices if int(idx) not in self.labeling_frames}
+        if not to_add:
+            return True
+
+        companion_count = 0
+        frame_count = len(to_add)
+        if self.config.frame_mode:
+            expanded, frame_count = self._frame_expansion(to_add)
+            companions = expanded - to_add
+            companion_count = len(companions)
+            total_count = len(expanded)
+            to_add = expanded - self.labeling_frames
+            if companions and not disclosed:
+                reply = QMessageBox.question(
+                    self,
+                    title,
+                    FRAME_MODE_CONFIRMATION_TEMPLATE.format(
+                        frame_count=frame_count,
+                        total_count=total_count,
+                        companion_count=companion_count,
+                    ),
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply != QMessageBox.Yes:
+                    return False
+
+        self.labeling_frames.update(to_add)
         self._populate_frames()
         self._select_frame_in_list(self.current_index)
         QMessageBox.information(
-            self, title, f"Added {len(indices)} frames to labeling set."
+            self, title, f"Added {len(to_add)} frame(s) to labeling set."
         )
+        return True
 
     def _collect_selected_indices(self) -> List[int]:
         idxs = set()

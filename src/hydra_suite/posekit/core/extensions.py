@@ -20,7 +20,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -506,6 +506,62 @@ def pick_frames_stratified(
     # ensure exact want_n (rare over/under due to edge cases)
     out = out[:want_n]
     return out
+
+
+def select_frames_by_cluster_coverage(
+    cluster_id: np.ndarray,
+    eligible_indices: List[int],
+    frame_key_of_index: Dict[int, Any],
+    want_n_frames: int,
+) -> List[Any]:
+    """Greedily select frame keys to maximize embedding-cluster coverage.
+
+    `cluster_id` is aligned with `eligible_indices` (cluster_id[i] is the
+    cluster of eligible_indices[i], matching cluster_embeddings_cosine's
+    output convention). `frame_key_of_index` maps a subset (or all) of
+    `eligible_indices` to an opaque, comparable per-source frame key (see
+    `hydra_suite.posekit.core.frame_grouping.group_indices_by_frame`).
+
+    Diversity is scored on the true per-individual embeddings/clusters —
+    never averaged across a frame's companions. Each round picks the
+    frame covering the most not-yet-covered clusters; ties break on (a)
+    total distinct clusters spanned, then (b) the smallest frame key, for
+    determinism. Once all clusters are covered, remaining picks continue
+    to use the same ranking (which naturally falls back to "most total
+    distinct clusters" once new-coverage is zero for every candidate),
+    so the full requested budget is used rather than under-filling.
+
+    Returns the selected frame keys, in selection order.
+    """
+    want_n_frames = max(0, int(want_n_frames))
+    if want_n_frames == 0 or not eligible_indices:
+        return []
+
+    frame_clusters: Dict[Any, set] = {}
+    for local, global_idx in enumerate(eligible_indices):
+        key = frame_key_of_index.get(global_idx)
+        if key is None:
+            continue
+        frame_clusters.setdefault(key, set()).add(int(cluster_id[local]))
+
+    covered: set = set()
+    selected: List[Any] = []
+    remaining = set(frame_clusters.keys())
+
+    while remaining and len(selected) < want_n_frames:
+        best_key = min(
+            remaining,
+            key=lambda k: (
+                -len(frame_clusters[k] - covered),
+                -len(frame_clusters[k]),
+                k,
+            ),
+        )
+        selected.append(best_key)
+        covered.update(frame_clusters[best_key])
+        remaining.discard(best_key)
+
+    return selected
 
 
 # -----------------------------
