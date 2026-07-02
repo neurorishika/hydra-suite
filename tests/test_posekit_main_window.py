@@ -422,3 +422,96 @@ def test_save_current_already_in_labeling_set_skips_confirmation(monkeypatch):
     MainWindow.save_current(window)
 
     assert len(save_calls) == 1
+
+
+def test_move_unlabeled_to_labeling_only_moves_selected(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    def add_indices_stub(indices, title):
+        window.labeling_frames.update(indices)
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png"), Path("b.png"), Path("c.png")],
+        labeling_frames=set(),
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _collect_selected_indices=lambda: [1],
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _add_indices_to_labeling=add_indices_stub,
+    )
+
+    MainWindow._move_unlabeled_to_labeling(window)
+
+    assert window.labeling_frames == {1}
+
+
+def test_move_unlabeled_to_labeling_frame_mode_expands_selection(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+    from hydra_suite.posekit.core.frame_grouping import group_indices_by_frame
+
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes)
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    def add_indices_stub(indices, title):
+        # Simulate frame expansion for frame mode
+        groups = group_indices_by_frame(
+            [p.name for p in window.image_paths],
+            [window._source_id_for_index(i) for i in range(len(window.image_paths))],
+        )
+        idx_to_key = {i: key for key, idxs in groups.items() for i in idxs}
+        keys = {idx_to_key[i] for i in indices if i in idx_to_key}
+        expanded = set()
+        for key in keys:
+            expanded.update(groups[key])
+        window.labeling_frames.update(expanded)
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _collect_selected_indices=lambda: [0],
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _add_indices_to_labeling=add_indices_stub,
+    )
+
+    MainWindow._move_unlabeled_to_labeling(window)
+
+    assert window.labeling_frames == {0, 1}
+
+
+def test_move_unlabeled_to_labeling_no_selection_shows_info(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    info_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append(a)),
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png")],
+        labeling_frames=set(),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _collect_selected_indices=lambda: [],
+        _populate_frames=lambda: None,
+    )
+
+    MainWindow._move_unlabeled_to_labeling(window)
+
+    assert len(info_calls) == 1
+    assert window.labeling_frames == set()

@@ -2688,16 +2688,20 @@ class MainWindow(QMainWindow):
         logger.debug("Rebuild labeling set (after): %s", sorted(self.labeling_frames))
 
     def _move_unlabeled_to_labeling(self):
-        """Move unlabeled frames from the current source into the labeling set."""
-        for idx, img_path in enumerate(self.image_paths):
-            if (
-                self._matches_current_source(idx)
-                and not self._is_labeled(img_path)
-                and idx not in self.labeling_frames
-            ):
-                self.labeling_frames.add(idx)
-        self._populate_frames()
-        self._select_frame_in_list(self.current_index, trigger_load=False)
+        """Move the selected unlabeled frames into the labeling set."""
+        candidates = [
+            idx
+            for idx in self._collect_selected_indices()
+            if self._matches_current_source(idx)
+            and not self._is_labeled(self.image_paths[idx])
+            and idx not in self.labeling_frames
+        ]
+        if not candidates:
+            QMessageBox.information(
+                self, "No frames", "Select one or more unlabeled frames first."
+            )
+            return
+        self._add_indices_to_labeling(candidates, "Unlabeled to Labeling")
 
     def _move_unlabeled_to_all(self):
         """Move unlabeled frames from the current source back to the source browser."""
