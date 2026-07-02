@@ -572,7 +572,7 @@ def test_tracking_worker_realtime_streams_live_pose_tag_and_cnn_into_assignment(
     )
 
     with pytest.raises(_StopAtAssociation):
-        worker.run()
+        worker._run_impl()
 
     association_data = captured["association_data"]
     assert association_data["detection_tag_ids"] == [42]
@@ -703,7 +703,7 @@ def test_tracking_worker_realtime_does_not_mark_pose_directed_when_pose_is_weak(
     )
 
     with pytest.raises(_StopAtAssociation):
-        worker.run()
+        worker._run_impl()
 
     assert np.isfinite(captured["association_data"]["detection_pose_heading"][0])
     np.testing.assert_array_equal(captured["meas_ori_directed"], [0])
@@ -813,7 +813,7 @@ def test_tracking_worker_realtime_keeps_cnn_hints_out_of_assignment_when_online_
     )
 
     with pytest.raises(_StopAtAssociation):
-        worker.run()
+        worker._run_impl()
 
     association_data = captured["association_data"]
     assert association_data["detection_tag_ids"] == [42]
@@ -876,7 +876,7 @@ def test_tracking_worker_realtime_ignores_existing_detection_cache(
     )
 
     with pytest.raises(_StopOnWrite):
-        worker.run()
+        worker._run_impl()
 
     assert cache_modes == ["w"]
 
@@ -922,7 +922,7 @@ def test_tracking_worker_forward_yolo_without_detection_cache_still_initializes_
     )
 
     with pytest.raises(_StopAtDetection):
-        worker.run()
+        worker._run_impl()
 
     assert detector_calls == [{"created": True}]
 
@@ -1025,7 +1025,7 @@ def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
     )
 
     with pytest.raises(_StopAtAssociation):
-        worker.run()
+        worker._run_impl()
 
     assert captured["meas"].shape == (1, 3)
 
@@ -1250,7 +1250,7 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
         detection_cache_path=str(detection_cache_path),
     )
     forward_worker.set_parameters(dict(base_params))
-    forward_worker.run()
+    forward_worker._run_impl()
 
     assert _ArtifactWritingUnifiedPrecompute.instances
     assert _ArtifactWritingUnifiedPrecompute.instances[-1].process_calls == 1
@@ -1301,7 +1301,7 @@ def test_realtime_forward_finalizes_artifacts_and_downstream_consumers_reuse_the
         backward_params = dict(base_params)
         backward_params["INDIVIDUAL_PROPERTIES_CACHE_PATH"] = str(pose_cache_path)
         backward_worker.set_parameters(backward_params)
-        backward_worker.run()
+        backward_worker._run_impl()
         assert backward_worker.frame_count == 1
 
         width, height = InterpolatedCropsWorker._get_detection_size(
@@ -1420,7 +1420,7 @@ def test_non_realtime_forward_defaults_to_streaming_individual_analysis(
         }
     )
 
-    worker.run()
+    worker._run_impl()
 
     assert _ArtifactWritingUnifiedPrecompute.instances
     assert _ArtifactWritingUnifiedPrecompute.instances[-1].process_calls == 1

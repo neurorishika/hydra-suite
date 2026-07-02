@@ -963,7 +963,33 @@ class TrackingWorker(QThread):
             video_path=self.video_path,
         )
 
-    def run(self: object) -> object:  # noqa: C901
+    def run(self: object) -> object:
+        """QThread entry point: delegate to ``_run_impl``, guaranteeing ``finished_signal``.
+
+        ``_run_impl`` is a large, deeply nested pipeline (video decode,
+        detection, tracking, post-processing) with many early-return error
+        paths, but no blanket exception handler. PySide6 silently swallows
+        any exception that escapes a QThread's ``run()`` override (it prints
+        "Error calling Python override of QThread::run()" and returns), so
+        without this wrapper an unexpected exception anywhere in
+        ``_run_impl`` — e.g. an NVDec hardware-decode failure raised lazily
+        on the first frame read for a clip whose resolution exceeds the
+        GPU's macroblock limit — leaves ``finished_signal`` never emitted.
+        Callers that block on it (e.g. headless_tracking.py's
+        ``QEventLoop.exec()``) then hang forever instead of surfacing a
+        clean error.
+        """
+        try:
+            self._run_impl()
+        except Exception:
+            logger.exception(
+                "Unhandled exception in TrackingWorker.run(); emitting "
+                "finished_signal(False, ...) so callers waiting on it "
+                "(e.g. the headless CLI's QEventLoop) don't hang forever."
+            )
+            self.finished_signal.emit(False, [], [])
+
+    def _run_impl(self: object) -> object:  # noqa: C901
         """Execute tracking pipeline for the configured video and parameters."""
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
