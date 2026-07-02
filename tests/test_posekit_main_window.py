@@ -169,12 +169,44 @@ def test_on_frame_mode_toggled_updates_config():
     from hydra_suite.posekit.config.schemas import PoseKitConfig
 
     window = SimpleNamespace(config=PoseKitConfig())
+    window._update_random_count_label = (
+        lambda frame_mode: MainWindow._update_random_count_label(window, frame_mode)
+    )
+    window.lbl_random_count = SimpleNamespace(
+        setText=lambda _text: None, setToolTip=lambda _tip: None
+    )
 
     MainWindow._on_frame_mode_toggled(window, True)
     assert window.config.frame_mode is True
 
     MainWindow._on_frame_mode_toggled(window, False)
     assert window.config.frame_mode is False
+
+
+def test_on_frame_mode_toggled_relabels_random_count_spinbox():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    texts = []
+    tooltips = []
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(),
+        lbl_random_count=SimpleNamespace(
+            setText=lambda text: texts.append(text),
+            setToolTip=lambda tip: tooltips.append(tip),
+        ),
+    )
+    window._update_random_count_label = (
+        lambda frame_mode: MainWindow._update_random_count_label(window, frame_mode)
+    )
+
+    MainWindow._on_frame_mode_toggled(window, True)
+    assert texts[-1] == "Frames"
+    assert "frames" in tooltips[-1].lower()
+
+    MainWindow._on_frame_mode_toggled(window, False)
+    assert texts[-1] == "Count"
+    assert "crops" in tooltips[-1].lower()
 
 
 def test_frame_expansion_groups_by_source_and_frame():
@@ -228,6 +260,45 @@ def test_add_indices_to_labeling_frame_mode_expands_and_confirms(monkeypatch):
     assert result is True
     assert window.labeling_frames == {0, 1}
     assert calls == ["asked"]
+
+
+def test_add_indices_to_labeling_confirmation_counts_total_not_just_new(monkeypatch):
+    """Total instance count in the confirmation must reflect all instances on
+    the touched frame, even those already present in labeling_frames — not
+    just the newly-added ones (regression for total_count vs len(to_add))."""
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    messages = []
+
+    def fake_question(_self, _title, message, *args, **kwargs):
+        messages.append(message)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[
+            Path("did10000.jpg"),
+            Path("did10001.jpg"),
+        ],
+        _source_id_for_index=lambda idx: "src_a",
+        # Index 0 is already in the labeling set; only index 1 is new, but
+        # both belong to the same frame, so the total should be 2.
+        labeling_frames={0},
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [1], "Test")
+
+    assert result is True
+    assert window.labeling_frames == {0, 1}
+    assert len(messages) == 1
+    assert "comprising 2 total instance(s)" in messages[0]
 
 
 def test_add_indices_to_labeling_frame_mode_cancel_adds_nothing(monkeypatch):

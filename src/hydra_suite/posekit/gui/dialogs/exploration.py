@@ -35,7 +35,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.posekit.core.frame_grouping import group_indices_by_frame
+from hydra_suite.posekit.core.frame_grouping import (
+    FRAME_MODE_CONFIRMATION_TEMPLATE,
+    group_indices_by_frame,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ...core.extensions import (
@@ -667,10 +670,11 @@ class SmartSelectDialog(QDialog):
                         reply = QMessageBox.question(
                             self,
                             "Added from Explorer",
-                            f"This will add {frame_count} frame(s) comprising "
-                            f"{len(expanded)} total instance(s), including "
-                            f"{companion_count} companion instance(s), to the "
-                            "labeling set. Continue?",
+                            FRAME_MODE_CONFIRMATION_TEMPLATE.format(
+                                frame_count=frame_count,
+                                total_count=len(expanded),
+                                companion_count=companion_count,
+                            ),
                             QMessageBox.Yes | QMessageBox.No,
                             QMessageBox.Yes,
                         )

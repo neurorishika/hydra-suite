@@ -108,11 +108,16 @@ class PoseSourceBrowserPanel(QWidget):
         self.btn_random_to_labeling.setToolTip(
             "Add random unlabeled frames from the current source to labeling"
         )
+        random_count_row = QHBoxLayout()
+        self.lbl_random_count = QLabel("Count")
+        self.lbl_random_count.setToolTip("Number of unlabeled crops to sample.")
         self.spin_random_count = QSpinBox()
         self.spin_random_count.setRange(1, 1000)
         self.spin_random_count.setValue(10)
+        random_count_row.addWidget(self.lbl_random_count)
+        random_count_row.addWidget(self.spin_random_count, 1)
         frame_btns.addWidget(self.btn_random_to_labeling, 1, 0)
-        frame_btns.addWidget(self.spin_random_count, 1, 1)
+        frame_btns.addLayout(random_count_row, 1, 1)
 
         self.btn_smart_select = QPushButton("Smart Select…")
         self.btn_smart_select.setToolTip(

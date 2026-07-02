@@ -52,7 +52,10 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.posekit.config.schemas import PoseKitConfig
-from hydra_suite.posekit.core.frame_grouping import group_indices_by_frame
+from hydra_suite.posekit.core.frame_grouping import (
+    FRAME_MODE_CONFIRMATION_TEMPLATE,
+    group_indices_by_frame,
+)
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .canvas import FrameListDelegate, PoseCanvas
@@ -217,10 +220,12 @@ class MainWindow(QMainWindow):
         self.btn_unlabeled_to_all = left.btn_unlabeled_to_all
         self.btn_random_to_labeling = left.btn_random_to_labeling
         self.spin_random_count = left.spin_random_count
+        self.lbl_random_count = left.lbl_random_count
         self.btn_smart_select = left.btn_smart_select
         self.btn_delete_frames = left.btn_delete_frames
         self.chk_frame_mode = left.chk_frame_mode
         self.chk_frame_mode.setChecked(self.config.frame_mode)
+        self._update_random_count_label(self.config.frame_mode)
         self.chk_frame_mode.toggled.connect(self._on_frame_mode_toggled)
 
         # Canvas
@@ -2752,6 +2757,19 @@ class MainWindow(QMainWindow):
     def _on_frame_mode_toggled(self, checked: bool) -> None:
         """Persist the Frame Mode checkbox state to the runtime config."""
         self.config.frame_mode = bool(checked)
+        self._update_random_count_label(self.config.frame_mode)
+
+    def _update_random_count_label(self, frame_mode: bool) -> None:
+        """Relabel the Random Selection count spinbox for Frame Mode."""
+        if frame_mode:
+            self.lbl_random_count.setText("Frames")
+            self.lbl_random_count.setToolTip(
+                "Number of source frames to sample (each frame's "
+                "individuals are added together)."
+            )
+        else:
+            self.lbl_random_count.setText("Count")
+            self.lbl_random_count.setToolTip("Number of unlabeled crops to sample.")
 
     def _add_random_to_labeling(self):
         """Add random unlabeled frames from All Frames list to labeling set."""
@@ -3510,10 +3528,11 @@ class MainWindow(QMainWindow):
                 reply = QMessageBox.question(
                     self,
                     "Add frame to labeling set",
-                    f"This will add {frame_count} frame(s) comprising "
-                    f"{len(expanded)} total instance(s), including "
-                    f"{len(companions)} companion instance(s), to the "
-                    "labeling set. Continue?",
+                    FRAME_MODE_CONFIRMATION_TEMPLATE.format(
+                        frame_count=frame_count,
+                        total_count=len(expanded),
+                        companion_count=len(companions),
+                    ),
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes,
                 )
@@ -4089,15 +4108,17 @@ class MainWindow(QMainWindow):
             expanded, frame_count = self._frame_expansion(to_add)
             companions = expanded - to_add
             companion_count = len(companions)
+            total_count = len(expanded)
             to_add = expanded - self.labeling_frames
             if companions and not disclosed:
                 reply = QMessageBox.question(
                     self,
                     title,
-                    f"This will add {frame_count} frame(s) comprising "
-                    f"{len(to_add)} total instance(s), including "
-                    f"{companion_count} companion instance(s), to the "
-                    "labeling set. Continue?",
+                    FRAME_MODE_CONFIRMATION_TEMPLATE.format(
+                        frame_count=frame_count,
+                        total_count=total_count,
+                        companion_count=companion_count,
+                    ),
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes,
                 )

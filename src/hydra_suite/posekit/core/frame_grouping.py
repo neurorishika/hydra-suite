@@ -12,6 +12,12 @@ from typing import Any, Sequence
 
 from hydra_suite.core.identity.dataset.naming import parse_identity_image_filename
 
+FRAME_MODE_CONFIRMATION_TEMPLATE = (
+    "This will add {frame_count} frame(s) comprising {total_count} total "
+    "instance(s), including {companion_count} companion instance(s), to the "
+    "labeling set. Continue?"
+)
+
 
 def group_indices_by_frame(
     filenames: Sequence[str], source_ids: Sequence[Any]
