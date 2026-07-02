@@ -634,6 +634,14 @@ class DirectTensorRTOBBExecutor(_BaseDirectOBBExecutor):
         # Store the model's static batch size for chunking in predict().
         batch_dim = self.engine.get_tensor_shape(self._input_name)[0]
         self._model_batch_size = int(batch_dim) if batch_dim > 0 else 1
+        # A numeric (fixed) batch dim -- including exactly 1, the common case
+        # for these OBB/detect engines exported with batch=1 -- means predict()
+        # MUST chunk down to it. Without this, `model_bs > 1` alone misses the
+        # batch=1 case and predict() feeds the whole multi-frame batch straight
+        # to the engine, which TensorRT rejects outright
+        # ("IExecutionContext::setInputShape: ... Static dimension mismatch").
+        # Dynamic-axis engines report -1 here and should NOT be chunked.
+        self._static_batch: bool = batch_dim > 0
         # Use a dedicated non-default CUDA stream so TensorRT does not inject extra
         # cudaStreamSynchronize() calls that it adds when running on the default stream.
         import torch
