@@ -10,7 +10,7 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-06-30-inference-runtime-tiers-design/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-07-01-filterkit-preserve-full-frames-design/">
       
       
       
@@ -20,7 +20,7 @@
     
     
       
-        <title>Inference Runtime Tiers — Unified Design - HYDRA Suite Docs</title>
+        <title>FilterKit: Preserve Full Frames Mode - HYDRA Suite Docs</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#inference-runtime-tiers-unified-design" class="md-skip">
+        <a href="#filterkit-preserve-full-frames-mode" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Inference Runtime Tiers — Unified Design
+              FilterKit: Preserve Full Frames Mode
             
           </span>
         </div>
@@ -1168,27 +1168,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developer-guide/inference-fast-mode/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Inference Fast Mode
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
@@ -1685,100 +1664,82 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#1-motivation" class="md-nav__link">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Motivation
+      Problem
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-north-star-principle" class="md-nav__link">
+  <a href="#goals" class="md-nav__link">
     <span class="md-ellipsis">
-      2. North-Star Principle
+      Goals
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#3-the-three-user-facing-tiers" class="md-nav__link">
+  <a href="#non-goals" class="md-nav__link">
     <span class="md-ellipsis">
-      3. The Three User-Facing Tiers
+      Non-goals
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#4-central-component-runtimeresolver" class="md-nav__link">
+  <a href="#design" class="md-nav__link">
     <span class="md-ellipsis">
-      4. Central Component: RuntimeResolver
+      Design
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-user-facing-changes-gui-ui-matches-the-backend" class="md-nav__link">
-    <span class="md-ellipsis">
-      5. User-Facing Changes (GUI) — "UI matches the backend"
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-migration-hard-cutover" class="md-nav__link">
-    <span class="md-ellipsis">
-      6. Migration (Hard Cutover)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-fast-mode-export-coverage-hard-requirement" class="md-nav__link">
-    <span class="md-ellipsis">
-      7. Fast-Mode Export Coverage (hard requirement)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#8-phasing" class="md-nav__link">
-    <span class="md-ellipsis">
-      8. Phasing
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="8. Phasing">
+    <nav class="md-nav" aria-label="Design">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#phase-1-native-gpu-exact-wins-independent-ships-first" class="md-nav__link">
+  <a href="#config" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 1 — Native-GPU exact wins (independent, ships first)
+      Config
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-2-runtime-tier-taxonomy" class="md-nav__link">
+  <a href="#diversity-stage-corepy" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 2 — Runtime tier taxonomy
+      Diversity stage (core.py)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-3-native-coreml-fast-mode-apple" class="md-nav__link">
+  <a href="#finalize-expansion-step" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 3 — Native CoreML fast-mode (Apple)
+      Finalize / expansion step
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gui-main_windowpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      GUI (main_window.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#export" class="md-nav__link">
+    <span class="md-ellipsis">
+      Export
     </span>
   </a>
   
@@ -1790,27 +1751,18 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#9-testing" class="md-nav__link">
+  <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
-      9. Testing
+      Testing
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#10-error-handling" class="md-nav__link">
+  <a href="#open-questions-risks" class="md-nav__link">
     <span class="md-ellipsis">
-      10. Error Handling
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#11-non-goals" class="md-nav__link">
-    <span class="md-ellipsis">
-      11. Non-Goals
+      Open questions / risks
     </span>
   </a>
   
@@ -1831,7 +1783,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-06-30-inference-runtime-tiers-design.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-07-01-filterkit-preserve-full-frames-design.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1839,309 +1791,108 @@
   
 
 
-<h1 id="inference-runtime-tiers-unified-design">Inference Runtime Tiers — Unified Design<a class="headerlink" href="#inference-runtime-tiers-unified-design" title="Permanent link">&para;</a></h1>
-<p><strong>Status:</strong> Approved design (north star). Implemented in phases; each phase gets
-its own implementation plan derived from this document.</p>
-<p><strong>Date:</strong> 2026-06-30</p>
-<p><strong>Supersedes for runtime selection:</strong> the 7-runtime <code>compute_runtime</code> model
-(<code>cpu</code>, <code>mps</code>, <code>cuda</code>, <code>onnx_cpu</code>, <code>onnx_cuda</code>, <code>onnx_coreml</code>, <code>tensorrt</code>) and
-per-stage runtime selection.</p>
-<hr />
-<h2 id="1-motivation">1. Motivation<a class="headerlink" href="#1-motivation" title="Permanent link">&para;</a></h2>
-<p>The inference pipeline currently exposes <strong>seven</strong> compute runtimes, selectable
-<strong>per stage</strong> (OBB, head-tail, CNN, pose each carry their own
-<code>compute_runtime</code>). Benchmarking (<code>tools/equivalence/opt_microbench.py</code>, CUDA
-RTX 6000 Ada + Apple M3 Max, 2026-06-30) showed most of these options are
-dominated or broken:</p>
+<h1 id="filterkit-preserve-full-frames-mode">FilterKit: Preserve Full Frames Mode<a class="headerlink" href="#filterkit-preserve-full-frames-mode" title="Permanent link">&para;</a></h1>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>FilterKit's diversity sampler currently treats each individual-animal crop as an
+independent item: it clusters on raw pixel features and keeps one representative
+crop per cluster, discarding the rest. This is fine for building a diverse
+<em>classification</em>-style dataset, but it destroys the ability to reconstruct a
+full video frame with all its animals — which is what's needed to later build
+multi-animal ("bottom-up") pose training data in PoseKit.</p>
+<p>We want an opt-in mode where, instead of keeping only the most diverse
+individual crops, FilterKit selects a diverse set of <em>frames</em> and keeps every
+individual's crop from each selected frame.</p>
+<h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>onnx_cuda</code> classifier: <strong>12% slower</strong> than native <code>cuda</code> — strictly dominated.</li>
-<li><code>onnx_cpu</code> for OBB: <strong>broken on non-CUDA hosts</strong> — the direct OBB executor
-  hardcodes <code>cuda:0</code> staging and requires <code>CUDAExecutionProvider</code>
-  (<code>_direct_obb_runtime.py:76,402-410</code>).</li>
-<li><code>onnx_coreml</code> for OBB: fails on dynamic shapes (E5RT unbounded dimension).</li>
-<li><code>tensorrt</code> classifier: only <strong>4.5% faster</strong> than native <code>cuda</code>, and non-exact.</li>
-<li><code>onnx_coreml</code> <strong>classifier</strong> on Mac: <strong>1.4–1.7× faster</strong> than native MPS — a
-  genuine win, the one ONNX case worth keeping.</li>
+<li>Add a <code>preserve_full_frames</code> toggle to FilterKit's pipeline.</li>
+<li>When enabled, diversity sampling operates on frames (not individual crops),
+  and the final export expands each selected frame to include every
+  individual detected in it — even ones that would otherwise be dropped by
+  quality/dedup/temporal filtering.</li>
+<li>Keep <code>metadata.json</code> untouched so existing per-crop frame/OBB/canonicalization
+  data remains available for later reconstruction work (out of scope here).</li>
 </ul>
-<p>Per-stage selection also permits inefficient mixing (e.g. <code>cuda</code> OBB +
-<code>onnx_cuda</code> classifier + <code>tensorrt</code> pose) that forces avoidable data movement.</p>
-<p>Exact (determinism-preserving) GPU optimizations have essentially no headroom on
-the real models: <code>channels_last</code> looked promising in a synthetic 224×224
-microbench (+11%) but proved a <strong>no-op on the real 96×96 classifier (+0.15%)</strong>,
-<strong>−54% (harmful) on MPS</strong>, and it <strong>crashes OBB inference</strong> on CUDA (ultralytics
-<code>fuse_conv_and_bn</code> <code>.view()</code> incompatibility) — so it was removed after
-verification. <code>inference_mode</code> ≈ <code>no_grad</code> (already present); pinned/<code>non_blocking</code>
-H2D is +14% on a copy that is tiny relative to compute. The large (2–5×) speedups
-live only in the non-exact fp16 paths (TensorRT / CoreML).</p>
-<h2 id="2-north-star-principle">2. North-Star Principle<a class="headerlink" href="#2-north-star-principle" title="Permanent link">&para;</a></h2>
-<p><strong>One runtime tier for the entire pipeline, auto-resolved to the best backend
-per platform.</strong> Native tiers are exact and device-invariant; the fast tier
-trades bit-exactness for speed. No tensor data crosses devices within a run.</p>
-<h2 id="3-the-three-user-facing-tiers">3. The Three User-Facing Tiers<a class="headerlink" href="#3-the-three-user-facing-tiers" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Tier</th>
-<th>CUDA host resolves to</th>
-<th>Apple host resolves to</th>
-<th>CPU-only host</th>
-<th>Numerics contract</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>CPU</strong></td>
-<td>torch CPU</td>
-<td>torch CPU</td>
-<td>torch CPU</td>
-<td>Exact / bit-reproducible</td>
-</tr>
-<tr>
-<td><strong>GPU</strong></td>
-<td>torch CUDA + exact wins (<code>inference_mode</code>, pinned H2D)</td>
-<td>torch MPS</td>
-<td>falls back to CPU tier</td>
-<td>Exact; device-invariant within existing ~0.006 px FP-noise envelope</td>
-</tr>
-<tr>
-<td><strong>GPU-Fast</strong></td>
-<td>TensorRT fp16 engines per stage; native-CUDA fallback per stage</td>
-<td>CoreML <code>.mlpackage</code> (YOLO) + CoreML classifier path; native-MPS fallback</td>
-<td>falls back to CPU tier</td>
-<td><strong>Not</strong> bit-identical to native; <strong>deterministic run-to-run</strong>; labeled "may reduce accuracy"</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Rules:</strong></p>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Pipeline-wide, single tier.</strong> One <code>InferenceConfig.runtime_tier</code> value
-  applies to every stage. No per-stage runtime field exists.</li>
-<li><strong>Best-effort fast-mode.</strong> In <code>GPU-Fast</code>, any stage lacking a fast artifact
-  (export unsupported, export failed, or no benefit) runs <strong>native-GPU on the
-  same device</strong> — never CPU. Logged, never a hard crash.</li>
-<li><strong>AprilTag exception.</strong> AprilTag always runs on CPU (a C-library detector, not
-  a GPU model). It is exempt from the tier and is the sole stage that reads a
-  CPU-side frame; this is inherent to AprilTag and independent of the tier.</li>
+<li>Reconstructing an actual full-frame image or building multi-instance PoseKit
+  annotations. That is future PoseKit work (a planned "frame mode" toggle) and
+  is explicitly out of scope for this change.</li>
+<li>Changing <code>metadata.json</code>'s schema or the crop filename encoding.</li>
+<li>Changing behavior of any dataset type other than what FilterKit already
+  supports (MAT identity crop datasets with <code>frame_idx</code>/<code>det_idx</code>, and
+  COCO/YOLO/class-folder datasets, to whatever extent <code>frame_idx</code> is
+  meaningful for them).</li>
 </ul>
-<h2 id="4-central-component-runtimeresolver">4. Central Component: <code>RuntimeResolver</code><a class="headerlink" href="#4-central-component-runtimeresolver" title="Permanent link">&para;</a></h2>
-<p>A new component in the <code>runtime/</code> layer is the single authority mapping
-<strong>(tier, platform, stage, artifact availability) → (backend, device)</strong>. It
-absorbs logic currently scattered across <code>_pipeline_supports_runtime</code>,
-<code>allowed_runtimes_for_pipelines</code>, <code>derive_onnx_execution_providers</code>, and the
-per-stage <code>compute_runtime</code> fields.</p>
+<h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
+<h3 id="config">Config<a class="headerlink" href="#config" title="Permanent link">&para;</a></h3>
+<p>Add <code>preserve_full_frames: bool = False</code> to the pipeline config dict built in
+<code>filterkit/gui/main_window.py</code> (the same dict that carries
+<code>diversity_enabled</code>, <code>diversity_target</code>, etc. — not the persisted
+<code>FilterKitConfig</code> dataclass, which only tracks dataset path / pagination).</p>
+<h3 id="diversity-stage-corepy">Diversity stage (<code>core.py</code>)<a class="headerlink" href="#diversity-stage-corepy" title="Permanent link">&para;</a></h3>
+<p>When <code>preserve_full_frames</code> is <code>True</code>, <code>diversity_sample</code> clusters on frames
+instead of individual crops:</p>
+<ol>
+<li>Group the stage's input items by <code>frame_idx</code>.</li>
+<li>For each frame, average the existing 32×32 grayscale flattened feature
+   vectors of all individuals present in that frame into one 1024-d vector.</li>
+<li>Compute <code>avg_individuals_per_frame</code> from the full loaded dataset (total
+   crops ÷ total unique frames) — not just the post-filter subset.</li>
+<li>Back-solve the number of frames to select:
+   <code>n_frames = max(1, round(diversity_target / avg_individuals_per_frame))</code>.</li>
+<li>Run <code>MiniBatchKMeans</code> with <code>n_clusters=n_frames</code> over the per-frame
+   vectors, and pick the frame nearest each centroid (same
+   <code>pairwise_distances_argmin_min</code> approach as today), deduplicated.</li>
+</ol>
+<p>When <code>preserve_full_frames</code> is <code>False</code>, behavior is unchanged (per-crop
+clustering as today).</p>
+<p>If diversity is disabled but <code>preserve_full_frames</code> is enabled, this stage is
+skipped entirely — expansion (below) still applies to whatever
+temporal/dedup/quality left behind.</p>
+<h3 id="finalize-expansion-step">Finalize / expansion step<a class="headerlink" href="#finalize-expansion-step" title="Permanent link">&para;</a></h3>
+<p>After all enabled stages produce a "kept" set of items, if
+<code>preserve_full_frames</code> is <code>True</code>:</p>
+<ol>
+<li>Collect the unique <code>frame_idx</code> values present in the kept set.</li>
+<li>For each such <code>frame_idx</code>, look up every individual crop with that
+   <code>frame_idx</code> in the <strong>original, unfiltered</strong> loaded dataset (i.e. before
+   quality/dedup/temporal filtering was applied).</li>
+<li>The union of these becomes the final selection.</li>
+</ol>
+<p>This restores companions that would otherwise have been dropped by
+quality/dedup/temporal filtering — a selected frame always exports with
+complete individual coverage. This step is independent of which upstream
+stages ran, so it works whether diversity sampling is enabled or not.</p>
+<h3 id="gui-main_windowpy">GUI (<code>main_window.py</code>)<a class="headerlink" href="#gui-main_windowpy" title="Permanent link">&para;</a></h3>
+<p>Add a checkbox near the diversity controls:</p>
+<blockquote>
+<p>"Preserve all individuals per frame (for full-frame pose reconstruction)"</p>
+</blockquote>
+<p>When checked, update the target field's helper text to note that the number
+is now an approximate final-image-count target (actual output ≈ frames ×
+individuals/frame, since a back-solved frame count is used). Default is
+unchecked; existing presets are unaffected (leave the toggle off in all of
+them).</p>
+<h3 id="export">Export<a class="headerlink" href="#export" title="Permanent link">&para;</a></h3>
+<p>No changes to <code>process_dataset</code>. It already copies whatever ends up in the
+finalized selection by filename, and <code>metadata.json</code> is left in place with all
+original per-crop data intact.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<p>New tests in <code>tests/test_filterkit_core.py</code>:</p>
 <ul>
-<li>Stages ask the resolver what to load; stages no longer carry runtime strings.</li>
-<li>The resolver is pure/deterministic and unit-testable in isolation: given a
-  tier, a detected platform, a stage key, and a callable reporting artifact
-  availability, it returns the concrete backend + device (or the native-GPU
-  fallback).</li>
-<li>Platform detection reuses <code>hydra_suite.utils.gpu_utils</code> / existing
-  availability flags.</li>
+<li>Frame-level feature aggregation produces one vector per unique <code>frame_idx</code>.</li>
+<li>Target back-solving picks a sensible <code>n_frames</code> given a known
+  <code>avg_individuals_per_frame</code>.</li>
+<li>Expansion restores companions that were removed by quality/dedup/temporal
+  filtering, when their frame was otherwise selected.</li>
+<li>With <code>preserve_full_frames=False</code>, behavior is byte-for-byte identical to
+  today.</li>
 </ul>
-<p><strong>Interface sketch</strong> (names finalized during planning):</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">RuntimeTier</span> <span class="o">=</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="s2">&quot;gpu&quot;</span><span class="p">,</span> <span class="s2">&quot;gpu_fast&quot;</span><span class="p">]</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">class</span><span class="w"> </span><span class="nc">ResolvedBackend</span><span class="p">:</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">backend</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;torch&quot;</span><span class="p">,</span> <span class="s2">&quot;tensorrt&quot;</span><span class="p">,</span> <span class="s2">&quot;coreml&quot;</span><span class="p">]</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;cpu&quot;</span><span class="p">,</span> <span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="s2">&quot;mps&quot;</span><span class="p">]</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">used_fallback</span><span class="p">:</span> <span class="nb">bool</span>          <span class="c1"># True if fast-mode fell back to native-GPU</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="k">class</span><span class="w"> </span><span class="nc">RuntimeResolver</span><span class="p">:</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tier</span><span class="p">:</span> <span class="n">RuntimeTier</span><span class="p">,</span> <span class="n">platform</span><span class="p">:</span> <span class="n">PlatformInfo</span><span class="p">):</span> <span class="o">...</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">resolve</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stage</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">artifact_available</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[],</span> <span class="nb">bool</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">ResolvedBackend</span><span class="p">:</span> <span class="o">...</span>
-</span></code></pre></div>
-<h2 id="5-user-facing-changes-gui-ui-matches-the-backend">5. User-Facing Changes (GUI) — "UI matches the backend"<a class="headerlink" href="#5-user-facing-changes-gui-ui-matches-the-backend" title="Permanent link">&para;</a></h2>
-<p>The GUI is a first-class deliverable: whenever the backend runtime model
-changes, the UI changes in the same phase so the two never drift. No phase that
-alters user-facing runtimes may merge without its UI update.</p>
-<p><strong>5.1 Remove the old options.</strong> <code>onnx_cpu</code>, <code>onnx_cuda</code>, <code>onnx_coreml</code>,
-<code>tensorrt</code> are removed as user-facing runtimes. CoreML, ORT, and TensorRT
-survive only as <strong>internal fast-mode backends</strong> the resolver selects.</p>
-<p><strong>5.2 Collapse to one tier selector.</strong> The three trackerkit dropdowns
-(<code>combo_compute_runtime</code>, <code>combo_headtail_runtime</code>, <code>combo_cnn_runtime</code> in
-<code>trackerkit/gui/panels/setup_panel.py</code>) and the posekit <code>combo_pred_runtime</code>
-(<code>posekit/gui/main_window.py</code>) are replaced by <strong>one tier selector</strong>, bound to
-<code>InferenceConfig.runtime_tier</code> (and the kit config schema). The old per-stage
-combos and their signal wiring are deleted.</p>
-<p><strong>5.3 Platform-aware labels.</strong> The selector shows only what the host supports,
-labeled by the backend the resolver will actually use:</p>
-<ul>
-<li>CUDA host: <code>CPU</code> / <code>GPU (CUDA)</code> / <code>GPU-Fast (TensorRT)</code></li>
-<li>Apple host: <code>CPU</code> / <code>GPU (Metal)</code> / <code>GPU-Fast (CoreML)</code></li>
-<li>CPU-only host: <code>CPU</code> only (GPU tiers hidden/disabled)</li>
-</ul>
-<p>Labels are derived from the same <code>RuntimeResolver</code>/platform detection as the
-backend, so the dropdown text is always truthful about the selected backend.</p>
-<p><strong>5.4 Reflect resolution + fallback.</strong> When <code>GPU-Fast</code> is selected, the panel
-surfaces the resolver outcome — a concise, read-only indicator (e.g. status
-line / tooltip) noting when a stage fell back to native-GPU (<code>used_fallback</code>)
-so the user understands what actually ran. Non-blocking; informational.</p>
-<p><strong>5.5 No stale state.</strong> <code>allowed_runtimes_for_pipelines</code>-driven population is
-replaced by resolver-driven tier enumeration; removing a runtime from the
-backend removes it from every kit's UI in the same change.</p>
-<h2 id="6-migration-hard-cutover">6. Migration (Hard Cutover)<a class="headerlink" href="#6-migration-hard-cutover" title="Permanent link">&para;</a></h2>
-<p>Per-stage <code>compute_runtime</code> fields are replaced by a single pipeline-level
-<code>runtime_tier</code>. On loading any legacy config, values are mapped:</p>
-<table>
-<thead>
-<tr>
-<th>Legacy per-stage value</th>
-<th>New tier</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>cpu</code></td>
-<td><code>CPU</code></td>
-</tr>
-<tr>
-<td><code>cuda</code>, <code>mps</code></td>
-<td><code>GPU</code></td>
-</tr>
-<tr>
-<td><code>onnx_cpu</code>, <code>onnx_cuda</code>, <code>onnx_coreml</code>, <code>tensorrt</code></td>
-<td><code>GPU-Fast</code></td>
-</tr>
-</tbody>
-</table>
-<p>If a legacy config mixed values across stages, the highest tier present wins
-(<code>GPU-Fast</code> &gt; <code>GPU</code> &gt; <code>CPU</code>), and a one-line warning is logged. Per-stage fields
-are dropped after mapping. Applies both to the new <code>InferenceConfig</code>
-(<code>from_json</code>) and to trackerkit's on-<code>main</code> config format via its translation
-layer into <code>InferenceConfig</code>.</p>
-<h2 id="7-fast-mode-export-coverage-hard-requirement">7. Fast-Mode Export Coverage (hard requirement)<a class="headerlink" href="#7-fast-mode-export-coverage-hard-requirement" title="Permanent link">&para;</a></h2>
-<p>Every model family the pipeline can run must have a fast-mode path, or a
-logged native-GPU fallback. Coverage matrix:</p>
-<table>
-<thead>
-<tr>
-<th>Family</th>
-<th>arch id(s)</th>
-<th>ONNX exporter (→ TensorRT)</th>
-<th>CoreML exporter</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>YOLO detect/pose/cls</td>
-<td><code>yolo</code>, <code>yolo_multihead</code>, <code>classifier_multihead</code></td>
-<td>exists: ultralytics <code>.export(format="onnx")</code></td>
-<td>exists: ultralytics <code>.export(format="coreml")</code></td>
-</tr>
-<tr>
-<td>Tiny classifier</td>
-<td><code>tinyclassifier</code></td>
-<td>exists: <code>export_tiny_to_onnx</code></td>
-<td><strong>new (P3):</strong> <code>export_tiny_to_coreml</code></td>
-</tr>
-<tr>
-<td>torchvision + timm classifier</td>
-<td><code>resnet50</code>, <code>convnext_tiny</code>, <code>efficientnet_b0</code>, …</td>
-<td>exists: <code>export_torchvision_to_onnx</code></td>
-<td><strong>new (P3):</strong> <code>export_torchvision_to_coreml</code></td>
-</tr>
-<tr>
-<td>SLEAP pose</td>
-<td>(SLEAP)</td>
-<td>exists (SLEAP export)</td>
-<td>native-GPU fallback (out of scope for new CoreML)</td>
-</tr>
-<tr>
-<td>AprilTag</td>
-<td>—</td>
-<td>N/A (CPU-only)</td>
-<td>N/A</td>
-</tr>
-</tbody>
-</table>
-<ul>
-<li>Multihead classifiers export <strong>per-factor backend</strong>.</li>
-<li>TensorRT engines are built from the ONNX peer (all three classifier families
-  already have ONNX exporters), so P2 covers every family on CUDA.</li>
-<li>CoreML exporters for tiny + torchvision/timm are the new P3 deliverable; until
-  then, Apple <code>GPU-Fast</code> falls back to native-MPS for those families
-  (best-effort rule, §3).</li>
-</ul>
-<h2 id="8-phasing">8. Phasing<a class="headerlink" href="#8-phasing" title="Permanent link">&para;</a></h2>
-<p>Each phase is a separate implementation plan; all share this document.</p>
-<h3 id="phase-1-native-gpu-exact-wins-independent-ships-first">Phase 1 — Native-GPU exact wins (independent, ships first)<a class="headerlink" href="#phase-1-native-gpu-exact-wins-independent-ships-first" title="Permanent link">&para;</a></h3>
-<ul>
-<li><code>inference_mode</code> around GPU crop extraction (<code>canonicalization/crop.py</code>
-  <code>grid_sample</code>, lines 299/387); upgrade classifier <code>no_grad</code> → <code>inference_mode</code>.</li>
-<li>Pinned + <code>non_blocking=True</code> H2D for classifier crop uploads (CUDA only).</li>
-<li>No taxonomy change: gated on device, not tier — lands immediately.</li>
-<li><code>channels_last</code> was attempted but <strong>removed after CUDA verification</strong>: it was a
-  no-op on the real classifier (EfficientNet-B0 @96×96: +0.15%, bit-exact output)
-  and it <em>crashed</em> real OBB inference (ultralytics <code>fuse_conv_and_bn</code> <code>.view()</code> is
-  incompatible with a channels_last layout). The +11% seen earlier was a synthetic
-  224×224 microbench that did not generalize. See
-  <code>docs/developer-guide/inference-fast-mode-future.md</code>.</li>
-<li>Measured 2026-06-30 (mehek RTX 6000 Ada): classifier output <strong>bit-exact</strong> base
-  vs HEAD; no throughput change. Net: Phase 1 ships as correctness-preserving
-  cleanups — the pipeline was already optimal for the real models.</li>
-</ul>
-<h3 id="phase-2-runtime-tier-taxonomy">Phase 2 — Runtime tier taxonomy<a class="headerlink" href="#phase-2-runtime-tier-taxonomy" title="Permanent link">&para;</a></h3>
-<ul>
-<li>Introduce <code>RuntimeResolver</code> + <code>InferenceConfig.runtime_tier</code>.</li>
-<li>Single tier pipeline-wide; remove per-stage <code>compute_runtime</code>.</li>
-<li>TensorRT becomes the CUDA <code>GPU-Fast</code> backend (wire existing auto-export in
-  <code>runtime_artifacts.py</code>); best-effort native-CUDA fallback per stage.</li>
-<li>Remove ONNX/TensorRT as user-facing runtimes; collapse GUI to one tier
-  selector (§5.1–5.5) in <strong>both</strong> trackerkit and posekit, delete the old
-  per-stage combos + wiring, and update each kit's config schema
-  (<code>&lt;kit&gt;/config/schemas.py</code>) to carry <code>runtime_tier</code>. <strong>The UI change ships in
-  this phase, not later</strong> — backend and UI move together.</li>
-<li>Hard-cutover migration (§6).</li>
-<li>Phase 1 exact wins fold under the resolved <code>GPU</code> tier.</li>
-</ul>
-<h3 id="phase-3-native-coreml-fast-mode-apple">Phase 3 — Native CoreML fast-mode (Apple)<a class="headerlink" href="#phase-3-native-coreml-fast-mode-apple" title="Permanent link">&para;</a></h3>
-<ul>
-<li>ultralytics <code>.mlpackage</code> export for YOLO OBB/pose.</li>
-<li>New <code>export_tiny_to_coreml</code> and <code>export_torchvision_to_coreml</code> (covers timm).</li>
-<li>CoreML artifact auto-management mirroring the TensorRT pattern.</li>
-<li>Wire CoreML backends into <code>GPU-Fast</code> on Apple; best-effort native-MPS fallback.</li>
-<li><strong>UI:</strong> the <code>GPU-Fast (CoreML)</code> label (§5.3) becomes live on Apple hosts once
-  the CoreML backend is wired; the fallback indicator (§5.4) reflects any
-  family that still uses native-MPS.</li>
-</ul>
-<h2 id="9-testing">9. Testing<a class="headerlink" href="#9-testing" title="Permanent link">&para;</a></h2>
-<ul>
-<li><strong>Resolver:</strong> unit tests for every (tier × platform × artifact-availability)
-  combination → expected <code>ResolvedBackend</code>, including fallback paths.</li>
-<li><strong>Migration:</strong> mapping tests for each legacy value and the mixed-config
-  highest-tier rule.</li>
-<li><strong>Exactness (P1/P2):</strong> CPU and GPU tiers preserve existing equivalence +
-  device-invariance guarantees (reuse <code>tools/equivalence</code>).</li>
-<li><strong>Fast-mode determinism (P2/P3):</strong> same input → identical output across two
-  runs (deterministic, though not bit-identical to native).</li>
-<li><strong>Export coverage (P2/P3):</strong> each classifier family (yolo/tiny/torchvision+timm,
-  including multihead per-factor) exports and runs under the fast tier, or logs
-  a native-GPU fallback.</li>
-<li><strong>GUI:</strong> tier selector shows correct platform-specific labels (§5.3), hides
-  unavailable tiers, binds to <code>runtime_tier</code> in the kit config schema, and the
-  old per-stage combos are gone from both trackerkit and posekit; the
-  resolution/fallback indicator (§5.4) renders when <code>GPU-Fast</code> is selected.</li>
-</ul>
-<h2 id="10-error-handling">10. Error Handling<a class="headerlink" href="#10-error-handling" title="Permanent link">&para;</a></h2>
-<ul>
-<li>Fast-mode export/build failure → logged warning + native-GPU fallback on the
-  same device (never CPU, never crash).</li>
-<li>Requesting a GPU tier on a CPU-only host → resolves to CPU tier with a logged
-  notice (GUI hides the option, but config-loaded/headless runs degrade
-  gracefully).</li>
-<li>Migration of an unrecognized legacy runtime string → maps to <code>GPU</code> if it is in
-  the CUDA/MPS family else <code>CPU</code>, with a warning.</li>
-</ul>
-<h2 id="11-non-goals">11. Non-Goals<a class="headerlink" href="#11-non-goals" title="Permanent link">&para;</a></h2>
-<ul>
-<li>TF32 and cudnn.benchmark are <strong>not</strong> enabled (they break determinism without
-  belonging to the fast-mode export model); may be revisited as a separate
-  fast-mode sub-option later.</li>
-<li><code>onnx_rocm</code> and generic ONNX portability are out of scope; ONNX remains an
-  internal IR for TensorRT engine builds only.</li>
-<li>SLEAP internal runtime handling is unchanged beyond tier mapping.</li>
-</ul>
+<h2 id="open-questions-risks">Open questions / risks<a class="headerlink" href="#open-questions-risks" title="Permanent link">&para;</a></h2>
+<p>None outstanding — scope has been deliberately kept to FilterKit's selection
+and export logic. Downstream reconstruction (full-frame image assembly,
+multi-instance PoseKit format) is tracked separately as PoseKit's planned
+frame-mode toggle.</p>
 
 
 
