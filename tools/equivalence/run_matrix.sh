@@ -61,6 +61,7 @@ if [ "$FIXTURES" = "1" ]; then
     "emi_obb_identity|$FX/clips/emi_obb_identity.mp4|$FX/configs/emi_obb_identity.json|"
     "ant_pose_headtail|$FX/clips/ant_pose_headtail.mp4|$FX/configs/ant_pose_headtail.json|$FX/ooceraea_biroi.json"
     "ant_obb_sleap|$FX/clips/ant_obb_sleap.mp4|$FX/configs/ant_obb_sleap.json|$FX/ooceraea_biroi.json"
+    "ant_obb_sequential|$FX/clips/ant_obb_sleap.mp4|$FX/configs/ant_obb_sequential.json|$FX/ooceraea_biroi.json"
     "worm_bgsub|$FX/clips/worm_bgsub.mp4|$FX/configs/worm_bgsub.json|"
     "ant_cnn_identity|$FX/clips/ant_cnn_identity.mp4|$FX/configs/ant_cnn_identity.json|$FX/ooceraea_biroi.json"
     "fly_obb|$FX/clips/fly_obb.mp4|$FX/configs/fly_obb.json|"

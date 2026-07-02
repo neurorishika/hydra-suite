@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
+import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -91,7 +92,9 @@ def _gpu_letterbox_batch(
         # HWC uint8 → NCHW float32
         t = frame.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float32)
         if new_h != H or new_w != W:
-            t = F.interpolate(t, size=(new_h, new_w), mode="bilinear", align_corners=False)
+            t = F.interpolate(
+                t, size=(new_h, new_w), mode="bilinear", align_corners=False
+            )
         pad_top = (imgsz - new_h) // 2
         pad_left = (imgsz - new_w) // 2
         pad_bot = imgsz - new_h - pad_top
@@ -103,7 +106,9 @@ def _gpu_letterbox_batch(
     return torch.stack(processed, dim=0), params
 
 
-def _invert_letterbox_on_result(result: Any, r: float, pad_left: float, pad_top: float) -> None:
+def _invert_letterbox_on_result(
+    result: Any, r: float, pad_left: float, pad_top: float
+) -> None:
     """Invert the letterbox transform on a single ultralytics Results object in-place.
 
     When ``model.predict`` receives a pre-letterboxed ``(B,3,imgsz,imgsz)``
@@ -138,9 +143,9 @@ def _invert_letterbox_on_result(result: Any, r: float, pad_left: float, pad_top:
     # allowed"). Re-enter inference_mode to perform the in-place coord inversion.
     with torch.inference_mode():
         data[:, 0] = (data[:, 0] - pad_left) / r  # cx
-        data[:, 1] = (data[:, 1] - pad_top) / r   # cy
-        data[:, 2] = data[:, 2] / r               # w
-        data[:, 3] = data[:, 3] / r               # h
+        data[:, 1] = (data[:, 1] - pad_top) / r  # cy
+        data[:, 2] = data[:, 2] / r  # w
+        data[:, 3] = data[:, 3] / r  # h
         # angle (col 4) and conf/cls (cols 5+) are unchanged
 
 
@@ -382,6 +387,9 @@ def _run_sequential(
     runtime: RuntimeContext,
 ) -> list[OBBResult]:
     seq = config.sequential
+    stage1_kwargs: dict[str, Any] = {}
+    if seq.detect_image_size > 0:
+        stage1_kwargs["imgsz"] = seq.detect_image_size
     stage1 = models.detect_model.predict(
         frames,
         conf=seq.detect_confidence_threshold,
@@ -389,7 +397,7 @@ def _run_sequential(
         classes=config.target_classes or None,
         verbose=False,
         device=runtime.device,
-        imgsz=seq.detect_image_size if seq.detect_image_size > 0 else None,
+        **stage1_kwargs,
     )
     results: list[OBBResult] = []
     for frame_idx, (frame, s1) in enumerate(zip(frames, stage1)):
@@ -401,6 +409,13 @@ def _run_sequential(
         if not crops:
             results.append(_empty_obb_result(frame_idx))
             continue
+        orig_sizes = [(c.shape[1], c.shape[0]) for c in crops]  # (w, h)
+        # Mirror legacy yolo_detector._seq_resize_crops_for_stage2: pre-resize
+        # each crop to the exact stage-2 input size with cv2 INTER_LINEAR,
+        # rather than letting Ultralytics' internal letterbox resize it (which
+        # can pick a different interpolation/stride-padded shape and shift
+        # borderline detections across the confidence threshold).
+        crops = _resize_crops_for_stage2(crops, seq.stage2_image_size)
         batch_size = seq.stage2_batch_size or len(crops)
         sub: list[OBBResult] = []
         for i in range(0, len(crops), batch_size):
@@ -414,13 +429,44 @@ def _run_sequential(
                 imgsz=seq.stage2_image_size,
             )
             for j, r in enumerate(s2):
-                sub.append(_extract_obb_result(r, frame_idx, offset=offsets[i + j]))
+                orig_w, orig_h = orig_sizes[i + j]
+                scale = (
+                    (orig_w / seq.stage2_image_size, orig_h / seq.stage2_image_size)
+                    if seq.stage2_image_size > 0
+                    else (1.0, 1.0)
+                )
+                sub.append(
+                    _extract_obb_result(
+                        r, frame_idx, offset=offsets[i + j], scale=scale
+                    )
+                )
         results.append(
             _apply_raw_detection_cap(
                 _merge_obb_results(frame_idx, sub), config.raw_detection_cap
             )
         )
     return results
+
+
+def _resize_crops_for_stage2(
+    crops: list[np.ndarray], stage2_image_size: int
+) -> list[np.ndarray]:
+    if stage2_image_size <= 0:
+        return crops
+    out = []
+    for crop in crops:
+        h_c, w_c = crop.shape[:2]
+        if h_c != stage2_image_size or w_c != stage2_image_size:
+            out.append(
+                cv2.resize(
+                    crop,
+                    (stage2_image_size, stage2_image_size),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+            )
+        else:
+            out.append(crop)
+    return out
 
 
 def _build_crops(
@@ -439,16 +485,20 @@ def _build_crops(
     crops: list[np.ndarray] = []
     offsets: list[tuple[float, float]] = []
     for x1, y1, x2, y2 in boxes.xyxy.cpu().numpy():
-        bw, bh = x2 - x1, y2 - y1
-        pad = seq.crop_pad_ratio * max(bw, bh)
+        # Mirrors legacy yolo_detector._build_sequential_crop exactly (padded
+        # square box centered on the stage-1 bbox, floor/ceil-clipped to the
+        # frame) so stage-2 sees byte-identical crop content to legacy.
+        bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        half = max(bw, bh) / 2 + pad
+        half = max(bw, bh) / 2 + seq.crop_pad_ratio * max(bw, bh)
         if seq.enforce_square_crop:
             half = max(half, seq.min_crop_size_px / 2)
-        ox1 = max(0, int(cx - half))
-        oy1 = max(0, int(cy - half))
-        ox2 = min(w, int(cx + half))
-        oy2 = min(h, int(cy + half))
+        ox1 = int(np.floor(max(0.0, cx - half)))
+        oy1 = int(np.floor(max(0.0, cy - half)))
+        ox2 = int(np.ceil(min(float(w), cx + half)))
+        oy2 = int(np.ceil(min(float(h), cy + half)))
+        if ox2 <= ox1 or oy2 <= oy1:
+            continue
         crop = arr[oy1:oy2, ox1:ox2]
         if crop.size == 0:
             continue
@@ -480,13 +530,23 @@ def _extract_obb_result(
     result: Any,
     frame_idx: int,
     offset: tuple[float, float] = (0.0, 0.0),
+    scale: tuple[float, float] = (1.0, 1.0),
 ) -> OBBResult:
     obb = result.obb
     if obb is None or len(obb) == 0:
         return _empty_obb_result(frame_idx)
-    xywhr = obb.xywhr.cpu().numpy()  # (N, 5): cx,cy,w,h,angle
+    xywhr = obb.xywhr.cpu().numpy().copy()  # (N, 5): cx,cy,w,h,angle
     conf = obb.conf.cpu().numpy()  # (N,)
     ox, oy = offset
+    sx, sy = scale
+    # Stage-2 predicts on a crop resized to a fixed square (stage2_image_size);
+    # rescale cx/w by sx and cy/h by sy back to the crop's own pixel space
+    # before offsetting into frame coordinates (mirrors legacy
+    # yolo_detector._seq_accumulate_crop_detections).
+    xywhr[:, 0] *= sx
+    xywhr[:, 2] *= sx
+    xywhr[:, 1] *= sy
+    xywhr[:, 3] *= sy
     centroids = xywhr[:, :2].copy()
     centroids[:, 0] += ox
     centroids[:, 1] += oy

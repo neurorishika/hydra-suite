@@ -51,11 +51,17 @@ Clips currently cover (one representative per demo, ~500 frames each):
 | `emi_obb_identity` | OBB-direct + identity online decoder |
 | `ant_pose_headtail` | OBB + head-tail + SLEAP pose + identity (realtime) |
 | `ant_obb_sleap` | OBB-direct + SLEAP pose + identity-analysis (no head-tail) |
+| `ant_obb_sequential` | **OBB-sequential** (detect stage -> crop -> OBB stage) + SLEAP pose + identity-analysis; reuses the `ant_obb_sleap` clip with `yolo_obb_mode=sequential` and the `detection/20260305-175022_26x_obiroi_v1.pt` + `obb/cropped/20260305-175049_26s_obiroi_obbcrop.pt` model pair |
 | `worm_bgsub` | **background-subtraction** detection path |
 | `ant_cnn_identity` | OBB + **CNN multihead identity** + head-tail + pose-direction |
 | `fly_obb` | OBB-direct, fly, fresh detection |
 
 No AprilTag clip yet (none of the source demos enable AprilTags).
+
+`ant_obb_sequential`'s two-stage models are not yet in the `equiv-fixtures-v2` release
+archive's `models_contained` list — they exist in this machine's local models dir
+(`obiroi` species, same vintage as the direct OBB model) but the release tarball needs
+regenerating (`make_manifest.py` + re-upload) before a fresh machine can fetch them.
 
 On a fresh machine:
 ```bash
@@ -70,8 +76,8 @@ arguments or via `ONLY=` (space- or comma-separated):
 bash tools/equivalence/run_matrix.sh ant_pose_headtail worm_bgsub
 ONLY=ant_pose_headtail bash tools/equivalence/run_matrix.sh
 ```
-Clip names: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `worm_bgsub`,
-`ant_cnn_identity`, `fly_obb`.
+Clip names: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
+`worm_bgsub`, `ant_cnn_identity`, `fly_obb`.
 
 To regenerate/refresh the fixtures (on a machine with the full data):
 ```bash
