@@ -1174,6 +1174,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../developer-guide/inference-fast-mode/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Inference Fast Mode
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
@@ -5611,19 +5632,7 @@ identical to the original monolithic implementation.</p>
 
     <div class="doc doc-contents ">
 
-        <p>QThread entry point: delegate to <code>_run_impl</code>, guaranteeing <code>finished_signal</code>.</p>
-<p><code>_run_impl</code> is a large, deeply nested pipeline (video decode,
-detection, tracking, post-processing) with many early-return error
-paths, but no blanket exception handler. PySide6 silently swallows
-any exception that escapes a QThread's <code>run()</code> override (it prints
-"Error calling Python override of QThread::run()" and returns), so
-without this wrapper an unexpected exception anywhere in
-<code>_run_impl</code> — e.g. an NVDec hardware-decode failure raised lazily
-on the first frame read for a clip whose resolution exceeds the
-GPU's macroblock limit — leaves <code>finished_signal</code> never emitted.
-Callers that block on it (e.g. headless_tracking.py's
-<code>QEventLoop.exec()</code>) then hang forever instead of surfacing a
-clean error.</p>
+        <p>Execute tracking pipeline for the configured video and parameters.</p>
 
     </div>
 
@@ -5928,19 +5937,7 @@ identical to the original monolithic implementation.</p>
 
     <div class="doc doc-contents ">
 
-        <p>QThread entry point: delegate to <code>_run_impl</code>, guaranteeing <code>finished_signal</code>.</p>
-<p><code>_run_impl</code> is a large, deeply nested pipeline (video decode,
-detection, tracking, post-processing) with many early-return error
-paths, but no blanket exception handler. PySide6 silently swallows
-any exception that escapes a QThread's <code>run()</code> override (it prints
-"Error calling Python override of QThread::run()" and returns), so
-without this wrapper an unexpected exception anywhere in
-<code>_run_impl</code> — e.g. an NVDec hardware-decode failure raised lazily
-on the first frame read for a clip whose resolution exceeds the
-GPU's macroblock limit — leaves <code>finished_signal</code> never emitted.
-Callers that block on it (e.g. headless_tracking.py's
-<code>QEventLoop.exec()</code>) then hang forever instead of surfacing a
-clean error.</p>
+        <p>Execute tracking pipeline for the configured video and parameters.</p>
 
     </div>
 
