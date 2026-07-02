@@ -21,6 +21,7 @@ Run in the HYDRA env (it spawns the SLEAP service):
     --skeleton tools/equivalence/fixtures/ooceraea_biroi.json \
     --device mps --frames 0 --max-dets 8 --out /tmp/pose_exp/service_native.npz
 """
+
 import argparse
 import json
 import tempfile
@@ -42,8 +43,9 @@ PAD = max(0.0, MARGIN - 1.0)
 def native_crop(frame_bgr, corners):
     cw, ch = compute_native_crop_dimensions(corners, AR, PAD)
     M, _ = compute_alignment_affine(corners, cw, ch, PAD)
-    return cv2.warpAffine(frame_bgr, M, (cw, ch), flags=cv2.INTER_LINEAR,
-                          borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpAffine(
+        frame_bgr, M, (cw, ch), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
 
 
 def main():
@@ -60,14 +62,21 @@ def main():
 
     names = json.loads(Path(args.skeleton).read_text()).get("keypoint_names", [])
     det = np.load(args.detection, allow_pickle=True)  # trusted local npz
-    ids = det["detection_ids"]; corners = det["corners"]
+    ids = det["detection_ids"]
+    corners = det["corners"]
     by_id = {int(ids[i]): i for i in range(len(ids))}
 
     out_root = tempfile.mkdtemp(prefix="pose_svc_test_")
     backend = SleapServiceBackend(
-        model_dir=args.model_dir, out_root=out_root, keypoint_names=names,
-        min_valid_conf=0.2, sleap_env="sleap", sleap_device=args.device,
-        sleap_batch=25, sleap_max_instances=1, runtime_flavor="native",
+        model_dir=args.model_dir,
+        out_root=out_root,
+        keypoint_names=names,
+        min_valid_conf=0.2,
+        sleap_env="sleap",
+        sleap_device=args.device,
+        sleap_batch=25,
+        sleap_max_instances=1,
+        runtime_flavor="native",
     )
     backend.warmup()
 
@@ -84,18 +93,27 @@ def main():
         for n, d in enumerate(dets):
             r = results[n]
             kp = getattr(r, "keypoints", None)
-            rec_kpts.append(np.asarray(kp, np.float32) if kp is not None else np.zeros((len(names), 3), np.float32))
+            rec_kpts.append(
+                np.asarray(kp, np.float32)
+                if kp is not None
+                else np.zeros((len(names), 3), np.float32)
+            )
             rec_ids.append(d)
         print(f"frame {fno}: {len(dets)} native crops -> service")
         # quick per-det validity
         for n, d in enumerate(dets):
             k = rec_kpts[len(rec_kpts) - len(dets) + n]
-            nz = int((np.asarray(k)[:, 2] > 0.2).sum()) if np.asarray(k).ndim == 2 else 0
+            nz = (
+                int((np.asarray(k)[:, 2] > 0.2).sum()) if np.asarray(k).ndim == 2 else 0
+            )
             print(f"  det {d}: {nz} kpts>0.2")
     cap.release()
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(args.out, kpts=np.array(rec_kpts, dtype=object),
-                        detids=np.array(rec_ids, np.int64))
+    np.savez_compressed(
+        args.out,
+        kpts=np.array(rec_kpts, dtype=object),
+        detids=np.array(rec_ids, np.int64),
+    )
     print(f"Saved -> {args.out}")
 
 
