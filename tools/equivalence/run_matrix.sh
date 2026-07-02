@@ -12,7 +12,9 @@
 #   WT_SRC    source tree for the NEW pipeline       (default $WT/src)
 #   DATA      MultiTrackerData root
 #   OUT       output root (default /tmp/equiv)
-#   RUNTIME   cpu|mps|cuda|onnx_cpu|onnx_cuda|tensorrt|auto (default auto)
+#   RUNTIME   cpu|mps|cuda|onnx_cpu|onnx_cuda|tensorrt|gpu|gpu_fast|auto (default auto)
+#             gpu/gpu_fast are the redesign's runtime_tier names (mapped to
+#             cuda/tensorrt for the legacy per-stage fields by runner.py).
 #
 # Edit the VIDEOS list below to add targets.  Nothing writes into DATA: each run
 # symlinks the video into its own output dir.
@@ -41,7 +43,7 @@ PY
 )
 fi
 case "$RUNTIME" in
-  cpu|mps|cuda|onnx_cpu|onnx_cuda|tensorrt|config) ;;
+  cpu|mps|cuda|onnx_cpu|onnx_cuda|tensorrt|gpu|gpu_fast|config) ;;
   *)
     echo "!! Could not determine a valid runtime (got '$RUNTIME')." >&2
     echo "   Set it explicitly, e.g.  RUNTIME=mps bash tools/equivalence/run_matrix.sh" >&2

@@ -79,9 +79,24 @@ def runtime_overrides(runtime: str) -> dict:
         }
     # Legacy per-stage runtime string: map it to a tier (so it still takes
     # effect post-redesign) AND keep the old fields for older code paths.
-    from hydra_suite.core.inference.config import migrate_runtime_to_tier
+    # This branch runs against BOTH source trees (legacy and new) depending
+    # on which run this is; hydra_suite.core.inference only exists in the
+    # redesign tree, so import it best-effort and fall back to an inline
+    # copy of migrate_runtime_to_tier's mapping for legacy-tree runs (legacy
+    # ignores runtime_tier anyway -- it only reads the per-stage fields below).
+    try:
+        from hydra_suite.core.inference.config import migrate_runtime_to_tier
 
-    tier = migrate_runtime_to_tier({runtime})
+        tier = migrate_runtime_to_tier({runtime})
+    except ModuleNotFoundError:
+        _fast = {"onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt"}
+        _gpu = {"cuda", "mps"}
+        if runtime in _fast:
+            tier = "gpu_fast"
+        elif runtime in _gpu:
+            tier = "gpu"
+        else:
+            tier = "cpu"
     return {
         "runtime_tier": tier,
         "compute_runtime": runtime,
