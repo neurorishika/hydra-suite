@@ -217,6 +217,7 @@ def test_add_indices_to_labeling_frame_mode_expands_and_confirms(monkeypatch):
         current_index=0,
         _populate_frames=lambda: None,
         _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
     )
 
     result = MainWindow._add_indices_to_labeling(window, [0], "Test")
@@ -243,6 +244,7 @@ def test_add_indices_to_labeling_frame_mode_cancel_adds_nothing(monkeypatch):
             AssertionError("must not refresh UI on cancel")
         ),
         _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
     )
 
     result = MainWindow._add_indices_to_labeling(window, [0], "Test")
@@ -273,6 +275,7 @@ def test_add_indices_to_labeling_frame_mode_disclosed_skips_confirmation(monkeyp
         current_index=0,
         _populate_frames=lambda: None,
         _select_frame_in_list=lambda *a, **k: None,
+        _frame_expansion=lambda indices: MainWindow._frame_expansion(window, indices),
     )
 
     result = MainWindow._add_indices_to_labeling(window, [0], "Test", disclosed=True)

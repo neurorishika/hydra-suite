@@ -3991,7 +3991,7 @@ class MainWindow(QMainWindow):
         companion_count = 0
         frame_count = len(to_add)
         if self.config.frame_mode:
-            expanded, frame_count = MainWindow._frame_expansion(self, to_add)
+            expanded, frame_count = self._frame_expansion(to_add)
             companions = expanded - to_add
             companion_count = len(companions)
             to_add = expanded - self.labeling_frames
