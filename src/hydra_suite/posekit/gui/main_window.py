@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.posekit.config.schemas import PoseKitConfig
+from hydra_suite.posekit.core.frame_grouping import group_indices_by_frame
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .canvas import FrameListDelegate, PoseCanvas
@@ -3958,16 +3959,63 @@ class MainWindow(QMainWindow):
 
         self._add_indices_to_labeling(picked, "Smart Select")
 
-    def _add_indices_to_labeling(self, indices: List[int], title: str):
-        if not indices:
-            return
-        for idx in indices:
-            self.labeling_frames.add(int(idx))
+    def _frame_expansion(self, indices: set) -> tuple:
+        """Return (expanded_indices, distinct_frame_count) for the frames touched by `indices`."""
+        groups = group_indices_by_frame(
+            [p.name for p in self.image_paths],
+            [self._source_id_for_index(i) for i in range(len(self.image_paths))],
+        )
+        idx_to_key = {i: key for key, idxs in groups.items() for i in idxs}
+        keys = {idx_to_key[i] for i in indices if i in idx_to_key}
+        expanded: set = set()
+        for key in keys:
+            expanded.update(groups[key])
+        return expanded, len(keys)
+
+    def _add_indices_to_labeling(
+        self, indices: List[int], title: str, disclosed: bool = False
+    ) -> bool:
+        """Add `indices` to the labeling set.
+
+        In Frame Mode, expands `indices` to every companion instance
+        sharing a frame with any of them, and — unless `disclosed` is
+        True (the caller already showed the user the full expansion) —
+        confirms via a dialog before committing. Returns True if
+        anything was added or there was nothing to add, False if the
+        user canceled a Frame Mode confirmation.
+        """
+        to_add = {int(idx) for idx in indices if int(idx) not in self.labeling_frames}
+        if not to_add:
+            return True
+
+        companion_count = 0
+        frame_count = len(to_add)
+        if self.config.frame_mode:
+            expanded, frame_count = MainWindow._frame_expansion(self, to_add)
+            companions = expanded - to_add
+            companion_count = len(companions)
+            to_add = expanded - self.labeling_frames
+            if companions and not disclosed:
+                reply = QMessageBox.question(
+                    self,
+                    title,
+                    f"This will add {frame_count} frame(s) comprising "
+                    f"{len(to_add)} total instance(s), including "
+                    f"{companion_count} companion instance(s), to the "
+                    "labeling set. Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply != QMessageBox.Yes:
+                    return False
+
+        self.labeling_frames.update(to_add)
         self._populate_frames()
         self._select_frame_in_list(self.current_index)
         QMessageBox.information(
-            self, title, f"Added {len(indices)} frames to labeling set."
+            self, title, f"Added {len(to_add)} frame(s) to labeling set."
         )
+        return True
 
     def _collect_selected_indices(self) -> List[int]:
         idxs = set()

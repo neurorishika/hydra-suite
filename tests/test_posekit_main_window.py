@@ -9,6 +9,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtWidgets import QMessageBox  # noqa: E402
+
 from hydra_suite.posekit.gui.main_window import MainWindow  # noqa: E402
 from hydra_suite.posekit.gui.models import FrameAnn  # noqa: E402
 
@@ -170,3 +172,140 @@ def test_on_frame_mode_toggled_updates_config():
 
     MainWindow._on_frame_mode_toggled(window, False)
     assert window.config.frame_mode is False
+
+
+def test_frame_expansion_groups_by_source_and_frame():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[
+            Path("did10000.jpg"),
+            Path("did10001.jpg"),
+            Path("did20000.jpg"),
+        ],
+        _source_id_for_index=lambda idx: "src_a",
+    )
+
+    expanded, frame_count = MainWindow._frame_expansion(window, {0})
+
+    assert expanded == {0, 1}
+    assert frame_count == 1
+
+
+def test_add_indices_to_labeling_frame_mode_expands_and_confirms(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    calls = []
+
+    def fake_question(*args, **kwargs):
+        calls.append("asked")
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(fake_question))
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[
+            Path("did10000.jpg"),
+            Path("did10001.jpg"),
+            Path("did20000.jpg"),
+        ],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test")
+
+    assert result is True
+    assert window.labeling_frames == {0, 1}
+    assert calls == ["asked"]
+
+
+def test_add_indices_to_labeling_frame_mode_cancel_adds_nothing(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No)
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: (_ for _ in ()).throw(
+            AssertionError("must not refresh UI on cancel")
+        ),
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test")
+
+    assert result is False
+    assert window.labeling_frames == set()
+
+
+def test_add_indices_to_labeling_frame_mode_disclosed_skips_confirmation(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm when disclosed=True")
+            )
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test", disclosed=True)
+
+    assert result is True
+    assert window.labeling_frames == {0, 1}
+
+
+def test_add_indices_to_labeling_individual_mode_unchanged(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm outside frame mode")
+            )
+        ),
+    )
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=0,
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+    )
+
+    result = MainWindow._add_indices_to_labeling(window, [0], "Test")
+
+    assert result is True
+    assert window.labeling_frames == {0}
