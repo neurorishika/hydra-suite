@@ -453,7 +453,9 @@ def load_obb_executor(
         )
 
     if runtime in _COREML_RUNTIMES:
-        return _load_coreml_executor(model_path, auto_export=auto_export)
+        return _load_coreml_executor(
+            model_path, auto_export=auto_export, imgsz_override=imgsz_override
+        )
 
     raise ArtifactExportError(f"Unsupported compute_runtime: {compute_runtime!r}")
 
@@ -469,12 +471,20 @@ def _load_torch_executor(model_path: str, runtime: str) -> Any:
     return model
 
 
-def _load_coreml_executor(model_path: str, *, auto_export: bool) -> Any:
+def _load_coreml_executor(
+    model_path: str, *, auto_export: bool, imgsz_override: int | None = None
+) -> Any:
     """Load (or auto-export) a CoreML ``.mlpackage`` and return a YOLO model.
 
     Uses a fixed ``imgsz`` export (``nms=False``) so CoreML sees a static input
     shape — avoiding the E5RT dynamic-shape failure that ``onnx_coreml`` hit.
     Apple Silicon only; will raise if coremltools is absent.
+
+    ``imgsz_override``, when set (>0), exports/loads the artifact at this
+    input size instead of the checkpoint's own embedded default — mirrors
+    ``_load_direct_executor``'s handling so sequential-OBB's stage-2 (crop)
+    model gets the same treatment on CoreML as it does on TensorRT/ONNX (see
+    ``load_obb_executor``'s ``imgsz_override`` docstring for why).
     """
     resolved = Path(model_path).expanduser().resolve()
     suffix = resolved.suffix.lower()
@@ -488,7 +498,11 @@ def _load_coreml_executor(model_path: str, *, auto_export: bool) -> Any:
         return _load_torch_model(str(resolved))
 
     artifact_path = _artifact_path_for(resolved, "coreml")
-    imgsz = _resolve_imgsz(resolved)
+    imgsz = (
+        int(imgsz_override)
+        if imgsz_override and imgsz_override > 0
+        else _resolve_imgsz(resolved)
+    )
 
     if _artifact_is_fresh(artifact_path, resolved, imgsz):
         logger.info("Reusing cached CoreML artifact: %s", artifact_path.name)

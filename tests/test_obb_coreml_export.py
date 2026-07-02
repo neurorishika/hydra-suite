@@ -103,6 +103,37 @@ def test_load_obb_executor_coreml_auto_export(tmp_path, monkeypatch):
     assert mlpackage.exists()
 
 
+def test_load_obb_executor_coreml_imgsz_override(tmp_path, monkeypatch):
+    """coreml + imgsz_override → export uses the override, not the checkpoint's own imgsz."""
+    import hydra_suite.core.inference.runtime_artifacts as ra
+    from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
+
+    pt_file = tmp_path / "model.pt"
+    pt_file.write_bytes(b"fake")
+    pt_file.touch()
+
+    calls = {"export_imgsz": []}
+
+    class _FakeModel:
+        names = {0: "ant"}
+        overrides = {}
+
+    def fake_load_torch(model_path: str):
+        return _FakeModel()
+
+    def fake_export(*, pt_path, artifact_path, runtime, imgsz, batch_size):
+        calls["export_imgsz"].append(imgsz)
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        (artifact_path / "model.mlmodel").write_bytes(b"fake-mlpackage")
+
+    monkeypatch.setattr(ra, "_load_torch_model", fake_load_torch)
+    monkeypatch.setattr(ra, "_export_artifact", fake_export)
+    monkeypatch.setattr(ra, "_resolve_imgsz", lambda pt_path: 160)
+
+    load_obb_executor(str(pt_file), "coreml", auto_export=True, imgsz_override=128)
+    assert calls["export_imgsz"] == [128]
+
+
 # ---------------------------------------------------------------------------
 # Real-export smoke test — Apple Silicon + coremltools only.
 # ---------------------------------------------------------------------------
