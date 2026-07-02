@@ -217,19 +217,35 @@ def _create_direct_executor(
     artifact_path: Path,
     imgsz: int,
     class_names: dict[int, str] | None = None,
+    task: str = "obb",
 ) -> Any:
-    """Create a direct ONNX/TRT OBB executor (square-letterbox preprocessing).
+    """Create a direct ONNX/TRT executor (square-letterbox preprocessing).
 
     Delegates to the ported ``core/detectors/_direct_obb_runtime`` factory. The
     executors there use ``LetterBox(auto=False)`` — identical square-letterbox
     preprocessing across the PyTorch-CUDA, ONNX, and TRT paths, which is the
     parity guarantee enforced by legacy ``_maybe_enable_direct_cuda_obb_executor``.
+
+    ``task="obb"`` (default) returns an executor that parses the model's raw
+    head as OBB output (cx,cy,w,h,angle,conf) into ``Results(obb=...)``.
+    ``task="detect"`` returns the plain-box variant (cx,cy,w,h,conf) into
+    ``Results(boxes=...)`` -- required for the sequential pipeline's stage-1
+    detect model, which is NOT an OBB model. Feeding a plain-detect model's
+    output through the OBB parser silently misreads the class-score channel
+    as an angle and always yields ``Results.boxes is None`` (mirrors legacy's
+    separate ``_maybe_enable_direct_detect_executor``).
     """
     from hydra_suite.core.detectors._direct_obb_runtime import (
+        create_direct_detect_executor,
         create_direct_obb_executor,
     )
 
-    return create_direct_obb_executor(
+    factory = (
+        create_direct_detect_executor
+        if task == "detect"
+        else create_direct_obb_executor
+    )
+    return factory(
         runtime=runtime,
         artifact_path=str(artifact_path),
         imgsz=int(imgsz),
@@ -375,6 +391,7 @@ def load_obb_executor(
     auto_export: bool = True,
     max_det: int = _DEFAULT_MAX_DET,
     imgsz_override: int | None = None,
+    task: str = "obb",
 ) -> Any:
     """Load the OBB executor for a model path + compute runtime.
 
@@ -406,6 +423,14 @@ def load_obb_executor(
         artifact built at the checkpoint's own size would silently receive
         wrongly-scaled input under gpu_fast (TensorRT/ONNX), which can drop
         every detection.
+    task:
+        ``"obb"`` (default) parses the raw head as OBB output
+        (cx,cy,w,h,angle,conf) into ``Results(obb=...)``. Use ``"detect"`` for
+        the sequential pipeline's stage-1 model, which is a plain (non-OBB)
+        detector -- parsing its output as OBB silently misreads the
+        class-score channel as an angle and yields ``Results.boxes is None``
+        for every frame. Ignored for the torch runtimes (cpu/mps/cuda), whose
+        underlying ultralytics model already knows its own task.
 
     Returns
     -------
@@ -424,6 +449,7 @@ def load_obb_executor(
             auto_export=auto_export,
             max_det=max_det,
             imgsz_override=imgsz_override,
+            task=task,
         )
 
     if runtime in _COREML_RUNTIMES:
@@ -493,6 +519,7 @@ def _load_direct_executor(
     auto_export: bool,
     max_det: int,
     imgsz_override: int | None = None,
+    task: str = "obb",
 ) -> DirectExecutorAdapter:
     """Resolve (or auto-export) an ONNX/TRT artifact and wrap a direct executor."""
     runtime = _direct_runtime_name(compute_runtime)
@@ -509,7 +536,11 @@ def _load_direct_executor(
             )
         imgsz = _DEFAULT_IMGSZ
         executor = _create_direct_executor(
-            runtime=runtime, artifact_path=resolved, imgsz=imgsz, class_names=None
+            runtime=runtime,
+            artifact_path=resolved,
+            imgsz=imgsz,
+            class_names=None,
+            task=task,
         )
         return DirectExecutorAdapter(executor, max_det=max_det)
 
@@ -549,5 +580,6 @@ def _load_direct_executor(
         artifact_path=artifact_path,
         imgsz=imgsz,
         class_names=class_names,
+        task=task,
     )
     return DirectExecutorAdapter(executor, max_det=max_det)

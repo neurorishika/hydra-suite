@@ -302,6 +302,9 @@ def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
         auto_export=auto_export,
         max_det=config.max_detections,
         imgsz_override=detect_imgsz if detect_imgsz > 0 else None,
+        # Stage-1 is a plain detector (no angle head) -- must be parsed as
+        # Results(boxes=...), not Results(obb=...), under tensorrt/onnx.
+        task="detect",
     )
     # stage2_image_size is always the effective input size (the pipeline
     # pre-resizes every crop to it in _resize_crops_for_stage2), so the
@@ -662,6 +665,7 @@ def _load_yolo(
     auto_export: bool = True,
     max_det: int = 20,
     imgsz_override: int | None = None,
+    task: str = "obb",
 ) -> Any:
     """Load the OBB executor for ``model_path`` under ``compute_runtime``.
 
@@ -680,6 +684,10 @@ def _load_yolo(
     the torch runtimes (cpu/mps/cuda), which take crops pre-resized by the
     caller and never re-export an artifact.
 
+    ``task="detect"`` must be passed for the sequential pipeline's stage-1
+    model under tensorrt/onnx (see :func:`load_obb_executor`) -- it is a plain
+    detector, not an OBB model.
+
     For ``compute_runtime="tensorrt"`` (gpu_fast tier), if the TRT artifact is
     unavailable or the build fails, falls back to native ``"cuda"`` and logs a
     WARNING.  Never falls back to CPU — stays on GPU device.
@@ -691,6 +699,7 @@ def _load_yolo(
             auto_export=auto_export,
             max_det=max_det,
             imgsz_override=imgsz_override,
+            task=task,
         )
     except (
         Exception
