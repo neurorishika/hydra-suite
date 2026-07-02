@@ -4032,7 +4032,16 @@ class MainWindow(QMainWindow):
 
     def open_smart_select(self: object) -> object:
         """open_smart_select method documentation."""
-        dlg = SmartSelectDialog(self, self.project, self.image_paths, self._is_labeled)
+        dlg = SmartSelectDialog(
+            self,
+            self.project,
+            self.image_paths,
+            self._is_labeled,
+            frame_mode=self.config.frame_mode,
+            source_ids=[
+                self._source_id_for_index(i) for i in range(len(self.image_paths))
+            ],
+        )
         if dlg.exec() != QDialog.Accepted or not getattr(dlg, "_did_add", False):
             return
 
@@ -4041,7 +4050,9 @@ class MainWindow(QMainWindow):
         if not picked:
             return
 
-        self._add_indices_to_labeling(picked, "Smart Select")
+        # Smart Select's own preview already discloses the full frame
+        # expansion, so no second confirmation is shown here.
+        self._add_indices_to_labeling(picked, "Smart Select", disclosed=True)
 
     def _frame_expansion(self, indices: set) -> tuple:
         """Return (expanded_indices, distinct_frame_count) for the frames touched by `indices`."""
