@@ -47,8 +47,8 @@
   ],
   "models_archive": {
     "name": "models.tar.gz",
-    "sha256": "8a39ee6d7047aed14c6b66e37de299489c47ab0277a75bfcd606c1e8bc827efc",
-    "bytes": 373015093,
+    "sha256": "67f3f91193460487df4a8b4cb70b63077ffc42a5d1c24e33a5b7135893338e57",
+    "bytes": 383707340,
     "extract_to": "models_dir"
   },
   "models_contained": [
@@ -56,9 +56,11 @@
     "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag_flat.pth",
     "classification/identity/20260429-105036_classifier_multihead_obiroi_colortag_flat_1.pth",
     "classification/orientation/20260429-104937_efficientnet_b0_obiroi_train1.pth",
+    "detection/20260305-175022_26x_obiroi_v1.pt",
     "obb/20260214-210051_26x_ant_train22.pt",
     "obb/20260416-165920_26s_obiroi_train36.pt",
     "obb/20260503-171130_26x_fly_train7.pt",
+    "obb/cropped/20260305-175049_26s_obiroi_obbcrop.pt",
     "pose/SLEAP/20260214-224154_unet_ant_single_instance"
   ]
 }

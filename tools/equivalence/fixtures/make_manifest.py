@@ -45,6 +45,10 @@ CLIPS = [
     {"name": "fly_obb.mp4", "skeleton": None},
 ]
 
+# Configs that reuse an existing clip above (no separate .mp4 asset) but
+# reference model files that still need to ship in models.tar.gz.
+EXTRA_MODEL_CONFIGS = ["ant_obb_sequential.json"]
+
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -69,8 +73,9 @@ def collect_models(models_dir: Path) -> list[str]:
     """Every relative model path referenced by a portable config that exists
     under the models dir, plus the factor weights of any multihead descriptor."""
     rels: set[str] = set()
-    for c in CLIPS:
-        cfg_path = CONFIGS_DIR / (Path(c["name"]).stem + ".json")
+    cfg_names = [Path(c["name"]).stem + ".json" for c in CLIPS] + EXTRA_MODEL_CONFIGS
+    for cfg_name in cfg_names:
+        cfg_path = CONFIGS_DIR / cfg_name
         cfg = json.loads(cfg_path.read_text())
         for s in _walk_strings(cfg):
             # Real model paths are relative and live under a category subdir
