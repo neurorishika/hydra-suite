@@ -60,12 +60,10 @@ No AprilTag clip yet (none of the source demos enable AprilTags).
 
 `ant_obb_sequential`'s two-stage models are now listed in `manifest.json`'s
 `models_contained` (added via `make_manifest.py`'s `EXTRA_MODEL_CONFIGS`, since
-the clip is reused rather than a separate asset) — but the regenerated
-`models.tar.gz` (384 MB) still needs to be uploaded to the `equiv-fixtures-v2`
-release, replacing the current asset, before a fresh machine can fetch them:
-```bash
-gh release upload equiv-fixtures-v2 tools/equivalence/fixtures/staging/models.tar.gz --clobber
-```
+the clip is reused rather than a separate asset), and the regenerated
+`models.tar.gz` (384 MB, includes both models) has been uploaded to the
+`equiv-fixtures-v2` release, replacing the previous asset — a fresh machine's
+`fetch_fixtures.sh` can now pull `ant_obb_sequential`'s models.
 
 On a fresh machine:
 ```bash
