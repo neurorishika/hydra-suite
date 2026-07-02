@@ -218,6 +218,9 @@ class MainWindow(QMainWindow):
         self.spin_random_count = left.spin_random_count
         self.btn_smart_select = left.btn_smart_select
         self.btn_delete_frames = left.btn_delete_frames
+        self.chk_frame_mode = left.chk_frame_mode
+        self.chk_frame_mode.setChecked(self.config.frame_mode)
+        self.chk_frame_mode.toggled.connect(self._on_frame_mode_toggled)
 
         # Canvas
         # Load UI settings - will be applied after widgets are created
@@ -2707,6 +2710,10 @@ class MainWindow(QMainWindow):
             self.labeling_frames.remove(idx)
         self._populate_frames()
         self._select_frame_in_list(self.current_index, trigger_load=False)
+
+    def _on_frame_mode_toggled(self, checked: bool) -> None:
+        """Persist the Frame Mode checkbox state to the runtime config."""
+        self.config.frame_mode = bool(checked)
 
     def _add_random_to_labeling(self):
         """Add random unlabeled frames from All Frames list to labeling set."""

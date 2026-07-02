@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -26,6 +27,15 @@ class PoseSourceBrowserPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
+
+        self.chk_frame_mode = QCheckBox("Frame Mode")
+        self.chk_frame_mode.setToolTip(
+            "Frame Mode: sampling and labeling operations act on entire "
+            "frames (all detected individuals together), not single crops. "
+            "Required if you're building a dataset for bottom-up "
+            "multi-animal pose models."
+        )
+        layout.addWidget(self.chk_frame_mode)
 
         layout.addWidget(QLabel("Labeling Set"))
         self.labeling_list = QListWidget()

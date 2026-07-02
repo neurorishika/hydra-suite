@@ -158,3 +158,15 @@ def test_switch_project_window_allows_empty_projects(
     assert shown == [True]
     assert closed == [True]
     assert hasattr(app, "_posekit_windows")
+
+
+def test_on_frame_mode_toggled_updates_config():
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    window = SimpleNamespace(config=PoseKitConfig())
+
+    MainWindow._on_frame_mode_toggled(window, True)
+    assert window.config.frame_mode is True
+
+    MainWindow._on_frame_mode_toggled(window, False)
+    assert window.config.frame_mode is False
