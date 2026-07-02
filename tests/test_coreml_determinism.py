@@ -67,10 +67,12 @@ def test_mlpackage_freshness_survives_manifest_touch(tmp_path):
     manifest.write_text('{"version": 1}', encoding="utf-8")
 
     # Write the freshness sidecar keyed to the source .pt mtime.
-    _write_fresh_marker(pkg, pt)
+    _write_fresh_marker(pkg, pt, 640)
 
     # Confirm fresh before any mutation.
-    assert _artifact_is_fresh(pkg, pt), "should be fresh right after marker is written"
+    assert _artifact_is_fresh(
+        pkg, pt, 640
+    ), "should be fresh right after marker is written"
 
     # Simulate coremltools rewriting Manifest.json on MLModel load: advance its
     # mtime so it is newer than the sidecar.
@@ -81,7 +83,7 @@ def test_mlpackage_freshness_survives_manifest_touch(tmp_path):
     manifest.touch()  # force mtime update
 
     # The sidecar still records the original .pt mtime; freshness must hold.
-    assert _artifact_is_fresh(pkg, pt), (
+    assert _artifact_is_fresh(pkg, pt, 640), (
         "freshness should survive Manifest.json touch because the sidecar "
         "records source .pt mtime, not the package directory mtime"
     )

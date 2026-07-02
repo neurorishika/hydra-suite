@@ -295,17 +295,23 @@ def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
     auto_export = config.sequential.auto_export
+    detect_imgsz = config.sequential.detect_image_size
     detect = _load_yolo(
         config.sequential.detect_model_path,
         compute_runtime,
         auto_export=auto_export,
         max_det=config.max_detections,
+        imgsz_override=detect_imgsz if detect_imgsz > 0 else None,
     )
+    # stage2_image_size is always the effective input size (the pipeline
+    # pre-resizes every crop to it in _resize_crops_for_stage2), so the
+    # artifact must be built at that size, not the checkpoint's own default.
     obb = _load_yolo(
         config.sequential.obb_model_path,
         compute_runtime,
         auto_export=auto_export,
         max_det=config.max_detections,
+        imgsz_override=config.sequential.stage2_image_size,
     )
     return OBBModels(mode="sequential", detect_model=detect, obb_model=obb)
 
@@ -655,6 +661,7 @@ def _load_yolo(
     *,
     auto_export: bool = True,
     max_det: int = 20,
+    imgsz_override: int | None = None,
 ) -> Any:
     """Load the OBB executor for ``model_path`` under ``compute_runtime``.
 
@@ -666,6 +673,13 @@ def _load_yolo(
         ``.mlpackage``. When no artifact exists and ``auto_export`` is False, a
         clear error is raised instead of silently running PyTorch (finding H4).
 
+    ``imgsz_override``, when set, forces the ONNX/TRT export/load size instead
+    of the checkpoint's own embedded default -- needed for the sequential-OBB
+    stage-2 (crop) model, whose ``stage2_image_size`` config value may differ
+    from the checkpoint's default (see :func:`load_obb_executor`). Ignored for
+    the torch runtimes (cpu/mps/cuda), which take crops pre-resized by the
+    caller and never re-export an artifact.
+
     For ``compute_runtime="tensorrt"`` (gpu_fast tier), if the TRT artifact is
     unavailable or the build fails, falls back to native ``"cuda"`` and logs a
     WARNING.  Never falls back to CPU — stays on GPU device.
@@ -676,6 +690,7 @@ def _load_yolo(
             compute_runtime,
             auto_export=auto_export,
             max_det=max_det,
+            imgsz_override=imgsz_override,
         )
     except (
         Exception

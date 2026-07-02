@@ -136,7 +136,7 @@ def test_tensorrt_existing_engine_skips_export(fake_loader, tmp_path):
     # Pre-create the engine artifact + metadata so it is considered fresh.
     engine = ra._artifact_path_for(pt, "tensorrt")
     engine.write_bytes(b"prebuilt")
-    ra._write_fresh_marker(engine, pt)
+    ra._write_fresh_marker(engine, pt, ra._DEFAULT_IMGSZ)
 
     adapter = load_obb_executor(str(pt), "tensorrt", auto_export=True)
     assert isinstance(adapter._executor, _FakeExecutor)

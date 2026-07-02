@@ -159,6 +159,7 @@ def _export_artifact(
             half=True,
             dynamic=False,
             batch=int(batch_size),
+            imgsz=imgsz,
             verbose=False,
         )
     elif runtime == "coreml":
@@ -270,28 +271,34 @@ def _meta_path(artifact_path: Path) -> Path:
     return artifact_path.with_suffix(f"{artifact_path.suffix}.runtime_meta.json")
 
 
-def _write_fresh_marker(artifact_path: Path, source_pt: Path) -> None:
-    """Write a freshness marker recording the source ``.pt`` mtime.
+def _write_fresh_marker(artifact_path: Path, source_pt: Path, imgsz: int) -> None:
+    """Write a freshness marker recording the source ``.pt`` mtime + build imgsz.
 
     Mirrors legacy ``_write_artifact_meta`` — used so a subsequent load can tell
     whether the cached artifact is still valid for the current source model.
+    ``imgsz`` is recorded so a config change (e.g. a sequential OBB stage's
+    ``stage2_image_size`` differing from the checkpoint's own default) forces a
+    rebuild instead of silently reusing an artifact exported at the wrong input
+    size (H4: no silent wrong-behavior fallback).
     """
     try:
         source_mtime_ns = source_pt.stat().st_mtime_ns
     except Exception:
         source_mtime_ns = 0
     _meta_path(artifact_path).write_text(
-        json.dumps({"source_mtime_ns": source_mtime_ns}), encoding="utf-8"
+        json.dumps({"source_mtime_ns": source_mtime_ns, "imgsz": int(imgsz)}),
+        encoding="utf-8",
     )
 
 
-def _artifact_is_fresh(artifact_path: Path, source_pt: Path) -> bool:
+def _artifact_is_fresh(artifact_path: Path, source_pt: Path, imgsz: int) -> bool:
     """Return True when ``artifact_path`` exists and is newer than its source.
 
     Clean analogue of legacy ``_artifact_is_fresh``: a cached artifact is reused
     only when it exists and was built from the current ``.pt`` (by recorded
-    source mtime). Missing/stale markers force a rebuild. Handles both file
-    artifacts (.onnx/.engine) and directory artifacts (.mlpackage).
+    source mtime) at the requested ``imgsz``. Missing/stale markers or an
+    imgsz mismatch force a rebuild. Handles both file artifacts (.onnx/.engine)
+    and directory artifacts (.mlpackage).
     """
     if not artifact_path.exists():
         return False
@@ -307,7 +314,11 @@ def _artifact_is_fresh(artifact_path: Path, source_pt: Path) -> bool:
         current = int(source_pt.stat().st_mtime_ns)
     except Exception:
         return False
-    return recorded == current
+    if recorded != current:
+        return False
+    # Older markers (pre-imgsz tracking) omit "imgsz" -- treat as stale so they
+    # get rebuilt once and gain the field, rather than silently trusting them.
+    return int(data.get("imgsz", -1)) == int(imgsz)
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +374,7 @@ def load_obb_executor(
     *,
     auto_export: bool = True,
     max_det: int = _DEFAULT_MAX_DET,
+    imgsz_override: int | None = None,
 ) -> Any:
     """Load the OBB executor for a model path + compute runtime.
 
@@ -384,6 +396,16 @@ def load_obb_executor(
     max_det:
         Max detections fed to the direct executor's NMS (ignored for the torch
         runtimes).
+    imgsz_override:
+        When set (>0), export/load the artifact at this input size instead of
+        the checkpoint's own embedded default (``_resolve_imgsz``). Needed for
+        the sequential-OBB stage-2 (crop) model: its checkpoint may have been
+        trained/exported at a different size than
+        ``OBBSequentialConfig.stage2_image_size``, and the pipeline always
+        pre-resizes crops to that configured size before inference -- an
+        artifact built at the checkpoint's own size would silently receive
+        wrongly-scaled input under gpu_fast (TensorRT/ONNX), which can drop
+        every detection.
 
     Returns
     -------
@@ -397,7 +419,11 @@ def load_obb_executor(
 
     if runtime in _TENSORRT_RUNTIMES:
         return _load_direct_executor(
-            model_path, runtime, auto_export=auto_export, max_det=max_det
+            model_path,
+            runtime,
+            auto_export=auto_export,
+            max_det=max_det,
+            imgsz_override=imgsz_override,
         )
 
     if runtime in _COREML_RUNTIMES:
@@ -436,8 +462,9 @@ def _load_coreml_executor(model_path: str, *, auto_export: bool) -> Any:
         return _load_torch_model(str(resolved))
 
     artifact_path = _artifact_path_for(resolved, "coreml")
+    imgsz = _resolve_imgsz(resolved)
 
-    if _artifact_is_fresh(artifact_path, resolved):
+    if _artifact_is_fresh(artifact_path, resolved, imgsz):
         logger.info("Reusing cached CoreML artifact: %s", artifact_path.name)
     else:
         if not auto_export:
@@ -446,7 +473,6 @@ def _load_coreml_executor(model_path: str, *, auto_export: bool) -> Any:
                 f"for {resolved.name} and auto_export=False. "
                 "Provide a prebuilt .mlpackage or enable auto_export."
             )
-        imgsz = _resolve_imgsz(resolved)
         _export_artifact(
             pt_path=resolved,
             artifact_path=artifact_path,
@@ -454,7 +480,7 @@ def _load_coreml_executor(model_path: str, *, auto_export: bool) -> Any:
             imgsz=imgsz,
             batch_size=_DEFAULT_BATCH_SIZE,
         )
-        _write_fresh_marker(artifact_path, resolved)
+        _write_fresh_marker(artifact_path, resolved, imgsz)
         logger.info("Exported CoreML artifact: %s", artifact_path)
 
     return _load_torch_model(str(artifact_path))
@@ -466,6 +492,7 @@ def _load_direct_executor(
     *,
     auto_export: bool,
     max_det: int,
+    imgsz_override: int | None = None,
 ) -> DirectExecutorAdapter:
     """Resolve (or auto-export) an ONNX/TRT artifact and wrap a direct executor."""
     runtime = _direct_runtime_name(compute_runtime)
@@ -488,8 +515,13 @@ def _load_direct_executor(
 
     # 2) Source .pt path: locate (or build) the derived artifact.
     artifact_path = _artifact_path_for(resolved, runtime)
+    imgsz = (
+        int(imgsz_override)
+        if imgsz_override and imgsz_override > 0
+        else _resolve_imgsz(resolved)
+    )
 
-    if _artifact_is_fresh(artifact_path, resolved):
+    if _artifact_is_fresh(artifact_path, resolved, imgsz):
         logger.info("Reusing cached %s OBB artifact: %s", runtime, artifact_path.name)
     else:
         if not auto_export:
@@ -501,7 +533,6 @@ def _load_direct_executor(
                 f"auto_export (CUDA box) — refusing to silently fall back to "
                 f"PyTorch (H4)."
             )
-        imgsz = _resolve_imgsz(resolved)
         _export_artifact(
             pt_path=resolved,
             artifact_path=artifact_path,
@@ -509,10 +540,9 @@ def _load_direct_executor(
             imgsz=imgsz,
             batch_size=_DEFAULT_BATCH_SIZE,
         )
-        _write_fresh_marker(artifact_path, resolved)
+        _write_fresh_marker(artifact_path, resolved, imgsz)
         logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
 
-    imgsz = _resolve_imgsz(resolved)
     class_names = _model_class_names(resolved)
     executor = _create_direct_executor(
         runtime=runtime,
