@@ -569,3 +569,79 @@ def test_move_unlabeled_to_all_frame_mode_skips_partially_labeled_frame(monkeypa
     # Frame (src_a, 2) has no labeled instance -> reverted (idx 2 removed).
     assert window.labeling_frames == {0, 1}
     assert len(info_calls) == 1
+
+
+def test_add_random_to_labeling_individual_mode_uses_add_indices_helper(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr("random.sample", lambda population, k: population[:k])
+    added = []
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png"), Path("b.png"), Path("c.png")],
+        labeling_frames=set(),
+        spin_random_count=SimpleNamespace(value=lambda: 2),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _add_indices_to_labeling=lambda indices, title: (
+            added.append((list(indices), title)),
+            True,
+        )[1],
+    )
+
+    MainWindow._add_random_to_labeling(window)
+
+    assert added == [([0, 1], "Random Selection")]
+
+
+def test_add_random_to_labeling_frame_mode_samples_frame_ids(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    monkeypatch.setattr("random.sample", lambda population, k: population[:k])
+    added = []
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=True),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg"), Path("did20000.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        spin_random_count=SimpleNamespace(value=lambda: 1),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+        _add_indices_to_labeling=lambda indices, title: (
+            added.append((sorted(indices), title)),
+            True,
+        )[1],
+    )
+
+    MainWindow._add_random_to_labeling(window)
+
+    # Frame keys are sorted by dict insertion order from group_indices_by_frame;
+    # with only one requested and frame (src_a, 1) inserted first (indices 0/1
+    # appear before index 2 in image_paths), it is the one sampled.
+    assert added == [([0, 1], "Random Selection")]
+
+
+def test_add_random_to_labeling_no_candidates_shows_info(monkeypatch):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    info_calls = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        staticmethod(lambda *a, **k: info_calls.append(a)),
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=False),
+        image_paths=[Path("a.png")],
+        labeling_frames={0},
+        spin_random_count=SimpleNamespace(value=lambda: 5),
+        _matches_current_source=lambda idx: True,
+        _is_labeled=lambda p: False,
+    )
+
+    MainWindow._add_random_to_labeling(window)
+
+    assert len(info_calls) == 1

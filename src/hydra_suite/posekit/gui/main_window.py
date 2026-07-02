@@ -2759,6 +2759,33 @@ class MainWindow(QMainWindow):
 
         count = self.spin_random_count.value()
 
+        if self.config.frame_mode:
+            groups = group_indices_by_frame(
+                [p.name for p in self.image_paths],
+                [self._source_id_for_index(i) for i in range(len(self.image_paths))],
+            )
+            candidate_keys = [
+                key
+                for key, idxs in groups.items()
+                if any(
+                    self._matches_current_source(i)
+                    and not self._is_labeled(self.image_paths[i])
+                    and i not in self.labeling_frames
+                    for i in idxs
+                )
+            ]
+            if not candidate_keys:
+                QMessageBox.information(
+                    self,
+                    "No frames",
+                    "No unlabeled frames available in All Frames list.",
+                )
+                return
+            chosen_keys = random.sample(candidate_keys, min(count, len(candidate_keys)))
+            to_add = [idx for key in chosen_keys for idx in groups[key]]
+            self._add_indices_to_labeling(to_add, "Random Selection")
+            return
+
         # Get all unlabeled frames from the current source browser.
         candidates = []
         for idx, img_path in enumerate(self.image_paths):
@@ -2777,14 +2804,7 @@ class MainWindow(QMainWindow):
 
         # Randomly select up to 'count' frames
         to_add = random.sample(candidates, min(count, len(candidates)))
-        for idx in to_add:
-            self.labeling_frames.add(idx)
-
-        self._populate_frames()
-        self._select_frame_in_list(self.current_index, trigger_load=False)
-        QMessageBox.information(
-            self, "Added frames", f"Added {len(to_add)} frames to labeling set."
-        )
+        self._add_indices_to_labeling(to_add, "Random Selection")
 
     def _on_kpt_selected(self, row: int):
         if row < 0:
