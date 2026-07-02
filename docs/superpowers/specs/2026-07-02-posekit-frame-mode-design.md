@@ -36,13 +36,13 @@ A prominent `QCheckBox` labeled **"Frame Mode"** is added at the very top of `Po
 - Checked = Frame Mode; the behavior changes below take effect.
 - State is persisted via `self.config.frame_mode`.
 
-## Shared Confirmation Helper
+## Shared Commit Path
 
-A single helper, e.g. `_confirm_frame_expansion(frame_count: int, companion_count: int) -> bool`, backs every Frame Mode action that would silently add images the user didn't explicitly pick. It shows one `QMessageBox.question` dialog:
+A single method, `_add_indices_to_labeling_set(indices: list[int], source_label: str) -> bool`, is the one place that actually mutates the labeling set. In Frame Mode, it expands `indices` to include every companion instance per frame, then — unless the caller has already disclosed the expansion via its own preview (see Smart Select below) — shows one `QMessageBox.question` confirmation before committing:
 
 > "This will add {frame_count} frame(s) comprising {total_count} total instance(s), including {companion_count} companion instance(s), to the labeling set. Continue?"
 
-Returns `True`/`False` for OK/Cancel. Reused (not reimplemented) by manual labeling, Random Selection, Smart Select, and Unlabeled → Labeling. This keeps a single confirmation wording and behavior across all four call sites.
+Returns `True`/`False` for OK/Cancel; on cancel, nothing is added. `source_label` is used only for logging/status-bar text (e.g. "Random Selection", "Embedding Explorer"). Reused (not reimplemented) by manual labeling, both bulk-move buttons, Random Selection, and the Embedding Explorer's "Add to Labeling Set" button — five call sites, one mutation path, one confirmation wording.
 
 ## Behavior Changes
 
@@ -52,7 +52,7 @@ All of the following are gated on `self.config.frame_mode` being `True`, except 
 
 When a user labels an image that is not yet in the labeling set, and that image's frame has companions:
 
-- Before committing the save, call the shared confirmation helper.
+- Before committing the save, route the companion expansion through the shared commit path (`_add_indices_to_labeling_set`), which shows the confirmation dialog.
 - **Cancel:** discard the keypoint edits just made (do not write the label file, do not add anything to the labeling set) — the frame stays exactly as it was.
 - **Confirm:** save the keypoints as normal, then add every companion instance of that frame to the labeling set.
 
@@ -62,7 +62,7 @@ If the frame has no companions (singleton, e.g. non-HYDRA source), behavior is i
 
 **Behavior fix, applies in both modes:** today this button moves *every* unlabeled frame in the current source into the labeling set. This changes to moving only the frames **currently selected** in the Source Frames list, in both Individual and Frame Mode.
 
-In Frame Mode specifically, each selected frame is expanded to include its companion instances (that aren't already in the labeling set), gated by the shared confirmation dialog before the move is committed.
+In Frame Mode specifically, the move goes through the shared commit path (`_add_indices_to_labeling_set`), which expands each selected frame to include its companion instances and gates the move behind the confirmation dialog.
 
 ### 3. Unlabeled → All (`_move_unlabeled_to_all`, the revert-to-source action)
 
@@ -74,7 +74,7 @@ Today this button removes selected/unlabeled frames from the labeling set, rever
 
 ### 4. Random Selection (`_add_random_to_labeling`)
 
-In Frame Mode, `random.sample` draws from the set of candidate **frame IDs** (frames with at least one not-yet-labeled instance) rather than individual image indices. The existing count spinbox is reinterpreted as the target frame count; its label/tooltip updates to reflect "frames" when Frame Mode is on. Selecting a frame pulls in all of its not-yet-labeled instances. Gated by the shared confirmation dialog before committing.
+In Frame Mode, `random.sample` draws from the set of candidate **frame IDs** (frames with at least one not-yet-labeled instance) rather than individual image indices. The existing count spinbox keeps its literal meaning — "N items to add" — now interpreted directly as N frames (no back-solving); its label/tooltip updates to say "frames" when Frame Mode is on. The chosen frame IDs are expanded and committed through the shared commit path.
 
 ### 5. Smart Select — Cluster Coverage Counting
 
@@ -82,7 +82,7 @@ The existing per-individual embedding computation and clustering (`cluster_embed
 
 Instead, a new frame-selection layer sits on top of the existing per-individual clustering output:
 
-1. Cluster all candidate (not-yet-labeled) individuals into `K` clusters using the existing pipeline, where `K` equals today's target count (unchanged meaning).
+1. Cluster all candidate (not-yet-labeled) individuals into `K` clusters using the existing pipeline (`self.k_spin`, unchanged meaning and default).
 2. Group individuals by frame (per the Frame Grouping section above).
 3. Greedily select frames:
    - Maintain a set of "covered" clusters (initially empty).
@@ -90,16 +90,31 @@ Instead, a new frame-selection layer sits on top of the existing per-individual 
    - Pick the highest-scoring frame. Tie-break by (a) total distinct clusters spanned (covered or not), then (b) smallest `frame_idx`, for determinism.
    - Add all of that frame's clusters to the covered set.
 4. Stop when either:
-   - The frame budget is exhausted. The budget is back-solved from the target count the same way as FilterKit: `n_frames = max(1, round(target_count / avg_individuals_per_frame))`.
+   - The frame budget (`self.n_spin`, "Frames to add" — already frame-count-shaped, reused as-is, meaning N frames directly with no back-solving) is exhausted.
    - All `K` clusters are covered *and* continuing would not improve coverage — in this case, keep picking by residual best-score (ignoring the "not-yet-covered" restriction) until the frame budget is used, so the full requested budget is spent rather than silently under-filling.
-5. Selecting a frame pulls in every not-yet-labeled instance on it.
+5. Selecting a frame pulls in every not-yet-labeled instance on it, added directly to `self.selected_indices` (no separate confirmation dialog — see UI Changes below for why).
 
-Gated by the shared confirmation dialog, reporting the true final frame/companion counts, before committing the additions to the labeling set.
+#### 5a. SmartSelectDialog UI Changes
+
+The dialog's controls and preview were built for the old per-individual stratified algorithm and don't represent the new greedy cluster-coverage algorithm:
+
+- When `self.config.frame_mode` is on, show a read-only note near the top of the dialog: "Frame Mode is ON — results grouped by source frame." There is no dialog-local Frame Mode toggle; the dialog always reflects the single global setting.
+- `self.min_per_spin` (min-per-cluster quota) and `self.strategy_combo` (centroid/centroid_then_diverse) are disabled and grayed out, with tooltip "Not used in Frame Mode — frame selection uses greedy cluster-coverage instead of per-cluster quotas." Both are meaningless for the new algorithm, which has no quotas or strategy choice.
+- `self._preview()` dispatches to the new frame-selection algorithm (Section 5, steps 1–4) instead of `pick_frames_stratified()` when Frame Mode is on; clustering via `cluster_embeddings_cosine()` is unchanged either way.
+- The preview list (`self.preview`) switches from one line per image to one line per selected frame: `[frame 0042] covers clusters {3,7} — 3 instances (1 labeled)`. This is a deliberate design choice: because Smart Select already requires the user to review this preview before clicking "Add," the expanded companion list showing here **is** the warning — no separate confirmation modal is shown when `_on_add()` runs, unlike the other four Frame Mode entry points, which have no comparable preview.
+
+#### 5b. EmbeddingExplorerDialog "Add to Labeling Set"
+
+No changes to the UMAP scatter plot, hover preview, or point-selection interaction (out of scope — this is a targeted fix to one commit action, not a visualization redesign). The dialog still treats points as individual images with no frame-aware rendering.
+
+The only change: `self.btn_add_sel`'s handler, which today calls `self.accept()` with `self.selected_indices` (local image indices) unchanged, now routes its selection through the shared commit path (`_add_indices_to_labeling_set`) when Frame Mode is on. Since this dialog's selection summary shows only a raw count with no frame/companion breakdown, the confirmation dialog is shown here (unlike Smart Select's own Add button in 5a).
 
 ## Testing Approach
 
 - Frame-grouping helper: unit tests for filename parsing (matching and non-matching cases), per-source scoping.
 - Config schema: round-trip `to_dict`/`from_dict` test including the new field, default `False`.
-- Each of the five behavior changes gets its own test exercising Frame Mode on vs. off, using synthetic multi-instance-per-frame fixtures (mirroring FilterKit's test fixture style: distinguishable images per cluster/frame so real clustering/greedy behavior is exercised, not degenerate all-filtered-out fixtures).
+- Each of the six behavior changes (manual labeling, both bulk-move buttons, Random Selection, Smart Select, Embedding Explorer) gets its own test exercising Frame Mode on vs. off, using synthetic multi-instance-per-frame fixtures (mirroring FilterKit's test fixture style: distinguishable images per cluster/frame so real clustering/greedy behavior is exercised, not degenerate all-filtered-out fixtures).
 - Smart Select cluster-coverage greedy loop: a dedicated test with a small fixed embedding set where the optimal coverage-maximizing frame order is known ahead of time, asserting the selection matches.
-- Confirmation-dialog gating: tests verify cancel leaves state unchanged (manual labeling: keypoints discarded, nothing added) and confirm applies the full expansion.
+- `_add_indices_to_labeling_set`: unit tests covering expansion correctness (companions pulled in, no duplicates) and the cancel path (nothing added) independent of any specific caller.
+- SmartSelectDialog: test that `min_per_spin`/`strategy_combo` are disabled in Frame Mode, and that the preview text renders one line per frame with correct cluster/instance/labeled-count content.
+- EmbeddingExplorerDialog: test that its "Add to Labeling Set" action, in Frame Mode, expands the raw point selection to companions and routes through the shared commit path (confirmation shown, cancel leaves selection uncommitted).
