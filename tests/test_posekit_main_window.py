@@ -22,6 +22,9 @@ class _DummyCombo:
     def setCurrentIndex(self, _index: int) -> None:
         return None
 
+    def currentIndex(self) -> int:
+        return 0
+
     def count(self) -> int:
         return 1
 
@@ -312,3 +315,110 @@ def test_add_indices_to_labeling_individual_mode_unchanged(monkeypatch):
 
     assert result is True
     assert window.labeling_frames == {0}
+
+
+def _make_save_current_window(monkeypatch, frame_mode, current_index=0):
+    from hydra_suite.posekit.config.schemas import PoseKitConfig
+
+    save_calls = []
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.save_yolo_pose_label",
+        lambda **kwargs: save_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "hydra_suite.posekit.gui.main_window.compute_bbox_from_kpts",
+        lambda *a, **k: (0, 0, 1, 1),
+    )
+
+    window = SimpleNamespace(
+        config=PoseKitConfig(frame_mode=frame_mode),
+        image_paths=[Path("did10000.jpg"), Path("did10001.jpg")],
+        _source_id_for_index=lambda idx: "src_a",
+        labeling_frames=set(),
+        current_index=current_index,
+        _ann=FrameAnn(cls=0, bbox_xyxy=None, kpts=[]),
+        _cache_current_frame=lambda: None,
+        _label_path_for=lambda p: Path(f"/labels/{p.stem}.txt"),
+        class_combo=_DummyCombo(),
+        _kpts_to_save_space=lambda kpts, path: (kpts, 10, 10),
+        project=SimpleNamespace(bbox_pad_frac=0.1),
+        _autosave_timer=SimpleNamespace(isActive=lambda: False, stop=lambda: None),
+        _populate_frames=lambda: None,
+        _select_frame_in_list=lambda *a, **k: None,
+        statusBar=lambda: SimpleNamespace(showMessage=lambda *a, **k: None),
+        _set_saved_status=lambda: None,
+        save_project=lambda: None,
+        _load_ann_from_disk=lambda idx: FrameAnn(cls=0, bbox_xyxy=None, kpts=[]),
+        _rebuild_canvas=lambda: None,
+    )
+    window._frame_expansion = lambda indices: MainWindow._frame_expansion(
+        window, indices
+    )
+    return window, save_calls
+
+
+def test_save_current_frame_mode_confirms_and_adds_companions(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes)
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=True)
+
+    MainWindow.save_current(window)
+
+    assert len(save_calls) == 1
+    assert window.labeling_frames == {1}  # companion added explicitly
+
+
+def test_save_current_frame_mode_cancel_discards_edits(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No)
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=True)
+    reload_calls = []
+    window._load_ann_from_disk = lambda idx: (
+        reload_calls.append(idx) or FrameAnn(cls=0, bbox_xyxy=None, kpts=[])
+    )
+
+    MainWindow.save_current(window)
+
+    assert save_calls == []
+    assert window.labeling_frames == set()
+    assert reload_calls == [0]
+
+
+def test_save_current_individual_mode_unchanged(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm outside frame mode")
+            )
+        ),
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=False)
+
+    MainWindow.save_current(window)
+
+    assert len(save_calls) == 1
+    # Individual mode never explicitly adds anything; only _populate_frames'
+    # own auto-promotion (not exercised by this fake) would do so.
+    assert window.labeling_frames == set()
+
+
+def test_save_current_already_in_labeling_set_skips_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not confirm when frame already in labeling set")
+            )
+        ),
+    )
+    window, save_calls = _make_save_current_window(monkeypatch, frame_mode=True)
+    window.labeling_frames = {0}
+
+    MainWindow.save_current(window)
+
+    assert len(save_calls) == 1

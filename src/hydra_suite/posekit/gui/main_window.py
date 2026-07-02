@@ -3445,6 +3445,30 @@ class MainWindow(QMainWindow):
         img_path = self.image_paths[self.current_index]
         label_path = self._label_path_for(img_path)
 
+        companions: set = set()
+        if self.config.frame_mode and self.current_index not in self.labeling_frames:
+            expanded, frame_count = self._frame_expansion({self.current_index})
+            companions = expanded - {self.current_index}
+            if companions:
+                reply = QMessageBox.question(
+                    self,
+                    "Add frame to labeling set",
+                    f"This will add {frame_count} frame(s) comprising "
+                    f"{len(expanded)} total instance(s), including "
+                    f"{len(companions)} companion instance(s), to the "
+                    "labeling set. Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.Yes,
+                )
+                if reply != QMessageBox.Yes:
+                    self._ann = self._load_ann_from_disk(self.current_index)
+                    self._rebuild_canvas()
+                    self._dirty = False
+                    self.statusBar().showMessage(
+                        "Save canceled — edits discarded.", 3000
+                    )
+                    return
+
         cls = int(self.class_combo.currentIndex())
         self._ann.cls = cls
 
@@ -3465,6 +3489,9 @@ class MainWindow(QMainWindow):
         if self._autosave_timer.isActive():
             self._autosave_timer.stop()
         self._dirty = False
+
+        if companions:
+            self.labeling_frames.update(companions)
 
         # Only refresh UI if we're staying on the current frame
         if refresh_ui:
