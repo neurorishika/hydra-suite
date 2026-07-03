@@ -121,7 +121,9 @@ def test_run_batch_pass_calls_progress_callback(tmp_path):
         # run_batch_pass now drives the whole pass via Pipeline.run; stub it so
         # this test verifies the runner's read-loop wiring (frame source drained,
         # range_total, final progress callback) without real OBB/stage work.
-        def fake_run(frame_source, frame_range, progress_cb=None, range_total=0):
+        def fake_run(
+            frame_source, frame_range, progress_cb=None, range_total=0, should_stop=None
+        ):
             processed = sum(1 for _ in frame_source)
             if progress_cb:
                 progress_cb(processed, range_total)

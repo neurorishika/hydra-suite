@@ -624,6 +624,7 @@ class InferenceRunner:
         progress_cb=None,
         start_frame: int = 0,
         end_frame: int | None = None,
+        should_stop=None,
     ) -> None:
         from .sources import make_frame_source
 
@@ -658,6 +659,7 @@ class InferenceRunner:
                 range(start_frame, end_frame + 1),
                 progress_cb=progress_cb,
                 range_total=range_total,
+                should_stop=should_stop,
             )
         finally:
             frame_source.close()

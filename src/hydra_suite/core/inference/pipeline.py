@@ -387,6 +387,7 @@ class Pipeline:
         frame_range: range,
         progress_cb: Callable[[int, int], None] | None = None,
         range_total: int = 0,
+        should_stop: Callable[[], bool] | None = None,
     ) -> InferencePassResult:
         """Drive the full pass over ``frame_source`` for ``frame_range``.
 
@@ -401,10 +402,16 @@ class Pipeline:
         at depth>=2 a producer thread runs decode+OBB up to ``depth-1`` windows
         ahead (bounded queue) while this single in-order consumer thread runs the
         downstream stages + cache writes.
+
+        ``should_stop``, if given, is polled at window boundaries; when it
+        returns ``True`` the pass returns early with whatever frames were
+        already processed (a partial ``InferencePassResult``).
         """
         if self.depth == 1:
-            return self._run_sync(frame_source, progress_cb, range_total)
-        return self._run_double_buffer(frame_source, progress_cb, range_total)
+            return self._run_sync(frame_source, progress_cb, range_total, should_stop)
+        return self._run_double_buffer(
+            frame_source, progress_cb, range_total, should_stop
+        )
 
     # --- depth=1: synchronous --------------------------------------------
 
@@ -413,12 +420,15 @@ class Pipeline:
         frame_source: Iterable,
         progress_cb: Callable[[int, int], None] | None,
         range_total: int,
+        should_stop: Callable[[], bool] | None = None,
     ) -> InferencePassResult:
         result = InferencePassResult()
         w = self.window_size
         step = max(1, range_total // 100) if range_total > 0 else 1
 
         for window in self._stream_windows(frame_source, w):
+            if should_stop is not None and should_stop():
+                break
             result.frames_processed += len(window)
             result.frame_results.extend(self._process_window(window))
             if progress_cb and range_total > 0:
@@ -443,6 +453,7 @@ class Pipeline:
         frame_source: Iterable,
         progress_cb: Callable[[int, int], None] | None,
         range_total: int,
+        should_stop: Callable[[], bool] | None = None,
     ) -> InferencePassResult:
         result = InferencePassResult()
         w = self.window_size
@@ -462,14 +473,15 @@ class Pipeline:
         def producer() -> None:
             try:
                 for window in self._stream_windows(frame_source, w):
-                    if stop.is_set():
+                    if stop.is_set() or (should_stop is not None and should_stop()):
+                        stop.set()
                         break
                     raw_list = self._run_obb_for_window(window)
                     read_counter["n"] += len(window)
                     # Carry the running read count so the consumer can emit
                     # progress with the same cadence as the sync path.
                     handoff_q.put((window, raw_list, read_counter["n"]))
-            except BaseException as exc:  # noqa: BLE001 -- surfaced via supervisor
+            except BaseException as exc:  # noqa: BLE001,B036 supervisor
                 producer_error.append(exc)
                 stop.set()
             finally:
@@ -497,7 +509,7 @@ class Pipeline:
                         step,
                         range_total,
                     )
-        except BaseException as exc:  # noqa: BLE001 -- supervisor re-raises
+        except BaseException as exc:  # noqa: BLE001,B036 supervisor
             consumer_error = exc
         finally:
             # Supervisor teardown: stop the producer at the next window boundary,
@@ -507,10 +519,13 @@ class Pipeline:
             producer_thread.join(timeout=30.0)
             # Flush + close the (async) cache writer so no write is left pending,
             # regardless of whether we are unwinding an error or finishing clean.
-            try:
-                self.cache_writer.flush()
-            finally:
-                self.cache_writer.close()
+            # ``cache_writer`` is only ``None`` for Pipeline.for_test() shims used
+            # in tests; every real (non-test) Pipeline always has one.
+            if self.cache_writer is not None:
+                try:
+                    self.cache_writer.flush()
+                finally:
+                    self.cache_writer.close()
 
         if consumer_error is not None:
             raise consumer_error

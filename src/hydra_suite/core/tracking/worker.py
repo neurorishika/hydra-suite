@@ -1165,6 +1165,7 @@ class TrackingWorker(QThread):
                         if int(p.get("END_FRAME", -1)) >= 0
                         else None
                     ),
+                    should_stop=lambda: self._stop_requested,
                 )
             except Exception as _bp_err:
                 profiler.phase_end("batched_detection")
