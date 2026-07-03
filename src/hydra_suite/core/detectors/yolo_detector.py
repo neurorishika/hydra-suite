@@ -1988,6 +1988,20 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                     bucket["conf"].append(float(crop_conf[detection_index]))
                     bucket["corners"].append(corners)
 
+        if _debug_seq:
+            for idx in range(min(5, actual_frame_count)):
+                bucket = per_frame_merged[idx]
+                confs = sorted(bucket["conf"], reverse=True)
+                n_above_03 = sum(1 for c in confs if c > 0.3)
+                logger.warning(
+                    "HYDRA_DEBUG_SEQ_OBB STAGE2 frame=%d device=%s n_candidates=%d n_conf_gt_0.3=%d top_confs=%s",
+                    start_frame_idx + idx,
+                    str(getattr(self, "obb_predict_device", None) or self.device),
+                    len(confs),
+                    n_above_03,
+                    ["%.4f" % c for c in confs[:10]],
+                )
+
         per_frame_raw = []
         for idx in range(actual_frame_count):
             bucket = per_frame_merged[idx]
