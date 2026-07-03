@@ -1890,11 +1890,6 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         all_original_sizes = []
         all_frame_indices = []
 
-        import os as _os
-
-        _debug_seq = _os.environ.get("HYDRA_DEBUG_SEQ_OBB") == "1"
-        _debug_stage1_counts = [] if _debug_seq else None
-
         if profiler is not None:
             profiler.phase_start("sequential_obb_crop")
         for idx in range(actual_frame_count):
@@ -1902,24 +1897,9 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             per_frame_stage1[idx] = det0
             boxes = getattr(det0, "boxes", None)
             if boxes is None or len(boxes) == 0:
-                if _debug_seq:
-                    _debug_stage1_counts.append(0)
                 continue
             xyxy = np.ascontiguousarray(boxes.xyxy.cpu().numpy(), dtype=np.float32)
             det_conf = np.ascontiguousarray(boxes.conf.cpu().numpy(), dtype=np.float32)
-            if _debug_seq:
-                _debug_stage1_counts.append(len(det_conf))
-                if idx < 5:
-                    logger.warning(
-                        "HYDRA_DEBUG_SEQ_OBB frame=%d device=%s stage1_raw_boxes=%d conf_min=%.6f conf_max=%.6f",
-                        start_frame_idx + idx,
-                        str(
-                            getattr(self, "detect_predict_device", None) or self.device
-                        ),
-                        len(det_conf),
-                        float(det_conf.min()) if len(det_conf) else float("nan"),
-                        float(det_conf.max()) if len(det_conf) else float("nan"),
-                    )
             order = np.argsort(det_conf)[::-1]
             if len(order) > max_det:
                 order = order[:max_det]
@@ -1940,18 +1920,6 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 all_frame_indices.append(idx)
         if profiler is not None:
             profiler.phase_end("sequential_obb_crop", work_units=len(all_crops))
-        if _debug_seq and _debug_stage1_counts:
-            import numpy as _np_dbg
-
-            arr = _np_dbg.asarray(_debug_stage1_counts)
-            logger.warning(
-                "HYDRA_DEBUG_SEQ_OBB SUMMARY device=%s frames=%d stage1_mean=%.3f stage1_max=%d stage1_total=%d",
-                str(getattr(self, "detect_predict_device", None) or self.device),
-                len(arr),
-                float(arr.mean()),
-                int(arr.max()),
-                int(arr.sum()),
-            )
 
         if all_crops:
             if use_gpu_crops:
@@ -2014,20 +1982,6 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                     bucket["shapes"].append(tuple(crop_shapes[detection_index]))
                     bucket["conf"].append(float(crop_conf[detection_index]))
                     bucket["corners"].append(corners)
-
-        if _debug_seq:
-            for idx in range(min(5, actual_frame_count)):
-                bucket = per_frame_merged[idx]
-                confs = sorted(bucket["conf"], reverse=True)
-                n_above_03 = sum(1 for c in confs if c > 0.3)
-                logger.warning(
-                    "HYDRA_DEBUG_SEQ_OBB STAGE2 frame=%d device=%s n_candidates=%d n_conf_gt_0.3=%d top_confs=%s",
-                    start_frame_idx + idx,
-                    str(getattr(self, "obb_predict_device", None) or self.device),
-                    len(confs),
-                    n_above_03,
-                    ["%.4f" % c for c in confs[:10]],
-                )
 
         per_frame_raw = []
         for idx in range(actual_frame_count):
