@@ -173,7 +173,24 @@ def _should_use_nvdec(params: dict, detector) -> bool:
 def _try_open_nvdec(video_path: str, start_frame: int):
     """Try to open an NVDec hardware decoder for *video_path*.
 
-    Returns ``(decoder, metadata, cp_module)`` on success, ``None`` on failure.
+    ``PyNvVideoCodec`` only validates a decoded stream's macroblock count
+    against the GPU's hardware limit *lazily*, on the first real
+    ``get_batch_frames()`` call — not when ``CreateSimpleDecoder`` succeeds.
+    So a clip whose resolution exceeds a GPU's macroblock limit (e.g.
+    4512x4512 against a 65536-macroblock cap) opens cleanly here and only
+    fails deep inside the main detection loop, uncaught. To surface that
+    failure at open time (so the caller can fall back to cv2 decode instead
+    of crashing mid-pass), this does a trial ``get_batch_frames(1)`` right
+    after opening/seeking, in the same try/except as decoder setup.
+
+    Because NVDEC decode is forward-only, the trial-decoded frame's content
+    cannot be "returned" to the stream — it is cached and returned as the
+    fourth tuple element so the caller can yield it as the first real frame
+    instead of discarding it / re-requesting frame ``start_frame``.
+
+    Returns ``(decoder, metadata, cp_module, primed_frame_or_None)`` on
+    success, ``None`` on any failure (missing libs, decoder-open failure, or
+    the trial-decode itself raising/failing).
     """
     try:
         import cupy as cp
@@ -190,25 +207,46 @@ def _try_open_nvdec(video_path: str, start_frame: int):
         meta = dec.get_stream_metadata()
         if start_frame > 0:
             dec.seek_to_index(int(start_frame))
-        return dec, meta, cp
+
+        # Trial-decode: surfaces MBCount-not-supported and similar failures
+        # immediately instead of deep inside the main batch-reading loop.
+        primed_frame = None
+        total_frames = int(getattr(meta, "num_frames", 0) or 0)
+        if total_frames <= 0 or start_frame < total_frames:
+            first_batch = dec.get_batch_frames(1)
+            if first_batch:
+                primed_frame = _nvdec_frame_to_cuda_tensor(first_batch[0], cp).clone()
+        return dec, meta, cp, primed_frame
     except Exception as exc:
         logger.warning("NVDec: failed to open decoder for %s: %s", video_path, exc)
         return None
 
 
 def _read_nvdec_batch(
-    sdec, cp, batch_size, start_frame, end_frame, frame_idx, is_stop_requested
+    sdec,
+    cp,
+    batch_size,
+    start_frame,
+    end_frame,
+    frame_idx,
+    is_stop_requested,
+    primed_frame=None,
 ):
     """Read up to *batch_size* NVDec-decoded CUDA tensors.
 
     Each frame is cloned immediately after decode so the decoder buffer can
-    safely be reused for the next frame.
+    safely be reused for the next frame. If *primed_frame* is given (the
+    trial-decoded frame cached by :func:`_try_open_nvdec`), it is consumed as
+    the first frame of the batch without calling ``get_batch_frames`` again.
 
     Returns ``(batch_tensors, frames_consumed)``.
     """
     batch_tensors = []
     consumed = 0
-    for _ in range(batch_size):
+    if primed_frame is not None:
+        batch_tensors.append(primed_frame)
+        consumed += 1
+    for _ in range(batch_size - consumed):
         if is_stop_requested():
             break
         current_frame_index = start_frame + frame_idx + consumed
@@ -289,14 +327,18 @@ def run_batched_detection_phase(
     logger.info(f"Batch size: {batch_size}")
 
     # Try to open the NVDec hardware decoder as a zero-copy alternative to cv2.
-    # Falls back to cv2 silently on any failure or when conditions are not met.
+    # Falls back to cv2 silently on any failure or when conditions are not met
+    # — including a clip whose resolution exceeds this GPU's macroblock limit,
+    # which _try_open_nvdec now detects via a trial decode instead of letting
+    # it crash the main loop later.
     use_nvdec = False
     nvdec_dec = None
     nvdec_cp = None
+    nvdec_primed_frame = None
     if video_path and _should_use_nvdec(params, detector):
         _nvdec_result = _try_open_nvdec(video_path, start_frame)
         if _nvdec_result is not None:
-            nvdec_dec, _nvdec_meta, nvdec_cp = _nvdec_result
+            nvdec_dec, _nvdec_meta, nvdec_cp, nvdec_primed_frame = _nvdec_result
             use_nvdec = True
             logger.info(
                 "NVDec GPU hardware decode enabled for Phase-1 " "(%dx%d, ~%d frames)",
@@ -305,7 +347,11 @@ def run_batched_detection_phase(
                 _nvdec_meta.num_frames,
             )
         else:
-            logger.info("NVDec decoder unavailable for this video; using cv2 decode.")
+            logger.info(
+                "NVDec decoder unavailable/unsupported for this video "
+                "(e.g. resolution exceeds this GPU's macroblock limit); "
+                "falling back to cv2 decode."
+            )
 
     detection_start_time = time.time()
     batch_times = deque(maxlen=30)
@@ -330,7 +376,11 @@ def run_batched_detection_phase(
                 end_frame,
                 frame_idx,
                 is_stop_requested,
+                primed_frame=nvdec_primed_frame,
             )
+            # The primed (trial-decoded) frame is only ever consumed once, at
+            # the very start of the pass.
+            nvdec_primed_frame = None
         else:
             batch_frames, consumed = _read_batch_frames(
                 cap,
