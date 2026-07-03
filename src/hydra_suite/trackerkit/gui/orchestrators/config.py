@@ -1183,27 +1183,8 @@ class ConfigOrchestrator:
         self._mw._refresh_pose_model_combo(
             preferred_model_path=self._mw._pose_model_path_for_backend(active_backend)
         )
-        pose_runtime_flavor = (
-            str(
-                get_cfg(
-                    "pose_runtime_flavor",
-                    default=derive_pose_runtime_settings(
-                        self._mw._selected_compute_runtime(),
-                        backend_family=self._panels.identity.combo_pose_model_type.currentText()
-                        .strip()
-                        .lower(),
-                    )["pose_runtime_flavor"],
-                )
-            )
-            .strip()
-            .lower()
-        )
-        self._mw._populate_pose_runtime_flavor_options(
-            backend=self._panels.identity.combo_pose_model_type.currentText()
-            .strip()
-            .lower(),
-            preferred=pose_runtime_flavor,
-        )
+        # Pose runtime is fully derived from Compute tier (spec §2/§5.2) — any
+        # legacy per-preset "pose_runtime_flavor" value is ignored on load.
         self._panels.identity.spin_pose_min_kpt_conf_valid.setValue(
             get_cfg("pose_min_kpt_conf_valid", default=0.2)
         )
@@ -3759,13 +3740,6 @@ class ConfigOrchestrator:
         """Apply cached benchmark recommendations back into the current UI."""
         notes: list[str] = []
 
-        def _set_combo_data(combo: QComboBox, value: object) -> bool:
-            index = combo.findData(value)
-            if index < 0:
-                return False
-            combo.setCurrentIndex(index)
-            return True
-
         detection = recommendations.get(
             "detection_direct"
             if self._panels.detection.combo_yolo_obb_mode.currentIndex() == 0
@@ -3800,11 +3774,8 @@ class ConfigOrchestrator:
 
         pose = recommendations.get(f"pose_{self._mw._current_pose_backend_key()}")
         if pose is not None:
-            pose_flavor = derive_pose_runtime_settings(
-                pose.runtime,
-                backend_family=self._mw._current_pose_backend_key(),
-            ).get("pose_runtime_flavor", "cpu")
-            _set_combo_data(self._panels.setup.combo_pose_runtime_flavor, pose_flavor)
+            # Pose runtime is derived from Compute tier, not independently
+            # recommendable (spec §2/§5.2) — only the batch size is applied.
             self._panels.identity.spin_pose_batch.setValue(int(pose.batch_size))
 
         cnn_recommendations = [

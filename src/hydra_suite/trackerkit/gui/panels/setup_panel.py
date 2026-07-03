@@ -646,21 +646,8 @@ class SetupPanel(QWidget):
         self._performance_base_control_cards.append(tier_card)
         self._performance_control_cards.append(tier_card)
 
-        self.combo_pose_runtime_flavor = QComboBox()
-        self.combo_pose_runtime_flavor.setFixedHeight(30)
-        self.combo_pose_runtime_flavor.setToolTip(
-            "Pose runtime used by the pose extraction pipeline.\n"
-            "This can be set independently from detection when pose is enabled."
-        )
-        self._register_optional_performance_control(
-            self.combo_pose_runtime_flavor,
-            "Pose runtime",
-        )
-        self._main_window._set_form_row_visible(
-            self.form_performance,
-            self.combo_pose_runtime_flavor,
-            False,
-        )
+        # Pose runtime is fully derived from Compute tier (spec §2/§5.2) — no
+        # UI control for it at all, not even read-only. See RuntimeResolver.
 
         self.check_save_confidence = QCheckBox("Save metrics")
         self.check_save_confidence.setChecked(True)

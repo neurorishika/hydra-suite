@@ -743,32 +743,17 @@ def test_tier_combo_exists_and_old_per_stage_combos_removed(
     window.close()
 
 
-def test_setup_panel_pose_runtime_visibility_tracks_pose_enable(
+def test_setup_panel_has_no_pose_runtime_control(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """Pose runtime has no UI control at all — it's fully derived from Compute tier."""
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda _pipeline: ["cpu", "mps", "onnx_coreml"],
-    )
-
-    window._identity_panel.chk_enable_pose_extractor.setChecked(False)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_pose_runtime_flavor.isHidden() is True
-
-    window._identity_panel.chk_enable_pose_extractor.setChecked(True)
-    window._identity_panel.combo_pose_model_type.setCurrentText("SLEAP")
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_pose_runtime_flavor.isHidden() is True
-
-    _select_first_nonempty_model(window._identity_panel.combo_pose_model)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_pose_runtime_flavor.isHidden() is False
-    assert window._identity_panel.combo_pose_runtime_flavor.isHidden() is True
+    assert not hasattr(window._setup_panel, "lbl_pose_runtime_flavor")
+    assert not hasattr(window._setup_panel, "combo_pose_runtime_flavor")
+    assert not hasattr(window._identity_panel, "combo_pose_runtime_flavor")
     window.close()
 
 
@@ -794,36 +779,12 @@ def test_setup_panel_single_tier_combo_always_visible(
     window.close()
 
 
-def test_setup_panel_performance_runtime_cards_reflow_when_visibility_changes(
+def test_saved_config_reflects_tier_derived_pose_runtime_flavor(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
-    window = _make_main_window(monkeypatch)
-    panel = window._setup_panel
-    grid = panel.performance_control_grid
-    pose_card = panel._performance_optional_control_cards[
-        panel.combo_pose_runtime_flavor
-    ]
-
-    # With pose hidden, grid row 1 should be empty.
-    window._set_form_row_visible(None, panel.combo_pose_runtime_flavor, False)
-    qapp.processEvents()
-    assert grid.itemAtPosition(1, 0) is None
-
-    # Show pose: should reflow into row 1.
-    window._set_form_row_visible(None, panel.combo_pose_runtime_flavor, True)
-    qapp.processEvents()
-    assert grid.itemAtPosition(1, 0).widget() is pose_card
-    window.close()
-
-
-def test_saved_config_preserves_selected_pose_runtime_flavor(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-    tmp_path: Path,
-) -> None:
+    """Pose runtime is not independently selectable; it tracks Compute tier (spec §2/§5.2)."""
     window = _make_main_window(monkeypatch)
     monkeypatch.setattr(
         session_module,
@@ -833,16 +794,18 @@ def test_saved_config_preserves_selected_pose_runtime_flavor(
 
     window._identity_panel.chk_enable_pose_extractor.setChecked(True)
     window._identity_panel.combo_pose_model_type.setCurrentText("SLEAP")
-    window._populate_pose_runtime_flavor_options("sleap", preferred="onnx_mps")
 
-    idx = window._setup_panel.combo_pose_runtime_flavor.findData("onnx_mps")
+    idx = window._setup_panel.combo_runtime_tier.findData("cpu")
     assert idx >= 0
-    window._setup_panel.combo_pose_runtime_flavor.setCurrentIndex(idx)
+    window._setup_panel.combo_runtime_tier.setCurrentIndex(idx)
+
+    expected_flavor = window._selected_pose_runtime_flavor()
+    assert expected_flavor == "cpu"
 
     config_path = tmp_path / "pose_runtime.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved_cfg["pose_runtime_flavor"] == "onnx_mps"
+    assert saved_cfg["pose_runtime_flavor"] == expected_flavor
     window.close()
 
 

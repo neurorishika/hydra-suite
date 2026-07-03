@@ -15,10 +15,9 @@ from PySide6.QtWidgets import QMessageBox
 from hydra_suite.runtime.compute_runtime import (
     derive_detection_runtime_settings,
     derive_pose_runtime_settings,
-    runtime_label,
     supported_runtimes_for_pipeline,
 )
-from hydra_suite.runtime.resolver import detect_platform
+from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
 from hydra_suite.utils.geometry import fit_circle_to_points
 
 if TYPE_CHECKING:
@@ -767,17 +766,6 @@ class SessionOrchestrator:
         backend = (
             self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
         )
-        self._mw._populate_pose_runtime_flavor_options(backend=backend)
-        if (
-            hasattr(self._mw, "_setup_panel")
-            and hasattr(self._mw._setup_panel, "form_performance")
-            and hasattr(self._mw._setup_panel, "combo_pose_runtime_flavor")
-        ):
-            self._mw._set_form_row_visible(
-                self._mw._setup_panel.form_performance,
-                self._mw._setup_panel.combo_pose_runtime_flavor,
-                bool(self._is_pose_inference_enabled()),
-            )
         is_sleap = backend == "sleap"
         if hasattr(self._mw, "_identity_panel") and hasattr(
             self._mw._identity_panel, "pose_sleap_env_row_widget"
@@ -786,14 +774,6 @@ class SessionOrchestrator:
                 self._mw._identity_panel.form_pose_runtime,
                 self._mw._identity_panel.pose_sleap_env_row_widget,
                 is_sleap,
-            )
-        if hasattr(self._mw, "_identity_panel") and hasattr(
-            self._mw._identity_panel, "combo_pose_runtime_flavor"
-        ):
-            self._mw._set_form_row_visible(
-                self._mw._identity_panel.form_pose_runtime,
-                self._mw._identity_panel.combo_pose_runtime_flavor,
-                False,
             )
         # Refresh pose model combo to show models for the selected backend.
         self._mw._refresh_pose_model_combo(
@@ -1022,15 +1002,18 @@ class SessionOrchestrator:
             return "cpu"
         return "cpu"
 
+    def _current_runtime_tier(self) -> str:
+        """Return the currently selected RuntimeTier id ("cpu"/"gpu"/"gpu_fast")."""
+        if not hasattr(self._mw, "_setup_panel"):
+            return "gpu"
+        if not hasattr(self._mw._setup_panel, "combo_runtime_tier"):
+            return "gpu"
+        data = self._mw._setup_panel.combo_runtime_tier.currentData()
+        return str(data).strip() if data else "gpu"
+
     def _selected_compute_runtime(self) -> str:
         """Derive a concrete compute_runtime string from the selected tier combo."""
-        if not hasattr(self._mw, "_setup_panel"):
-            return "cpu"
-        if not hasattr(self._mw._setup_panel, "combo_runtime_tier"):
-            return "cpu"
-        data = self._mw._setup_panel.combo_runtime_tier.currentData()
-        tier = str(data).strip() if data else "gpu"
-        return self._tier_to_compute_runtime(tier)
+        return self._tier_to_compute_runtime(self._current_runtime_tier())
 
     def _has_cnn_identity_enabled(self) -> bool:
         """Return True when CNN identity analysis is configured and enabled."""
@@ -1118,77 +1101,48 @@ class SessionOrchestrator:
         if hasattr(self._mw, "_detection_panel"):
             self._mw._detection_panel._sync_batch_policy_controls()
         if hasattr(self._mw, "_identity_panel"):
-            self._mw._populate_pose_runtime_flavor_options(
-                backend=self._mw._identity_panel.combo_pose_model_type.currentText()
-                .strip()
-                .lower(),
-                preferred=self._mw._selected_pose_runtime_flavor(),
-            )
             self._mw._identity_panel._sync_realtime_individual_batch_ui()
 
-    def _pose_runtime_options_for_backend(self, backend: str):
-        """Return (label, flavor) pairs for the pose runtime flavor combo."""
+    def _resolve_pose_runtime(self, backend: str) -> str:
+        """Resolve the canonical runtime for the pose stage from the tier alone.
+
+        Spec §2/§5.2: pose runtime is not independently selectable. GPU-Fast
+        uses the RuntimeResolver's per-stage fallback contract (§5.4) — a fast
+        artifact (TensorRT/CoreML) if this pipeline supports it, else the
+        native GPU.
+        """
+        tier = self._current_runtime_tier()
+        platform = detect_platform()
         pipeline = (
             "sleap_pose" if str(backend).strip().lower() == "sleap" else "yolo_pose"
         )
-        runtimes = supported_runtimes_for_pipeline(pipeline) or ["cpu"]
-        recommended = None
-        recommendation = self._mw._current_pose_benchmark_recommendation()
-        if recommendation is not None:
-            recommended = recommendation.runtime
-        options = []
-        seen_flavors = set()
-        for runtime in runtimes:
-            derived = derive_pose_runtime_settings(runtime, backend_family=backend)
-            flavor = str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
-            if not flavor or flavor in seen_flavors:
-                continue
-            seen_flavors.add(flavor)
-            label = runtime_label(runtime)
-            if runtime == recommended:
-                label += " (Recommended)"
-            options.append((label, flavor))
-        return options or [("CPU", "cpu")]
+        supported = supported_runtimes_for_pipeline(pipeline)
 
-    def _populate_pose_runtime_flavor_options(self, backend: str, preferred=None):
-        """Populate the pose runtime flavor combo based on the current backend."""
-        if not hasattr(self._mw, "_setup_panel") or not hasattr(
-            self._mw._setup_panel, "combo_pose_runtime_flavor"
-        ):
-            return
-        combo = self._mw._setup_panel.combo_pose_runtime_flavor
-        selected = (
-            str(preferred or self._mw._selected_pose_runtime_flavor() or "auto")
-            .strip()
-            .lower()
+        def artifact_available() -> bool:
+            if platform.has_cuda:
+                return "tensorrt" in supported
+            if platform.has_mps:
+                return "onnx_coreml" in supported
+            return True
+
+        resolved = RuntimeResolver(tier, platform).resolve(
+            pipeline, artifact_available=artifact_available
         )
-        options = self._pose_runtime_options_for_backend(backend)
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
-        combo.blockSignals(True)
-        combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.blockSignals(False)
+        if resolved.backend == "tensorrt":
+            return "tensorrt"
+        if resolved.backend == "coreml":
+            return "onnx_coreml"
+        return resolved.device  # "cuda", "mps", or "cpu"
 
     def _selected_pose_runtime_flavor(self) -> str:
-        """Return the currently selected pose runtime flavor key."""
-        if hasattr(self._mw, "_setup_panel") and hasattr(
-            self._mw._setup_panel, "combo_pose_runtime_flavor"
-        ):
-            data = self._mw._setup_panel.combo_pose_runtime_flavor.currentData()
-            if data:
-                return str(data).strip().lower()
+        """Return the pose runtime flavor key, fully derived from the compute tier."""
         backend = (
             self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
             if hasattr(self._mw, "_identity_panel")
             else "yolo"
         )
         derived = derive_pose_runtime_settings(
-            self._selected_compute_runtime(), backend_family=backend
+            self._resolve_pose_runtime(backend), backend_family=backend
         )
         return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
 

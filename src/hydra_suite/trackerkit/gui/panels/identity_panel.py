@@ -425,21 +425,6 @@ class IdentityPanel(QWidget):
             self._main_window._sync_pose_backend_ui
         )
 
-        self.combo_pose_runtime_flavor = QComboBox()
-        self.combo_pose_runtime_flavor.setToolTip(
-            "Pose runtime implementation.\n"
-            "Auto/Native uses default backend runtime.\n"
-            "ONNX/TensorRT artifacts are exported and reused automatically."
-        )
-        # Note: combo_pose_runtime_flavor will be populated post-construction
-        self.combo_pose_runtime_flavor.currentIndexChanged.connect(
-            self._main_window._sync_pose_backend_ui
-        )
-        fl_pose.addRow("Pose runtime", self.combo_pose_runtime_flavor)
-        self._main_window._set_form_row_visible(
-            fl_pose, self.combo_pose_runtime_flavor, False
-        )
-
         self.combo_pose_model = QComboBox()
         self.combo_pose_model.setToolTip(
             "Pose model for individual analysis.\n"

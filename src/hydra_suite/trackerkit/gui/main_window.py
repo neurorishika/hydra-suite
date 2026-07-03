@@ -932,12 +932,6 @@ class MainWindow(QMainWindow):
         self._identity_panel._refresh_cnn_identity_model_combo()
         self._identity_panel._refresh_yolo_headtail_model_combo()
         self._update_background_color_button()
-        self._populate_pose_runtime_flavor_options(backend="yolo")
-        self._set_form_row_visible(
-            self._identity_panel.form_pose_runtime,
-            self._identity_panel.combo_pose_runtime_flavor,
-            False,
-        )
         self._refresh_pose_model_combo()
         self._identity_panel._refresh_pose_sleap_envs()
         self._identity_panel._refresh_pose_direction_keypoint_lists()
@@ -1445,19 +1439,6 @@ class MainWindow(QMainWindow):
         """Update runtime combo and sync dependent controls."""
         if hasattr(self, "_session_orch"):
             self._session_orch._on_runtime_context_changed(*_args)
-
-    def _pose_runtime_options_for_backend(self, backend: str):
-        """Return (label, flavor) pairs for the pose runtime flavor combo."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._pose_runtime_options_for_backend(backend)
-        return []
-
-    def _populate_pose_runtime_flavor_options(self, backend: str, preferred=None):
-        """Populate the pose runtime flavor combo."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._populate_pose_runtime_flavor_options(
-                backend, preferred=preferred
-            )
 
     def _selected_pose_runtime_flavor(self) -> str:
         """Return the currently selected pose runtime flavor key."""
