@@ -185,8 +185,7 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
                 # Enable direct CUDA executor to ensure auto=False square
                 # letterboxing (matches TRT/ONNX paths for non-square frames).
                 if self.device.startswith("cuda"):
-                    _ov = getattr(self.model, "overrides", {}) or {}
-                    _pt_imgsz = _ov.get("imgsz") or self._resolve_onnx_imgsz()
+                    _pt_imgsz = self._resolve_direct_cuda_obb_imgsz(self.model)
                     self._maybe_enable_direct_cuda_obb_executor(
                         self.model,
                         int(_pt_imgsz),
@@ -221,9 +220,8 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
             # Enable direct CUDA executor to ensure auto=False square
             # letterboxing (matches TRT/ONNX paths for non-square frames).
             if self.device.startswith("cuda"):
-                _ov = getattr(self.model, "overrides", {}) or {}
-                _pt_imgsz = _ov.get("imgsz") or self._resolve_onnx_imgsz(
-                    model_path=model_path
+                _pt_imgsz = self._resolve_direct_cuda_obb_imgsz(
+                    self.model, model_path=model_path
                 )
                 self._maybe_enable_direct_cuda_obb_executor(
                     self.model,
@@ -233,6 +231,35 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         except Exception as e:
             logger.error(f"Failed to load YOLO model from '{model_path}': {e}")
             raise
+
+    def _resolve_direct_cuda_obb_imgsz(
+        self, model, model_path: Path | None = None
+    ) -> int:
+        """Resolve the imgsz the direct-CUDA OBB executor must be built at.
+
+        In ``sequential`` OBB mode, ``self.model`` is the *stage-2 crop*
+        classifier, which is always invoked on ``YOLO_SEQ_STAGE2_IMGSZ``-sized
+        square crops (already resized/letterboxed by the sequential pipeline
+        before reaching ``_predict_obb_results``) — never on the checkpoint's
+        own embedded/export imgsz. Building the direct CUDA executor at the
+        checkpoint's default imgsz instead of the actual stage-2 crop size
+        caused a device-specific input-scale mismatch: crops were resized
+        again internally by the executor to the wrong square size, which
+        systematically inflated the crop classifier's confidence scores on
+        native CUDA relative to the CPU/MPS Ultralytics-wrapper path (same
+        weights, same crops, wildly different score distributions) — see
+        the sequential-OBB CUDA over-detection bug.
+
+        Direct mode's OBB model runs on full frames at the checkpoint's own
+        imgsz, so that path is unaffected and keeps resolving from model
+        metadata as before.
+        """
+        if self._current_obb_mode() == "sequential":
+            stage2_imgsz = int(self.params.get("YOLO_SEQ_STAGE2_IMGSZ", 0) or 0)
+            if stage2_imgsz > 0:
+                return stage2_imgsz
+        _ov = getattr(model, "overrides", {}) or {}
+        return int(_ov.get("imgsz") or self._resolve_onnx_imgsz(model_path=model_path))
 
     def _load_model_for_task(self, model_path_str: str, task: str):
         """Load an auxiliary YOLO model for detect/classify tasks."""
