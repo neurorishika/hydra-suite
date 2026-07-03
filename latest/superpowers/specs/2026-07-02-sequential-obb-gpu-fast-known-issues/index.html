@@ -1779,11 +1779,25 @@ still open, split by where it lives.</p>
 <p>Related work already merged/pushed:
 - <code>feature/inference-pipeline-redesign</code>: <code>6692b51</code>, <code>9a6929f</code>, <code>1785cd0</code>,
   <code>bbd5960</code>, <code>22597f1</code> — sequential OBB crash + parity + gpu_fast fixes.
-- <code>fix/nvdec-hang</code> (off <code>main</code>, PR not yet opened): <code>c02c0d8</code> — fixes the
-  NVDEC hang described below.</p>
+  Also <code>1b0f08b</code> (CoreML <code>imgsz_override</code> threading, closes §2.2) and
+  <code>6cb2e49</code>/<code>3226db3</code> (fixtures manifest + release re-upload, closes §2.4),
+  both landed shortly after this doc's initial commit.
+- <strong>Update (2026-07-03): all four <code>main</code>-side items in §1 are now merged</strong>
+  via PR #15 (<code>fix/seq-obb-cuda-overdetect</code>, closes 1.1), PR #16
+  (<code>fix/nvdec-hang</code>, closes 1.2), PR #17 (<code>fix/direct-trt-static-batch</code>,
+  closes 1.3/2.5), PR #18 (<code>fix/seq-detect-trt-imgsz</code>). Section 1 below is
+  kept for historical context; see each subsection for the merge commit.</p>
 <hr />
 <h2 id="1-on-main-legacy-not-fixed-here-needs-separate-work">1. On <code>main</code> (legacy) — not fixed here, needs separate work<a class="headerlink" href="#1-on-main-legacy-not-fixed-here-needs-separate-work" title="Permanent link">&para;</a></h2>
 <h3 id="11-legacy-sequential-obb-produces-10x-more-detections-on-native-cuda-than-cpu">1.1 Legacy sequential-OBB produces ~10x more detections on native CUDA than CPU<a class="headerlink" href="#11-legacy-sequential-obb-produces-10x-more-detections-on-native-cuda-than-cpu" title="Permanent link">&para;</a></h3>
+<p><strong>RESOLVED (2026-07-03), PR #15 (<code>fix/seq-obb-cuda-overdetect</code>, merged as
+<code>08a3562</code>).</strong> Root cause: the direct-CUDA OBB executor was being built at
+the checkpoint's default embedded imgsz instead of the actual stage-2 crop
+size (<code>YOLO_SEQ_STAGE2_IMGSZ</code>), causing crops to be internally re-resized to
+the wrong square size and systematically inflating confidence scores on
+native CUDA. Fixed via <code>_resolve_direct_cuda_obb_imgsz()</code> in
+<code>yolo_detector.py</code>, which resolves the stage-2 crop imgsz when in sequential
+mode (direct mode is unaffected and keeps its old resolution path).</p>
 <p><strong>Where:</strong> <code>src/hydra_suite/core/detectors/yolo_detector.py</code>, legacy's
 <code>_seq_*</code> sequential-OBB path (<code>_seq_stage1_predict</code>,
 <code>_seq_run_stage2_obb_batched</code>, and friends).</p>
@@ -1814,6 +1828,10 @@ by comparing raw stage-1 box counts (before crop-building) between CPU and
 CUDA on the same frame; if stage-1 counts already differ, the bug is in
 detection/NMS, not downstream filtering.</p>
 <h3 id="12-nvdec-hard-fails-instead-of-falling-back-to-cv2-decode-for-high-macroblock-count-clips">1.2 NVDEC hard-fails instead of falling back to cv2 decode for high-macroblock-count clips<a class="headerlink" href="#12-nvdec-hard-fails-instead-of-falling-back-to-cv2-decode-for-high-macroblock-count-clips" title="Permanent link">&para;</a></h3>
+<p><strong>RESOLVED (2026-07-03), PR #16 (<code>fix/nvdec-hang</code>, merged as <code>fef5933</code>).</strong>
+Adds a trial-decode call right after opening the NVDEC decoder plus a cv2
+fallback when the trial fails, mirroring the pattern already used by the
+redesign branch's <code>sources.py</code>.</p>
 <p><strong>Where:</strong> <code>src/hydra_suite/core/tracking/detection_phase.py</code>,
 <code>_try_open_nvdec</code> / <code>_read_nvdec_batch</code> / <code>run_batched_detection_phase</code>.</p>
 <p><strong>What happens:</strong> <code>PyNvVideoCodec</code> only validates the decoded stream's
@@ -1842,6 +1860,11 @@ fix likely already exists in the redesign branch and could be ported back to
 legacy's <code>detection_phase.py</code>, or legacy could be pointed at the same
 <code>FrameSource</code> abstraction instead of its own NVDEC code path.</p>
 <h3 id="13-coredetectors_direct_obb_runtimepys-tensorrt-batch1-chunking-bug-is-presumably-still-present">1.3 <code>core/detectors/_direct_obb_runtime.py</code>'s TensorRT batch=1 chunking bug is presumably still present<a class="headerlink" href="#13-coredetectors_direct_obb_runtimepys-tensorrt-batch1-chunking-bug-is-presumably-still-present" title="Permanent link">&para;</a></h3>
+<p><strong>RESOLVED (2026-07-03), PR #17 (<code>fix/direct-trt-static-batch</code>, merged as
+<code>b750392</code>).</strong> Ported the one-line fix from the redesign branch verbatim:
+<code>self._static_batch = batch_dim &gt; 0</code> in <code>DirectTensorRTOBBExecutor.__init__</code>.
+(A related fix, PR #18 <code>fix/seq-detect-trt-imgsz</code>, merged as <code>aeedc15</code>,
+addresses sequential stage-1 detect TRT imgsz resolution in the same area.)</p>
 <p><strong>Where:</strong> <code>src/hydra_suite/core/detectors/_direct_obb_runtime.py</code>,
 <code>DirectTensorRTOBBExecutor.__init__</code>.</p>
 <p>This file is <strong>byte-identical</strong> between <code>main@0a83c51</code> and the redesign
@@ -1929,24 +1952,120 @@ So the OBB stage is not at fault; the discrepancy is in the
 tracking/assignment (Kalman gating / trajectory-birth-confirmation) stage of
 <code>core/tracking/worker.py</code>, and hasn't been root-caused beyond that
 localization.</p>
-<p><strong>2.2 — CoreML path never got the <code>imgsz_override</code>/<code>task</code> fix.</strong>
-<code>load_obb_executor</code>'s CoreML branch (<code>_load_coreml_executor</code>) still calls
-<code>_resolve_imgsz(resolved)</code> unconditionally — the fix in
-<code>runtime_artifacts.py</code> only threads <code>imgsz_override</code>/<code>task</code> through the
-TensorRT direct-executor path (<code>_load_direct_executor</code>). If sequential OBB
-is ever run on Apple Silicon's <code>gpu_fast</code> tier (CoreML) with a
-<code>stage2_image_size</code> that differs from the crop model's own checkpoint
-default, the same zero-detection bug from finding #4 above would likely
-reproduce there. Untested (no CoreML-capable box was used this session)
-and unfixed.</p>
-<p><strong>2.3 — <code>YOLO_SEQ_STAGE2_POW2_PAD</code> has no equivalent in the new
-<code>OBBSequentialConfig</code>.</strong> Legacy's sequential OBB has a
-<code>YOLO_SEQ_STAGE2_POW2_PAD</code> knob (pads the crop <em>list</em> — not crop pixel
-content — to a power-of-two count for fixed-shape backends). Determined
-this session to be irrelevant for correctness in the new pipeline's
-direct-executor path (which already chunks properly once fix #6 above is
-applied), but it was never explicitly ported/considered, so if a future
-backend needs it, there's no config surface for it yet.</p>
+<p><strong>Update (2026-07-02, local re-run on the redesign branch's own worktree,
+CPU tier):</strong> reproduced the exact same 940-vs-941 discrepancy locally
+(<code>RUNTIME=cpu ONLY=ant_obb_sequential bash tools/equivalence/run_matrix.sh</code>)
+and localized it one level further. The missing row is entirely a
+<em>backward-pass</em> artifact — the forward-pass CSVs (<code>..._forward.csv</code>) are
+identical between legacy and new for this ant (trajectory born at frame 165
+in both); the extra frame-164 row only appears in legacy's <em>backward</em>
+replay CSV. Dumped the new pipeline's raw <code>InferenceRunner</code> detection cache
+(<code>.inference_cache_&lt;video&gt;/detection.npz</code>) directly: the frame-164
+detection at (1735.09, 1415.24) is present with confidence <code>0.32317126</code> —
+bit-identical to legacy's value and comfortably clear of
+<code>yolo_confidence_threshold=0.3</code> (not a threshold-boundary flip). So the
+detection reaches <code>filter_with_indices</code> in <code>core/inference/stages/filtering.py</code>
+and should survive its gates untouched (nothing else at that frame overlaps
+it for NMS to contend with). This rules out both the OBB stage and the
+CPU/MPS filtering stage as the cause. The remaining candidate is
+slot-availability state during backward Kalman tracking in
+<code>core/tracking/worker.py</code>'s free-slot loop (~line 3474 in the redesign
+tree): if no track slot is in <code>"lost"</code> state at frame 164 in the new
+pipeline's backward run (unlike legacy's run, where one apparently is), the
+detection is silently dropped with no trajectory to attach to — that
+free-slot loop has no diagnostic logging for the "no free slot" case, so
+this could not be confirmed from the existing WARNING-level
+<code>SLOT_REUSE</code>/<code>JUMP?</code> diagnostics alone. Confirming this would require
+instrumenting <code>track_states</code> per-frame across both pipelines' full
+backward runs (frames ~150–165) and diffing slot occupancy history —
+not attempted here given the doc's own priority ranking (§4) already ranks
+this below the CoreML/manifest/gpu_fast items, which were addressed instead
+this session.</p>
+<p><strong>Update (2026-07-03): root-caused. The free-slot hypothesis above was
+wrong</strong> — instrumented <code>track_states</code>/<code>tracking_continuity</code> per-frame plus
+the full Hungarian cost matrix for both pipelines' backward runs on the
+<code>ant_obb_sequential</code> CPU fixture (temporary logging in <code>worker.py</code> and
+<code>hungarian.py</code>, reverted after). Findings, in order:</p>
+<ol>
+<li>At frame 164, both pipelines see the <strong>identical 3 measurements</strong>
+   (bit-identical <code>meas</code> arrays) and classify slots identically into
+   <code>est=[0, 5, 6, 7]</code> / <code>lost=[1, 2, 3, 4, 8, ...]</code> / <code>unst=[]</code> — the
+   free-slot loop (§<code>worker.py</code> free-slot loop) is not on the code path
+   that produces this discrepancy at all; slot 7 (the track this
+   detection belongs to) is <code>est</code> (established), not something waiting on
+   a <code>"lost"</code> slot.</li>
+<li><code>raw_dist_mat[7, 1]</code> (slot 7 vs. the frame-164 detection) is
+   <strong>bit-identical</strong> between legacy and new: <code>10.861329...</code>px, comfortably
+   inside every gate.</li>
+<li>But <code>cost[7, 1]</code> — the value actually fed to
+   <code>linear_sum_assignment</code> — is <strong>not</strong> identical: legacy <code>15.803</code>,
+   new <code>17.974</code>, a <code>~2.17</code> gap. Subtracting the identical raw distance
+   isolates this to the <em>identity hint term</em> added by
+   <code>Hungarian._apply_bayesian_identity_cost()</code> (gated on
+   <code>ENABLE_IDENTITY_ONLINE_DECODER</code> + <code>ASSOCIATION_IDENTITY_HINT_SCALE</code>,
+   default <code>0.3</code>): <code>alpha * -logsumexp(track_log_posterior[7] +
+   det_log_likelihood[1])</code> evaluates to <code>4.94</code> in legacy vs. <code>7.11</code> in
+   new — i.e. the online identity decoder's per-slot log-posterior (or
+   the detection's log-likelihood) differs slightly between the two
+   codebases' implementations of that decoder.</li>
+<li>Phase 1 (<code>_assign_established_hungarian</code>) runs <code>linear_sum_assignment</code>
+   on the full <code>4×3</code> (tracks × detections) cost submatrix — since there
+   are more established tracks (4) than detections (3) that frame, the
+   solver is <em>forced</em> to leave exactly one track unassigned every time,
+   and which one is a genuinely global optimization over all four rows,
+   not a per-row threshold check. The ~2-unit identity-cost gap for slot 7
+   is enough to flip which of the 4 est tracks is the "odd one out":
+   legacy's assignment keeps slot 7 in (→ matched to this detection,
+   frame-164 row written), new's assignment drops slot 7 (→ detection
+   ends up in <code>free_dets</code>, and separately, no slot happens to be <code>"lost"</code>
+   for it to respawn into, so it's dropped with no trajectory).</li>
+</ol>
+<p><strong>Conclusion:</strong> this is not a logic bug in either pipeline's assignment
+code — both correctly compute the (slightly different) global-optimal
+assignment for their own cost matrix. The actual discrepancy traces to the
+online identity decoder producing marginally different Bayesian
+log-posteriors between legacy's inline implementation and the new
+pipeline's <code>core/inference</code>-based one, most likely from ~190 backward-pass
+frames of accumulated float32 evidence-update order/rounding differences
+between the two decoder implementations. This is the tracking-stage analog
+of the FP16-threshold-flip behavior already documented for the GPU/GPU-fast
+tiers above (§ "GPU vs GPU-fast" note) — an inherently discrete
+(combinatorial, over-subscribed Hungarian) decision amplifying a small,
+expected floating-point-level difference into a binary present/absent
+outcome for one row out of ~1000. Given the magnitude, root-causing the
+<em>exact</em> source of the log-posterior discrepancy inside the identity decoder
+refactor is a separate, much larger parity-audit task (out of scope here);
+this item is closed as <strong>understood and accepted, no code fix</strong>, not "not
+yet root-caused."</p>
+<p><strong>2.2 — RESOLVED (2026-07-03, prior to this doc's initial commit — commit
+<code>1b0f08b</code>).</strong> <code>load_obb_executor</code>'s CoreML branch (<code>_load_coreml_executor</code>)
+now accepts and applies <code>imgsz_override</code>, mirroring the TensorRT
+direct-executor path (<code>_load_direct_executor</code>). Verified by reading
+<code>runtime_artifacts.py</code>: <code>_load_coreml_executor(model_path, *, auto_export,
+imgsz_override=None)</code> resolves <code>imgsz</code> from the override when given,
+falling back to <code>_resolve_imgsz(resolved)</code> only when not. Still untested on
+real Apple Silicon <code>gpu_fast</code> hardware (no CoreML-capable box was used this
+session), but the code-level gap is closed.</p>
+<p><strong>2.3 — RESOLVED (2026-07-03): <code>YOLO_SEQ_STAGE2_POW2_PAD</code> intentionally has
+no equivalent in the new <code>OBBSequentialConfig</code> — confirmed not needed, not a
+gap.</strong> Legacy's sequential OBB has a <code>YOLO_SEQ_STAGE2_POW2_PAD</code> knob that
+pads the crop <em>list</em> (not crop pixel content) to the next power-of-two count
+before handing it to a fixed-shape backend, working around legacy's
+executor requiring an exact match to one of its exported batch sizes.</p>
+<p>Re-verified against the current code: the new pipeline's
+<code>_BaseDirectOBBExecutor.predict()</code> (<code>core/detectors/_direct_obb_runtime.py</code>,
+<code>predict()</code>/<code>_predict_chunk()</code>) already does <em>generic</em> batch chunking for
+every direct-mode call (stage-1 detect and stage-2 crop-OBB alike) —
+it chunks to the executor's own <code>_model_batch_size</code> and pads any
+undersized final chunk by repeating the first frame, then truncates results
+back to the real count. This runs independently of (and downstream of)
+<code>_run_sequential</code>'s own <code>stage2_batch_size</code> loop (<code>core/inference/stages/obb.py</code>),
+so crops are correctly batched regardless of what <code>stage2_batch_size</code> is set
+to. This is strictly more precise than legacy's pow2 rounding — it pads to
+the model's <em>actual</em> batch size, not merely the nearest power of two — so
+there is no scenario where <code>YOLO_SEQ_STAGE2_POW2_PAD</code> would add correctness
+or performance value that the new pipeline lacks. No config surface is
+needed; closing this with no action.</p>
 <p><strong>2.4 — <code>ant_obb_sequential</code>'s model weights aren't in the release
 archive.</strong> The two-stage detect+crop-OBB models
 (<code>detection/20260305-175022_26x_obiroi_v1.pt</code>,
@@ -1964,6 +2083,43 @@ previously-broken multi-frame-batch cases, not break already-working
 single-frame ones — but no direct-mode <code>gpu_fast</code> fixture
 (<code>emi_obb_identity</code>, <code>fly_obb</code>, etc.) was re-run on mehek after this change
 to confirm there's no regression.</p>
+<p><strong>Resolved (2026-07-02, on mehek).</strong> Re-ran direct-mode <code>gpu_fast</code> fixtures
+and found two previously-undiscovered bugs — both specific to the NVDEC
+CUDA-tensor frame path (never exercised by a direct-mode <code>gpu_fast</code> fixture
+before this session) — fixed on <code>feature/inference-pipeline-redesign</code>:</p>
+<ol>
+<li><code>_resolve_imgsz()</code> in <code>core/inference/stages/obb.py</code> only knew how to
+   read <code>imgsz</code> from an ultralytics-model-shaped object (<code>.overrides</code> /
+   <code>.model.args</code>). <code>DirectExecutorAdapter</code> (the gpu_fast TensorRT/ONNX
+   wrapper) has neither, so it always silently fell back to the hardcoded
+   1024 default — harmless for <code>emi_obb_identity</code> (whose engine happens to
+   be exported at 1024, masking the bug) but crashed <code>fly_obb</code>'s 640-imgsz
+   engine with <code>TensorRT setInputShape: Static dimension mismatch</code> on every
+   frame. Fixed by having <code>DirectExecutorAdapter</code> surface the underlying
+   executor's own <code>.imgsz</code> — commit on <code>feature/inference-pipeline-redesign</code>.</li>
+<li>Even with (1) fixed, <code>_run_direct</code>'s CUDA-tensor branch still crashed:
+   it pre-letterboxes NVDEC frames into a single <code>(B,3,imgsz,imgsz)</code> tensor
+   (necessary for a plain ultralytics model, which can't accept a list of
+   CUDA tensors) and hands that to <code>model.predict()</code> unconditionally.
+   <code>DirectExecutorAdapter.predict()</code> then did <code>list(batched_tensor)</code>,
+   splitting it back into per-slice <code>(3,imgsz,imgsz)</code> "frames" and feeding
+   them to the underlying executor's <code>_preprocess_cuda_batch</code>, which
+   re-letterboxed each as if it were a raw <code>(H,W,3)</code> frame — corrupting the
+   shape whenever <code>imgsz != 3</code>. Fixed by routing <code>DirectExecutorAdapter</code>
+   through the plain frames-list path instead (its own executor already has
+   correct native CUDA-list handling with correct original-frame coordinate
+   output).</li>
+</ol>
+<p><strong>Verified after both fixes</strong>, on mehek: <code>fly_obb</code> (gpu_fast, direct mode)
+now matches legacy on 1500/1500 rows (1 row differs at FP16-rounding level
+— consistent with the already-documented FP16-quantization caveat), with
+bit-identical new_a/new_b determinism. <code>emi_obb_identity</code> — whose NVDEC path
+hits the 4512×4512 macroblock limit and falls back to CPU decode (the
+redesign's <code>HYDRA_DISABLE_NVDEC</code>-pattern fallback working as intended,
+unlike legacy's hang from finding 1.2) — produces <strong>bit-identical</strong> output
+between the NVDEC-attempted run (exercises today's fixes) and the
+CPU-decode-fallback run (doesn't), proving the fix produces correct results
+end-to-end, not just avoids a crash.</p>
 <hr />
 <h2 id="3-process-note-not-a-code-issue">3. Process note (not a code issue)<a class="headerlink" href="#3-process-note-not-a-code-issue" title="Permanent link">&para;</a></h2>
 <p>Another session/agent was actively committing to
@@ -1978,22 +2134,36 @@ sessions against the same branch: commit early and often, and diff against
 <ol>
 <li><strong>1.3 / 2.5</strong> — port the one-line <code>_static_batch</code> fix to <code>main</code>, then
    spot-check legacy's direct-mode <code>gpu_fast</code> fixtures on a real TensorRT
-   box. Cheap, low-risk, plausibly fixes a live crash on <code>main</code>.</li>
+   box. Cheap, low-risk, plausibly fixes a live crash on <code>main</code>.
+   <strong>DONE (2026-07-03) — PR #17, merged as <code>b750392</code>.</strong></li>
 <li><strong>1.1</strong> — legacy CUDA over-detection bug. Silent correctness bug (not a
    crash) affecting anyone using sequential OBB + CUDA on <code>main</code> today;
-   worth prioritizing over the CoreML/pow2-pad gaps below.</li>
+   worth prioritizing over the CoreML/pow2-pad gaps below.
+   <strong>DONE (2026-07-03) — PR #15, merged as <code>08a3562</code>.</strong></li>
 <li><strong>1.2</strong> — NVDEC fallback-instead-of-hard-fail. The redesign branch may
    already have the fix pattern (<code>sources.py</code>'s trial-decode / <code>FrameSource</code>
    abstraction, commit <code>a6709be</code>) — check whether it can be ported/reused
-   rather than reimplemented.</li>
+   rather than reimplemented.
+   <strong>DONE (2026-07-03) — PR #16, merged as <code>fef5933</code>.</strong></li>
 <li><strong>2.1</strong> — tracking-stage trajectory-birth timing. Lower priority: tiny
    magnitude (1 row in ~1000), and the OBB layer is already confirmed
-   correct.</li>
+   correct. <strong>Root-caused and closed (2026-07-03) — no code fix.</strong> Not the
+   free-slot loop after all (that hypothesis is disproven — see updated
+   write-up below); the actual cause is a small floating-point-level
+   difference in the online identity decoder's Bayesian cost term between
+   legacy and new, which flips the outcome of an over-subscribed
+   (more-established-tracks-than-detections) Hungarian assignment at frame</li>
+<li>Inherent to the identity-decoder refactor, same class as the
+   already-accepted FP16 threshold-flip behavior noted for GPU/GPU-fast
+   above; not worth chasing for 1 row in ~1000.</li>
 <li><strong>2.2, 2.3, 2.4</strong> — CoreML imgsz-override, pow2-pad config surface,
-   release-archive packaging. All lower urgency (no known live bug reports
-   for CoreML sequential OBB; pow2-pad is an optimization knob; the
-   release-archive gap only blocks <em>other machines</em> from running this one
-   new fixture, not any existing one).</li>
+   release-archive packaging.
+   <strong>2.2 and 2.4 already resolved</strong> (commits <code>1b0f08b</code> and <code>6cb2e49</code>/<code>3226db3</code>,
+   landed shortly after this doc's initial commit).
+   <strong>2.3 confirmed not needed — closed with no action (2026-07-03),</strong> see
+   updated write-up below: the new pipeline's generic per-chunk batch
+   padding in <code>_BaseDirectOBBExecutor.predict()</code> already subsumes what
+   pow2-pad was for.</li>
 </ol>
 
 
