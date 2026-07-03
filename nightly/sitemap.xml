@@ -45,10 +45,6 @@
          <lastmod>2026-07-03</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/developer-guide/inference-fast-mode/</loc>
-         <lastmod>2026-07-03</lastmod>
-    </url>
-    <url>
          <loc>https://neurorishika.github.io/hydra-suite/nightly/developer-guide/module-map/</loc>
          <lastmod>2026-07-03</lastmod>
     </url>
@@ -157,27 +153,7 @@
          <lastmod>2026-07-03</lastmod>
     </url>
     <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/plans/2026-06-30-inference-acceleration-restoration/</loc>
-         <lastmod>2026-07-03</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/plans/2026-06-30-runtime-tiers-phase1-exact-wins/</loc>
-         <lastmod>2026-07-03</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/plans/2026-06-30-runtime-tiers-phase2-taxonomy/</loc>
-         <lastmod>2026-07-03</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/plans/2026-06-30-runtime-tiers-phase3-coreml/</loc>
-         <lastmod>2026-07-03</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-06-30-inference-acceleration-restoration-design/</loc>
-         <lastmod>2026-07-03</lastmod>
-    </url>
-    <url>
-         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-06-30-inference-runtime-tiers-design/</loc>
+         <loc>https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-07-01-filterkit-preserve-full-frames-design/</loc>
          <lastmod>2026-07-03</lastmod>
     </url>
     <url>
