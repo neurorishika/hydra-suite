@@ -93,6 +93,19 @@ from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
 )
 
 
+def should_build_bgsub_detection_cache(
+    *, preview_mode: bool, backward_mode: bool
+) -> bool:
+    """Return True if a forward bg-sub run should read/write the shared detection cache.
+
+    Preview Mode must not touch it: the cache file is a single fixed path per
+    video (not qualified by frame range), and closing a handle always
+    overwrites it with only the current run's frames — so a short preview
+    range would silently truncate a full-range cache used by backward mode.
+    """
+    return not preview_mode
+
+
 class TrackingWorker(QThread):
     """
     Core tracking engine. Orchestrates tracking components to be functionally
@@ -1087,21 +1100,27 @@ class TrackingWorker(QThread):
             # batch pass), and cached via the refactor-native DetectionCacheHandle
             # so the backward pass can replay them — parity with the OBB path,
             # which caches through InferenceRunner.
-            _cache_dir = self._resolve_cache_dir()
-            _cache_dir.mkdir(parents=True, exist_ok=True)
-            _bgsub_cache_path = _cache_dir / "bgsub_detection.npz"
-            _bgsub_key = with_video_signature(
-                bgsub_detection_cache_key(p), video_signature(self.video_path)
-            )
-            bgsub_detection_cache = DetectionCacheHandle(
-                path=_bgsub_cache_path, key=_bgsub_key
-            )
+            if should_build_bgsub_detection_cache(
+                preview_mode=self.preview_mode, backward_mode=self.backward_mode
+            ):
+                _cache_dir = self._resolve_cache_dir()
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                _bgsub_cache_path = _cache_dir / "bgsub_detection.npz"
+                _bgsub_key = with_video_signature(
+                    bgsub_detection_cache_key(p), video_signature(self.video_path)
+                )
+                bgsub_detection_cache = DetectionCacheHandle(
+                    path=_bgsub_cache_path, key=_bgsub_key
+                )
             if self.backward_mode:
-                if not bgsub_detection_cache.is_valid():
+                if (
+                    bgsub_detection_cache is None
+                    or not bgsub_detection_cache.is_valid()
+                ):
                     logger.error(
                         "Backward tracking requires valid forward bg-sub detections "
                         "at %s. Please run forward tracking first.",
-                        _bgsub_cache_path,
+                        self._resolve_cache_dir() / "bgsub_detection.npz",
                     )
                     cap.release()
                     self.finished_signal.emit(False, [], [])
@@ -1113,9 +1132,16 @@ class TrackingWorker(QThread):
                 )
             else:
                 detector = create_detector(p)
-                logger.info(
-                    "Forward pass caching bg-sub detections to %s", _bgsub_cache_path
-                )
+                if bgsub_detection_cache is not None:
+                    logger.info(
+                        "Forward pass caching bg-sub detections to %s",
+                        _bgsub_cache_path,
+                    )
+                else:
+                    logger.info(
+                        "Preview mode: skipping bg-sub detection cache to avoid "
+                        "truncating the full-range cache."
+                    )
 
         # === RUN BATCHED INFERENCE PHASE (if applicable) ===
         # For YOLO OBB: InferenceRunner.run_batch_pass() when caches are not yet valid.
