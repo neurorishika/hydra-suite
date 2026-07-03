@@ -296,7 +296,12 @@ class TrackingOrchestrator:
             "PreviewDetectionWorker",
             timeout_ms=1200,
         )
-        self._request_qthread_stop(self._mw.tracking_worker, "TrackingWorker")
+        self._request_qthread_stop(
+            self._mw.tracking_worker,
+            "TrackingWorker",
+            timeout_ms=10000,
+            force_terminate=False,
+        )
         self._stop_csv_writer()
 
         self._cleanup_thread_reference("_cache_builder_worker")
