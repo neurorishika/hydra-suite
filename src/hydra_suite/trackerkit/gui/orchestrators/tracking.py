@@ -3855,7 +3855,12 @@ class TrackingOrchestrator:
             params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
         )
 
-        # Preview mode runs live (realtime) detection — no cache lookup or build.
+        # Preview mode runs forward detection live, but reuses a valid,
+        # range-covering YOLO-OBB InferenceRunner cache when one already
+        # exists for the current model/config/video (see worker.py:1030-1054).
+        # Background-subtraction has no forward-mode cache-read path, so this
+        # flag is a no-op for it (see Task 3 for why bgsub must not *write*
+        # into the shared cache during preview).
         self._mw.tracking_worker = TrackingWorker(
             video_path,
             csv_writer_thread=None,
@@ -3863,7 +3868,7 @@ class TrackingOrchestrator:
             backward_mode=False,
             detection_cache_path=None,
             preview_mode=True,
-            use_cached_detections=False,
+            use_cached_detections=True,
         )
         self._mw.tracking_worker.set_parameters(params)
         self._mw.tracking_worker.frame_signal.connect(self.on_new_frame)
