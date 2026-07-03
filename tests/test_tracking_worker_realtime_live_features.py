@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import cv2
 import numpy as np
-import pandas as pd
 import pytest
 
 import hydra_suite.core.tracking.worker as worker_mod
@@ -12,16 +9,9 @@ from hydra_suite.core.identity.classification.cnn import (
     ClassPrediction,
     CNNIdentityCache,
 )
-from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
-from hydra_suite.core.identity.pose.features import build_pose_detection_keypoint_map
-from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
 from hydra_suite.core.tracking.features.cnn_features import (
     cnn_build_association_entries,
 )
-from hydra_suite.core.tracking.features.tag_features import build_tag_detection_map
-from hydra_suite.data.detection_cache import DetectionCache
-from hydra_suite.data.tag_observation_cache import TagObservationCache
-from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
 
 
 class _StopAtAssociation(RuntimeError):
@@ -465,6 +455,106 @@ def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
         worker.run()
 
     assert captured["meas"].shape == (1, 3)
+
+
+def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Realtime yolo_obb frames with zero detections must not crash (regression).
+
+    InferenceRunner.run_realtime() can return a FrameResult whose OBB has
+    zero detections (nothing found in frame). The realtime dispatch branch
+    must still initialize `meas` and friends to empty, mirroring the cached
+    branches, instead of leaving them unbound.
+    """
+    from hydra_suite.core.inference.result import FrameResult, OBBResult
+
+    class _FakeInferenceRunner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run_realtime(self, frame, frame_idx=0, roi_mask=None, roi_mask_cuda=None):
+            empty_obb = OBBResult(
+                frame_idx=frame_idx,
+                centroids=np.zeros((0, 2), dtype=np.float32),
+                angles=np.zeros((0,), dtype=np.float32),
+                sizes=np.zeros((0,), dtype=np.float32),
+                shapes=np.zeros((0, 2), dtype=np.float32),
+                confidences=np.zeros((0,), dtype=np.float32),
+                corners=np.zeros((0, 4, 2), dtype=np.float32),
+                detection_ids=np.zeros((0,), dtype=np.int64),
+            )
+            return FrameResult(
+                frame_idx=frame_idx,
+                obb=empty_obb,
+                filtered_indices=[],
+                headtail=None,
+                cnn=[],
+                pose=None,
+                apriltag=None,
+                resolved_headings=np.zeros((0,), dtype=np.float32),
+            )
+
+        def caches_all_valid(self):
+            return False
+
+        def detection_cache_covers_range(self, *_args, **_kwargs):
+            return False
+
+        def close(self):
+            return None
+
+    class _UnusedAssignerProbe:
+        def __init__(self, params, worker=None):
+            self.params = params
+
+        def compute_cost_matrix(self, *_args, **_kwargs):
+            raise AssertionError(
+                "compute_cost_matrix should not be called with zero detections"
+            )
+
+    monkeypatch.setattr(worker_mod, "TrackingProfiler", _FakeProfiler)
+    monkeypatch.setattr(worker_mod.cv2, "VideoCapture", _FakeVideoCapture)
+    monkeypatch.setattr(worker_mod, "InferenceRunner", _FakeInferenceRunner)
+    monkeypatch.setattr(worker_mod, "KalmanFilterManager", _FakeKalmanFilterManager)
+    monkeypatch.setattr(worker_mod, "TrackAssigner", _UnusedAssignerProbe)
+
+    results = {}
+
+    def _capture_finished(success, trajectories, metrics):
+        results["success"] = success
+
+    worker = worker_mod.TrackingWorker(str(tmp_path / "video.mp4"))
+    worker.finished_signal.connect(_capture_finished)
+    worker.set_parameters(
+        {
+            "MAX_TARGETS": 1,
+            "START_FRAME": 0,
+            "END_FRAME": 0,
+            "RESIZE_FACTOR": 1.0,
+            "DETECTION_METHOD": "yolo_obb",
+            "TRACKING_REALTIME_MODE": True,
+            "TRACKING_WORKFLOW_MODE": "realtime",
+            "MIN_DETECTIONS_TO_START": 1,
+            "MIN_DETECTION_COUNTS": 2,
+            "LOST_THRESHOLD_FRAMES": 1,
+            "REFERENCE_BODY_SIZE": 20.0,
+            "MAX_DISTANCE_THRESHOLD": 1000.0,
+            "ENABLE_POSE_EXTRACTOR": False,
+            "USE_APRILTAGS": False,
+            "CNN_CLASSIFIERS": [],
+            "ENABLE_CONFIDENCE_DENSITY_MAP": False,
+            "ENABLE_FRAME_PREFETCH": False,
+            "VISUALIZATION_FREE_MODE": True,
+            "ADVANCED_CONFIG": {},
+            "COMPUTE_RUNTIME": "cpu",
+        }
+    )
+
+    worker.run()
+
+    assert results.get("success") is True
 
 
 def test_cnn_build_association_entries_supports_detection_only_cache_reads(tmp_path):

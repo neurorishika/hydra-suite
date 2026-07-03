@@ -2381,6 +2381,27 @@ class TrackingWorker(QThread):
                         raw_heading_confidences = []
                         raw_directed_mask = []
                     raw_canonical_affines = None
+                else:
+                    # Empty frame — no detections this frame
+                    meas = []
+                    sizes = []
+                    shapes = []
+                    detection_confidences = []
+                    filtered_obb_corners = []
+                    detection_ids = []
+                    raw_detection_ids = []
+                    raw_meas = []
+                    raw_sizes = []
+                    raw_shapes = []
+                    raw_confidences = []
+                    raw_obb_corners = []
+                    detection_headtail_heading = np.asarray([], dtype=np.float32)
+                    detection_headtail_confidence = np.asarray([], dtype=np.float32)
+                    headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                    raw_heading_hints = []
+                    raw_heading_confidences = []
+                    raw_directed_mask = []
+                    raw_canonical_affines = None
 
             else:
                 # No frame and no cached detections - skip this iteration
