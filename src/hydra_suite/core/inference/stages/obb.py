@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
-from ..runtime_artifacts import load_obb_executor
+from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor
 
 logger = logging.getLogger(__name__)
 
@@ -354,13 +354,30 @@ def _run_direct(
     conf_floor = config.direct.confidence_floor if config.direct else 1e-3
 
     # Detect the CUDA-tensor frame case: NvdecFrameReader yields a list of
-    # CUDA torch.Tensors (HWC uint8 RGB).  Ultralytics does NOT accept a list
-    # of tensors as a prediction source (raises TypeError inside check_source /
-    # autocast_list).  We GPU-letterbox the list into a single batched tensor,
-    # run predict on that, then invert the letterbox on each result so that
+    # CUDA torch.Tensors (HWC uint8 RGB). A plain ultralytics YOLO model (the
+    # torch cpu/mps/cuda runtimes) does NOT accept a list of tensors as a
+    # prediction source (raises TypeError inside check_source / autocast_list),
+    # so for that case only we GPU-letterbox the list into a single batched
+    # tensor, run predict on that, then invert the letterbox on each result so
     # downstream extract functions see original-frame coordinates — identical
     # to what the numpy list path produces.
-    if frames and isinstance(frames[0], torch.Tensor) and frames[0].is_cuda:
+    #
+    # DirectExecutorAdapter (gpu_fast direct executors) is NOT an ultralytics
+    # model — its own predict() already accepts a raw list of CUDA HWC frames
+    # and does its own correct letterbox + original-frame coordinate scaling
+    # (_BaseDirectOBBExecutor._preprocess_cuda_batch / _postprocess). Routing
+    # it through the manual pre-batch above double-preprocesses: the adapter
+    # splits the already-letterboxed (B,3,imgsz,imgsz) tensor back into a list
+    # of (3,imgsz,imgsz) slices and re-letterboxes each as if it were a raw
+    # (H,W,3) frame, corrupting the shape fed to TensorRT ("Static dimension
+    # mismatch" in setInputShape) whenever imgsz != 3. So it must take the
+    # plain frames-list path below, same as the non-CUDA-tensor case.
+    if (
+        frames
+        and isinstance(frames[0], torch.Tensor)
+        and frames[0].is_cuda
+        and not isinstance(model, DirectExecutorAdapter)
+    ):
         imgsz = _resolve_imgsz(model)
         batched, lb_params = _gpu_letterbox_batch(frames, imgsz)
         results = model.predict(

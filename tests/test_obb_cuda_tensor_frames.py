@@ -20,6 +20,7 @@ import torch
 # ---------------------------------------------------------------------------
 # Import helpers from obb.py
 # ---------------------------------------------------------------------------
+from hydra_suite.core.inference.runtime_artifacts import DirectExecutorAdapter
 from hydra_suite.core.inference.stages.obb import (
     _gpu_letterbox_batch,
     _invert_letterbox_on_result,
@@ -488,3 +489,60 @@ class TestRunDirectCudaTensorPath:
         assert abs(got_w - w_orig) < 1e-3, f"w={got_w}, expected {w_orig}"
         assert abs(got_h - h_orig) < 1e-3, f"h={got_h}, expected {h_orig}"
         assert abs(got_angle - angle) < 1e-6, f"angle={got_angle}, expected {angle}"
+
+
+# ---------------------------------------------------------------------------
+# Test 6: _run_direct — DirectExecutorAdapter (gpu_fast) bypasses the manual
+# GPU-letterbox pre-batch and gets the raw CUDA frame list instead.
+# ---------------------------------------------------------------------------
+
+
+class TestRunDirectCudaTensorDirectExecutorAdapter:
+    """DirectExecutorAdapter has its own correct CUDA-list preprocessing
+    (_BaseDirectOBBExecutor._preprocess_cuda_batch expects raw (H,W,3) frames).
+    Routing it through the manual pre-batch double-preprocesses: the adapter's
+    predict() re-splits the already-letterboxed (B,3,imgsz,imgsz) tensor into
+    per-slice (3,imgsz,imgsz) "frames" and re-letterboxes each as if it were
+    HWC, corrupting the shape fed to the underlying executor. This must not
+    happen — the adapter should receive the original per-frame list unchanged.
+    """
+
+    def _make_runtime(self):
+        rt = MagicMock()
+        rt.tensor_on_cuda = False
+        rt.device = "cuda:0"
+        return rt
+
+    def _make_config(self):
+        cfg = MagicMock()
+        cfg.direct.confidence_floor = 0.001
+        cfg.target_classes = None
+        cfg.raw_detection_cap = 0
+        return cfg
+
+    def test_direct_executor_adapter_receives_raw_frame_list(self):
+        H, W, B = 200, 400, 2
+        frames = [torch.zeros((H, W, 3), dtype=torch.uint8) for _ in range(B)]
+
+        fake_executor = MagicMock()
+        fake_executor.names = {0: "ant"}
+        fake_executor.predict.return_value = [MagicMock(obb=None) for _ in range(B)]
+        adapter = DirectExecutorAdapter(fake_executor, max_det=20)
+
+        rt = self._make_runtime()
+        cfg = self._make_config()
+
+        with patch.object(
+            type(frames[0]),
+            "is_cuda",
+            new_callable=lambda: property(lambda self: True),
+        ):
+            _run_direct(frames, adapter, cfg, rt)
+
+        # The adapter must forward the original per-frame list unchanged —
+        # not a single pre-batched (B,3,imgsz,imgsz) tensor.
+        call_args = fake_executor.predict.call_args
+        forwarded = call_args[0][0]
+        assert (
+            forwarded == frames
+        ), "DirectExecutorAdapter must receive the raw frame list"
