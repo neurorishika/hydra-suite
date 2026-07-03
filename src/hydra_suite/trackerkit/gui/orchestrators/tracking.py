@@ -49,6 +49,29 @@ logger = logging.getLogger(__name__)
 RICH_EXPORT_SUFFIX = "_with_individual"
 LEGACY_RICH_EXPORT_SUFFIX = "_with_pose"
 
+# Preview Mode runs the full detection/tracking pipeline live (no cache-only
+# fast path), so an unbounded frame range makes "Preview" as slow as a full
+# run. Cap it to a fixed wall-clock duration of source video.
+PREVIEW_MAX_DURATION_SECONDS = 300
+
+
+def compute_capped_preview_range(
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+    max_duration_seconds: int = PREVIEW_MAX_DURATION_SECONDS,
+) -> tuple[int, bool]:
+    """Return (clamped_end_frame, was_clamped) for a preview frame range.
+
+    Clamps ``end_frame`` so the selected range covers at most
+    ``max_duration_seconds`` of video at ``fps``, measured from ``start_frame``.
+    """
+    max_frames = max(1, int(round(fps * max_duration_seconds)))
+    selected_frames = end_frame - start_frame + 1
+    if selected_frames <= max_frames:
+        return end_frame, False
+    return start_frame + max_frames - 1, True
+
 
 class TrackingOrchestrator:
     """Owns the tracking lifecycle: start, stop, merge, export, finalize."""
@@ -3791,6 +3814,25 @@ class TrackingOrchestrator:
             params, mode_label="tracking preview"
         ):
             return
+
+        preview_fps = self._mw._resolve_source_video_fps()
+        preview_start_frame = int(params.get("START_FRAME", 0))
+        preview_end_frame = int(params.get("END_FRAME", preview_start_frame))
+        clamped_end_frame, was_clamped = compute_capped_preview_range(
+            preview_start_frame, preview_end_frame, preview_fps
+        )
+        if was_clamped:
+            minutes = PREVIEW_MAX_DURATION_SECONDS // 60
+            QMessageBox.warning(
+                self._mw,
+                "Preview Range Capped",
+                f"The selected range ({preview_end_frame - preview_start_frame + 1} "
+                f"frames) exceeds the {minutes}-minute preview limit.\n\n"
+                f"Preview will run frames {preview_start_frame}-{clamped_end_frame} "
+                "only. Use 'Start Full Tracking' to process the entire selected range.",
+            )
+            params["END_FRAME"] = clamped_end_frame
+
         # Preview should always render frames regardless of visualization-free toggle
         params["VISUALIZATION_FREE_MODE"] = False
         # Preview must not use ONNX/TensorRT — downgrade to the native device runtime.
