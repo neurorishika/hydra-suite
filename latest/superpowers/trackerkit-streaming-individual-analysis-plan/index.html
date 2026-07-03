@@ -1,0 +1,3096 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/trackerkit-streaming-individual-analysis-plan/">
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>TrackerKit Streaming Individual Analysis Plan - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trackerkit-streaming-individual-analysis-plan" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              TrackerKit Streaming Individual Analysis Plan
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#objective" class="md-nav__link">
+    <span class="md-ellipsis">
+      Objective
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-this-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why This Change
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scope
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scope">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      In Scope
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#out-of-scope" class="md-nav__link">
+    <span class="md-ellipsis">
+      Out of Scope
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-state-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current State Summary
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Current State Summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-exists-today" class="md-nav__link">
+    <span class="md-ellipsis">
+      What Exists Today
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-still-blocks-the-desired-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      What Still Blocks The Desired Path
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architectural-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architectural Direction
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Architectural Direction">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#primary-principle" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary Principle
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resulting-execution-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resulting Execution Model
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resulting Execution Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#primary-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Primary Path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fallback-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fallback Path
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#explicit-non-goal-for-early-phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      Explicit Non-Goal For Early Phases
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-on-the-identity-overhaul" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependency On The Identity Overhaul
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runtime Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runtime Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#common-runtime-expectations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Common Runtime Expectations
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Runtime Expectations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#native-cpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native CPU
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-mps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native MPS
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#native-cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      Native CUDA
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#onnx-cpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      ONNX CPU
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#onnx-cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      ONNX CUDA
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensorrt" class="md-nav__link">
+    <span class="md-ellipsis">
+      TensorRT
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#required-design-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Required Design Changes
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Required Design Changes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-introduce-a-shared-oriented-analysis-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Introduce A Shared Oriented Analysis Payload
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-add-a-public-gpu-native-cnn-batch-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Add A Public GPU-Native CNN Batch API
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-split-reorientation-from-replay-infrastructure" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Split Reorientation From Replay Infrastructure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-promote-streaming-analysis-to-the-default-forward-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. Promote Streaming Analysis To The Default Forward Path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-keep-replay-as-an-explicit-fallback" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. Keep Replay As An Explicit Fallback
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phased-implementation-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phased Implementation Plan
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-0-guardrails-and-instrumentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0: Guardrails And Instrumentation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 0: Guardrails And Instrumentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-1-shared-streaming-analysis-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1: Shared Streaming Analysis Contract
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Shared Streaming Analysis Contract">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-2-gpu-native-cnn-api-and-runtime-readiness" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2: GPU-Native CNN API And Runtime Readiness
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: GPU-Native CNN API And Runtime Readiness">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-3-streaming-pose-integration-on-the-filtered-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3: Streaming Pose Integration On The Filtered Path
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 3: Streaming Pose Integration On The Filtered Path">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-4-streaming-cnn-integration-on-the-filtered-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4: Streaming CNN Integration On The Filtered Path
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 4: Streaming CNN Integration On The Filtered Path">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-5-make-streaming-the-default-and-demote-unifiedprecompute" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5: Make Streaming The Default And Demote UnifiedPrecompute
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 5: Make Streaming The Default And Demote UnifiedPrecompute">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-6-reduce-unifiedprecompute-to-replayrecovery-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 6: Reduce UnifiedPrecompute To Replay/Recovery Mode
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 6: Reduce UnifiedPrecompute To Replay/Recovery Mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-6-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 6 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-6-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 6 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-6-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 6 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-6-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 6 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#phase-7-revisit-interpolation-and-offline-gaps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 7: Revisit Interpolation And Offline Gaps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 7: Revisit Interpolation And Offline Gaps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-7-goal" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 7 Goal
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-7-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 7 Tasks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-7-files-expected" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 7 Files Expected
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-7-exit-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 7 Exit Criteria
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risk-register" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risk Register
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Risk Register">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#risk-1-behavioral-drift-between-cpu-and-gpu-cnn-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risk 1: Behavioral Drift Between CPU And GPU CNN Paths
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#risk-2-runtime-feature-fragmentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risk 2: Runtime Feature Fragmentation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#risk-3-cache-contract-breakage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risk 3: Cache Contract Breakage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#risk-4-realtime-throughput-regression-from-over-synchronization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risk 4: Realtime Throughput Regression From Over-Synchronization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#risk-5-mps-gains-are-smaller-than-cuda-gains" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risk 5: MPS Gains Are Smaller Than CUDA Gains
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testing Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unit Tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Integration Tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Validation
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommended-delivery-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended Delivery Order
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#final-integrated-product" class="md-nav__link">
+    <span class="md-ellipsis">
+      Final Integrated Product
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#immediate-next-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Immediate Next Steps
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/trackerkit-streaming-individual-analysis-plan.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="trackerkit-streaming-individual-analysis-plan">TrackerKit Streaming Individual Analysis Plan<a class="headerlink" href="#trackerkit-streaming-individual-analysis-plan" title="Permanent link">&para;</a></h1>
+<p>Date: 2026-04-25</p>
+<p>Related docs:</p>
+<ul>
+<li><code>runtime-integration.md</code></li>
+<li><code>tracking-algorithm-deep-dive.md</code></li>
+<li><code>trackerkit-identity-overhaul-spec.md</code></li>
+</ul>
+<h2 id="objective">Objective<a class="headerlink" href="#objective" title="Permanent link">&para;</a></h2>
+<p>Move TrackerKit individual analysis for pose and CNN identity from the current replay/precompute-heavy workflow to a streaming-first workflow that runs immediately after:</p>
+<ol>
+<li>YOLO OBB detection</li>
+<li>detection filtering</li>
+<li>head-tail prediction</li>
+<li>head-tail-based canonical reorientation</li>
+</ol>
+<p>The target execution order for filtered detections is:</p>
+<p><code>detect -&gt; filter -&gt; head-tail -&gt; canonical reorientation -&gt; CNN + pose</code></p>
+<p>AprilTag remains separate and continues to run on AABB crops. It is explicitly out of scope for this migration except where orchestration must keep it isolated.</p>
+<p>This plan now serves as the transport and runtime substrate for the identity overhaul described in <code>trackerkit-identity-overhaul-spec.md</code>. The streaming work owns the payload, crop transport, runtime, and cache-emission path; the identity overhaul owns the probabilistic evidence model and online and offline decoding built on top of that substrate.</p>
+<h2 id="why-this-change">Why This Change<a class="headerlink" href="#why-this-change" title="Permanent link">&para;</a></h2>
+<p>The current default path pays avoidable costs:</p>
+<ul>
+<li>A second full video/precompute pass is forced for non-realtime YOLO OBB runs when pose or CNN analysis is enabled.</li>
+<li>Unified precompute re-extracts crops from CPU frames even when head-tail has already derived canonical orientation metadata.</li>
+<li>CNN precompute currently uses CPU-style crop batches rather than a GPU-native crop path.</li>
+<li>On CUDA, this leaves performance on the table by forcing extra CPU crop extraction and host/device transfers.</li>
+<li>On MPS, it still incurs the cost of replaying the video even though TensorRT/ONNX CUDA optimizations are not relevant there.</li>
+</ul>
+<p>The fastest path to meaningful speedup is not full removal of every fallback path. It is to make streaming filtered-detection analysis the primary execution path for pose and CNN, then progressively demote the replay path to a cache/recovery mechanism.</p>
+<h2 id="scope">Scope<a class="headerlink" href="#scope" title="Permanent link">&para;</a></h2>
+<h3 id="in-scope">In Scope<a class="headerlink" href="#in-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Run CNN and pose immediately after head-tail reorientation for filtered detections.</li>
+<li>Reuse detector-stage canonical orientation data instead of recomputing orientation downstream.</li>
+<li>Make the CNN path GPU-native-ready in the same way head-tail already is.</li>
+<li>Support all relevant runtimes for CNN and pose:</li>
+<li>native CPU</li>
+<li>native MPS</li>
+<li>native CUDA</li>
+<li>ONNX CPU</li>
+<li>ONNX CUDA</li>
+<li>TensorRT</li>
+<li>Preserve cache artifacts required by downstream tracking/orientation/export logic.</li>
+<li>Keep replay/offline cache generation functional during migration.</li>
+</ul>
+<h3 id="out-of-scope">Out of Scope<a class="headerlink" href="#out-of-scope" title="Permanent link">&para;</a></h3>
+<ul>
+<li>AprilTag redesign beyond keeping it separate.</li>
+<li>Full removal of interpolated occlusion post-pass.</li>
+<li>Full deletion of UnifiedPrecompute in the first implementation wave.</li>
+<li>Any CLI or user-visible workflow changes unrelated to execution order and performance.</li>
+</ul>
+<h2 id="current-state-summary">Current State Summary<a class="headerlink" href="#current-state-summary" title="Permanent link">&para;</a></h2>
+<h3 id="what-exists-today">What Exists Today<a class="headerlink" href="#what-exists-today" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Head-tail already executes in the detector path and can use GPU-native crop inference on CUDA-capable inputs.</li>
+<li>Detector output can persist canonical affine metadata alongside raw detections.</li>
+<li>The worker already has a streaming/live precompute mode for advanced individual analysis.</li>
+<li>PosePipeline already has support for CUDA crop batches when given CUDA tensors.</li>
+<li>The lower classifier backend already has a GPU-native batch entry point.</li>
+</ul>
+<h3 id="what-still-blocks-the-desired-path">What Still Blocks The Desired Path<a class="headerlink" href="#what-still-blocks-the-desired-path" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Unified precompute remains the default for non-realtime pose/CNN analysis.</li>
+<li>Unified precompute reopens/replays the video and extracts crops from CPU frames.</li>
+<li>CNNPrecomputePhase uses CPU crop batches and does not expose a higher-level GPU-native API parallel to pose/head-tail.</li>
+<li>The current live path still routes through the generic precompute crop extraction layer instead of chaining directly off detector-stage filtered detections and their canonical orientation products.</li>
+<li>Runtime support is not expressed through a single shared crop-batch abstraction across head-tail, pose, and CNN.</li>
+</ul>
+<h2 id="architectural-direction">Architectural Direction<a class="headerlink" href="#architectural-direction" title="Permanent link">&para;</a></h2>
+<h3 id="primary-principle">Primary Principle<a class="headerlink" href="#primary-principle" title="Permanent link">&para;</a></h3>
+<p>The filtered-detection boundary becomes the handoff point for downstream individual analysis.</p>
+<p>Everything after detection filtering should consume one shared per-frame/per-batch payload that contains:</p>
+<ul>
+<li>filtered detection ids</li>
+<li>filtered OBB corners</li>
+<li>resolved canonical orientation / reorientation metadata</li>
+<li>canonical affine matrices</li>
+<li>optionally canonical crops as CPU arrays</li>
+<li>optionally canonical crops as GPU tensors</li>
+<li>source runtime metadata needed for downstream backend routing</li>
+</ul>
+<h3 id="resulting-execution-model">Resulting Execution Model<a class="headerlink" href="#resulting-execution-model" title="Permanent link">&para;</a></h3>
+<h4 id="primary-path">Primary Path<a class="headerlink" href="#primary-path" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Forward YOLO OBB run</li>
+<li>Filter detections once</li>
+<li>Run head-tail once on filtered detections</li>
+<li>Produce canonical orientation metadata once</li>
+<li>Dispatch the same filtered detections and oriented crop payload to:</li>
+<li>pose analysis</li>
+<li>CNN analysis</li>
+<li>Write pose/CNN outputs directly into live stores and cache writers</li>
+<li>Consume those outputs during the same tracking run</li>
+</ul>
+<h4 id="fallback-path">Fallback Path<a class="headerlink" href="#fallback-path" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Replay from detection cache when live streaming is unavailable, disabled, or explicitly requested</li>
+<li>Rebuild pose/CNN artifacts offline from cached detections without needing fresh detector inference</li>
+<li>Keep AprilTag independent</li>
+</ul>
+<h3 id="explicit-non-goal-for-early-phases">Explicit Non-Goal For Early Phases<a class="headerlink" href="#explicit-non-goal-for-early-phases" title="Permanent link">&para;</a></h3>
+<p>Do not make pose or CNN depend on AprilTag crop format or AABB crop rules. Pose and CNN will standardize around canonical/oriented crops; AprilTag keeps its AABB-only path.</p>
+<h2 id="dependency-on-the-identity-overhaul">Dependency On The Identity Overhaul<a class="headerlink" href="#dependency-on-the-identity-overhaul" title="Permanent link">&para;</a></h2>
+<p>The identity overhaul depends on this plan for three concrete reasons:</p>
+<ul>
+<li>the online identity decoder must consume live filtered-detection outputs without forcing a replay path</li>
+<li>the posterior evidence cache must be emitted from the same live and replay execution path</li>
+<li>the final offline identity decoder must consume artifacts that are stable regardless of whether the run used live streaming or replay fallback</li>
+</ul>
+<p>Because of that dependency, this plan should be executed first wherever it establishes shared infrastructure. The identity overhaul can begin in parallel only once the shared payload and cache-emission points are defined.</p>
+<h2 id="runtime-strategy">Runtime Strategy<a class="headerlink" href="#runtime-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="common-runtime-expectations">Common Runtime Expectations<a class="headerlink" href="#common-runtime-expectations" title="Permanent link">&para;</a></h3>
+<p>Head-tail should become the reference model for how pose and CNN are integrated into the forward loop.</p>
+<h4 id="native-cpu">Native CPU<a class="headerlink" href="#native-cpu" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Supported for correctness and fallback.</li>
+<li>Uses CPU crop arrays and CPU backend execution.</li>
+</ul>
+<h4 id="native-mps">Native MPS<a class="headerlink" href="#native-mps" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Supported primarily through native backend execution.</li>
+<li>Should benefit from removal of replay/video re-read even if crop handling remains CPU-oriented in early phases.</li>
+<li>No dependency on ONNX CUDA or TensorRT.</li>
+</ul>
+<h4 id="native-cuda">Native CUDA<a class="headerlink" href="#native-cuda" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Primary optimization target.</li>
+<li>Prefer detector-stage GPU-resident canonical crops or a GPU-native crop extraction path immediately after head-tail.</li>
+<li>Avoid GPU -&gt; CPU -&gt; GPU round-trips where backend supports device-native execution.</li>
+</ul>
+<h4 id="onnx-cpu">ONNX CPU<a class="headerlink" href="#onnx-cpu" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Supported as an offline/fallback runtime.</li>
+<li>Can use CPU crop arrays.</li>
+</ul>
+<h4 id="onnx-cuda">ONNX CUDA<a class="headerlink" href="#onnx-cuda" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Supported for pose and CNN where backend export/runtime already exists.</li>
+<li>Requires a shared GPU-native batch-preprocess path and backend-level I/O binding support where available.</li>
+</ul>
+<h4 id="tensorrt">TensorRT<a class="headerlink" href="#tensorrt" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Supported for CUDA-capable systems only.</li>
+<li>Must use the same runtime artifact bookkeeping rules already used elsewhere in TrackerKit.</li>
+</ul>
+<h2 id="required-design-changes">Required Design Changes<a class="headerlink" href="#required-design-changes" title="Permanent link">&para;</a></h2>
+<h3 id="1-introduce-a-shared-oriented-analysis-payload">1. Introduce A Shared Oriented Analysis Payload<a class="headerlink" href="#1-introduce-a-shared-oriented-analysis-payload" title="Permanent link">&para;</a></h3>
+<p>Create a focused data contract for downstream filtered-detection analysis. This should not be a copy of raw detector output; it should be post-filter and post-head-tail.</p>
+<p>Recommended fields:</p>
+<ul>
+<li><code>frame_idx</code></li>
+<li><code>detection_ids</code></li>
+<li><code>obb_corners</code></li>
+<li><code>headtail_heading</code></li>
+<li><code>headtail_confidence</code></li>
+<li><code>headtail_directed</code></li>
+<li><code>canonical_affines</code></li>
+<li><code>canonical_crops_cpu</code> optional</li>
+<li><code>canonical_crops_cuda</code> optional</li>
+<li><code>input_is_bgr</code></li>
+<li><code>runtime_family</code></li>
+</ul>
+<p>This payload must also become the attachment point for identity evidence emission. It does not need to carry final posterior vectors itself, but it must carry enough stable indexing information for a downstream identity phase to emit per-detection evidence sidecars using the same <code>frame_idx</code>, detection ordering, and crop provenance in both live and replay modes.</p>
+<p>This payload becomes the single handoff object from detection/head-tail to pose and CNN.</p>
+<h3 id="2-add-a-public-gpu-native-cnn-batch-api">2. Add A Public GPU-Native CNN Batch API<a class="headerlink" href="#2-add-a-public-gpu-native-cnn-batch-api" title="Permanent link">&para;</a></h3>
+<p>The lower classifier backend already has CUDA batch support. The high-level CNN identity wrapper needs an explicit public method parallel to pose/head-tail.</p>
+<p>Recommended API addition:</p>
+<ul>
+<li><code>CNNIdentityBackend.predict_batch_cuda(crops_chw, input_is_bgr=True)</code></li>
+</ul>
+<p>Responsibilities:</p>
+<ul>
+<li>preserve current thresholding and class mapping semantics</li>
+<li>preserve factor/scoring mode behavior</li>
+<li>expose calibrated posterior output hooks so the identity overhaul can emit full-catalog evidence without duplicating inference</li>
+<li>route to CPU automatically when the configured execution backend cannot stay device-native</li>
+<li>expose profiling hooks consistent with pose/head-tail where practical</li>
+</ul>
+<h3 id="3-split-reorientation-from-replay-infrastructure">3. Split Reorientation From Replay Infrastructure<a class="headerlink" href="#3-split-reorientation-from-replay-infrastructure" title="Permanent link">&para;</a></h3>
+<p>Canonical reorientation data currently survives mainly as affine metadata. Make that orientation output a first-class product of the detector/head-tail stage so downstream analysis can consume it directly without going back through generic precompute.</p>
+<h3 id="4-promote-streaming-analysis-to-the-default-forward-path">4. Promote Streaming Analysis To The Default Forward Path<a class="headerlink" href="#4-promote-streaming-analysis-to-the-default-forward-path" title="Permanent link">&para;</a></h3>
+<p>For YOLO OBB forward runs with pose/CNN enabled:</p>
+<ul>
+<li>do not force unified precompute before tracking</li>
+<li>do not reopen the video solely for pose/CNN precompute</li>
+<li>do not require a second crop extraction path when filtered detections already produced everything needed</li>
+</ul>
+<h3 id="5-keep-replay-as-an-explicit-fallback">5. Keep Replay As An Explicit Fallback<a class="headerlink" href="#5-keep-replay-as-an-explicit-fallback" title="Permanent link">&para;</a></h3>
+<p>Replay remains valuable for:</p>
+<ul>
+<li>recovery from interrupted runs</li>
+<li>cache regeneration from detection cache</li>
+<li>debug repro</li>
+<li>environments where live/runtime support is incomplete</li>
+</ul>
+<p>Replay should become an explicit compatibility mode, not the primary execution path.</p>
+<h2 id="phased-implementation-plan">Phased Implementation Plan<a class="headerlink" href="#phased-implementation-plan" title="Permanent link">&para;</a></h2>
+<h2 id="phase-0-guardrails-and-instrumentation">Phase 0: Guardrails And Instrumentation<a class="headerlink" href="#phase-0-guardrails-and-instrumentation" title="Permanent link">&para;</a></h2>
+<h3 id="phase-0-goal">Phase 0 Goal<a class="headerlink" href="#phase-0-goal" title="Permanent link">&para;</a></h3>
+<p>Establish baseline metrics and lock down contracts that must not regress during the migration.</p>
+<h3 id="phase-0-tasks">Phase 0 Tasks<a class="headerlink" href="#phase-0-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Capture baseline timings using real-video probes, not synthetic benchmark dialog numbers.</li>
+<li>Document the current contract for batched raw detection results and detection cache metadata.</li>
+<li>Preserve the existing batched raw detector return contract: <code>detect_objects_batched(return_raw=True)</code> must continue returning the full raw tuple, including <code>canonical_affines</code>, on empty/failure paths so detection-cache writers do not break.</li>
+<li>Add focused logging/profiling counters for:</li>
+<li>frame read time</li>
+<li>filter time</li>
+<li>head-tail time</li>
+<li>canonical crop extraction time</li>
+<li>pose enqueue/inference time</li>
+<li>CNN enqueue/inference time</li>
+<li>cache write time</li>
+<li>Confirm which downstream consumers require:</li>
+<li>raw detection cache</li>
+<li>canonical affines</li>
+<li>detected properties cache</li>
+<li>pose properties cache</li>
+<li>CNN identity cache</li>
+</ul>
+<h3 id="phase-0-files-expected">Phase 0 Files Expected<a class="headerlink" href="#phase-0-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code></li>
+<li><code>src/hydra_suite/core/tracking/detection_phase.py</code></li>
+<li><code>src/hydra_suite/trackerkit/obb_runtime_probe.py</code></li>
+<li><code>tools/benchmark_trackerkit_obb.py</code></li>
+</ul>
+<h3 id="phase-0-exit-criteria">Phase 0 Exit Criteria<a class="headerlink" href="#phase-0-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A before/after measurement method is agreed and reproducible.</li>
+<li>Existing batched raw contract remains unchanged.</li>
+<li>There is no ambiguity about which caches are authoritative for each stage.</li>
+</ul>
+<h2 id="phase-1-shared-streaming-analysis-contract">Phase 1: Shared Streaming Analysis Contract<a class="headerlink" href="#phase-1-shared-streaming-analysis-contract" title="Permanent link">&para;</a></h2>
+<h3 id="phase-1-goal">Phase 1 Goal<a class="headerlink" href="#phase-1-goal" title="Permanent link">&para;</a></h3>
+<p>Create a clean handoff object for filtered-detection, post-head-tail analysis.</p>
+<h3 id="phase-1-tasks">Phase 1 Tasks<a class="headerlink" href="#phase-1-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add a small typed container for the streaming analysis payload.</li>
+<li>Build it immediately after filtered detections and head-tail results are available.</li>
+<li>Include canonical affine data from detector/head-tail output.</li>
+<li>Allow payloads to carry either CPU crops, CUDA crops, or both.</li>
+<li>Keep AprilTag out of this contract.</li>
+<li>Define stable detection-slot indexing that later identity evidence caches can reuse unchanged.</li>
+</ul>
+<h3 id="phase-1-files-expected">Phase 1 Files Expected<a class="headerlink" href="#phase-1-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code></li>
+<li><code>src/hydra_suite/core/detectors/yolo_detector.py</code></li>
+<li>possibly a new module under <code>src/hydra_suite/core/tracking/</code></li>
+</ul>
+<h3 id="phase-1-exit-criteria">Phase 1 Exit Criteria<a class="headerlink" href="#phase-1-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Pose and CNN can both consume the same payload shape.</li>
+<li>No stage after head-tail needs to rediscover orientation rules.</li>
+</ul>
+<h2 id="phase-2-gpu-native-cnn-api-and-runtime-readiness">Phase 2: GPU-Native CNN API And Runtime Readiness<a class="headerlink" href="#phase-2-gpu-native-cnn-api-and-runtime-readiness" title="Permanent link">&para;</a></h2>
+<h3 id="phase-2-goal">Phase 2 Goal<a class="headerlink" href="#phase-2-goal" title="Permanent link">&para;</a></h3>
+<p>Make CNN analysis symmetrical with head-tail and pose in terms of runtime-aware batch execution.</p>
+<h3 id="phase-2-tasks">Phase 2 Tasks<a class="headerlink" href="#phase-2-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add high-level <code>predict_batch_cuda</code> to <code>CNNIdentityBackend</code>.</li>
+<li>Add a posterior-producing path or hook that can expose calibrated class probabilities for the identity overhaul.</li>
+<li>Ensure runtime-specific behavior is preserved for:</li>
+<li>native CPU</li>
+<li>native MPS</li>
+<li>native CUDA</li>
+<li>ONNX CPU</li>
+<li>ONNX CUDA</li>
+<li>TensorRT</li>
+<li>Centralize runtime/profile metadata exposure if missing.</li>
+<li>Add artifact/export handling consistent with runtime artifact policies.</li>
+<li>Validate scoring mode parity between CPU and CUDA entry points.</li>
+</ul>
+<h3 id="phase-2-files-expected">Phase 2 Files Expected<a class="headerlink" href="#phase-2-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/identity/classification/cnn.py</code></li>
+<li><code>src/hydra_suite/core/identity/classification/backend.py</code></li>
+<li><code>src/hydra_suite/core/detectors/_runtime_artifacts.py</code></li>
+<li>any shared runtime config helpers used by CNN model resolution</li>
+</ul>
+<h3 id="phase-2-exit-criteria">Phase 2 Exit Criteria<a class="headerlink" href="#phase-2-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>CNN can consume CUDA crop batches directly when available.</li>
+<li>CPU and GPU entry points produce equivalent semantic outputs.</li>
+<li>ONNX/TensorRT runtime selection remains compatible with existing artifact bookkeeping.</li>
+</ul>
+<h2 id="phase-3-streaming-pose-integration-on-the-filtered-path">Phase 3: Streaming Pose Integration On The Filtered Path<a class="headerlink" href="#phase-3-streaming-pose-integration-on-the-filtered-path" title="Permanent link">&para;</a></h2>
+<h3 id="phase-3-goal">Phase 3 Goal<a class="headerlink" href="#phase-3-goal" title="Permanent link">&para;</a></h3>
+<p>Feed pose from the same post-head-tail payload instead of replaying frames for precompute.</p>
+<h3 id="phase-3-tasks">Phase 3 Tasks<a class="headerlink" href="#phase-3-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add a live pose dispatcher that consumes the shared streaming payload.</li>
+<li>Reuse existing PosePipeline batching/cache-writing machinery where it helps.</li>
+<li>Bypass generic frame replay/crop extraction when the live payload already has crops.</li>
+<li>Preserve pose cache writes and detected-properties integration needed by tracking.</li>
+<li>Keep replay fallback available for cache-only rebuilds.</li>
+</ul>
+<h3 id="phase-3-files-expected">Phase 3 Files Expected<a class="headerlink" href="#phase-3-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/pose_pipeline.py</code></li>
+<li><code>src/hydra_suite/core/tracking/worker.py</code></li>
+<li><code>src/hydra_suite/core/identity/pose/api.py</code></li>
+</ul>
+<h3 id="phase-3-exit-criteria">Phase 3 Exit Criteria<a class="headerlink" href="#phase-3-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Pose runs in the forward loop on filtered detections.</li>
+<li>Live pose outputs feed the same downstream orientation/visibility consumers.</li>
+<li>No separate pose precompute video pass is required for the normal forward workflow.</li>
+</ul>
+<h2 id="phase-4-streaming-cnn-integration-on-the-filtered-path">Phase 4: Streaming CNN Integration On The Filtered Path<a class="headerlink" href="#phase-4-streaming-cnn-integration-on-the-filtered-path" title="Permanent link">&para;</a></h2>
+<h3 id="phase-4-goal">Phase 4 Goal<a class="headerlink" href="#phase-4-goal" title="Permanent link">&para;</a></h3>
+<p>Run CNN immediately alongside pose after head-tail reorientation using the same payload and cache semantics.</p>
+<h3 id="phase-4-tasks">Phase 4 Tasks<a class="headerlink" href="#phase-4-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Add a live CNN dispatcher parallel to the pose dispatcher.</li>
+<li>Replace <code>CNNPrecomputePhase</code> as the primary path for forward runs.</li>
+<li>Preserve or adapt <code>LiveCNNIdentityStore</code> and cache writer semantics.</li>
+<li>Add the emission point for a future <code>IdentityEvidenceCache</code> sidecar while keeping current top-1 caches intact.</li>
+<li>Ensure track-level history logic still reads the same label/confidence outputs.</li>
+<li>Support multiple configured CNN classifiers in one frame.</li>
+</ul>
+<h3 id="phase-4-files-expected">Phase 4 Files Expected<a class="headerlink" href="#phase-4-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code></li>
+<li><code>src/hydra_suite/core/tracking/live_features.py</code></li>
+<li><code>src/hydra_suite/core/tracking/precompute.py</code></li>
+<li><code>src/hydra_suite/core/identity/classification/cnn.py</code></li>
+</ul>
+<h3 id="phase-4-exit-criteria">Phase 4 Exit Criteria<a class="headerlink" href="#phase-4-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>CNN no longer requires unified precompute for the default forward path.</li>
+<li>Multiple CNN models still work in one run.</li>
+<li>Track history/scoring remains behaviorally equivalent.</li>
+</ul>
+<h2 id="phase-5-make-streaming-the-default-and-demote-unifiedprecompute">Phase 5: Make Streaming The Default And Demote UnifiedPrecompute<a class="headerlink" href="#phase-5-make-streaming-the-default-and-demote-unifiedprecompute" title="Permanent link">&para;</a></h2>
+<h3 id="phase-5-goal">Phase 5 Goal<a class="headerlink" href="#phase-5-goal" title="Permanent link">&para;</a></h3>
+<p>Change the forward YOLO OBB workflow so streaming pose/CNN analysis is the default behavior.</p>
+<h3 id="phase-5-tasks">Phase 5 Tasks<a class="headerlink" href="#phase-5-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Stop forcing batched unified precompute for pose/CNN in normal forward runs.</li>
+<li>Keep replay path behind an explicit fallback/compatibility decision.</li>
+<li>Ensure detection cache creation still happens where required for backward tracking and offline rebuilds.</li>
+<li>Ensure the identity-evidence sidecar is emitted equivalently for both live streaming and replay fallback.</li>
+<li>Keep AprilTag orchestration independent.</li>
+<li>Audit UI/workflow flags so the selected path is predictable and observable.</li>
+</ul>
+<h3 id="phase-5-files-expected">Phase 5 Files Expected<a class="headerlink" href="#phase-5-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code></li>
+<li><code>src/hydra_suite/trackerkit/gui/orchestrators/config.py</code></li>
+<li><code>src/hydra_suite/trackerkit/gui/orchestrators/session.py</code></li>
+<li><code>src/hydra_suite/trackerkit/obb_runtime_probe.py</code></li>
+</ul>
+<h3 id="phase-5-exit-criteria">Phase 5 Exit Criteria<a class="headerlink" href="#phase-5-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>The default forward path no longer pays the extra precompute video pass for pose/CNN.</li>
+<li>Realtime and non-realtime forward workflows use the same primary analysis architecture.</li>
+<li>Replay remains available but no longer drives normal execution.</li>
+</ul>
+<h2 id="phase-6-reduce-unifiedprecompute-to-replayrecovery-mode">Phase 6: Reduce UnifiedPrecompute To Replay/Recovery Mode<a class="headerlink" href="#phase-6-reduce-unifiedprecompute-to-replayrecovery-mode" title="Permanent link">&para;</a></h2>
+<h3 id="phase-6-goal">Phase 6 Goal<a class="headerlink" href="#phase-6-goal" title="Permanent link">&para;</a></h3>
+<p>Keep only the subset of unified precompute that remains operationally useful.</p>
+<h3 id="phase-6-tasks">Phase 6 Tasks<a class="headerlink" href="#phase-6-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Remove pose/CNN assumptions from the “normal path” code.</li>
+<li>Retain replay functionality for:</li>
+<li>explicit cache regeneration</li>
+<li>debug reproduction</li>
+<li>post-hoc rebuilds from detection cache</li>
+<li>Keep AprilTag precompute isolated if still useful.</li>
+<li>Simplify or delete generic abstractions that no longer serve active paths.</li>
+</ul>
+<h3 id="phase-6-files-expected">Phase 6 Files Expected<a class="headerlink" href="#phase-6-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/precompute.py</code></li>
+<li><code>src/hydra_suite/core/tracking/worker.py</code></li>
+<li><code>src/hydra_suite/trackerkit/gui/dialogs/benchmark_dialog.py</code></li>
+<li>any replay/debug entry points that call unified precompute explicitly</li>
+</ul>
+<h3 id="phase-6-exit-criteria">Phase 6 Exit Criteria<a class="headerlink" href="#phase-6-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>UnifiedPrecompute is no longer on the hot path for pose/CNN forward runs.</li>
+<li>Remaining code has a clear reason to exist.</li>
+</ul>
+<h2 id="phase-7-revisit-interpolation-and-offline-gaps">Phase 7: Revisit Interpolation And Offline Gaps<a class="headerlink" href="#phase-7-revisit-interpolation-and-offline-gaps" title="Permanent link">&para;</a></h2>
+<h3 id="phase-7-goal">Phase 7 Goal<a class="headerlink" href="#phase-7-goal" title="Permanent link">&para;</a></h3>
+<p>Decide whether the occlusion interpolation worker should remain separate or adopt the same streaming/runtime abstractions later.</p>
+<h3 id="phase-7-tasks">Phase 7 Tasks<a class="headerlink" href="#phase-7-tasks" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Keep interpolation worker behavior unchanged during earlier phases.</li>
+<li>Reevaluate whether CNN/pose backend init and crop transport in the interpolation post-pass can share the new runtime abstractions.</li>
+<li>Do not merge this work into earlier phases unless needed for correctness.</li>
+</ul>
+<h3 id="phase-7-files-expected">Phase 7 Files Expected<a class="headerlink" href="#phase-7-files-expected" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/trackerkit/gui/workers/crops_worker.py</code></li>
+</ul>
+<h3 id="phase-7-exit-criteria">Phase 7 Exit Criteria<a class="headerlink" href="#phase-7-exit-criteria" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Interpolation is consciously either left separate or scheduled as a follow-on refactor.</li>
+</ul>
+<h2 id="risk-register">Risk Register<a class="headerlink" href="#risk-register" title="Permanent link">&para;</a></h2>
+<h3 id="risk-1-behavioral-drift-between-cpu-and-gpu-cnn-paths">Risk 1: Behavioral Drift Between CPU And GPU CNN Paths<a class="headerlink" href="#risk-1-behavioral-drift-between-cpu-and-gpu-cnn-paths" title="Permanent link">&para;</a></h3>
+<p>Mitigation:</p>
+<ul>
+<li>add parity tests across CPU and CUDA entry points</li>
+<li>compare class names and confidences within expected tolerance</li>
+<li>test multi-head and single-head models</li>
+</ul>
+<h3 id="risk-2-runtime-feature-fragmentation">Risk 2: Runtime Feature Fragmentation<a class="headerlink" href="#risk-2-runtime-feature-fragmentation" title="Permanent link">&para;</a></h3>
+<p>Mitigation:</p>
+<ul>
+<li>define one routing table for pose/CNN runtime capability</li>
+<li>do not let worker logic guess backend support independently</li>
+</ul>
+<h3 id="risk-3-cache-contract-breakage">Risk 3: Cache Contract Breakage<a class="headerlink" href="#risk-3-cache-contract-breakage" title="Permanent link">&para;</a></h3>
+<p>Mitigation:</p>
+<ul>
+<li>preserve detection cache field ordering and semantics</li>
+<li>keep pose/CNN cache schemas stable during migration</li>
+<li>add compatibility probes before changing writers</li>
+</ul>
+<h3 id="risk-4-realtime-throughput-regression-from-over-synchronization">Risk 4: Realtime Throughput Regression From Over-Synchronization<a class="headerlink" href="#risk-4-realtime-throughput-regression-from-over-synchronization" title="Permanent link">&para;</a></h3>
+<p>Mitigation:</p>
+<ul>
+<li>keep async writers and bounded batching</li>
+<li>avoid per-frame blocking unless required by a specific backend</li>
+<li>measure queueing separately from model time</li>
+</ul>
+<h3 id="risk-5-mps-gains-are-smaller-than-cuda-gains">Risk 5: MPS Gains Are Smaller Than CUDA Gains<a class="headerlink" href="#risk-5-mps-gains-are-smaller-than-cuda-gains" title="Permanent link">&para;</a></h3>
+<p>Mitigation:</p>
+<ul>
+<li>treat “remove replay pass” as the first MPS win</li>
+<li>do not promise fully GPU-native crop flow on MPS in early phases</li>
+</ul>
+<h2 id="testing-strategy">Testing Strategy<a class="headerlink" href="#testing-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="unit-tests">Unit Tests<a class="headerlink" href="#unit-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>CNN CPU vs CUDA output parity</li>
+<li>pose CPU vs CUDA path parity where supported</li>
+<li>runtime selection tests for CPU/MPS/CUDA/ONNX/TensorRT</li>
+<li>shared payload shape and invariants</li>
+<li>cache writer schema compatibility tests</li>
+</ul>
+<h3 id="integration-tests">Integration Tests<a class="headerlink" href="#integration-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>forward YOLO OBB run with head-tail + pose enabled</li>
+<li>forward YOLO OBB run with head-tail + one CNN enabled</li>
+<li>forward YOLO OBB run with head-tail + pose + multiple CNNs enabled</li>
+<li>non-realtime forward run should not trigger precompute replay for pose/CNN default path</li>
+<li>replay fallback should still rebuild artifacts from detection cache</li>
+</ul>
+<h3 id="performance-validation">Performance Validation<a class="headerlink" href="#performance-validation" title="Permanent link">&para;</a></h3>
+<ul>
+<li>compare before/after on real videos using <code>obb_runtime_probe.py</code> or <code>benchmark_trackerkit_obb.py</code></li>
+<li>report:</li>
+<li>end-to-end forward runtime</li>
+<li>frame read time</li>
+<li>crop extraction time</li>
+<li>pose latency</li>
+<li>CNN latency</li>
+<li>cache write latency</li>
+<li>GPU memory high-water mark where available</li>
+</ul>
+<h2 id="recommended-delivery-order">Recommended Delivery Order<a class="headerlink" href="#recommended-delivery-order" title="Permanent link">&para;</a></h2>
+<p>If both this plan and the identity overhaul are being executed together, the best combined order is:</p>
+<ol>
+<li>Streaming Phase 0: instrumentation, guardrails, and artifact-contract audit.</li>
+<li>Streaming Phase 1: shared oriented-analysis payload with stable detection-slot indexing.</li>
+<li>Streaming Phase 2: GPU-native CNN runtime path plus posterior-output hook.</li>
+<li>Identity Overhaul Phase 0: posterior-preserving evidence contracts and sidecar cache, implemented on top of the shared streaming payload.</li>
+<li>Streaming Phase 3 and Phase 4: live pose and CNN dispatch on the filtered path, including evidence-sidecar emission in both live and replay modes.</li>
+<li>Identity Overhaul Phase 1 and Phase 2: online decoder, commitment, and slot reservation using the new live evidence stream.</li>
+<li>Streaming Phase 5: make the streaming path the default forward path.</li>
+<li>Identity Overhaul Phase 3 and Phase 4: offline smoothing and global fragment assignment using the preserved evidence sidecar.</li>
+<li>Streaming Phase 6 and Identity Overhaul Phase 5: retire legacy replay-first and hard-label identity heuristics.</li>
+<li>Streaming Phase 7: revisit interpolation and any remaining replay-only gaps.</li>
+</ol>
+<p>This order is preferred because it prevents the identity overhaul from being built on top of a transport path that is about to be replaced. The streaming plan establishes the runtime and cache substrate first; the identity overhaul then uses that substrate for online and offline decoding.</p>
+<h2 id="final-integrated-product">Final Integrated Product<a class="headerlink" href="#final-integrated-product" title="Permanent link">&para;</a></h2>
+<p>When both specs are complete, the final product should behave as follows:</p>
+<ul>
+<li>forward YOLO OBB runs dispatch pose and CNN analysis directly from the filtered, canonicalized detection stream</li>
+<li>the same live and replay code paths emit a stable identity evidence sidecar alongside existing compatibility caches</li>
+<li>the live tracker uses posterior-aware identity decoding with uniqueness-aware visible assignment and slot reservation</li>
+<li>the offline post-processing path consumes preserved evidence rather than flattened top-1 labels</li>
+<li>replay remains as a recovery and regeneration mechanism, not the primary path for normal CNN and pose analysis</li>
+</ul>
+<h2 id="immediate-next-steps">Immediate Next Steps<a class="headerlink" href="#immediate-next-steps" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Add the shared streaming analysis payload type and wire it at the filtered-detection boundary.</li>
+<li>Add <code>CNNIdentityBackend.predict_batch_cuda()</code> plus a posterior-producing hook and parity tests.</li>
+<li>Define the stable detection-slot indexing and cache-emission contract that the identity sidecar will use.</li>
+<li>Refactor pose and CNN live dispatch to consume the same payload directly.</li>
+<li>Only after those pieces exist, start the identity evidence cache and online decoder work from <code>trackerkit-identity-overhaul-spec.md</code>.</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>

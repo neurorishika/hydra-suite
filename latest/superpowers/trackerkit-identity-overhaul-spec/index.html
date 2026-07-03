@@ -1,0 +1,2813 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="User and developer documentation for HYDRA Suite">
+      
+      
+      
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/latest/superpowers/trackerkit-identity-overhaul-spec/">
+      
+      
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
+    
+    
+      
+        <title>TrackerKit Identity Overhaul Spec - HYDRA Suite Docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.0253249f.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trackerkit-identity-overhaul-spec" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            HYDRA Suite Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              TrackerKit Identity Overhaul Spec
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="blue" data-md-color-accent="light-blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../user-guide/overview/" class="md-tabs__link">
+          
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+          
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/api-index/" class="md-tabs__link">
+          
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    HYDRA Suite Docs
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/neurorishika/hydra-suite" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.6.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    neurorishika/hydra-suite
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Getting Started
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Getting Started
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Installation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/environments/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Environments and Makefile
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/integrations/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Integrations
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Quickstart (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/platforms/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Platform Notes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    User Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            User Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/overview/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Overview
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/workflow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    End-to-End Workflow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detection-modes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Detection Modes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/tracking-and-merging/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking and Merging
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/post-processing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Post-processing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/configuration-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Configuration Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/compute-runtimes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Compute Runtimes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Outputs and CSV Schema
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/dataset-generation/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Dataset Generation
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/individual-analysis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Individual Analysis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    PoseKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/classkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ClassKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/detectkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DetectKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/filterkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FilterKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/refinekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    RefineKit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../user-guide/troubleshooting/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Developer Guide
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Developer Guide
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/architecture/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Architecture
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/module-map/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Module Map
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Data Flow
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Algorithm Deep Dive
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Tracking Optimization
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    GPU Backends
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Runtime Integration
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CUDA Dependency Updates
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Performance Tuning
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Confidence Metrics
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Detection
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Extending Identity
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/code-health/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Code Health & Auditing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/publishing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Publishing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../developer-guide/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-index/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API Index
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/ui-components-hydra/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (TrackerKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/ui-components-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    UI Components (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-app/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Launcher)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-core/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Core)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-data/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Data)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-gui/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (TrackerKit GUI)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-widgets/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Widgets)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-posekit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (PoseKit)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api-utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    API (Utils)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    CLI Reference
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/technical-reference/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Technical Reference (LaTeX)
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/changelog/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/faq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    FAQ
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#objective" class="md-nav__link">
+    <span class="md-ellipsis">
+      Objective
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#problem-statement" class="md-nav__link">
+    <span class="md-ellipsis">
+      Problem Statement
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#current-codebase-findings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current Codebase Findings
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Current Codebase Findings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#realtime-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Realtime path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-processing-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      Post-processing path
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evidence-persistence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evidence persistence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slot-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      Slot lifecycle
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#design-principles" class="md-nav__link">
+    <span class="md-ellipsis">
+      Design Principles
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependency-on-the-streaming-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependency On The Streaming Plan
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#functional-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Functional Requirements
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      Non-Goals
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#target-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Target Architecture
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Target Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#identity-catalog" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Catalog
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#identity-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      Identity Evidence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#online-identity-decoder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Online Identity Decoder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#offline-identity-decoder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Offline Identity Decoder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slot-reservation-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Slot Reservation Policy
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-file-level-changes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Proposed File-Level Changes
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposed File-Level Changes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#new-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      New modules
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#existing-files-to-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      Existing files to change
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Existing files to change">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoreidentityclassificationcnnpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/identity/classification/cnn.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoretrackingprecomputepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/tracking/precompute.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoretrackingworkerpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/tracking/worker.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoretrackingcnn_featurespy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/tracking/cnn_features.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoretrackingtag_featurespy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/tracking/tag_features.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoreassignershungarianpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/assigners/hungarian.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecorepostidentity_postprocesspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/post/identity_postprocess.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitetrackerkitguiorchestratorstrackingpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/trackerkit/gui/orchestrators/tracking.py
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#srchydra_suitecoreidentitypropertiesexportpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      src/hydra_suite/core/identity/properties/export.py
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-data-artifacts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Proposed Data Artifacts
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposed Data Artifacts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#raw-evidence-artifact" class="md-nav__link">
+    <span class="md-ellipsis">
+      Raw evidence artifact
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rich-export-summary-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Rich export summary columns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-and-rollout-flags" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration and Rollout Flags
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#detailed-rollout-plan" class="md-nav__link">
+    <span class="md-ellipsis">
+      Detailed Rollout Plan
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Detailed Rollout Plan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-0-preserve-posterior-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 0: Preserve Posterior Information
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-realtime-decoder-behind-flag" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1: Realtime Decoder Behind Flag
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-commitment-and-slot-reservation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2: Commitment and Slot Reservation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-offline-smoothing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 3: Offline Smoothing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-4-global-fragment-assignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 4: Global Fragment Assignment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-5-retire-legacy-identity-heuristics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 5: Retire Legacy Identity Heuristics
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testing Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Unit tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Integration tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#regression-scenarios" class="md-nav__link">
+    <span class="md-ellipsis">
+      Regression scenarios
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metrics
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks-and-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Risks and Open Questions
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#acceptance-criteria" class="md-nav__link">
+    <span class="md-ellipsis">
+      Acceptance Criteria
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommended-joint-execution-order" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended Joint Execution Order
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommended-first-implementation-slice" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended First Implementation Slice
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/trackerkit-identity-overhaul-spec.md" title="Edit this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="trackerkit-identity-overhaul-spec">TrackerKit Identity Overhaul Spec<a class="headerlink" href="#trackerkit-identity-overhaul-spec" title="Permanent link">&para;</a></h1>
+<p>Date: 2026-04-26
+Status: Proposed</p>
+<p>Related docs:</p>
+<ul>
+<li><code>architecture.md</code></li>
+<li><code>runtime-integration.md</code></li>
+<li><code>trackerkit-streaming-individual-analysis-plan.md</code></li>
+<li><code>tracking-algorithm-deep-dive.md</code></li>
+</ul>
+<h2 id="objective">Objective<a class="headerlink" href="#objective" title="Permanent link">&para;</a></h2>
+<p>Overhaul TrackerKit identity handling so that both realtime tracking and offline post-processing preserve uncertainty, accumulate evidence over time, and enforce the hard uniqueness constraint that one visible animal can own a given identity at a time.</p>
+<p>This spec is intentionally narrower than the general tracking architecture docs. It focuses only on identity inference, identity persistence, identity-aware slot reuse, and identity-aware post-processing.</p>
+<p>This identity plan assumes the streaming-first execution substrate from <code>trackerkit-streaming-individual-analysis-plan.md</code>. The streaming plan owns the filtered-detection payload, canonical crop transport, runtime execution, and live versus replay parity. This plan owns the probabilistic identity model that must run on top of that substrate.</p>
+<h2 id="problem-statement">Problem Statement<a class="headerlink" href="#problem-statement" title="Permanent link">&para;</a></h2>
+<p>The operating conditions are simpler than general multi-object tracking, but stricter than the current implementation assumes:</p>
+<ul>
+<li>Geometry and motion association already produce trajectories or track slots.</li>
+<li>For each visible trajectory or detection, TrackerKit has identity evidence with confidence.</li>
+<li>Identities come from a known set of <code>N</code> unique types.</li>
+<li>At any frame, the visible assignment from trajectory to identity must be a partial injection.</li>
+<li>Not all animals are always visible.</li>
+<li>The detector and classifier are noisy, so the system must clean spurious errors without discarding useful uncertainty.</li>
+</ul>
+<p>The current system loses too much information by collapsing identity evidence into hard labels too early. The correct abstraction is probabilistic identity accumulation under a global uniqueness constraint.</p>
+<h2 id="current-codebase-findings">Current Codebase Findings<a class="headerlink" href="#current-codebase-findings" title="Permanent link">&para;</a></h2>
+<p>The current implementation already has useful hooks, but the uncertainty-preserving model does not exist yet.</p>
+<h3 id="realtime-path">Realtime path<a class="headerlink" href="#realtime-path" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code> reads per-frame tag and CNN outputs during tracking.</li>
+<li><code>src/hydra_suite/core/tracking/tag_features.py</code> keeps a rolling majority-vote tag history per track slot.</li>
+<li><code>src/hydra_suite/core/identity/classification/cnn.py</code> exposes <code>TrackCNNHistory</code>, which stores tuples of hard classes and confidences, then reduces them to majority identities.</li>
+<li><code>src/hydra_suite/core/tracking/cnn_features.py</code> converts cached predictions plus track history into <code>detection_classes</code> and <code>track_identities</code> for the assigner.</li>
+<li><code>src/hydra_suite/core/assigners/hungarian.py</code> only sees hard identity overlays as additive match and mismatch bonuses in the geometric cost matrix.</li>
+</ul>
+<h3 id="post-processing-path">Post-processing path<a class="headerlink" href="#post-processing-path" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code> builds the rich export dataframe after tracking by merging pose, CNN, AprilTag, and interpolation outputs.</li>
+<li><code>src/hydra_suite/core/post/identity_postprocess.py</code> performs a heuristic split and re-chain pass using exported <code>TagID</code>, <code>InterpTagID</code>, <code>DetectedTagID</code>, and flattened CNN class/conf columns.</li>
+<li><code>src/hydra_suite/core/post/processing.py</code> uses <code>UniqueIdentityKey</code> only as a relink veto or compatibility check after trajectories already exist.</li>
+</ul>
+<h3 id="evidence-persistence">Evidence persistence<a class="headerlink" href="#evidence-persistence" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/identity/classification/cnn.py</code> persists only top class names and top confidences per factor in <code>CNNIdentityCache</code>.</li>
+<li><code>src/hydra_suite/core/identity/properties/export.py</code> exports only flattened <code>CNN_&lt;label&gt;_Class</code> and <code>CNN_&lt;label&gt;_Conf</code> columns.</li>
+<li>The current pipeline does not persist calibrated posterior vectors over the full identity catalog, so offline post-processing cannot recover information that was already discarded.</li>
+</ul>
+<h3 id="slot-lifecycle">Slot lifecycle<a class="headerlink" href="#slot-lifecycle" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/tracking/worker.py</code> clears tag and CNN histories when a lost slot respawns.</li>
+<li>Lost slots are freely reused with a new <code>TrajectoryID</code> and no identity reservation semantics.</li>
+<li>The current code therefore has no notion of long-lived slot commitment or identity-aware slot reuse.</li>
+</ul>
+<h2 id="design-principles">Design Principles<a class="headerlink" href="#design-principles" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Preserve the full posterior over identities as long as possible.</li>
+<li>Separate geometric association from identity decoding.</li>
+<li>Enforce uniqueness globally across visible trajectories, not greedily per trajectory.</li>
+<li>Use the same identity model online and offline.</li>
+<li>Keep raw evidence and cleaned outputs side by side for auditability.</li>
+<li>Treat low-confidence evidence as weak evidence, not as missing evidence.</li>
+<li>Make identity commitment and slot reuse policy explicit, testable, and configurable.</li>
+</ul>
+<h2 id="dependency-on-the-streaming-plan">Dependency On The Streaming Plan<a class="headerlink" href="#dependency-on-the-streaming-plan" title="Permanent link">&para;</a></h2>
+<p>The identity overhaul should not be executed as an isolated refactor.</p>
+<p>It depends on the streaming plan for:</p>
+<ul>
+<li>a stable filtered-detection payload after head-tail and canonical reorientation</li>
+<li>one live and replay-compatible place to emit identity evidence caches</li>
+<li>runtime-consistent CNN execution paths that can expose posterior information without duplicating inference code</li>
+</ul>
+<p>Because of that dependency, the streaming plan should establish the transport layer first. The identity overhaul should begin only after the shared payload contract and CNN posterior-emission hook exist.</p>
+<h2 id="functional-requirements">Functional Requirements<a class="headerlink" href="#functional-requirements" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Support a known catalog of unique identities plus an explicit <code>unknown</code> or <code>unobserved</code> state.</li>
+<li>Fuse multiple evidence sources, including AprilTag and CNN identity models.</li>
+<li>Preserve multihead uncertainty instead of collapsing it into a tuple string.</li>
+<li>Produce a stable online identity assignment with bounded latency.</li>
+<li>Produce a stronger offline identity result using future evidence and global fragment constraints.</li>
+<li>Keep compatibility with the current CSV and rich-export workflows during migration.</li>
+<li>Avoid violating the rule that two visible trajectories cannot own the same identity at the same time.</li>
+<li>Allow animals to be absent without forcing fabricated identities.</li>
+</ul>
+<h2 id="non-goals">Non-Goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Replacing the Kalman tracker or geometric detection-to-track association in this project.</li>
+<li>Redesigning AprilTag detection itself.</li>
+<li>Solving generic open-world re-identification beyond the configured identity catalog.</li>
+<li>Removing existing CSV exports or GUI affordances during the first rollout phase.</li>
+</ul>
+<h2 id="target-architecture">Target Architecture<a class="headerlink" href="#target-architecture" title="Permanent link">&para;</a></h2>
+<p>The system should use one identity model and one evidence representation in both live and offline modes.</p>
+<h3 id="identity-catalog">Identity Catalog<a class="headerlink" href="#identity-catalog" title="Permanent link">&para;</a></h3>
+<p>Introduce a canonical identity catalog that all sources map into.</p>
+<p>Proposed module:</p>
+<ul>
+<li><code>src/hydra_suite/core/identity/catalog.py</code></li>
+</ul>
+<p>Proposed responsibilities:</p>
+<ul>
+<li>Define the ordered identity domain for one run.</li>
+<li>Represent the <code>unknown</code> or <code>unobserved</code> state explicitly.</li>
+<li>Map AprilTag IDs, classifier labels, and future appearance embeddings into the same index space.</li>
+<li>Validate that configured unique-ID classifiers are compatible with the catalog.</li>
+</ul>
+<p>Proposed data model:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">IdentityCatalog</span><span class="p">:</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">labels</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="n">unknown_index</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">source_mappings</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="nd">@property</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">size</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">index_of</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">label_of</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<h3 id="identity-evidence">Identity Evidence<a class="headerlink" href="#identity-evidence" title="Permanent link">&para;</a></h3>
+<p>Introduce one common evidence contract that every source emits.</p>
+<p>Proposed modules:</p>
+<ul>
+<li><code>src/hydra_suite/core/identity/evidence.py</code></li>
+<li><code>src/hydra_suite/core/identity/cache.py</code></li>
+</ul>
+<p>Proposed data model:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">IdentityEvidence</span><span class="p">:</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="n">detection_index</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">detection_id</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="n">source_name</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">log_probs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>  <span class="c1"># shape: [catalog_size]</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">observed_mask</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">confidence_scale</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="k">class</span><span class="w"> </span><span class="nc">IdentityEvidenceCache</span><span class="p">:</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">save_frame</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">evidences</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">IdentityEvidence</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">load_frame</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">IdentityEvidence</span><span class="p">]:</span> <span class="o">...</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">flush</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<p>Rules:</p>
+<ul>
+<li>AprilTag evidence should be represented as a very sharp categorical distribution over one identity plus a small floor elsewhere.</li>
+<li>CNN evidence should be stored as a calibrated posterior over the catalog, not only the top class.</li>
+<li>Multihead models must preserve per-factor uncertainty until the factor-to-catalog mapping step is complete.</li>
+<li>Missing evidence should be represented explicitly, not by dropping the detection from the cache.</li>
+<li>The evidence cache must be emitted equivalently from both the streaming live path and the replay fallback path defined in <code>trackerkit-streaming-individual-analysis-plan.md</code>.</li>
+</ul>
+<h3 id="online-identity-decoder">Online Identity Decoder<a class="headerlink" href="#online-identity-decoder" title="Permanent link">&para;</a></h3>
+<p>Add a new online decoder layer that runs after geometry assignment and before final identity publication.</p>
+<p>Proposed module:</p>
+<ul>
+<li><code>src/hydra_suite/core/identity/online.py</code></li>
+</ul>
+<p>Proposed data model:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nd">@dataclass</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">class</span><span class="w"> </span><span class="nc">TrackIdentityBelief</span><span class="p">:</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">slot_index</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">trajectory_id</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">log_posterior</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>  <span class="c1"># shape: [catalog_size]</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">committed_identity</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">commitment_age</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="n">stable_frames</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">last_visible_frame</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>    <span class="n">slot_lock_identity</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>    <span class="n">slot_lock_strength</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="k">class</span><span class="w"> </span><span class="nc">IdentityAssignment</span><span class="p">:</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>    <span class="n">slot_index</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>    <span class="n">identity_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>    <span class="n">confidence</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>    <span class="n">margin</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>    <span class="n">committed</span><span class="p">:</span> <span class="nb">bool</span>
+</span></code></pre></div>
+<p>Proposed API:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">OnlineIdentityDecoder</span><span class="p">:</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">catalog</span><span class="p">:</span> <span class="n">IdentityCatalog</span><span class="p">,</span> <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">ensure_slots</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">n_slots</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">update_matched_slots</span><span class="p">(</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>        <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>        <span class="n">matched_slot_to_detection</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>        <span class="n">evidences</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">IdentityEvidence</span><span class="p">],</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>        <span class="n">slot_states</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">decay_unmatched_slots</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">frame_idx</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">visible_slots</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">decode_visible_assignments</span><span class="p">(</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>        <span class="bp">self</span><span class="p">,</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>        <span class="n">visible_slots</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19" href="#__codelineno-3-19"></a>    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">IdentityAssignment</span><span class="p">]:</span> <span class="o">...</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20" href="#__codelineno-3-20"></a>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21" href="#__codelineno-3-21"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">reserve_slot_on_commit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">slot_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22" href="#__codelineno-3-22"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">clear_slot</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">slot_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<p>Online algorithm:</p>
+<ol>
+<li>Predict each slot belief forward with a sticky transition matrix.</li>
+<li>Fuse all matched evidence for that slot in log-space.</li>
+<li>Keep the full posterior over the catalog.</li>
+<li>Solve a visible-slot to identity assignment with dummy unassigned states.</li>
+<li>Publish identity only when posterior and stability cross configurable thresholds.</li>
+<li>Retain the full posterior even when nothing is committed yet.</li>
+</ol>
+<h3 id="offline-identity-decoder">Offline Identity Decoder<a class="headerlink" href="#offline-identity-decoder" title="Permanent link">&para;</a></h3>
+<p>Add a probabilistic offline decoder that consumes the same evidence cache and final trajectories.</p>
+<p>Proposed modules:</p>
+<ul>
+<li><code>src/hydra_suite/core/identity/offline.py</code></li>
+<li><code>src/hydra_suite/core/identity/fragments.py</code></li>
+</ul>
+<p>Proposed API:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">smooth_trajectory_identity_posteriors</span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">trajectories_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="n">evidence_cache</span><span class="p">:</span> <span class="n">IdentityEvidenceCache</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">catalog</span><span class="p">:</span> <span class="n">IdentityCatalog</span><span class="p">,</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="k">def</span><span class="w"> </span><span class="nf">build_identity_fragments</span><span class="p">(</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    <span class="n">smoothed_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="k">def</span><span class="w"> </span><span class="nf">solve_fragment_identity_assignment</span><span class="p">(</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a>    <span class="n">fragments_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>    <span class="n">catalog</span><span class="p">:</span> <span class="n">IdentityCatalog</span><span class="p">,</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>    <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span> <span class="o">...</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="k">def</span><span class="w"> </span><span class="nf">run_identity_residual_assignment</span><span class="p">(</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>    <span class="n">fragments_df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>    <span class="n">params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span> <span class="o">...</span>
+</span></code></pre></div>
+<p>Offline algorithm:</p>
+<ol>
+<li>Run forward-backward or Viterbi per trajectory on the stored posterior evidence.</li>
+<li>Segment trajectories into fragments where the smoothed identity is stable.</li>
+<li>Accumulate fragment log-likelihoods over the catalog.</li>
+<li>Solve a global uniqueness-constrained assignment across overlapping fragments.</li>
+<li>Lock in confident fragments and iterate on ambiguous fragments.</li>
+<li>Detect likely mixed-identity trajectories and split at evidence regime changes.</li>
+<li>Write both summary outputs and audit-friendly posterior diagnostics.</li>
+</ol>
+<h3 id="slot-reservation-policy">Slot Reservation Policy<a class="headerlink" href="#slot-reservation-policy" title="Permanent link">&para;</a></h3>
+<p>Support the bounded-slot rule explicitly.</p>
+<p>Policy statement:</p>
+<ul>
+<li>Once a slot has held one identity with high posterior for long enough, reuse of that slot should be strongly biased toward the same identity.</li>
+<li>After a stronger threshold, the slot may become hard-locked to that identity until a timeout or contradiction condition is reached.</li>
+</ul>
+<p>This policy belongs in the online decoder, not in the geometric assigner.</p>
+<p>Initial rollout rule:</p>
+<ul>
+<li>soft lock only</li>
+<li>no hard rejection in the first phase</li>
+<li>log every time a lost slot is reused by a different decoded identity than its previous committed identity</li>
+</ul>
+<p>Later rollout rule:</p>
+<ul>
+<li>optional hard lock after <code>IDENTITY_SLOT_LOCK_MIN_FRAMES</code></li>
+<li>allow override if the posterior for a new identity exceeds the current lock by a configured margin for a configured dwell time</li>
+</ul>
+<h2 id="proposed-file-level-changes">Proposed File-Level Changes<a class="headerlink" href="#proposed-file-level-changes" title="Permanent link">&para;</a></h2>
+<h3 id="new-modules">New modules<a class="headerlink" href="#new-modules" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>src/hydra_suite/core/identity/catalog.py</code></li>
+<li><code>src/hydra_suite/core/identity/evidence.py</code></li>
+<li><code>src/hydra_suite/core/identity/cache.py</code></li>
+<li><code>src/hydra_suite/core/identity/online.py</code></li>
+<li><code>src/hydra_suite/core/identity/offline.py</code></li>
+<li><code>src/hydra_suite/core/identity/fragments.py</code></li>
+<li><code>src/hydra_suite/core/identity/calibration.py</code></li>
+</ul>
+<h3 id="existing-files-to-change">Existing files to change<a class="headerlink" href="#existing-files-to-change" title="Permanent link">&para;</a></h3>
+<h4 id="srchydra_suitecoreidentityclassificationcnnpy"><code>src/hydra_suite/core/identity/classification/cnn.py</code><a class="headerlink" href="#srchydra_suitecoreidentityclassificationcnnpy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Add a posterior-producing path that returns calibrated probabilities over classes, not only top-1 names and confidences.</li>
+<li>Preserve multihead posterior information until the mapping into the identity catalog is complete.</li>
+<li>Keep the current <code>ClassPrediction</code> path for compatibility during migration.</li>
+</ul>
+<h4 id="srchydra_suitecoretrackingprecomputepy"><code>src/hydra_suite/core/tracking/precompute.py</code><a class="headerlink" href="#srchydra_suitecoretrackingprecomputepy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Add an <code>IdentityEvidencePhase</code> that writes the new sidecar evidence cache.</li>
+<li>Keep existing <code>CNNIdentityCache</code> writing during migration.</li>
+<li>Ensure live streaming and replay fallback both emit the same evidence contract using the shared filtered-detection payload.</li>
+</ul>
+<h4 id="srchydra_suitecoretrackingworkerpy"><code>src/hydra_suite/core/tracking/worker.py</code><a class="headerlink" href="#srchydra_suitecoretrackingworkerpy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Replace hard-label history as the primary live identity state with <code>OnlineIdentityDecoder</code>.</li>
+<li>Use identity posteriors for slot commitment, uniqueness-aware decoding, and slot reservation.</li>
+<li>Keep track-level CSV outputs compatible while adding new summary columns.</li>
+</ul>
+<h4 id="srchydra_suitecoretrackingcnn_featurespy"><code>src/hydra_suite/core/tracking/cnn_features.py</code><a class="headerlink" href="#srchydra_suitecoretrackingcnn_featurespy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Deprecate direct hard-label track-history usage.</li>
+<li>Convert this module into a thin evidence adapter during migration.</li>
+</ul>
+<h4 id="srchydra_suitecoretrackingtag_featurespy"><code>src/hydra_suite/core/tracking/tag_features.py</code><a class="headerlink" href="#srchydra_suitecoretrackingtag_featurespy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Convert from majority-vote tag history into an evidence builder for AprilTag observations.</li>
+<li>Keep deterministic tag helper functions where useful for UI and diagnostics.</li>
+</ul>
+<h4 id="srchydra_suitecoreassignershungarianpy"><code>src/hydra_suite/core/assigners/hungarian.py</code><a class="headerlink" href="#srchydra_suitecoreassignershungarianpy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Reduce identity overlay responsibility.</li>
+<li>Continue using identity only as a compatibility term for geometry association.</li>
+<li>Do not make this module the global identity uniqueness solver.</li>
+</ul>
+<h4 id="srchydra_suitecorepostidentity_postprocesspy"><code>src/hydra_suite/core/post/identity_postprocess.py</code><a class="headerlink" href="#srchydra_suitecorepostidentity_postprocesspy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Replace the current heuristic split-and-rechain implementation with a compatibility shim over the new offline decoder.</li>
+<li>Preserve audit columns such as <code>UniqueIdentityKey</code> while changing how they are computed.</li>
+</ul>
+<h4 id="srchydra_suitetrackerkitguiorchestratorstrackingpy"><code>src/hydra_suite/trackerkit/gui/orchestrators/tracking.py</code><a class="headerlink" href="#srchydra_suitetrackerkitguiorchestratorstrackingpy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Load the new identity evidence sidecar when building the rich export dataframe.</li>
+<li>Run the offline decoder after rich evidence assembly.</li>
+<li>Continue emitting label-friendly summary columns for video export and CSV export.</li>
+</ul>
+<h4 id="srchydra_suitecoreidentitypropertiesexportpy"><code>src/hydra_suite/core/identity/properties/export.py</code><a class="headerlink" href="#srchydra_suitecoreidentitypropertiesexportpy" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Continue exporting current summary columns.</li>
+<li>Add new summary fields for decoded identity, commitment state, entropy, and margins.</li>
+<li>Do not use this CSV as the primary posterior store.</li>
+</ul>
+<h2 id="proposed-data-artifacts">Proposed Data Artifacts<a class="headerlink" href="#proposed-data-artifacts" title="Permanent link">&para;</a></h2>
+<h3 id="raw-evidence-artifact">Raw evidence artifact<a class="headerlink" href="#raw-evidence-artifact" title="Permanent link">&para;</a></h3>
+<p>Introduce a new sidecar file next to the detection and CNN caches.</p>
+<p>Suggested naming:</p>
+<ul>
+<li><code>&lt;base&gt;_identity_evidence_&lt;signature&gt;.npz</code></li>
+</ul>
+<p>Required contents per frame and detection slot:</p>
+<ul>
+<li><code>frame_idx</code></li>
+<li><code>detection_index</code></li>
+<li><code>detection_id</code></li>
+<li><code>source_name</code></li>
+<li><code>log_probs</code></li>
+<li><code>catalog_labels</code></li>
+<li><code>calibration_signature</code></li>
+<li><code>runtime_signature</code></li>
+<li><code>observed_mask</code></li>
+</ul>
+<h3 id="rich-export-summary-columns">Rich export summary columns<a class="headerlink" href="#rich-export-summary-columns" title="Permanent link">&para;</a></h3>
+<p>Add new summary columns to the rich dataframe and exported CSV.</p>
+<p>Suggested columns:</p>
+<ul>
+<li><code>IdentityAssignedID</code></li>
+<li><code>IdentityAssignedLabel</code></li>
+<li><code>IdentityAssignedConfidence</code></li>
+<li><code>IdentityPosteriorMargin</code></li>
+<li><code>IdentityEntropy</code></li>
+<li><code>IdentityCommitted</code></li>
+<li><code>IdentityEvidenceSources</code></li>
+<li><code>IdentityConflictFlag</code></li>
+<li><code>IdentitySlotLockLabel</code></li>
+<li><code>IdentitySlotLockStrength</code></li>
+</ul>
+<p>Existing columns such as <code>UniqueIdentityKey</code> can remain as compatibility and UI presentation fields.</p>
+<h2 id="configuration-and-rollout-flags">Configuration and Rollout Flags<a class="headerlink" href="#configuration-and-rollout-flags" title="Permanent link">&para;</a></h2>
+<p>Add the new behavior behind explicit configuration so migration is reversible.</p>
+<p>Suggested runtime parameters:</p>
+<ul>
+<li><code>ENABLE_IDENTITY_POSTERIOR_CACHE</code></li>
+<li><code>ENABLE_IDENTITY_ONLINE_DECODER</code></li>
+<li><code>ENABLE_IDENTITY_OFFLINE_DECODER</code></li>
+<li><code>IDENTITY_TRANSITION_EPSILON</code></li>
+<li><code>IDENTITY_UNKNOWN_PRIOR</code></li>
+<li><code>IDENTITY_COMMIT_THRESHOLD</code></li>
+<li><code>IDENTITY_COMMIT_MIN_HITS</code></li>
+<li><code>IDENTITY_DISPLAY_THRESHOLD</code></li>
+<li><code>IDENTITY_SLOT_LOCK_MIN_FRAMES</code></li>
+<li><code>IDENTITY_SLOT_LOCK_STRENGTH</code></li>
+<li><code>IDENTITY_SLOT_LOCK_OVERRIDE_MARGIN</code></li>
+<li><code>IDENTITY_OFFLINE_FRAGMENT_MIN_FRAMES</code></li>
+<li><code>IDENTITY_OFFLINE_AMBIGUITY_MARGIN</code></li>
+<li><code>IDENTITY_OFFLINE_MIN_COST_FLOW</code></li>
+<li><code>IDENTITY_CALIBRATION_REQUIRED</code></li>
+</ul>
+<p>Migration rule:</p>
+<ul>
+<li>Old and new identity pipelines must be runnable side by side until parity and auditability are satisfactory.</li>
+</ul>
+<h2 id="detailed-rollout-plan">Detailed Rollout Plan<a class="headerlink" href="#detailed-rollout-plan" title="Permanent link">&para;</a></h2>
+<h3 id="phase-0-preserve-posterior-information">Phase 0: Preserve Posterior Information<a class="headerlink" href="#phase-0-preserve-posterior-information" title="Permanent link">&para;</a></h3>
+<p>Goal:</p>
+<ul>
+<li>Stop losing information at cache write time.</li>
+</ul>
+<p>Tasks:</p>
+<ul>
+<li>Add posterior vector output to CNN identity inference.</li>
+<li>Add calibration metadata plumbing.</li>
+<li>Introduce <code>IdentityEvidenceCache</code>.</li>
+<li>Implement the evidence cache on top of the shared payload and cache-emission points from the streaming plan rather than creating a parallel path.</li>
+<li>Keep current top-1 cache and CSV export unchanged.</li>
+</ul>
+<p>Exit criteria:</p>
+<ul>
+<li>Every relevant frame can be reconstructed from a posterior artifact without rerunning the model.</li>
+</ul>
+<h3 id="phase-1-realtime-decoder-behind-flag">Phase 1: Realtime Decoder Behind Flag<a class="headerlink" href="#phase-1-realtime-decoder-behind-flag" title="Permanent link">&para;</a></h3>
+<p>Goal:</p>
+<ul>
+<li>Add a new online identity decoder without removing current behavior.</li>
+</ul>
+<p>Tasks:</p>
+<ul>
+<li>Instantiate <code>IdentityCatalog</code> at run start.</li>
+<li>Build evidence vectors from AprilTag and CNN outputs.</li>
+<li>Update slot beliefs online.</li>
+<li>Add uniqueness-aware visible assignment with dummy unassigned identities.</li>
+<li>Emit summary diagnostics and logs.</li>
+<li>Consume live evidence from the streaming forward path, not from a replay-only precompute phase.</li>
+</ul>
+<p>Exit criteria:</p>
+<ul>
+<li>The live path produces posterior-aware identity outputs under a feature flag.</li>
+</ul>
+<h3 id="phase-2-commitment-and-slot-reservation">Phase 2: Commitment and Slot Reservation<a class="headerlink" href="#phase-2-commitment-and-slot-reservation" title="Permanent link">&para;</a></h3>
+<p>Goal:</p>
+<ul>
+<li>Stabilize live identity output and implement the bounded-slot rule.</li>
+</ul>
+<p>Tasks:</p>
+<ul>
+<li>Add commitment state and stability counters.</li>
+<li>Add soft slot lock behavior.</li>
+<li>Add later optional hard slot lock behavior.</li>
+<li>Record lock overrides and contradictions.</li>
+</ul>
+<p>Exit criteria:</p>
+<ul>
+<li>Realtime identity outputs are stable and slot reuse is identity-aware.</li>
+</ul>
+<h3 id="phase-3-offline-smoothing">Phase 3: Offline Smoothing<a class="headerlink" href="#phase-3-offline-smoothing" title="Permanent link">&para;</a></h3>
+<p>Goal:</p>
+<ul>
+<li>Use future evidence to clean the final result.</li>
+</ul>
+<p>Tasks:</p>
+<ul>
+<li>Add forward-backward and Viterbi smoothing over final trajectories.</li>
+<li>Emit smoothed posterior summaries.</li>
+<li>Preserve raw and smoothed outputs together.</li>
+<li>Consume the same identity evidence sidecar emitted by both streaming and replay paths.</li>
+</ul>
+<p>Exit criteria:</p>
+<ul>
+<li>A confident late identity burst can improve ambiguous early frames in the same trajectory.</li>
+</ul>
+<h3 id="phase-4-global-fragment-assignment">Phase 4: Global Fragment Assignment<a class="headerlink" href="#phase-4-global-fragment-assignment" title="Permanent link">&para;</a></h3>
+<p>Goal:</p>
+<ul>
+<li>Enforce uniqueness globally across overlapping fragments.</li>
+</ul>
+<p>Tasks:</p>
+<ul>
+<li>Build fragment-level evidence summaries.</li>
+<li>Solve overlap-constrained assignment using min-cost flow or equivalent integer optimization.</li>
+<li>Add residual reassignment for ambiguous fragments.</li>
+</ul>
+<p>Exit criteria:</p>
+<ul>
+<li>No overlapping decoded fragments share the same identity unless explicitly marked unresolved.</li>
+</ul>
+<h3 id="phase-5-retire-legacy-identity-heuristics">Phase 5: Retire Legacy Identity Heuristics<a class="headerlink" href="#phase-5-retire-legacy-identity-heuristics" title="Permanent link">&para;</a></h3>
+<p>Goal:</p>
+<ul>
+<li>Remove old majority-vote identity behavior once the new path is validated.</li>
+</ul>
+<p>Tasks:</p>
+<ul>
+<li>Decommission <code>TrackCNNHistory</code> and <code>TrackTagHistory</code> as the primary live decision machinery.</li>
+<li>Remove heuristic-only split/join as the main offline decoder.</li>
+<li>Keep compatibility adapters only where UI or exports still depend on them.</li>
+</ul>
+<p>Exit criteria:</p>
+<ul>
+<li>The new posterior-based pipeline is the default identity system.</li>
+</ul>
+<h2 id="testing-strategy">Testing Strategy<a class="headerlink" href="#testing-strategy" title="Permanent link">&para;</a></h2>
+<h3 id="unit-tests">Unit tests<a class="headerlink" href="#unit-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>IdentityCatalog</code> mapping correctness.</li>
+<li>Calibration application and numerical stability.</li>
+<li>Posterior cache roundtrip.</li>
+<li>Online transition and evidence fusion logic.</li>
+<li>Unique assignment decoder with dummy unassigned states.</li>
+<li>Slot lock and override behavior.</li>
+<li>Offline fragment likelihood accumulation.</li>
+</ul>
+<h3 id="integration-tests">Integration tests<a class="headerlink" href="#integration-tests" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Realtime run with AprilTag only.</li>
+<li>Realtime run with CNN unique-ID only.</li>
+<li>Realtime run with AprilTag plus CNN evidence conflict.</li>
+<li>Occlusion and reappearance with slot reservation.</li>
+<li>Offline smoothing correcting early ambiguity.</li>
+<li>Offline global fragment solver resolving overlapping conflicts.</li>
+</ul>
+<h3 id="regression-scenarios">Regression scenarios<a class="headerlink" href="#regression-scenarios" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Two live tracks both moderately favor the same identity.</li>
+<li>One track has low-confidence diffuse evidence across many frames.</li>
+<li>One multihead factor is missing while others remain informative.</li>
+<li>A long-lived slot respawns near a different animal.</li>
+<li>A trajectory contains a clean internal identity switch point.</li>
+</ul>
+<h3 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h3>
+<ul>
+<li>IDF1</li>
+<li>identity switch count</li>
+<li>duplicate-ID violations per frame</li>
+<li>unresolved or tentative fraction</li>
+<li>recovery delay after occlusion</li>
+<li>agreement between online committed identity and offline final identity</li>
+</ul>
+<h2 id="risks-and-open-questions">Risks and Open Questions<a class="headerlink" href="#risks-and-open-questions" title="Permanent link">&para;</a></h2>
+<ul>
+<li>A true identity catalog is straightforward for AprilTag, but may require explicit configuration for CNN classifiers whose labels are not directly the unique animal IDs.</li>
+<li>If existing models cannot emit full calibrated posterior vectors, Phase 0 will require backend work before the larger decoder rollout can start.</li>
+<li>The online decoder should remain low-latency; if the catalog becomes large, visible-slot decoding must remain bounded and efficient.</li>
+<li>The slot lock policy must start soft to avoid preserving wrong commitments too aggressively.</li>
+<li>The offline solver should degrade gracefully when the evidence is genuinely ambiguous.</li>
+</ul>
+<h2 id="acceptance-criteria">Acceptance Criteria<a class="headerlink" href="#acceptance-criteria" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The system preserves raw identity uncertainty in a persisted artifact.</li>
+<li>The online path can output tentative and committed identities without discarding low-confidence evidence.</li>
+<li>The offline path uses future evidence to improve final identity results.</li>
+<li>The uniqueness constraint is enforced globally for visible trajectories in both live decoding and offline fragment assignment.</li>
+<li>Slot reuse can be configured to prefer or require the same identity after sufficient commitment time.</li>
+<li>Existing CSV, rich export, and video-label flows remain functional during migration.</li>
+<li>The identity pipeline behaves the same regardless of whether evidence was produced by the live streaming path or replay fallback.</li>
+</ul>
+<h2 id="recommended-joint-execution-order">Recommended Joint Execution Order<a class="headerlink" href="#recommended-joint-execution-order" title="Permanent link">&para;</a></h2>
+<p>If the streaming plan and identity overhaul are being executed together, the preferred combined order is:</p>
+<ol>
+<li>Streaming Phase 0: instrumentation and artifact-contract audit.</li>
+<li>Streaming Phase 1: shared oriented-analysis payload.</li>
+<li>Streaming Phase 2: GPU-native CNN runtime path plus posterior-output hook.</li>
+<li>Identity Overhaul Phase 0: identity catalog, calibrated posterior contract, and evidence sidecar cache.</li>
+<li>Streaming Phase 3 and Phase 4: live pose and CNN dispatch on the shared payload, including evidence emission.</li>
+<li>Identity Overhaul Phase 1 and Phase 2: online decoder, commitment, and slot reservation on the live path.</li>
+<li>Streaming Phase 5: make streaming the default forward path.</li>
+<li>Identity Overhaul Phase 3 and Phase 4: offline smoothing and global fragment assignment on top of the preserved evidence.</li>
+<li>Streaming Phase 6 and Identity Overhaul Phase 5: retire replay-first and hard-label legacy behavior.</li>
+</ol>
+<p>Rationale:</p>
+<ul>
+<li>the streaming plan owns the transport and runtime substrate</li>
+<li>the identity overhaul owns the evidence model and decoders</li>
+<li>building the identity overhaul first would force rework when the transport path changes</li>
+<li>making streaming default too early would leave the live path without the probabilistic decoder that justifies the transition</li>
+</ul>
+<h2 id="recommended-first-implementation-slice">Recommended First Implementation Slice<a class="headerlink" href="#recommended-first-implementation-slice" title="Permanent link">&para;</a></h2>
+<p>The first engineering slice should be intentionally narrow and unblock the rest of the roadmap.</p>
+<ol>
+<li>Complete Streaming Phase 1 so the filtered-detection payload and stable detection-slot indexing exist.</li>
+<li>Complete Streaming Phase 2 so CNN execution has a posterior-producing hook.</li>
+<li>Add posterior-producing CNN output plus calibration metadata in <code>cnn.py</code>.</li>
+<li>Add the new identity evidence sidecar cache in <code>precompute.py</code> using the shared streaming payload path.</li>
+<li>Build <code>IdentityCatalog</code> and <code>IdentityEvidence</code> contracts.</li>
+<li>Fix live multihead history initialization so it no longer collapses to <code>("flat",)</code>.</li>
+<li>Add a feature-flagged online decoder that computes posteriors without yet changing the final assignment behavior.</li>
+</ol>
+<p>This slice provides the data preservation and observability needed before replacing the current live and offline heuristics, and it does so on top of the same execution substrate that the final product will use.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      
+    
+  </body>
+</html>
