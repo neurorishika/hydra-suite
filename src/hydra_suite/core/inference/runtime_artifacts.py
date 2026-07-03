@@ -358,6 +358,14 @@ class DirectExecutorAdapter:
         self._max_det = int(max_det)
         # Surface class names for parity with YOLO model attribute access.
         self.names = getattr(executor, "names", None)
+        # Surface the executor's fixed input size — obb.py's _resolve_imgsz()
+        # reads this for the NVDEC CUDA-tensor letterbox path, since this
+        # adapter has no .overrides/.model.args for it to duck-type against
+        # (those are ultralytics-model-shaped attributes this class doesn't
+        # have). Without this, _resolve_imgsz() always fell back to a
+        # hardcoded 1024, which silently mismatches any engine built at a
+        # different imgsz (e.g. 640) and crashes TensorRT's setInputShape.
+        self.imgsz = getattr(executor, "imgsz", None)
 
     def predict(
         self,

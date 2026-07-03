@@ -8,14 +8,13 @@ These tests run entirely on CPU (no CUDA required) by:
 CUDA verification (equivalence between numpy-list path and tensor path on
 real GPU hardware with NVDEC) is done separately on the mehek box.
 """
+
 from __future__ import annotations
 
 import math
-import types
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 import torch
 
 # ---------------------------------------------------------------------------
@@ -28,10 +27,10 @@ from hydra_suite.core.inference.stages.obb import (
     _run_direct,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers / stubs
 # ---------------------------------------------------------------------------
+
 
 def _xywhr_to_corners(xywhr: torch.Tensor) -> torch.Tensor:
     """(N,5) cx,cy,w,h,angle -> (N,4,2) rotated corners (tl,tr,br,bl).
@@ -103,6 +102,7 @@ def _make_result_in_imgsz_space(
 # Test 1: pure letterbox math — forward then inverse is identity
 # ---------------------------------------------------------------------------
 
+
 class TestGpuLetterboxBatch:
     """Unit tests for _gpu_letterbox_batch (CPU tensors only)."""
 
@@ -141,6 +141,7 @@ class TestGpuLetterboxBatch:
 # ---------------------------------------------------------------------------
 # Test 2: inverse letterbox math — known box, hand-computed expected result
 # ---------------------------------------------------------------------------
+
 
 class TestInvertLetterbox:
     """Unit tests for _invert_letterbox_on_result.
@@ -222,8 +223,12 @@ class TestInvertLetterbox:
         expected_tl_y = cy_orig - h_orig / 2
         got_tl_x = float(corners[0, 0, 0])
         got_tl_y = float(corners[0, 0, 1])
-        assert abs(got_tl_x - expected_tl_x) < 1e-4, f"tl_x={got_tl_x} expected {expected_tl_x}"
-        assert abs(got_tl_y - expected_tl_y) < 1e-4, f"tl_y={got_tl_y} expected {expected_tl_y}"
+        assert (
+            abs(got_tl_x - expected_tl_x) < 1e-4
+        ), f"tl_x={got_tl_x} expected {expected_tl_x}"
+        assert (
+            abs(got_tl_y - expected_tl_y) < 1e-4
+        ), f"tl_y={got_tl_y} expected {expected_tl_y}"
 
     def test_empty_obb_no_crash(self):
         """_invert_letterbox_on_result must not crash on an empty OBB."""
@@ -256,6 +261,7 @@ class TestInvertLetterbox:
 # Test 3: _resolve_imgsz reads from model.overrides
 # ---------------------------------------------------------------------------
 
+
 class TestResolveImgsz:
     def test_reads_from_overrides(self):
         model = MagicMock()
@@ -274,6 +280,7 @@ class TestResolveImgsz:
         model.model.args = {}
         result = _resolve_imgsz(model)
         from hydra_suite.core.inference.stages.obb import _FALLBACK_IMGSZ
+
         assert result == _FALLBACK_IMGSZ
 
     def test_list_imgsz_in_overrides(self):
@@ -281,10 +288,22 @@ class TestResolveImgsz:
         model.overrides = {"imgsz": [640, 640]}
         assert _resolve_imgsz(model) == 640
 
+    def test_reads_from_direct_executor_adapter_imgsz(self):
+        """DirectExecutorAdapter (gpu_fast direct-mode) has no .overrides/
+        .model.args — a plain object with just .imgsz, like the real
+        adapter — must resolve from that attribute instead of silently
+        falling back to _FALLBACK_IMGSZ and mismatching the TRT engine."""
+
+        class _FakeDirectExecutorAdapter:
+            imgsz = 640
+
+        assert _resolve_imgsz(_FakeDirectExecutorAdapter()) == 640
+
 
 # ---------------------------------------------------------------------------
 # Test 4: _run_direct — numpy-list path passes list unchanged to model.predict
 # ---------------------------------------------------------------------------
+
 
 class TestRunDirectNumpyPath:
     def _make_runtime(self, tensor_on_cuda=False):
@@ -319,12 +338,15 @@ class TestRunDirectNumpyPath:
         # predict must have been called with the list, not a single tensor
         call_args = model.predict.call_args
         first_arg = call_args[0][0]
-        assert first_arg is frames, "numpy list must be passed directly to model.predict"
+        assert (
+            first_arg is frames
+        ), "numpy list must be passed directly to model.predict"
 
 
 # ---------------------------------------------------------------------------
 # Test 5: _run_direct — CUDA-tensor path batches frames and inverts letterbox
 # ---------------------------------------------------------------------------
+
 
 class TestRunDirectCudaTensorPath:
     """Exercise the CUDA-tensor branch of _run_direct on CPU hardware.
@@ -386,12 +408,15 @@ class TestRunDirectCudaTensorPath:
 
         call_args = model.predict.call_args
         first_arg = call_args[0][0]
-        assert isinstance(first_arg, torch.Tensor), (
-            "predict must be called with a single Tensor, not a list"
-        )
-        assert first_arg.shape == (B, 3, imgsz, imgsz), (
-            f"batched tensor shape {first_arg.shape} != ({B}, 3, {imgsz}, {imgsz})"
-        )
+        assert isinstance(
+            first_arg, torch.Tensor
+        ), "predict must be called with a single Tensor, not a list"
+        assert first_arg.shape == (
+            B,
+            3,
+            imgsz,
+            imgsz,
+        ), f"batched tensor shape {first_arg.shape} != ({B}, 3, {imgsz}, {imgsz})"
 
     def test_predict_called_with_float32_tensor(self):
         """The batched tensor must be float32 (no fp16)."""
@@ -423,7 +448,7 @@ class TestRunDirectCudaTensorPath:
         r = min(imgsz / H, imgsz / W)  # 1.6
         new_h = int(H * r)
         new_w = int(W * r)
-        pad_top = (imgsz - new_h) // 2   # 160
+        pad_top = (imgsz - new_h) // 2  # 160
         pad_left = (imgsz - new_w) // 2  # 0
 
         cx_orig, cy_orig = 200.0, 100.0

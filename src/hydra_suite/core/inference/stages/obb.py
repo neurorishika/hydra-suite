@@ -23,14 +23,23 @@ def _resolve_imgsz(model: Any) -> int:
     """Read the input image size from a loaded ultralytics YOLO model.
 
     Tries the documented attributes in order of preference:
-      1. ``model.overrides["imgsz"]`` — set from the .pt checkpoint args at
+      1. ``model.imgsz`` — set by ``DirectExecutorAdapter`` for direct
+         ONNX/TRT executors (gpu_fast), which have no ``.overrides``/
+         ``.model.args`` for the checks below to duck-type against.
+      2. ``model.overrides["imgsz"]`` — set from the .pt checkpoint args at
          load time and patched by predict() kwargs.
-      2. ``model.model.args["imgsz"]`` — the Ultralytics Trainer-style dict
+      3. ``model.model.args["imgsz"]`` — the Ultralytics Trainer-style dict
          stored in the inner nn.Module after load.
 
-    Falls back to ``_FALLBACK_IMGSZ`` (1024) with a warning if neither
-    attribute resolves to a positive integer.
+    Falls back to ``_FALLBACK_IMGSZ`` (1024) with a warning if none of these
+    attributes resolve to a positive integer.
     """
+    try:
+        v = getattr(model, "imgsz", 0)
+        if isinstance(v, (int, float)) and int(v) > 0:
+            return int(v)
+    except Exception:
+        pass
     try:
         v = getattr(model, "overrides", {}).get("imgsz", 0)
         if isinstance(v, (int, float)) and int(v) > 0:
