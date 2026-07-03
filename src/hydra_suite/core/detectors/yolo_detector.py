@@ -392,10 +392,26 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         else:
             return
         # Use the detect-specific ONNX imgsz when explicitly configured;
-        # otherwise fall back to reading from ONNX model metadata.
+        # otherwise fall back to reading from model metadata. Read metadata
+        # from the ORIGINAL .pt checkpoint (self.detect_model_path), not from
+        # `path` (the compiled .onnx/.engine runtime artifact): loading a
+        # compiled TensorRT engine through Ultralytics' YOLO wrapper does not
+        # reliably surface the export imgsz via `overrides['imgsz']`, so
+        # `_resolve_onnx_imgsz(model_path=path)` silently fell through to its
+        # hardcoded 640 default here — while the engine was actually built at
+        # the checkpoint's own imgsz (e.g. 1024). That mismatch made the
+        # direct TensorRT detect executor letterbox to 640x640 and then feed
+        # that into a 1024x1024-only engine, crashing with
+        # "IExecutionContext::setInputShape: ... Static dimension mismatch"
+        # on every frame of sequential OBB mode's gpu_fast tier.
         seq_detect_imgsz = int(self.params.get("YOLO_SEQ_DETECT_IMGSZ", 0))
         if seq_detect_imgsz <= 0:
-            seq_detect_imgsz = self._resolve_onnx_imgsz(model_path=path)
+            checkpoint_path = (
+                Path(self.detect_model_path).expanduser().resolve()
+                if self.detect_model_path
+                else path
+            )
+            seq_detect_imgsz = self._resolve_onnx_imgsz(model_path=checkpoint_path)
         class_names = getattr(self.detect_model, "names", None)
         self._maybe_enable_direct_detect_executor(
             runtime,
