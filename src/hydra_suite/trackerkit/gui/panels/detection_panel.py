@@ -1344,7 +1344,16 @@ class DetectionPanel(QWidget):
                 recommendation_text = f"Benchmark recommendation: {recommendation.runtime_label} at batch {recommendation.batch_size}."
 
         if fixed_runtime:
-            message = "The selected runtime uses a fixed exported batch. Manual batch size controls the non-realtime detector artifact size."
+            if self._main_window._gpu_fast_obb_is_coreml_only():
+                message = (
+                    "On this platform, gpu_fast detection (OBB) runs on "
+                    "CoreML, which supports only batch size 1 — one frame "
+                    "at a time, regardless of this setting. CoreML "
+                    "classification (identity/head-tail/CNN) is unaffected "
+                    "and still batches normally."
+                )
+            else:
+                message = "The selected runtime uses a fixed exported batch. Manual batch size controls the non-realtime detector artifact size."
             if recommendation_text:
                 message += "\n" + recommendation_text
             self.lbl_batch_policy_notice.setText(message)

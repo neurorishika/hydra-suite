@@ -1027,7 +1027,29 @@ class SessionOrchestrator:
     def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
         rt = str(runtime or self._selected_compute_runtime() or "").strip().lower()
-        return rt == "tensorrt" or rt.startswith("onnx")
+        if rt == "tensorrt" or rt.startswith("onnx"):
+            return True
+        return self._gpu_fast_obb_is_coreml_only()
+
+    def _gpu_fast_obb_is_coreml_only(self) -> bool:
+        """Return True when gpu_fast OBB detection will run on CoreML.
+
+        ``_tier_to_compute_runtime("gpu_fast")`` reports "mps" on Apple
+        Silicon (the GUI's per-tier compute_runtime label), but the OBB
+        stage internally upgrades to a CoreML direct executor whenever the
+        exported ``.mlpackage`` artifact is available (see
+        ``core/inference/runtime.py:runtime_to_compute_runtime``). CoreML's
+        OBB export cannot use a dynamic batch axis (Spec 1 Phase A/B,
+        2026-07-04: ultralytics' CoreML export hard-crashes at compile time
+        for OBB models when both the batch and spatial dims are dynamic
+        together), so OBB detection under this path is permanently batch=1,
+        even though CoreML classification (identity/head-tail/CNN) batches
+        normally. This is a platform limitation, not a config choice.
+        """
+        if self._current_runtime_tier() != "gpu_fast":
+            return False
+        platform = detect_platform()
+        return bool(platform.has_mps and not platform.has_cuda)
 
     @staticmethod
     def _preview_safe_runtime(runtime: str) -> str:
