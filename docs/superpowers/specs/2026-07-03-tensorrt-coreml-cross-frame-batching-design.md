@@ -1,8 +1,8 @@
 # TensorRT + CoreML Cross-Frame Batching for OBB/Classifiers — Design (Spec 1 of 2)
 
-Date: 2026-07-03
+Date: 2026-07-03 (Phase A/B results and decision added 2026-07-04)
 Branch: `feature/inference-pipeline-redesign`
-Status: Draft — pending Phase A/B verification results
+Status: Phase A/B complete, decision made — proceeding to Phase C implementation
 
 ## Background
 
@@ -104,16 +104,98 @@ batch=1, and that becomes a hard constraint fed into Spec 2.
 
 ## Phase C — Implementation
 
-Implement whichever candidate(s) won Phase B:
-- CUDA: changes land in `core/inference/runtime_artifacts.py` (export logic)
-  and the new-pipeline OBB executor (dynamic `set_input_shape` per window, or
-  a swap to an ORT+TRT-EP session, depending on winner).
-- CoreML: changes land in `backend.py:_forward_coreml` (batched predict), if
-  Phase A determined it's supported.
+See "Phase A/B results" and "Decision" below for what was actually chosen
+(two-engine TensorRT switch + CoreML classifier batching fix). Implementation
+changes land in:
+- `core/inference/runtime_artifacts.py` (export both a static-b1 and a
+  dynamic-shape engine per OBB model)
+- the new-pipeline OBB executor (route by requested batch size: 1 → static
+  engine, ≥2 → dynamic engine + `set_input_shape`, one long-lived context)
+- `backend.py:_forward_coreml` (batched `predict()` instead of per-crop loop)
 
 Acceptance gate: the same equivalence + throughput suite from Phase A,
 checked into `tools/equivalence/` as a standing regression check (not just a
 one-off spike script).
+
+## Phase A/B results (2026-07-04)
+
+Ran on `mehek` (RTX 6000 Ada, TensorRT 10.16.1.11, torch 2.11.0+cu130,
+onnxruntime-gpu 1.24.1) for CUDA candidates, and locally (Apple Silicon,
+torch MPS, coremltools 9.0) for CoreML. All experiments in scratch
+directories; no repo files touched during the spike.
+
+**Raw throughput (synthetic input, `yolo26s-obb`, 1024×1024, FP16), fps /
+ms-per-frame:**
+
+| Candidate | b1 | b4 | b6 | b8 | b12 | b16 |
+|---|---|---|---|---|---|---|
+| static engine (dedicated per size) | 885 (1.13ms) | — | — | 1088 (0.92ms) | — | — |
+| dynamic-shape `.engine` | 540 (1.85ms) | 1131 (0.88ms) | **1169 (0.855ms, peak)** | 1146 (0.87ms) | 1059 (0.94ms) | 1016 (0.98ms) |
+| ONNX + TensorRT EP | 384 | 629 | — | 631 | — | 582 |
+
+Key findings:
+- The dynamic engine's batch=1 case is **41% slower** than a dedicated
+  static-b1 engine (540 vs 885 fps) — a real, consistent "dynamic-shape tax."
+- Peak dynamic-engine throughput is at **batch 6–8**, not 16 — degrades past
+  8.
+- Reusing one execution context across varying batch sizes (simulating a
+  real pipeline's varying window sizes: 8→1→16→4→1→8→16→1) costs only
+  noise-level overhead (≤5%, mostly <0.1ms/frame) vs. a fresh context per
+  shape — **safe to keep one long-lived context and call
+  `set_input_shape` per window.**
+- ONNX+TRT-EP works but is 1.7–2x slower in absolute fps than raw TensorRT
+  at every batch size, plus a 154s cold engine-build cost. Not selected.
+- CoreML classifier (`TinyClassifier`, custom `export_tiny_to_coreml`,
+  already exports with `RangeDim(1,512)` on the batch axis): confirmed
+  **batching works**, measured **7.8x per-frame speedup** (1.49ms → 0.19ms
+  at batch 1 → 32). This is a pure `_forward_coreml` code-loop bug, not an
+  export limitation.
+- CoreML OBB: dynamic-batch export via ultralytics **hard-crashes at CoreML
+  compile time** (`E5RT`: `TopK k=300 not within range [1,21]`), reproduced
+  identically at batch=2 and batch=16. This is an architectural limitation
+  of ultralytics' CoreML export (batch and spatial dims share one
+  `dynamic=True` flag, and OBB's fixed top-k conflicts with the resulting
+  symbolic anchor count) — not fixable without custom MIL-level export
+  surgery. Out of scope for this spec.
+
+### Decision (made 2026-07-04)
+
+**TensorRT OBB (CUDA):** keep **two engines** per model — the existing
+static batch=1 engine, and one dynamic-shape engine with an optimization
+profile covering the configured batch range (min=1, opt≈configured window,
+max=configured window). At inference time, route by requested batch size:
+- Realtime workflow, or any call with batch size 1 → static-b1 engine
+  (avoids the dynamic-shape tax entirely for the case that's actually
+  latency-sensitive).
+- Batch size ≥ 2 (non-realtime, windowed) → dynamic engine, one
+  `context.set_input_shape` + `execute_async_v3` call for the whole window,
+  using a single long-lived context per engine.
+
+This is simpler than a `static-multi` engine-per-size set (only 2 engines
+to build/manage, not N) while still avoiding the batch=1 regression.
+
+**CoreML classifier:** fix `_forward_coreml` to call `predict()` once per
+window (batched `MLMultiArray`) instead of looping per crop. No export
+change needed.
+
+**CoreML OBB:** stays batch=1, permanently (architectural CoreML/E5RT
+limitation, not a config choice). Spec 2's UI must surface this as an
+explicit, accurate notice — e.g. "CoreML detection (OBB) runs one frame at
+a time; CoreML classification (identity/head-tail/CNN) batches normally" —
+rather than a generic "fixed batch" message that implies uniform behavior
+across all CoreML-backed stages.
+
+**Acceptance gate for Phase C:** the two-engine TensorRT switch and the
+CoreML classifier batching fix must both pass the existing equivalence
+harness (`tools/equivalence/compare.py`) on real video fixtures
+(`ant_obb_sleap`, `ant_obb_sequential`, `emi_obb_identity`, `fly_obb` for
+TensorRT; any CNN-identity clip for CoreML), not just the synthetic
+throughput spike above — synthetic timing proves the mechanism is fast, not
+that it's correct. Must also confirm the batching change actually reaches
+downstream stages: i.e., that an OBB window is genuinely detected in one
+batched call before crops flow into head-tail/CNN/pose (which already
+batch), so the cross-frame batching win isn't undone by a hidden serial
+step in between.
 
 ## Handoff artifact for Spec 2
 
