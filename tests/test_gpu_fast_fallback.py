@@ -88,7 +88,9 @@ def test_obb_gpu_fast_falls_back_to_cuda_when_trt_artifact_missing(
     # Track which compute_runtimes load_obb_executor was called with.
     calls: list[str] = []
 
-    def fake_load_obb_executor(model_path, compute_runtime, *, auto_export, max_det):
+    def fake_load_obb_executor(
+        model_path, compute_runtime, *, auto_export, max_det, **kwargs
+    ):
         calls.append(str(compute_runtime))
         if compute_runtime == "tensorrt":
             raise ArtifactExportError("no .engine artifact and auto_export=False")
@@ -130,7 +132,9 @@ def test_obb_gpu_fast_falls_back_to_cuda_when_trt_build_crashes(
 
     calls: list[str] = []
 
-    def fake_load_obb_executor(model_path, compute_runtime, *, auto_export, max_det):
+    def fake_load_obb_executor(
+        model_path, compute_runtime, *, auto_export, max_det, **kwargs
+    ):
         calls.append(str(compute_runtime))
         if compute_runtime == "tensorrt":
             raise RuntimeError("TRT build failed")

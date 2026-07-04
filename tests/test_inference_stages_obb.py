@@ -246,6 +246,101 @@ def test_load_yolo_calls_to_for_native_pt(monkeypatch):
     assert calls == []
 
 
+def test_load_yolo_forwards_batch_size_to_load_obb_executor(monkeypatch):
+    """_load_yolo must forward its batch_size kwarg to load_obb_executor
+    unchanged -- this is how the configured window size reaches the
+    TensorRT dynamic-vs-static export decision (Task 1)."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    captured = {}
+
+    def fake_load_obb_executor(model_path, compute_runtime, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(obb_mod, "load_obb_executor", fake_load_obb_executor)
+
+    obb_mod._load_yolo("/m.pt", "tensorrt", auto_export=False, batch_size=8)
+    assert captured["batch_size"] == 8
+
+
+def test_load_obb_models_direct_mode_uses_detection_batch_size(monkeypatch):
+    """Direct-mode OBB must be loaded with the caller's batch_size (the
+    pipeline's configured detection_batch_size), not a hardcoded 1."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+    from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    captured = {}
+
+    def fake_load_yolo(model_path, compute_runtime, **kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", fake_load_yolo)
+
+    config = OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="/m.pt"))
+    runtime = RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=False,
+        default_runtime="tensorrt",
+        tensor_on_cuda=False,
+    )
+    obb_mod.load_obb_models(config, runtime, batch_size=8)
+    assert captured["batch_size"] == 8
+
+
+def test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model(
+    monkeypatch,
+):
+    """Sequential mode: stage-1 (detect) uses the frame-window batch_size;
+    stage-2 (obb/crop) uses OBBSequentialConfig.stage2_batch_size when set,
+    falling back to the frame-window batch_size otherwise."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+    from hydra_suite.core.inference.config import OBBConfig, OBBSequentialConfig
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    calls = []
+
+    def fake_load_yolo(model_path, compute_runtime, **kwargs):
+        calls.append((model_path, kwargs.get("batch_size")))
+        return object()
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", fake_load_yolo)
+
+    runtime = RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=False,
+        default_runtime="tensorrt",
+        tensor_on_cuda=False,
+    )
+
+    # stage2_batch_size explicitly set -> obb model uses it, not batch_size.
+    config = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/detect.pt",
+            obb_model_path="/obb.pt",
+            stage2_batch_size=16,
+        ),
+    )
+    obb_mod.load_obb_models(config, runtime, batch_size=8)
+    assert calls == [("/detect.pt", 8), ("/obb.pt", 16)]
+
+    # stage2_batch_size unset (None) -> obb model falls back to batch_size.
+    calls.clear()
+    config2 = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/detect.pt", obb_model_path="/obb.pt"
+        ),
+    )
+    obb_mod.load_obb_models(config2, runtime, batch_size=8)
+    assert calls == [("/detect.pt", 8), ("/obb.pt", 8)]
+
+
 import warnings
 
 

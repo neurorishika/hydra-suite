@@ -281,7 +281,9 @@ def _corners_from_xywhr(
     return np.stack((x, y), axis=2).astype(np.float32)
 
 
-def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
+def load_obb_models(
+    config: OBBConfig, runtime: RuntimeContext, *, batch_size: int = 1
+) -> OBBModels:
     # Derive backend from the RuntimeContext (which reflects runtime_tier via
     # from_config). Per-stage compute_runtime fields are deprecated in favor of
     # runtime_tier; they are kept in place for serialization only.
@@ -300,6 +302,7 @@ def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
             compute_runtime,
             auto_export=auto_export,
             max_det=config.max_detections,
+            batch_size=batch_size,
         )
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
@@ -314,16 +317,22 @@ def load_obb_models(config: OBBConfig, runtime: RuntimeContext) -> OBBModels:
         # Stage-1 is a plain detector (no angle head) -- must be parsed as
         # Results(boxes=...), not Results(obb=...), under tensorrt/onnx.
         task="detect",
+        batch_size=batch_size,
     )
     # stage2_image_size is always the effective input size (the pipeline
     # pre-resizes every crop to it in _resize_crops_for_stage2), so the
     # artifact must be built at that size, not the checkpoint's own default.
+    # stage2_batch_size, when set, is the number of crops stage-2 is called
+    # with per chunk (see _run_sequential's `batch_size = seq.stage2_batch_size
+    # or len(crops)`); falls back to the frame-window batch_size when unset so
+    # the exported artifact still gets a dynamic profile sized reasonably.
     obb = _load_yolo(
         config.sequential.obb_model_path,
         compute_runtime,
         auto_export=auto_export,
         max_det=config.max_detections,
         imgsz_override=config.sequential.stage2_image_size,
+        batch_size=config.sequential.stage2_batch_size or batch_size,
     )
     return OBBModels(mode="sequential", detect_model=detect, obb_model=obb)
 
@@ -692,6 +701,7 @@ def _load_yolo(
     max_det: int = 20,
     imgsz_override: int | None = None,
     task: str = "obb",
+    batch_size: int = 1,
 ) -> Any:
     """Load the OBB executor for ``model_path`` under ``compute_runtime``.
 
@@ -714,6 +724,10 @@ def _load_yolo(
     model under tensorrt/onnx (see :func:`load_obb_executor`) -- it is a plain
     detector, not an OBB model.
 
+    ``batch_size`` is forwarded to :func:`load_obb_executor` and governs
+    whether a TensorRT export uses a static batch=1 engine or a dynamic-batch
+    engine (see Task 1) -- ignored for the torch runtimes and for coreml.
+
     For ``compute_runtime="tensorrt"`` (gpu_fast tier), if the TRT artifact is
     unavailable or the build fails, falls back to native ``"cuda"`` and logs a
     WARNING.  Never falls back to CPU — stays on GPU device.
@@ -726,6 +740,7 @@ def _load_yolo(
             max_det=max_det,
             imgsz_override=imgsz_override,
             task=task,
+            batch_size=batch_size,
         )
     except (
         Exception

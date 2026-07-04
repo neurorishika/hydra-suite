@@ -127,7 +127,7 @@ def _load_all_models(
     from .stages.obb import load_obb_models
     from .stages.pose import load_pose_model
 
-    obb = load_obb_models(config.obb, runtime)
+    obb = load_obb_models(config.obb, runtime, batch_size=config.detection_batch_size)
     if cache_only:
         logger.debug(
             "InferenceRunner cache_only=True: skipping HeadTail/CNN/Pose/AprilTag "
