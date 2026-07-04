@@ -871,28 +871,27 @@ class ClassifierBackend:
     def _forward_coreml(self, batch_np: np.ndarray) -> np.ndarray:
         """Run a preprocessed (N, 3, H, W) float32 batch through the CoreML model.
 
+        Calls predict() ONCE for the whole batch. The exported .mlpackage's
+        input already uses a RangeDim(1, 512) batch axis (see
+        export_tiny_to_coreml / export_torchvision_to_coreml) -- looping
+        per-crop was a correctness-preserving but throughput-destroying bug:
+        measured 7.8x slower per-frame at batch=32 than a single batched call
+        (Spec 1 Phase A/B, 2026-07-04).
+
         The output feature name assigned by coremltools varies by model graph
-        (e.g. ``'var_23'``). We therefore index the prediction dict by position
-        — taking the first value — rather than by a hardcoded name.
+        (e.g. ``'var_23'``). We therefore index the prediction dict by the
+        cached name when known, falling back to the first value by position.
 
         The model was traced with an NCHW ``ct.TensorType(name="input", ...)``
-        input, so we feed the preprocessed batch as-is in NCHW under the "input"
-        key — no layout transpose is needed.
+        input, so we feed the preprocessed batch as-is in NCHW under the
+        "input" key — no layout transpose is needed.
         """
-        results: list[np.ndarray] = []
-        for i in range(batch_np.shape[0]):
-            single = batch_np[i : i + 1]  # (1, 3, H, W)
-            pred = self._model.predict({"input": single})
-            if (
-                self._coreml_output_name is not None
-                and self._coreml_output_name in pred
-            ):
-                logits = pred[self._coreml_output_name]
-            else:
-                # Fallback: take first value by position regardless of key name.
-                logits = next(iter(pred.values()))
-            results.append(np.asarray(logits, dtype=np.float32).reshape(-1))
-        return np.stack(results, axis=0)
+        pred = self._model.predict({"input": batch_np})
+        if self._coreml_output_name is not None and self._coreml_output_name in pred:
+            logits = pred[self._coreml_output_name]
+        else:
+            logits = next(iter(pred.values()))
+        return np.asarray(logits, dtype=np.float32).reshape(batch_np.shape[0], -1)
 
     def _uses_imagenet_normalization(self) -> bool:
         """Return True when the checkpoint expects ImageNet mean/std normalization."""

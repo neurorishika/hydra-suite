@@ -52,6 +52,53 @@ def test_backend_does_not_report_coreml_for_onnx():
         assert be._uses_coreml() is False, f"Expected False for runtime={rt!r}"
 
 
+def test_forward_coreml_calls_predict_once_for_whole_batch():
+    """_forward_coreml must call predict() ONCE for the whole batch, not once
+    per crop. Regression test for the throughput bug found in Spec 1 Phase
+    A/B (2026-07-04): looping per-crop measured 7.8x slower per-frame at
+    batch=32 than a single batched predict() call, even though the exported
+    .mlpackage already supports batch via RangeDim(1, 512)."""
+    be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
+    be._coreml_output_name = "out"
+
+    calls = []
+
+    class _FakeCoreMLModel:
+        def predict(self, feed):
+            n = feed["input"].shape[0]
+            calls.append(n)
+            return {"out": np.zeros((n, 5), dtype=np.float32)}
+
+    be._model = _FakeCoreMLModel()
+    batch = np.random.rand(4, 3, 64, 128).astype(np.float32)
+    out = be._forward_coreml(batch)
+
+    assert calls == [4], (
+        f"Expected exactly one predict() call covering the whole batch of 4, "
+        f"got per-call batch sizes {calls}"
+    )
+    assert out.shape == (4, 5)
+
+
+def test_forward_coreml_falls_back_to_positional_output_when_name_unset():
+    """When _coreml_output_name is None (unresolved output name), fall back
+    to the first value in the prediction dict, matching the old per-crop
+    behaviour's fallback."""
+    be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
+    be._coreml_output_name = None
+
+    class _FakeCoreMLModel:
+        def predict(self, feed):
+            n = feed["input"].shape[0]
+            return {"var_23": np.ones((n, 3), dtype=np.float32)}
+
+    be._model = _FakeCoreMLModel()
+    batch = np.zeros((2, 3, 64, 128), dtype=np.float32)
+    out = be._forward_coreml(batch)
+    assert out.shape == (2, 3)
+    assert np.all(out == 1.0)
+
+
 # ---------------------------------------------------------------------------
 # Real end-to-end tests on Apple Silicon
 # ---------------------------------------------------------------------------
