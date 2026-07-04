@@ -194,6 +194,80 @@ def test_explicit_onnx_path_with_onnx_cpu_raises_unsupported(fake_loader, tmp_pa
     assert fake_loader["executor"] == 0
 
 
+def test_artifact_path_embeds_requested_batch_size(tmp_path):
+    """Different batch sizes must produce different cached artifact filenames,
+    so a workflow requesting batch=8 never reuses a batch=1 (or batch=16)
+    cached engine."""
+    pt = tmp_path / "model.pt"
+    assert ra._artifact_path_for(pt, "tensorrt", batch_size=1).name == "model_b1.engine"
+    assert ra._artifact_path_for(pt, "tensorrt", batch_size=8).name == "model_b8.engine"
+    # Default (no batch_size passed) preserves today's behaviour exactly.
+    assert ra._artifact_path_for(pt, "tensorrt").name == "model_b1.engine"
+
+
+def test_tensorrt_export_uses_dynamic_profile_when_batch_size_gt_one(
+    tmp_path, monkeypatch
+):
+    """batch_size > 1 must export with dynamic=True (a real optimization
+    profile covering 1..batch_size); batch_size == 1 must stay dynamic=False
+    (today's static engine) -- this is the routing rule from Spec 1's
+    Phase A/B decision (2026-07-04): realtime/batch=1 uses the un-taxed
+    static engine, batch>=2 uses the dynamic engine."""
+    import sys
+    import types
+
+    captured: dict = {}
+
+    class _FakeExportYOLO:
+        def __init__(self, path):
+            self.path = path
+            self.model = types.SimpleNamespace(
+                model=[types.SimpleNamespace(end2end=False)]
+            )
+
+        def export(self, **kwargs):
+            captured.update(kwargs)
+            out = tmp_path / "exported.engine"
+            out.write_bytes(b"fake-engine")
+            return str(out)
+
+    fake_ultra = types.ModuleType("ultralytics")
+    fake_ultra.YOLO = _FakeExportYOLO
+    monkeypatch.setitem(sys.modules, "ultralytics", fake_ultra)
+    monkeypatch.setattr(ra, "_create_direct_executor", lambda **kw: object())
+
+    pt = tmp_path / "model.pt"
+    pt.write_bytes(b"x")
+    load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=8)
+    assert captured["dynamic"] is True
+    assert captured["batch"] == 8
+
+    captured.clear()
+    pt2 = tmp_path / "model2.pt"
+    pt2.write_bytes(b"x")
+    load_obb_executor(str(pt2), "tensorrt", auto_export=True, batch_size=1)
+    assert captured["dynamic"] is False
+    assert captured["batch"] == 1
+
+
+def test_tensorrt_batch_size_two_and_eight_export_separate_cached_artifacts(
+    fake_loader, tmp_path
+):
+    """Requesting batch_size=8 then batch_size=1 for the same .pt must export
+    TWICE (two distinct cached files), not reuse/clobber one artifact."""
+    pt = tmp_path / "model.pt"
+    pt.write_bytes(b"x")
+
+    load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=8)
+    assert fake_loader["export"] == 1
+    load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=1)
+    assert fake_loader["export"] == 2  # different artifact path -> re-export, not reuse
+
+    # Requesting batch_size=8 again reuses the now-cached batch=8 artifact.
+    load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=8)
+    assert fake_loader["export"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Adapter wrapping: the direct executor must be exposed via a YOLO-compatible
 # .predict() so stages/obb.py geometry extraction is unchanged.

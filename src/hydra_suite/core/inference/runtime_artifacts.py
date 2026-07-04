@@ -148,16 +148,19 @@ def _export_artifact(
         _force_raw_head(base_model)
 
     if runtime == "tensorrt":
+        dynamic = int(batch_size) > 1
         logger.info(
-            "Building TensorRT OBB engine (imgsz=%d, batch=%d) — one-time export...",
+            "Building TensorRT OBB engine (imgsz=%d, batch=%d, dynamic=%s) — "
+            "one-time export...",
             imgsz,
             batch_size,
+            dynamic,
         )
         export_path = base_model.export(
             format="engine",
             device="cuda:0",
             half=True,
-            dynamic=False,
+            dynamic=dynamic,
             batch=int(batch_size),
             imgsz=imgsz,
             verbose=False,
@@ -273,14 +276,28 @@ def _artifact_suffix(runtime: str) -> str:
     return ".engine"
 
 
-def _artifact_path_for(pt_path: Path, runtime: str) -> Path:
-    """Derive the artifact path for a ``.pt`` source + direct runtime name."""
+def _artifact_path_for(
+    pt_path: Path, runtime: str, batch_size: int = _DEFAULT_BATCH_SIZE
+) -> Path:
+    """Derive the artifact path for a ``.pt`` source + direct runtime name.
+
+    ``batch_size`` is embedded in the filename (``_b1``, ``_b8``, ...) so a
+    workflow requesting a different batch size never reuses a wrong-shaped
+    cached engine. ``batch_size == 1`` exports a static batch=1 engine
+    (unchanged from before); ``batch_size > 1`` exports a TensorRT engine
+    with a dynamic batch profile (min=1, opt=batch_size, max=batch_size --
+    see ``_export_artifact``).
+    """
     pt_path = Path(pt_path)
     suffix = _artifact_suffix(runtime)
     if runtime == "coreml":
-        # CoreML uses a bare stem (no batch suffix) since batch is always 1.
+        # CoreML uses a bare stem (no batch suffix): OBB stays batch=1 on
+        # CoreML permanently -- ultralytics' CoreML export hard-crashes at
+        # compile time when both the batch and spatial dims are made
+        # dynamic together for an OBB model (Spec 1 Phase A/B, 2026-07-04)
+        # -- so there is only ever one CoreML OBB artifact.
         return pt_path.with_suffix(".mlpackage")
-    return pt_path.with_name(f"{pt_path.stem}_b{_DEFAULT_BATCH_SIZE}{suffix}")
+    return pt_path.with_name(f"{pt_path.stem}_b{int(batch_size)}{suffix}")
 
 
 def _meta_path(artifact_path: Path) -> Path:
@@ -400,6 +417,7 @@ def load_obb_executor(
     max_det: int = _DEFAULT_MAX_DET,
     imgsz_override: int | None = None,
     task: str = "obb",
+    batch_size: int = _DEFAULT_BATCH_SIZE,
 ) -> Any:
     """Load the OBB executor for a model path + compute runtime.
 
@@ -439,6 +457,15 @@ def load_obb_executor(
         class-score channel as an angle and yields ``Results.boxes is None``
         for every frame. Ignored for the torch runtimes (cpu/mps/cuda), whose
         underlying ultralytics model already knows its own task.
+    batch_size:
+        The number of frames/crops this executor will typically be called
+        with per ``predict()`` call. ``1`` (default) exports/loads a static
+        batch=1 TensorRT engine (unchanged from before). ``>1`` exports a
+        TensorRT engine with a dynamic batch profile (min=1, opt=batch_size,
+        max=batch_size) so a single engine handles the whole configured
+        window in one inference call. Ignored for cpu/mps/cuda (torch
+        already batches natively) and for coreml (OBB stays batch=1
+        permanently on CoreML -- see ``_load_coreml_executor``).
 
     Returns
     -------
@@ -458,6 +485,7 @@ def load_obb_executor(
             max_det=max_det,
             imgsz_override=imgsz_override,
             task=task,
+            batch_size=batch_size,
         )
 
     if runtime in _COREML_RUNTIMES:
@@ -542,6 +570,7 @@ def _load_direct_executor(
     max_det: int,
     imgsz_override: int | None = None,
     task: str = "obb",
+    batch_size: int = _DEFAULT_BATCH_SIZE,
 ) -> DirectExecutorAdapter:
     """Resolve (or auto-export) an ONNX/TRT artifact and wrap a direct executor."""
     runtime = _direct_runtime_name(compute_runtime)
@@ -567,7 +596,7 @@ def _load_direct_executor(
         return DirectExecutorAdapter(executor, max_det=max_det)
 
     # 2) Source .pt path: locate (or build) the derived artifact.
-    artifact_path = _artifact_path_for(resolved, runtime)
+    artifact_path = _artifact_path_for(resolved, runtime, batch_size=batch_size)
     imgsz = (
         int(imgsz_override)
         if imgsz_override and imgsz_override > 0
@@ -591,7 +620,7 @@ def _load_direct_executor(
             artifact_path=artifact_path,
             runtime=runtime,
             imgsz=imgsz,
-            batch_size=_DEFAULT_BATCH_SIZE,
+            batch_size=batch_size,
         )
         _write_fresh_marker(artifact_path, resolved, imgsz)
         logger.info("Exported %s OBB artifact: %s", runtime, artifact_path)
