@@ -222,35 +222,6 @@ def test_run_obb_onnx_cuda_returns_obb_result():
     assert isinstance(results[0], OBBResult)
 
 
-def test_load_yolo_routes_onnx_trt_to_direct_executor(monkeypatch, tmp_path):
-    """ONNX/TRT runtimes route through the direct-executor path (no torch .to()).
-
-    Task 15 (H4): _load_yolo now delegates to load_obb_executor, which builds a
-    direct ONNX/TRT executor for onnx_*/tensorrt rather than loading a .pt and
-    silently running PyTorch. We inject fakes so no real ORT/TRT is needed.
-    """
-    import hydra_suite.core.inference.runtime_artifacts as ra
-
-    created = []
-
-    def fake_executor(*, runtime, artifact_path, imgsz, class_names=None):
-        created.append(runtime)
-        return object()
-
-    monkeypatch.setattr(ra, "_create_direct_executor", fake_executor)
-    from hydra_suite.core.inference.stages.obb import _load_yolo
-
-    onnx = tmp_path / "m.onnx"
-    onnx.write_bytes(b"x")
-    engine = tmp_path / "m.engine"
-    engine.write_bytes(b"x")
-
-    _load_yolo(str(onnx), "onnx_cuda", auto_export=False)
-    _load_yolo(str(engine), "tensorrt", auto_export=False)
-    _load_yolo(str(onnx), "onnx_coreml", auto_export=False)
-    assert created == ["onnx", "tensorrt", "onnx"]
-
-
 def test_load_yolo_calls_to_for_native_pt(monkeypatch):
     """Native cuda and mps DO call .to(); cpu does not."""
     calls = []

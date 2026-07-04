@@ -72,7 +72,9 @@ def fake_loader(monkeypatch):
         Path(artifact_path).write_bytes(b"fake-artifact")
         return Path(artifact_path)
 
-    def fake_executor_factory(*, runtime, artifact_path, imgsz, class_names=None):
+    def fake_executor_factory(
+        *, runtime, artifact_path, imgsz, class_names=None, task="obb"
+    ):
         counters["executor"] += 1
         return _FakeExecutor(runtime, str(artifact_path), int(imgsz))
 
