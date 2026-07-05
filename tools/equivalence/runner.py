@@ -114,6 +114,7 @@ def build_config(
     outdir: Path,
     runtime: str,
     skeleton: str | None = None,
+    detection_batch_size: int | None = None,
 ) -> Path:
     with open(orig_config_path) as fh:
         cfg = json.load(fh)
@@ -126,6 +127,8 @@ def build_config(
         cfg["pose_skeleton_file"] = str(Path(skeleton).expanduser().resolve())
     cfg.update(DISABLE)
     cfg.update(runtime_overrides(runtime))
+    if detection_batch_size is not None:
+        cfg["YOLO_BATCH_SIZE"] = int(detection_batch_size)
     out_cfg = outdir / "equiv_config.json"
     with open(out_cfg, "w") as fh:
         json.dump(cfg, fh, indent=2)
@@ -204,6 +207,12 @@ def main() -> int:
         default=None,
         help="Override pose_skeleton_file (portable clip configs leave it blank).",
     )
+    ap.add_argument(
+        "--detection-batch-size",
+        type=int,
+        default=None,
+        help="Override detection_batch_size (YOLO_BATCH_SIZE) for TensorRT batching.",
+    )
     args = ap.parse_args()
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -230,7 +239,12 @@ def main() -> int:
             shutil.rmtree(stale, ignore_errors=True)
 
     cfg_path = build_config(
-        args.orig_config, video_link, outdir, args.runtime, skeleton=args.skeleton
+        args.orig_config,
+        video_link,
+        outdir,
+        args.runtime,
+        skeleton=args.skeleton,
+        detection_batch_size=args.detection_batch_size,
     )
 
     import hydra_suite
