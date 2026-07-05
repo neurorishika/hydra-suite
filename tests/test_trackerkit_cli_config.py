@@ -134,3 +134,23 @@ def test_cli_session_direct_run_support_is_gated_by_gui_owned_features(tmp_path)
     assert pose_session.supports_direct_run() is False
     assert identity_session.supports_direct_run() is False
     assert simple_session.supports_direct_run() is True
+
+
+def test_cli_session_yolo_batch_size_reads_detection_batch_size_from_config(tmp_path):
+    session = load_tracker_cli_session(
+        str(tmp_path / "subject.mp4"),
+        config_data={"detection_batch_size": 8},
+        video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
+    )
+
+    assert session.params["YOLO_BATCH_SIZE"] == 8
+
+
+def test_cli_session_yolo_batch_size_defaults_to_one_when_not_configured(tmp_path):
+    session = load_tracker_cli_session(
+        str(tmp_path / "subject.mp4"),
+        config_data={},
+        video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
+    )
+
+    assert session.params["YOLO_BATCH_SIZE"] == 1

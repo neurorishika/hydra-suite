@@ -39,10 +39,10 @@ def test_build_config_sets_yolo_batch_size_when_provided(tmp_path):
     with open(out_cfg) as fh:
         cfg = json.load(fh)
 
-    assert "YOLO_BATCH_SIZE" in cfg, "YOLO_BATCH_SIZE not found in config"
+    assert "detection_batch_size" in cfg, "detection_batch_size not found in config"
     assert (
-        cfg["YOLO_BATCH_SIZE"] == 8
-    ), f"Expected YOLO_BATCH_SIZE=8, got {cfg['YOLO_BATCH_SIZE']}"
+        cfg["detection_batch_size"] == 8
+    ), f"Expected detection_batch_size=8, got {cfg['detection_batch_size']}"
 
 
 def test_build_config_omits_yolo_batch_size_when_not_provided(tmp_path):
@@ -66,5 +66,5 @@ def test_build_config_omits_yolo_batch_size_when_not_provided(tmp_path):
         cfg = json.load(fh)
 
     assert (
-        "YOLO_BATCH_SIZE" not in cfg
-    ), "YOLO_BATCH_SIZE should not be set when detection_batch_size is None"
+        "detection_batch_size" not in cfg
+    ), "detection_batch_size should not be set when detection_batch_size is None"

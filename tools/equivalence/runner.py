@@ -128,7 +128,7 @@ def build_config(
     cfg.update(DISABLE)
     cfg.update(runtime_overrides(runtime))
     if detection_batch_size is not None:
-        cfg["YOLO_BATCH_SIZE"] = int(detection_batch_size)
+        cfg["detection_batch_size"] = int(detection_batch_size)
     out_cfg = outdir / "equiv_config.json"
     with open(out_cfg, "w") as fh:
         json.dump(cfg, fh, indent=2)
