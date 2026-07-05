@@ -19,8 +19,8 @@ sys.modules["equiv_runner"] = equiv_runner
 _spec.loader.exec_module(equiv_runner)
 
 
-def test_build_config_sets_yolo_batch_size_when_provided(tmp_path):
-    """When detection_batch_size is provided, YOLO_BATCH_SIZE is set in config."""
+def test_build_config_sets_detection_batch_size_when_provided(tmp_path):
+    """When detection_batch_size is provided, detection_batch_size is set in config."""
     # Create a minimal valid orig-config
     orig_config = tmp_path / "orig_config.json"
     orig_config.write_text(json.dumps({"file_path": "", "csv_path": ""}))
@@ -45,8 +45,8 @@ def test_build_config_sets_yolo_batch_size_when_provided(tmp_path):
     ), f"Expected detection_batch_size=8, got {cfg['detection_batch_size']}"
 
 
-def test_build_config_omits_yolo_batch_size_when_not_provided(tmp_path):
-    """When detection_batch_size is not provided, YOLO_BATCH_SIZE is not set."""
+def test_build_config_omits_detection_batch_size_when_not_provided(tmp_path):
+    """When detection_batch_size is not provided, detection_batch_size is not set."""
     # Create a minimal valid orig-config
     orig_config = tmp_path / "orig_config.json"
     orig_config.write_text(json.dumps({"file_path": "", "csv_path": ""}))

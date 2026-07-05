@@ -306,6 +306,17 @@ def load_obb_models(
         )
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
+    if batch_size > 1:
+        logger.warning(
+            "Sequential-mode OBB with detection_batch_size=%d: dynamic-batch "
+            "TensorRT engines showed a much larger cross-run detection "
+            "discrepancy for sequential mode (~18%%) than direct mode (~1%%) "
+            "in real-hardware verification (two-stage error compounding), "
+            "documented in docs/superpowers/specs/2026-07-03-tensorrt-coreml-"
+            "cross-frame-batching-design.md. Consider batch_size=1 for "
+            "sequential OBB until this is further investigated.",
+            batch_size,
+        )
     auto_export = config.sequential.auto_export
     detect_imgsz = config.sequential.detect_image_size
     detect = _load_yolo(

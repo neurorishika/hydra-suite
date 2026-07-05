@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+from hydra_suite.core.inference.config import (
+    OBBConfig,
+    OBBDirectConfig,
+    OBBSequentialConfig,
+)
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.obb import (
@@ -435,3 +439,65 @@ def test_run_direct_forwards_target_classes_to_predict():
     cfg_all = OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="/m.pt"))
     _run_direct(frames, _Model(), cfg_all, rt)
     assert captured["classes"] is None
+
+
+def test_load_obb_models_sequential_dynamic_batching_warning(monkeypatch, caplog):
+    """Sequential-mode OBB with batch_size>1 must log a WARNING about known
+    detection discrepancy issues (documented in the TensorRT/CoreML spec).
+    Warning must NOT fire for:
+    - sequential mode with batch_size=1
+    - direct mode with any batch_size
+    """
+    import logging
+
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    def fake_load_yolo(model_path, compute_runtime, **kwargs):
+        return object()
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", fake_load_yolo)
+
+    runtime = RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=False,
+        default_runtime="tensorrt",
+        tensor_on_cuda=False,
+    )
+
+    # Test 1: sequential mode with batch_size > 1 → WARNING
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        config_seq = OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path="/detect.pt", obb_model_path="/obb.pt"
+            ),
+        )
+        obb_mod.load_obb_models(config_seq, runtime, batch_size=4)
+    assert any(
+        "Sequential-mode OBB" in record.message and "dynamic-batch" in record.message
+        for record in caplog.records
+    ), "Expected warning about sequential-mode dynamic batching with batch_size>1"
+
+    # Test 2: sequential mode with batch_size = 1 → NO WARNING
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        obb_mod.load_obb_models(config_seq, runtime, batch_size=1)
+    assert not any(
+        "Sequential-mode OBB" in record.message and "dynamic-batch" in record.message
+        for record in caplog.records
+    ), "Should NOT warn for sequential mode with batch_size=1"
+
+    # Test 3: direct mode with batch_size > 1 → NO WARNING
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        config_direct = OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path="/m.pt"),
+        )
+        obb_mod.load_obb_models(config_direct, runtime, batch_size=4)
+    assert not any(
+        "Sequential-mode OBB" in record.message and "dynamic-batch" in record.message
+        for record in caplog.records
+    ), "Should NOT warn for direct mode"
