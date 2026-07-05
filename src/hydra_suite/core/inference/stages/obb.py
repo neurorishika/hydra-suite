@@ -311,10 +311,16 @@ def load_obb_models(
             "Sequential-mode OBB with detection_batch_size=%d: dynamic-batch "
             "TensorRT engines showed a much larger cross-run detection "
             "discrepancy for sequential mode (~18%%) than direct mode (~1%%) "
-            "in real-hardware verification (two-stage error compounding), "
-            "documented in docs/superpowers/specs/2026-07-03-tensorrt-coreml-"
+            "in real-hardware verification. Root-caused: stage-1's raw "
+            "detections are as clean as direct mode (~0.16%% divergence), "
+            "but small stage-1 coordinate differences shift crop boundaries "
+            "fed to stage-2, and stage-2's tiny-crop OBB estimation is "
+            "highly sensitive to that shift -- an architectural property of "
+            "the sequential/crop-based pipeline, not a batching bug. See "
+            "docs/superpowers/specs/2026-07-03-tensorrt-coreml-"
             "cross-frame-batching-design.md. Consider batch_size=1 for "
-            "sequential OBB until this is further investigated.",
+            "sequential OBB unless this cross-run divergence is acceptable "
+            "for your use case.",
             batch_size,
         )
     auto_export = config.sequential.auto_export

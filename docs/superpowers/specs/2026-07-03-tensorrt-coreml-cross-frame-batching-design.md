@@ -312,6 +312,64 @@ documentation/policy decision, not a code change made as part of this plan
 — Spec 2 (or a follow-up spec) should decide whether to gate this in the
 UI/config layer.
 
+### Root-cause investigation of the sequential-mode 18% (2026-07-05)
+
+Follow-up investigation (systematic-debugging methodology, real hardware on
+`mehek`) isolated stage-1 (detect) alone — comparing the static and dynamic
+engines' raw box output directly on 64 real frames, bypassing crop
+extraction, stage-2, and tracking entirely, using the production
+`DirectTensorRTDetectExecutor` code path.
+
+**Finding: stage-1 alone is clean — 0/64 frames had a box-count mismatch;
+0.16% of individual boxes unmatched (2 of 2560); matched boxes agreed to
+max 4.66px, mean 0.31px, p99 1.05px.** This is at or below direct-mode
+OBB's already-accepted ~1% discrepancy. The two observed mismatches were
+both marginal, low-confidence detections flipping in/out right at the
+`max_det=20` ranking cutoff — ordinary FP16 cross-engine noise, not a
+systemic shift. **This refutes any bug in the dynamic-batch detect
+executor or the batching/threading logic itself** — `_direct_obb_runtime.py`
+has no batch-size-dependent branching in its NMS/postprocessing, and the
+dynamic engine correctly receives the whole 8-frame chunk in one call (no
+accidental per-frame fallback).
+
+**The 18% is therefore fully attributable to downstream amplification,
+architecturally inherent to the sequential (crop-based) pipeline, not to
+this plan's batching change specifically:**
+
+1. Stage-1's tiny (sub-pixel-to-~5px, on a 1024px frame) coordinate
+   differences feed into crop-boundary computation (padding ratio,
+   min-crop-size, square-crop enforcement — all involving pixel rounding).
+   The same absolute pixel difference is a much larger *relative* shift
+   once it lands inside a tiny 128×128 stage-2 crop.
+2. Stage-2's OBB estimation for small ant-sized objects in that tiny crop
+   is highly sensitive to crop alignment — a shift of a few pixels can
+   plausibly change confidence/angle enough to alter or drop the detection,
+   even though stage-2's own engine is held constant across the comparison
+   (both the batch=1 and batch=8 sequential runs use the *same* dynamic
+   `stage2_batch_size=16` engine — only stage-1 differs between them).
+3. Any resulting per-frame stage-2 difference then compounds through
+   Kalman tracking / backward-pass / trajectory-continuity logic — which
+   this project's own prior known-issues doc (referenced earlier in this
+   spec's Background) already documented as sensitive to tiny
+   floating-point differences via Hungarian-assignment tie-breaks, turning
+   one flipped per-frame detection into many changed final-CSV rows across
+   a whole video (a single dropped detection can break/split/merge a
+   trajectory across dozens of subsequent frames).
+
+**Conclusion:** this is not a bug introduced by this plan — it is a
+pre-existing sensitivity of the sequential/crop-based architecture (and
+its downstream tracking stage) to *any* small numeric noise, which dynamic
+TensorRT batching happens to introduce as one more (small, ~0.16%) noise
+source. The same sensitivity would presumably also show up from other
+noise sources (FP16 vs FP32, GPU driver version, etc.) if measured. No
+further code investigation is warranted under this plan; the runtime
+warning added in commit `9229e70` remains the shipped mitigation. A future
+fix, if pursued, would target the amplification points (steps 1-3 above)
+rather than the batching mechanism itself — e.g. making crop-boundary
+computation less sensitive to sub-pixel input noise, or investigating
+whether the trajectory-continuity/identity-decoder sensitivity documented
+elsewhere in this codebase can be hardened generally. Out of scope here.
+
 **Batching Capability Matrix (final):**
 
 | Accelerator / stage | Batching real? | Valid batch range | Notes |
