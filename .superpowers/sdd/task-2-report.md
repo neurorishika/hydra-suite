@@ -1,227 +1,67 @@
-# Task 2 Report — CoreML `.mlpackage` Exporters (tiny + torchvision/timm)
+# Task 2 Report: Thread Configured Batch Size into OBB Model Loading
 
----
+## Summary
 
-> **NOTE**: This file previously held a different task-2 report from an earlier branch iteration. That content is preserved below the separator. The active report is above it.
+Successfully implemented Task 2 of the TensorRT/CoreML cross-frame batching plan. The configured batch size (`InferenceConfig.detection_batch_size` for direct mode, `OBBSequentialConfig.stage2_batch_size` for sequential mode) now flows through the OBB model loading pipeline, enabling TensorRT to build dynamic-batch engines sized to the actual pipeline window size rather than hardcoded static batch=1.
 
----
-
-## Status: DONE
-
-**Commit:** `f1667e3` — `feat(training): CoreML .mlpackage exporters for tiny + torchvision/timm classifiers`
-
----
-
-## What Was Built
+## Implementation
 
 ### Files Modified
-- `src/hydra_suite/training/torchvision_model.py`: added `export_torchvision_to_coreml(model, ckpt, mlpackage_path) -> Path`
-- `src/hydra_suite/training/tiny_model.py`: added `export_tiny_to_coreml(model, ckpt, mlpackage_path) -> Path`
-- `tests/test_classifier_coreml_export.py`: 4 tests covering both exporters, explicit + default input sizes
 
----
+1. **`src/hydra_suite/core/inference/stages/obb.py`**
+   - Added `batch_size: int = 1` parameter to `_load_yolo()` (line 695)
+   - Updated docstring to document batch_size behavior
+   - Forwarded `batch_size` to `load_obb_executor()` in main call (line 730-739)
+   - Added `batch_size: int = 1` parameter to `load_obb_models()` (line 284)
+   - Threaded batch_size appropriately:
+     - Direct mode: passes caller's batch_size to _load_yolo (line 305)
+     - Sequential mode: stage-1 uses caller's batch_size (line 244), stage-2 uses `config.sequential.stage2_batch_size or batch_size` (line 259)
 
-## Conversion Approach
+2. **`src/hydra_suite/core/inference/runner.py`**
+   - Updated line 130 to pass `batch_size=config.detection_batch_size` to `load_obb_models()`
 
-**torch.jit.trace + coremltools.convert** — the direct path from the brief worked without fallback.
+3. **`tests/test_inference_stages_obb.py`**
+   - Added `test_load_yolo_forwards_batch_size_to_load_obb_executor()` - validates batch_size is forwarded from _load_yolo to load_obb_executor
+   - Added `test_load_obb_models_direct_mode_uses_detection_batch_size()` - validates direct mode uses caller's batch_size
+   - Added `test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model()` - validates sequential mode uses stage2_batch_size when set, falls back to batch_size
 
-Pre-implementation probe test confirmed:
+4. **`tests/test_gpu_fast_fallback.py`**
+   - Updated both `fake_load_obb_executor()` functions to accept `**kwargs` to handle the new parameters
+
+## TDD Evidence
+
+### RED (Initial Test Run)
 ```
-Trace: OK
-Convert: OK
-Save: OK, exists = True
-```
-
-Pipeline per exporter:
-1. `model.eval()`
-2. `torch.jit.trace(model, dummy)` — dummy shape `(1, 3, H, W)`
-3. `ct.convert(traced, inputs=[ct.TensorType(name="input", shape=ct.Shape(shape=(ct.RangeDim(1, 512), 3, H, W)))], compute_units=ct.ComputeUnit.ALL, minimum_deployment_target=ct.target.macOS13)`
-4. `mlmodel.save(str(mlpackage_path))`
-
----
-
-## Test Results (RED → GREEN)
-
-RED: `ImportError: cannot import name 'export_torchvision_to_coreml'` (before implementation)
-
-GREEN:
-```
-platform darwin -- Python 3.13.12, pytest-9.0.2
-4 tests collected, 4 PASSED in 3.84s
-
-tests/test_classifier_coreml_export.py::test_export_torchvision_to_coreml_writes_mlpackage PASSED
-tests/test_classifier_coreml_export.py::test_export_tiny_to_coreml_writes_mlpackage PASSED
-tests/test_classifier_coreml_export.py::test_export_torchvision_to_coreml_default_input_size PASSED
-tests/test_classifier_coreml_export.py::test_export_tiny_to_coreml_default_input_size PASSED
+FAILED tests/test_inference_stages_obb.py::test_load_yolo_forwards_batch_size_to_load_obb_executor
+TypeError: _load_yolo() got an unexpected keyword argument 'batch_size'
 ```
 
-Real `.mlpackage` bundles produced on disk. `pytest.importorskip("coremltools")` ensures SKIP on machines without coremltools.
-
----
-
-## Torch/CoreML Version Compatibility
-
-- **torch:** 2.11.0 (above coremltools 9.0 tested max of 2.7.0)
-- **coremltools:** 9.0
-
-Warnings observed (non-fatal):
-- `Torch version 2.11.0 has not been tested with coremltools. Torch 2.7.0 is the most recent version that has been tested.`
-- `torch.jit.trace is deprecated. Please switch to torch.compile or torch.export.` (DeprecationWarning — not an error)
-- Output tensor renamed from `'23'` to `'var_23'` (coremltools normalizes numeric names)
-
-None of these blocked conversion.
-
----
-
-## Concerns / Future Work
-
-1. **`torch.jit.trace` deprecation**: coremltools 9.0 doesn't yet consume `torch.export` programs, so trace is the only viable path today. Update when coremltools adds export support.
-2. **Output tensor renaming**: downstream inference code reading CoreML output by name should use `'var_23'` (or index by position).
-3. **Batch axis upper bound**: `RangeDim(1, 512)` — make configurable if larger batches are needed.
-
----
-
-# Previous Task-2 Report (InferenceConfig.runtime_tier) — archived below
-
----
-
-# Task 2 Report: `InferenceConfig.runtime_tier` + Hard-Cutover Legacy Migration
-
----
-
-## TDD RED/GREEN Evidence
-
-### RED (Step 2)
-
+### GREEN (After Implementation)
 ```
-KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py -v
+======================== 48 passed, 1 skipped in 3.73s =========================
 
-ERROR collecting tests/test_inference_config_tier_migration.py
-ImportError: cannot import name 'migrate_runtime_to_tier' from 'hydra_suite.core.inference.config'
-1 error
+tests/test_inference_stages_obb.py::test_load_yolo_forwards_batch_size_to_load_obb_executor PASSED
+tests/test_inference_stages_obb.py::test_load_obb_models_direct_mode_uses_detection_batch_size PASSED
+tests/test_inference_stages_obb.py::test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model PASSED
 ```
 
-Confirmed fail as expected — function did not exist yet.
+All three new tests pass.
+All existing tests in test_inference_obb_artifacts.py, test_inference_stages_obb.py, test_inference_batch_stages.py, test_gpu_fast_fallback.py still pass (no regressions).
 
-### GREEN (Step 4)
+## Self-Review Findings
 
-```
-KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py tests/test_inference_config.py -v
+✅ Implemented exactly the functions/signatures specified in the brief
+✅ All 3 new tests pass
+✅ All existing tests in affected files still pass (48 passed, 1 skipped)
+✅ Test output is clean (no warnings or deprecations)
+✅ Code follows project conventions and existing patterns
+✅ Batch size threading logic is correct:
+  - Direct mode: batch_size flows directly to _load_yolo
+  - Sequential mode: stage-1 uses batch_size, stage-2 uses stage2_batch_size with fallback
+✅ Docstrings updated to document new behavior
+✅ Pre-commit hooks passed (black, flake8, isort)
+✅ Git commit created with proper message
 
-tests/test_inference_config_tier_migration.py::test_cpu_maps_to_cpu PASSED
-tests/test_inference_config_tier_migration.py::test_cuda_and_mps_map_to_gpu PASSED
-tests/test_inference_config_tier_migration.py::test_onnx_and_tensorrt_map_to_gpu_fast PASSED
-tests/test_inference_config_tier_migration.py::test_mixed_takes_highest_tier PASSED
-tests/test_inference_config_tier_migration.py::test_empty_defaults_to_gpu PASSED
-tests/test_inference_config.py::test_from_json_round_trip PASSED
-tests/test_inference_config.py::test_round_trip_with_headtail PASSED
-tests/test_inference_config.py::test_round_trip_with_cnn_phases PASSED
-tests/test_inference_config.py::test_runtime_validation_rejects_cuda_cpu_mix PASSED
-tests/test_inference_config.py::test_runtime_validation_accepts_cuda_group PASSED
-tests/test_inference_config.py::test_runtime_validation_accepts_cpu_group PASSED
-tests/test_inference_config.py::test_from_json_validates_on_load PASSED
-tests/test_inference_config.py::test_sequential_config_round_trip PASSED
+## No Concerns
 
-13 passed in 2.20s
-```
-
----
-
-## Files Changed
-
-- **Modified**: `src/hydra_suite/core/inference/config.py`
-  - Added `import logging` and `from hydra_suite.runtime.resolver import RuntimeTier`
-  - Added module-level `migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier` — maps legacy runtime strings to tier; empty set → "gpu"
-  - Added module-level `_collect_legacy_runtime_strings(d: dict) -> set[str]` — reads raw dict sub-keys (obb.direct, obb.sequential, headtail, cnn_phases, pose.yolo, pose.sleap)
-  - Added `runtime_tier: RuntimeTier = "gpu"` field to `InferenceConfig` dataclass (after `pipeline_depth`)
-  - Wired `_dict_to_config` to derive `runtime_tier` from legacy per-stage runtimes when absent, with one-line warning log
-
-- **Created**: `tests/test_inference_config_tier_migration.py`
-  - 5 tests: cpu, cuda/mps, onnx/tensorrt, mixed, empty-set
-
----
-
-## `test_inference_config.py` Adjustments
-
-No adjustments required. All 8 existing tests passed without modification. The new `runtime_tier` field has a default of `"gpu"`, so round-trip tests that write configs (which include `runtime_tier` in the dict) load back correctly. The `_dict_to_config` migration path is exercised transparently.
-
----
-
-## Self-Review
-
-- `migrate_runtime_to_tier(set())` returns "gpu" (special-cased with early return before any set intersection logic).
-- `migrate_runtime_to_tier` priority order: gpu_fast > gpu > cpu (consistent with the brief).
-- Migration only logs when legacy runtimes are actually present (not for empty-set / new configs).
-- Per-stage `compute_runtime` fields are preserved intact (Task 3 will remove them).
-- `RuntimeTier` imported from `hydra_suite.runtime.resolver` — no local redefinition.
-- pre-commit hooks (black, ruff, flake8, isort) all passed.
-
----
-
-## Concerns
-
-None. All 13 tests pass, no regressions.
-
----
-
-## Commit
-
-`633ddab feat(config): add runtime_tier with hard-cutover legacy migration`
-
----
-
-## Review Fix: Pose Sub-Dict Mutation Before Legacy Runtime Collection
-
-### Root Cause
-
-In `_dict_to_config`, `pose_d.pop("yolo", None)` and `pose_d.pop("sleap", None)` were called at lines 324–325 — before the `_collect_legacy_runtime_strings(d)` call at line 342. Because `_collect_legacy_runtime_strings` reads `d["pose"]["yolo"]` and `d["pose"]["sleap"]` from the raw dict, those keys were already gone by the time it ran. A legacy config with `pose.yolo.compute_runtime="tensorrt"` would therefore miss the pose runtime, see only `{'cpu'}` (from the OBB stage), and yield `runtime_tier='cpu'` instead of `'gpu_fast'`.
-
-### Fix Applied
-
-Moved the `runtime_tier` derivation block (the `_collect_legacy_runtime_strings(d)` call + `migrate_runtime_to_tier` + warning log) to BEFORE the `pose_d.pop()` mutations in `_dict_to_config`. The `apriltag` construction was left in its original relative position after the pose block. No logic was changed — only execution order.
-
-**File**: `src/hydra_suite/core/inference/config.py` (`_dict_to_config`)
-
-### RED Evidence (new tests, before fix)
-
-```
-KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py -v
-
-FAILED tests/test_inference_config_tier_migration.py::test_pose_yolo_tensorrt_migrates_to_gpu_fast
-  AssertionError: Expected 'gpu_fast', got 'cpu'
-  WARNING: Migrated legacy per-stage runtimes {'cpu'} -> runtime_tier='cpu'
-
-FAILED tests/test_inference_config_tier_migration.py::test_pose_sleap_onnx_cuda_migrates_to_gpu_fast
-  AssertionError: Expected 'gpu_fast', got 'cpu'
-  WARNING: Migrated legacy per-stage runtimes {'cpu'} -> runtime_tier='cpu'
-
-2 failed, 5 passed
-```
-
-### GREEN Evidence (after fix)
-
-```
-KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=src python -m pytest tests/test_inference_config_tier_migration.py tests/test_inference_config.py -v
-
-tests/test_inference_config_tier_migration.py::test_pose_yolo_tensorrt_migrates_to_gpu_fast PASSED
-tests/test_inference_config_tier_migration.py::test_pose_sleap_onnx_cuda_migrates_to_gpu_fast PASSED
-tests/test_inference_config_tier_migration.py::test_cpu_maps_to_cpu PASSED
-tests/test_inference_config_tier_migration.py::test_cuda_and_mps_map_to_gpu PASSED
-tests/test_inference_config_tier_migration.py::test_onnx_and_tensorrt_map_to_gpu_fast PASSED
-tests/test_inference_config_tier_migration.py::test_mixed_takes_highest_tier PASSED
-tests/test_inference_config_tier_migration.py::test_empty_defaults_to_gpu PASSED
-tests/test_inference_config.py::test_from_json_round_trip PASSED
-tests/test_inference_config.py::test_round_trip_with_headtail PASSED
-tests/test_inference_config.py::test_round_trip_with_cnn_phases PASSED
-tests/test_inference_config.py::test_runtime_validation_rejects_cuda_cpu_mix PASSED
-tests/test_inference_config.py::test_runtime_validation_accepts_cuda_group PASSED
-tests/test_inference_config.py::test_runtime_validation_accepts_cpu_group PASSED
-tests/test_inference_config.py::test_from_json_validates_on_load PASSED
-tests/test_inference_config.py::test_sequential_config_round_trip PASSED
-
-15 passed in 2.28s
-```
-
-### Commit
-
-`a8e36b5 fix(config): collect legacy pose runtimes before pose_d mutation in _dict_to_config`
+Implementation is straightforward and matches the brief specifications exactly. Batch size propagation logic is correct and tested. All tests pass with no regressions.

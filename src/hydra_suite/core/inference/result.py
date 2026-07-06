@@ -46,11 +46,12 @@ class CropBatch:
     Row order is detection-id order (frame-index-derived), so batch membership
     is a pure function of frame index — the reproducibility invariant.
     """
-    crops: "torch.Tensor"            # (N, C, H, W) device-resident or CPU
-    detection_ids: np.ndarray        # (N,) int64
-    frame_index: np.ndarray          # (N,) int64
-    obb_by_frame: dict               # frame_idx -> OBBResult
-    native_sizes: np.ndarray         # (N, 2) int64 — pre-pad crop h,w
+
+    crops: "torch.Tensor"  # (N, C, H, W) device-resident or CPU
+    detection_ids: np.ndarray  # (N,) int64
+    frame_index: np.ndarray  # (N,) int64
+    obb_by_frame: dict  # frame_idx -> OBBResult
+    native_sizes: np.ndarray  # (N, 2) int64 — pre-pad crop h,w
 
     def frames(self) -> list:
         return sorted({int(f) for f in self.frame_index.tolist()})

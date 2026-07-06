@@ -11,11 +11,16 @@ Scatter-level integration tests:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
 from hydra_suite.core.inference.stages.assemble import suppress_foreign_keypoints
 
+if TYPE_CHECKING:
+    from hydra_suite.core.inference.config import InferenceConfig
+    from hydra_suite.core.inference.result import OBBResult, PoseResult
 
 # ---------------------------------------------------------------------------
 # Unit tests: suppress_foreign_keypoints
@@ -24,12 +29,14 @@ from hydra_suite.core.inference.stages.assemble import suppress_foreign_keypoint
 
 def test_keypoint_inside_foreign_obb_is_zeroed():
     # keypoint at (40,20) lands inside the foreign box [30..50]x[10..30]
-    kpts = np.array([[[15.0, 20.0, 0.9], [40.0, 20.0, 0.9]]], np.float32)  # (1 det, 2 kpts, 3)
+    kpts = np.array(
+        [[[15.0, 20.0, 0.9], [40.0, 20.0, 0.9]]], np.float32
+    )  # (1 det, 2 kpts, 3)
     target_corners = np.array([[10, 10], [25, 10], [25, 30], [10, 30]], np.float32)
     foreign = [np.array([[30, 10], [50, 10], [50, 30], [30, 30]], np.float32)]
     out = suppress_foreign_keypoints(kpts[0], target_corners, foreign)
-    assert out[0, 2] == 0.9     # inside target → kept
-    assert out[1, 2] == 0.0     # inside foreign → zeroed
+    assert out[0, 2] == 0.9  # inside target → kept
+    assert out[1, 2] == 0.0  # inside foreign → zeroed
 
 
 def test_keypoint_outside_all_obbs_is_kept():
@@ -148,11 +155,15 @@ def test_scatter_foreign_suppression_flag_on_zeroes_overlapping_keypoint():
     pose = _make_pose_result(kpts)
     config = _make_inference_config(suppress=True)
 
-    results = scatter({0: obb}, headtail=None, cnns=None, pose={0: pose}, apriltag=None, config=config)
+    results = scatter(
+        {0: obb}, headtail=None, cnns=None, pose={0: pose}, apriltag=None, config=config
+    )
     out_kpts = results[0].pose.keypoints
 
     assert out_kpts[0, 0, 2] == 0.0, "det 0 kpt inside foreign OBB should be zeroed"
-    assert out_kpts[1, 0, 2] == pytest.approx(0.9), "det 1 kpt inside own OBB should be kept"
+    assert out_kpts[1, 0, 2] == pytest.approx(
+        0.9
+    ), "det 1 kpt inside own OBB should be kept"
 
 
 def test_scatter_foreign_suppression_flag_off_keeps_overlapping_keypoint():
@@ -173,7 +184,11 @@ def test_scatter_foreign_suppression_flag_off_keeps_overlapping_keypoint():
     pose = _make_pose_result(kpts)
     config = _make_inference_config(suppress=False)
 
-    results = scatter({0: obb}, headtail=None, cnns=None, pose={0: pose}, apriltag=None, config=config)
+    results = scatter(
+        {0: obb}, headtail=None, cnns=None, pose={0: pose}, apriltag=None, config=config
+    )
     out_kpts = results[0].pose.keypoints
 
-    assert out_kpts[0, 0, 2] == pytest.approx(0.9), "det 0 kpt should be kept when flag OFF"
+    assert out_kpts[0, 0, 2] == pytest.approx(
+        0.9
+    ), "det 0 kpt should be kept when flag OFF"

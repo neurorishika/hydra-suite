@@ -20,6 +20,7 @@ Run (SLEAP env):
 
 Only deps: numpy, cv2, torch, sleap_nn, yaml/omegaconf. No hydra_suite import.
 """
+
 import argparse
 import math
 from pathlib import Path
@@ -55,11 +56,14 @@ def alignment_affine(corners, cw, ch, pad):
     margin = 1.0 + pad
     hw, hh = major * margin * 0.5, minor * margin * 0.5
     ca, sa = math.cos(angle), math.sin(angle)
-    src = np.array([
-        [cx - hw * ca + hh * sa, cy - hw * sa - hh * ca],
-        [cx + hw * ca + hh * sa, cy + hw * sa - hh * ca],
-        [cx - hw * ca - hh * sa, cy - hw * sa + hh * ca],
-    ], np.float32)
+    src = np.array(
+        [
+            [cx - hw * ca + hh * sa, cy - hw * sa - hh * ca],
+            [cx + hw * ca + hh * sa, cy + hw * sa - hh * ca],
+            [cx - hw * ca - hh * sa, cy - hw * sa + hh * ca],
+        ],
+        np.float32,
+    )
     dst = np.array([[0, 0], [cw, 0], [0, ch]], np.float32)
     return cv2.getAffineTransform(src, dst)
 
@@ -69,7 +73,8 @@ def corners_from_xywhr(cx, cy, w, h, ang):
     # angle of the MAJOR axis (mirror _normalize_obb_geometry's swap)
     a = ang if w >= h else ang + math.pi / 2.0
     hw, hh = major / 2.0, minor / 2.0
-    xo = np.array([-hw, hw, hw, -hw]); yo = np.array([-hh, -hh, hh, hh])
+    xo = np.array([-hw, hw, hw, -hw])
+    yo = np.array([-hh, -hh, hh, hh])
     ca, sa = math.cos(a), math.sin(a)
     xs = cx + xo * ca - yo * sa
     ys = cy + xo * sa + yo * ca
@@ -78,8 +83,9 @@ def corners_from_xywhr(cx, cy, w, h, ang):
 
 def warp(frame_bgr, corners, cw, ch):
     M = alignment_affine(corners, cw, ch, PAD)
-    return cv2.warpAffine(frame_bgr, M, (cw, ch), flags=cv2.INTER_LINEAR,
-                          borderMode=cv2.BORDER_REPLICATE)
+    return cv2.warpAffine(
+        frame_bgr, M, (cw, ch), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
 
 
 def build_variants(frame_bgr, corners, cx, cy, w, h, ang):
@@ -99,6 +105,7 @@ def build_variants(frame_bgr, corners, cx, cy, w, h, ang):
 
 def load_preprocess_config(model_dir):
     import yaml
+
     cfg = Path(model_dir) / "training_config.yaml"
     if not cfg.exists():
         return None
@@ -108,10 +115,12 @@ def load_preprocess_config(model_dir):
 
 def build_predictor(model_dir, device, batch, pc):
     from sleap_nn.inference.predictors import Predictor
+
     kw = dict(model_paths=[model_dir], device=device, batch_size=batch)
     if pc is not None:
         try:
             from omegaconf import OmegaConf
+
             kw["preprocess_config"] = OmegaConf.create(pc)
         except Exception:
             kw["preprocess_config"] = pc
@@ -121,6 +130,7 @@ def build_predictor(model_dir, device, batch, pc):
 def prepared_batch(crops_bgr, pred):
     import torch
     from sleap_nn.data.resizing import apply_sizematcher
+
     pc = pred.preprocess_config
     mh, mw = pc["max_height"], pc["max_width"]
     ensure_rgb = bool(pc.get("ensure_rgb", True))
@@ -136,10 +146,13 @@ def prepared_batch(crops_bgr, pred):
             img = img.repeat(1, 3, 1, 1)
         elif ensure_gray and img.shape[-3] != 1:
             import torchvision.transforms.functional as TF
+
             img = TF.rgb_to_grayscale(img, num_output_channels=1)
         imgs.append(img.unsqueeze(0))
         org_szs.append(torch.Tensor([H, W]).unsqueeze(0).unsqueeze(0))
-        eff.append(torch.tensor(e)); fidxs.append(i); vidxs.append(0)
+        eff.append(torch.tensor(e))
+        fidxs.append(i)
+        vidxs.append(0)
     return imgs, fidxs, vidxs, org_szs, [], eff
 
 
@@ -153,7 +166,8 @@ def predict(pred, crops_bgr):
         pk = np.asarray(ex.get("pred_instance_peaks"))
         pv = ex.get("pred_peak_values")
         if pk.ndim == 2:
-            pk = pk[None]; pv = None if pv is None else np.asarray(pv)[None]
+            pk = pk[None]
+            pv = None if pv is None else np.asarray(pv)[None]
         for b in range(pk.shape[0]):
             peaks.append(np.asarray(pk[b], np.float32))
             vals.append(None if pv is None else np.asarray(pv[b], np.float32))
@@ -173,11 +187,16 @@ def main():
     args = ap.parse_args()
 
     det = np.load(args.detection, allow_pickle=True)  # trusted local npz
-    ids = det["detection_ids"]; corners = det["corners"]; cents = det["centroids"]
-    angles = det["angles"]; sizes = det["sizes"]; shapes = det["shapes"]
+    ids = det["detection_ids"]
+    corners = det["corners"]
+    cents = det["centroids"]
+    angles = det["angles"]
+    sizes = det["sizes"]
+    shapes = det["shapes"]
     # recover w,h from sizes(=major*minor) and aspect(shapes[:,1]=major/minor)
     asp = shapes[:, 1]
-    major = np.sqrt(sizes * asp); minor = np.sqrt(sizes / asp)
+    major = np.sqrt(sizes * asp)
+    minor = np.sqrt(sizes / asp)
     by_id = {int(ids[i]): i for i in range(len(ids))}
 
     pc = load_preprocess_config(args.model_dir)
@@ -186,7 +205,9 @@ def main():
     cap = cv2.VideoCapture(args.video)
     frames = [int(x) for x in args.frames.split(",") if x.strip()]
     variant_names = ["native", "native_180", "xywhr", "xywhr_180", "xywhr_flipv"]
-    rec = {v: {"crops": [], "kpts": [], "vals": [], "detids": []} for v in variant_names}
+    rec = {
+        v: {"crops": [], "kpts": [], "vals": [], "detids": []} for v in variant_names
+    }
 
     for fno in frames:
         cap.set(cv2.CAP_PROP_POS_FRAMES, fno)
@@ -198,9 +219,15 @@ def main():
         order = []
         for did in dets:
             i = by_id[did]
-            variants = build_variants(frame, corners[i].reshape(4, 2),
-                                      float(cents[i, 0]), float(cents[i, 1]),
-                                      float(major[i]), float(minor[i]), float(angles[i]))
+            variants = build_variants(
+                frame,
+                corners[i].reshape(4, 2),
+                float(cents[i, 0]),
+                float(cents[i, 1]),
+                float(major[i]),
+                float(minor[i]),
+                float(angles[i]),
+            )
             for v in variant_names:
                 per_variant[v].append(variants[v])
             order.append(did)
@@ -210,8 +237,14 @@ def main():
             peaks, vals = predict(pred, per_variant[v])
             for n, did in enumerate(order):
                 rec[v]["crops"].append(per_variant[v][n])
-                rec[v]["kpts"].append(peaks[n] if n < len(peaks) else np.zeros((0, 2), np.float32))
-                rec[v]["vals"].append(vals[n] if n < len(vals) and vals[n] is not None else np.zeros(0, np.float32))
+                rec[v]["kpts"].append(
+                    peaks[n] if n < len(peaks) else np.zeros((0, 2), np.float32)
+                )
+                rec[v]["vals"].append(
+                    vals[n]
+                    if n < len(vals) and vals[n] is not None
+                    else np.zeros(0, np.float32)
+                )
                 rec[v]["detids"].append(did)
         print(f"frame {fno}: {len(dets)} dets x {len(variant_names)} variants done")
     cap.release()
@@ -223,8 +256,13 @@ def main():
         out[f"{v}__vals"] = np.array(rec[v]["vals"], dtype=object)
         out[f"{v}__detids"] = np.array(rec[v]["detids"], dtype=np.int64)
         # quick confidence summary
-        allv = np.concatenate([np.asarray(x).ravel() for x in rec[v]["vals"] if np.asarray(x).size]) \
-            if any(np.asarray(x).size for x in rec[v]["vals"]) else np.zeros(0)
+        allv = (
+            np.concatenate(
+                [np.asarray(x).ravel() for x in rec[v]["vals"] if np.asarray(x).size]
+            )
+            if any(np.asarray(x).size for x in rec[v]["vals"])
+            else np.zeros(0)
+        )
         print(f"  {v}: mean_conf={allv.mean():.3f}" if allv.size else f"  {v}: no vals")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out, variant_names=np.array(variant_names), **out)
