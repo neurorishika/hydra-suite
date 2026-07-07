@@ -3759,8 +3759,9 @@ class ConfigOrchestrator:
             else "detection_sequential"
         )
         if detection is not None:
-            # Translate recommended runtime to the nearest tier and set tier combo.
-            rec_tier = migrate_runtime_to_tier({detection.runtime})
+            # detection.runtime is already a tier string ("cpu"/"gpu"/"gpu_fast")
+            # set by bench_obb/bench_sequential — use it directly.
+            rec_tier = str(detection.runtime or "cpu")
             if hasattr(self._panels.setup, "combo_runtime_tier"):
                 idx = self._panels.setup.combo_runtime_tier.findData(rec_tier)
                 if idx >= 0:
