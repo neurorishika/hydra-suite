@@ -606,8 +606,11 @@ class SetupPanel(QWidget):
             "1.0 = full resolution, 0.5 = half resolution (4× faster).\n"
             "All body-size-based parameters auto-scale with this value."
         )
-        from hydra_suite.runtime.compute_runtime import available_tiers, tier_label
-        from hydra_suite.runtime.resolver import detect_platform
+        from hydra_suite.runtime.resolver import (
+            available_tiers,
+            detect_platform,
+            tier_label,
+        )
 
         self.combo_runtime_tier = QComboBox()
         self.combo_runtime_tier.setFixedHeight(30)

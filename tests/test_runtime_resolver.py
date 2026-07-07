@@ -51,3 +51,34 @@ def test_gpu_fast_mac_without_artifact_falls_back_to_native_mps():
 def test_gpu_tier_on_cpu_only_host_degrades_to_cpu():
     r = RuntimeResolver("gpu", CPU_ONLY)
     assert r.resolve("obb") == ResolvedBackend("torch", "cpu", True)
+
+
+def test_available_tiers_cpu_only():
+    platform = PlatformInfo(has_cuda=False, has_mps=False)
+    from hydra_suite.runtime.resolver import available_tiers
+
+    assert available_tiers(platform) == ["cpu"]
+
+
+def test_available_tiers_with_accelerator():
+    platform = PlatformInfo(has_cuda=True, has_mps=False)
+    from hydra_suite.runtime.resolver import available_tiers
+
+    assert available_tiers(platform) == ["cpu", "gpu", "gpu_fast"]
+
+
+def test_tier_label_cuda_platform():
+    platform = PlatformInfo(has_cuda=True, has_mps=False)
+    from hydra_suite.runtime.resolver import tier_label
+
+    assert tier_label("cpu", platform) == "CPU"
+    assert tier_label("gpu", platform) == "GPU (CUDA)"
+    assert tier_label("gpu_fast", platform) == "GPU-Fast (TensorRT)"
+
+
+def test_tier_label_mps_platform():
+    platform = PlatformInfo(has_cuda=False, has_mps=True)
+    from hydra_suite.runtime.resolver import tier_label
+
+    assert tier_label("gpu", platform) == "GPU (Metal)"
+    assert tier_label("gpu_fast", platform) == "GPU-Fast (CoreML)"

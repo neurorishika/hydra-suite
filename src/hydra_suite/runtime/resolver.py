@@ -65,6 +65,33 @@ class RuntimeResolver:
         return ResolvedBackend("torch", "cpu", used_fallback=True)
 
 
+def available_tiers(platform: PlatformInfo) -> list:
+    """Return the ordered list of runtime tiers available on *platform*.
+
+    Returns ``["cpu"]`` when no GPU accelerator is present, or
+    ``["cpu", "gpu", "gpu_fast"]`` when CUDA or MPS is available.
+    """
+    if not (platform.has_cuda or platform.has_mps):
+        return ["cpu"]
+    return ["cpu", "gpu", "gpu_fast"]
+
+
+def tier_label(tier: str, platform: PlatformInfo) -> str:
+    """Return a human-readable label for *tier* on *platform*.
+
+    - ``"cpu"``      -> ``"CPU"``
+    - ``"gpu"``      -> ``"GPU (CUDA)"`` / ``"GPU (Metal)"``
+    - ``"gpu_fast"`` -> ``"GPU-Fast (TensorRT)"`` / ``"GPU-Fast (CoreML)"``
+    """
+    if tier == "cpu":
+        return "CPU"
+    accel = "CUDA" if platform.has_cuda else ("Metal" if platform.has_mps else "CPU")
+    fast = (
+        "TensorRT" if platform.has_cuda else ("CoreML" if platform.has_mps else "CPU")
+    )
+    return {"gpu": f"GPU ({accel})", "gpu_fast": f"GPU-Fast ({fast})"}[tier]
+
+
 def detect_platform() -> PlatformInfo:
     """Detect host acceleration via the existing gpu_utils availability flags."""
     from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, MPS_AVAILABLE
