@@ -1054,3 +1054,89 @@ def test_collect_active_targets_uses_tier_vocabulary(tmp_path: Path) -> None:
         ), f"target {target.key!r} exposed non-tier runtimes: {target.runtimes}"
         assert target.current_runtime in allowed_tiers
         assert target.current_runtime == "gpu"
+
+
+def test_synchronize_runtime_calls_cuda_when_available(monkeypatch) -> None:
+    import torch
+
+    cuda_sync_calls: list[None] = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: cuda_sync_calls.append(None))
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    # Passing a tier string ("gpu") must not affect which branch runs: only
+    # real hardware availability should matter.
+    benchmarking._synchronize_runtime("gpu")
+
+    assert cuda_sync_calls == [None]
+
+
+def test_synchronize_runtime_calls_mps_when_available_and_cuda_absent(
+    monkeypatch,
+) -> None:
+    import torch
+
+    mps_sync_calls: list[None] = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(torch.mps, "synchronize", lambda: mps_sync_calls.append(None))
+
+    benchmarking._synchronize_runtime("gpu_fast")
+
+    assert mps_sync_calls == [None]
+
+
+def test_synchronize_runtime_no_accelerator_does_nothing(monkeypatch) -> None:
+    import torch
+
+    cuda_sync_calls: list[None] = []
+    mps_sync_calls: list[None] = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: cuda_sync_calls.append(None))
+    monkeypatch.setattr(torch.mps, "synchronize", lambda: mps_sync_calls.append(None))
+
+    # Should not raise even though no accelerator is available.
+    benchmarking._synchronize_runtime("cpu")
+
+    assert cuda_sync_calls == []
+    assert mps_sync_calls == []
+
+
+def test_sample_accelerator_memory_mb_reads_cuda_when_available(monkeypatch) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda: 2 * 1024 * 1024)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda: 4 * 1024 * 1024)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    result = benchmarking._sample_accelerator_memory_mb("gpu")
+
+    assert result == 4.0
+
+
+def test_sample_accelerator_memory_mb_reads_mps_when_available_and_cuda_absent(
+    monkeypatch,
+) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(torch.mps, "current_allocated_memory", lambda: 1024 * 1024)
+    monkeypatch.setattr(torch.mps, "driver_allocated_memory", lambda: 3 * 1024 * 1024)
+
+    result = benchmarking._sample_accelerator_memory_mb("gpu_fast")
+
+    assert result == 3.0
+
+
+def test_sample_accelerator_memory_mb_returns_none_without_accelerator(
+    monkeypatch,
+) -> None:
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert benchmarking._sample_accelerator_memory_mb("cpu") is None

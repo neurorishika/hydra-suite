@@ -469,17 +469,30 @@ def _process_rss_mb() -> float | None:
     return float(int(output)) / 1024.0
 
 
-def _synchronize_runtime(runtime: str) -> None:
-    rt = _normalize_runtime(runtime)
+def _synchronize_runtime(runtime: str = "") -> None:
+    """Synchronize whichever accelerator is genuinely present and busy.
+
+    This intentionally does NOT branch on a runtime/tier string (e.g.
+    "cuda", "gpu", "gpu_fast"). Those vocabularies drift independently of
+    this module (tiers vs. canonical runtimes), and gating on them has
+    previously caused this synchronization to be silently skipped when the
+    caller passed a tier string this function didn't recognize. Instead we
+    probe real hardware availability directly: if CUDA is available,
+    synchronize CUDA; if MPS is available, synchronize MPS. Both checks are
+    safe no-ops when the corresponding accelerator has no in-flight work,
+    so there is no correctness cost to checking unconditionally.
+
+    ``runtime`` is accepted only for logging/debugging context and is never
+    used to decide which branch executes.
+    """
     try:
         import torch
     except Exception:
         return
     try:
-        if rt in {"cuda", "onnx_cuda", "tensorrt"}:
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-        elif rt == "mps":
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        if torch.backends.mps.is_available():
             synchronize = getattr(torch.mps, "synchronize", None)
             if callable(synchronize):
                 synchronize()
@@ -489,20 +502,25 @@ def _synchronize_runtime(runtime: str) -> None:
         )
 
 
-def _sample_accelerator_memory_mb(runtime: str) -> float | None:
-    rt = _normalize_runtime(runtime)
+def _sample_accelerator_memory_mb(runtime: str = "") -> float | None:
+    """Sample accelerator memory usage from whichever hardware is present.
+
+    Like ``_synchronize_runtime``, this checks real hardware availability
+    (``torch.cuda.is_available()`` / ``torch.backends.mps.is_available()``)
+    rather than branching on a runtime/tier string, so it stays correct
+    regardless of what runtime-vocabulary changes happen elsewhere in the
+    codebase. ``runtime`` is accepted only for logging/debugging context.
+    """
     try:
         import torch
     except Exception:
         return None
     try:
-        if rt in {"cuda", "onnx_cuda", "tensorrt"}:
-            if not torch.cuda.is_available():
-                return None
+        if torch.cuda.is_available():
             allocated = float(torch.cuda.memory_allocated())
             reserved = float(torch.cuda.memory_reserved())
             return max(allocated, reserved) / (1024.0 * 1024.0)
-        if rt == "mps":
+        if torch.backends.mps.is_available():
             current = getattr(torch.mps, "current_allocated_memory", None)
             driver = getattr(torch.mps, "driver_allocated_memory", None)
             samples: list[float] = []
