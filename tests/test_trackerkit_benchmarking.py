@@ -754,6 +754,67 @@ def test_bench_headtail_uses_classifier_backend_not_legacy_detector(
     assert created["compute_runtime"] in {"cpu", "cuda", "mps", "tensorrt", "coreml"}
 
 
+def test_run_target_benchmark_resolves_tier_before_bench_classify(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.trackerkit.benchmarking as benchmarking
+
+    seen_runtimes = []
+
+    def fake_bench_classify(model_path, runtime, *a, **k):
+        seen_runtimes.append(runtime)
+        return benchmarking.BenchmarkResult(
+            model_type="classify",
+            model_path=model_path,
+            runtime=runtime,
+            runtime_label=runtime,
+            batch_size=1,
+            input_shape=(32, 32),
+            warmup_iters=0,
+            bench_iters=1,
+            success=True,
+        )
+
+    monkeypatch.setattr(benchmarking, "bench_classify", fake_bench_classify)
+
+    target = benchmarking.BenchmarkTargetSpec(
+        key="cnn_0",
+        label="CNN: test",
+        pipeline="classify",
+        model_path=str(tmp_path / "cnn.pt"),
+        runtimes=["gpu_fast"],
+        batch_sizes=[1],
+        current_runtime="cpu",
+        current_batch_size=1,
+    )
+    geometry = benchmarking.BenchmarkGeometry(
+        frame_width=64,
+        frame_height=64,
+        resize_factor=1.0,
+        effective_frame_width=64,
+        effective_frame_height=64,
+        reference_body_size=32.0,
+        reference_aspect_ratio=1.0,
+        padding_fraction=0.1,
+        canonical_crop_width=32,
+        canonical_crop_height=32,
+    )
+
+    benchmarking.run_target_benchmark(
+        target, geometry, "gpu_fast", 1, warmup=0, iterations=1
+    )
+
+    platform = benchmarking.detect_platform()
+    expected_runtime = benchmarking.resolve_compute_runtime(
+        "gpu_fast", platform, stage="cnn"
+    )
+    assert seen_runtimes == [expected_runtime]
+    # On any accelerated platform, "gpu_fast" must resolve away from the
+    # CPU fallback that `_normalize_runtime` would silently collapse it to.
+    if platform.has_cuda or platform.has_mps:
+        assert expected_runtime != "cpu"
+
+
 def test_collect_active_targets_includes_sequential_crop_settings(
     tmp_path: Path,
 ) -> None:

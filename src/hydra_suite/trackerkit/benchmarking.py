@@ -1509,9 +1509,11 @@ def run_target_benchmark(
             pose_backend_cache=pose_backend_cache,
         )
     if target.pipeline == "classify":
+        platform = detect_platform()
+        resolved_runtime = resolve_compute_runtime(runtime, platform, stage="cnn")
         return bench_classify(
             target.model_path,
-            normalized_runtime,
+            resolved_runtime,
             warmup,
             iterations,
             batch_size,
