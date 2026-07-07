@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.runtime.resolver import detect_platform, tier_label
 from hydra_suite.trackerkit.benchmarking import (
     BenchmarkRecommendation,
     BenchmarkResult,
@@ -39,7 +40,6 @@ from hydra_suite.trackerkit.benchmarking import (
     derive_benchmark_geometry_from_video,
     lookup_cached_recommendation,
     run_target_benchmark,
-    runtime_label,
     store_cached_results,
 )
 from hydra_suite.widgets.dialogs import BaseDialog
@@ -74,27 +74,27 @@ class _MetricTile(QFrame):
 
 
 class _RuntimeSelectionWidget(QWidget):
-    """Validated runtime selector that avoids free-text entry."""
+    """Validated tier selector that avoids free-text entry."""
 
-    def __init__(self, runtimes: list[str], parent: QWidget | None = None) -> None:
+    def __init__(
+        self, tiers: list[str], platform, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._checkboxes: dict[str, QCheckBox] = {}
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(4)
-        for index, runtime in enumerate(runtimes):
-            checkbox = QCheckBox(runtime_label(runtime))
+        for index, tier in enumerate(tiers):
+            checkbox = QCheckBox(tier_label(tier, platform))
             checkbox.setChecked(True)
-            checkbox.setToolTip(runtime)
+            checkbox.setToolTip(tier)
             layout.addWidget(checkbox, index // 3, index % 3)
-            self._checkboxes[runtime] = checkbox
+            self._checkboxes[tier] = checkbox
 
     def selected_runtimes(self) -> list[str]:
         return [
-            runtime
-            for runtime, checkbox in self._checkboxes.items()
-            if checkbox.isChecked()
+            tier for tier, checkbox in self._checkboxes.items() if checkbox.isChecked()
         ]
 
 
@@ -212,6 +212,7 @@ class _BenchmarkWorker(BaseWorker):
         self._cancel_requested = True
 
     def execute(self) -> None:
+        platform = detect_platform()
         total = sum(
             max(
                 1,
@@ -242,9 +243,9 @@ class _BenchmarkWorker(BaseWorker):
                                 return
                             completed += 1
                             status = (
-                                f"Benchmarking {target.label}: {runtime_label(runtime)} @ frame {batch_size} / crop {individual_batch_size}"
+                                f"Benchmarking {target.label}: {tier_label(runtime, platform)} @ frame {batch_size} / crop {individual_batch_size}"
                                 if individual_batch_size is not None
-                                else f"Benchmarking {target.label}: {runtime_label(runtime)} @ batch {batch_size}"
+                                else f"Benchmarking {target.label}: {tier_label(runtime, platform)} @ batch {batch_size}"
                             )
                             _stream_benchmark_status(status)
                             self.status.emit(status)
@@ -280,6 +281,7 @@ class TrackerBenchmarkDialog(BaseDialog):
         )
         self.setMinimumSize(980, 680)
         self._main_window = main_window
+        self._platform = detect_platform()
         self._worker: _BenchmarkWorker | None = None
         self._targets, self._collection_notes = collect_active_targets(main_window)
         self._geometry = derive_benchmark_geometry_from_video(
@@ -469,13 +471,13 @@ QTableWidget#BenchmarkResultsTable::item {
         ):
             return runtime_text, runtime_tooltip
 
-        runtime_value = str(result.runtime or "").strip().lower()
-        if runtime_value in {"cpu", "mps", "cuda"}:
+        resolved_backend = str(result.resolved_backend or "").strip().lower()
+        if resolved_backend == "torch":
             return (
                 f"{runtime_text} [Native Service]",
                 "SLEAP native runtime measured through the persistent SLEAP service backend, including crop transport and result extraction in the timed phase.",
             )
-        if runtime_value.startswith("onnx_") or runtime_value == "tensorrt":
+        if resolved_backend in {"tensorrt", "onnx"}:
             return (
                 f"{runtime_text} [Exported Direct]",
                 "SLEAP exported runtime measured through the direct exported backend path, including crop preparation and postprocess in the timed phase.",
@@ -521,7 +523,8 @@ QTableWidget#BenchmarkResultsTable::item {
         badge_column.setContentsMargins(0, 0, 0, 0)
         badge_column.setSpacing(6)
 
-        current_text = f"Current: {runtime_label(target.current_runtime)}"
+        platform = detect_platform()
+        current_text = f"Current: {tier_label(target.current_runtime, platform)}"
         if target.supports_batch_apply:
             if target.current_individual_batch_size is not None:
                 current_text += f" | frame {target.current_batch_size} / crop {target.current_individual_batch_size}"
@@ -566,7 +569,7 @@ QTableWidget#BenchmarkResultsTable::item {
         runtime_label_widget = QLabel("Runtimes to test")
         runtime_label_widget.setObjectName("BenchmarkFieldLabel")
         runtime_box.addWidget(runtime_label_widget)
-        runtime_selector = _RuntimeSelectionWidget(target.runtimes)
+        runtime_selector = _RuntimeSelectionWidget(target.runtimes, self._platform)
         runtime_box.addWidget(runtime_selector)
         controls.addLayout(runtime_box, 3)
 

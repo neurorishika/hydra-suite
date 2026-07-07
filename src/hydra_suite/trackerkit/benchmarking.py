@@ -1220,6 +1220,11 @@ def bench_pose(
             runtime_flavor = (
                 str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
             )
+            result.resolved_backend = (
+                "tensorrt"
+                if runtime_flavor.startswith("tensorrt")
+                else ("onnx" if runtime_flavor.startswith("onnx") else "torch")
+            )
             sleap_device = str(derived.get("pose_sleap_device", "cpu")).strip() or "cpu"
             if reused_backend:
                 _emit_benchmark_message(

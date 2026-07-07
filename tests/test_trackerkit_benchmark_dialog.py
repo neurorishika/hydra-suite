@@ -14,6 +14,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from hydra_suite.runtime.resolver import PlatformInfo  # noqa: E402
 from hydra_suite.trackerkit.benchmarking import (  # noqa: E402
     BenchmarkRecommendation,
     BenchmarkResult,
@@ -76,11 +77,21 @@ def _make_geometry() -> SimpleNamespace:
 
 
 def test_runtime_selection_widget_returns_checked_runtimes(qapp) -> None:
-    widget = dialog_module._RuntimeSelectionWidget(["cpu", "mps", "cuda"])
+    platform = PlatformInfo(has_cuda=True, has_mps=False)
+    widget = dialog_module._RuntimeSelectionWidget(["cpu", "gpu", "gpu_fast"], platform)
 
-    widget._checkboxes["mps"].setChecked(False)
+    widget._checkboxes["gpu"].setChecked(False)
 
-    assert widget.selected_runtimes() == ["cpu", "cuda"]
+    assert widget.selected_runtimes() == ["cpu", "gpu_fast"]
+
+
+def test_runtime_selection_widget_shows_tier_labels(qapp) -> None:
+    platform = PlatformInfo(has_cuda=True, has_mps=False)
+    widget = dialog_module._RuntimeSelectionWidget(["cpu", "gpu", "gpu_fast"], platform)
+
+    labels = [cb.text() for cb in widget._checkboxes.values()]
+    assert "GPU-Fast (TensorRT)" in labels
+    assert widget.selected_runtimes() == ["cpu", "gpu", "gpu_fast"]
 
 
 def test_batch_size_selection_widget_adds_removes_and_resets(qapp) -> None:
@@ -107,7 +118,7 @@ def test_tracker_benchmark_dialog_collects_validated_target_selections(
         label="Detection",
         pipeline="obb",
         model_path="/tmp/model.pt",
-        runtimes=["cpu", "mps"],
+        runtimes=["cpu", "gpu"],
         batch_sizes=[1, 4],
         current_runtime="cpu",
         current_batch_size=4,
@@ -135,7 +146,7 @@ def test_tracker_benchmark_dialog_collects_validated_target_selections(
     batch_selector = row["batches"]
 
     runtime_selector._checkboxes["cpu"].setChecked(False)
-    runtime_selector._checkboxes["mps"].setChecked(False)
+    runtime_selector._checkboxes["gpu"].setChecked(False)
     selected, errors = dialog._selected_targets()
     assert selected == []
     assert errors == ["Detection: select at least one runtime."]
@@ -149,7 +160,7 @@ def test_tracker_benchmark_dialog_collects_validated_target_selections(
     assert len(selected) == 1
     assert selected[0].runtimes == ["cpu"]
     assert selected[0].batch_sizes == [1, 4, 16]
-    assert target.runtimes == ["cpu", "mps"]
+    assert target.runtimes == ["cpu", "gpu"]
     assert target.batch_sizes == [1, 4]
 
 
@@ -162,7 +173,7 @@ def test_tracker_benchmark_dialog_uses_bright_text_on_dark_cards(
         label="Detection",
         pipeline="obb",
         model_path="/tmp/model.pt",
-        runtimes=["cpu", "mps"],
+        runtimes=["cpu", "gpu"],
         batch_sizes=[1, 4],
         current_runtime="cpu",
         current_batch_size=4,
@@ -203,7 +214,7 @@ def test_tracker_benchmark_dialog_collects_sequential_frame_and_crop_batches(
         label="Detection (Sequential)",
         pipeline="sequential",
         model_path="/tmp/model.pt",
-        runtimes=["cpu", "mps"],
+        runtimes=["cpu", "gpu"],
         batch_sizes=[1, 4],
         individual_batch_sizes=[8, 12],
         current_runtime="cpu",
@@ -327,7 +338,7 @@ def test_tracker_benchmark_dialog_clarifies_sleap_pose_runtime_paths(
         label="Pose Extraction",
         pipeline="pose",
         model_path="/tmp/pose_model",
-        runtimes=["mps", "onnx_coreml"],
+        runtimes=["gpu", "gpu_fast"],
         batch_sizes=[1],
         backend_family="sleap",
         benchmark_context={"keypoint_names": ["nose", "tail"]},
@@ -361,6 +372,7 @@ def test_tracker_benchmark_dialog_clarifies_sleap_pose_runtime_paths(
                 input_shape=(32, 64),
                 warmup_iters=1,
                 bench_iters=2,
+                resolved_backend="torch",
                 mean_ms=50.0,
                 mean_per_frame_ms=50.0,
                 throughput_fps=20.0,
@@ -374,6 +386,7 @@ def test_tracker_benchmark_dialog_clarifies_sleap_pose_runtime_paths(
                 input_shape=(32, 64),
                 warmup_iters=1,
                 bench_iters=2,
+                resolved_backend="onnx",
                 mean_ms=12.0,
                 mean_per_frame_ms=12.0,
                 throughput_fps=83.3,
