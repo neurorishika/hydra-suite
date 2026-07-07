@@ -5,6 +5,7 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
+from hydra_suite.runtime import resolver as benchmarking_resolver
 from hydra_suite.trackerkit import benchmarking
 
 
@@ -424,7 +425,80 @@ def test_bench_pose_yolo_gpu_fast_uses_native_device_not_export(monkeypatch, tmp
 
     assert result.success, result.error
     assert not export_calls
-    assert created["device"] in {"cuda:0", "mps", "cpu"}
+    # Whatever accelerator this machine actually has (mps here), gpu_fast must
+    # resolve to the *native* device for that accelerator, never "cpu".
+    platform = benchmarking.detect_platform()
+    if platform.has_cuda:
+        assert created["device"] == "cuda:0"
+    elif platform.has_mps:
+        assert created["device"] == "mps"
+    else:
+        assert created["device"] == "cpu"
+
+
+def test_bench_pose_yolo_gpu_fast_uses_cuda_device_on_cuda_platform(
+    monkeypatch, tmp_path
+):
+    """Regression test for the gpu_fast->cpu silent-fallback bug.
+
+    Forces a simulated CUDA platform (no real GPU hardware required) and
+    asserts device == "cuda:0". Against the pre-fix code (which called
+    resolve_compute_runtime(tier, platform, stage="yolo_pose") with no
+    artifact_available override, so gpu_fast + has_cuda=True resolved to the
+    literal compute-runtime string "tensorrt", which the device-mapping
+    ternary has no branch for and silently fell through to "cpu"), this
+    assertion fails.
+    """
+    import hydra_suite.trackerkit.benchmarking as benchmarking
+
+    monkeypatch.setattr(
+        benchmarking,
+        "detect_platform",
+        lambda: benchmarking_resolver.PlatformInfo(has_cuda=True, has_mps=False),
+    )
+
+    export_calls = []
+
+    def fake_auto_export(*args, **kwargs):
+        export_calls.append((args, kwargs))
+        raise AssertionError(
+            "YOLO pose must not export to ONNX/TensorRT under gpu_fast"
+        )
+
+    monkeypatch.setattr(
+        "hydra_suite.core.identity.pose.backends.yolo.auto_export_yolo_model",
+        fake_auto_export,
+    )
+
+    created = {}
+
+    class _FakeBackend:
+        def __init__(self, model_path, device, batch_size):
+            created["device"] = device
+
+        def predict_batch(self, crops):
+            return [None] * len(crops)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "hydra_suite.core.identity.pose.backends.yolo.YoloNativeBackend", _FakeBackend
+    )
+
+    result = benchmarking.bench_pose(
+        str(tmp_path / "pose.pt"),
+        "gpu_fast",
+        warmup=1,
+        iterations=1,
+        batch_size=1,
+        crop_size=64,
+        backend_family="yolo",
+    )
+
+    assert result.success, result.error
+    assert not export_calls
+    assert created["device"] == "cuda:0"
 
 
 def test_run_target_benchmark_pose_preserves_rectangular_crop_geometry_for_sleap(

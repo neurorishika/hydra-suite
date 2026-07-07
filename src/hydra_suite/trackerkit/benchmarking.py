@@ -77,13 +77,22 @@ class _PoseBenchmarkBackendCache:
         self._backends.clear()
 
 
-def _can_reuse_pose_backend(backend_family: str, tier: str) -> bool:
+def _can_reuse_pose_backend(backend_family: str, tier: str, platform: Any) -> bool:
     family = str(backend_family or "yolo").strip().lower()
     rt = str(tier or "cpu").strip().lower()
     if family == "yolo":
-        return rt != "tensorrt"
+        # `tier` is always "cpu"/"gpu"/"gpu_fast" here, never the canonical
+        # runtime string "tensorrt" -- YOLO pose never has an export artifact
+        # (see stages/pose.py::load_pose_model), so gpu_fast is always just
+        # the native backend on a different device. Always reusable.
+        return True
     if family == "sleap":
-        return rt in {"cpu", "mps", "cuda"}
+        # cpu/gpu tiers always resolve to the native SLEAP service backend.
+        # gpu_fast is the one case that can differ: on CUDA hardware it
+        # resolves to an exported (tensorrt/onnx) backend (not reusable);
+        # on Apple hardware SLEAP has no CoreML path, so gpu_fast still
+        # resolves to the native/mps backend (reusable).
+        return rt != "gpu_fast" or not platform.has_cuda
     return False
 
 
@@ -92,10 +101,11 @@ def _pose_backend_cache_key(
     tier: str,
     model_path: str,
     crop_size: int,
+    platform: Any,
     keypoint_names: list[str] | None = None,
     sleap_env: str = "sleap",
 ) -> tuple[Any, ...] | None:
-    if not _can_reuse_pose_backend(backend_family, tier):
+    if not _can_reuse_pose_backend(backend_family, tier, platform):
         return None
     family = str(backend_family or "yolo").strip().lower()
     return (
@@ -1171,6 +1181,7 @@ def bench_pose(
             tier,
             model_path,
             crop_size,
+            platform,
             keypoint_names=keypoint_names,
             sleap_env=sleap_env,
         )
@@ -1287,7 +1298,9 @@ def bench_pose(
 
         from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
 
-        compute_runtime = resolve_compute_runtime(tier, platform, stage="yolo_pose")
+        compute_runtime = resolve_compute_runtime(
+            tier, platform, stage="yolo_pose", artifact_available=lambda: False
+        )
         device = (
             "cuda:0"
             if compute_runtime == "cuda"
