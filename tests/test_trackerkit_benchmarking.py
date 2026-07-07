@@ -815,6 +815,62 @@ def test_run_target_benchmark_resolves_tier_before_bench_classify(
         assert expected_runtime != "cpu"
 
 
+def test_run_target_benchmark_passes_raw_tier_to_bench_headtail(monkeypatch, tmp_path):
+    """`bench_headtail` now expects a tier ("cpu"/"gpu"/"gpu_fast"), not a
+    canonical-runtime string. `_normalize_runtime` doesn't recognize tier
+    strings and silently collapses "gpu"/"gpu_fast" to "cpu" -- this dispatch
+    must NOT route the tier through it (the same bug already fixed for
+    bench_obb/bench_sequential/bench_pose/bench_classify's dispatch sites)."""
+    import hydra_suite.trackerkit.benchmarking as benchmarking
+
+    seen_tiers = []
+
+    def fake_bench_headtail(model_path, tier, *a, **k):
+        seen_tiers.append(tier)
+        return benchmarking.BenchmarkResult(
+            model_type="headtail",
+            model_path=model_path,
+            runtime=tier,
+            runtime_label=tier,
+            batch_size=1,
+            input_shape=(32, 32),
+            warmup_iters=0,
+            bench_iters=1,
+            success=True,
+        )
+
+    monkeypatch.setattr(benchmarking, "bench_headtail", fake_bench_headtail)
+
+    target = benchmarking.BenchmarkTargetSpec(
+        key="headtail",
+        label="Head-tail Orientation",
+        pipeline="headtail",
+        model_path=str(tmp_path / "headtail.pt"),
+        runtimes=["gpu_fast"],
+        batch_sizes=[1],
+        current_runtime="cpu",
+        current_batch_size=1,
+    )
+    geometry = benchmarking.BenchmarkGeometry(
+        frame_width=64,
+        frame_height=64,
+        resize_factor=1.0,
+        effective_frame_width=64,
+        effective_frame_height=64,
+        reference_body_size=32.0,
+        reference_aspect_ratio=1.0,
+        padding_fraction=0.1,
+        canonical_crop_width=32,
+        canonical_crop_height=32,
+    )
+
+    benchmarking.run_target_benchmark(
+        target, geometry, "gpu_fast", 1, warmup=0, iterations=1
+    )
+
+    assert seen_tiers == ["gpu_fast"]
+
+
 def test_collect_active_targets_includes_sequential_crop_settings(
     tmp_path: Path,
 ) -> None:

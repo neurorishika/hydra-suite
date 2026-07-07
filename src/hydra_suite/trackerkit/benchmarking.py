@@ -19,7 +19,6 @@ from hydra_suite.core.canonicalization.crop import compute_crop_dimensions
 from hydra_suite.core.identity.properties.cache import _file_fingerprint, _hash_payload
 from hydra_suite.paths import get_config_dir
 from hydra_suite.runtime.compute_runtime import (
-    _normalize_runtime,
     derive_pose_runtime_settings,
     runtime_label,
 )
@@ -1439,7 +1438,6 @@ def run_target_benchmark(
     iterations: int,
 ) -> BenchmarkResult:
     """Run one benchmark target for a single runtime and batch size."""
-    normalized_runtime = _normalize_runtime(runtime)
     frame_size = (geometry.effective_frame_height, geometry.effective_frame_width)
     crop_size = int(max(geometry.canonical_crop_width, geometry.canonical_crop_height))
     crop_hw = (
@@ -1486,7 +1484,7 @@ def run_target_benchmark(
     if target.pipeline == "headtail":
         return bench_headtail(
             target.model_path,
-            normalized_runtime,
+            runtime,
             warmup,
             iterations,
             batch_size,
