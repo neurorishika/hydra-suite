@@ -297,7 +297,7 @@ def test_bench_pose_streams_phase_messages(monkeypatch, tmp_path: Path) -> None:
 
     result = benchmarking.bench_pose(
         model_path=str(tmp_path / "pose.pt"),
-        runtime="cpu",
+        tier="cpu",
         warmup=1,
         iterations=2,
         batch_size=4,
@@ -354,7 +354,7 @@ def test_bench_pose_reuses_native_backend_across_batch_sweeps(
     try:
         first = benchmarking.bench_pose(
             model_path=str(tmp_path / "pose.pt"),
-            runtime="cpu",
+            tier="cpu",
             warmup=0,
             iterations=1,
             batch_size=4,
@@ -364,7 +364,7 @@ def test_bench_pose_reuses_native_backend_across_batch_sweeps(
         )
         second = benchmarking.bench_pose(
             model_path=str(tmp_path / "pose.pt"),
-            runtime="cpu",
+            tier="cpu",
             warmup=0,
             iterations=1,
             batch_size=8,
@@ -378,6 +378,53 @@ def test_bench_pose_reuses_native_backend_across_batch_sweeps(
     assert first.success is True
     assert second.success is True
     assert call_counts == {"create": 1, "warmup": 1, "predict": 2, "close": 1}
+
+
+def test_bench_pose_yolo_gpu_fast_uses_native_device_not_export(monkeypatch, tmp_path):
+    import hydra_suite.trackerkit.benchmarking as benchmarking
+
+    export_calls = []
+
+    def fake_auto_export(*args, **kwargs):
+        export_calls.append((args, kwargs))
+        raise AssertionError(
+            "YOLO pose must not export to ONNX/TensorRT under gpu_fast"
+        )
+
+    monkeypatch.setattr(
+        "hydra_suite.core.identity.pose.backends.yolo.auto_export_yolo_model",
+        fake_auto_export,
+    )
+
+    created = {}
+
+    class _FakeBackend:
+        def __init__(self, model_path, device, batch_size):
+            created["device"] = device
+
+        def predict_batch(self, crops):
+            return [None] * len(crops)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "hydra_suite.core.identity.pose.backends.yolo.YoloNativeBackend", _FakeBackend
+    )
+
+    result = benchmarking.bench_pose(
+        str(tmp_path / "pose.pt"),
+        "gpu_fast",
+        warmup=1,
+        iterations=1,
+        batch_size=1,
+        crop_size=64,
+        backend_family="yolo",
+    )
+
+    assert result.success, result.error
+    assert not export_calls
+    assert created["device"] in {"cuda:0", "mps", "cpu"}
 
 
 def test_run_target_benchmark_pose_preserves_rectangular_crop_geometry_for_sleap(
@@ -421,7 +468,7 @@ def test_run_target_benchmark_pose_preserves_rectangular_crop_geometry_for_sleap
         label="Pose Extraction",
         pipeline="pose",
         model_path=str(tmp_path / "pose_model"),
-        runtimes=["onnx_coreml"],
+        runtimes=["gpu_fast"],
         batch_sizes=[3],
         backend_family="sleap",
         benchmark_context={
@@ -445,7 +492,7 @@ def test_run_target_benchmark_pose_preserves_rectangular_crop_geometry_for_sleap
     result = benchmarking.run_target_benchmark(
         target,
         geometry,
-        runtime="onnx_coreml",
+        runtime="gpu_fast",
         batch_size=3,
         warmup=0,
         iterations=1,
@@ -454,7 +501,11 @@ def test_run_target_benchmark_pose_preserves_rectangular_crop_geometry_for_sleap
     assert result.success is True
     assert result.input_shape == (72, 104)
     assert captured["export_input_hw"] is None
-    assert captured["runtime_flavor"] == "onnx_mps"
+    # On this platform (Apple Silicon, no CUDA), gpu_fast for SLEAP has no
+    # exported CoreML path (see stages/pose.py) and resolves to the native
+    # mps compute_runtime, which derive_pose_runtime_settings maps to the
+    # "mps" flavor.
+    assert captured["runtime_flavor"] == "mps"
     assert captured["device"] == "mps"
     assert captured["crop_shapes"] == [(72, 104, 3)]
 

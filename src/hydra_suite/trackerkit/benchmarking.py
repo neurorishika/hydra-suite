@@ -77,9 +77,9 @@ class _PoseBenchmarkBackendCache:
         self._backends.clear()
 
 
-def _can_reuse_pose_backend(backend_family: str, runtime: str) -> bool:
+def _can_reuse_pose_backend(backend_family: str, tier: str) -> bool:
     family = str(backend_family or "yolo").strip().lower()
-    rt = _normalize_runtime(runtime)
+    rt = str(tier or "cpu").strip().lower()
     if family == "yolo":
         return rt != "tensorrt"
     if family == "sleap":
@@ -89,18 +89,18 @@ def _can_reuse_pose_backend(backend_family: str, runtime: str) -> bool:
 
 def _pose_backend_cache_key(
     backend_family: str,
-    runtime: str,
+    tier: str,
     model_path: str,
     crop_size: int,
     keypoint_names: list[str] | None = None,
     sleap_env: str = "sleap",
 ) -> tuple[Any, ...] | None:
-    if not _can_reuse_pose_backend(backend_family, runtime):
+    if not _can_reuse_pose_backend(backend_family, tier):
         return None
     family = str(backend_family or "yolo").strip().lower()
     return (
         family,
-        _normalize_runtime(runtime),
+        str(tier or "cpu").strip().lower(),
         str(model_path),
         int(crop_size),
         tuple(str(name) for name in (keypoint_names or [])),
@@ -611,23 +611,6 @@ def _default_batch_sizes(current: int, maximum: int) -> list[int]:
         if bounded not in ordered:
             ordered.append(bounded)
     return ordered
-
-
-def _canonical_runtime_from_pose_flavor(flavor: str) -> str:
-    value = str(flavor or "cpu").strip().lower()
-    if value in {"tensorrt_cuda", "tensorrt"}:
-        return "tensorrt"
-    if value in {"onnx_mps", "onnx_coreml"}:
-        return "onnx_coreml"
-    if value == "onnx_cuda":
-        return "onnx_cuda"
-    if value == "onnx_cpu":
-        return "onnx_cpu"
-    if value == "cuda":
-        return "cuda"
-    if value == "mps":
-        return "mps"
-    return "cpu"
 
 
 def _resolve_existing_model_path(model_path: object) -> str:
@@ -1143,23 +1126,9 @@ def bench_headtail(
     return result
 
 
-def _runtime_to_pose_flavor(runtime: str) -> tuple[str, str]:
-    rt = _normalize_runtime(runtime)
-    mapping = {
-        "cpu": ("native", "cpu"),
-        "mps": ("native", "mps"),
-        "cuda": ("native", "cuda:0"),
-        "onnx_coreml": ("onnx", "mps"),
-        "onnx_cpu": ("onnx", "cpu"),
-        "onnx_cuda": ("onnx", "cuda:0"),
-        "tensorrt": ("tensorrt", "cuda:0"),
-    }
-    return mapping.get(rt, ("native", "cpu"))
-
-
 def bench_pose(
     model_path: str,
-    runtime: str,
+    tier: str,
     warmup: int,
     iterations: int,
     batch_size: int,
@@ -1178,11 +1147,15 @@ def bench_pose(
         if isinstance(crop_hw, tuple) and len(crop_hw) >= 2
         else (int(crop_size), int(crop_size))
     )
+    platform = detect_platform()
+    pipeline = (
+        "sleap_pose" if str(backend_family).strip().lower() == "sleap" else "yolo_pose"
+    )
     result = BenchmarkResult(
         model_type="pose",
         model_path=model_path,
-        runtime=runtime,
-        runtime_label=runtime_label(runtime),
+        runtime=tier,
+        runtime_label=tier_label(tier, platform),
         batch_size=batch_size,
         input_shape=(crop_height, crop_width),
         warmup_iters=warmup,
@@ -1195,7 +1168,7 @@ def bench_pose(
         )
         cache_key = _pose_backend_cache_key(
             backend_family,
-            runtime,
+            tier,
             model_path,
             crop_size,
             keypoint_names=keypoint_names,
@@ -1213,7 +1186,21 @@ def bench_pose(
             )
             from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
 
-            derived = derive_pose_runtime_settings(runtime, backend_family="sleap")
+            def _sleap_artifact_available() -> bool:
+                # Mirrors core/inference/stages/pose.py's SLEAP tier->flavor gate:
+                # gpu_fast on CUDA uses the exported TensorRT/ONNX path; on Apple,
+                # SLEAP has no CoreML path and always uses native (mps) service.
+                return platform.has_cuda
+
+            sleap_compute_runtime = resolve_compute_runtime(
+                tier,
+                platform,
+                stage=pipeline,
+                artifact_available=_sleap_artifact_available,
+            )
+            derived = derive_pose_runtime_settings(
+                sleap_compute_runtime, backend_family="sleap"
+            )
             runtime_flavor = (
                 str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
             )
@@ -1298,44 +1285,27 @@ def bench_pose(
                     closer()
             return result
 
-        from hydra_suite.core.identity.pose.backends.yolo import (
-            YoloNativeBackend,
-            auto_export_yolo_model,
-        )
-        from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+        from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
 
-        flavor, device = _runtime_to_pose_flavor(runtime)
-        actual_model_path = model_path
+        compute_runtime = resolve_compute_runtime(tier, platform, stage="yolo_pose")
+        device = (
+            "cuda:0"
+            if compute_runtime == "cuda"
+            else ("mps" if compute_runtime in ("mps", "coreml") else "cpu")
+        )
         if reused_backend:
             _emit_benchmark_message(
-                f"Reusing YOLO pose backend ({flavor} on {device}) for batch {batch_size}.",
+                f"Reusing YOLO pose backend (native on {device}) for batch {batch_size}.",
                 status_callback,
             )
             _update_pose_backend_batch_size(backend, batch_size)
         else:
-            if flavor in {"onnx", "tensorrt"}:
-                _emit_benchmark_message(
-                    f"Preparing YOLO pose runtime artifact ({flavor}, batch {batch_size}).",
-                    status_callback,
-                )
-                config = PoseRuntimeConfig(
-                    backend_family="yolo",
-                    runtime_flavor=flavor,
-                    device=device,
-                    model_path=model_path,
-                    yolo_batch=batch_size,
-                )
-                actual_model_path = auto_export_yolo_model(
-                    config,
-                    flavor,
-                    runtime_device=device,
-                )
             _emit_benchmark_message(
-                f"Creating YOLO pose backend ({flavor} on {device}, batch {batch_size}).",
+                f"Creating YOLO pose backend (native on {device}, batch {batch_size}).",
                 status_callback,
             )
             backend = YoloNativeBackend(
-                model_path=actual_model_path,
+                model_path=model_path,
                 device=device,
                 batch_size=batch_size,
             )
@@ -1381,7 +1351,7 @@ def bench_pose(
     except Exception as exc:
         result.success = False
         result.error = str(exc)
-        logger.warning("Pose benchmark failed [%s]: %s", runtime, exc)
+        logger.warning("Pose benchmark failed [%s]: %s", tier, exc)
     return result
 
 
@@ -1507,7 +1477,7 @@ def run_target_benchmark(
     if target.pipeline == "pose":
         return bench_pose(
             target.model_path,
-            normalized_runtime,
+            runtime,
             warmup,
             iterations,
             batch_size,
