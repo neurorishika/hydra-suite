@@ -92,6 +92,29 @@ def tier_label(tier: str, platform: PlatformInfo) -> str:
     return {"gpu": f"GPU ({accel})", "gpu_fast": f"GPU-Fast ({fast})"}[tier]
 
 
+def resolve_compute_runtime(
+    tier: str,
+    platform: PlatformInfo,
+    stage: str = "obb",
+    artifact_available: Callable[[], bool] = lambda: True,
+) -> str:
+    """Resolve a tier to the compute-runtime string the live pipeline would use.
+
+    Thin wrapper around ``RuntimeResolver.resolve`` for callers that only need
+    the resulting runtime string (display/benchmark plumbing), not the full
+    ``RuntimeContext`` that ``core/inference/runtime.py`` builds for an actual
+    inference run.
+    """
+    resolved = RuntimeResolver(tier, platform).resolve(
+        stage, artifact_available=artifact_available
+    )
+    if resolved.backend == "tensorrt":
+        return "tensorrt"
+    if resolved.backend == "coreml":
+        return "coreml"
+    return resolved.device  # "cuda", "mps", or "cpu"
+
+
 def detect_platform() -> PlatformInfo:
     """Detect host acceleration via the existing gpu_utils availability flags."""
     from hydra_suite.utils.gpu_utils import CUDA_AVAILABLE, MPS_AVAILABLE

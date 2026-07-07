@@ -162,6 +162,9 @@ class BenchmarkResult:
     input_shape: tuple[int, int]
     warmup_iters: int
     bench_iters: int
+    resolved_backend: str = (
+        ""  # "torch"/"tensorrt"/"coreml" — what RuntimeResolver picked
+    )
     individual_batch_size: int | None = None
     latencies_ms: list[float] = field(default_factory=list)
     mean_ms: float = 0.0
