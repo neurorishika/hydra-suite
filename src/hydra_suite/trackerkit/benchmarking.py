@@ -21,12 +21,11 @@ from hydra_suite.paths import get_config_dir
 from hydra_suite.runtime.compute_runtime import (
     _normalize_runtime,
     allowed_runtimes_for_pipelines,
-    available_tiers,
     derive_pose_runtime_settings,
     runtime_label,
     supported_runtimes_for_pipeline,
 )
-from hydra_suite.runtime.resolver import detect_platform
+from hydra_suite.runtime.resolver import available_tiers, detect_platform
 from hydra_suite.trackerkit.gui.model_utils import (
     resolve_model_path,
     resolve_pose_model_path,

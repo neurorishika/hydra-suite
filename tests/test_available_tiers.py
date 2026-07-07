@@ -1,5 +1,4 @@
-from hydra_suite.runtime.compute_runtime import available_tiers, tier_label
-from hydra_suite.runtime.resolver import PlatformInfo
+from hydra_suite.runtime.resolver import PlatformInfo, available_tiers, tier_label
 
 
 def test_cuda_host_tiers_and_labels():

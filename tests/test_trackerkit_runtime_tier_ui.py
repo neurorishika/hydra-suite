@@ -10,8 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from hydra_suite.runtime.compute_runtime import available_tiers, tier_label
-from hydra_suite.runtime.resolver import PlatformInfo
+from hydra_suite.runtime.resolver import PlatformInfo, available_tiers, tier_label
 
 
 def test_tier_combo_lists_cuda_platform_tiers():
@@ -63,8 +62,7 @@ def test_tier_combo_itemdata_are_tier_ids():
     from PySide6.QtWidgets import QApplication
 
     QApplication.instance() or QApplication([])
-    from hydra_suite.runtime.compute_runtime import available_tiers
-    from hydra_suite.runtime.resolver import detect_platform
+    from hydra_suite.runtime.resolver import available_tiers, detect_platform
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
     mw = MainWindow()

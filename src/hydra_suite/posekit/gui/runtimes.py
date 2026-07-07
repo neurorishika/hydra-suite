@@ -4,13 +4,16 @@ try:
     from hydra_suite.runtime.compute_runtime import (
         CANONICAL_RUNTIMES,
         allowed_runtimes_for_pipelines,
-        available_tiers,
         derive_pose_runtime_settings,
         infer_compute_runtime_from_legacy,
         runtime_label,
+    )
+    from hydra_suite.runtime.resolver import (
+        PlatformInfo,
+        available_tiers,
+        detect_platform,
         tier_label,
     )
-    from hydra_suite.runtime.resolver import PlatformInfo, detect_platform
 except Exception:
     CANONICAL_RUNTIMES = [
         "cpu",

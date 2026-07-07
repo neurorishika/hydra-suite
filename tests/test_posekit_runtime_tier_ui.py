@@ -1,7 +1,6 @@
 """Tests for posekit runtime-tier selector (Task 7 — Phase 2)."""
 
-from hydra_suite.runtime.compute_runtime import available_tiers, tier_label
-from hydra_suite.runtime.resolver import PlatformInfo
+from hydra_suite.runtime.resolver import PlatformInfo, available_tiers, tier_label
 
 
 def test_posekit_tier_labels_mac():
