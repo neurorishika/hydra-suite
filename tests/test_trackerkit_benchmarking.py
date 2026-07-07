@@ -507,152 +507,90 @@ def test_collect_active_targets_skips_headtail_when_pipeline_disabled(
     )
 
 
-def test_runtime_to_obb_params_omits_yolo_imgsz_when_not_overridden() -> None:
-    params = benchmarking._runtime_to_obb_params(
-        "onnx_coreml",
-        "/tmp/model.pt",
-        imgsz=None,
-        batch_size=8,
+def test_bench_obb_uses_load_obb_executor_not_legacy_detector(monkeypatch, tmp_path):
+    import hydra_suite.trackerkit.benchmarking as benchmarking_module
+
+    calls = []
+
+    class _FakeExecutor:
+        def predict(self, frames, **kwargs):
+            class _R:
+                obb = None
+                boxes = None
+
+            return [_R() for _ in frames]
+
+    def fake_load_obb_executor(model_path, compute_runtime, **kwargs):
+        calls.append((model_path, compute_runtime, kwargs))
+        return _FakeExecutor()
+
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.runtime_artifacts.load_obb_executor",
+        fake_load_obb_executor,
     )
 
-    assert "YOLO_IMGSZ" not in params
-    assert params["ENABLE_ONNX_RUNTIME"] is True
-    assert params["TENSORRT_MAX_BATCH_SIZE"] == 8
+    # If bench_obb still imports YOLOOBBDetector at all, fail loudly.
+    def _fail_if_called(*_a, **_k):
+        raise AssertionError("bench_obb must not construct YOLOOBBDetector")
 
-
-def test_bench_obb_does_not_override_imgsz_with_frame_size(
-    monkeypatch, tmp_path: Path
-) -> None:
-    captured = {}
-
-    class FakeDetector:
-        def __init__(self, params):
-            captured.update(params)
-            self.use_onnx = True
-            self.use_tensorrt = False
-
-        def detect_objects(self, _frame, frame_count=0):
-            return []
-
-        def detect_objects_batched(self, _frames, start_frame_idx=0):
-            return []
-
-    monkeypatch.setitem(
-        sys.modules,
-        "hydra_suite.core.detectors",
-        types.SimpleNamespace(YOLOOBBDetector=FakeDetector),
+    monkeypatch.setattr(
+        "hydra_suite.core.detectors.YOLOOBBDetector", _fail_if_called, raising=False
     )
 
-    result = benchmarking.bench_obb(
-        str(tmp_path / "model.pt"),
-        runtime="onnx_coreml",
-        warmup=0,
-        iterations=1,
-        batch_size=8,
-        frame_size=(2160, 4096),
-        max_targets=13,
-    )
-
-    assert result.success is True
-    assert captured["ENABLE_ONNX_RUNTIME"] is True
-    assert captured["TENSORRT_MAX_BATCH_SIZE"] == 8
-    assert captured["MAX_TARGETS"] == 13
-    assert "YOLO_IMGSZ" not in captured
-
-
-def test_bench_obb_fails_when_tensorrt_request_falls_back_to_pytorch(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    class FakeDetector:
-        def __init__(self, _params):
-            self.use_tensorrt = False
-            self.use_onnx = False
-            self.tensorrt_failure_reason = (
-                "TensorRT build failed during benchmark setup"
-            )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "hydra_suite.core.detectors",
-        types.SimpleNamespace(YOLOOBBDetector=FakeDetector),
-    )
-
-    result = benchmarking.bench_obb(
-        str(tmp_path / "model.pt"),
-        runtime="tensorrt",
-        warmup=0,
+    model_path = str(tmp_path / "model.pt")
+    result = benchmarking_module.bench_obb(
+        model_path,
+        "gpu_fast",
+        warmup=1,
         iterations=1,
         batch_size=1,
-        frame_size=(640, 640),
+        frame_size=(128, 128),
     )
 
-    assert result.success is False
-    assert "TensorRT build failed during benchmark setup" in result.error
+    assert result.success, result.error
+    assert calls, "load_obb_executor was never called"
+    assert calls[0][0] == model_path
 
 
-def test_bench_sequential_does_not_force_stage1_detect_imgsz_to_frame_size(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    captured = {}
-    batched_calls = []
+def test_bench_sequential_uses_load_obb_executor(monkeypatch, tmp_path):
+    import hydra_suite.trackerkit.benchmarking as benchmarking_module
 
-    class FakeDetector:
-        def __init__(self, params):
-            captured.update(params)
-            self.params = dict(params)
-            self.use_onnx = True
-            self.use_tensorrt = False
+    calls = []
 
-        def detect_objects(self, _frame, frame_count=0):
-            batched_calls.append(("single", frame_count, 1))
-            return (), (), (), (), ()
+    class _FakeExecutor:
+        def predict(self, frames, **kwargs):
+            class _R:
+                obb = None
+                boxes = None
 
-        def detect_objects_batched(self, frames, start_frame_idx=0):
-            batched_calls.append(("batched", start_frame_idx, len(frames)))
-            return [(), (), (), (), (), (), (), ()]
+            return [_R() for _ in frames]
 
-    monkeypatch.setitem(
-        sys.modules,
-        "hydra_suite.core.detectors",
-        types.SimpleNamespace(YOLOOBBDetector=FakeDetector),
+    def fake_load_obb_executor(model_path, compute_runtime, **kwargs):
+        calls.append((model_path, compute_runtime, kwargs.get("task")))
+        return _FakeExecutor()
+
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.runtime_artifacts.load_obb_executor",
+        fake_load_obb_executor,
     )
 
-    result = benchmarking.bench_sequential(
-        detect_model_path=str(tmp_path / "detect.pt"),
-        crop_obb_model_path=str(tmp_path / "crop.pt"),
-        runtime="onnx_coreml",
-        warmup=0,
+    detect_path = str(tmp_path / "detect.pt")
+    crop_path = str(tmp_path / "crop.pt")
+    result = benchmarking_module.bench_sequential(
+        detect_path,
+        crop_path,
+        "gpu",
+        warmup=1,
         iterations=1,
-        batch_size=8,
-        individual_batch_size=11,
-        frame_size=(2160, 4096),
-        crop_size=256,
-        crop_pad_ratio=0.2,
-        min_crop_size_px=96,
-        enforce_square_crop=False,
-        stage2_pow2_pad=True,
-        detect_conf_threshold=0.18,
-        assumed_target_count=11,
-        max_targets=11,
+        batch_size=1,
+        individual_batch_size=1,
+        frame_size=(128, 128),
+        crop_size=128,
     )
 
-    assert result.success is True
-    assert captured["ENABLE_ONNX_RUNTIME"] is True
-    assert captured["MAX_TARGETS"] == 11
-    assert captured["YOLO_SEQ_STAGE2_IMGSZ"] == 256
-    assert captured["YOLO_SEQ_STAGE2_RUNTIME_BUILD_BATCH_SIZE"] == 11
-    assert captured["YOLO_SEQ_INDIVIDUAL_BATCH_SIZE"] == 11
-    assert captured["YOLO_DETECT_RUNTIME_BUILD_BATCH_SIZE"] == 8
-    assert captured["YOLO_SEQ_CROP_PAD_RATIO"] == 0.2
-    assert captured["YOLO_SEQ_MIN_CROP_SIZE_PX"] == 96
-    assert captured["YOLO_SEQ_ENFORCE_SQUARE_CROP"] is False
-    assert captured["YOLO_SEQ_STAGE2_POW2_PAD"] is True
-    assert captured["YOLO_SEQ_DETECT_CONF_THRESHOLD"] == 0.18
-    assert batched_calls == [("batched", 0, 8)]
-    assert "YOLO_IMGSZ" not in captured
-    assert "YOLO_SEQ_DETECT_IMGSZ" not in captured
+    assert result.success, result.error
+    # Two executors: stage-1 detect (task="detect") and stage-2 crop OBB (task="obb").
+    assert {c[2] for c in calls} == {"detect", "obb"}
 
 
 def test_collect_active_targets_includes_sequential_crop_settings(
@@ -839,7 +777,6 @@ def test_run_target_benchmark_uses_setup_target_count_for_detection_modes(
 
     assert calls["direct"]["max_targets"] == 9
     assert calls["sequential"]["individual_batch_size"] == 9
-    assert calls["sequential"]["assumed_target_count"] == 9
     assert calls["sequential"]["max_targets"] == 9
     assert calls["sequential"]["crop_size"] == 192
 

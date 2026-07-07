@@ -23,7 +23,12 @@ from hydra_suite.runtime.compute_runtime import (
     derive_pose_runtime_settings,
     runtime_label,
 )
-from hydra_suite.runtime.resolver import available_tiers, detect_platform
+from hydra_suite.runtime.resolver import (
+    available_tiers,
+    detect_platform,
+    resolve_compute_runtime,
+    tier_label,
+)
 from hydra_suite.trackerkit.gui.model_utils import (
     resolve_model_path,
     resolve_pose_model_path,
@@ -965,101 +970,9 @@ def make_synthetic_obb_corners(
     return corners_list
 
 
-def _runtime_to_obb_params(
-    runtime: str,
-    model_path: str,
-    imgsz: int | None = None,
-    batch_size: int = 1,
-    max_targets: int = 25,
-) -> dict[str, Any]:
-    rt = _normalize_runtime(runtime)
-    device = "cpu"
-    enable_trt = False
-    enable_onnx = False
-    if rt == "mps":
-        device = "mps"
-    elif rt == "cuda":
-        device = "cuda:0"
-    elif rt == "tensorrt":
-        device = "cuda:0"
-        enable_trt = True
-    elif rt == "onnx_coreml":
-        device = "mps"
-        enable_onnx = True
-    elif rt == "onnx_cpu":
-        device = "cpu"
-        enable_onnx = True
-    elif rt == "onnx_cuda":
-        device = "cuda:0"
-        enable_onnx = True
-    params = {
-        "YOLO_MODEL_PATH": model_path,
-        "YOLO_OBB_MODE": "direct",
-        "YOLO_OBB_DIRECT_MODEL_PATH": model_path,
-        "YOLO_DETECT_MODEL_PATH": "",
-        "YOLO_CROP_OBB_MODEL_PATH": model_path,
-        "YOLO_HEADTAIL_MODEL_PATH": "",
-        "YOLO_DEVICE": device,
-        "ENABLE_TENSORRT": enable_trt,
-        "ENABLE_ONNX_RUNTIME": enable_onnx,
-        "ENABLE_YOLO_BATCHING": batch_size > 1,
-        "YOLO_BATCH_SIZE_MODE": "manual",
-        "YOLO_MANUAL_BATCH_SIZE": batch_size,
-        "YOLO_CONFIDENCE_THRESHOLD": 0.25,
-        "YOLO_IOU_THRESHOLD": 0.7,
-        "TENSORRT_MAX_BATCH_SIZE": batch_size,
-        "MAX_TARGETS": max(1, int(max_targets)),
-    }
-    if imgsz not in (None, 0, "", False):
-        params["YOLO_IMGSZ"] = int(imgsz)
-    return params
-
-
-def _make_detector_runtime_stub(runtime: str, model_path: str, *, batch_size: int):
-    from hydra_suite.core.detectors import YOLOOBBDetector
-
-    params = _runtime_to_obb_params(
-        runtime, model_path, imgsz=640, batch_size=batch_size
-    )
-    params["TRACKING_REALTIME_MODE"] = False
-    detector = YOLOOBBDetector.__new__(YOLOOBBDetector)
-    detector.params = params
-    detector.model = None
-    detector.detect_model = None
-    detector._headtail_analyzer = None
-    detector.device = str(params.get("YOLO_DEVICE", "cpu"))
-    detector.use_tensorrt = False
-    detector.use_onnx = False
-    detector.onnx_imgsz = None
-    detector.onnx_batch_size = 1
-    detector.tensorrt_batch_size = 1
-    detector.obb_predict_device = None
-    detector.detect_predict_device = None
-    return detector
-
-
-def _ensure_detector_runtime_materialized(detector: Any, runtime: str) -> None:
-    """Ensure detector initialization honored the requested accelerated runtime."""
-    rt = _normalize_runtime(runtime)
-    if rt == "tensorrt" and not bool(getattr(detector, "use_tensorrt", False)):
-        reason = str(
-            getattr(detector, "tensorrt_failure_reason", "")
-            or "TensorRT backend was requested, but detector fell back to standard inference."
-        ).strip()
-        raise RuntimeError(reason)
-    if rt in {"onnx_coreml", "onnx_cpu", "onnx_cuda"} and not bool(
-        getattr(detector, "use_onnx", False)
-    ):
-        reason = str(
-            getattr(detector, "onnx_failure_reason", "")
-            or "ONNX runtime was requested, but detector fell back to standard inference."
-        ).strip()
-        raise RuntimeError(reason)
-
-
 def bench_obb(
     model_path: str,
-    runtime: str,
+    tier: str,
     warmup: int,
     iterations: int,
     batch_size: int,
@@ -1067,55 +980,51 @@ def bench_obb(
     *,
     max_targets: int = 25,
 ) -> BenchmarkResult:
-    """Benchmark direct OBB inference for a runtime."""
+    """Benchmark direct OBB inference for a runtime tier via the production executor."""
+    from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
+    from hydra_suite.runtime.resolver import RuntimeResolver
+
+    platform = detect_platform()
+    resolved = RuntimeResolver(tier, platform).resolve("obb")
+    compute_runtime = resolve_compute_runtime(tier, platform, stage="obb")
     result = BenchmarkResult(
         model_type="obb",
         model_path=model_path,
-        runtime=runtime,
-        runtime_label=runtime_label(runtime),
+        runtime=tier,
+        runtime_label=tier_label(tier, platform),
+        resolved_backend=resolved.backend,
         batch_size=batch_size,
         input_shape=frame_size,
         warmup_iters=warmup,
         bench_iters=iterations,
     )
     try:
-        from hydra_suite.core.detectors import YOLOOBBDetector
-
-        params = _runtime_to_obb_params(
-            runtime,
+        executor = load_obb_executor(
             model_path,
-            imgsz=None,
+            compute_runtime,
+            max_det=max(20, max_targets),
             batch_size=batch_size,
-            max_targets=max_targets,
         )
-        detector = YOLOOBBDetector(params)
-        _ensure_detector_runtime_materialized(detector, runtime)
         frames = [make_synthetic_frame(*frame_size) for _ in range(batch_size)]
-        for _ in range(warmup):
-            if batch_size == 1:
-                detector.detect_objects(frames[0], frame_count=0)
-            else:
-                detector.detect_objects_batched(frames, start_frame_idx=0)
 
         def _run_once() -> None:
-            if batch_size == 1:
-                detector.detect_objects(frames[0], frame_count=0)
-            else:
-                detector.detect_objects_batched(frames, start_frame_idx=0)
+            executor.predict(frames, conf=1e-3, iou=1.0, verbose=False)
 
+        for _ in range(warmup):
+            _run_once()
         _run_timed_benchmark_iterations(result, iterations, _run_once)
         result.compute_stats()
     except Exception as exc:
         result.success = False
         result.error = str(exc)
-        logger.warning("Direct OBB benchmark failed [%s]: %s", runtime, exc)
+        logger.warning("Direct OBB benchmark failed [%s]: %s", tier, exc)
     return result
 
 
 def bench_sequential(
     detect_model_path: str,
     crop_obb_model_path: str,
-    runtime: str,
+    tier: str,
     warmup: int,
     iterations: int,
     batch_size: int,
@@ -1123,20 +1032,21 @@ def bench_sequential(
     frame_size: tuple[int, int],
     crop_size: int,
     *,
-    crop_pad_ratio: float = 0.15,
-    min_crop_size_px: int = 64,
-    enforce_square_crop: bool = True,
-    stage2_pow2_pad: bool = False,
-    detect_conf_threshold: float = 0.25,
-    assumed_target_count: int = 1,
     max_targets: int = 25,
 ) -> BenchmarkResult:
-    """Benchmark sequential detect-plus-crop OBB inference."""
+    """Benchmark sequential detect-plus-crop OBB inference via production executors."""
+    from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
+    from hydra_suite.runtime.resolver import RuntimeResolver
+
+    platform = detect_platform()
+    resolved = RuntimeResolver(tier, platform).resolve("obb")
+    compute_runtime = resolve_compute_runtime(tier, platform, stage="obb")
     result = BenchmarkResult(
         model_type="sequential",
         model_path=f"{detect_model_path} | {crop_obb_model_path}",
-        runtime=runtime,
-        runtime_label=runtime_label(runtime),
+        runtime=tier,
+        runtime_label=tier_label(tier, platform),
+        resolved_backend=resolved.backend,
         batch_size=batch_size,
         individual_batch_size=int(individual_batch_size),
         input_shape=frame_size,
@@ -1144,55 +1054,36 @@ def bench_sequential(
         bench_iters=iterations,
     )
     try:
-        from hydra_suite.core.detectors import YOLOOBBDetector
-
-        synthetic_target_count = max(1, int(assumed_target_count or max_targets))
-        params = _runtime_to_obb_params(
-            runtime,
-            crop_obb_model_path,
-            imgsz=None,
+        detect_executor = load_obb_executor(
+            detect_model_path,
+            compute_runtime,
+            task="detect",
             batch_size=batch_size,
-            max_targets=max_targets,
+            max_det=max(20, max_targets),
         )
-        params.update(
-            {
-                "YOLO_OBB_MODE": "sequential",
-                "YOLO_DETECT_MODEL_PATH": detect_model_path,
-                "YOLO_CROP_OBB_MODEL_PATH": crop_obb_model_path,
-                "YOLO_OBB_DIRECT_MODEL_PATH": crop_obb_model_path,
-                "YOLO_SEQ_STAGE2_IMGSZ": crop_size,
-                "YOLO_SEQ_INDIVIDUAL_BATCH_SIZE": int(individual_batch_size),
-                "YOLO_SEQ_STAGE2_RUNTIME_BUILD_BATCH_SIZE": int(individual_batch_size),
-                "YOLO_DETECT_RUNTIME_BUILD_BATCH_SIZE": int(batch_size),
-                "YOLO_SEQ_CROP_PAD_RATIO": float(crop_pad_ratio),
-                "YOLO_SEQ_MIN_CROP_SIZE_PX": int(min_crop_size_px),
-                "YOLO_SEQ_ENFORCE_SQUARE_CROP": bool(enforce_square_crop),
-                "YOLO_SEQ_STAGE2_POW2_PAD": bool(stage2_pow2_pad),
-                "YOLO_SEQ_DETECT_CONF_THRESHOLD": float(detect_conf_threshold),
-                "MAX_TARGETS": synthetic_target_count,
-            }
+        crop_executor = load_obb_executor(
+            crop_obb_model_path,
+            compute_runtime,
+            task="obb",
+            batch_size=individual_batch_size,
+            imgsz_override=crop_size,
+            max_det=max(20, max_targets),
         )
-        detector = YOLOOBBDetector(params)
-        _ensure_detector_runtime_materialized(detector, runtime)
         frames = [make_synthetic_frame(*frame_size) for _ in range(batch_size)]
-        for _ in range(warmup):
-            if batch_size == 1:
-                detector.detect_objects(frames[0], frame_count=0)
-            else:
-                detector.detect_objects_batched(frames, start_frame_idx=0)
+        crops = make_synthetic_crops(individual_batch_size, crop_size, crop_size)
 
         def _run_once() -> None:
-            if batch_size == 1:
-                detector.detect_objects(frames[0], frame_count=0)
-            else:
-                detector.detect_objects_batched(frames, start_frame_idx=0)
+            detect_executor.predict(frames, conf=0.25, iou=0.7, verbose=False)
+            crop_executor.predict(list(crops), conf=1e-3, iou=1.0, verbose=False)
 
+        for _ in range(warmup):
+            _run_once()
         _run_timed_benchmark_iterations(result, iterations, _run_once)
         result.compute_stats()
     except Exception as exc:
         result.success = False
         result.error = str(exc)
-        logger.warning("Sequential benchmark failed [%s]: %s", runtime, exc)
+        logger.warning("Sequential benchmark failed [%s]: %s", tier, exc)
     return result
 
 
@@ -1217,7 +1108,12 @@ def bench_headtail(
         bench_iters=iterations,
     )
     try:
-        detector = _make_detector_runtime_stub(
+        # NOTE(task-5): `_make_detector_runtime_stub` was deleted in Task 5 of the
+        # runtime-tier-benchmarking-cleanup plan; Task 7 rewrites bench_headtail onto
+        # the production head-tail classifier path and removes this reference. Until
+        # Task 7 lands, this call intentionally raises NameError, which is caught below
+        # and surfaced as a benchmark failure rather than crashing the caller.
+        detector = _make_detector_runtime_stub(  # noqa: F821
             runtime, model_path, batch_size=batch_size
         )
         detector.params["YOLO_HEADTAIL_MODEL_PATH"] = model_path
@@ -1564,7 +1460,7 @@ def run_target_benchmark(
     if target.pipeline == "obb":
         return bench_obb(
             target.model_path,
-            normalized_runtime,
+            runtime,
             warmup,
             iterations,
             batch_size,
@@ -1582,7 +1478,7 @@ def run_target_benchmark(
         return bench_sequential(
             detect_model_path,
             target.model_path,
-            normalized_runtime,
+            runtime,
             warmup,
             iterations,
             batch_size,
@@ -1596,22 +1492,6 @@ def run_target_benchmark(
             ),
             frame_size,
             sequential_stage2_imgsz,
-            crop_pad_ratio=float(
-                target.benchmark_context.get("yolo_seq_crop_pad_ratio", 0.15)
-            ),
-            min_crop_size_px=int(
-                target.benchmark_context.get("yolo_seq_min_crop_size_px", 64)
-            ),
-            enforce_square_crop=bool(
-                target.benchmark_context.get("yolo_seq_enforce_square_crop", True)
-            ),
-            stage2_pow2_pad=bool(
-                target.benchmark_context.get("yolo_seq_stage2_pow2_pad", False)
-            ),
-            detect_conf_threshold=float(
-                target.benchmark_context.get("yolo_seq_detect_conf_threshold", 0.25)
-            ),
-            assumed_target_count=int(target.benchmark_context.get("max_targets", 1)),
             max_targets=int(target.benchmark_context.get("max_targets", 25)),
         )
     if target.pipeline == "headtail":
