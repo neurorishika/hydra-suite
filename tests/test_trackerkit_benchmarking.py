@@ -149,7 +149,7 @@ def test_collect_active_targets_includes_sleap_pose_target(tmp_path: Path) -> No
 
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
         ),
         _identity_panel=SimpleNamespace(
@@ -205,7 +205,7 @@ def test_collect_active_targets_resolves_relative_direct_model_path(
 
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
         ),
         _identity_panel=SimpleNamespace(
@@ -235,7 +235,7 @@ def test_collect_active_targets_resolves_relative_direct_model_path(
 def test_collect_active_targets_skips_vitpose_pose_target() -> None:
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
         ),
         _identity_panel=SimpleNamespace(
@@ -478,7 +478,7 @@ def test_collect_active_targets_skips_headtail_when_pipeline_disabled(
 
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
         ),
         _identity_panel=SimpleNamespace(
@@ -665,7 +665,7 @@ def test_collect_active_targets_includes_sequential_crop_settings(
 
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 16),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 16),
             spin_yolo_seq_individual_batch_size=SimpleNamespace(value=lambda: 12),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 1),
             spin_yolo_seq_crop_pad=SimpleNamespace(value=lambda: 0.22),
@@ -879,7 +879,7 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
 
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
         ),
         _identity_panel=SimpleNamespace(
@@ -931,7 +931,7 @@ def test_collect_active_targets_no_longer_calls_deleted_compute_runtime_options_
     """
     main_window = SimpleNamespace(
         _detection_panel=SimpleNamespace(
-            spin_yolo_batch_size=SimpleNamespace(value=lambda: 4),
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
         ),
         _identity_panel=SimpleNamespace(

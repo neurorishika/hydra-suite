@@ -540,6 +540,11 @@ class ConfigOrchestrator:
         self._panels.detection.spin_yolo_batch_size.setValue(
             get_cfg("yolo_manual_batch_size", default=16)
         )
+
+        # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+        self._panels.detection.spin_detection_batch_size.setValue(
+            get_cfg("detection_batch_size", default=1)
+        )
         # Re-apply runtime-derived constraints (e.g., TensorRT => manual batch mode).
         self._mw._on_runtime_context_changed()
 
@@ -1626,7 +1631,9 @@ class ConfigOrchestrator:
 
         cfg.update(
             {
-                # TensorRT
+                # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+                "detection_batch_size": self._panels.detection.spin_detection_batch_size.value(),
+                # TensorRT (legacy detector: cache build / preview / benchmark only)
                 "enable_tensorrt": runtime_detection["enable_tensorrt"],
                 "tensorrt_max_batch_size": (
                     self._panels.detection.spin_yolo_batch_size.value()
@@ -2067,6 +2074,9 @@ class ConfigOrchestrator:
         advanced_config["yolo_manual_batch_size"] = (
             self._panels.detection.spin_yolo_batch_size.value()
         )
+        advanced_config["detection_batch_size"] = (
+            self._panels.detection.spin_detection_batch_size.value()
+        )
         advanced_config["yolo_seq_individual_batch_size"] = (
             self._panels.detection.spin_yolo_seq_individual_batch_size.value()
         )
@@ -2179,6 +2189,9 @@ class ConfigOrchestrator:
             "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
             "USE_CUSTOM_OBB_IOU_FILTERING": True,
             "YOLO_TARGET_CLASSES": yolo_cls,
+            # Live Detection Batching: feeds InferenceConfig.detection_batch_size
+            # via worker.py:_build_inference_config_from_params.
+            "YOLO_BATCH_SIZE": self._panels.detection.spin_detection_batch_size.value(),
             "COMPUTE_RUNTIME": compute_runtime,
             "RUNTIME_TIER": self._mw._selected_runtime_tier(),
             "CNN_COMPUTE_RUNTIME": cnn_runtime,
@@ -3752,9 +3765,7 @@ class ConfigOrchestrator:
                 idx = self._panels.setup.combo_runtime_tier.findData(rec_tier)
                 if idx >= 0:
                     self._panels.setup.combo_runtime_tier.setCurrentIndex(idx)
-            self._panels.detection.chk_enable_yolo_batching.setChecked(True)
-            self._panels.detection.combo_yolo_batch_mode.setCurrentIndex(1)
-            self._panels.detection.spin_yolo_batch_size.setValue(
+            self._panels.detection.spin_detection_batch_size.setValue(
                 int(detection.batch_size)
             )
             individual_batch_size = getattr(detection, "individual_batch_size", None)

@@ -795,15 +795,63 @@ class DetectionPanel(QWidget):
         l_yolo.addWidget(self.yolo_group)
 
         # ============================================================
-        # YOLO Inference Acceleration (TensorRT + Batching)
+        # Live Detection Batching (drives the real InferenceRunner pipeline)
         # ============================================================
-        self.g_gpu_accel = QGroupBox("Inference Acceleration")
+        self.g_live_batching = QGroupBox("Live Detection Batching")
+        self._main_window._set_compact_section_widget(self.g_live_batching)
+        vl_live_batch = QVBoxLayout(self.g_live_batching)
+        vl_live_batch.setSpacing(6)
+        vl_live_batch.addWidget(
+            self._main_window._create_help_label(
+                "Controls how many frames the detector processes per GPU call during an actual "
+                "tracking run. Higher batches are faster on TensorRT/CUDA/MPS; some runtimes are "
+                "locked to 1 (see notice below)."
+            )
+        )
+        self.spin_detection_batch_size = QSpinBox()
+        self.spin_detection_batch_size.setRange(1, 64)
+        self.spin_detection_batch_size.setValue(
+            int(self._main_window.advanced_config.get("detection_batch_size", 1))
+        )
+        self.spin_detection_batch_size.setFixedHeight(30)
+        self.spin_detection_batch_size.setToolTip(
+            "Number of frames the detector processes per GPU call during live tracking.\n"
+            "Feeds InferenceConfig.detection_batch_size directly.\n"
+            "Higher = faster on TensorRT/CUDA/MPS, more GPU memory used.\n"
+            "Typical values: 4-16 depending on GPU."
+        )
+        self.spin_detection_batch_size.valueChanged.connect(
+            self._on_detection_batch_size_changed
+        )
+        _live_batch_row = QHBoxLayout()
+        _live_batch_row.addWidget(QLabel("Frame batch size"))
+        _live_batch_row.addWidget(self.spin_detection_batch_size, 1)
+        vl_live_batch.addLayout(_live_batch_row)
+
+        self.lbl_batch_policy_notice = QLabel("")
+        self.lbl_batch_policy_notice.setWordWrap(True)
+        self.lbl_batch_policy_notice.setStyleSheet(
+            "color: #d7ba7d; font-size: 11px; padding-top: 2px;"
+        )
+        self.lbl_batch_policy_notice.setVisible(False)
+        vl_live_batch.addWidget(self.lbl_batch_policy_notice)
+        l_yolo.addWidget(self.g_live_batching)
+
+        # ============================================================
+        # Legacy Detector Batching (Parameter Helper cache build / Preview
+        # "Test Detection" / Benchmark baseline only — NOT live tracking)
+        # ============================================================
+        self.g_gpu_accel = QGroupBox(
+            "Legacy Detector Batching (Cache Build / Preview / Benchmark)"
+        )
         self._main_window._set_compact_section_widget(self.g_gpu_accel)
         vl_gpu = QVBoxLayout(self.g_gpu_accel)
         vl_gpu.setSpacing(6)
         vl_gpu.addWidget(
             self._main_window._create_help_label(
-                "Control YOLO throughput features. Use batching for faster full-run detection, and TensorRT when NVIDIA export/runtime support is available."
+                "These settings do not affect live tracking speed. They only apply to the "
+                "legacy detector used by Parameter Helper's detection-cache build, the Preview "
+                "“Test Detection” action, and the Benchmark panel's starting batch size."
             )
         )
 
@@ -813,7 +861,7 @@ class DetectionPanel(QWidget):
         self.chk_enable_tensorrt.setEnabled(TENSORRT_AVAILABLE)
 
         tensorrt_tooltip = (
-            "Enable NVIDIA TensorRT for 2-5× faster YOLO inference.\n"
+            "Enable NVIDIA TensorRT for the legacy detector (cache build / preview only).\n"
             "Requires NVIDIA GPU with CUDA.\n"
             "First run will export model (1-5 min), then cached for future use.\n"
             "Uses FP16 precision for maximum speed.\n"
@@ -835,7 +883,7 @@ class DetectionPanel(QWidget):
         )
         self.spin_tensorrt_batch.setFixedHeight(30)
         self.spin_tensorrt_batch.setToolTip(
-            "Maximum batch size for TensorRT engine.\n"
+            "Maximum batch size for the legacy detector's TensorRT engine (cache build / preview only).\n"
             "Higher = potentially faster, Lower = more stable.\n"
             "Reduce if build fails (try 8, 4, or 1).\n"
             "Typical: 16-32 (high-end), 8-16 (mid-range), 1-8 (low VRAM)"
@@ -850,8 +898,8 @@ class DetectionPanel(QWidget):
             self._main_window.advanced_config.get("enable_yolo_batching", True)
         )
         self.chk_enable_yolo_batching.setToolTip(
-            "Process frames in batches on GPU for 2-5× faster detection.\n"
-            "Only works in full tracking mode (not preview)."
+            "Enable batched inference in the legacy detector (cache build / preview only).\n"
+            "Does not affect live tracking's detection speed."
         )
         self.chk_enable_yolo_batching.stateChanged.connect(
             self._on_yolo_batching_toggled
@@ -861,8 +909,8 @@ class DetectionPanel(QWidget):
         self.combo_yolo_batch_mode.addItems(["Auto", "Manual"])
         self.combo_yolo_batch_mode.setFixedHeight(30)
         self.combo_yolo_batch_mode.setToolTip(
-            "Auto: Automatically estimate batch size based on GPU memory.\n"
-            "Manual: Specify a fixed batch size."
+            "Auto: Automatically estimate the legacy detector's batch size from GPU memory.\n"
+            "Manual: Specify a fixed batch size for the legacy detector."
         )
         self.combo_yolo_batch_mode.currentIndexChanged.connect(
             self._on_yolo_batch_mode_changed
@@ -879,8 +927,9 @@ class DetectionPanel(QWidget):
         )
         self.spin_yolo_batch_size.setFixedHeight(30)
         self.spin_yolo_batch_size.setToolTip(
-            "Manual frame batch size (only used when mode is Manual).\n"
-            "Larger = faster but uses more GPU memory.\n"
+            "Manual batch size for the legacy detector (only used when mode is Manual).\n"
+            "Used by Parameter Helper cache build, Preview Test Detection, and as the\n"
+            "Benchmark panel's starting batch size. Does not affect live tracking.\n"
             "Typical values: 8-32 depending on GPU."
         )
         self.spin_yolo_batch_size.valueChanged.connect(
@@ -915,14 +964,6 @@ class DetectionPanel(QWidget):
         accel_controls_grid.setColumnStretch(1, 1)
         accel_controls_grid.setColumnStretch(2, 1)
         vl_gpu.addLayout(accel_controls_grid)
-
-        self.lbl_batch_policy_notice = QLabel("")
-        self.lbl_batch_policy_notice.setWordWrap(True)
-        self.lbl_batch_policy_notice.setStyleSheet(
-            "color: #d7ba7d; font-size: 11px; padding-top: 2px;"
-        )
-        self.lbl_batch_policy_notice.setVisible(False)
-        vl_gpu.addWidget(self.lbl_batch_policy_notice)
         l_yolo.addWidget(self.g_gpu_accel)
 
         # Set initial visibility for TensorRT widgets
@@ -1269,8 +1310,20 @@ class DetectionPanel(QWidget):
             return
         self._sync_batch_policy_controls()
 
+    def _on_detection_batch_size_changed(self, value: int):
+        """Refresh the live batching notice when the frame batch size changes."""
+        self._sync_live_detection_batch_controls()
+
     def _sync_batch_policy_controls(self) -> None:
-        """Keep detection batching controls aligned with runtime policy."""
+        """Keep legacy-detector batching controls aligned with runtime policy.
+
+        These widgets (chk_enable_yolo_batching, combo_yolo_batch_mode,
+        spin_yolo_batch_size, chk_enable_tensorrt, spin_tensorrt_batch) only
+        affect the legacy detector used by Parameter Helper's cache build,
+        Preview "Test Detection", and the Benchmark panel's baseline — not
+        live tracking. See _sync_live_detection_batch_controls for the
+        control that actually drives InferenceConfig.detection_batch_size.
+        """
         realtime_enabled = False
         if hasattr(self._main_window, "_setup_panel"):
             realtime_enabled = is_realtime_workflow(
@@ -1282,7 +1335,6 @@ class DetectionPanel(QWidget):
         fixed_runtime = self._main_window._runtime_requires_fixed_yolo_batch()
         if not hasattr(self, "chk_enable_yolo_batching"):
             return
-        sequential = self.combo_yolo_obb_mode.currentIndex() == 1
 
         if fixed_runtime and self.combo_yolo_batch_mode.currentIndex() != 1:
             self.combo_yolo_batch_mode.blockSignals(True)
@@ -1313,21 +1365,38 @@ class DetectionPanel(QWidget):
             self.spin_yolo_batch_size.setEnabled(False)
             self.spin_tensorrt_batch.setEnabled(False)
             self.lbl_tensorrt_batch.setEnabled(tensorrt_enabled)
-            if sequential:
-                message = "Realtime tracking fixes the frame batch to 1. Sequential stage-2 crop batching still uses the Stage-2 crop batch setting."
-            else:
-                message = "Realtime tracking processes detection one frame at a time. Frame-level YOLO and ONNX/TensorRT batch settings are ignored during realtime runs."
-            self.lbl_batch_policy_notice.setText(message)
-            self.lbl_batch_policy_notice.setVisible(True)
+        else:
+            self.chk_enable_yolo_batching.setEnabled(not fixed_runtime)
+            self.combo_yolo_batch_mode.setEnabled(
+                batching_enabled and not fixed_runtime
+            )
+            self.spin_yolo_batch_size.setEnabled(
+                batching_enabled and (manual_mode or fixed_runtime)
+            )
+            self.spin_tensorrt_batch.setEnabled(tensorrt_enabled)
+            self.lbl_tensorrt_batch.setEnabled(tensorrt_enabled)
+
+        self._sync_live_detection_batch_controls()
+
+    def _sync_live_detection_batch_controls(self) -> None:
+        """Keep the Frame batch size control aligned with runtime policy.
+
+        This is the control that actually reaches InferenceConfig.detection_batch_size
+        for live tracking runs.
+        """
+        if not hasattr(self, "spin_detection_batch_size"):
             return
 
-        self.chk_enable_yolo_batching.setEnabled(not fixed_runtime)
-        self.combo_yolo_batch_mode.setEnabled(batching_enabled and not fixed_runtime)
-        self.spin_yolo_batch_size.setEnabled(
-            batching_enabled and (manual_mode or fixed_runtime)
-        )
-        self.spin_tensorrt_batch.setEnabled(tensorrt_enabled)
-        self.lbl_tensorrt_batch.setEnabled(tensorrt_enabled)
+        realtime_enabled = False
+        if hasattr(self._main_window, "_setup_panel"):
+            realtime_enabled = is_realtime_workflow(
+                self._main_window._setup_panel.chk_realtime_mode.isChecked(),
+                getattr(
+                    self._main_window, "_workflow_mode_key", lambda: "non_realtime"
+                )(),
+            )
+        sequential = self.combo_yolo_obb_mode.currentIndex() == 1
+        coreml_locked = self._main_window._gpu_fast_obb_is_coreml_only()
 
         recommendation = self._main_window._current_detection_benchmark_recommendation()
         recommendation_text = ""
@@ -1343,28 +1412,56 @@ class DetectionPanel(QWidget):
             else:
                 recommendation_text = f"Benchmark recommendation: {recommendation.runtime_label} at batch {recommendation.batch_size}."
 
-        if fixed_runtime:
-            if self._main_window._gpu_fast_obb_is_coreml_only():
-                message = (
-                    "On this platform, gpu_fast detection (OBB) runs on "
-                    "CoreML, which supports only batch size 1 — one frame "
-                    "at a time, regardless of this setting. CoreML "
-                    "classification (identity/head-tail/CNN) is unaffected "
-                    "and still batches normally."
-                )
+        if realtime_enabled:
+            self.spin_detection_batch_size.blockSignals(True)
+            self.spin_detection_batch_size.setValue(1)
+            self.spin_detection_batch_size.blockSignals(False)
+            self.spin_detection_batch_size.setEnabled(False)
+            if sequential:
+                message = "Realtime tracking fixes the frame batch to 1. Sequential stage-2 crop batching still uses the Stage-2 crop batch setting."
             else:
-                message = "The selected runtime uses a fixed exported batch. Manual batch size controls the non-realtime detector artifact size."
+                message = "Realtime tracking processes detection one frame at a time; frame batch size is fixed to 1."
+            self.lbl_batch_policy_notice.setText(message)
+            self.lbl_batch_policy_notice.setVisible(True)
+            return
+
+        if coreml_locked:
+            self.spin_detection_batch_size.blockSignals(True)
+            self.spin_detection_batch_size.setValue(1)
+            self.spin_detection_batch_size.blockSignals(False)
+            self.spin_detection_batch_size.setEnabled(False)
+            message = (
+                "On this platform, gpu_fast detection (OBB) runs on "
+                "CoreML, which supports only batch size 1 — one frame "
+                "at a time, regardless of this setting. CoreML "
+                "classification (identity/head-tail/CNN) is unaffected "
+                "and still batches normally."
+            )
             if recommendation_text:
                 message += "\n" + recommendation_text
             self.lbl_batch_policy_notice.setText(message)
             self.lbl_batch_policy_notice.setVisible(True)
-        else:
+            return
+
+        self.spin_detection_batch_size.setEnabled(True)
+        if sequential:
+            message = (
+                "Sequential mode's stage-1 detection batching showed higher "
+                "run-to-run variation in detections during testing (see "
+                "docs/superpowers/specs/2026-07-03-tensorrt-coreml-cross-frame-"
+                "batching-design.md). Stage-2 crop batch is usually the safer "
+                "place to batch."
+            )
             if recommendation_text:
-                self.lbl_batch_policy_notice.setText(recommendation_text)
-                self.lbl_batch_policy_notice.setVisible(True)
-            else:
-                self.lbl_batch_policy_notice.clear()
-                self.lbl_batch_policy_notice.setVisible(False)
+                message += "\n" + recommendation_text
+            self.lbl_batch_policy_notice.setText(message)
+            self.lbl_batch_policy_notice.setVisible(True)
+        elif recommendation_text:
+            self.lbl_batch_policy_notice.setText(recommendation_text)
+            self.lbl_batch_policy_notice.setVisible(True)
+        else:
+            self.lbl_batch_policy_notice.clear()
+            self.lbl_batch_policy_notice.setVisible(False)
 
     # =========================================================================
     # DETECTION METHOD CHANGED UI (moved from MainWindow)

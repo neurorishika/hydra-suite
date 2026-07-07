@@ -677,7 +677,7 @@ def collect_active_targets(
     max_targets = max(1, int(main_window._setup_panel.spin_max_targets.value()))
     current_detection_runtime = main_window._selected_compute_runtime()
     current_detection_batch = int(
-        main_window._detection_panel.spin_yolo_batch_size.value()
+        main_window._detection_panel.spin_detection_batch_size.value()
     )
     seq_individual_widget = getattr(
         main_window._detection_panel,

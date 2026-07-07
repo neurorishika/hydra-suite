@@ -1423,6 +1423,12 @@ class MainWindow(QMainWindow):
             return self._session_orch._runtime_requires_fixed_yolo_batch(runtime)
         return False
 
+    def _gpu_fast_obb_is_coreml_only(self) -> bool:
+        """Return True when gpu_fast OBB detection will run on CoreML (batch=1 only)."""
+        if hasattr(self, "_session_orch"):
+            return self._session_orch._gpu_fast_obb_is_coreml_only()
+        return False
+
     @staticmethod
     def _preview_safe_runtime(runtime: str) -> str:
         """Downgrade ONNX/TensorRT runtimes to their native equivalents."""
