@@ -844,10 +844,11 @@ def test_run_target_benchmark_uses_setup_target_count_for_detection_modes(
     assert calls["sequential"]["crop_size"] == 192
 
 
-def test_collect_active_targets_includes_exported_headtail_runtimes(
+def test_collect_active_targets_includes_tier_headtail_runtimes(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """headtail target now speaks the 3-value tier vocabulary, not canonical runtimes."""
     model_path = tmp_path / "orientation.onnx"
     model_path.write_text("stub", encoding="utf-8")
 
@@ -858,22 +859,6 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
             str(model_path)
             if str(model) == "classification/orientation/model.onnx"
             else str(model)
-        ),
-    )
-    monkeypatch.setattr(
-        benchmarking,
-        "supported_runtimes_for_pipeline",
-        lambda pipeline: (
-            [
-                "cpu",
-                "mps",
-                "onnx_coreml",
-                "onnx_cpu",
-                "onnx_cuda",
-                "tensorrt",
-            ]
-            if pipeline == "headtail"
-            else ["cpu"]
         ),
     )
 
@@ -887,9 +872,10 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
             spin_headtail_batch=SimpleNamespace(value=lambda: 32),
             _get_selected_yolo_headtail_model_path=lambda: "classification/orientation/model.onnx",
         ),
-        _setup_panel=SimpleNamespace(spin_max_targets=SimpleNamespace(value=lambda: 8)),
-        _compute_runtime_options_for_current_ui=lambda: [("CPU", "cpu")],
-        _selected_compute_runtime=lambda: "cpu",
+        _setup_panel=SimpleNamespace(
+            spin_max_targets=SimpleNamespace(value=lambda: 8),
+            combo_runtime_tier=SimpleNamespace(currentData=lambda: "gpu_fast"),
+        ),
         _is_yolo_detection_mode=lambda: True,
         _get_selected_yolo_model_path=lambda: "",
         _get_selected_yolo_detect_model_path=lambda: "",
@@ -897,8 +883,6 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
         _identity_config=lambda: {"cnn_classifiers": []},
         _is_pose_inference_enabled=lambda: False,
         _is_headtail_compute_enabled=lambda: True,
-        _selected_headtail_runtime=lambda: "onnx_coreml",
-        _selected_cnn_runtime=lambda: "cpu",
     )
 
     targets, notices = benchmarking.collect_active_targets(main_window)
@@ -907,15 +891,9 @@ def test_collect_active_targets_includes_exported_headtail_runtimes(
     assert len(targets) == 1
     headtail_targets = [target for target in targets if target.key == "headtail"]
     assert len(headtail_targets) == 1
-    assert headtail_targets[0].runtimes == [
-        "cpu",
-        "mps",
-        "onnx_coreml",
-        "onnx_cpu",
-        "onnx_cuda",
-        "tensorrt",
-    ]
-    assert headtail_targets[0].current_runtime == "onnx_coreml"
+    allowed_tiers = {"cpu", "gpu", "gpu_fast"}
+    assert set(headtail_targets[0].runtimes) <= allowed_tiers
+    assert headtail_targets[0].current_runtime == "gpu_fast"
     assert headtail_targets[0].current_batch_size == 32
     assert headtail_targets[0].supports_batch_apply is True
 
@@ -953,3 +931,64 @@ def test_collect_active_targets_no_longer_calls_deleted_compute_runtime_options_
 
     assert isinstance(targets, list)
     assert isinstance(notices, list)
+
+
+def test_collect_active_targets_uses_tier_vocabulary(tmp_path: Path) -> None:
+    """Every target type (detection, head-tail, pose, CNN) must speak the
+    3-value tier vocabulary ("cpu"/"gpu"/"gpu_fast"), not canonical runtime
+    strings such as onnx_cpu/onnx_cuda/onnx_coreml/tensorrt/mps/cuda.
+    """
+    direct_model = tmp_path / "detector.pt"
+    direct_model.write_text("stub", encoding="utf-8")
+    headtail_model = tmp_path / "orientation.pth"
+    headtail_model.write_text("stub", encoding="utf-8")
+    sleap_model_dir = tmp_path / "sleap_model"
+    sleap_model_dir.mkdir()
+
+    main_window = SimpleNamespace(
+        _detection_panel=SimpleNamespace(
+            spin_detection_batch_size=SimpleNamespace(value=lambda: 4),
+            combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
+        ),
+        _identity_panel=SimpleNamespace(
+            spin_pose_batch=SimpleNamespace(value=lambda: 6),
+            spin_headtail_batch=SimpleNamespace(value=lambda: 8),
+            _get_selected_yolo_headtail_model_path=lambda: str(headtail_model),
+        ),
+        _setup_panel=SimpleNamespace(
+            spin_max_targets=SimpleNamespace(value=lambda: 8),
+            combo_runtime_tier=SimpleNamespace(currentData=lambda: "gpu"),
+        ),
+        _is_yolo_detection_mode=lambda: True,
+        _get_selected_yolo_model_path=lambda: str(direct_model),
+        _get_selected_yolo_detect_model_path=lambda: "",
+        _get_selected_yolo_crop_obb_model_path=lambda: "",
+        _identity_config=lambda: {
+            "cnn_classifiers": [
+                {"label": "species", "model_path": str(direct_model), "batch_size": 2}
+            ]
+        },
+        _is_pose_inference_enabled=lambda: True,
+        _is_headtail_compute_enabled=lambda: True,
+        _current_pose_backend_key=lambda: "sleap",
+        _get_resolved_pose_model_dir=lambda backend: str(sleap_model_dir),
+        _load_pose_skeleton_keypoint_names=lambda: ["nose", "tail"],
+        _selected_pose_sleap_env=lambda: "sleap-mps",
+    )
+
+    targets, notices = benchmarking.collect_active_targets(main_window)
+
+    assert {target.key for target in targets} == {
+        "detection_direct",
+        "headtail",
+        "pose_sleap",
+        "cnn_0",
+    }
+
+    allowed_tiers = {"cpu", "gpu", "gpu_fast"}
+    for target in targets:
+        assert (
+            set(target.runtimes) <= allowed_tiers
+        ), f"target {target.key!r} exposed non-tier runtimes: {target.runtimes}"
+        assert target.current_runtime in allowed_tiers
+        assert target.current_runtime == "gpu"

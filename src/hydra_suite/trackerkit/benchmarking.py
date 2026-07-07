@@ -20,10 +20,8 @@ from hydra_suite.core.identity.properties.cache import _file_fingerprint, _hash_
 from hydra_suite.paths import get_config_dir
 from hydra_suite.runtime.compute_runtime import (
     _normalize_runtime,
-    allowed_runtimes_for_pipelines,
     derive_pose_runtime_settings,
     runtime_label,
-    supported_runtimes_for_pipeline,
 )
 from hydra_suite.runtime.resolver import available_tiers, detect_platform
 from hydra_suite.trackerkit.gui.model_utils import (
@@ -36,25 +34,6 @@ logger = logging.getLogger(__name__)
 
 _CACHE_VERSION = "1.1"
 _RECOMMENDATION_MARGIN = 0.05
-
-
-def _tiers_to_compute_runtimes(tiers: list, platform) -> list[str]:
-    """Map runtime tier ids to canonical compute_runtime strings, deduplicating."""
-    seen: list[str] = []
-    for tier in tiers:
-        if tier == "gpu_fast":
-            rt = (
-                "tensorrt"
-                if platform.has_cuda
-                else ("mps" if platform.has_mps else "cpu")
-            )
-        elif tier == "gpu":
-            rt = "cuda" if platform.has_cuda else ("mps" if platform.has_mps else "cpu")
-        else:
-            rt = "cpu"
-        if rt not in seen:
-            seen.append(rt)
-    return seen
 
 
 def _emit_benchmark_message(
@@ -673,11 +652,15 @@ def collect_active_targets(
         return targets, notices
 
     _platform = detect_platform()
-    detection_runtimes = _tiers_to_compute_runtimes(
-        available_tiers(_platform), _platform
+    current_tier = (
+        str(main_window._setup_panel.combo_runtime_tier.currentData() or "cpu")
+        if hasattr(main_window, "_setup_panel")
+        and hasattr(main_window._setup_panel, "combo_runtime_tier")
+        else "cpu"
     )
+    detection_tiers = available_tiers(_platform)
     max_targets = max(1, int(main_window._setup_panel.spin_max_targets.value()))
-    current_detection_runtime = main_window._selected_compute_runtime()
+    current_detection_runtime = current_tier
     current_detection_batch = int(
         main_window._detection_panel.spin_detection_batch_size.value()
     )
@@ -709,7 +692,7 @@ def collect_active_targets(
                         label="Detection (Direct OBB)",
                         pipeline="obb",
                         model_path=direct_model,
-                        runtimes=detection_runtimes,
+                        runtimes=detection_tiers,
                         batch_sizes=_default_batch_sizes(current_detection_batch, 64),
                         current_runtime=current_detection_runtime,
                         current_batch_size=current_detection_batch,
@@ -737,7 +720,7 @@ def collect_active_targets(
                         pipeline="sequential",
                         model_path=crop_model,
                         extra_model_paths=[detect_model],
-                        runtimes=detection_runtimes,
+                        runtimes=detection_tiers,
                         batch_sizes=_default_batch_sizes(current_detection_batch, 64),
                         individual_batch_sizes=_default_batch_sizes(
                             current_detection_individual_batch,
@@ -803,7 +786,7 @@ def collect_active_targets(
         _resolve_existing_model_path(raw_headtail_model) if headtail_enabled else ""
     )
     if headtail_model:
-        headtail_runtimes = supported_runtimes_for_pipeline("headtail")
+        headtail_tiers = available_tiers(_platform)
         headtail_batch_widget = getattr(
             main_window._identity_panel,
             "spin_headtail_batch",
@@ -823,12 +806,12 @@ def collect_active_targets(
                 label="Head-tail Orientation",
                 pipeline="headtail",
                 model_path=headtail_model,
-                runtimes=headtail_runtimes or ["cpu"],
+                runtimes=headtail_tiers,
                 batch_sizes=_default_batch_sizes(
                     current_headtail_batch,
                     max(max_targets, current_headtail_batch * 2),
                 ),
-                current_runtime=main_window._selected_headtail_runtime(),
+                current_runtime=current_tier,
                 current_batch_size=current_headtail_batch,
             )
         )
@@ -849,11 +832,7 @@ def collect_active_targets(
                 raw_pose_model_path, backend
             )
             if pose_model_path:
-                pose_runtime = _canonical_runtime_from_pose_flavor(
-                    main_window._selected_pose_runtime_flavor()
-                )
                 benchmark_context: dict[str, Any] = {}
-                pose_pipeline = "yolo_pose"
                 if backend == "sleap":
                     keypoint_names = list(
                         main_window._load_pose_skeleton_keypoint_names()
@@ -868,7 +847,6 @@ def collect_active_targets(
                             "keypoint_names": keypoint_names,
                             "sleap_env": str(main_window._selected_pose_sleap_env()),
                         }
-                        pose_pipeline = "sleap_pose"
                 if pose_model_path:
                     targets.append(
                         BenchmarkTargetSpec(
@@ -876,15 +854,14 @@ def collect_active_targets(
                             label="Pose Extraction",
                             pipeline="pose",
                             model_path=pose_model_path,
-                            runtimes=supported_runtimes_for_pipeline(pose_pipeline)
-                            or ["cpu"],
+                            runtimes=available_tiers(_platform),
                             batch_sizes=_default_batch_sizes(
                                 int(
                                     main_window._identity_panel.spin_pose_batch.value()
                                 ),
                                 256,
                             ),
-                            current_runtime=pose_runtime,
+                            current_runtime=current_tier,
                             current_batch_size=int(
                                 main_window._identity_panel.spin_pose_batch.value()
                             ),
@@ -897,7 +874,7 @@ def collect_active_targets(
                     f"Pose benchmark skipped because the selected {backend.upper()} model could not be resolved."
                 )
 
-    cnn_runtime = main_window._selected_cnn_runtime()
+    cnn_runtime = current_tier
     for index, classifier in enumerate(
         main_window._identity_config().get("cnn_classifiers", []) or []
     ):
@@ -917,7 +894,7 @@ def collect_active_targets(
                 label=f"CNN: {label}",
                 pipeline="classify",
                 model_path=model_path,
-                runtimes=allowed_runtimes_for_pipelines([]) or ["cpu"],
+                runtimes=available_tiers(_platform),
                 batch_sizes=_default_batch_sizes(batch_size, 256),
                 current_runtime=cnn_runtime,
                 current_batch_size=batch_size,
