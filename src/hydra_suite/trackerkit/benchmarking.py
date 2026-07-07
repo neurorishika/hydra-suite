@@ -18,10 +18,7 @@ import numpy as np
 from hydra_suite.core.canonicalization.crop import compute_crop_dimensions
 from hydra_suite.core.identity.properties.cache import _file_fingerprint, _hash_payload
 from hydra_suite.paths import get_config_dir
-from hydra_suite.runtime.compute_runtime import (
-    derive_pose_runtime_settings,
-    runtime_label,
-)
+from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
 from hydra_suite.runtime.resolver import (
     RuntimeResolver,
     available_tiers,
@@ -1380,18 +1377,22 @@ def bench_pose(
 
 def bench_classify(
     model_path: str,
-    runtime: str,
+    tier: str,
     warmup: int,
     iterations: int,
     batch_size: int,
     crop_size: int,
 ) -> BenchmarkResult:
-    """Benchmark CNN identity classification inference."""
+    """Benchmark CNN identity classification inference via the production CNNIdentityBackend."""
+    platform = detect_platform()
+    resolved_backend_name = RuntimeResolver(tier, platform).resolve("cnn").backend
+    compute_runtime = resolve_compute_runtime(tier, platform, stage="cnn")
     result = BenchmarkResult(
         model_type="classify",
         model_path=model_path,
-        runtime=runtime,
-        runtime_label=runtime_label(runtime),
+        runtime=tier,
+        runtime_label=tier_label(tier, platform),
+        resolved_backend=resolved_backend_name,
         batch_size=batch_size,
         input_shape=(crop_size, crop_size),
         warmup_iters=warmup,
@@ -1411,7 +1412,7 @@ def bench_classify(
         backend = CNNIdentityBackend(
             config=config,
             model_path=model_path,
-            compute_runtime=runtime,
+            compute_runtime=compute_runtime,
         )
         crops = make_synthetic_crops(batch_size, crop_size, crop_size)
         for _ in range(warmup):
@@ -1426,7 +1427,7 @@ def bench_classify(
     except Exception as exc:
         result.success = False
         result.error = str(exc)
-        logger.warning("Classification benchmark failed [%s]: %s", runtime, exc)
+        logger.warning("Classification benchmark failed [%s]: %s", tier, exc)
     return result
 
 
@@ -1512,11 +1513,9 @@ def run_target_benchmark(
             pose_backend_cache=pose_backend_cache,
         )
     if target.pipeline == "classify":
-        platform = detect_platform()
-        resolved_runtime = resolve_compute_runtime(runtime, platform, stage="cnn")
         return bench_classify(
             target.model_path,
-            resolved_runtime,
+            runtime,
             warmup,
             iterations,
             batch_size,

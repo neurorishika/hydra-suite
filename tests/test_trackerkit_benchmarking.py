@@ -754,20 +754,21 @@ def test_bench_headtail_uses_classifier_backend_not_legacy_detector(
     assert created["compute_runtime"] in {"cpu", "cuda", "mps", "tensorrt", "coreml"}
 
 
-def test_run_target_benchmark_resolves_tier_before_bench_classify(
-    monkeypatch, tmp_path
-):
+def test_run_target_benchmark_passes_raw_tier_to_bench_classify(monkeypatch, tmp_path):
+    """`bench_classify` is now tier-native (like bench_obb/bench_sequential/
+    bench_pose/bench_headtail) and resolves the compute-runtime internally --
+    this dispatch must NOT pre-resolve the tier before calling it."""
     import hydra_suite.trackerkit.benchmarking as benchmarking
 
-    seen_runtimes = []
+    seen_tiers = []
 
-    def fake_bench_classify(model_path, runtime, *a, **k):
-        seen_runtimes.append(runtime)
+    def fake_bench_classify(model_path, tier, *a, **k):
+        seen_tiers.append(tier)
         return benchmarking.BenchmarkResult(
             model_type="classify",
             model_path=model_path,
-            runtime=runtime,
-            runtime_label=runtime,
+            runtime=tier,
+            runtime_label=tier,
             batch_size=1,
             input_shape=(32, 32),
             warmup_iters=0,
@@ -804,15 +805,45 @@ def test_run_target_benchmark_resolves_tier_before_bench_classify(
         target, geometry, "gpu_fast", 1, warmup=0, iterations=1
     )
 
-    platform = benchmarking.detect_platform()
-    expected_runtime = benchmarking.resolve_compute_runtime(
-        "gpu_fast", platform, stage="cnn"
+    assert seen_tiers == ["gpu_fast"]
+
+
+def test_bench_classify_is_tier_native(monkeypatch, tmp_path):
+    """`bench_classify` should resolve its own compute-runtime from the tier
+    (mirroring `bench_headtail`) and report the tier itself as `result.runtime`,
+    with the resolved backend name captured separately."""
+    import hydra_suite.trackerkit.benchmarking as benchmarking
+
+    created = {}
+
+    class _FakeBackend:
+        def __init__(self, config, model_path, compute_runtime):
+            created["compute_runtime"] = compute_runtime
+
+        def predict_batch(self, crops):
+            return [None] * len(crops)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "hydra_suite.core.identity.classification.cnn.CNNIdentityBackend",
+        _FakeBackend,
     )
-    assert seen_runtimes == [expected_runtime]
-    # On any accelerated platform, "gpu_fast" must resolve away from the
-    # CPU fallback that `_normalize_runtime` would silently collapse it to.
-    if platform.has_cuda or platform.has_mps:
-        assert expected_runtime != "cpu"
+
+    result = benchmarking.bench_classify(
+        str(tmp_path / "cnn.pt"),
+        "gpu_fast",
+        warmup=1,
+        iterations=1,
+        batch_size=2,
+        crop_size=32,
+    )
+
+    assert result.success, result.error
+    assert result.runtime == "gpu_fast"
+    assert result.resolved_backend
+    assert created["compute_runtime"] in {"cpu", "cuda", "mps", "tensorrt", "coreml"}
 
 
 def test_run_target_benchmark_passes_raw_tier_to_bench_headtail(monkeypatch, tmp_path):
