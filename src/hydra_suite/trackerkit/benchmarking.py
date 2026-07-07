@@ -24,6 +24,7 @@ from hydra_suite.runtime.compute_runtime import (
     runtime_label,
 )
 from hydra_suite.runtime.resolver import (
+    RuntimeResolver,
     available_tiers,
     detect_platform,
     resolve_compute_runtime,
@@ -993,7 +994,6 @@ def bench_obb(
 ) -> BenchmarkResult:
     """Benchmark direct OBB inference for a runtime tier via the production executor."""
     from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
-    from hydra_suite.runtime.resolver import RuntimeResolver
 
     platform = detect_platform()
     resolved = RuntimeResolver(tier, platform).resolve("obb")
@@ -1047,7 +1047,6 @@ def bench_sequential(
 ) -> BenchmarkResult:
     """Benchmark sequential detect-plus-crop OBB inference via production executors."""
     from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
-    from hydra_suite.runtime.resolver import RuntimeResolver
 
     platform = detect_platform()
     resolved = RuntimeResolver(tier, platform).resolve("obb")
@@ -1100,57 +1099,46 @@ def bench_sequential(
 
 def bench_headtail(
     model_path: str,
-    runtime: str,
+    tier: str,
     warmup: int,
     iterations: int,
     batch_size: int,
     frame_size: tuple[int, int],
     crop_size: int,
 ) -> BenchmarkResult:
-    """Benchmark detector-side head-tail analysis."""
+    """Benchmark head-tail classification via the production ClassifierBackend."""
+    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+
+    platform = detect_platform()
+    resolved_backend_name = RuntimeResolver(tier, platform).resolve("head_tail").backend
+    compute_runtime = resolve_compute_runtime(tier, platform, stage="head_tail")
     result = BenchmarkResult(
         model_type="headtail",
         model_path=model_path,
-        runtime=runtime,
-        runtime_label=runtime_label(runtime),
+        runtime=tier,
+        runtime_label=tier_label(tier, platform),
+        resolved_backend=resolved_backend_name,
         batch_size=batch_size,
         input_shape=(crop_size, crop_size),
         warmup_iters=warmup,
         bench_iters=iterations,
     )
     try:
-        # NOTE(task-5): `_make_detector_runtime_stub` was deleted in Task 5 of the
-        # runtime-tier-benchmarking-cleanup plan; Task 7 rewrites bench_headtail onto
-        # the production head-tail classifier path and removes this reference. Until
-        # Task 7 lands, this call intentionally raises NameError, which is caught below
-        # and surfaced as a benchmark failure rather than crashing the caller.
-        detector = _make_detector_runtime_stub(  # noqa: F821
-            runtime, model_path, batch_size=batch_size
-        )
-        detector.params["YOLO_HEADTAIL_MODEL_PATH"] = model_path
-        detector._load_headtail_model(model_path)
-        analyzer = detector._headtail_analyzer
-        if analyzer is None or not analyzer.is_available:
-            raise RuntimeError("Failed to load head-tail model")
-        frame = make_synthetic_frame(*frame_size)
-        obb_corners = make_synthetic_obb_corners(
-            batch_size,
-            frame_size[0],
-            frame_size[1],
-            crop_size,
-        )
+        backend = ClassifierBackend(model_path, compute_runtime)
+        crops = make_synthetic_crops(batch_size, crop_size, crop_size)
         for _ in range(warmup):
-            detector._compute_headtail_hints(frame, obb_corners)
+            backend.predict_batch(crops)
 
         def _run_once() -> None:
-            detector._compute_headtail_hints(frame, obb_corners)
+            backend.predict_batch(crops)
 
         _run_timed_benchmark_iterations(result, iterations, _run_once)
         result.compute_stats()
+        backend.close()
     except Exception as exc:
         result.success = False
         result.error = str(exc)
-        logger.warning("Head-tail benchmark failed [%s]: %s", runtime, exc)
+        logger.warning("Head-tail benchmark failed [%s]: %s", tier, exc)
     return result
 
 

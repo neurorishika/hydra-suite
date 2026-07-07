@@ -718,6 +718,42 @@ def test_bench_sequential_uses_load_obb_executor(monkeypatch, tmp_path):
     assert {c[2] for c in calls} == {"detect", "obb"}
 
 
+def test_bench_headtail_uses_classifier_backend_not_legacy_detector(
+    monkeypatch, tmp_path
+):
+    import hydra_suite.trackerkit.benchmarking as benchmarking
+
+    created = {}
+
+    class _FakeBackend:
+        def __init__(self, model_path, compute_runtime):
+            created["compute_runtime"] = compute_runtime
+
+        def predict_batch(self, crops):
+            return [None] * len(crops)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "hydra_suite.core.identity.classification.backend.ClassifierBackend",
+        _FakeBackend,
+    )
+
+    result = benchmarking.bench_headtail(
+        str(tmp_path / "headtail.pt"),
+        "gpu",
+        warmup=1,
+        iterations=1,
+        batch_size=2,
+        frame_size=(64, 64),
+        crop_size=32,
+    )
+
+    assert result.success, result.error
+    assert created["compute_runtime"] in {"cpu", "cuda", "mps", "tensorrt", "coreml"}
+
+
 def test_collect_active_targets_includes_sequential_crop_settings(
     tmp_path: Path,
 ) -> None:
