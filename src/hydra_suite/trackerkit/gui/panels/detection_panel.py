@@ -1852,6 +1852,7 @@ class DetectionPanel(QWidget):
             "min_object_size": self.spin_min_object_size.value(),
             "max_object_size": self.spin_max_object_size.value(),
             "compute_runtime": selected_runtime,
+            "runtime_tier": tier,
             "obb_compute_runtime": obb_compute_runtime,
             "headtail_runtime": (
                 self._main_window._selected_headtail_runtime()

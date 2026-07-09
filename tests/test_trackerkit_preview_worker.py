@@ -840,3 +840,126 @@ def test_preview_run_pose_no_build_runtime_config(monkeypatch, caplog) -> None:
     assert pose_config.device == "cuda"
     assert pose_config.sleap_device == "cuda"
     assert pose_config.sleap_env == "sleap_env_x"
+
+
+def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
+    monkeypatch, caplog
+) -> None:
+    """Critical-finding regression test: `_collect_preview_detection_context`
+    (the only place that builds the preview context dict) must populate
+    ``runtime_tier`` so that `_preview_run_pose_overlay`'s tier-based
+    ``resolve_compute_runtime`` branch is actually reached in production,
+    instead of always falling back to the legacy ``compute_runtime`` string.
+
+    This exercises the *full* path: a real ``DetectionPanel`` (via a real
+    ``MainWindow``) builds the context, and that context is fed unmodified
+    into ``_preview_run_pose_overlay``.
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
+    pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
+    resolver_mod = importlib.import_module("hydra_suite.runtime.resolver")
+
+    # Pin the platform so tier -> compute_runtime resolution is deterministic.
+    monkeypatch.setattr(
+        resolver_mod,
+        "detect_platform",
+        lambda: resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+    )
+
+    mw = MainWindow()
+    try:
+        # Force the tier selector to "gpu_fast" regardless of what tiers the
+        # test host's real hardware happens to expose in the combo box.
+        monkeypatch.setattr(mw, "_selected_runtime_tier", lambda: "gpu_fast")
+        monkeypatch.setattr(
+            mw, "_get_resolved_pose_model_dir", lambda backend: "/models/sleap_model"
+        )
+        monkeypatch.setattr(mw, "_is_pose_inference_enabled", lambda: True)
+        monkeypatch.setattr(mw, "_selected_pose_sleap_env", lambda: "sleap_env_x")
+        mw._identity_panel.combo_pose_model_type.setCurrentText("SLEAP")
+
+        context = mw._detection_panel._collect_preview_detection_context()
+
+        # The bug: this key was never populated, so preview pose overlay's
+        # resolution always fell back to the legacy `compute_runtime` string.
+        assert context["runtime_tier"] == "gpu_fast"
+        assert context["pose_model_type"] == "sleap"
+        assert context["pose_model_dir"] == "/models/sleap_model"
+        assert context["enable_pose_extractor"] is True
+
+        def _boom(*args, **kwargs):
+            raise AssertionError(
+                "preview pose overlay should not call the legacy build_runtime_config"
+            )
+
+        monkeypatch.setattr(pose_api, "build_runtime_config", _boom)
+
+        captured: dict[str, object] = {}
+
+        class FakeBackend:
+            def predict_batch(self, crops):
+                captured["predict_batch_called"] = True
+                return []
+
+        def _fake_create_pose_backend_from_config(config):
+            captured["pose_config"] = config
+            return FakeBackend()
+
+        monkeypatch.setattr(
+            pose_api,
+            "create_pose_backend_from_config",
+            _fake_create_pose_backend_from_config,
+        )
+
+        canonical_crops = [np.zeros((8, 8, 3), dtype=np.uint8)]
+        canonical_inverses = [np.eye(2, 3, dtype=np.float32)]
+        label_stacks = [[]]
+        pose_keypoints_by_det: dict[int, np.ndarray] = {}
+
+        with caplog.at_level("WARNING"):
+            result = preview_worker._preview_run_pose_overlay(
+                [np.zeros((4, 2), dtype=np.float32)],
+                canonical_crops,
+                canonical_inverses,
+                context,
+                label_stacks,
+                pose_keypoints_by_det,
+            )
+
+        assert not any(
+            "Preview pose overlay disabled" in rec.message for rec in caplog.records
+        )
+        assert result is not None
+        assert captured["predict_batch_called"] is True
+
+        # The tier ("gpu_fast") that _collect_preview_detection_context
+        # threaded through must be what drove the resolved runtime — not the
+        # legacy `compute_runtime` fallback string.
+        expected_runtime = resolver_mod.resolve_compute_runtime(
+            "gpu_fast",
+            resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+            stage="sleap_pose",
+        )
+        assert expected_runtime == "tensorrt"
+
+        pose_config = captured["pose_config"]
+        assert isinstance(pose_config, pose_types.PoseRuntimeConfig)
+        assert pose_config.backend_family == "sleap"
+        assert pose_config.runtime_flavor == "tensorrt"
+        assert pose_config.device == "cuda"
+        assert pose_config.sleap_device == "cuda"
+    finally:
+        mw.close()
