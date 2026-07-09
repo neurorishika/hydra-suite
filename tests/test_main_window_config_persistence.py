@@ -17,7 +17,6 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from hydra_suite.trackerkit.benchmarking import BenchmarkRecommendation
 from hydra_suite.trackerkit.gui.main_window import MainWindow
-from hydra_suite.trackerkit.gui.orchestrators import session as session_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
 
@@ -786,11 +785,6 @@ def test_saved_config_reflects_tier_derived_pose_runtime_flavor(
 ) -> None:
     """Pose runtime is not independently selectable; it tracks Compute tier (spec §2/§5.2)."""
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda _pipeline: ["cpu", "mps", "onnx_coreml", "onnx_cpu"],
-    )
 
     window._identity_panel.chk_enable_pose_extractor.setChecked(True)
     window._identity_panel.combo_pose_model_type.setCurrentText("SLEAP")

@@ -12,11 +12,8 @@ from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
-from hydra_suite.runtime.compute_runtime import (
-    derive_pose_runtime_settings,
-    supported_runtimes_for_pipeline,
-)
-from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
+from hydra_suite.runtime.resolver import detect_platform, resolve_compute_runtime
 from hydra_suite.utils.geometry import fit_circle_to_points
 
 if TYPE_CHECKING:
@@ -1116,28 +1113,34 @@ class SessionOrchestrator:
         artifact (TensorRT/CoreML) if this pipeline supports it, else the
         native GPU.
         """
+        from hydra_suite.utils.gpu_utils import (
+            ONNXRUNTIME_COREML_AVAILABLE,
+            TENSORRT_AVAILABLE,
+        )
+
         tier = self._current_runtime_tier()
         platform = detect_platform()
-        pipeline = (
-            "sleap_pose" if str(backend).strip().lower() == "sleap" else "yolo_pose"
-        )
-        supported = supported_runtimes_for_pipeline(pipeline)
+        is_sleap = str(backend).strip().lower() == "sleap"
+        pipeline = "sleap_pose" if is_sleap else "yolo_pose"
 
         def artifact_available() -> bool:
+            if is_sleap:
+                # SLEAP has no CoreML export path; its fast tier only applies
+                # on CUDA (mirrors core/inference/stages/pose.py's SLEAP
+                # tier->flavor gate).
+                return platform.has_cuda
             if platform.has_cuda:
-                return "tensorrt" in supported
+                return bool(TENSORRT_AVAILABLE)
             if platform.has_mps:
-                return "onnx_coreml" in supported
+                return bool(ONNXRUNTIME_COREML_AVAILABLE)
             return True
 
-        resolved = RuntimeResolver(tier, platform).resolve(
-            pipeline, artifact_available=artifact_available
+        # resolve_compute_runtime returns "coreml" for the CoreML backend;
+        # derive_pose_runtime_settings's _normalize_runtime already aliases
+        # "coreml" to "onnx_coreml", so no extra translation is needed here.
+        return resolve_compute_runtime(
+            tier, platform, stage=pipeline, artifact_available=artifact_available
         )
-        if resolved.backend == "tensorrt":
-            return "tensorrt"
-        if resolved.backend == "coreml":
-            return "onnx_coreml"
-        return resolved.device  # "cuda", "mps", or "cpu"
 
     def _selected_pose_runtime_flavor(self) -> str:
         """Return the pose runtime flavor key, fully derived from the compute tier."""
