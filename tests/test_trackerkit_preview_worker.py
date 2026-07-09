@@ -153,7 +153,7 @@ def test_preview_run_yolo_branch_uses_filtered_headtail_hints(monkeypatch) -> No
     monkeypatch.setattr(
         preview_worker,
         "_preview_run_yolo_raw_detection",
-        lambda executors, frame_to_process, yolo_params, headtail_state=None: (
+        lambda executors, frame_to_process, yolo_params, headtail_state=None, extractor=None: (
             [np.array([16.0, 13.0, 0.0], dtype=np.float32)],
             [1.0],
             [(1.0, 2.0)],
@@ -231,6 +231,304 @@ def test_preview_run_yolo_branch_uses_filtered_headtail_hints(monkeypatch) -> No
     assert heading == 1.25
     assert conf == pytest.approx(0.88, abs=1e-4)
     assert directed == 1
+
+
+class _ArrayWrap:
+    """Minimal ``torch.Tensor``-like wrapper exposing ``.cpu().numpy()``."""
+
+    def __init__(self, arr) -> None:
+        self._arr = np.asarray(arr, dtype=np.float32)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._arr
+
+
+class _FakeStage1Boxes:
+    """Stand-in for ultralytics ``Results.boxes`` (stage-1 plain detector)."""
+
+    def __init__(self, xyxy, conf, cls) -> None:
+        self.xyxy = _ArrayWrap(xyxy)
+        self.conf = _ArrayWrap(conf)
+        self.cls = _ArrayWrap(cls)
+
+    def __len__(self) -> int:
+        return self.xyxy._arr.shape[0]
+
+
+class _FakeOBB:
+    """Stand-in for ultralytics ``Results.obb`` (stage-2 crop-OBB output)."""
+
+    def __init__(self, xywhr, conf, cls) -> None:
+        self.xywhr = _ArrayWrap(xywhr)
+        self.conf = _ArrayWrap(conf)
+        self.cls = _ArrayWrap(cls)
+
+    def __len__(self) -> int:
+        return self.xywhr._arr.shape[0]
+
+
+def _make_sequential_fake_executors():
+    """Build fake stage-1 (detect) / stage-2 (crop-OBB) executors.
+
+    Stage-1 returns four candidate boxes (mirrors a real detector emitting
+    several distinct crops). Stage-2 returns one detection each for three of
+    the four crops, at three different confidences, plus a genuinely empty
+    result for the fourth crop -- this exercises
+    ``_preview_accumulate_crop_detections``'s empty-result skip,
+    ``_preview_sort_merged_detections``'s confidence-descending sort, and its
+    ``max_det`` truncation (when the caller caps below 3), all with
+    non-trivial, order-scrambled input.
+    """
+    import types
+
+    stage1_boxes = _FakeStage1Boxes(
+        xyxy=[
+            [5.0, 5.0, 25.0, 25.0],
+            [60.0, 60.0, 80.0, 80.0],
+            [120.0, 120.0, 140.0, 140.0],
+            [160.0, 160.0, 180.0, 180.0],
+        ],
+        conf=[0.7, 0.7, 0.7, 0.7],
+        cls=[9, 9, 9, 9],
+    )
+    stage1_result = types.SimpleNamespace(boxes=stage1_boxes, names={9: "blob"})
+
+    # Per-crop stage-2 detections, deliberately *not* pre-sorted by
+    # confidence, so a correct implementation must sort them. Box sizes are
+    # chosen to correlate with confidence (higher conf -> larger box) so that
+    # this fixture is unambiguous under either of the two truncation policies
+    # a caller might apply downstream (raw-merge truncates by confidence via
+    # ``_preview_sort_merged_detections``; the GUI's final
+    # ``filter_raw_detections`` separately truncates to ``MAX_TARGETS`` by
+    # detection *size*, largest-first).
+    stage2_results = [
+        types.SimpleNamespace(
+            obb=_FakeOBB(xywhr=[[10.0, 10.0, 6.0, 10.0, 0.3]], conf=[0.4], cls=[1])
+        ),
+        types.SimpleNamespace(
+            obb=_FakeOBB(xywhr=[[15.0, 15.0, 20.0, 20.0, 0.0]], conf=[0.9], cls=[0])
+        ),
+        types.SimpleNamespace(
+            obb=_FakeOBB(xywhr=[[20.0, 20.0, 15.0, 15.0, 0.5]], conf=[0.6], cls=[2])
+        ),
+        types.SimpleNamespace(obb=None),  # 4th crop: no stage-2 detections at all.
+    ]
+
+    class FakeStage1Executor:
+        names = {9: "blob"}
+
+        def predict(self, *args, **kwargs):
+            return [stage1_result]
+
+    class FakeStage2Executor:
+        names = {0: "ant", 1: "ant", 2: "ant"}
+
+        def predict(self, chunk, **kwargs):
+            return stage2_results[: len(chunk)]
+
+    return FakeStage1Executor(), FakeStage2Executor()
+
+
+def test_preview_run_sequential_raw_detection_merges_sorts_and_truncates() -> None:
+    """Task 2 finding: exercise the sequential-mode crop merge/sort/truncate path.
+
+    Directly drives ``_preview_run_sequential_raw_detection`` (bypassing the
+    GUI wiring) with fake stage-1/stage-2 executors returning multiple
+    candidate boxes so ``_preview_accumulate_crop_detections`` and
+    ``_preview_sort_merged_detections`` do genuine, non-trivial merge/sort/
+    truncate work, not just a pass-through.
+    """
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.detectors import DetectionFilter
+
+    detect_executor, obb_executor = _make_sequential_fake_executors()
+    executors = {"mode": "sequential", "detect": detect_executor, "obb": obb_executor}
+    yolo_params = {
+        "MAX_TARGETS": 1,  # max_det = 2 * MAX_TARGETS = 2 -> forces truncation
+        "YOLO_SEQ_CROP_PAD_RATIO": 0.15,
+        "YOLO_SEQ_MIN_CROP_SIZE_PX": 64,
+        "YOLO_SEQ_ENFORCE_SQUARE_CROP": True,
+        "YOLO_SEQ_STAGE2_IMGSZ": 0,  # skip stage-2 resize -> merge scale is 1.0
+        "YOLO_SEQ_INDIVIDUAL_BATCH_SIZE": 16,
+        "YOLO_SEQ_DETECT_CONF_THRESHOLD": 0.25,
+    }
+    extractor = DetectionFilter(yolo_params)
+    frame = np.zeros((200, 200, 3), dtype=np.uint8)
+
+    (
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        raw_class_ids,
+        stage1_result,
+    ) = preview_worker._preview_run_sequential_raw_detection(
+        extractor,
+        executors,
+        frame,
+        yolo_params,
+        raw_conf_floor=1e-3,
+        target_classes=None,
+        max_det=2,
+    )
+
+    # 4 stage-1 boxes -> 4 crops; 1 crop yields no stage-2 detections (skipped
+    # by _preview_accumulate_crop_detections), leaving 3 candidates
+    # (confidences 0.4, 0.9, 0.6); max_det=2 truncates to the top 2.
+    assert len(raw_meas) == 2
+    assert raw_confidences == sorted(raw_confidences, reverse=True)
+    assert raw_confidences[0] == pytest.approx(0.9, abs=1e-4)
+    assert raw_confidences[1] == pytest.approx(0.6, abs=1e-4)
+    # Class ids travel with their detection through the sort/truncate.
+    assert raw_class_ids == [0, 2]
+    # Corners are well-formed (4, 2) oriented-box corner sets.
+    assert len(raw_obb_corners) == 2
+    for corners in raw_obb_corners:
+        assert np.asarray(corners).shape == (4, 2)
+    # The stage-1 Results object is returned (for downstream viz), not lost.
+    assert getattr(stage1_result, "boxes", None) is not None
+
+
+def test_preview_run_yolo_branch_sequential_mode_uses_two_executors(
+    monkeypatch,
+) -> None:
+    """Task 2: end-to-end sequential-mode preview branch, off ``load_obb_executor``.
+
+    Mirrors ``test_preview_run_yolo_branch_uses_load_obb_executor_not_legacy_detector``'s
+    monkeypatching pattern for direct mode, but supplies *two* distinct fake
+    executors (stage-1 detect + stage-2 crop-OBB) keyed off the ``task=``
+    kwarg ``load_obb_executor`` is called with, and asserts the branch reaches
+    the final annotation step with correctly-shaped, correctly-ordered
+    output -- without ever touching the legacy ``YOLOOBBDetector``.
+    """
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    runtime_artifacts = importlib.import_module(
+        "hydra_suite.core.inference.runtime_artifacts"
+    )
+    detectors_pkg = importlib.import_module("hydra_suite.core.detectors")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "preview should not construct a legacy YOLOOBBDetector instance"
+        )
+
+    monkeypatch.setattr(detectors_pkg, "YOLOOBBDetector", _boom)
+
+    detect_executor, obb_executor = _make_sequential_fake_executors()
+    load_calls: list[dict] = []
+
+    def _fake_load_obb_executor(model_path, compute_runtime, **kwargs):
+        load_calls.append({"model_path": model_path, **kwargs})
+        if kwargs.get("task") == "detect":
+            return detect_executor
+        return obb_executor
+
+    monkeypatch.setattr(runtime_artifacts, "load_obb_executor", _fake_load_obb_executor)
+    monkeypatch.setattr(
+        preview_worker,
+        "_preview_resize_frame",
+        lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_load_headtail_model", lambda yolo_params: None
+    )
+    monkeypatch.setattr(
+        preview_worker,
+        "_preview_compute_canonical_crops",
+        lambda filtered_corners, frame_to_process, context: (
+            [None] * len(filtered_corners),
+            [None] * len(filtered_corners),
+            0.1,
+            (0, 0, 0),
+            False,
+        ),
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_run_pose_overlay", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_run_cnn_overlay", lambda *args, **kwargs: []
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_run_apriltag_overlay", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_cleanup_backends", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_draw_yolo_footer", lambda *args, **kwargs: None
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture_annotations(
+        test_frame,
+        filtered_corners,
+        detection_confidences,
+        filtered_class_labels,
+        label_stacks,
+        label_anchors,
+        pose_keypoints_by_det,
+        filtered_headtail,
+        context,
+    ):
+        captured["filtered_corners"] = list(filtered_corners)
+        captured["detection_confidences"] = list(detection_confidences)
+        captured["filtered_class_labels"] = list(filtered_class_labels)
+
+    monkeypatch.setattr(
+        preview_worker, "_preview_draw_obb_annotations", _capture_annotations
+    )
+
+    test_frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    context = {
+        "yolo_obb_mode": "sequential",
+        "yolo_detect_model_path": "detect.pt",
+        "yolo_crop_obb_model_path": "crop_obb.pt",
+        "compute_runtime": "cpu",
+        "obb_compute_runtime": "cpu",
+        "yolo_confidence": 0.1,
+        "yolo_seq_stage2_imgsz": 0,
+        "max_targets": 2,
+    }
+
+    detected_dimensions, out_frame = preview_worker._preview_run_yolo_branch(
+        test_frame,
+        test_frame.copy(),
+        context,
+        1.0,
+        False,
+    )
+
+    detect_calls = [c for c in load_calls if c.get("task") == "detect"]
+    obb_calls = [c for c in load_calls if c.get("task") == "obb"]
+    assert len(detect_calls) == 1
+    assert len(obb_calls) == 1
+    assert detect_calls[0]["model_path"].endswith("detect.pt")
+    assert obb_calls[0]["model_path"].endswith("crop_obb.pt")
+
+    # 3 non-empty crop detections (0.4, 0.9, 0.6) all pass the raw stage
+    # (max_det=2*MAX_TARGETS=4), then the final ``MAX_TARGETS=2`` cap in
+    # ``filter_raw_detections`` keeps only the top-2 by confidence (0.9,
+    # 0.6); both pass the 0.1 confidence-filter threshold and are far enough
+    # apart to survive OBB-IOU NMS untouched.
+    assert len(captured["filtered_corners"]) == 2
+    for corners in captured["filtered_corners"]:
+        assert np.asarray(corners).shape == (4, 2)
+    assert captured["detection_confidences"] == sorted(
+        captured["detection_confidences"], reverse=True
+    )
+    assert captured["detection_confidences"][0] == pytest.approx(0.9, abs=1e-4)
+    assert captured["detection_confidences"][1] == pytest.approx(0.6, abs=1e-4)
+    assert out_frame.shape == test_frame.shape
 
 
 def test_preview_raw_detection_prefilters_headtail_candidates(monkeypatch) -> None:

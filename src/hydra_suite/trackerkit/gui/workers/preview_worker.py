@@ -1057,6 +1057,30 @@ def _preview_run_sequential_raw_detection(
     if boxes is None or len(boxes) == 0:
         return [], [], [], [], [], [], det0
 
+    # NOTE: unlike legacy ``YOLOOBBDetector._run_sequential_raw_detection``
+    # (which explicitly did ``np.argsort(det_conf)[::-1][:max_det]`` before
+    # building crops), ``boxes`` here is used as-is, un-re-sorted. This is
+    # intentional and verified, not an oversight: ``detect_executor``'s
+    # ``.predict()`` for both backends is routed through the same shared
+    # ultralytics NMS entry point, which already guarantees
+    # confidence-descending, ``max_det``-capped output --
+    #   * torch cpu/mps/cuda (``_load_torch_executor``) and CoreML (which
+    #     also loads via ``_load_torch_model``) call
+    #     ``ultralytics.utils.nms.non_max_suppression`` (see
+    #     ``ultralytics/utils/nms.py``): NMS keep-indices are built from
+    #     ``scores.argsort(descending=True)`` (``TorchNMS.nms``/
+    #     ``fast_nms``) or ``torchvision.ops.nms`` (also score-descending
+    #     per its docs), then capped via ``i = i[:max_det]`` (nms.py:157) --
+    #     so the surviving order is already confidence-descending and capped.
+    #   * the direct TensorRT/ONNX executor
+    #     (``core/detectors/_direct_obb_runtime.py``, ``_postprocess``,
+    #     ~line 266) calls that *exact same*
+    #     ``ultralytics.utils.nms.non_max_suppression(..., max_det=max_det)``
+    #     function -- byte-identical sort/cap guarantee, no separate
+    #     TensorRT-side NMS implementation to diverge.
+    # This matches current production ``_run_sequential``
+    # (``core/inference/stages/obb.py``), which also builds crops directly
+    # off stage-1 ``boxes`` with no explicit re-sort, for the same reason.
     seq_spec = _PreviewSeqCropSpec(
         crop_pad_ratio=float(yolo_params.get("YOLO_SEQ_CROP_PAD_RATIO", 0.15)),
         min_crop_size_px=float(yolo_params.get("YOLO_SEQ_MIN_CROP_SIZE_PX", 64)),
@@ -1113,15 +1137,17 @@ def _preview_run_sequential_raw_detection(
 
 
 def _preview_run_yolo_raw_detection(
-    executors, frame_to_process, yolo_params, headtail_state=None
+    executors, frame_to_process, yolo_params, headtail_state=None, extractor=None
 ):
     """Run raw OBB detection (direct or sequential) via production OBB executors.
 
     Returns the same 10-tuple contract the legacy detector-backed function
     returned, so downstream filtering/annotation code needs no changes.
-    """
-    from hydra_suite.core.detectors import DetectionFilter
 
+    ``extractor``: an optional pre-built ``DetectionFilter`` instance to reuse
+    (the caller may already need one for ``filter_raw_detections``); a fresh
+    one is constructed when omitted.
+    """
     raw_conf_floor = max(
         1e-4, float(yolo_params.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3))
     )
@@ -1129,7 +1155,10 @@ def _preview_run_yolo_raw_detection(
     max_det = max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2
     yolo_mode = str(yolo_params.get("YOLO_OBB_MODE", "direct")).strip().lower()
 
-    extractor = DetectionFilter(yolo_params)
+    if extractor is None:
+        from hydra_suite.core.detectors import DetectionFilter
+
+        extractor = DetectionFilter(yolo_params)
 
     if yolo_mode == "sequential":
         (
@@ -1682,6 +1711,7 @@ def _preview_run_yolo_branch(
     obb_compute_runtime = str(yolo_params.get("OBB_COMPUTE_RUNTIME", "cpu"))
     executors = _preview_load_obb_executors(yolo_params, obb_compute_runtime, yolo_mode)
     headtail_state = _preview_load_headtail_model(yolo_params)
+    extractor = DetectionFilter(yolo_params)
 
     try:
         (
@@ -1696,11 +1726,14 @@ def _preview_run_yolo_branch(
             raw_directed_mask,
             stage1_result,
         ) = _preview_run_yolo_raw_detection(
-            executors, frame_to_process, yolo_params, headtail_state
+            executors,
+            frame_to_process,
+            yolo_params,
+            headtail_state,
+            extractor=extractor,
         )
 
         raw_ids = list(range(len(raw_meas)))
-        extractor = DetectionFilter(yolo_params)
         (
             meas,
             _sizes,

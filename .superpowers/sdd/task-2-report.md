@@ -198,3 +198,126 @@ particularly to verify:
   correctly on real hardware (this session only exercised the code paths via
   monkeypatched fakes — the real `load_obb_executor` TensorRT/CoreML export
   machinery was not exercised end-to-end).
+
+---
+
+## Code-review fix-up (post-`c54afd7`)
+
+A code reviewer found two Important issues on top of the above. Both are now
+fixed in a follow-up commit.
+
+### Finding 1 — Missing test coverage for the sequential-mode path
+
+Added two new tests to `tests/test_trackerkit_preview_worker.py`:
+
+- `test_preview_run_sequential_raw_detection_merges_sorts_and_truncates` —
+  calls `_preview_run_sequential_raw_detection` directly with fake stage-1
+  (detect) / stage-2 (crop-OBB) executors. Stage-1 returns 4 candidate boxes;
+  stage-2 returns non-pre-sorted per-crop detections (confidences 0.4, 0.9,
+  0.6) plus a genuinely empty result for the 4th crop, and `max_det=2`.
+  Asserts: the empty-result crop is skipped by
+  `_preview_accumulate_crop_detections`, the merged detections come back
+  confidence-descending and truncated to 2 by
+  `_preview_sort_merged_detections` (0.9, 0.6 — the 0.4 one is dropped),
+  class ids travel with their detection through the sort/truncate, and
+  corners are well-formed `(4, 2)` arrays.
+- `test_preview_run_yolo_branch_sequential_mode_uses_two_executors` — full
+  end-to-end test through `_preview_run_yolo_branch` in sequential mode,
+  monkeypatching `runtime_artifacts.load_obb_executor` to return one of two
+  distinct fake executors keyed off the `task=` kwarg (`"detect"` vs.
+  `"obb"`), following the exact same monkeypatching pattern the pre-existing
+  direct-mode test in this file uses. Also monkeypatches
+  `detectors_pkg.YOLOOBBDetector` to raise, confirming the legacy class is
+  never touched. Asserts `load_obb_executor` was called once for each task
+  with the expected model paths, and that the final
+  `_preview_draw_obb_annotations` call receives 2 well-shaped,
+  confidence-ordered detections (discovered along the way: the GUI's final
+  `MAX_TARGETS` cap in `filter_raw_detections` truncates by detection *size*
+  descending, not confidence — the test fixture's box sizes were set to
+  correlate with confidence so the expected top-2 is unambiguous either way).
+
+Both new tests pass; `_preview_yolo_sequential_stage1_viz`'s new
+`detect_model_names` signature is exercised transitively through the
+second test's `stage1_result`/`names` fixture (the sequential branch of
+`_preview_run_yolo_branch` calls it whenever `stage1_result is not None`).
+
+### Finding 2 — Dropped pre-crop confidence sort/truncate: investigation
+
+Legacy `YOLOOBBDetector._run_sequential_raw_detection`
+(`src/hydra_suite/core/detectors/yolo_detector.py:1594-1596`) explicitly did
+`order = np.argsort(det_conf)[::-1]; order = order[:max_det]` on stage-1
+detections before building crops. The new `_preview_run_sequential_raw_detection`
+does not — it builds crops directly off `boxes` as returned by
+`detect_executor.predict(...)`.
+
+**Investigated whether this is safe, rather than leaving it an unstated
+assumption.** Confirmed, by reading the actual source in this repo's active
+conda env (`hydra-mps`, ultralytics 8.4.34) and this repo's own direct-executor
+code, that `detect_executor`'s `.predict()` for both backends is guaranteed
+to return confidence-descending + `max_det`-capped output:
+
+- **Torch cpu/mps/cuda** (`_load_torch_executor`) and **CoreML** (which also
+  loads via `_load_torch_model`, `runtime_artifacts.py:534`) run ultralytics'
+  own `Results` postprocessing, which calls
+  `ultralytics.utils.nms.non_max_suppression(..., max_det=max_det)`
+  (`.../site-packages/ultralytics/utils/nms.py`). Inside it: NMS keep-indices
+  come from `scores.argsort(descending=True)` (`TorchNMS.nms`, nms.py:265;
+  `TorchNMS.fast_nms`, nms.py:218) or `torchvision.ops.nms` (also
+  score-descending per its own docs), and the result is capped via
+  `i = i[:max_det]` (nms.py:157) **after** that descending sort — so the
+  surviving boxes are already confidence-descending and capped before
+  `Results.boxes` is even constructed.
+- **The direct TensorRT/ONNX executor**
+  (`src/hydra_suite/core/detectors/_direct_obb_runtime.py`, `_postprocess`,
+  ~line 266) calls that *exact same*
+  `ultralytics.utils.nms.non_max_suppression(preds, ..., max_det=max_det, ...)`
+  function — not a separate TensorRT-side NMS implementation — so the
+  guarantee is byte-identical across backends.
+
+This also matches current (non-legacy) production code: `_run_sequential` in
+`src/hydra_suite/core/inference/stages/obb.py:444-509` (the real
+tracking-time sequential-OBB pipeline) builds crops directly off stage-1
+`boxes` with **no** explicit re-sort either (`_build_crops(frame, boxes, seq,
+runtime)` at line 469) — for the same reason.
+
+**Conclusion: left the sort/truncate out, as verified-safe rather than an
+unstated assumption**, and added a code comment in
+`_preview_run_sequential_raw_detection`
+(`src/hydra_suite/trackerkit/gui/workers/preview_worker.py`, just before crop
+building) documenting this confirmation in detail (with the exact file/line
+citations above) so a future reader doesn't have to re-derive it or wonder
+if it's an oversight.
+
+### Minor finding — `DetectionFilter(yolo_params)` double instantiation
+
+Fixed: `_preview_run_yolo_raw_detection` now accepts an optional `extractor`
+parameter (falls back to constructing its own `DetectionFilter` when
+omitted, so its other caller/tests are unaffected); `_preview_run_yolo_branch`
+now constructs a single `DetectionFilter(yolo_params)` up front and passes it
+in via `extractor=extractor`, reusing it for the later
+`filter_raw_detections` call instead of constructing a second instance.
+Updated the one existing test that monkeypatched
+`_preview_run_yolo_raw_detection` with a fixed lambda signature to accept the
+new `extractor=None` keyword.
+
+### Files changed (this fix-up)
+
+- `src/hydra_suite/trackerkit/gui/workers/preview_worker.py`
+- `tests/test_trackerkit_preview_worker.py`
+
+### Verification
+
+```
+python -m pytest tests/test_trackerkit_preview_worker.py -v
+# 9 passed
+
+python -m pytest tests/test_trackerkit_preview_worker.py tests/test_trackerkit_panels_smoke.py tests/test_compute_runtime.py -q
+# 41 passed, 1 skipped
+```
+
+`make format` (black/isort — reformatted the two changed files only; the
+incidental isort touch to `refinekit/gui/dialogs/merge_wizard.py` was
+reverted again, as it's outside this fix-up's scope) and
+`flake8 --config=.flake8.moderate` on both changed files individually
+produced no findings. `make lint` (full-repo) shows only pre-existing
+findings in files this fix-up did not touch.
