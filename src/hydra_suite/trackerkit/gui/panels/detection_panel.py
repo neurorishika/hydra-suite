@@ -1792,15 +1792,18 @@ class DetectionPanel(QWidget):
 
     def _collect_preview_detection_context(self) -> dict:
         """Capture current UI values for async preview detection."""
-        from hydra_suite.runtime.compute_runtime import (
-            derive_detection_runtime_settings,
-            derive_pose_runtime_settings,
+        from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
+        from hydra_suite.runtime.resolver import (
+            detect_platform,
+            resolve_compute_runtime,
         )
 
         selected_runtime = self._main_window._preview_safe_runtime(
             self._main_window._selected_compute_runtime()
         )
-        runtime_detection = derive_detection_runtime_settings(selected_runtime)
+        tier = self._main_window._selected_runtime_tier()
+        platform = detect_platform()
+        obb_compute_runtime = resolve_compute_runtime(tier, platform, stage="obb")
         identity_cfg = self._preview_identity_config()
         ip = getattr(self._main_window, "_identity_panel", None)
         pose_backend_family = (
@@ -1810,11 +1813,6 @@ class DetectionPanel(QWidget):
         )
         runtime_pose = derive_pose_runtime_settings(
             selected_runtime, backend_family=pose_backend_family
-        )
-        trt_batch_size = (
-            self.spin_yolo_batch_size.value()
-            if self._main_window._runtime_requires_fixed_yolo_batch(selected_runtime)
-            else self.spin_tensorrt_batch.value()
         )
         class_text = self.line_yolo_classes.text().strip()
         target_classes = None
@@ -1854,6 +1852,7 @@ class DetectionPanel(QWidget):
             "min_object_size": self.spin_min_object_size.value(),
             "max_object_size": self.spin_max_object_size.value(),
             "compute_runtime": selected_runtime,
+            "obb_compute_runtime": obb_compute_runtime,
             "headtail_runtime": (
                 self._main_window._selected_headtail_runtime()
                 if hasattr(self._main_window, "_selected_headtail_runtime")
@@ -1904,11 +1903,6 @@ class DetectionPanel(QWidget):
             "yolo_confidence": self.spin_yolo_confidence.value(),
             "yolo_iou": self.spin_yolo_iou.value(),
             "yolo_target_classes": target_classes,
-            "yolo_device": runtime_detection["yolo_device"],
-            "enable_gpu_background": runtime_detection["enable_gpu_background"],
-            "enable_tensorrt": runtime_detection["enable_tensorrt"],
-            "enable_onnx_runtime": runtime_detection["enable_onnx_runtime"],
-            "tensorrt_max_batch_size": trt_batch_size,
             "max_targets": sp.spin_max_targets.value() if sp is not None else 10,
             "max_contour_multiplier": self.spin_max_contour_multiplier.value(),
             "enable_conservative_split": self.chk_conservative_split.isChecked(),

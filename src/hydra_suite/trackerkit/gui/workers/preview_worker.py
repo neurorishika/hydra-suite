@@ -503,6 +503,9 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
         min_size_px2 = 0
         max_size_px2 = float("inf")
     return {
+        "OBB_COMPUTE_RUNTIME": str(
+            context.get("obb_compute_runtime", context.get("compute_runtime", "cpu"))
+        ),
         "YOLO_MODEL_PATH": resolve_model_path(context.get("yolo_model_path", "")),
         "YOLO_OBB_MODE": str(context.get("yolo_obb_mode", "direct")).strip().lower(),
         "ADVANCED_CONFIG": {
@@ -562,11 +565,7 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
         "YOLO_IOU_THRESHOLD": float(context.get("yolo_iou", 0.45)),
         "USE_CUSTOM_OBB_IOU_FILTERING": True,
         "YOLO_TARGET_CLASSES": context.get("yolo_target_classes"),
-        "YOLO_DEVICE": context.get("yolo_device"),
         "ENABLE_GPU_BACKGROUND": bool(context.get("enable_gpu_background", False)),
-        "ENABLE_TENSORRT": bool(context.get("enable_tensorrt", False)),
-        "ENABLE_ONNX_RUNTIME": bool(context.get("enable_onnx_runtime", False)),
-        "TENSORRT_MAX_BATCH_SIZE": int(context.get("tensorrt_max_batch_size", 1)),
         "MAX_TARGETS": int(context.get("max_targets", 1)),
         "MAX_CONTOUR_MULTIPLIER": float(context.get("max_contour_multiplier", 3.0)),
         "ENABLE_SIZE_FILTERING": bool(use_detection_filters),
@@ -575,12 +574,563 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
     }
 
 
-def _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params):
+def _preview_runtime_context_for(compute_runtime: str):
+    """Build a minimal ``RuntimeContext`` that maps back to ``compute_runtime``.
+
+    Preview only needs ``RuntimeContext`` to satisfy ``load_headtail_model``'s
+    and ``run_headtail``'s signatures (neither reads it for anything other than
+    ``runtime_to_compute_runtime`` at load time) -- so we synthesize a context
+    whose fields round-trip through ``runtime_to_compute_runtime`` back to the
+    requested runtime string, rather than constructing a full ``InferenceConfig``.
+    """
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    rt = str(compute_runtime).strip().lower()
+    if rt == "cuda":
+        return RuntimeContext(
+            cuda_mode=True,
+            device="cuda:0",
+            use_nvdec=False,
+            default_runtime="cuda",
+            tensor_on_cuda=True,
+            coreml_mode=False,
+        )
+    if rt == "tensorrt":
+        return RuntimeContext(
+            cuda_mode=True,
+            device="cuda:0",
+            use_nvdec=False,
+            default_runtime="cuda",
+            tensor_on_cuda=False,
+            coreml_mode=False,
+        )
+    if rt == "coreml":
+        return RuntimeContext(
+            cuda_mode=False,
+            device="mps",
+            use_nvdec=False,
+            default_runtime="cpu",
+            tensor_on_cuda=False,
+            coreml_mode=True,
+        )
+    if rt == "mps":
+        return RuntimeContext(
+            cuda_mode=False,
+            device="mps",
+            use_nvdec=False,
+            default_runtime="cpu",
+            tensor_on_cuda=False,
+            coreml_mode=False,
+        )
+    return RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        default_runtime="cpu",
+        tensor_on_cuda=False,
+        coreml_mode=False,
+    )
+
+
+def _preview_load_obb_executors(yolo_params, obb_compute_runtime, yolo_mode):
+    """Load the production OBB executor(s) for the preview's direct/sequential mode."""
+    from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
+
+    max_det = max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2
+    if yolo_mode == "sequential":
+        detect_model_path = yolo_params.get("YOLO_DETECT_MODEL_PATH")
+        if not detect_model_path:
+            raise ValueError(
+                "Sequential YOLO OBB mode requires YOLO_DETECT_MODEL_PATH."
+            )
+        detect_executor = load_obb_executor(
+            detect_model_path,
+            obb_compute_runtime,
+            task="detect",
+            max_det=max_det,
+        )
+        crop_obb_model_path = yolo_params.get(
+            "YOLO_CROP_OBB_MODEL_PATH"
+        ) or yolo_params.get("YOLO_OBB_DIRECT_MODEL_PATH")
+        stage2_imgsz = int(yolo_params.get("YOLO_SEQ_STAGE2_IMGSZ", 160))
+        obb_executor = load_obb_executor(
+            crop_obb_model_path,
+            obb_compute_runtime,
+            task="obb",
+            max_det=max_det,
+            imgsz_override=stage2_imgsz if stage2_imgsz > 0 else None,
+        )
+        return {"mode": "sequential", "detect": detect_executor, "obb": obb_executor}
+
+    obb_model_path = yolo_params.get("YOLO_OBB_DIRECT_MODEL_PATH") or yolo_params.get(
+        "YOLO_MODEL_PATH"
+    )
+    obb_executor = load_obb_executor(
+        obb_model_path, obb_compute_runtime, task="obb", max_det=max_det
+    )
+    return {"mode": "direct", "obb": obb_executor}
+
+
+def _preview_select_headtail_candidate_indices(
+    params,
+    raw_meas,
+    raw_sizes,
+    raw_shapes,
+    raw_confidences,
+    raw_obb_corners,
+    *,
+    roi_mask=None,
+):
+    """Cheap pre-filter selecting raw-detection indices worth sending through head-tail.
+
+    Ported from ``YOLOOBBDetector._select_headtail_candidate_indices`` (which
+    only ever depended on ``self.params``): confidence/size/AR/ROI gates only,
+    intentionally skipping OBB NMS/IOU suppression so head-tail candidates are a
+    superset of ``filter_raw_detections``'s final kept set.
+    """
+    from hydra_suite.core.detectors._utils import _advanced_config_value
+
+    if not raw_meas:
+        return []
+    conf_threshold = float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
+    detect_conf_threshold = float(
+        params.get(
+            "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD",
+            params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25),
+        )
+    )
+    meas_arr = np.ascontiguousarray(np.asarray(raw_meas, dtype=np.float32))
+    sizes_arr = np.ascontiguousarray(np.asarray(raw_sizes, dtype=np.float32))
+    shapes_arr = np.ascontiguousarray(np.asarray(raw_shapes, dtype=np.float32))
+    conf_arr = np.ascontiguousarray(np.asarray(raw_confidences, dtype=np.float32))
+
+    n = min(len(meas_arr), len(sizes_arr), len(shapes_arr), len(conf_arr))
+    if raw_obb_corners:
+        n = min(n, len(raw_obb_corners))
+    if n <= 0:
+        return []
+
+    meas_arr = meas_arr[:n]
+    sizes_arr = sizes_arr[:n]
+    shapes_arr = shapes_arr[:n]
+    conf_arr = conf_arr[:n]
+
+    keep_mask = conf_arr >= conf_threshold
+
+    if params.get("ENABLE_SIZE_FILTERING", False):
+        min_size = float(params.get("MIN_OBJECT_SIZE", 0))
+        max_size = float(params.get("MAX_OBJECT_SIZE", float("inf")))
+        ellipse_area_arr = shapes_arr[:, 0] if shapes_arr.ndim == 2 else sizes_arr
+        keep_mask &= (ellipse_area_arr >= min_size) & (ellipse_area_arr <= max_size)
+
+    if _advanced_config_value(params, "enable_aspect_ratio_filtering", False):
+        ref_ar = float(_advanced_config_value(params, "reference_aspect_ratio", 2.0))
+        min_ar_mult = float(
+            _advanced_config_value(params, "min_aspect_ratio_multiplier", 0.5)
+        )
+        max_ar_mult = float(
+            _advanced_config_value(params, "max_aspect_ratio_multiplier", 2.0)
+        )
+        min_ar = ref_ar * min_ar_mult
+        max_ar = ref_ar * max_ar_mult
+        ar_arr = shapes_arr[:, 1] if shapes_arr.ndim == 2 else np.ones(len(sizes_arr))
+        keep_mask &= (ar_arr >= min_ar) & (ar_arr <= max_ar)
+
+    if roi_mask is not None and len(meas_arr) > 0:
+        h, w = roi_mask.shape[:2]
+        cx = meas_arr[:, 0].astype(np.int32)
+        cy = meas_arr[:, 1].astype(np.int32)
+        in_bounds = (cx >= 0) & (cx < w) & (cy >= 0) & (cy < h)
+        cx_safe = np.clip(cx, 0, max(0, w - 1))
+        cy_safe = np.clip(cy, 0, max(0, h - 1))
+        in_roi = roi_mask[cy_safe, cx_safe] > 0
+        keep_mask &= in_bounds & in_roi
+
+    if detect_conf_threshold > 0.0:
+        keep_mask &= conf_arr >= detect_conf_threshold
+
+    return [int(idx) for idx in np.flatnonzero(keep_mask)]
+
+
+def _preview_load_headtail_model(yolo_params):
+    """Load a real head-tail classifier for preview via the production stage loader.
+
+    Returns ``None`` when no head-tail model is configured (or loading fails,
+    logged as a warning so preview degrades to undirected detections rather
+    than crashing), otherwise ``(model, config, runtime)``.
+    """
+    from hydra_suite.core.detectors._utils import _advanced_config_value
+
+    headtail_path = str(yolo_params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip()
+    if not headtail_path:
+        return None
+
+    from hydra_suite.core.inference.config import HeadTailConfig
+    from hydra_suite.core.inference.stages.headtail import load_headtail_model
+
+    ref_ar = float(_advanced_config_value(yolo_params, "reference_aspect_ratio", 2.0))
+    margin = float(
+        _advanced_config_value(yolo_params, "yolo_headtail_canonical_margin", 1.3)
+    )
+    ht_config = HeadTailConfig(
+        model_path=headtail_path,
+        confidence_threshold=float(
+            yolo_params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.50)
+        ),
+        batch_size=max(1, int(yolo_params.get("HEADTAIL_BATCH_SIZE", 64))),
+        canonical_aspect_ratio=ref_ar,
+        canonical_margin=margin,
+    )
+    runtime = _preview_runtime_context_for(
+        str(yolo_params.get("HEADTAIL_COMPUTE_RUNTIME", "cpu"))
+    )
+    try:
+        model = load_headtail_model(ht_config, runtime)
+    except Exception as exc:
+        logger.warning("Preview head-tail model failed to load: %s", exc)
+        return None
+    return model, ht_config, runtime
+
+
+def _preview_run_headtail(
+    headtail_state,
+    frame_to_process,
+    raw_meas,
+    raw_sizes,
+    raw_shapes,
+    raw_confidences,
+    raw_obb_corners,
+    yolo_params,
+    roi_mask=None,
+):
+    """Run the real head-tail model on a cheap-prefiltered candidate subset.
+
+    Preserves the legacy ordering: cheap candidate pre-filter -> head-tail
+    model call on the raw candidate set -> caller's later ``filter_raw_detections``
+    trims hints down to the surviving detections.
+    """
+    total = len(raw_meas)
+    heading_hints = [float("nan")] * total
+    heading_confidences = [0.0] * total
+    directed_mask = [0] * total
+
+    if headtail_state is None or not raw_meas:
+        return heading_hints, heading_confidences, directed_mask
+
+    candidate_indices = _preview_select_headtail_candidate_indices(
+        yolo_params,
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        roi_mask=roi_mask,
+    )
+    if not candidate_indices:
+        return heading_hints, heading_confidences, directed_mask
+
+    from hydra_suite.core.detectors._utils import _advanced_config_value
+    from hydra_suite.core.inference.result import OBBResult
+    from hydra_suite.core.inference.stages.headtail import run_headtail
+
+    model, ht_config, runtime = headtail_state
+    sel_centroids = np.asarray(
+        [np.asarray(raw_meas[i], dtype=np.float32)[:2] for i in candidate_indices],
+        dtype=np.float32,
+    )
+    sel_angles = np.asarray(
+        [np.asarray(raw_meas[i], dtype=np.float32)[2] for i in candidate_indices],
+        dtype=np.float32,
+    )
+    sel_sizes = np.asarray([raw_sizes[i] for i in candidate_indices], dtype=np.float32)
+    sel_shapes = np.asarray(
+        [raw_shapes[i] for i in candidate_indices], dtype=np.float32
+    )
+    sel_conf = np.asarray(
+        [raw_confidences[i] for i in candidate_indices], dtype=np.float32
+    )
+    sel_corners = np.asarray(
+        [raw_obb_corners[i] for i in candidate_indices], dtype=np.float32
+    )
+    subset = OBBResult(
+        frame_idx=0,
+        centroids=sel_centroids,
+        angles=sel_angles,
+        sizes=sel_sizes,
+        shapes=sel_shapes,
+        confidences=sel_conf,
+        corners=sel_corners,
+        detection_ids=OBBResult.make_detection_ids(0, len(candidate_indices)),
+    )
+    ref_ar = float(_advanced_config_value(yolo_params, "reference_aspect_ratio", 2.0))
+    margin = float(
+        _advanced_config_value(yolo_params, "yolo_headtail_canonical_margin", 1.3)
+    )
+    result = run_headtail(
+        frame_to_process,
+        subset,
+        model,
+        ht_config,
+        runtime,
+        aspect_ratio=ref_ar,
+        margin=margin,
+    )
+    for slot, raw_idx in enumerate(candidate_indices):
+        heading_hints[raw_idx] = float(result.heading_hints[slot])
+        heading_confidences[raw_idx] = float(result.heading_confidences[slot])
+        directed_mask[raw_idx] = int(result.directed_mask[slot])
+    return heading_hints, heading_confidences, directed_mask
+
+
+def _preview_run_direct_raw_detection(
+    extractor, executor, frame_to_process, target_classes, raw_conf_floor, max_det
+):
+    """Direct-mode raw OBB extraction via a production ``load_obb_executor`` result."""
+    results = executor.predict(
+        [frame_to_process],
+        conf=raw_conf_floor,
+        iou=1.0,
+        classes=target_classes,
+        max_det=max_det,
+        verbose=False,
+    )
+    if not results:
+        return [], [], [], [], [], [], None
+    result0 = results[0]
+    if getattr(result0, "obb", None) is None or len(result0.obb) == 0:
+        return [], [], [], [], [], [], result0
+    (
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        raw_class_ids,
+    ) = extractor._extract_raw_detections(result0.obb, return_class_ids=True)
+    return (
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        raw_class_ids,
+        result0,
+    )
+
+
+class _PreviewSeqCropSpec:
+    """Minimal stand-in for ``OBBSequentialConfig`` fields ``_build_crops`` reads."""
+
+    def __init__(self, crop_pad_ratio, min_crop_size_px, enforce_square_crop):
+        self.crop_pad_ratio = crop_pad_ratio
+        self.min_crop_size_px = min_crop_size_px
+        self.enforce_square_crop = enforce_square_crop
+
+
+def _preview_accumulate_crop_detections(
+    extractor, stage2_results, crop_offsets, crop_original_sizes, predict_imgsz
+):
+    """Merge per-crop stage-2 detections back into full-frame coordinates.
+
+    Mirrors legacy ``YOLOOBBDetector._seq_accumulate_crop_detections``.
+    """
+    merged_meas, merged_sizes, merged_shapes = [], [], []
+    merged_conf, merged_corners, merged_class_ids = [], [], []
+    n = min(len(stage2_results), len(crop_offsets), len(crop_original_sizes))
+    for i in range(n):
+        result = stage2_results[i]
+        x0, y0 = crop_offsets[i]
+        if (
+            result is None
+            or getattr(result, "obb", None) is None
+            or len(result.obb) == 0
+        ):
+            continue
+        (
+            crop_meas,
+            crop_sizes,
+            crop_shapes,
+            crop_conf,
+            crop_corners,
+            crop_class_ids,
+        ) = extractor._extract_raw_detections(result.obb, return_class_ids=True)
+        if not crop_meas:
+            continue
+        if predict_imgsz:
+            orig_w, orig_h = crop_original_sizes[i]
+            sx = orig_w / float(predict_imgsz)
+            sy = orig_h / float(predict_imgsz)
+        else:
+            sx, sy = 1.0, 1.0
+        for j in range(len(crop_meas)):
+            m = np.asarray(crop_meas[j], dtype=np.float32).copy()
+            m[0] = m[0] * np.float32(sx) + np.float32(x0)
+            m[1] = m[1] * np.float32(sy) + np.float32(y0)
+            c = np.asarray(crop_corners[j], dtype=np.float32).copy()
+            c[:, 0] = c[:, 0] * np.float32(sx) + np.float32(x0)
+            c[:, 1] = c[:, 1] * np.float32(sy) + np.float32(y0)
+            merged_meas.append(m)
+            merged_sizes.append(float(crop_sizes[j]) * sx * sy)
+            merged_shapes.append(tuple(crop_shapes[j]))
+            merged_conf.append(float(crop_conf[j]))
+            merged_corners.append(c)
+            merged_class_ids.append(int(crop_class_ids[j]))
+    return (
+        merged_meas,
+        merged_sizes,
+        merged_shapes,
+        merged_conf,
+        merged_corners,
+        merged_class_ids,
+    )
+
+
+def _preview_sort_merged_detections(merged, max_det):
+    (
+        merged_meas,
+        merged_sizes,
+        merged_shapes,
+        merged_conf,
+        merged_corners,
+        merged_class_ids,
+    ) = merged
+    if not merged_meas:
+        return [], [], [], [], [], []
+    conf_arr = np.asarray(merged_conf, dtype=np.float32)
+    order = np.argsort(conf_arr)[::-1]
+    if len(order) > max_det:
+        order = order[:max_det]
+    return (
+        [merged_meas[i] for i in order],
+        [merged_sizes[i] for i in order],
+        [merged_shapes[i] for i in order],
+        [merged_conf[i] for i in order],
+        [merged_corners[i] for i in order],
+        [merged_class_ids[i] for i in order],
+    )
+
+
+def _preview_run_sequential_raw_detection(
+    extractor,
+    executors,
+    frame_to_process,
+    yolo_params,
+    raw_conf_floor,
+    target_classes,
+    max_det,
+):
+    """Sequential-mode raw OBB extraction: stage-1 detect + stage-2 crop-OBB.
+
+    Uses production ``load_obb_executor`` results plus the same crop-building
+    helper ``core/inference/stages/obb.py`` uses (``_build_crops``/
+    ``_resize_crops_for_stage2``), mirroring legacy
+    ``YOLOOBBDetector._run_sequential_raw_detection``'s CPU-numpy path.
+    """
+    from hydra_suite.core.inference.stages.obb import (
+        _build_crops,
+        _resize_crops_for_stage2,
+    )
+
+    detect_executor = executors.get("detect")
+    obb_executor = executors.get("obb")
+    if detect_executor is None or obb_executor is None:
+        return [], [], [], [], [], [], None
+
+    seq_detect_conf = max(
+        1e-4, float(yolo_params.get("YOLO_SEQ_DETECT_CONF_THRESHOLD", raw_conf_floor))
+    )
+    detect_target_classes = yolo_params.get(
+        "YOLO_DETECT_TARGET_CLASSES", target_classes
+    )
+    detect_results = detect_executor.predict(
+        [frame_to_process],
+        conf=seq_detect_conf,
+        iou=1.0,
+        classes=detect_target_classes,
+        max_det=max_det,
+        verbose=False,
+    )
+    if not detect_results:
+        return [], [], [], [], [], [], None
+    det0 = detect_results[0]
+    boxes = getattr(det0, "boxes", None)
+    if boxes is None or len(boxes) == 0:
+        return [], [], [], [], [], [], det0
+
+    seq_spec = _PreviewSeqCropSpec(
+        crop_pad_ratio=float(yolo_params.get("YOLO_SEQ_CROP_PAD_RATIO", 0.15)),
+        min_crop_size_px=float(yolo_params.get("YOLO_SEQ_MIN_CROP_SIZE_PX", 64)),
+        enforce_square_crop=bool(yolo_params.get("YOLO_SEQ_ENFORCE_SQUARE_CROP", True)),
+    )
+    crops, crop_offsets = _build_crops(frame_to_process, boxes, seq_spec, None)
+    if not crops:
+        return [], [], [], [], [], [], det0
+
+    crop_original_sizes = [(c.shape[1], c.shape[0]) for c in crops]
+    stage2_imgsz = int(yolo_params.get("YOLO_SEQ_STAGE2_IMGSZ", 160))
+    crops_for_stage2 = (
+        _resize_crops_for_stage2(crops, stage2_imgsz) if stage2_imgsz > 0 else crops
+    )
+    predict_imgsz = stage2_imgsz if stage2_imgsz > 0 else None
+
+    individual_batch_size = max(
+        1, int(yolo_params.get("YOLO_SEQ_INDIVIDUAL_BATCH_SIZE", 16))
+    )
+    stage2_results = []
+    for start in range(0, len(crops_for_stage2), individual_batch_size):
+        chunk = crops_for_stage2[start : start + individual_batch_size]
+        chunk_results = obb_executor.predict(
+            chunk,
+            conf=raw_conf_floor,
+            iou=1.0,
+            classes=target_classes,
+            max_det=max_det,
+            verbose=False,
+            imgsz=predict_imgsz,
+        )
+        stage2_results.extend(list(chunk_results)[: len(chunk)])
+
+    merged = _preview_accumulate_crop_detections(
+        extractor, stage2_results, crop_offsets, crop_original_sizes, predict_imgsz
+    )
+    (
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        raw_class_ids,
+    ) = _preview_sort_merged_detections(merged, max_det)
+    return (
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_confidences,
+        raw_obb_corners,
+        raw_class_ids,
+        det0,
+    )
+
+
+def _preview_run_yolo_raw_detection(
+    executors, frame_to_process, yolo_params, headtail_state=None
+):
+    """Run raw OBB detection (direct or sequential) via production OBB executors.
+
+    Returns the same 10-tuple contract the legacy detector-backed function
+    returned, so downstream filtering/annotation code needs no changes.
+    """
+    from hydra_suite.core.detectors import DetectionFilter
 
     raw_conf_floor = max(
         1e-4, float(yolo_params.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3))
     )
+    target_classes = yolo_params.get("YOLO_TARGET_CLASSES")
+    max_det = max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2
     yolo_mode = str(yolo_params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+
+    extractor = DetectionFilter(yolo_params)
+
     if yolo_mode == "sequential":
         (
             raw_meas,
@@ -590,12 +1140,14 @@ def _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params):
             raw_obb_corners,
             raw_class_ids,
             stage1_result,
-        ) = detector._run_sequential_raw_detection(
+        ) = _preview_run_sequential_raw_detection(
+            extractor,
+            executors,
             frame_to_process,
-            target_classes=yolo_params.get("YOLO_TARGET_CLASSES"),
-            raw_conf_floor=raw_conf_floor,
-            max_det=max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2,
-            return_class_ids=True,
+            yolo_params,
+            raw_conf_floor,
+            target_classes,
+            max_det,
         )
     else:
         (
@@ -606,34 +1158,31 @@ def _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params):
             raw_obb_corners,
             raw_class_ids,
             stage1_result,
-        ) = detector._run_direct_raw_detection(
+        ) = _preview_run_direct_raw_detection(
+            extractor,
+            executors["obb"],
             frame_to_process,
-            target_classes=yolo_params.get("YOLO_TARGET_CLASSES"),
-            raw_conf_floor=raw_conf_floor,
-            max_det=max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2,
-            return_class_ids=True,
+            target_classes,
+            raw_conf_floor,
+            max_det,
         )
-    raw_heading_hints = []
-    raw_heading_confidences = []
-    raw_directed_mask = []
+
     if raw_meas:
-        candidate_indices = detector._select_headtail_candidate_indices(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confidences,
-            raw_obb_corners,
+        raw_heading_hints, raw_heading_confidences, raw_directed_mask = (
+            _preview_run_headtail(
+                headtail_state,
+                frame_to_process,
+                raw_meas,
+                raw_sizes,
+                raw_shapes,
+                raw_confidences,
+                raw_obb_corners,
+                yolo_params,
+            )
         )
-        (
-            raw_heading_hints,
-            raw_heading_confidences,
-            raw_directed_mask,
-            _,
-        ) = detector._compute_headtail_hints_for_indices(
-            frame_to_process,
-            raw_obb_corners,
-            candidate_indices,
-        )
+    else:
+        raw_heading_hints, raw_heading_confidences, raw_directed_mask = [], [], []
+
     return (
         raw_meas,
         raw_sizes,
@@ -649,7 +1198,11 @@ def _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params):
 
 
 def _preview_yolo_sequential_stage1_viz(
-    test_frame, detector, stage1_result, filtered_obb_corners, detected_dimensions
+    test_frame,
+    detect_model_names,
+    stage1_result,
+    filtered_obb_corners,
+    detected_dimensions,
 ):
     detect_color = (255, 200, 0)
     boxes = getattr(stage1_result, "boxes", None)
@@ -663,10 +1216,8 @@ def _preview_yolo_sequential_stage1_viz(
         det_xyxy = np.empty((0, 4), dtype=np.float32)
         det_conf = np.empty((0,), dtype=np.float32)
         det_cls = np.empty((0,), dtype=np.int32)
-    detect_names = _normalize_preview_model_names(
+    detect_names = detect_model_names or _normalize_preview_model_names(
         getattr(stage1_result, "names", None)
-        or getattr(getattr(detector.detect_model, "model", None), "names", None)
-        or getattr(detector.detect_model, "names", None)
     )
     for di in range(len(det_xyxy)):
         x1, y1, x2, y2 = [int(v) for v in det_xyxy[di]]
@@ -1108,7 +1659,7 @@ def _preview_draw_yolo_footer(
 def _preview_run_yolo_branch(
     frame_bgr, test_frame, context, resize_f, use_detection_filters
 ):
-    from hydra_suite.core.detectors import YOLOOBBDetector
+    from hydra_suite.core.detectors import DetectionFilter
 
     frame_to_process, test_frame = _preview_resize_frame(
         frame_bgr, test_frame, resize_f
@@ -1127,145 +1678,169 @@ def _preview_run_yolo_branch(
         f"Running YOLO detection (conf={yolo_params['YOLO_CONFIDENCE_THRESHOLD']:.2f}, "
         f"iou={yolo_params['YOLO_IOU_THRESHOLD']:.2f})"
     )
-    detector = YOLOOBBDetector(yolo_params)
     yolo_mode = str(yolo_params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+    obb_compute_runtime = str(yolo_params.get("OBB_COMPUTE_RUNTIME", "cpu"))
+    executors = _preview_load_obb_executors(yolo_params, obb_compute_runtime, yolo_mode)
+    headtail_state = _preview_load_headtail_model(yolo_params)
 
-    (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        raw_class_ids,
-        raw_heading_hints,
-        raw_heading_confidences,
-        raw_directed_mask,
-        stage1_result,
-    ) = _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params)
-
-    raw_ids = list(range(len(raw_meas)))
-    (
-        meas,
-        _sizes,
-        _shapes,
-        detection_confidences,
-        filtered_obb_corners,
-        filtered_ids,
-        filtered_heading_hints,
-        filtered_heading_confidences,
-        filtered_directed_mask,
-    ) = detector.filter_raw_detections(
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        roi_mask=roi_for_yolo,
-        detection_ids=raw_ids,
-        heading_hints=raw_heading_hints,
-        heading_confidences=raw_heading_confidences,
-        directed_mask=raw_directed_mask,
-    )
-
-    stage2_names = _normalize_preview_model_names(
-        getattr(detector.model, "names", None)
-        or getattr(getattr(detector.model, "model", None), "names", None)
-    )
-    filtered_class_labels = []
-    for det_id in filtered_ids:
-        if 0 <= int(det_id) < len(raw_class_ids):
-            filtered_class_labels.append(
-                _preview_class_label(stage2_names, raw_class_ids[int(det_id)])
-            )
-        else:
-            filtered_class_labels.append("cls ?")
-
-    filtered_headtail = []
-    for idx in range(len(filtered_obb_corners)):
-        heading = (
-            filtered_heading_hints[idx]
-            if idx < len(filtered_heading_hints)
-            else float("nan")
-        )
-        confidence = (
-            filtered_heading_confidences[idx]
-            if idx < len(filtered_heading_confidences)
-            else 0.0
-        )
-        directed = (
-            filtered_directed_mask[idx] if idx < len(filtered_directed_mask) else 0
-        )
-        filtered_headtail.append((heading, confidence, directed))
-
-    detected_dimensions = []
-    if yolo_mode == "sequential" and stage1_result is not None:
-        detected_dimensions = _preview_yolo_sequential_stage1_viz(
-            test_frame,
-            detector,
+    try:
+        (
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+            raw_class_ids,
+            raw_heading_hints,
+            raw_heading_confidences,
+            raw_directed_mask,
             stage1_result,
-            filtered_obb_corners,
-            detected_dimensions,
+        ) = _preview_run_yolo_raw_detection(
+            executors, frame_to_process, yolo_params, headtail_state
         )
 
-    filtered_corners = [np.asarray(c, dtype=np.float32) for c in filtered_obb_corners]
-    label_stacks = [[] for _ in range(len(filtered_corners))]
-    label_anchors = []
-    for corners in filtered_corners:
-        major_axis = float(np.linalg.norm(corners[1] - corners[0]))
-        minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
-        if major_axis < minor_axis:
-            major_axis, minor_axis = minor_axis, major_axis
-        detected_dimensions.append((major_axis, minor_axis))
-        label_anchors.append(_preview_label_anchor(corners, test_frame.shape))
+        raw_ids = list(range(len(raw_meas)))
+        extractor = DetectionFilter(yolo_params)
+        (
+            meas,
+            _sizes,
+            _shapes,
+            detection_confidences,
+            filtered_obb_corners,
+            filtered_ids,
+            filtered_heading_hints,
+            filtered_heading_confidences,
+            filtered_directed_mask,
+        ) = extractor.filter_raw_detections(
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+            roi_mask=roi_for_yolo,
+            detection_ids=raw_ids,
+            heading_hints=raw_heading_hints,
+            heading_confidences=raw_heading_confidences,
+            directed_mask=raw_directed_mask,
+        )
 
-    canonical_crops, canonical_inverses, crop_padding, bg_color, suppress_foreign = (
-        _preview_compute_canonical_crops(filtered_corners, frame_to_process, context)
-    )
+        stage2_names = _normalize_preview_model_names(
+            getattr(executors["obb"], "names", None)
+            or getattr(getattr(executors["obb"], "model", None), "names", None)
+        )
+        filtered_class_labels = []
+        for det_id in filtered_ids:
+            if 0 <= int(det_id) < len(raw_class_ids):
+                filtered_class_labels.append(
+                    _preview_class_label(stage2_names, raw_class_ids[int(det_id)])
+                )
+            else:
+                filtered_class_labels.append("cls ?")
 
-    pose_keypoints_by_det = {}
-    pose_backend = _preview_run_pose_overlay(
-        filtered_corners,
-        canonical_crops,
-        canonical_inverses,
-        context,
-        label_stacks,
-        pose_keypoints_by_det,
-    )
-    cnn_backends = _preview_run_cnn_overlay(
-        filtered_corners, canonical_crops, context, label_stacks
-    )
-    apriltag_detector = _preview_run_apriltag_overlay(
-        filtered_corners,
-        frame_to_process,
-        context,
-        label_stacks,
-        test_frame,
-        crop_padding,
-        suppress_foreign,
-        bg_color,
-    )
+        filtered_headtail = []
+        for idx in range(len(filtered_obb_corners)):
+            heading = (
+                filtered_heading_hints[idx]
+                if idx < len(filtered_heading_hints)
+                else float("nan")
+            )
+            confidence = (
+                filtered_heading_confidences[idx]
+                if idx < len(filtered_heading_confidences)
+                else 0.0
+            )
+            directed = (
+                filtered_directed_mask[idx] if idx < len(filtered_directed_mask) else 0
+            )
+            filtered_headtail.append((heading, confidence, directed))
 
-    _preview_draw_obb_annotations(
-        test_frame,
-        filtered_corners,
-        detection_confidences,
-        filtered_class_labels,
-        label_stacks,
-        label_anchors,
-        pose_keypoints_by_det,
-        filtered_headtail,
-        context,
-    )
-    _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector)
-    _preview_draw_yolo_footer(
-        test_frame,
-        meas,
-        yolo_params,
-        context,
-        filtered_headtail=filtered_headtail,
-    )
+        detected_dimensions = []
+        if yolo_mode == "sequential" and stage1_result is not None:
+            detect_names = _normalize_preview_model_names(
+                getattr(executors.get("detect"), "names", None)
+            )
+            detected_dimensions = _preview_yolo_sequential_stage1_viz(
+                test_frame,
+                detect_names,
+                stage1_result,
+                filtered_obb_corners,
+                detected_dimensions,
+            )
 
-    return detected_dimensions, test_frame
+        filtered_corners = [
+            np.asarray(c, dtype=np.float32) for c in filtered_obb_corners
+        ]
+        label_stacks = [[] for _ in range(len(filtered_corners))]
+        label_anchors = []
+        for corners in filtered_corners:
+            major_axis = float(np.linalg.norm(corners[1] - corners[0]))
+            minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
+            if major_axis < minor_axis:
+                major_axis, minor_axis = minor_axis, major_axis
+            detected_dimensions.append((major_axis, minor_axis))
+            label_anchors.append(_preview_label_anchor(corners, test_frame.shape))
+
+        (
+            canonical_crops,
+            canonical_inverses,
+            crop_padding,
+            bg_color,
+            suppress_foreign,
+        ) = _preview_compute_canonical_crops(
+            filtered_corners, frame_to_process, context
+        )
+
+        pose_keypoints_by_det = {}
+        pose_backend = _preview_run_pose_overlay(
+            filtered_corners,
+            canonical_crops,
+            canonical_inverses,
+            context,
+            label_stacks,
+            pose_keypoints_by_det,
+        )
+        cnn_backends = _preview_run_cnn_overlay(
+            filtered_corners, canonical_crops, context, label_stacks
+        )
+        apriltag_detector = _preview_run_apriltag_overlay(
+            filtered_corners,
+            frame_to_process,
+            context,
+            label_stacks,
+            test_frame,
+            crop_padding,
+            suppress_foreign,
+            bg_color,
+        )
+
+        _preview_draw_obb_annotations(
+            test_frame,
+            filtered_corners,
+            detection_confidences,
+            filtered_class_labels,
+            label_stacks,
+            label_anchors,
+            pose_keypoints_by_det,
+            filtered_headtail,
+            context,
+        )
+        _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector)
+        _preview_draw_yolo_footer(
+            test_frame,
+            meas,
+            yolo_params,
+            context,
+            filtered_headtail=filtered_headtail,
+        )
+
+        return detected_dimensions, test_frame
+    finally:
+        if headtail_state is not None:
+            model, _ht_config, _runtime = headtail_state
+            try:
+                model.backend.close()
+            except Exception:
+                pass
 
 
 def _run_preview_detection_job(
