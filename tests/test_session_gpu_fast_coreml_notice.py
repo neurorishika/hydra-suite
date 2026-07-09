@@ -102,3 +102,45 @@ def test_selected_compute_runtime_reports_cuda_tensorrt_on_cuda_gpu_fast(
         lambda: types.SimpleNamespace(has_mps=False, has_cuda=True),
     )
     assert orch._selected_compute_runtime() == "tensorrt"
+
+
+def test_main_window_preview_safe_runtime_downgrades_coreml():
+    """Regression test for the LIVE call path: ``MainWindow._preview_safe_runtime``
+    (called from ``detection_panel.py::_collect_preview_detection_context`` and
+    ``tracking.py`` preview helpers) must downgrade the new "coreml" value that
+    ``_selected_compute_runtime()`` can now report on Apple-Silicon gpu_fast to
+    "mps", exactly like ``SessionOrchestrator._preview_safe_runtime`` already
+    does. Before this fix, ``MainWindow``'s independent copy of this mapping
+    had no "coreml" branch and returned "coreml" unchanged, which would have
+    sent preview/Test-Detection/head-tail/CNN-preview through the exported
+    CoreML backend instead of falling back to native MPS."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    assert MainWindow._preview_safe_runtime("coreml") == "mps"
+    # Existing mappings must be unaffected by the fix.
+    assert MainWindow._preview_safe_runtime("onnx_cpu") == "cpu"
+    assert MainWindow._preview_safe_runtime("onnx_coreml") == "mps"
+    assert MainWindow._preview_safe_runtime("onnx_cuda") == "cuda"
+    assert MainWindow._preview_safe_runtime("tensorrt") == "cuda"
+    assert MainWindow._preview_safe_runtime("mps") == "mps"
+    assert MainWindow._preview_safe_runtime("cpu") == "cpu"
+
+
+def test_main_window_preview_safe_runtime_delegates_to_session_orchestrator():
+    """``MainWindow._preview_safe_runtime`` should delegate to
+    ``SessionOrchestrator._preview_safe_runtime`` (single source of truth) so
+    the two copies cannot drift out of sync again."""
+    from hydra_suite.trackerkit.gui.main_window import MainWindow
+
+    for value in (
+        "coreml",
+        "onnx_coreml",
+        "onnx_cpu",
+        "onnx_cuda",
+        "tensorrt",
+        "mps",
+        "cpu",
+    ):
+        assert MainWindow._preview_safe_runtime(
+            value
+        ) == session_mod.SessionOrchestrator._preview_safe_runtime(value)

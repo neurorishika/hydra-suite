@@ -1431,15 +1431,16 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _preview_safe_runtime(runtime: str) -> str:
-        """Downgrade ONNX/TensorRT runtimes to their native equivalents."""
-        rt = str(runtime or "cpu").strip().lower()
-        if rt == "onnx_cpu":
-            return "cpu"
-        if rt == "onnx_coreml":
-            return "mps"
-        if rt in ("onnx_cuda", "tensorrt"):
-            return "cuda"
-        return rt
+        """Downgrade ONNX/TensorRT/CoreML runtimes to their native equivalents.
+
+        Delegates to ``SessionOrchestrator._preview_safe_runtime`` (the single
+        source of truth for this mapping) so both copies stay in sync; this
+        static method is the one with live callers (``detection_panel.py``
+        and ``tracking.py``).
+        """
+        from hydra_suite.trackerkit.gui.orchestrators.session import SessionOrchestrator
+
+        return SessionOrchestrator._preview_safe_runtime(runtime)
 
     def _on_runtime_context_changed(self, *_args):
         """Update runtime combo and sync dependent controls."""
