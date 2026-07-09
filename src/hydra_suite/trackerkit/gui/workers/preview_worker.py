@@ -1328,35 +1328,95 @@ def _preview_run_pose_overlay(
         from hydra_suite.core.canonicalization.crop import (
             invert_keypoints as _invert_kpts,
         )
-        from hydra_suite.core.identity.pose.api import (
-            build_runtime_config,
-            create_pose_backend_from_config,
+        from hydra_suite.core.identity.pose.utils import load_skeleton_from_json
+        from hydra_suite.runtime.resolver import (
+            detect_platform,
+            resolve_compute_runtime,
         )
 
-        preview_pose_params = {
-            "POSE_MODEL_TYPE": str(context.get("pose_model_type", "yolo")),
-            "POSE_MODEL_DIR": str(context.get("pose_model_dir", "")),
-            "POSE_RUNTIME_FLAVOR": str(context.get("pose_runtime_flavor", "auto")),
-            "POSE_SKELETON_FILE": str(context.get("pose_skeleton_file", "")),
-            "POSE_MIN_KPT_CONF_VALID": float(
-                context.get("pose_min_kpt_conf_valid", 0.2)
-            ),
-            "POSE_YOLO_BATCH": int(context.get("pose_batch_size", 4)),
-            "POSE_BATCH_SIZE": int(context.get("pose_batch_size", 4)),
-            "POSE_SLEAP_BATCH": int(context.get("pose_batch_size", 4)),
-            "POSE_SLEAP_ENV": str(context.get("pose_sleap_env", "sleap")),
-            "POSE_SLEAP_DEVICE": str(context.get("pose_sleap_device", "auto")),
-            "COMPUTE_RUNTIME": str(context.get("compute_runtime", "cpu")),
-            "YOLO_DEVICE": str(context.get("yolo_device", "cpu")),
-        }
-        video_path = str(context.get("video_path", "") or "").strip()
-        out_root = (
-            str(Path(video_path).expanduser().resolve().parent)
-            if video_path
-            else os.getcwd()
-        )
-        pose_config = build_runtime_config(preview_pose_params, out_root=out_root)
-        pose_backend = create_pose_backend_from_config(pose_config)
+        backend_family = str(context.get("pose_model_type", "yolo")).strip().lower()
+        model_path = str(context.get("pose_model_dir", ""))
+        min_valid_conf = float(context.get("pose_min_kpt_conf_valid", 0.2))
+        batch_size = int(context.get("pose_batch_size", 4))
+        skeleton_file = str(context.get("pose_skeleton_file", ""))
+        keypoint_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
+
+        # Mirror core/inference/stages/pose.py::load_pose_model's compute_runtime
+        # derivation: prefer the tier-based resolver (same authority the real
+        # tracking pipeline uses) when a runtime tier is available in the
+        # preview context, falling back to the already-resolved runtime string
+        # for older/headless callers that only supply "compute_runtime".
+        stage = "yolo_pose" if backend_family == "yolo" else "sleap_pose"
+        tier = str(context.get("runtime_tier", "")).strip().lower()
+        if tier in ("cpu", "gpu", "gpu_fast"):
+            compute_runtime = resolve_compute_runtime(
+                tier, detect_platform(), stage=stage
+            )
+        else:
+            compute_runtime = str(context.get("compute_runtime", "cpu"))
+
+        if backend_family == "yolo":
+            from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
+
+            device = (
+                "cuda:0"
+                if compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
+                else ("mps" if compute_runtime in ("mps", "coreml") else "cpu")
+            )
+            pose_backend = YoloNativeBackend(
+                model_path=model_path,
+                device=device,
+                min_valid_conf=min_valid_conf,
+                keypoint_names=keypoint_names if keypoint_names else None,
+                batch_size=batch_size,
+            )
+        else:
+            from hydra_suite.core.identity.pose.api import (
+                create_pose_backend_from_config,
+            )
+            from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+
+            # Debug/A-B override kept for parity with load_pose_model: lets us
+            # force a SLEAP runtime flavor independent of the resolved tier.
+            _flavor_override = os.environ.get("HYDRA_SLEAP_FLAVOR", "").strip().lower()
+            if _flavor_override:
+                runtime_flavor = _flavor_override
+                device = "cpu" if _flavor_override == "onnx_cpu" else "cuda"
+            elif compute_runtime in ("cuda", "onnx_cuda"):
+                runtime_flavor = "onnx_cuda"
+                device = "cuda"
+            elif compute_runtime in ("mps", "coreml"):
+                runtime_flavor = "native"
+                device = "mps"
+            elif compute_runtime == "tensorrt":
+                runtime_flavor = "tensorrt"
+                device = "cuda"
+            else:
+                runtime_flavor = "onnx_cpu"
+                device = "cpu"
+
+            video_path = str(context.get("video_path", "") or "").strip()
+            out_root = (
+                str(Path(video_path).expanduser().resolve().parent)
+                if video_path
+                else os.getcwd()
+            )
+            pose_config = PoseRuntimeConfig(
+                backend_family="sleap",
+                runtime_flavor=runtime_flavor,
+                device=device,
+                batch_size=max(1, batch_size),
+                model_path=model_path,
+                out_root=out_root,
+                min_valid_conf=min_valid_conf,
+                sleap_env=str(context.get("pose_sleap_env", "sleap")),
+                sleap_device=device,
+                sleap_batch=max(1, batch_size),
+                sleap_max_instances=int(context.get("pose_sleap_max_instances", 1)),
+                keypoint_names=list(keypoint_names),
+                skeleton_edges=skeleton_edges,
+            )
+            pose_backend = create_pose_backend_from_config(pose_config)
         valid_pose_entries = [
             (idx, crop)
             for idx, crop in enumerate(canonical_crops)

@@ -748,3 +748,95 @@ def test_preview_run_cnn_overlay_formats_multihead_predictions(monkeypatch) -> N
 
     assert len(backends) == 1
     assert label_stacks == [["cnn_identity: color=red 0.93 | side=unknown 0.42"]]
+
+
+def test_preview_run_pose_no_build_runtime_config(monkeypatch, caplog) -> None:
+    """Task 3: the pose-preview branch must construct ``PoseRuntimeConfig``
+    directly (mirroring ``core/inference/stages/pose.py::load_pose_model``)
+    instead of calling the legacy ``build_runtime_config`` translation step."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
+    pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
+    resolver_mod = importlib.import_module("hydra_suite.runtime.resolver")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "preview pose overlay should not call the legacy build_runtime_config"
+        )
+
+    monkeypatch.setattr(pose_api, "build_runtime_config", _boom)
+
+    captured: dict[str, object] = {}
+
+    class FakeBackend:
+        def predict_batch(self, crops):
+            captured["predict_batch_called"] = True
+            return []
+
+    def _fake_create_pose_backend_from_config(config):
+        captured["pose_config"] = config
+        return FakeBackend()
+
+    monkeypatch.setattr(
+        pose_api,
+        "create_pose_backend_from_config",
+        _fake_create_pose_backend_from_config,
+    )
+
+    # Pin the platform so tier -> compute_runtime resolution is deterministic:
+    # gpu_fast + CUDA available -> "tensorrt" (matches load_pose_model's SLEAP
+    # branch: runtime_flavor="tensorrt", device="cuda").
+    monkeypatch.setattr(
+        resolver_mod,
+        "detect_platform",
+        lambda: resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+    )
+
+    context = {
+        "enable_pose_extractor": True,
+        "pose_model_type": "sleap",
+        "pose_model_dir": "/models/sleap_model",
+        "pose_skeleton_file": "",
+        "pose_min_kpt_conf_valid": 0.3,
+        "pose_batch_size": 2,
+        "pose_sleap_env": "sleap_env_x",
+        "runtime_tier": "gpu_fast",
+    }
+
+    canonical_crops = [np.zeros((8, 8, 3), dtype=np.uint8)]
+    canonical_inverses = [np.eye(2, 3, dtype=np.float32)]
+    label_stacks = [[]]
+    pose_keypoints_by_det: dict[int, np.ndarray] = {}
+
+    with caplog.at_level("WARNING"):
+        result = preview_worker._preview_run_pose_overlay(
+            [np.zeros((4, 2), dtype=np.float32)],
+            canonical_crops,
+            canonical_inverses,
+            context,
+            label_stacks,
+            pose_keypoints_by_det,
+        )
+
+    assert not any(
+        "Preview pose overlay disabled" in rec.message for rec in caplog.records
+    )
+    assert result is not None
+    assert captured["predict_batch_called"] is True
+
+    expected_runtime = resolver_mod.resolve_compute_runtime(
+        "gpu_fast",
+        resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+        stage="sleap_pose",
+    )
+    assert expected_runtime == "tensorrt"
+
+    pose_config = captured["pose_config"]
+    assert isinstance(pose_config, pose_types.PoseRuntimeConfig)
+    assert pose_config.backend_family == "sleap"
+    assert pose_config.runtime_flavor == "tensorrt"
+    assert pose_config.device == "cuda"
+    assert pose_config.sleap_device == "cuda"
+    assert pose_config.sleap_env == "sleap_env_x"
