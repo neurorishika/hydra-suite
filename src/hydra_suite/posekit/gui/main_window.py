@@ -4234,8 +4234,14 @@ class MainWindow(QMainWindow):
                 return str(data).strip().lower()
         return "cpu"
 
-    def _selected_compute_runtime(self) -> str:
-        """Return the canonical compute runtime for the currently selected tier."""
+    def _selected_compute_runtime(self, stage: Optional[str] = None) -> str:
+        """Return the canonical compute runtime for the currently selected tier.
+
+        ``stage`` selects the resolver's capability profile ("yolo_pose" /
+        "sleap_pose"); defaults to the currently selected prediction backend
+        so YOLO and SLEAP resolve against their own profile, mirroring
+        ``core/inference/stages/pose.py``.
+        """
         if hasattr(self, "combo_pred_runtime"):
             data = self.combo_pred_runtime.currentData()
             tier = str(data).strip().lower() if data else ""
@@ -4248,7 +4254,10 @@ class MainWindow(QMainWindow):
                 tier = txt
             # Map tier → canonical runtime using detected platform.
             platform = detect_platform()
-            return tier_to_canonical_runtime(tier, platform)
+            resolved_stage = stage or (
+                "sleap_pose" if self._pred_backend() == "sleap" else "yolo_pose"
+            )
+            return tier_to_canonical_runtime(tier, platform, stage=resolved_stage)
         return "cpu"
 
     def _populate_pred_runtime_options(
@@ -4674,9 +4683,20 @@ class MainWindow(QMainWindow):
 
     def _pred_runtime_flavor(self) -> str:
         backend = self._pred_backend()
-        derived = derive_pose_runtime_settings(
-            self._selected_compute_runtime(), backend_family=backend
-        )
+        compute_runtime = self._selected_compute_runtime()
+        # "coreml" (native Apple GPU-Fast) has no representation in
+        # derive_pose_runtime_settings — that helper's `_normalize_runtime`
+        # collapses "coreml" to the legacy "onnx_coreml" canonical runtime and
+        # returns the ONNX-CoreML-EP flavor ("onnx_mps"), silently reintroducing
+        # the exact bug this module exists to fix (see
+        # docs/superpowers/specs/2026-04-04-codebase-simplification-design.md
+        # Task 6). "coreml" uniquely identifies the native-backend case and
+        # needs no further translation for either backend family, so short-
+        # circuit here rather than routing it through that shared, cross-app
+        # helper (out of scope to modify — used by trackerkit too).
+        if compute_runtime == "coreml":
+            return "coreml"
+        derived = derive_pose_runtime_settings(compute_runtime, backend_family=backend)
         return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
 
     def _browse_pred_exported_model(self):
