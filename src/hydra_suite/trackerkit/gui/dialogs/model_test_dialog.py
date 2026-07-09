@@ -32,28 +32,62 @@ _OBB_COLOR = (0, 255, 0)
 _OBB_THICKNESS = 2
 
 
+#: Confidence / IOU thresholds used for the quick-test's own NMS pass.
+#: These are intentionally fixed (not user-configurable) -- this dialog's
+#: purpose is a fast visual sanity check, not a tunable inference run.
+_TEST_CONFIDENCE_THRESHOLD = 0.25
+_TEST_IOU_THRESHOLD = 0.45
+
+
+def training_device_to_compute_runtime(device: str) -> str:
+    """Map a literal training-device string onto a ``load_obb_executor`` compute runtime.
+
+    Both callers of this dialog (``trackerkit``'s ``train_yolo_dialog`` and
+    ``detectkit``'s project-level training config) expose a free-text training
+    device selector (fed straight into YOLO's own ``device=`` training
+    parameter) -- a genuinely different, simpler concept than the app's tiered
+    ``compute_runtime`` system (``cpu``/``gpu``/``gpu_fast`` resolved via
+    ``resolve_compute_runtime``). Quick Test runs a freshly trained model that
+    has no exported TensorRT/CoreML artifact yet, so gpu_fast-style tier
+    resolution doesn't apply here -- this is a literal device sanity check,
+    not a tier selection. Map the literal device string directly onto the
+    closest ``load_obb_executor``-accepted runtime instead of routing it
+    through the tier resolver.
+    """
+    dev = str(device or "").strip().lower()
+    if dev.startswith("cuda"):
+        return "cuda"
+    if dev == "mps":
+        return "mps"
+    return "cpu"
+
+
 def build_test_params(
     model_path: str,
     role: str,
-    device: str,
+    compute_runtime: str,
     imgsz: int,
     crop_pad_ratio: float = 0.15,
     min_crop_size_px: int = 64,
     enforce_square: bool = True,
     detect_model_path: str = "",
 ) -> dict:
-    """Build a YOLO detector parameter dict suitable for ``YOLOOBBDetector``.
+    """Build a minimal parameter dict for ``load_obb_executor``-based inference.
 
     Parameters
     ----------
     model_path:
-        Path to the trained ``.pt`` model weights.
+        Path to the trained ``.pt`` model weights under test.
     role:
         One of ``"obb_direct"``, ``"seq_detect"``, ``"seq_crop_obb"``.
-    device:
-        Compute device string (``"cpu"``, ``"cuda"``, ``"mps"``, ...).
+    compute_runtime:
+        Compute runtime string accepted by
+        ``core.inference.runtime_artifacts.load_obb_executor``
+        (``"cpu"``, ``"cuda"``, ``"mps"``, ...).
     imgsz:
-        Inference image size.
+        Inference image size (used as ``imgsz_override`` for
+        ``load_obb_executor``, and as the stage-2 crop size for
+        ``"seq_crop_obb"``).
     crop_pad_ratio:
         Crop padding ratio for sequential crop-OBB mode.
     min_crop_size_px:
@@ -61,36 +95,41 @@ def build_test_params(
     enforce_square:
         Whether to enforce square crops in sequential mode.
     detect_model_path:
-        Optional separate detection model for sequential mode stage 1.
+        Stage-1 detection model used to build crops when testing a
+        sequential crop-OBB model (``role == "seq_crop_obb"``). Ignored for
+        other roles.
+
+    Returns
+    -------
+    dict
+        ``{"model_path", "compute_runtime", "imgsz", "task"}`` plus, for
+        ``role == "seq_crop_obb"``, ``"detect_model_path"`` and the crop
+        parameters above.
     """
+    task = "detect" if role == "seq_detect" else "obb"
     params: dict = {
-        "YOLO_MODEL_PATH": model_path,
-        "YOLO_DEVICE": device,
-        "YOLO_IMGSZ": imgsz,
-        "YOLO_CONFIDENCE_THRESHOLD": 0.25,
-        "YOLO_IOU_THRESHOLD": 0.45,
-        "YOLO_MAX_TARGETS": 100,
-        "USE_TENSORRT": False,
-        "USE_ONNX": False,
+        "model_path": model_path,
+        "compute_runtime": compute_runtime,
+        "imgsz": imgsz,
+        "task": task,
     }
 
-    if role in ("seq_detect", "seq_crop_obb"):
-        params["YOLO_OBB_MODE"] = "sequential"
-        params["YOLO_DETECT_MODEL_PATH"] = detect_model_path or model_path
-    else:
-        params["YOLO_OBB_MODE"] = "direct"
-        params["YOLO_OBB_DIRECT_MODEL_PATH"] = model_path
-
     if role == "seq_crop_obb":
-        params["YOLO_CROP_OBB_MODEL_PATH"] = model_path
-        params["YOLO_SEQ_STAGE2_IMGSZ"] = imgsz
-        params["YOLO_SEQ_CROP_PAD_RATIO"] = crop_pad_ratio
-        params["YOLO_SEQ_MIN_CROP_SIZE_PX"] = min_crop_size_px
-        params["YOLO_SEQ_ENFORCE_SQUARE_CROP"] = enforce_square
-        if detect_model_path:
-            params["YOLO_MODEL_PATH"] = detect_model_path
+        params["detect_model_path"] = detect_model_path or model_path
+        params["crop_pad_ratio"] = crop_pad_ratio
+        params["min_crop_size_px"] = min_crop_size_px
+        params["enforce_square"] = enforce_square
 
     return params
+
+
+class _SeqCropSpec:
+    """Minimal stand-in for ``OBBSequentialConfig`` fields ``_build_crops`` reads."""
+
+    def __init__(self, crop_pad_ratio, min_crop_size_px, enforce_square_crop):
+        self.crop_pad_ratio = crop_pad_ratio
+        self.min_crop_size_px = min_crop_size_px
+        self.enforce_square_crop = enforce_square_crop
 
 
 # ---------------------------------------------------------------------------
@@ -110,11 +149,40 @@ class _TestWorker(BaseWorker):
         self.image_paths = image_paths
 
     def execute(self):
-        """Load the YOLO OBB detector and run inference on each provided image, emitting detections per frame."""
-        from hydra_suite.core.detectors import YOLOOBBDetector
+        """Load production OBB executor(s) and run inference on each sample image.
+
+        Uses ``load_obb_executor`` (the same production factory the
+        preview-detection path uses) instead of the legacy
+        ``YOLOOBBDetector``. Geometry is extracted via the shared
+        ``core/inference/stages/obb.py`` helpers so this dialog draws exactly
+        the OBB quads the production pipeline would produce.
+        """
+        from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
 
         self.status.emit("Loading model...")
-        detector = YOLOOBBDetector(self.params)
+        task = self.params.get("task", "obb")
+        compute_runtime = self.params.get("compute_runtime", "cpu")
+        imgsz = self.params.get("imgsz") or None
+
+        executor = load_obb_executor(
+            self.params["model_path"],
+            compute_runtime,
+            task=task,
+            imgsz_override=imgsz,
+        )
+
+        detect_model_path = self.params.get("detect_model_path")
+        detect_executor = None
+        if detect_model_path:
+            detect_executor = load_obb_executor(
+                detect_model_path, compute_runtime, task="detect"
+            )
+
+        crop_spec = _SeqCropSpec(
+            crop_pad_ratio=float(self.params.get("crop_pad_ratio", 0.15)),
+            min_crop_size_px=float(self.params.get("min_crop_size_px", 64)),
+            enforce_square_crop=bool(self.params.get("enforce_square", True)),
+        )
 
         for idx, img_path in enumerate(self.image_paths):
             self.status.emit(
@@ -125,16 +193,18 @@ class _TestWorker(BaseWorker):
                 logger.warning("Could not read image: %s", img_path)
                 continue
 
-            result = detector.detect_objects(frame, frame_count=idx, return_raw=True)
-            # result when return_raw=True:
-            #   (meas, sizes, shapes, yolo_results, confidences,
-            #    obb_corners, heading_hints, heading_confidences,
-            #    directed_mask, canonical_affines)
-            obb_corners = result[5] if len(result) > 5 else []
+            if detect_executor is not None:
+                corners = self._run_sequential(
+                    frame, idx, detect_executor, executor, crop_spec, imgsz
+                )
+            elif task == "detect":
+                corners = self._run_detect_only(frame, executor)
+            else:
+                corners = self._run_direct(frame, idx, executor)
 
             annotated = frame.copy()
-            for corners in obb_corners:
-                pts = np.array(corners, dtype=np.int32).reshape((-1, 1, 2))
+            for quad in corners:
+                pts = np.array(quad, dtype=np.int32).reshape((-1, 1, 2))
                 cv2.polylines(
                     annotated,
                     [pts],
@@ -146,6 +216,102 @@ class _TestWorker(BaseWorker):
             self.image_ready.emit(annotated)
 
         self.finished_all.emit()
+
+    @staticmethod
+    def _run_direct(frame: np.ndarray, idx: int, executor) -> list:
+        """Direct-mode OBB inference: run the executor and extract quads."""
+        from hydra_suite.core.inference.stages.obb import _extract_obb_result
+
+        results = executor.predict(
+            [frame],
+            conf=_TEST_CONFIDENCE_THRESHOLD,
+            iou=_TEST_IOU_THRESHOLD,
+            verbose=False,
+        )
+        if not results:
+            return []
+        result = _extract_obb_result(results[0], idx)
+        return list(result.corners)
+
+    @staticmethod
+    def _run_detect_only(frame: np.ndarray, executor) -> list:
+        """Stage-1-detect-only test: draw axis-aligned boxes as quads."""
+        results = executor.predict(
+            [frame],
+            conf=_TEST_CONFIDENCE_THRESHOLD,
+            iou=_TEST_IOU_THRESHOLD,
+            verbose=False,
+        )
+        if not results:
+            return []
+        boxes = getattr(results[0], "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return []
+        quads = []
+        for x1, y1, x2, y2 in boxes.xyxy.cpu().numpy():
+            quads.append(
+                np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+            )
+        return quads
+
+    @staticmethod
+    def _run_sequential(
+        frame: np.ndarray,
+        idx: int,
+        detect_executor,
+        obb_executor,
+        crop_spec: "_SeqCropSpec",
+        stage2_imgsz,
+    ) -> list:
+        """Sequential detect-then-crop-OBB test: build crops off stage-1 boxes."""
+        from hydra_suite.core.inference.stages.obb import (
+            _build_crops,
+            _extract_obb_result,
+            _merge_obb_results,
+            _resize_crops_for_stage2,
+        )
+
+        detect_results = detect_executor.predict(
+            [frame],
+            conf=_TEST_CONFIDENCE_THRESHOLD,
+            iou=_TEST_IOU_THRESHOLD,
+            verbose=False,
+        )
+        if not detect_results:
+            return []
+        boxes = getattr(detect_results[0], "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return []
+
+        crops, offsets = _build_crops(frame, boxes, crop_spec, None)
+        if not crops:
+            return []
+
+        orig_sizes = [(c.shape[1], c.shape[0]) for c in crops]
+        stage2_size = int(stage2_imgsz) if stage2_imgsz else 0
+        crops_for_stage2 = (
+            _resize_crops_for_stage2(crops, stage2_size) if stage2_size > 0 else crops
+        )
+
+        obb_results = obb_executor.predict(
+            crops_for_stage2,
+            conf=_TEST_CONFIDENCE_THRESHOLD,
+            iou=_TEST_IOU_THRESHOLD,
+            verbose=False,
+        )
+
+        sub = []
+        for i, r in enumerate(obb_results):
+            orig_w, orig_h = orig_sizes[i]
+            scale = (
+                (orig_w / stage2_size, orig_h / stage2_size)
+                if stage2_size > 0
+                else (1.0, 1.0)
+            )
+            sub.append(_extract_obb_result(r, idx, offset=offsets[i], scale=scale))
+
+        merged = _merge_obb_results(idx, sub)
+        return list(merged.corners)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +362,7 @@ class ModelTestDialog(BaseDialog):
         model_path: str,
         role: str,
         dataset_dir: str,
-        device: str = "cpu",
+        compute_runtime: str = "cpu",
         imgsz: int = 640,
         crop_pad_ratio: float = 0.15,
         min_crop_size_px: int = 64,
@@ -216,7 +382,7 @@ class ModelTestDialog(BaseDialog):
         self._model_path = model_path
         self._role = role
         self._dataset_dir = dataset_dir
-        self._device = device
+        self._compute_runtime = compute_runtime
         self._imgsz = imgsz
         self._crop_pad_ratio = crop_pad_ratio
         self._min_crop_size_px = min_crop_size_px
@@ -269,7 +435,7 @@ class ModelTestDialog(BaseDialog):
         params = build_test_params(
             model_path=self._model_path,
             role=self._role,
-            device=self._device,
+            compute_runtime=self._compute_runtime,
             imgsz=self._imgsz,
             crop_pad_ratio=self._crop_pad_ratio,
             min_crop_size_px=self._min_crop_size_px,
