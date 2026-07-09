@@ -13,7 +13,6 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
 from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
     derive_pose_runtime_settings,
     supported_runtimes_for_pipeline,
 )
@@ -794,9 +793,11 @@ class SessionOrchestrator:
             hasattr(self._mw, "_detection_panel")
             and self._mw._detection_panel.combo_yolo_obb_mode.currentIndex() == 1
         )
-        is_mps = "mps" in runtime.lower()
+        # "coreml" is Apple GPU-Fast's concrete backend (resolve_compute_runtime),
+        # and is just as Apple-Silicon-bound as native "mps" for this warning.
+        is_apple_silicon = "mps" in runtime.lower() or "coreml" in runtime.lower()
         is_cuda = "cuda" in runtime.lower()
-        if is_mps and sequential:
+        if is_apple_silicon and sequential:
             msg = (
                 "⚠ Sequential mode is significantly slower on Apple Silicon (MPS). "
                 "Direct mode is recommended for MPS — it runs ~4× faster."
@@ -984,24 +985,6 @@ class SessionOrchestrator:
     # RUNTIME / COMPUTE OPTIONS
     # =========================================================================
 
-    @staticmethod
-    def _tier_to_compute_runtime(tier: str) -> str:
-        """Derive a canonical compute_runtime string from a RuntimeTier id."""
-        platform = detect_platform()
-        if tier == "gpu_fast":
-            if platform.has_cuda:
-                return "tensorrt"
-            if platform.has_mps:
-                return "mps"
-            return "cpu"
-        if tier == "gpu":
-            if platform.has_cuda:
-                return "cuda"
-            if platform.has_mps:
-                return "mps"
-            return "cpu"
-        return "cpu"
-
     def _current_runtime_tier(self) -> str:
         """Return the currently selected RuntimeTier id ("cpu"/"gpu"/"gpu_fast")."""
         if not hasattr(self._mw, "_setup_panel"):
@@ -1012,8 +995,12 @@ class SessionOrchestrator:
         return str(data).strip() if data else "gpu"
 
     def _selected_compute_runtime(self) -> str:
-        """Derive a concrete compute_runtime string from the selected tier combo."""
-        return self._tier_to_compute_runtime(self._current_runtime_tier())
+        """Derive the concrete compute_runtime string from the selected tier combo."""
+        from hydra_suite.runtime.resolver import resolve_compute_runtime
+
+        return resolve_compute_runtime(
+            self._current_runtime_tier(), detect_platform(), stage="obb"
+        )
 
     def _has_cnn_identity_enabled(self) -> bool:
         """Return True when CNN identity analysis is configured and enabled."""
@@ -1027,17 +1014,17 @@ class SessionOrchestrator:
     def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
         rt = str(runtime or self._selected_compute_runtime() or "").strip().lower()
-        if rt == "tensorrt" or rt.startswith("onnx"):
+        if rt == "tensorrt":
             return True
         return self._gpu_fast_obb_is_coreml_only()
 
     def _gpu_fast_obb_is_coreml_only(self) -> bool:
         """Return True when gpu_fast OBB detection will run on CoreML.
 
-        ``_tier_to_compute_runtime("gpu_fast")`` reports "mps" on Apple
-        Silicon (the GUI's per-tier compute_runtime label), but the OBB
-        stage internally upgrades to a CoreML direct executor whenever the
-        exported ``.mlpackage`` artifact is available (see
+        ``_selected_compute_runtime()`` reports "coreml" directly for gpu_fast
+        on Apple Silicon (via ``resolve_compute_runtime``), and the OBB stage
+        internally upgrades to a CoreML direct executor whenever the exported
+        ``.mlpackage`` artifact is available (see
         ``core/inference/runtime.py:runtime_to_compute_runtime``). CoreML's
         OBB export cannot use a dynamic batch axis (Spec 1 Phase A/B,
         2026-07-04: ultralytics' CoreML export hard-crashes at compile time
@@ -1053,11 +1040,19 @@ class SessionOrchestrator:
 
     @staticmethod
     def _preview_safe_runtime(runtime: str) -> str:
-        """Downgrade ONNX/TensorRT runtimes to their native equivalents for preview."""
+        """Downgrade ONNX/TensorRT/CoreML runtimes to their native equivalents for preview.
+
+        NOTE: still has live callers (``tracking.py::start_preview_on_video``,
+        ``detection_panel.py::_collect_preview_detection_context``) that must
+        not run preview through an exported accelerator backend, so this is
+        NOT dead despite `_selected_compute_runtime()` no longer emitting the
+        legacy ``onnx_*`` vocabulary. It now also downgrades the new
+        ``"coreml"`` value `_selected_compute_runtime()` can report directly.
+        """
         rt = str(runtime or "cpu").strip().lower()
         if rt == "onnx_cpu":
             return "cpu"
-        if rt == "onnx_coreml":
+        if rt in ("onnx_coreml", "coreml"):
             return "mps"
         if rt in ("onnx_cuda", "tensorrt"):
             return "cuda"
@@ -1107,19 +1102,7 @@ class SessionOrchestrator:
         """Sync dependent controls when the runtime tier or context changes."""
         self._update_runtime_fallback_hint()
         self._mw._refresh_benchmark_recommendations()
-        selected_runtime = self._selected_compute_runtime()
         self._mw._update_obb_mode_warning()
-        derived = derive_detection_runtime_settings(selected_runtime)
-        if hasattr(self._mw, "_detection_panel"):
-            idx = self._mw._detection_panel.combo_device.findText(
-                str(derived.get("yolo_device", "cpu")), Qt.MatchStartsWith
-            )
-            if idx >= 0:
-                self._mw._detection_panel.combo_device.setCurrentIndex(idx)
-        if hasattr(self._mw, "_detection_panel"):
-            self._mw._detection_panel.chk_enable_tensorrt.setChecked(
-                bool(derived.get("enable_tensorrt", False))
-            )
         if hasattr(self._mw, "_detection_panel"):
             self._mw._detection_panel._sync_batch_policy_controls()
         if hasattr(self._mw, "_identity_panel"):

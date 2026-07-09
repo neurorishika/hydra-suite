@@ -71,3 +71,34 @@ def test_runtime_requires_fixed_yolo_batch_true_for_apple_silicon_gpu_fast(
     )
     orch._selected_compute_runtime = lambda: "mps"  # type: ignore[method-assign]
     assert orch._runtime_requires_fixed_yolo_batch() is True
+
+
+def test_selected_compute_runtime_reports_native_coreml_on_apple_gpu_fast(
+    monkeypatch,
+):
+    """_selected_compute_runtime must report the concrete "coreml" backend
+    (not the legacy-detector-vocabulary "mps") on Apple-Silicon gpu_fast, now
+    that it derives from resolve_compute_runtime() instead of the deleted
+    duplicate _tier_to_compute_runtime() tier->runtime mapping."""
+    orch = _make_orchestrator("gpu_fast")
+    monkeypatch.setattr(
+        session_mod,
+        "detect_platform",
+        lambda: types.SimpleNamespace(has_mps=True, has_cuda=False),
+    )
+    assert orch._selected_compute_runtime() == "coreml"
+
+
+def test_selected_compute_runtime_reports_cuda_tensorrt_on_cuda_gpu_fast(
+    monkeypatch,
+):
+    """Sanity check the CUDA side of the same derivation still reports
+    "tensorrt" for gpu_fast, matching the old _tier_to_compute_runtime
+    behavior (which was correct for CUDA, only wrong for Apple Silicon)."""
+    orch = _make_orchestrator("gpu_fast")
+    monkeypatch.setattr(
+        session_mod,
+        "detect_platform",
+        lambda: types.SimpleNamespace(has_mps=False, has_cuda=True),
+    )
+    assert orch._selected_compute_runtime() == "tensorrt"
