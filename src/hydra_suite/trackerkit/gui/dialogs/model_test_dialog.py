@@ -38,6 +38,13 @@ _OBB_THICKNESS = 2
 _TEST_CONFIDENCE_THRESHOLD = 0.25
 _TEST_IOU_THRESHOLD = 0.45
 
+#: Max detections fed to ``load_obb_executor``'s NMS. Matches the legacy
+#: ``YOLOOBBDetector`` path's hardcoded ``YOLO_MAX_TARGETS`` (100) -- this is
+#: a visual sanity-check tool for a multi-animal tracker, and
+#: ``load_obb_executor``'s own default (20) is too low for busy scenes and
+#: would silently hide real detections.
+_TEST_MAX_DET = 100
+
 
 def training_device_to_compute_runtime(device: str) -> str:
     """Map a literal training-device string onto a ``load_obb_executor`` compute runtime.
@@ -53,12 +60,26 @@ def training_device_to_compute_runtime(device: str) -> str:
     not a tier selection. Map the literal device string directly onto the
     closest ``load_obb_executor``-accepted runtime instead of routing it
     through the tier resolver.
+
+    ``"auto"`` (the training-device combo's default, first entry) is not a
+    literal device -- it means "pick the best available device", mirroring
+    the legacy ``YOLOOBBDetector._detect_device`` priority (CUDA > MPS > CPU),
+    so it is resolved here via the same centralized availability flags
+    instead of regressing to a hardcoded CPU runtime.
     """
     dev = str(device or "").strip().lower()
     if dev.startswith("cuda"):
         return "cuda"
     if dev == "mps":
         return "mps"
+    if dev == "auto" or not dev:
+        from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, TORCH_CUDA_AVAILABLE
+
+        if TORCH_CUDA_AVAILABLE:
+            return "cuda"
+        if MPS_AVAILABLE:
+            return "mps"
+        return "cpu"
     return "cpu"
 
 
@@ -169,13 +190,17 @@ class _TestWorker(BaseWorker):
             compute_runtime,
             task=task,
             imgsz_override=imgsz,
+            max_det=_TEST_MAX_DET,
         )
 
         detect_model_path = self.params.get("detect_model_path")
         detect_executor = None
         if detect_model_path:
             detect_executor = load_obb_executor(
-                detect_model_path, compute_runtime, task="detect"
+                detect_model_path,
+                compute_runtime,
+                task="detect",
+                max_det=_TEST_MAX_DET,
             )
 
         crop_spec = _SeqCropSpec(
