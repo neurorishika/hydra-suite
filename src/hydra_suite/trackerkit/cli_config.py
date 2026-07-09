@@ -14,7 +14,10 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from hydra_suite.runtime.compute_runtime import infer_compute_runtime_from_legacy
+from hydra_suite.runtime.compute_runtime import (
+    _normalize_runtime,
+    infer_compute_runtime_from_legacy,
+)
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
@@ -38,8 +41,18 @@ def legacy_detection_runtime_fields(compute_runtime: str) -> dict:
     distinct from ``"onnx_coreml"`` (ONNX Runtime with the CoreML execution
     provider) rather than collapsed into it, since collapsing the two was the
     vocabulary bug this refactor plan has otherwise been fixing.
+
+    Legacy on-disk configs may still carry non-canonical aliases (``"trt"``,
+    ``"onnx"``, ``"onnx_gpu"``, ``"onnx_mps"``, etc.) predating this
+    refactor. Those are normalized via ``_normalize_runtime`` before dispatch,
+    exactly as the deleted ``derive_detection_runtime_settings`` did. The one
+    exception is the literal ``"coreml"`` alias: ``_normalize_runtime``
+    collapses it into ``"onnx_coreml"``, which would reintroduce the
+    coreml/onnx_coreml conflation this refactor fixed, so it is special-cased
+    to bypass normalization and dispatch as ``"coreml"`` directly.
     """
-    rt = str(compute_runtime or "cpu").strip().lower()
+    raw = str(compute_runtime or "cpu").strip().lower().replace("-", "_")
+    rt = "coreml" if raw == "coreml" else _normalize_runtime(compute_runtime)
 
     yolo_device = "cpu"
     enable_tensorrt = False

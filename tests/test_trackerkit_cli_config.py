@@ -208,3 +208,42 @@ def test_legacy_detection_runtime_fields_cpu_default():
         "enable_onnx_runtime": False,
         "enable_gpu_background": False,
     }
+
+
+def test_legacy_detection_runtime_fields_normalizes_trt_alias():
+    """Legacy on-disk configs may say "trt"; it must resolve identically to
+    "tensorrt", matching the aliasing _normalize_runtime used to apply before
+    this helper's dispatch (previously done inside the deleted
+    derive_detection_runtime_settings)."""
+    assert legacy_detection_runtime_fields("trt") == legacy_detection_runtime_fields(
+        "tensorrt"
+    )
+
+
+def test_legacy_detection_runtime_fields_normalizes_onnx_gpu_alias():
+    assert legacy_detection_runtime_fields(
+        "onnx_gpu"
+    ) == legacy_detection_runtime_fields("onnx_cuda")
+
+
+def test_legacy_detection_runtime_fields_normalizes_onnx_mps_alias():
+    assert legacy_detection_runtime_fields(
+        "onnx_mps"
+    ) == legacy_detection_runtime_fields("onnx_coreml")
+
+
+def test_legacy_detection_runtime_fields_coreml_still_not_collapsed_after_normalization_fix():
+    """Guard against reintroducing the original Task 8 bug: even though the
+    alias-normalization fix now routes most legacy strings through
+    _normalize_runtime (which collapses "coreml" -> "onnx_coreml"), the
+    literal "coreml" alias must remain special-cased and must NOT produce the
+    same result as "onnx_coreml"."""
+    coreml_out = legacy_detection_runtime_fields("coreml")
+    onnx_coreml_out = legacy_detection_runtime_fields("onnx_coreml")
+    assert coreml_out != onnx_coreml_out
+    assert coreml_out == {
+        "yolo_device": "mps",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    }
