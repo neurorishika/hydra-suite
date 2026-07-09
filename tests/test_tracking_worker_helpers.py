@@ -202,7 +202,6 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     pose_features_new.normalize_pose_keypoints = lambda *_args, **_kwargs: None
     pose_features_new.resolve_pose_group_indices = lambda *_args, **_kwargs: []
     pose_api = types.ModuleType("hydra_suite.core.identity.pose.api")
-    pose_api.build_runtime_config = lambda *_args, **_kwargs: None
     pose_api.create_pose_backend_from_config = lambda *_args, **_kwargs: None
 
     properties_pkg = types.ModuleType("hydra_suite.core.identity.properties")

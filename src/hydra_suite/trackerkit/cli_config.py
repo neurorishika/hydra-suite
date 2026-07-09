@@ -14,13 +14,61 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
-    infer_compute_runtime_from_legacy,
-)
+from hydra_suite.runtime.compute_runtime import infer_compute_runtime_from_legacy
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
+
+
+def legacy_detection_runtime_fields(compute_runtime: str) -> dict:
+    """Map a ``compute_runtime`` string to legacy detection config fields.
+
+    These fields (``yolo_device``/``enable_tensorrt``/``enable_onnx_runtime``/
+    ``enable_gpu_background``) no longer drive any live detector construction:
+    the ``"yolo_obb"`` detection method runs entirely through
+    ``InferenceRunner``/``load_obb_executor``, keyed off ``RUNTIME_TIER`` /
+    ``COMPUTE_RUNTIME``, which never reads these fields back. They are kept
+    only for (a) legacy config-file field backward-compatibility (display /
+    round-tripping old preset files) and (b) contributing to the
+    detection/engine cache-invalidation hash key (see
+    ``trackerkit/gui/orchestrators/tracking.py``'s cache-id builder).
+
+    Unlike the deleted ``derive_detection_runtime_settings``, ``"coreml"``
+    (native Apple GPU-Fast backend, resolved via ``RuntimeResolver``) is kept
+    distinct from ``"onnx_coreml"`` (ONNX Runtime with the CoreML execution
+    provider) rather than collapsed into it, since collapsing the two was the
+    vocabulary bug this refactor plan has otherwise been fixing.
+    """
+    rt = str(compute_runtime or "cpu").strip().lower()
+
+    yolo_device = "cpu"
+    enable_tensorrt = False
+    enable_onnx_runtime = False
+
+    if rt in ("mps", "coreml"):
+        yolo_device = "mps"
+    elif rt == "cuda":
+        yolo_device = "cuda:0"
+    elif rt == "tensorrt":
+        yolo_device = "cuda:0"
+        enable_tensorrt = True
+    elif rt == "onnx_coreml":
+        yolo_device = "mps"
+        enable_onnx_runtime = True
+    elif rt == "onnx_cpu":
+        yolo_device = "cpu"
+        enable_onnx_runtime = True
+    elif rt == "onnx_cuda":
+        yolo_device = "cuda:0"
+        enable_onnx_runtime = True
+
+    return {
+        "yolo_device": yolo_device,
+        "enable_tensorrt": bool(enable_tensorrt),
+        "enable_onnx_runtime": bool(enable_onnx_runtime),
+        "enable_gpu_background": yolo_device != "cpu",
+    }
+
 
 KALMAN_ANISOTROPY_RATIO_CONST = 50.0
 POSE_REJECTION_THRESHOLD_CONST = 0.5
@@ -418,7 +466,7 @@ def build_tracking_parameters(
             ),
         )
     )
-    detection_runtime = derive_detection_runtime_settings(compute_runtime)
+    detection_runtime = legacy_detection_runtime_fields(compute_runtime)
     yolo_mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
     yolo_direct_path = resolve_model_path(
         _cfg_get(cfg, "yolo_obb_direct_model_path", "yolo_model_path", default="")

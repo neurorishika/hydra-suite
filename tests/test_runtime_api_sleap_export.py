@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 import types
 from contextlib import contextmanager
@@ -654,116 +653,6 @@ def test_yolo_backend_rejects_directory_model_path_with_clear_error(
             msg = str(exc).lower()
             assert "pose_model_type" in msg
             assert "sleap" in msg
-
-
-def test_build_runtime_config_derives_sleap_export_hw_from_model_config(
-    tmp_path: Path,
-) -> None:
-    stubs = {
-        "hydra_suite.utils.gpu_utils": _gpu_stub(),
-    }
-    mod = _load_runtime_api_module(stubs)
-
-    model_dir = tmp_path / "sleap_model"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    training_cfg = {
-        "data_config": {
-            "preprocessing": {
-                "crop_size": None,
-                "max_height": 211,
-                "max_width": 216,
-            }
-        },
-        "model_config": {"backbone_config": {"unet": {"max_stride": 32}}},
-    }
-    (model_dir / "training_config.json").write_text(
-        json.dumps(training_cfg), encoding="utf-8"
-    )
-
-    params = {
-        "POSE_MODEL_TYPE": "sleap",
-        "POSE_MODEL_DIR": str(model_dir),
-        "POSE_RUNTIME_FLAVOR": "onnx",
-        "POSE_SLEAP_BATCH": 4,
-    }
-    cfg = mod.build_runtime_config(params, out_root=str(tmp_path))
-    assert cfg.sleap_export_input_hw == (224, 224)
-
-
-def test_build_runtime_config_explicit_sleap_export_hw_overrides_model_config(
-    tmp_path: Path,
-) -> None:
-    stubs = {
-        "hydra_suite.utils.gpu_utils": _gpu_stub(),
-    }
-    mod = _load_runtime_api_module(stubs)
-
-    model_dir = tmp_path / "sleap_model"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    training_cfg = {
-        "data_config": {"preprocessing": {"max_height": 211, "max_width": 216}},
-        "model_config": {"backbone_config": {"unet": {"max_stride": 32}}},
-    }
-    (model_dir / "training_config.json").write_text(
-        json.dumps(training_cfg), encoding="utf-8"
-    )
-
-    params = {
-        "POSE_MODEL_TYPE": "sleap",
-        "POSE_MODEL_DIR": str(model_dir),
-        "POSE_RUNTIME_FLAVOR": "onnx",
-        "POSE_SLEAP_EXPORT_INPUT_HEIGHT": 190,  # aligned up to 192
-        "POSE_SLEAP_EXPORT_INPUT_WIDTH": 224,
-    }
-    cfg = mod.build_runtime_config(params, out_root=str(tmp_path))
-    assert cfg.sleap_export_input_hw == (192, 224)
-
-
-def test_build_runtime_config_clamps_realtime_individual_batches_to_animals(
-    tmp_path: Path,
-) -> None:
-    stubs = {
-        "hydra_suite.utils.gpu_utils": _gpu_stub(),
-    }
-    mod = _load_runtime_api_module(stubs)
-
-    params = {
-        "POSE_MODEL_TYPE": "yolo",
-        "POSE_MODEL_DIR": str(tmp_path / "pose.pt"),
-        "POSE_RUNTIME_FLAVOR": "native",
-        "POSE_YOLO_BATCH": 16,
-        "POSE_SLEAP_BATCH": 12,
-        "TRACKING_REALTIME_MODE": True,
-        "TRACKING_WORKFLOW_MODE": "realtime",
-        "MAX_TARGETS": 5,
-    }
-
-    cfg = mod.build_runtime_config(params, out_root=str(tmp_path))
-
-    assert cfg.batch_size == 5
-    assert cfg.yolo_batch == 5
-    assert cfg.sleap_batch == 5
-
-
-def test_build_runtime_config_respects_explicit_pose_runtime_flavor_over_compute_runtime(
-    tmp_path: Path,
-) -> None:
-    stubs = {
-        "hydra_suite.utils.gpu_utils": _gpu_stub(),
-    }
-    mod = _load_runtime_api_module(stubs)
-
-    params = {
-        "POSE_MODEL_TYPE": "sleap",
-        "POSE_MODEL_DIR": str(tmp_path / "sleap_model"),
-        "POSE_RUNTIME_FLAVOR": "mps",
-        "POSE_SLEAP_DEVICE": "mps",
-        "COMPUTE_RUNTIME": "onnx_coreml",
-    }
-
-    cfg = mod.build_runtime_config(params, out_root=str(tmp_path))
-
-    assert cfg.runtime_flavor == "mps"
 
 
 def test_attempt_sleap_cli_export_prefers_size_aware_commands_first(

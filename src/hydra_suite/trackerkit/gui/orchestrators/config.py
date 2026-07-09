@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
 from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
     derive_pose_runtime_settings,
     infer_compute_runtime_from_legacy,
 )
@@ -37,6 +36,7 @@ from hydra_suite.trackerkit.benchmarking import (
     derive_benchmark_geometry_from_video,
     lookup_cached_recommendation,
 )
+from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.model_utils import (
     _normalize_usage_role,
     _sanitize_model_token,
@@ -516,14 +516,14 @@ class ConfigOrchestrator:
         )
         self._panels.detection.spin_tensorrt_batch.setEnabled(
             bool(
-                derive_detection_runtime_settings(self._mw._selected_compute_runtime())[
+                legacy_detection_runtime_fields(self._mw._selected_compute_runtime())[
                     "enable_tensorrt"
                 ]
             )
         )
         self._panels.detection.lbl_tensorrt_batch.setEnabled(
             bool(
-                derive_detection_runtime_settings(self._mw._selected_compute_runtime())[
+                legacy_detection_runtime_fields(self._mw._selected_compute_runtime())[
                     "enable_tensorrt"
                 ]
             )
@@ -1622,7 +1622,7 @@ class ConfigOrchestrator:
             cfg[f"{role_key}_usage_role"] = role_meta.get("usage_role", "")
 
         # === COMPUTE RUNTIME ===
-        runtime_detection = derive_detection_runtime_settings(compute_runtime)
+        runtime_detection = legacy_detection_runtime_fields(compute_runtime)
         cfg["compute_runtime"] = compute_runtime
         cfg["runtime_tier"] = self._mw._selected_runtime_tier()
         # Keep legacy fields writable for backward compatibility.
@@ -2127,7 +2127,7 @@ class ConfigOrchestrator:
         compute_runtime = self._mw._selected_compute_runtime()
         headtail_runtime = self._mw._selected_headtail_runtime()
         cnn_runtime = self._mw._selected_cnn_runtime()
-        runtime_detection = derive_detection_runtime_settings(compute_runtime)
+        runtime_detection = legacy_detection_runtime_fields(compute_runtime)
         trt_batch_size = (
             self._panels.detection.spin_yolo_batch_size.value()
             if self._mw._runtime_requires_fixed_yolo_batch(compute_runtime)

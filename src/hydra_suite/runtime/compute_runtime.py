@@ -302,38 +302,6 @@ def infer_compute_runtime_from_legacy(
     return _best_auto_runtime()
 
 
-def derive_detection_runtime_settings(compute_runtime: str) -> dict:
-    """Map canonical runtime to OBB detection legacy settings."""
-    rt = _normalize_runtime(compute_runtime)
-
-    yolo_device = "cpu"
-    enable_tensorrt = False
-    enable_onnx_runtime = False
-
-    if rt == "mps":
-        yolo_device = "mps"
-    elif rt == "cuda":
-        yolo_device = "cuda:0"
-    elif rt == "tensorrt":
-        yolo_device = "cuda:0"
-        enable_tensorrt = True
-    elif rt == "onnx_coreml":
-        yolo_device = "mps"
-        enable_onnx_runtime = True
-    elif rt == "onnx_cpu":
-        yolo_device = "cpu"
-        enable_onnx_runtime = True
-    elif rt == "onnx_cuda":
-        yolo_device = "cuda:0"
-        enable_onnx_runtime = True
-    return {
-        "yolo_device": yolo_device,
-        "enable_tensorrt": bool(enable_tensorrt),
-        "enable_onnx_runtime": bool(enable_onnx_runtime),
-        "enable_gpu_background": yolo_device != "cpu",
-    }
-
-
 def derive_pose_runtime_settings(compute_runtime: str, backend_family: str) -> dict:
     """Map canonical runtime to pose runtime legacy settings consumed by runtime_api."""
     rt = _normalize_runtime(compute_runtime)

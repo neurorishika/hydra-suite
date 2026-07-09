@@ -3,7 +3,6 @@
 from .compute_runtime import (
     CANONICAL_RUNTIMES,
     allowed_runtimes_for_pipelines,
-    derive_detection_runtime_settings,
     derive_onnx_execution_providers,
     derive_pose_runtime_settings,
     infer_compute_runtime_from_legacy,
@@ -17,7 +16,6 @@ __all__ = [
     "supported_runtimes_for_pipeline",
     "allowed_runtimes_for_pipelines",
     "infer_compute_runtime_from_legacy",
-    "derive_detection_runtime_settings",
     "derive_onnx_execution_providers",
     "derive_pose_runtime_settings",
 ]

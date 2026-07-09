@@ -29,7 +29,7 @@ from .geometry import (
     ellipse_to_obb_corners,
     resolve_directed_angle,
 )
-from .pose.api import build_runtime_config, create_pose_backend_from_config
+from .pose.api import create_pose_backend_from_config
 
 # Pose
 from .pose.types import (
@@ -65,7 +65,6 @@ __all__ = [
     "PoseRuntimeConfig",
     "PoseInferenceBackend",
     "RuntimeMetrics",
-    "build_runtime_config",
     "create_pose_backend_from_config",
     # Properties
     "IndividualPropertiesCache",

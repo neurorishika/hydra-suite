@@ -88,22 +88,6 @@ def test_allowed_runtimes_for_sleap_pose_exposes_tensorrt_when_available(monkeyp
     assert "tensorrt" in allowed
 
 
-def test_derive_detection_runtime_settings_tensorrt():
-    mod = _load_mod()
-    out = mod.derive_detection_runtime_settings("tensorrt")
-    assert out["yolo_device"] == "cuda:0"
-    assert out["enable_tensorrt"] is True
-    assert out["enable_onnx_runtime"] is False
-
-
-def test_derive_detection_runtime_settings_onnx_cpu():
-    mod = _load_mod()
-    out = mod.derive_detection_runtime_settings("onnx_cpu")
-    assert out["yolo_device"] == "cpu"
-    assert out["enable_tensorrt"] is False
-    assert out["enable_onnx_runtime"] is True
-
-
 def test_allowed_runtimes_includes_onnx_coreml_on_mps(monkeypatch):
     mod = _load_mod()
     monkeypatch.setattr(mod, "MPS_AVAILABLE", True)
@@ -116,22 +100,6 @@ def test_allowed_runtimes_includes_onnx_coreml_on_mps(monkeypatch):
 
     allowed = mod.allowed_runtimes_for_pipelines(["yolo_obb_detection", "yolo_pose"])
     assert "onnx_coreml" in allowed
-
-
-def test_derive_detection_runtime_settings_onnx_coreml():
-    mod = _load_mod()
-    out = mod.derive_detection_runtime_settings("onnx_coreml")
-    assert out["yolo_device"] == "mps"
-    assert out["enable_tensorrt"] is False
-    assert out["enable_onnx_runtime"] is True
-
-
-def test_derive_detection_runtime_settings_onnx_cuda():
-    mod = _load_mod()
-    out = mod.derive_detection_runtime_settings("onnx_cuda")
-    assert out["yolo_device"] == "cuda:0"
-    assert out["enable_tensorrt"] is False
-    assert out["enable_onnx_runtime"] is True
 
 
 def test_derive_pose_runtime_settings_onnx_cuda():

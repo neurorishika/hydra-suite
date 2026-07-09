@@ -148,18 +148,17 @@ def test_init_pose_backend_yolo_no_build_runtime_config(monkeypatch, tmp_path) -
     """Task 5: the YOLO pose branch must construct ``YoloNativeBackend``
     directly (mirroring ``core/inference/stages/pose.py::load_pose_model`` and
     Task 3's ``_preview_run_pose_overlay``) instead of calling the legacy
-    ``build_runtime_config`` translation step."""
+    ``build_runtime_config`` translation step.
+
+    Task 8: ``build_runtime_config`` was since deleted from
+    ``core/identity/pose/api.py`` entirely (zero real callers remained), so
+    it cannot be called here."""
     pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
     yolo_module = importlib.import_module(
         "hydra_suite.core.identity.pose.backends.yolo"
     )
 
-    def _boom(*args, **kwargs):
-        raise AssertionError(
-            "_init_pose_backend should not call the legacy build_runtime_config"
-        )
-
-    monkeypatch.setattr(pose_api, "build_runtime_config", _boom)
+    assert not hasattr(pose_api, "build_runtime_config")
 
     captured: dict[str, object] = {}
 
@@ -205,16 +204,15 @@ def test_init_pose_backend_yolo_no_build_runtime_config(monkeypatch, tmp_path) -
 def test_init_pose_backend_sleap_no_build_runtime_config(monkeypatch, tmp_path) -> None:
     """Task 5: the SLEAP pose branch must construct ``PoseRuntimeConfig``
     directly instead of calling the legacy ``build_runtime_config`` translation
-    step."""
+    step.
+
+    Task 8: ``build_runtime_config`` was since deleted from
+    ``core/identity/pose/api.py`` entirely (zero real callers remained), so
+    it cannot be called here."""
     pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
     pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
 
-    def _boom(*args, **kwargs):
-        raise AssertionError(
-            "_init_pose_backend should not call the legacy build_runtime_config"
-        )
-
-    monkeypatch.setattr(pose_api, "build_runtime_config", _boom)
+    assert not hasattr(pose_api, "build_runtime_config")
 
     captured: dict[str, object] = {}
 

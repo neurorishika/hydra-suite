@@ -4,6 +4,7 @@ import math
 
 from hydra_suite.trackerkit.cli_config import (
     TrackerCliVideoProbe,
+    legacy_detection_runtime_fields,
     load_tracker_cli_session,
 )
 
@@ -154,3 +155,56 @@ def test_cli_session_yolo_batch_size_defaults_to_one_when_not_configured(tmp_pat
     )
 
     assert session.params["YOLO_BATCH_SIZE"] == 1
+
+
+def test_legacy_detection_runtime_fields_tensorrt():
+    out = legacy_detection_runtime_fields("tensorrt")
+    assert out == {
+        "yolo_device": "cuda:0",
+        "enable_tensorrt": True,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    }
+
+
+def test_legacy_detection_runtime_fields_onnx_coreml():
+    out = legacy_detection_runtime_fields("onnx_coreml")
+    assert out == {
+        "yolo_device": "mps",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": True,
+        "enable_gpu_background": True,
+    }
+
+
+def test_legacy_detection_runtime_fields_onnx_cuda():
+    out = legacy_detection_runtime_fields("onnx_cuda")
+    assert out == {
+        "yolo_device": "cuda:0",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": True,
+        "enable_gpu_background": True,
+    }
+
+
+def test_legacy_detection_runtime_fields_coreml_is_not_collapsed_into_onnx_coreml():
+    """Task 8: unlike the deleted derive_detection_runtime_settings, the native
+    "coreml" tier-resolved backend must not be collapsed into "onnx_coreml" —
+    it should behave like the plain "mps" device with no ONNX flag set."""
+    out = legacy_detection_runtime_fields("coreml")
+    assert out == {
+        "yolo_device": "mps",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    }
+
+
+def test_legacy_detection_runtime_fields_cpu_default():
+    out = legacy_detection_runtime_fields("cpu")
+    assert out == {
+        "yolo_device": "cpu",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": False,
+    }

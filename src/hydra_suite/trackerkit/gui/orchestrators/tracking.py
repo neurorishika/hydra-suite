@@ -26,10 +26,8 @@ from hydra_suite.core.identity.properties.export import (
     DETECTED_HEADING_COLUMNS,
     build_pose_keypoint_labels,
 )
-from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
-    derive_pose_runtime_settings,
-)
+from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
+from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
 from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
@@ -3843,7 +3841,7 @@ class TrackingOrchestrator:
         # Preview must not use ONNX/TensorRT — downgrade to the native device runtime.
         safe_rt = self._mw._preview_safe_runtime(params.get("COMPUTE_RUNTIME", "cpu"))
         if safe_rt != params.get("COMPUTE_RUNTIME"):
-            safe_det = derive_detection_runtime_settings(safe_rt)
+            safe_det = legacy_detection_runtime_fields(safe_rt)
             params["COMPUTE_RUNTIME"] = safe_rt
             params["YOLO_DEVICE"] = safe_det["yolo_device"]
             params["ENABLE_GPU_BACKGROUND"] = safe_det["enable_gpu_background"]

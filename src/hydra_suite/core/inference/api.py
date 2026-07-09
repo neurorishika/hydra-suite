@@ -4,10 +4,12 @@ Keep this surface minimal: each helper exists to support a specific kept consume
 that cannot directly depend on the internal stages module.
 
 Correction 21: apply_detection_filter shim for optimizer.py and optimizer_workers.py
-Correction 22: predict_pose_for_image helper and build_runtime_config /
-  create_pose_backend_from_config shims for posekit/gui/workers.py.
-  These re-export from core/identity/pose/api.py while it exists; once that
-  module is deleted the implementations will move here.
+Correction 22: predict_pose_for_image helper and create_pose_backend_from_config
+  shim for posekit/gui/workers.py.
+  create_pose_backend_from_config re-exports from core/identity/pose/api.py
+  while it exists; once that module is deleted the implementation will move
+  here. (Task 8: build_runtime_config was deleted from pose/api.py — it had
+  zero real callers left — so its shim here was removed too.)
 """
 
 from __future__ import annotations
@@ -16,15 +18,13 @@ from .config import OBBConfig
 from .result import OBBResult
 from .stages.filtering import filter_detections
 
-# Correction 22: stable re-exports so posekit/gui/workers.py does not need to
+# Correction 22: stable re-export so posekit/gui/workers.py does not need to
 # import from the soon-to-be-deleted core/identity/pose/api module.
 try:
     from hydra_suite.core.identity.pose.api import (  # noqa: F401
-        build_runtime_config,
         create_pose_backend_from_config,
     )
 except ImportError:
-    build_runtime_config = None  # type: ignore[assignment]
     create_pose_backend_from_config = None  # type: ignore[assignment]
 
 
@@ -45,7 +45,8 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     batch use — call InferenceRunner.run_realtime if you need persistent state.
 
     Correction 22: replaces the lazy import of build_runtime_config /
-    create_pose_backend_from_config from deleted core/identity/pose/api.py.
+    create_pose_backend_from_config from (eventually) deleted
+    core/identity/pose/api.py.
     """
     from .config import InferenceConfig, OBBConfig, OBBDirectConfig
     from .runner import _load_pose_model

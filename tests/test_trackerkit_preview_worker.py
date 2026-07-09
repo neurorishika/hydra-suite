@@ -753,7 +753,12 @@ def test_preview_run_cnn_overlay_formats_multihead_predictions(monkeypatch) -> N
 def test_preview_run_pose_no_build_runtime_config(monkeypatch, caplog) -> None:
     """Task 3: the pose-preview branch must construct ``PoseRuntimeConfig``
     directly (mirroring ``core/inference/stages/pose.py::load_pose_model``)
-    instead of calling the legacy ``build_runtime_config`` translation step."""
+    instead of calling the legacy ``build_runtime_config`` translation step.
+
+    Task 8: ``build_runtime_config`` itself has since been deleted from
+    ``core/identity/pose/api.py`` (zero real callers remained), so the
+    guard this test used to install by monkeypatching it to raise is no
+    longer possible/needed -- the function simply does not exist anymore."""
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
@@ -761,12 +766,7 @@ def test_preview_run_pose_no_build_runtime_config(monkeypatch, caplog) -> None:
     pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
     resolver_mod = importlib.import_module("hydra_suite.runtime.resolver")
 
-    def _boom(*args, **kwargs):
-        raise AssertionError(
-            "preview pose overlay should not call the legacy build_runtime_config"
-        )
-
-    monkeypatch.setattr(pose_api, "build_runtime_config", _boom)
+    assert not hasattr(pose_api, "build_runtime_config")
 
     captured: dict[str, object] = {}
 
@@ -900,12 +900,9 @@ def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
         assert context["pose_model_dir"] == "/models/sleap_model"
         assert context["enable_pose_extractor"] is True
 
-        def _boom(*args, **kwargs):
-            raise AssertionError(
-                "preview pose overlay should not call the legacy build_runtime_config"
-            )
-
-        monkeypatch.setattr(pose_api, "build_runtime_config", _boom)
+        # Task 8: build_runtime_config was deleted from pose/api.py entirely
+        # (zero real callers remained), so it cannot be called here.
+        assert not hasattr(pose_api, "build_runtime_config")
 
         captured: dict[str, object] = {}
 
