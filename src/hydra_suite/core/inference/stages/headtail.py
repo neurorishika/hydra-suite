@@ -141,15 +141,28 @@ def _assemble_headtail_result(
 
     Shared by run_headtail and run_headtail_batch so the per-detection logic
     is never duplicated.
+
+    Mirrors legacy's ``_select_headtail_candidate_indices`` confidence gate
+    (``YOLO_HEADTAIL_DETECT_CONF_THRESHOLD``): detections whose OBB confidence
+    falls below ``config.candidate_confidence_threshold`` are left undirected
+    even if the classifier would have returned a confident prediction for
+    them. ``candidate_confidence_threshold=None`` (the default) classifies
+    every detection, matching prior behavior.
     """
     n = obb_result.num_detections
     hints = np.full(n, float("nan"), dtype=np.float32)
     confs = np.zeros(n, dtype=np.float32)
     mask = np.zeros(n, dtype=np.uint8)
+    candidate_threshold = config.candidate_confidence_threshold
 
     for i, probs_per_factor in enumerate(all_probs):
         if i >= n:
             break
+        if (
+            candidate_threshold is not None
+            and float(obb_result.confidences[i]) < candidate_threshold
+        ):
+            continue
         factor_probs = probs_per_factor[0]
         winning_idx = int(np.argmax(factor_probs))
         winning_conf = float(factor_probs[winning_idx])

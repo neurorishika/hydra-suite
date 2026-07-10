@@ -212,3 +212,57 @@ def test_run_headtail_unknown_label_not_directed():
     result = run_headtail(crops, _obb(n=1), model, config, _cpu_rt())
     assert result.directed_mask[0] == 0
     assert math.isnan(result.heading_hints[0])
+
+
+def test_run_headtail_below_candidate_confidence_skips_classification():
+    """Mirrors legacy's ``_select_headtail_candidate_indices`` confidence gate:
+    a detection whose OBB confidence falls below ``candidate_confidence_threshold``
+    must stay undirected even when the classifier would have returned a
+    confident, directed prediction for it.
+    """
+    config = HeadTailConfig(
+        model_path="/ht.pt",
+        confidence_threshold=0.5,
+        candidate_confidence_threshold=0.25,
+    )
+    mock_backend = MagicMock()
+    # Both detections would classify as confidently "right" if asked.
+    mock_backend.predict_batch.return_value = [
+        [np.array([0.95, 0.0, 0.0, 0.0, 0.05])],
+        [np.array([0.95, 0.0, 0.0, 0.0, 0.05])],
+    ]
+    model = HeadTailModel(
+        backend=mock_backend,
+        input_size=(64, 64),
+        class_names=["right", "left", "up", "down", "unknown"],
+    )
+    obb = _obb(n=2)
+    obb.confidences[0] = 0.10  # below candidate_confidence_threshold -> skipped
+    obb.confidences[1] = 0.90  # above -> classified normally
+    crops = torch.zeros((2, 3, 64, 64))
+    result = run_headtail(crops, obb, model, config, _cpu_rt())
+    assert result.directed_mask[0] == 0
+    assert math.isnan(result.heading_hints[0])
+    assert result.directed_mask[1] == 1
+    assert result.heading_hints[1] == pytest.approx(0.0)
+
+
+def test_run_headtail_candidate_confidence_none_classifies_everything():
+    """Default (``candidate_confidence_threshold=None``) preserves prior
+    behavior: every detection is classified regardless of OBB confidence."""
+    config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.5)
+    mock_backend = MagicMock()
+    mock_backend.predict_batch.return_value = [
+        [np.array([0.95, 0.0, 0.0, 0.0, 0.05])],
+    ]
+    model = HeadTailModel(
+        backend=mock_backend,
+        input_size=(64, 64),
+        class_names=["right", "left", "up", "down", "unknown"],
+    )
+    obb = _obb(n=1)
+    obb.confidences[0] = 0.01  # would fail any reasonable candidate gate
+    crops = torch.zeros((1, 3, 64, 64))
+    result = run_headtail(crops, obb, model, config, _cpu_rt())
+    assert result.directed_mask[0] == 1
+    assert result.heading_hints[0] == pytest.approx(0.0)

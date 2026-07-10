@@ -4523,6 +4523,16 @@ class TrackingWorker(QThread):
                 confidence_threshold=float(
                     params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)
                 ),
+                # Mirrors legacy's separate, stricter head-tail candidate gate
+                # (_select_headtail_candidate_indices): detections below this
+                # confidence never get classified at all (stay undirected),
+                # independent of the main OBB filter's own confidence_threshold.
+                candidate_confidence_threshold=float(
+                    params.get(
+                        "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD",
+                        params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25),
+                    )
+                ),
                 batch_size=int(params.get("HEADTAIL_BATCH_SIZE", 64)),
                 canonical_aspect_ratio=float(
                     params.get("ADVANCED_CONFIG", {}).get("reference_aspect_ratio", 2.0)
