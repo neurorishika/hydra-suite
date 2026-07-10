@@ -15,6 +15,8 @@ import yaml
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
+from hydra_suite.utils.conda_utils import run_conda
+
 
 # Settings helpers
 def load_ui_settings():
@@ -89,7 +91,7 @@ def list_sleap_envs() -> Tuple[List[str], str]:
     if shutil.which("conda") is None:
         return [], "Conda not found on PATH."
     try:
-        res = subprocess.run(
+        res = run_conda(
             ["conda", "env", "list"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

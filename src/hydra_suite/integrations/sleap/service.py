@@ -22,6 +22,8 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from hydra_suite.utils.conda_utils import popen_conda, run_conda
+
 
 class PoseInferenceService:
     """PoseInferenceService API surface documentation."""
@@ -2249,7 +2251,7 @@ class _SleapHttpService:
         cfg_path, code_path, err = self._write_temp_files(port)
         if err:
             return False, err
-        self.proc = subprocess.Popen(
+        self.proc = popen_conda(
             [
                 "conda",
                 "run",
@@ -2394,7 +2396,7 @@ def _sleap_env_preflight(env_name: str) -> Tuple[bool, str]:
         return False, f"Failed to prepare SLEAP env preflight script: {exc}"
 
     try:
-        res = subprocess.run(
+        res = run_conda(
             ["conda", "run", "-n", env_name, "python", str(script_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -2636,7 +2638,7 @@ def _run_sleap_export_predict_subprocess(
     )
     req_path.write_text(json.dumps(req), encoding="utf-8")
 
-    proc = subprocess.Popen(
+    proc = popen_conda(
         [
             "conda",
             "run",

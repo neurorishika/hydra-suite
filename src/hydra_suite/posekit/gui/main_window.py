@@ -7,7 +7,6 @@ import gc
 import hashlib
 import json
 import logging
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -52,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.posekit.config.schemas import PoseKitConfig
+from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .canvas import FrameListDelegate, PoseCanvas
@@ -4357,7 +4357,7 @@ class MainWindow(QMainWindow):
         self.combo_sleap_env.setEnabled(True)
         envs: List[str] = []
         try:
-            res = subprocess.run(
+            res = run_conda(
                 ["conda", "env", "list"],
                 capture_output=True,
                 text=True,

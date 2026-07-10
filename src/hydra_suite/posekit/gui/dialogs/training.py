@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.utils.conda_utils import popen_conda, run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ...core.extensions import (
@@ -398,7 +399,7 @@ class SleapExportWorker(QObject):
                 code,
                 str(req_path),
             ]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = run_conda(cmd, capture_output=True, text=True)
             if proc.returncode != 0:
                 err = (
                     proc.stderr.strip() or proc.stdout.strip() or "SLEAP export failed."
@@ -1082,7 +1083,7 @@ class TrainingRunnerDialog(QDialog):
 
         def _supports_cmd(args: List[str]) -> bool:
             try:
-                res = subprocess.run(
+                res = run_conda(
                     ["conda", "run", "-n", env] + args,
                     capture_output=True,
                     text=True,
@@ -1098,7 +1099,7 @@ class TrainingRunnerDialog(QDialog):
             cmd = ["conda", "run", "-n", env, "sleap-label", str(slp_path)]
 
         try:
-            subprocess.Popen(cmd)
+            popen_conda(cmd)
             self._append_log(f"[SLEAP] Launching: {' '.join(cmd)}")
         except Exception as e:
             QMessageBox.warning(self, "SLEAP launch failed", str(e))
