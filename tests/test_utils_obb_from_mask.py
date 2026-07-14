@@ -6,10 +6,7 @@ import math
 
 import torch
 
-from hydra_suite.core.detectors._obb_from_mask import (
-    _letterbox_gain_pad,
-    rotated_rect_from_masks,
-)
+from hydra_suite.utils.obb_from_mask import _letterbox_gain_pad, rotated_rect_from_masks
 
 
 def _rasterize_rotated_rect(

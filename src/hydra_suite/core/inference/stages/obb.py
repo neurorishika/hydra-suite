@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ...detectors._obb_from_mask import _letterbox_gain_pad, rotated_rect_from_masks
+from ....utils.obb_from_mask import _letterbox_gain_pad, rotated_rect_from_masks
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
@@ -816,17 +816,15 @@ def _extract_raw_tensors_from_masks(
     materialize_tensors().
     """
     masks = result.masks
-    if masks is None or masks.data is None or masks.data.shape[0] == 0:
-        dev = torch.device(device)
-        return _RawOBBTensors(
-            frame_idx=frame_idx,
-            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
-            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
-            conf=torch.zeros(0, dtype=torch.float32, device=dev),
-        )
     boxes = result.boxes
     conf_all = boxes.conf if boxes is not None else None
-    if conf_all is None or len(conf_all) == 0:
+    if (
+        masks is None
+        or masks.data is None
+        or masks.data.shape[0] == 0
+        or conf_all is None
+        or len(conf_all) == 0
+    ):
         dev = torch.device(device)
         return _RawOBBTensors(
             frame_idx=frame_idx,
