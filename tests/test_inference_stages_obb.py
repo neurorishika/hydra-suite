@@ -674,3 +674,77 @@ def test_extract_raw_tensors_from_masks_no_masks_returns_empty():
     )
     raw = _extract_raw_tensors_from_masks(result, frame_idx=1, device="cpu")
     assert raw.xywhr.shape == (0, 5)
+
+
+def test_run_direct_dispatches_to_detect_extraction(monkeypatch):
+    from types import SimpleNamespace
+
+    import numpy as np
+    import torch
+
+    from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+    from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
+
+    class _FakeDetectModel:
+        def predict(self, frames, **kwargs):
+            return [
+                SimpleNamespace(
+                    boxes=SimpleNamespace(
+                        xyxy=torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
+                        conf=torch.tensor([0.7]),
+                    )
+                )
+                for _ in frames
+            ]
+
+    config = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="fake.pt", model_task="detect", fixed_angle_deg=45.0
+        ),
+    )
+    models = OBBModels(mode="direct", direct_model=_FakeDetectModel())
+    runtime = SimpleNamespace(tensor_on_cuda=False, device="cpu")
+
+    results = run_obb([np.zeros((20, 20, 3), dtype=np.uint8)], models, config, runtime)
+
+    assert len(results) == 1
+    assert results[0].num_detections == 1
+
+
+def test_run_direct_detect_uses_raw_tensor_fast_path_when_tensor_on_cuda():
+    from types import SimpleNamespace
+
+    import numpy as np
+    import torch
+
+    from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+    from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
+
+    class _FakeDetectModel:
+        def predict(self, frames, **kwargs):
+            return [
+                SimpleNamespace(
+                    boxes=SimpleNamespace(
+                        xyxy=torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
+                        conf=torch.tensor([0.7]),
+                    )
+                )
+                for _ in frames
+            ]
+
+    config = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="fake.pt", model_task="detect"),
+    )
+    models = OBBModels(mode="direct", direct_model=_FakeDetectModel())
+    runtime = SimpleNamespace(tensor_on_cuda=True, device="cpu")
+
+    results = run_obb([np.zeros((20, 20, 3), dtype=np.uint8)], models, config, runtime)
+
+    # tensor_on_cuda=True must return _RawOBBTensors (a torch-tensor
+    # namedtuple), NOT an already-materialized OBBResult.
+    assert hasattr(results[0], "xywhr")
+    assert not hasattr(results[0], "corners") or isinstance(
+        results[0].xywhr, torch.Tensor
+    )

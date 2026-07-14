@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -304,6 +305,7 @@ def load_obb_models(
             auto_export=auto_export,
             max_det=config.max_detections,
             batch_size=batch_size,
+            task=config.direct.model_task,
         )
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
@@ -429,6 +431,47 @@ def _run_direct(
             device=runtime.device,
         )
 
+    model_task = config.direct.model_task if config.direct else "obb"
+
+    if model_task == "detect":
+        fixed_angle_rad = math.radians(
+            config.direct.fixed_angle_deg if config.direct else 0.0
+        )
+        # Zero-CPU-sync fast path under the native cuda runtime, mirroring
+        # "obb"'s own tensor_on_cuda branch below -- normalize/corners/
+        # finite-filtering is deferred to the shared materialize_tensors().
+        if runtime.tensor_on_cuda:
+            return [
+                _extract_raw_tensors_from_boxes(r, idx, fixed_angle_rad, runtime.device)
+                for idx, r in enumerate(results)
+            ]
+        return [
+            _apply_raw_detection_cap(
+                _extract_obb_from_boxes(r, idx, fixed_angle_rad),
+                config.raw_detection_cap,
+            )
+            for idx, r in enumerate(results)
+        ]
+
+    if model_task == "segment":
+        # rotated_rect_from_masks does all the heavy per-pixel/per-angle work
+        # on-device with no internal .cpu() calls, so under the native cuda
+        # runtime segment gets the exact same zero-CPU-sync _RawOBBTensors
+        # fast path as "obb"/"detect" -- the sync is deferred to
+        # materialize_tensors(), same as every other detection source.
+        if runtime.tensor_on_cuda:
+            return [
+                _extract_raw_tensors_from_masks(r, idx, runtime.device)
+                for idx, r in enumerate(results)
+            ]
+        return [
+            _apply_raw_detection_cap(
+                _extract_obb_from_masks(r, idx), config.raw_detection_cap
+            )
+            for idx, r in enumerate(results)
+        ]
+
+    # model_task == "obb": existing native-OBB behaviour, unchanged.
     # Only native PyTorch "cuda" runtime leaves tensors on device.
     # onnx_cuda and tensorrt: predict() returns CPU numpy regardless of GPU use.
     if runtime.tensor_on_cuda:
