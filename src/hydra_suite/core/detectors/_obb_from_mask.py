@@ -22,6 +22,8 @@ Method
    parabolic fit through the winning bin and its two neighbours (same idea as
    sub-pixel peak refinement in stereo/optical-flow disparity search), then
    recompute width/height once more at the refined angle.
+5. Canonicalize w/h so that the wider dimension is always ``w`` and ``angle``
+   always tracks the major axis (swap w/h and adjust angle by π/2 if needed).
 
 Everything after step 1 operates on a small, fixed-size tensor
 (``crop_size x crop_size`` per detection), so this stays cheap even for many
@@ -111,6 +113,8 @@ def rotated_rect_from_masks(
     side = 2.0 * half  # physical size (pixels) of each detection's crop
     sx1, sy1 = bcx - half, bcy - half
     sx2, sy2 = bcx + half, bcy + half
+    # Use float32 for batch_idx (not masks.dtype): torch.arange(n, dtype=torch.bool)
+    # would clip indices to {0, 1}, silently corrupting roi_align batch indices for N > 2.
     batch_idx = torch.arange(n, device=device, dtype=torch.float32)
     roi_boxes = torch.stack([batch_idx, sx1, sy1, sx2, sy2], dim=1)
 

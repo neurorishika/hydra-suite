@@ -92,3 +92,48 @@ def test_rotated_rect_from_masks_handles_zero_detections():
     boxes = torch.zeros((0, 4))
     rect = rotated_rect_from_masks(masks, boxes)
     assert rect.shape == (0, 5)
+
+
+def test_rotated_rect_from_masks_batched_multi_detection():
+    """Verify per-row independence: two detections in a single call."""
+    # First detection: axis-aligned rectangle at (64, 64), w=50, h=20, angle=0.
+    mask1 = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    # Second detection: rotated rectangle at (64, 64), w=50, h=20, angle=35.
+    mask2 = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=35.0)
+    # Stack into (2, 128, 128) batch.
+    masks = torch.stack([mask1, mask2], dim=0)
+    # Provide matching bounding boxes (loose axis-aligned coverage).
+    boxes = torch.tensor(
+        [
+            [14.0, 14.0, 114.0, 114.0],  # covers both
+            [14.0, 14.0, 114.0, 114.0],
+        ]
+    )
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+
+    # Both rows should be returned with correct shape.
+    assert rect.shape == (2, 5)
+
+    # Row 0: axis-aligned rectangle (angle ~ 0 mod pi).
+    cx0, cy0, w0, h0, angle0 = rect[0].tolist()
+    assert math.isclose(cx0, 64, abs_tol=1.5)
+    assert math.isclose(cy0, 64, abs_tol=1.5)
+    major0, minor0 = max(w0, h0), min(w0, h0)
+    assert math.isclose(major0, 50, abs_tol=3.0)
+    assert math.isclose(minor0, 20, abs_tol=3.0)
+    assert min(angle0 % math.pi, math.pi - (angle0 % math.pi)) < math.radians(5)
+
+    # Row 1: rotated rectangle (angle ~ 35° mod pi).
+    cx1, cy1, w1, h1, angle1 = rect[1].tolist()
+    assert math.isclose(cx1, 64, abs_tol=1.5)
+    assert math.isclose(cy1, 64, abs_tol=1.5)
+    major1, minor1 = max(w1, h1), min(w1, h1)
+    assert math.isclose(major1, 50, abs_tol=4.0)
+    assert math.isclose(minor1, 20, abs_tol=4.0)
+    expected_rad = math.radians(35.0)
+    diff = min(
+        abs((angle1 % math.pi) - expected_rad),
+        math.pi - abs((angle1 % math.pi) - expected_rad),
+    )
+    assert diff < math.radians(6)
