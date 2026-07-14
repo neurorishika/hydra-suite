@@ -60,7 +60,7 @@ def fake_loader(monkeypatch):
 
     Returns a dict of counters the test can assert against.
     """
-    counters = {"export": 0, "executor": 0, "torch_load": 0}
+    counters = {"export": 0, "executor": 0, "torch_load": 0, "tasks": []}
 
     def fake_load_torch(model_path: str):
         counters["torch_load"] += 1
@@ -76,6 +76,7 @@ def fake_loader(monkeypatch):
         *, runtime, artifact_path, imgsz, class_names=None, task="obb"
     ):
         counters["executor"] += 1
+        counters["tasks"].append(task)
         return _FakeExecutor(runtime, str(artifact_path), int(imgsz))
 
     monkeypatch.setattr(ra, "_load_torch_model", fake_load_torch)
@@ -266,6 +267,50 @@ def test_tensorrt_batch_size_two_and_eight_export_separate_cached_artifacts(
     # Requesting batch_size=8 again reuses the now-cached batch=8 artifact.
     load_obb_executor(str(pt), "tensorrt", auto_export=True, batch_size=8)
     assert fake_loader["export"] == 2
+
+
+def test_load_obb_executor_segment_task_routes_to_create_direct_executor(
+    fake_loader, tmp_path
+):
+    """``task="segment"`` must be forwarded verbatim to ``_create_direct_executor``,
+    same as the existing "obb"/"detect" plumbing."""
+    pt_path = tmp_path / "model.pt"
+    pt_path.write_bytes(b"fake")
+
+    load_obb_executor(str(pt_path), "tensorrt", auto_export=True, task="segment")
+
+    assert fake_loader["tasks"][-1] == "segment"
+
+
+def test_create_direct_executor_segment_task_routes_to_segment_factory(
+    monkeypatch, tmp_path
+):
+    """``_create_direct_executor(task="segment")`` must dispatch to
+    ``create_direct_segment_executor`` -- not silently fall through to the
+    default OBB (or plain-detect) factory."""
+    from hydra_suite.core.detectors import _direct_obb_runtime as dor
+
+    calls: list[str] = []
+
+    def fake_segment_factory(*, runtime, artifact_path, imgsz, class_names=None, **_kw):
+        calls.append("segment")
+        return object()
+
+    def fail_factory(*_args, **_kwargs):
+        raise AssertionError("wrong direct-executor factory was called")
+
+    monkeypatch.setattr(dor, "create_direct_segment_executor", fake_segment_factory)
+    monkeypatch.setattr(dor, "create_direct_obb_executor", fail_factory)
+    monkeypatch.setattr(dor, "create_direct_detect_executor", fail_factory)
+
+    artifact_path = tmp_path / "model.engine"
+    artifact_path.write_bytes(b"fake")
+    result = ra._create_direct_executor(
+        runtime="tensorrt", artifact_path=artifact_path, imgsz=640, task="segment"
+    )
+
+    assert calls == ["segment"]
+    assert result is not None
 
 
 # ---------------------------------------------------------------------------
