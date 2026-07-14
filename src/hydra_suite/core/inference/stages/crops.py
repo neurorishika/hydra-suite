@@ -21,6 +21,8 @@ def extract_canonical_crops(
     canonical_aspect_ratio: float,
     canonical_margin: float,
     runtime: RuntimeContext,
+    suppress_foreign: bool = False,
+    background_color: tuple[int, int, int] = (0, 0, 0),
 ) -> torch.Tensor:
     """Extract OBB-aligned canonical crops. Returns (N, C, H, W) tensor on runtime.device.
 
@@ -28,22 +30,40 @@ def extract_canonical_crops(
     CPU path: cv2.warpAffine per crop -> stacked CPU tensor.
     onnx_cuda/tensorrt use CPU path even though cuda_mode=True; their downstream
     models take CPU numpy, so GPU crop upload+download would be pure waste.
+
+    ``suppress_foreign=True`` blacks out the OTHER detections' OBB polygons in
+    each crop (matching legacy's ``suppress_foreign_obb``, applied
+    unconditionally there) via the same ``_apply_foreign_mask_canonical_batch``
+    helper ``extract_canonical_crops_batch`` uses — this single-frame entry
+    point previously had no masking support at all, a real (unintentional)
+    legacy parity gap for any realtime/streaming caller.
     """
     n = obb_result.num_detections
     if n == 0:
         return torch.zeros((0, 3, 64, 64), dtype=torch.float32)
 
     if runtime.tensor_on_cuda:
-        return _extract_canonical_gpu(
+        crops = _extract_canonical_gpu(
             frame,
             obb_result,
             canonical_aspect_ratio,
             canonical_margin,
             runtime.device,
         )
-    return _extract_canonical_cpu(
-        frame, obb_result, canonical_aspect_ratio, canonical_margin
-    )
+    else:
+        crops = _extract_canonical_cpu(
+            frame, obb_result, canonical_aspect_ratio, canonical_margin
+        )
+
+    if suppress_foreign and n > 1:
+        crops = _apply_foreign_mask_canonical_batch(
+            crops,
+            obb_result,
+            canonical_aspect_ratio,
+            canonical_margin,
+            background_color,
+        )
+    return crops
 
 
 def extract_aabb_crops(

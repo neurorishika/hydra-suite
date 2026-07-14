@@ -138,3 +138,65 @@ def test_canonical_crops_dtype_normalized():
     assert crops.dtype == torch.float32
     # White pixels normalise to ~1.0
     assert crops.max().item() == pytest.approx(1.0, abs=1e-3)
+
+
+def _overlapping_obb_result() -> OBBResult:
+    """Two close, overlapping OBBs so detection 1's polygon lands inside
+    detection 0's canonical crop bounds — the scenario the realtime path's
+    missing foreign-masking gap manifested in (see 2026-07-10 equivalence
+    investigation: legacy always masks foreign OBBs via suppress_foreign_obb,
+    but extract_canonical_crops previously had no masking support at all)."""
+    centroids = np.array([[100.0, 100.0], [110.0, 100.0]], dtype=np.float32)
+    corners = np.zeros((2, 4, 2), dtype=np.float32)
+    for i in range(2):
+        cx, cy = centroids[i]
+        corners[i] = [
+            [cx - 20, cy - 10],
+            [cx + 20, cy - 10],
+            [cx + 20, cy + 10],
+            [cx - 20, cy + 10],
+        ]
+    return OBBResult(
+        frame_idx=0,
+        centroids=centroids,
+        angles=np.zeros(2, dtype=np.float32),
+        sizes=np.full(2, 400.0, dtype=np.float32),
+        shapes=np.ones((2, 2), dtype=np.float32),
+        confidences=np.ones(2, dtype=np.float32),
+        corners=corners,
+        detection_ids=OBBResult.make_detection_ids(0, 2),
+    )
+
+
+def test_extract_canonical_crops_defaults_to_no_masking():
+    """suppress_foreign defaults to False: unchanged behavior for existing callers."""
+    frame = np.full((480, 640, 3), 255, dtype=np.uint8)  # white frame
+    obb = _overlapping_obb_result()
+    crops = extract_canonical_crops(frame, obb, 2.0, 1.3, _cpu_rt())
+    # No masking requested -> no background-color pixels introduced; still ~white.
+    assert crops.min().item() == pytest.approx(1.0, abs=1e-3)
+
+
+def test_extract_canonical_crops_suppress_foreign_masks_overlapping_detection():
+    """suppress_foreign=True must black out a neighboring detection's OBB —
+    the realtime pose-crop path's parity gap with legacy's suppress_foreign_obb
+    (always-on, no realtime/batch split there)."""
+    frame = np.full((480, 640, 3), 255, dtype=np.uint8)  # white frame
+    obb = _overlapping_obb_result()
+    crops = extract_canonical_crops(
+        frame, obb, 2.0, 1.3, _cpu_rt(), suppress_foreign=True
+    )
+    # With the neighbor's OBB masked to black, at least one crop must contain
+    # background-color (0) pixels that a fully-white unmasked frame wouldn't produce.
+    assert crops.min().item() == pytest.approx(0.0, abs=1e-3)
+
+
+def test_extract_canonical_crops_suppress_foreign_noop_for_single_detection():
+    """suppress_foreign=True with only one detection must not crash or alter output
+    (mirrors extract_canonical_crops_batch's num_detections > 1 gate)."""
+    frame = np.full((480, 640, 3), 255, dtype=np.uint8)
+    obb = _obb_result(n=1)
+    crops = extract_canonical_crops(
+        frame, obb, 2.0, 1.3, _cpu_rt(), suppress_foreign=True
+    )
+    assert crops.min().item() == pytest.approx(1.0, abs=1e-3)

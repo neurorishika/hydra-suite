@@ -445,14 +445,29 @@ class InferenceRunner:
             self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
         )
         mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
-        # Realtime intentionally does NOT foreign-mask pose crops or apply
-        # keypoint suppression (the batch/cached path does both) — this is the
-        # realtime/batch boundary.
         # Canonical (native-extent) crops are now only consumed by the pose stage;
         # head-tail / CNN warp directly from the frame. Skip the extraction
         # entirely when there is no pose model (e.g. OBB-only / identity clips).
+        # Foreign-ant masking (suppress_foreign_regions) mirrors legacy's
+        # unconditional suppress_foreign_obb: legacy has no realtime/batch
+        # split and always masks, so the realtime path must too.
+        pose_cfg = self.config.pose
+        suppress_foreign = (
+            pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
+        )
+        background_color = (
+            pose_cfg.background_color if pose_cfg is not None else (0, 0, 0)
+        )
         canonical_crops = (
-            extract_canonical_crops(frame, filtered_obb, ar, mg, self.runtime)
+            extract_canonical_crops(
+                frame,
+                filtered_obb,
+                ar,
+                mg,
+                self.runtime,
+                suppress_foreign=suppress_foreign,
+                background_color=background_color,
+            )
             if self._models.pose is not None
             else None
         )
