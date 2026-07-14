@@ -651,6 +651,108 @@ def _extract_obb_result(
     )
 
 
+def _extract_obb_from_boxes(
+    result: Any,
+    frame_idx: int,
+    fixed_angle_rad: float,
+    offset: tuple[float, float] = (0.0, 0.0),
+    scale: tuple[float, float] = (1.0, 1.0),
+) -> OBBResult:
+    """Build an OBBResult from a plain (axis-aligned) detect model's boxes.
+
+    Every detection is assigned ``fixed_angle_rad`` before being folded through
+    the same ``_normalize_obb_geometry`` / ``_corners_from_xywhr`` pipeline used
+    for native-OBB output, so downstream consumers (filtering, assignment,
+    canonical crops) cannot tell the geometry did not come from an OBB head.
+    """
+    boxes = result.boxes
+    if boxes is None or boxes.xyxy.shape[0] == 0:
+        return _empty_obb_result(frame_idx)
+    xyxy = boxes.xyxy.cpu().numpy().copy()  # (N, 4): x1,y1,x2,y2
+    conf = boxes.conf.cpu().numpy()  # (N,)
+    ox, oy = offset
+    sx, sy = scale
+    cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
+    cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
+    w_arr = xyxy[:, 2] - xyxy[:, 0]
+    h_arr = xyxy[:, 3] - xyxy[:, 1]
+    # Mirrors _extract_obb_result's crop-space rescale-then-offset order.
+    cx *= sx
+    w_arr *= sx
+    cy *= sy
+    h_arr *= sy
+    cx += ox
+    cy += oy
+    angle_arr = np.full(cx.shape, float(fixed_angle_rad), dtype=np.float32)
+    angles_fixed, sizes, aspect = _normalize_obb_geometry(w_arr, h_arr, angle_arr)
+    mask = _valid_detection_mask(cx, cy, w_arr, h_arr, angles_fixed, conf)
+    if not mask.all():
+        dropped = int(mask.size - int(mask.sum()))
+        if dropped > 0:
+            logger.warning(
+                "Dropping %d invalid detect-as-OBB detections with non-finite "
+                "or non-positive geometry.",
+                dropped,
+            )
+        cx, cy, w_arr, h_arr = cx[mask], cy[mask], w_arr[mask], h_arr[mask]
+        conf, angles_fixed, sizes, aspect = (
+            conf[mask],
+            angles_fixed[mask],
+            sizes[mask],
+            aspect[mask],
+        )
+    n = int(len(conf))
+    corners = _corners_from_xywhr(cx, cy, w_arr, h_arr, angles_fixed)
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.stack([cx, cy], axis=1).astype(np.float32),
+        angles=angles_fixed,
+        sizes=sizes,
+        shapes=np.stack([sizes, aspect], axis=1).astype(np.float32),
+        confidences=conf.astype(np.float32),
+        corners=corners.astype(np.float32),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, n),
+    )
+
+
+def _extract_raw_tensors_from_boxes(
+    result: Any, frame_idx: int, fixed_angle_rad: float, device: str
+) -> _RawOBBTensors:
+    """Keep detect-as-OBB tensors on the compute device -- no .cpu() call.
+
+    Mirrors _extract_raw_tensors's contract exactly: raw, unfiltered geometry.
+    normalize/corners/finite-value filtering is deferred to
+    materialize_tensors(), which already works generically for ANY
+    (xywhr, conf) device-tensor pair regardless of detection source.
+    """
+    boxes = result.boxes
+    if boxes is None or boxes.xyxy.shape[0] == 0:
+        dev = torch.device(device)
+        return _RawOBBTensors(
+            frame_idx=frame_idx,
+            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
+            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
+            conf=torch.zeros(0, dtype=torch.float32, device=dev),
+        )
+    xyxy = boxes.xyxy  # (N, 4), stays on whatever device it already is
+    cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
+    cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
+    w_arr = xyxy[:, 2] - xyxy[:, 0]
+    h_arr = xyxy[:, 3] - xyxy[:, 1]
+    angle = torch.full_like(cx, float(fixed_angle_rad))
+    xywhr = torch.stack([cx, cy, w_arr, h_arr, angle], dim=1)
+    # materialize_tensors() ignores raw.corners and rebuilds corners fresh
+    # from xywhr (see its existing implementation) -- this field is a
+    # placeholder, exactly like _extract_raw_tensors's own corners field is
+    # for the "obb" fast path today.
+    corners = torch.zeros(
+        (xywhr.shape[0], 4, 2), dtype=torch.float32, device=xywhr.device
+    )
+    return _RawOBBTensors(
+        frame_idx=frame_idx, xywhr=xywhr, corners=corners, conf=boxes.conf
+    )
+
+
 def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
     """Sort detections by confidence descending and keep the top ``cap``.
 

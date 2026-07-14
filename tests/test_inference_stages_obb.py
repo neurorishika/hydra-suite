@@ -395,6 +395,81 @@ def test_extract_raw_tensors_uses_runtime_device_for_empty_path():
     assert str(raw.conf.device) == "cpu"
 
 
+def test_extract_obb_from_boxes_applies_fixed_angle():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_boxes
+
+    # One box: x1,y1,x2,y2 = 10,20,30,60 -> cx=20,cy=40,w=20,h=40
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[10.0, 20.0, 30.0, 60.0]]),
+            conf=torch.tensor([0.9]),
+        )
+    )
+
+    out = _extract_obb_from_boxes(result, frame_idx=3, fixed_angle_rad=0.0)
+
+    assert out.num_detections == 1
+    assert out.frame_idx == 3
+    np.testing.assert_allclose(out.centroids[0], [20.0, 40.0], atol=1e-4)
+    # w=20 < h=40, so _normalize_obb_geometry swaps to major=h=40, minor=w=20
+    # and adds 90deg to the (here, 0deg) fixed angle.
+    np.testing.assert_allclose(out.angles[0], np.pi / 2, atol=1e-4)
+    np.testing.assert_allclose(out.sizes[0], 800.0, atol=1e-3)  # 20*40
+    np.testing.assert_allclose(out.confidences[0], 0.9, atol=1e-4)
+
+
+def test_extract_obb_from_boxes_empty_boxes_returns_empty_result():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_boxes
+
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(xyxy=torch.zeros((0, 4)), conf=torch.zeros(0))
+    )
+    out = _extract_obb_from_boxes(result, frame_idx=0, fixed_angle_rad=0.0)
+    assert out.num_detections == 0
+
+
+def test_extract_raw_tensors_from_boxes_keeps_everything_on_device():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_boxes
+
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[10.0, 20.0, 30.0, 60.0]]),
+            conf=torch.tensor([0.9]),
+        )
+    )
+
+    raw = _extract_raw_tensors_from_boxes(
+        result, frame_idx=3, fixed_angle_rad=0.5, device="cpu"
+    )
+
+    assert raw.frame_idx == 3
+    assert isinstance(raw.xywhr, torch.Tensor)
+    assert raw.xywhr.shape == (1, 5)
+    torch.testing.assert_close(raw.xywhr[0, :4], torch.tensor([20.0, 40.0, 20.0, 40.0]))
+    torch.testing.assert_close(raw.xywhr[0, 4], torch.tensor(0.5))
+    torch.testing.assert_close(raw.conf, torch.tensor([0.9]))
+
+
+def test_extract_raw_tensors_from_boxes_empty_boxes():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_boxes
+
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(xyxy=torch.zeros((0, 4)), conf=torch.zeros(0))
+    )
+    raw = _extract_raw_tensors_from_boxes(
+        result, frame_idx=0, fixed_angle_rad=0.0, device="cpu"
+    )
+    assert raw.xywhr.shape == (0, 5)
+
+
 def test_obb_models_has_callable_close():
     """Regression: OBBModels.close() must be a real method (it was once defined
     after a return inside _normalize_obb_geometry, so the class lacked it and
