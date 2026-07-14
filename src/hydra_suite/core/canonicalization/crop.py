@@ -204,10 +204,14 @@ def extract_canonical_crop(
     canvas_h: int,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     foreign_corners: Optional[List[np.ndarray]] = None,
+    own_corners: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Apply M_align to extract a rotation-normalised crop.
 
-    Optionally masks foreign OBB regions in canonical space.
+    Optionally masks foreign OBB regions in canonical space. *own_corners*
+    (the current detection's own OBB, frame coordinates), when given,
+    excludes any overlap with foreign OBBs so the current animal's own body
+    is never masked out — see ``_apply_foreign_mask_canonical``.
     """
     crop = cv2.warpAffine(
         frame,
@@ -218,7 +222,9 @@ def extract_canonical_crop(
     )
 
     if foreign_corners:
-        _apply_foreign_mask_canonical(crop, M_align, foreign_corners, bg_color)
+        _apply_foreign_mask_canonical(
+            crop, M_align, foreign_corners, bg_color, own_corners=own_corners
+        )
 
     return crop
 
@@ -533,7 +539,13 @@ def extract_and_classify_batch(
                 foreign = [all_corners[j] for j in range(len(all_corners)) if j != di]
 
             crop = extract_canonical_crop(
-                frame, M_align, canvas_w, canvas_h, bg_color, foreign
+                frame,
+                M_align,
+                canvas_w,
+                canvas_h,
+                bg_color,
+                foreign,
+                own_corners=corners,
             )
 
             M_inverse = cv2.invertAffineTransform(M_align)
@@ -563,21 +575,48 @@ def _apply_foreign_mask_canonical(
     M_align: np.ndarray,
     foreign_corners_list: List[np.ndarray],
     bg_color: Tuple[int, int, int],
+    own_corners: Optional[np.ndarray] = None,
 ) -> None:
     """Fill foreign OBB regions with background colour in canonical space.
 
     Transforms each foreign OBB's corners into canonical space via M_align,
     then fills the polygon with *bg_color*.  Modifies *crop* in-place.
+
+    When two detections' OBBs overlap (adjacent/touching animals), a foreign
+    OBB's polygon can spill into the current detection's own OBB region. If
+    *own_corners* is given, that overlap is excluded from the mask so the
+    current animal's own body is never blanked out — only the parts of the
+    foreign region outside the current detection's own OBB are filled.
     """
     M = np.asarray(M_align, dtype=np.float64)
     R = M[:, :2]  # (2, 2)
     t = M[:, 2:]  # (2, 1)
 
-    for corners in foreign_corners_list:
+    def _to_canonical(corners: np.ndarray) -> np.ndarray:
         pts = np.asarray(corners, dtype=np.float64).reshape(-1, 2)
-        canonical_pts = (R @ pts.T + t).T  # (N, 2)
-        poly = canonical_pts.astype(np.int32).reshape(-1, 1, 2)
-        cv2.fillPoly(crop, [poly], bg_color)
+        return (R @ pts.T + t).T
+
+    own_poly = None
+    if own_corners is not None:
+        own_poly = _to_canonical(own_corners).astype(np.int32).reshape(-1, 1, 2)
+
+    h, w = crop.shape[:2]
+    for corners in foreign_corners_list:
+        poly = _to_canonical(corners).astype(np.int32).reshape(-1, 1, 2)
+        if own_poly is None:
+            cv2.fillPoly(crop, [poly], bg_color)
+            continue
+
+        # Exclude any overlap with the current detection's own OBB: rasterise
+        # both polygons and only fill pixels claimed by the foreign OBB but
+        # not by the current detection's own OBB.
+        foreign_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(foreign_mask, [poly], 1)
+        own_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(own_mask, [own_poly], 1)
+        mask = (foreign_mask & ~own_mask).astype(bool)
+        if mask.any():
+            crop[mask] = bg_color
 
 
 def _rotation_matrix(

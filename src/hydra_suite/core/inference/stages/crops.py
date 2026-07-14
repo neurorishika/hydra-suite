@@ -372,7 +372,13 @@ def _apply_foreign_mask_canonical_batch(
     for i in range(n):
         crop_hwc = np.ascontiguousarray(crops_np[i].transpose(1, 2, 0))
         foreign = [obb.corners[j] for j in range(n) if j != i]
-        _apply_foreign_mask_canonical(crop_hwc, m_aligns[i], foreign, background_color)
+        _apply_foreign_mask_canonical(
+            crop_hwc,
+            m_aligns[i],
+            foreign,
+            background_color,
+            own_corners=obb.corners[i],
+        )
         crops_np[i] = crop_hwc.transpose(2, 0, 1)
 
     return torch.from_numpy(crops_np).float().to(device) / 255.0
