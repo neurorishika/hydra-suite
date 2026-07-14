@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ....utils.obb_from_mask import _letterbox_gain_pad, rotated_rect_from_masks
+from ....utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
@@ -117,8 +117,17 @@ def _gpu_letterbox_batch(
     return torch.stack(processed, dim=0), params
 
 
+def _frames_are_cuda_tensors(frames: list) -> bool:
+    """True when the frame list is the NVDEC CUDA-tensor kind (HWC uint8 RGB)."""
+    return bool(frames) and isinstance(frames[0], torch.Tensor) and frames[0].is_cuda
+
+
 def _invert_letterbox_on_result(
-    result: Any, r: float, pad_left: float, pad_top: float
+    result: Any,
+    r: float,
+    pad_left: float,
+    pad_top: float,
+    orig_shape: tuple[int, int] | None = None,
 ) -> None:
     """Invert the letterbox transform on a single ultralytics Results object in-place.
 
@@ -143,21 +152,50 @@ def _invert_letterbox_on_result(
     Writing through ``data`` (columns 0-3 = cx, cy, w, h; col 4 = angle) is the
     single source of truth: both ``xywhr`` and the recomputed corners then
     reflect original-frame coordinates, independent of ultralytics version.
+
+    ``result.obb`` is ``None`` for a **detect** or **segment** checkpoint, so
+    the same inversion is applied to ``result.boxes`` (whose ``data`` columns
+    0-3 are x1, y1, x2, y2) in that case -- without it, detect geometry stays
+    in letterbox coordinates (every centroid/size scaled by ``r`` and shifted
+    by the pad) with no error raised.
+
+    ``orig_shape``, when given, also restores ``result.orig_shape`` to the TRUE
+    frame shape. ultralytics sets it to ``(imgsz, imgsz)`` when predicting on a
+    pre-letterboxed tensor, which would make ``letterbox_gain_pad`` degenerate
+    to ``gain=1, pad=0`` and turn the segment path's mask<->frame conversion
+    into a no-op.
     """
-    obb = result.obb
-    if obb is None or len(obb) == 0:
-        return
-    data = obb.data  # (N, >=5): cx, cy, w, h, angle, [conf, cls]
+    if orig_shape is not None:
+        result.orig_shape = (int(orig_shape[0]), int(orig_shape[1]))
+    obb = getattr(result, "obb", None)
     # ultralytics runs predict() under torch.inference_mode(), so `data` is an
     # "inference tensor" that cannot be mutated in-place outside that context
     # ("Inplace update to inference tensor outside InferenceMode is not
     # allowed"). Re-enter inference_mode to perform the in-place coord inversion.
+    if obb is not None and len(obb) > 0:
+        data = obb.data  # (N, >=5): cx, cy, w, h, angle, [conf, cls]
+        with torch.inference_mode():
+            data[:, 0] = (data[:, 0] - pad_left) / r  # cx
+            data[:, 1] = (data[:, 1] - pad_top) / r  # cy
+            data[:, 2] = data[:, 2] / r  # w
+            data[:, 3] = data[:, 3] / r  # h
+            # angle (col 4) and conf/cls (cols 5+) are unchanged
+        return
+    boxes = getattr(result, "boxes", None)
+    if boxes is None or len(boxes) == 0:
+        return
+    data = boxes.data  # (N, >=6): x1, y1, x2, y2, [track_id], conf, cls
     with torch.inference_mode():
-        data[:, 0] = (data[:, 0] - pad_left) / r  # cx
-        data[:, 1] = (data[:, 1] - pad_top) / r  # cy
-        data[:, 2] = data[:, 2] / r  # w
-        data[:, 3] = data[:, 3] / r  # h
-        # angle (col 4) and conf/cls (cols 5+) are unchanged
+        data[:, 0] = (data[:, 0] - pad_left) / r  # x1
+        data[:, 1] = (data[:, 1] - pad_top) / r  # y1
+        data[:, 2] = (data[:, 2] - pad_left) / r  # x2
+        data[:, 3] = (data[:, 3] - pad_top) / r  # y2
+        # conf/cls (and any track id) are unchanged.
+    # result.masks (segment) is deliberately NOT touched: it stays in its own
+    # letterbox-space canvas, and _extract_obb_from_masks maps the (now
+    # original-frame) boxes into that canvas via letterbox_gain_pad against the
+    # restored result.orig_shape -- which is exactly what the numpy list path
+    # produces.
 
 
 def _valid_detection_mask(
@@ -283,6 +321,32 @@ def _corners_from_xywhr(
     return np.stack((x, y), axis=2).astype(np.float32)
 
 
+def _assert_direct_task_matches_checkpoint(
+    model: Any, model_task: str, model_path: str
+) -> None:
+    """Fail loudly when the checkpoint's own task disagrees with ``model_task``.
+
+    On the torch runtimes (cpu/mps/cuda) ultralytics infers the task from the
+    checkpoint and IGNORES the ``task=`` argument, so a mismatch is silent: a
+    segment checkpoint used with ``model_task="obb"`` makes ``result.obb`` None
+    (and an OBB checkpoint used with ``model_task="detect"`` makes
+    ``result.boxes`` None) on EVERY frame -- the user just sees zero detections
+    for the whole video with no error. The direct executors (tensorrt/coreml)
+    expose no ``.task``; they are built for the requested task explicitly, so
+    they are skipped here.
+    """
+    ckpt_task = getattr(model, "task", None)
+    if not isinstance(ckpt_task, str) or ckpt_task == model_task:
+        return
+    raise ValueError(
+        f"Direct-mode OBB model task mismatch: the checkpoint "
+        f"'{model_path}' is a '{ckpt_task}' model, but the configured "
+        f"direct model task is '{model_task}'. Detection would silently "
+        f"return zero results on every frame. Set the direct model task to "
+        f"'{ckpt_task}', or select a '{model_task}' checkpoint."
+    )
+
+
 def load_obb_models(
     config: OBBConfig, runtime: RuntimeContext, *, batch_size: int = 1
 ) -> OBBModels:
@@ -306,6 +370,9 @@ def load_obb_models(
             max_det=config.max_detections,
             batch_size=batch_size,
             task=config.direct.model_task,
+        )
+        _assert_direct_task_matches_checkpoint(
+            m, config.direct.model_task, config.direct.model_path
         )
         return OBBModels(mode="direct", direct_model=m)
     assert config.sequential is not None
@@ -401,11 +468,8 @@ def _run_direct(
     # (H,W,3) frame, corrupting the shape fed to TensorRT ("Static dimension
     # mismatch" in setInputShape) whenever imgsz != 3. So it must take the
     # plain frames-list path below, same as the non-CUDA-tensor case.
-    if (
-        frames
-        and isinstance(frames[0], torch.Tensor)
-        and frames[0].is_cuda
-        and not isinstance(model, DirectExecutorAdapter)
+    if _frames_are_cuda_tensors(frames) and not isinstance(
+        model, DirectExecutorAdapter
     ):
         imgsz = _resolve_imgsz(model)
         batched, lb_params = _gpu_letterbox_batch(frames, imgsz)
@@ -418,9 +482,17 @@ def _run_direct(
             device=runtime.device,
         )
         # Invert letterbox so coordinates are in original-frame space before
-        # the extract functions read them.
-        for result, (r, pad_left, pad_top) in zip(results, lb_params):
-            _invert_letterbox_on_result(result, r, pad_left, pad_top)
+        # the extract functions read them. This covers obb (result.obb), detect
+        # (result.boxes) AND segment (result.boxes + restored result.orig_shape,
+        # which the mask<->frame conversion derives its gain from).
+        for frame, result, (r, pad_left, pad_top) in zip(frames, results, lb_params):
+            _invert_letterbox_on_result(
+                result,
+                r,
+                pad_left,
+                pad_top,
+                orig_shape=(int(frame.shape[0]), int(frame.shape[1])),
+            )
     else:
         results = model.predict(
             frames,
@@ -699,8 +771,6 @@ def _extract_obb_from_boxes(
     result: Any,
     frame_idx: int,
     fixed_angle_rad: float,
-    offset: tuple[float, float] = (0.0, 0.0),
-    scale: tuple[float, float] = (1.0, 1.0),
 ) -> OBBResult:
     """Build an OBBResult from a plain (axis-aligned) detect model's boxes.
 
@@ -714,19 +784,10 @@ def _extract_obb_from_boxes(
         return _empty_obb_result(frame_idx)
     xyxy = boxes.xyxy.cpu().numpy().copy()  # (N, 4): x1,y1,x2,y2
     conf = boxes.conf.cpu().numpy()  # (N,)
-    ox, oy = offset
-    sx, sy = scale
     cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
     cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
     w_arr = xyxy[:, 2] - xyxy[:, 0]
     h_arr = xyxy[:, 3] - xyxy[:, 1]
-    # Mirrors _extract_obb_result's crop-space rescale-then-offset order.
-    cx *= sx
-    w_arr *= sx
-    cy *= sy
-    h_arr *= sy
-    cx += ox
-    cy += oy
     angle_arr = np.full(cx.shape, float(fixed_angle_rad), dtype=np.float32)
     angles_fixed, sizes, aspect = _normalize_obb_geometry(w_arr, h_arr, angle_arr)
     mask = _valid_detection_mask(cx, cy, w_arr, h_arr, angles_fixed, conf)
@@ -762,13 +823,11 @@ def _extract_obb_from_boxes(
 def _extract_obb_from_masks(
     result: Any,
     frame_idx: int,
-    offset: tuple[float, float] = (0.0, 0.0),
-    scale: tuple[float, float] = (1.0, 1.0),
 ) -> OBBResult:
     """Build an OBBResult from a segmentation model's predicted masks.
 
     Angle/size come from ``rotated_rect_from_masks`` (GPU-native, no cv2) run
-    on the mask tensor's own square coordinate space; ``_letterbox_gain_pad``
+    on the mask tensor's own square coordinate space; ``letterbox_gain_pad``
     converts the caller's original-frame boxes into that space beforehand and
     the resulting (cx, cy, w, h) back afterwards -- a single uniform gain plus
     translation, which (unlike independent per-axis ratios) never distorts
@@ -785,7 +844,7 @@ def _extract_obb_from_masks(
     if conf_all is None or len(conf_all) == 0:
         return _empty_obb_result(frame_idx)
 
-    gain, pad_x, pad_y = _letterbox_gain_pad(
+    gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
     )
     boxes_orig = boxes.xyxy
@@ -802,13 +861,6 @@ def _extract_obb_from_masks(
     h_arr = (h_m / gain).cpu().numpy()
     angle_arr = angle_rad.cpu().numpy()
     conf = conf_all.cpu().numpy()
-
-    ox, oy = offset
-    sx, sy = scale
-    cx = cx * sx + ox
-    cy = cy * sy + oy
-    w_arr = w_arr * sx
-    h_arr = h_arr * sy
 
     angles_fixed, sizes, aspect = _normalize_obb_geometry(w_arr, h_arr, angle_arr)
     mask_valid = _valid_detection_mask(cx, cy, w_arr, h_arr, angles_fixed, conf)
@@ -875,7 +927,7 @@ def _extract_raw_tensors_from_masks(
             corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
             conf=torch.zeros(0, dtype=torch.float32, device=dev),
         )
-    gain, pad_x, pad_y = _letterbox_gain_pad(
+    gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(masks.data.shape[-2:]), tuple(result.orig_shape)
     )
     boxes_orig = boxes.xyxy

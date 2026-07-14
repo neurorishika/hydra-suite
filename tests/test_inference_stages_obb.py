@@ -748,3 +748,188 @@ def test_run_direct_detect_uses_raw_tensor_fast_path_when_tensor_on_cuda():
     assert not hasattr(results[0], "corners") or isinstance(
         results[0].xywhr, torch.Tensor
     )
+
+
+# ---------------------------------------------------------------------------
+# Final-review CRITICAL 1: letterbox inversion on the native-CUDA/NVDEC path
+# must also apply to detect (boxes) and segment (masks) results, not just OBB.
+# ---------------------------------------------------------------------------
+
+
+class _FakeBoxes:
+    """Duck-type of ultralytics Boxes: `.data` is the single source of truth."""
+
+    def __init__(self, data: torch.Tensor):
+        self.data = data
+
+    def __len__(self) -> int:
+        return int(self.data.shape[0])
+
+    @property
+    def xyxy(self) -> torch.Tensor:
+        return self.data[:, :4]
+
+    @property
+    def conf(self) -> torch.Tensor:
+        return self.data[:, 4]
+
+
+def _letterbox_params(h: int, w: int, imgsz: int):
+    r = min(imgsz / h, imgsz / w)
+    new_h, new_w = int(h * r), int(w * r)
+    return r, (imgsz - new_w) // 2, (imgsz - new_h) // 2
+
+
+def _force_cuda_frames(monkeypatch):
+    """Fake the 'frames are CUDA tensors' branch so it runs on CPU tensors."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    monkeypatch.setattr(obb_mod, "_frames_are_cuda_tensors", lambda frames: True)
+    return obb_mod
+
+
+def test_run_direct_detect_cuda_frames_returns_original_frame_coords(monkeypatch):
+    """CRITICAL 1: detect results must be un-letterboxed back to frame coords."""
+    from types import SimpleNamespace
+
+    obb_mod = _force_cuda_frames(monkeypatch)
+
+    H, W, IMGSZ = 40, 80, 64
+    r, pad_left, pad_top = _letterbox_params(H, W, IMGSZ)
+    # True original-frame box, and its letterbox-space image.
+    x1, y1, x2, y2 = 10.0, 10.0, 30.0, 20.0
+    lb = torch.tensor(
+        [
+            [
+                x1 * r + pad_left,
+                y1 * r + pad_top,
+                x2 * r + pad_left,
+                y2 * r + pad_top,
+                0.9,
+                0.0,
+            ]
+        ]
+    )
+
+    class _FakeModel:
+        imgsz = IMGSZ
+
+        def predict(self, batched, **kwargs):
+            assert batched.shape[-2:] == (IMGSZ, IMGSZ)
+            return [
+                SimpleNamespace(
+                    obb=None,
+                    masks=None,
+                    boxes=_FakeBoxes(lb.clone()),
+                    orig_shape=(IMGSZ, IMGSZ),
+                )
+            ]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/m.pt", model_task="detect"),
+    )
+    frames = [torch.zeros((H, W, 3), dtype=torch.uint8)]
+    out = obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+
+    assert out[0].num_detections == 1
+    np.testing.assert_allclose(out[0].centroids[0], [20.0, 15.0], atol=0.6)
+    # w=20, h=10 -> size = 200 in ORIGINAL-frame pixels (not r**2-scaled).
+    np.testing.assert_allclose(out[0].sizes[0], 200.0, rtol=0.06)
+
+
+def test_run_direct_segment_cuda_frames_returns_original_frame_coords(monkeypatch):
+    """CRITICAL 1: segment masks must map back to original-frame coordinates."""
+    from types import SimpleNamespace
+
+    obb_mod = _force_cuda_frames(monkeypatch)
+
+    H, W, IMGSZ = 40, 80, 64
+    r, pad_left, pad_top = _letterbox_params(H, W, IMGSZ)
+    x1, y1, x2, y2 = 10.0, 12.0, 30.0, 22.0  # original-frame box (w=20, h=10)
+    lx1, ly1 = x1 * r + pad_left, y1 * r + pad_top
+    lx2, ly2 = x2 * r + pad_left, y2 * r + pad_top
+    lb = torch.tensor([[lx1, ly1, lx2, ly2, 0.9, 0.0]])
+
+    # Mask in letterbox space, at letterbox resolution.
+    ys, xs = torch.meshgrid(
+        torch.arange(IMGSZ, dtype=torch.float32),
+        torch.arange(IMGSZ, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = ((xs >= lx1) & (xs <= lx2) & (ys >= ly1) & (ys <= ly2)).float().unsqueeze(0)
+
+    class _FakeModel:
+        imgsz = IMGSZ
+
+        def predict(self, batched, **kwargs):
+            return [
+                SimpleNamespace(
+                    obb=None,
+                    boxes=_FakeBoxes(lb.clone()),
+                    masks=SimpleNamespace(data=mask.clone()),
+                    orig_shape=(IMGSZ, IMGSZ),
+                )
+            ]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/m.pt", model_task="segment"),
+    )
+    frames = [torch.zeros((H, W, 3), dtype=torch.uint8)]
+    out = obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+
+    assert out[0].num_detections == 1
+    np.testing.assert_allclose(out[0].centroids[0], [20.0, 17.0], atol=2.0)
+    # Original-frame extent ~20 x 10 -> size ~200 px^2 (letterbox space would
+    # report ~200 * r**2 == 128).
+    np.testing.assert_allclose(out[0].sizes[0], 200.0, rtol=0.25)
+
+
+# ---------------------------------------------------------------------------
+# Final-review IMPORTANT 4: a mismatched checkpoint task must fail loudly.
+# ---------------------------------------------------------------------------
+
+
+def test_load_obb_models_rejects_checkpoint_task_mismatch(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    class _SegCheckpoint:
+        task = "segment"
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", lambda *a, **k: _SegCheckpoint())
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        default_runtime="cpu",
+        tensor_on_cuda=False,
+    )
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/seg.pt", model_task="obb"),
+    )
+    with pytest.raises(ValueError, match="segment"):
+        obb_mod.load_obb_models(cfg, runtime)
+
+
+def test_load_obb_models_accepts_matching_checkpoint_task(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    class _SegCheckpoint:
+        task = "segment"
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", lambda *a, **k: _SegCheckpoint())
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        default_runtime="cpu",
+        tensor_on_cuda=False,
+    )
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/seg.pt", model_task="segment"),
+    )
+    models = obb_mod.load_obb_models(cfg, runtime)
+    assert models.mode == "direct"
