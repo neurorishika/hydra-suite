@@ -1034,11 +1034,11 @@ def _decode_segment_predictions(
         One namespace per input frame, each exposing exactly the four
         attributes ``_extract_obb_from_masks`` (stages/obb.py) reads:
         ``.orig_shape`` (``(H, W)``), ``.boxes.xyxy``/``.boxes.conf``
-        (original-frame space), and ``.masks.data`` (the RAW, letterbox-
-        space, NOT-upsampled proto-resolution mask tensor — cheaper than
-        upsampling since ``rotated_rect_from_masks`` needs only a small
-        crop of it and handles the resulting scale via
-        ``_letterbox_gain_pad``, so upsampling first would be wasted work).
+        (original-frame space), and ``.masks.data`` (the letterbox-space mask
+        tensor, upsampled to the model's input resolution so it carries the
+        same detail as the torch runtimes' ``Results.masks.data``;
+        ``_extract_obb_from_masks`` maps between that canvas and frame space
+        via ``letterbox_gain_pad``, which reads the mask's own shape).
     """
     import types
 
@@ -1072,15 +1072,20 @@ def _decode_segment_predictions(
         proto_i = protos[i] if protos.shape[0] == len(filtered) else protos[0]
         boxes_letterboxed = pred[:, :4]
         mask_coeffs = pred[:, 6:]
-        # upsample=False: keep proto resolution -- rotated_rect_from_masks
-        # crops a small tile per detection regardless, so upsampling the
-        # full mask to imgsz here would be wasted GPU work.
+        # upsample=True: emit masks at LETTERBOX resolution, matching what the
+        # torch runtimes' ultralytics Results.masks.data carries. It is not
+        # wasted work: rotated_rect_from_masks' roi_align samples FROM THE
+        # SOURCE mask, so proto-resolution input genuinely loses resolution
+        # (a 30x12 px animal is ~2.5x1 proto pixels at 160 vs 640 -- its angle
+        # would be noise, and would differ from the same checkpoint's cuda/cpu
+        # output). letterbox_gain_pad derives its gain from the mask's own
+        # shape, so the coordinate round-trip holds at either resolution.
         masks = ops.process_mask(
             proto_i,
             mask_coeffs,
             boxes_letterboxed,
             img_tensor_shape[2:],
-            upsample=False,
+            upsample=True,
         )
         boxes_orig = pred[:, :6].clone()
         boxes_orig[:, :4] = ops.scale_boxes(

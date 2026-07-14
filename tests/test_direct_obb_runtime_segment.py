@@ -124,6 +124,11 @@ def test_decode_segment_predictions_mask_localized_to_box_region():
     region, one clearly outside it. Only the inside spike may remain "on"
     after process_mask's crop -- this fails if the crop/coordinate mapping
     is wrong (e.g. if the wrong box or the wrong space were used).
+
+    Masks are emitted at LETTERBOX resolution (upsample=True), so the surviving
+    blob is the bilinear upsample of the inside spike: it must sit inside the
+    box, and its centroid must land on that spike's letterbox-space position
+    (proto row/col * imgsz/mh).
     """
     nc, nm, mh, mw, imgsz = 1, 1, 16, 16, 64
     preds = _make_synthetic_prediction(nc, nm, num_anchors=8)
@@ -149,13 +154,27 @@ def test_decode_segment_predictions_mask_localized_to_box_region():
     r = results[0]
     assert r.masks is not None and r.masks.data.shape[0] == 1
     mask = r.masks.data[0]
-    on_pixels = torch.nonzero(mask, as_tuple=False)
-    assert on_pixels.shape[0] == 1
-    row, col = on_pixels[0].tolist()
-    assert (row, col) == inside_rc
-    assert 7 <= row < 9
-    assert 6 <= col < 10
-    assert mask[outside_rc[0], outside_rc[1]] == 0
+    assert tuple(mask.shape) == (imgsz, imgsz)
+    scale = imgsz / mh  # proto -> letterbox
+    on_pixels = torch.nonzero(mask, as_tuple=False).float()
+    assert on_pixels.shape[0] > 0
+    # Every "on" pixel lies inside the detection's letterbox-space box
+    # (22, 27) - (42, 37), i.e. process_mask's crop still holds...
+    assert on_pixels[:, 0].min() >= 27 and on_pixels[:, 0].max() <= 37
+    assert on_pixels[:, 1].min() >= 22 and on_pixels[:, 1].max() <= 42
+    # ...and the blob is centered on the INSIDE spike, not the outside one.
+    centroid_r = float(on_pixels[:, 0].mean())
+    centroid_c = float(on_pixels[:, 1].mean())
+    assert abs(centroid_r - inside_rc[0] * scale) < 4.0
+    assert abs(centroid_c - inside_rc[1] * scale) < 4.0
+    # The outside spike's letterbox neighbourhood stays off.
+    assert (
+        mask[
+            outside_rc[0] : int(outside_rc[0] * scale) + 4,
+            outside_rc[1] : int(outside_rc[1] * scale) + 4,
+        ].sum()
+        == 0
+    )
 
 
 def test_decode_segment_predictions_batch_of_two_uses_own_prototypes():
@@ -192,15 +211,52 @@ def test_decode_segment_predictions_batch_of_two_uses_own_prototypes():
     )
 
     assert len(results) == 2
+    scale = imgsz / mh  # proto -> letterbox (masks are upsampled, see task I3)
     expected_spikes = [spike_image0, spike_image1]
     for i, expected_rc in enumerate(expected_spikes):
         r = results[i]
         assert r.masks is not None and r.masks.data.shape[0] == 1
         mask = r.masks.data[0]
-        on_pixels = torch.nonzero(mask, as_tuple=False)
-        assert on_pixels.shape[0] == 1, f"image {i}: expected exactly one on-pixel"
-        row, col = on_pixels[0].tolist()
-        assert (row, col) == expected_rc, (
-            f"image {i}: expected spike at {expected_rc}, got ({row}, {col}) -- "
-            "prototypes were not applied per-image"
+        on_pixels = torch.nonzero(mask, as_tuple=False).float()
+        assert on_pixels.shape[0] > 0, f"image {i}: expected a decoded blob"
+        row = float(on_pixels[:, 0].mean())
+        col = float(on_pixels[:, 1].mean())
+        assert (
+            abs(row - expected_rc[0] * scale) < 4.0
+            and abs(col - expected_rc[1] * scale) < 4.0
+        ), (
+            f"image {i}: expected blob near letterbox "
+            f"{(expected_rc[0] * scale, expected_rc[1] * scale)}, got "
+            f"({row}, {col}) -- prototypes were not applied per-image"
         )
+
+
+def test_decode_segment_predictions_masks_at_letterbox_resolution():
+    """Final review IMPORTANT 3: TRT masks must come back at the SAME resolution
+    as every other runtime (letterbox/imgsz), not at coarse proto resolution.
+
+    ``roi_align`` in ``rotated_rect_from_masks`` samples FROM THE SOURCE mask,
+    so proto-resolution masks genuinely lose 4x of the angle/size signal (a
+    30x12 px animal becomes ~2.5x1 proto pixels) and diverge from the same
+    checkpoint's output under cuda/cpu.
+    """
+    nc, nm, mh, mw, imgsz = 1, 4, 16, 16, 64
+    preds = _make_synthetic_prediction(nc, nm, num_anchors=8)
+    protos = torch.ones((1, nm, mh, mw), dtype=torch.float32)
+
+    results = _decode_segment_predictions(
+        preds,
+        protos,
+        img_tensor_shape=(1, 3, imgsz, imgsz),
+        orig_shape=(imgsz, imgsz),
+        conf_thres=0.05,
+        classes=None,
+        max_det=10,
+        nc=nc,
+    )
+
+    mask = results[0].masks.data
+    assert tuple(mask.shape[-2:]) == (imgsz, imgsz), (
+        f"masks decoded at {tuple(mask.shape[-2:])}, expected letterbox "
+        f"resolution ({imgsz}, {imgsz})"
+    )
