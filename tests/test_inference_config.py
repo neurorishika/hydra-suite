@@ -161,3 +161,28 @@ def test_sequential_config_round_trip():
     assert loaded.obb.sequential.detect_compute_runtime == "cuda"
     assert loaded.obb.sequential.obb_compute_runtime == "tensorrt"
     assert loaded.obb.sequential.detect_confidence_threshold == pytest.approx(0.1)
+
+
+def test_obb_direct_config_model_task_round_trips(tmp_path):
+    config = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                model_path="yolo26s-seg.pt",
+                model_task="segment",
+                fixed_angle_deg=0.0,
+            ),
+        )
+    )
+    path = tmp_path / "cfg.json"
+    config.to_json(str(path))
+    loaded = InferenceConfig.from_json(str(path))
+
+    assert loaded.obb.direct.model_task == "segment"
+    assert loaded.obb.direct.fixed_angle_deg == 0.0
+
+
+def test_obb_direct_config_model_task_defaults_to_obb():
+    direct = OBBDirectConfig(model_path="yolo26s-obb.pt")
+    assert direct.model_task == "obb"
+    assert direct.fixed_angle_deg == 0.0

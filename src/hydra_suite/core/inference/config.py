@@ -93,6 +93,18 @@ class OBBDirectConfig:
     # artifact exists, loading raises a
     # clear error instead of silently running PyTorch (parity finding H4).
     auto_export: bool = True
+    # "obb": model_path is a native-OBB YOLO checkpoint (existing behaviour).
+    # "detect": model_path is a plain axis-aligned YOLO detect checkpoint;
+    # every detection is assigned the fixed angle below instead of a
+    # model-predicted angle.
+    # "segment": model_path is a YOLO instance-segmentation checkpoint; the
+    # angle is derived per-detection from a GPU batched rotated-rectangle
+    # search over the predicted mask (see core/detectors/_obb_from_mask.py).
+    model_task: Literal["obb", "detect", "segment"] = "obb"
+    # Only read when model_task == "detect". Degrees; converted to radians
+    # before being folded through the same normalize/corners pipeline as
+    # native-OBB angles.
+    fixed_angle_deg: float = 0.0
 
 
 @dataclass
