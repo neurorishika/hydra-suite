@@ -4486,6 +4486,9 @@ class TrackingWorker(QThread):
                 raw_detection_cap=raw_cap,
             )
         else:
+            model_task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
+            if model_task not in {"obb", "detect", "segment"}:
+                model_task = "obb"
             obb_cfg = OBBConfig(
                 mode="direct",
                 direct=OBBDirectConfig(
@@ -4493,6 +4496,8 @@ class TrackingWorker(QThread):
                     compute_runtime=compute_runtime,
                     confidence_floor=1e-3,
                     confidence_threshold=yolo_conf,
+                    model_task=model_task,
+                    fixed_angle_deg=float(params.get("YOLO_OBB_FIXED_ANGLE_DEG", 0.0)),
                 ),
                 target_classes=target_classes,
                 confidence_threshold=yolo_conf,

@@ -110,6 +110,37 @@ def test_build_inference_config_sets_compute_runtime(tmp_path):
     assert cfg.obb.direct.compute_runtime == "mps"
 
 
+def test_build_inference_config_from_params_threads_model_task_and_angle(tmp_path):
+    """YOLO_OBB_DIRECT_TASK/YOLO_OBB_FIXED_ANGLE_DEG populate OBBDirectConfig."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "yolo26s-seg.pt"),
+        "YOLO_OBB_DIRECT_TASK": "segment",
+        "YOLO_OBB_FIXED_ANGLE_DEG": 12.5,
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.model_task == "segment"
+    assert cfg.obb.direct.fixed_angle_deg == pytest.approx(12.5)
+
+
+def test_build_inference_config_from_params_defaults_model_task_to_obb(tmp_path):
+    """Unknown/absent YOLO_OBB_DIRECT_TASK falls back to 'obb'."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "model.pt"),
+        "YOLO_OBB_DIRECT_TASK": "not_a_real_task",
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.model_task == "obb"
+    assert cfg.obb.direct.fixed_angle_deg == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # frame_result_to_meas integration
 # ---------------------------------------------------------------------------
