@@ -557,7 +557,7 @@ def test_preview_raw_detection_prefilters_headtail_candidates(monkeypatch) -> No
     monkeypatch.setattr(
         preview_worker,
         "_preview_run_direct_raw_detection",
-        lambda extractor, executor, frame, target_classes, raw_conf_floor, max_det: (
+        lambda extractor, executor, frame, target_classes, raw_conf_floor, max_det, **kwargs: (
             [np.array([1.0, 1.0, 0.0], dtype=np.float32)] * 3,
             [100.0, 80.0, 60.0],
             [(100.0, 2.0)] * 3,
@@ -960,3 +960,151 @@ def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
         assert pose_config.sleap_device == "cuda"
     finally:
         mw.close()
+
+
+# ---------------------------------------------------------------------------
+# Final-review IMPORTANT 5: the "Test Detection" preview must honour the
+# configured direct model task (obb / detect / segment) instead of hardcoding
+# "obb" (which silently rendered zero detections for detect/segment models).
+# ---------------------------------------------------------------------------
+
+
+def test_preview_load_obb_executors_honours_direct_task(monkeypatch) -> None:
+    import hydra_suite.core.inference.runtime_artifacts as ra
+
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+
+    captured: dict = {}
+
+    def _fake_load(model_path, runtime, **kwargs):
+        captured["path"] = model_path
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(ra, "load_obb_executor", _fake_load)
+
+    params = {
+        "MAX_TARGETS": 4,
+        "YOLO_OBB_DIRECT_MODEL_PATH": "/seg.pt",
+        "YOLO_OBB_DIRECT_TASK": "segment",
+    }
+    preview_worker._preview_load_obb_executors(params, "cpu", "direct")
+    assert captured["task"] == "segment"
+
+    # Unknown task falls back to "obb" (same validation as
+    # core/tracking/worker.py::_build_inference_config_from_params).
+    captured.clear()
+    params["YOLO_OBB_DIRECT_TASK"] = "bogus"
+    preview_worker._preview_load_obb_executors(params, "cpu", "direct")
+    assert captured["task"] == "obb"
+
+
+def test_preview_run_direct_raw_detection_decodes_detect_model() -> None:
+    from types import SimpleNamespace
+
+    import torch
+
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.detectors import DetectionFilter
+
+    class _Executor:
+        def predict(self, frames, **kwargs):
+            # A plain detect checkpoint: result.obb is None, boxes carry xyxy.
+            return [
+                SimpleNamespace(
+                    obb=None,
+                    masks=None,
+                    boxes=SimpleNamespace(
+                        xyxy=torch.tensor([[10.0, 20.0, 30.0, 60.0]]),
+                        conf=torch.tensor([0.9]),
+                    ),
+                )
+            ]
+
+    params = {"MAX_TARGETS": 4}
+    (
+        raw_meas,
+        raw_sizes,
+        raw_shapes,
+        raw_conf,
+        raw_corners,
+        raw_class_ids,
+        _result0,
+    ) = preview_worker._preview_run_direct_raw_detection(
+        DetectionFilter(params),
+        _Executor(),
+        np.zeros((80, 80, 3), dtype=np.uint8),
+        None,
+        1e-3,
+        8,
+        model_task="detect",
+        fixed_angle_deg=0.0,
+    )
+
+    assert len(raw_meas) == 1, "detect-task preview must not render zero detections"
+    np.testing.assert_allclose(raw_meas[0][:2], [20.0, 40.0], atol=1e-3)
+    assert raw_conf[0] == pytest.approx(0.9, abs=1e-4)
+    assert np.asarray(raw_corners[0]).shape == (4, 2)
+    # shapes = (ellipse_area, aspect_ratio), same convention the preview's
+    # DetectionFilter size/AR gates read.
+    assert raw_shapes[0][0] == pytest.approx(np.pi / 4 * 800.0, rel=1e-3)
+    assert raw_shapes[0][1] == pytest.approx(2.0, rel=1e-3)
+    assert len(raw_class_ids) == 1
+
+
+def test_preview_run_direct_raw_detection_decodes_segment_model() -> None:
+    from types import SimpleNamespace
+
+    import torch
+
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.detectors import DetectionFilter
+
+    ys, xs = torch.meshgrid(
+        torch.arange(80, dtype=torch.float32),
+        torch.arange(80, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = (
+        ((xs >= 30) & (xs <= 70) & (ys >= 20) & (ys <= 40)).float().unsqueeze(0)
+    )  # (1, 80, 80)
+
+    class _Executor:
+        def predict(self, frames, **kwargs):
+            return [
+                SimpleNamespace(
+                    obb=None,
+                    masks=SimpleNamespace(data=mask),
+                    boxes=SimpleNamespace(
+                        xyxy=torch.tensor([[30.0, 20.0, 70.0, 40.0]]),
+                        conf=torch.tensor([0.8]),
+                    ),
+                    orig_shape=(80, 80),
+                )
+            ]
+
+    params = {"MAX_TARGETS": 4}
+    raw_meas, raw_sizes, _shapes, raw_conf, raw_corners, _cls, _r0 = (
+        preview_worker._preview_run_direct_raw_detection(
+            DetectionFilter(params),
+            _Executor(),
+            np.zeros((80, 80, 3), dtype=np.uint8),
+            None,
+            1e-3,
+            8,
+            model_task="segment",
+            fixed_angle_deg=0.0,
+        )
+    )
+
+    assert len(raw_meas) == 1, "segment-task preview must not render zero detections"
+    np.testing.assert_allclose(raw_meas[0][:2], [50.0, 30.0], atol=2.0)
+    assert raw_conf[0] == pytest.approx(0.8, abs=1e-4)
+    assert np.asarray(raw_corners[0]).shape == (4, 2)
+    assert raw_sizes[0] > 0

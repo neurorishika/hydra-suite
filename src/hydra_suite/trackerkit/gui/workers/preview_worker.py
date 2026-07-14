@@ -636,6 +636,19 @@ def _preview_runtime_context_for(compute_runtime: str):
     )
 
 
+def _preview_direct_model_task(yolo_params) -> str:
+    """Validated direct-mode model task ("obb" | "detect" | "segment").
+
+    Mirrors ``core/tracking/worker.py::_build_inference_config_from_params``
+    exactly (strip/lower, unknown value falls back to "obb") so the preview and
+    the tracking run can never disagree about how to decode the model.
+    """
+    task = str(yolo_params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
+    if task not in {"obb", "detect", "segment"}:
+        task = "obb"
+    return task
+
+
 def _preview_load_obb_executors(yolo_params, obb_compute_runtime, yolo_mode):
     """Load the production OBB executor(s) for the preview's direct/sequential mode."""
     from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
@@ -669,8 +682,15 @@ def _preview_load_obb_executors(yolo_params, obb_compute_runtime, yolo_mode):
     obb_model_path = yolo_params.get("YOLO_OBB_DIRECT_MODEL_PATH") or yolo_params.get(
         "YOLO_MODEL_PATH"
     )
+    # The direct model may be a native-OBB, a plain detect, or a segment
+    # checkpoint -- the executor must be built for the CONFIGURED task, or the
+    # tensorrt path asserts on the output count and the torch path decodes the
+    # wrong Results attribute (silently zero detections).
     obb_executor = load_obb_executor(
-        obb_model_path, obb_compute_runtime, task="obb", max_det=max_det
+        obb_model_path,
+        obb_compute_runtime,
+        task=_preview_direct_model_task(yolo_params),
+        max_det=max_det,
     )
     return {"mode": "direct", "obb": obb_executor}
 
@@ -886,10 +906,69 @@ def _preview_run_headtail(
     return heading_hints, heading_confidences, directed_mask
 
 
+def _obb_result_to_preview_lists(result):
+    """Convert an ``OBBResult`` into the preview's raw-detection list 6-tuple.
+
+    The preview's ``DetectionFilter`` size/AR gates read ``shapes[:, 0]`` as an
+    ELLIPSE area (matching the GUI's circular-area formula) and ``shapes[:, 1]``
+    as the aspect ratio -- exactly what ``_extract_raw_detections`` emits for
+    the "obb" path. ``OBBResult.sizes`` is the OBB RECT area (major*minor), so
+    the ellipse area is ``pi/4 * size``; aspect comes straight from
+    ``result.shapes[:, 1]``. Detect/segment carry no class head, so class ids
+    are the ``-1`` "unknown" sentinel used elsewhere in the pipeline.
+    """
+    import numpy as np
+
+    n = int(result.num_detections)
+    if n == 0:
+        return [], [], [], [], [], []
+    centroids = np.asarray(result.centroids, dtype=np.float32)
+    angles = np.asarray(result.angles, dtype=np.float32)
+    sizes = np.asarray(result.sizes, dtype=np.float32)
+    shapes = np.asarray(result.shapes, dtype=np.float32)
+    aspect = shapes[:, 1] if shapes.ndim == 2 and shapes.shape[1] > 1 else np.ones(n)
+    ellipse_area = (np.pi / 4.0) * sizes
+    meas = [
+        np.array([centroids[i, 0], centroids[i, 1], angles[i]], dtype=np.float32)
+        for i in range(n)
+    ]
+    shapes_list = [(float(ellipse_area[i]), float(aspect[i])) for i in range(n)]
+    corners = np.asarray(result.corners, dtype=np.float32)
+    return (
+        meas,
+        sizes.tolist(),
+        shapes_list,
+        np.asarray(result.confidences, dtype=np.float32).tolist(),
+        [corners[i] for i in range(n)],
+        [-1] * n,
+    )
+
+
 def _preview_run_direct_raw_detection(
-    extractor, executor, frame_to_process, target_classes, raw_conf_floor, max_det
+    extractor,
+    executor,
+    frame_to_process,
+    target_classes,
+    raw_conf_floor,
+    max_det,
+    *,
+    model_task: str = "obb",
+    fixed_angle_deg: float = 0.0,
 ):
-    """Direct-mode raw OBB extraction via a production ``load_obb_executor`` result."""
+    """Direct-mode raw OBB extraction via a production ``load_obb_executor`` result.
+
+    Dispatches on ``model_task`` exactly as ``stages/obb.py::_run_direct``:
+
+    * ``"obb"``    -> ``result.obb`` via ``DetectionFilter._extract_raw_detections``
+    * ``"detect"`` -> ``result.boxes`` via ``_extract_obb_from_boxes`` (fixed angle)
+    * ``"segment"``-> ``result.masks`` via ``_extract_obb_from_masks``
+
+    Reusing the SAME extract functions the tracking run uses means the preview
+    can never disagree with it about geometry -- previously this hardcoded the
+    "obb" decode, so detect/segment models rendered zero detections silently.
+    """
+    import math
+
     results = executor.predict(
         [frame_to_process],
         conf=raw_conf_floor,
@@ -901,6 +980,37 @@ def _preview_run_direct_raw_detection(
     if not results:
         return [], [], [], [], [], [], None
     result0 = results[0]
+
+    if model_task in ("detect", "segment"):
+        from hydra_suite.core.inference.stages.obb import (
+            _extract_obb_from_boxes,
+            _extract_obb_from_masks,
+        )
+
+        if model_task == "detect":
+            obb_result = _extract_obb_from_boxes(
+                result0, frame_idx=0, fixed_angle_rad=math.radians(fixed_angle_deg)
+            )
+        else:
+            obb_result = _extract_obb_from_masks(result0, frame_idx=0)
+        (
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+            raw_class_ids,
+        ) = _obb_result_to_preview_lists(obb_result)
+        return (
+            raw_meas,
+            raw_sizes,
+            raw_shapes,
+            raw_confidences,
+            raw_obb_corners,
+            raw_class_ids,
+            result0,
+        )
+
     if getattr(result0, "obb", None) is None or len(result0.obb) == 0:
         return [], [], [], [], [], [], result0
     (
@@ -1198,6 +1308,8 @@ def _preview_run_yolo_raw_detection(
             target_classes,
             raw_conf_floor,
             max_det,
+            model_task=_preview_direct_model_task(yolo_params),
+            fixed_angle_deg=float(yolo_params.get("YOLO_OBB_FIXED_ANGLE_DEG", 0.0)),
         )
 
     if raw_meas:

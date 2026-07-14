@@ -614,7 +614,7 @@ class DetectionPanel(QWidget):
             "Fixed OBB angle applied to every detection when Direct model "
             "task is 'Detect (fixed angle)'."
         )
-        self.lbl_fixed_angle = f_yolo.addRow("Fixed angle", self.spin_yolo_fixed_angle)
+        f_yolo.addRow("Fixed angle", self.spin_yolo_fixed_angle)
 
         self.combo_yolo_model = QComboBox()
         self.combo_yolo_model.activated.connect(self.on_yolo_model_changed)
@@ -2140,6 +2140,15 @@ class DetectionPanel(QWidget):
         _set_row_visible(getattr(self, "combo_yolo_detect_model", None), sequential)
         _set_row_visible(getattr(self, "combo_yolo_crop_obb_model", None), sequential)
         _set_row_visible(getattr(self, "yolo_seq_advanced", None), sequential)
+        # The direct-only task selector is meaningless in sequential mode; hide
+        # it (and the fixed-angle row) there. In direct mode the task combo is
+        # always shown, and _on_yolo_direct_task_changed governs the fixed-angle
+        # row's visibility (Detect task only).
+        _set_row_visible(getattr(self, "combo_yolo_direct_task", None), not sequential)
+        if sequential:
+            _set_row_visible(getattr(self, "spin_yolo_fixed_angle", None), False)
+        else:
+            self._on_yolo_direct_task_changed(None)
 
         ip = getattr(self._main_window, "_identity_panel", None)
         _set_row_visible(
