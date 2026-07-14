@@ -987,3 +987,272 @@ def create_direct_detect_executor(
             class_count=class_count,
         )
     raise ValueError(f"Unsupported direct detect runtime: {runtime}")
+
+
+# ---------------------------------------------------------------------------
+# Direct YOLO segment executor (segment-as-OBB direct mode)
+# ---------------------------------------------------------------------------
+# Segmentation raw heads emit TWO outputs (detections + mask prototypes)
+# instead of one, so these executors do NOT subclass DirectONNXOBBExecutor /
+# DirectTensorRTOBBExecutor (which assert exactly one output tensor). All
+# shared tensor math lives in _decode_segment_predictions, a pure function
+# unit-testable on CPU tensors without a real TRT engine. It never builds an
+# ultralytics Results.masks and never calls cv2 -- angle/size come from
+# hydra_suite.utils.obb_from_mask.rotated_rect_from_masks, which is GPU-native
+# and stays entirely in tensor ops.
+
+
+def _decode_segment_predictions(
+    preds,
+    protos,
+    *,
+    img_tensor_shape,
+    orig_shape,
+    conf_thres: float,
+    classes,
+    max_det: int,
+    nc: int,
+):
+    """Decode a raw YOLO-segment head output into duck-typed detections.
+
+    Parameters
+    ----------
+    preds:
+        Raw detection tensor, shape ``(B, 4+nc+nm, num_anchors)``.
+    protos:
+        Raw mask-prototype tensor, shape ``(B, nm, mh, mw)``.
+    img_tensor_shape:
+        The model input tensor's shape, e.g. ``(B, 3, imgsz, imgsz)`` — used
+        by ``ops.scale_boxes`` to map letterbox-space boxes back to
+        ``orig_shape`` pixel space.
+    orig_shape:
+        ``(H, W)`` of the true original frame.
+
+    Returns
+    -------
+    list[types.SimpleNamespace]
+        One namespace per input frame, each exposing exactly the four
+        attributes ``_extract_obb_from_masks`` (stages/obb.py) reads:
+        ``.orig_shape`` (``(H, W)``), ``.boxes.xyxy``/``.boxes.conf``
+        (original-frame space), and ``.masks.data`` (the RAW, letterbox-
+        space, NOT-upsampled proto-resolution mask tensor — cheaper than
+        upsampling since ``rotated_rect_from_masks`` needs only a small
+        crop of it and handles the resulting scale via
+        ``_letterbox_gain_pad``, so upsampling first would be wasted work).
+    """
+    import types
+
+    import torch
+    from ultralytics.utils import nms, ops
+
+    if not isinstance(preds, torch.Tensor):
+        preds = torch.as_tensor(preds)
+    if not isinstance(protos, torch.Tensor):
+        protos = torch.as_tensor(protos)
+
+    filtered = nms.non_max_suppression(
+        preds,
+        conf_thres=conf_thres,
+        iou_thres=0.5,
+        classes=classes,
+        max_det=max_det,
+        nc=nc,
+        rotated=False,
+    )
+
+    results = []
+    for i, pred in enumerate(filtered):
+        if pred is None or len(pred) == 0:
+            results.append(
+                types.SimpleNamespace(
+                    orig_shape=tuple(orig_shape), boxes=None, masks=None
+                )
+            )
+            continue
+        proto_i = protos[i] if protos.shape[0] == len(filtered) else protos[0]
+        boxes_letterboxed = pred[:, :4]
+        mask_coeffs = pred[:, 6:]
+        # upsample=False: keep proto resolution -- rotated_rect_from_masks
+        # crops a small tile per detection regardless, so upsampling the
+        # full mask to imgsz here would be wasted GPU work.
+        masks = ops.process_mask(
+            proto_i,
+            mask_coeffs,
+            boxes_letterboxed,
+            img_tensor_shape[2:],
+            upsample=False,
+        )
+        boxes_orig = pred[:, :6].clone()
+        boxes_orig[:, :4] = ops.scale_boxes(
+            img_tensor_shape[2:], boxes_orig[:, :4], orig_shape
+        )
+        results.append(
+            types.SimpleNamespace(
+                orig_shape=tuple(orig_shape),
+                boxes=types.SimpleNamespace(
+                    xyxy=boxes_orig[:, :4], conf=boxes_orig[:, 4]
+                ),
+                masks=types.SimpleNamespace(data=masks),
+            )
+        )
+    return results
+
+
+class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
+    """Direct TensorRT executor for a YOLO *segment* checkpoint.
+
+    Binds the engine's TWO output tensors (detections, mask prototypes)
+    instead of the one output every other direct executor in this module
+    assumes -- this is why it subclasses ``_BaseDirectOBBExecutor`` directly
+    rather than ``DirectTensorRTOBBExecutor`` (whose ``__init__`` hard-asserts
+    exactly one output tensor).
+    """
+
+    def __init__(
+        self,
+        artifact_path: str,
+        imgsz: int,
+        class_names: dict[int, str] | None = None,
+        class_count: int | None = None,
+    ) -> None:
+        super().__init__(artifact_path, imgsz, class_names, class_count)
+
+        import struct
+
+        import tensorrt as trt  # type: ignore[import-not-found]
+
+        with open(self.artifact_path, "rb") as handle:
+            meta_len = struct.unpack("<I", handle.read(4))[0]
+            meta_json = handle.read(meta_len).decode("utf-8")
+            engine_data = handle.read()
+
+        meta = json.loads(meta_json)
+        if not self.names:
+            self.names = {
+                int(key): str(value)
+                for key, value in dict(meta.get("names") or {}).items()
+            }
+            self.nc = max(1, len(self.names) or self.nc)
+
+        logger = trt.Logger(trt.Logger.WARNING)
+        runtime = trt.Runtime(logger)
+        self.engine = runtime.deserialize_cuda_engine(engine_data)
+        if self.engine is None:
+            raise RuntimeError("TensorRT failed to deserialize segment engine")
+        self.context = self.engine.create_execution_context()
+
+        tensor_names = [
+            self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)
+        ]
+        input_names = [
+            n
+            for n in tensor_names
+            if self.engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT
+        ]
+        output_names = [
+            n
+            for n in tensor_names
+            if self.engine.get_tensor_mode(n) == trt.TensorIOMode.OUTPUT
+        ]
+        if len(input_names) != 1 or len(output_names) != 2:
+            raise RuntimeError(
+                "TensorRT segment engine must expose exactly one input and "
+                "two outputs (detections, mask prototypes)"
+            )
+        self._input_name = input_names[0]
+        # Prototypes are the rank-4 output (B, nm, mh, mw); detections are
+        # rank-3 (B, 4+nc+nm, num_anchors). Disambiguate by tensor rank
+        # rather than assuming export order, since output order is not
+        # contractually guaranteed across ultralytics versions.
+        shapes = {n: tuple(self.engine.get_tensor_shape(n)) for n in output_names}
+        proto_candidates = [n for n, s in shapes.items() if len(s) == 4]
+        det_candidates = [n for n, s in shapes.items() if len(s) == 3]
+        if len(proto_candidates) != 1 or len(det_candidates) != 1:
+            raise RuntimeError(
+                f"Could not disambiguate segment engine outputs by rank: {shapes}"
+            )
+        self._proto_name = proto_candidates[0]
+        self._det_name = det_candidates[0]
+
+        batch_dim = self.engine.get_tensor_shape(self._input_name)[0]
+        self._model_batch_size = int(batch_dim) if batch_dim > 0 else 1
+        self._static_batch: bool = batch_dim > 0
+        self._end2end = False  # segment raw heads are always CBC, never end2end
+
+        import torch
+
+        self._cuda_stream = torch.cuda.Stream()
+        self._sync_event = torch.cuda.Event()
+
+        try:
+            _warmup = torch.zeros(
+                (self._model_batch_size, 3, self.imgsz, self.imgsz),
+                dtype=torch.float32,
+                device="cuda",
+            )
+            self._run_inference(_warmup)
+            self._run_inference(_warmup)
+            torch.cuda.synchronize()
+            del _warmup
+        except Exception:
+            pass
+
+    def _run_inference(self, img_tensor):
+        import torch
+
+        x = img_tensor.float().contiguous()
+        self.context.set_input_shape(self._input_name, tuple(x.shape))
+        det_shape = tuple(self.context.get_tensor_shape(self._det_name))
+        proto_shape = tuple(self.context.get_tensor_shape(self._proto_name))
+        det_out = torch.empty(det_shape, dtype=torch.float32, device=x.device)
+        proto_out = torch.empty(proto_shape, dtype=torch.float32, device=x.device)
+        self.context.set_tensor_address(self._input_name, x.data_ptr())
+        self.context.set_tensor_address(self._det_name, det_out.data_ptr())
+        self.context.set_tensor_address(self._proto_name, proto_out.data_ptr())
+        self._sync_event.record(torch.cuda.current_stream())
+        self._cuda_stream.wait_event(self._sync_event)
+        self.context.execute_async_v3(self._cuda_stream.cuda_stream)
+        self._cuda_stream.synchronize()
+        return det_out, proto_out
+
+    def _postprocess(
+        self, raw_preds, img_tensor, orig_frames, conf_thres, classes, max_det
+    ):
+        det_out, proto_out = raw_preds
+        orig_shape = orig_frames[0].shape[:2]
+        return _decode_segment_predictions(
+            det_out,
+            proto_out,
+            img_tensor_shape=tuple(img_tensor.shape),
+            orig_shape=orig_shape,
+            conf_thres=conf_thres,
+            classes=classes,
+            max_det=max_det,
+            nc=self.nc,
+        )
+
+
+def create_direct_segment_executor(
+    *,
+    runtime: str,
+    artifact_path: str,
+    imgsz: int,
+    class_names: dict[int, str] | None = None,
+    class_count: int | None = None,
+):
+    """Instantiate a direct executor for the YOLO *segment* task.
+
+    Only ``"tensorrt"`` is supported: ``load_obb_executor`` never requests
+    ``onnx_*`` runtimes for OBB (see ``runtime_artifacts.ArtifactExportError``
+    for unsupported runtimes), and cpu/mps/cuda/coreml already work through
+    the plain ultralytics-model path (no direct executor involved).
+    """
+    runtime_name = str(runtime or "").strip().lower()
+    if runtime_name == "tensorrt":
+        return DirectTensorRTSegmentExecutor(
+            artifact_path,
+            imgsz,
+            class_names=class_names,
+            class_count=class_count,
+        )
+    raise ValueError(f"Unsupported direct segment runtime: {runtime}")
