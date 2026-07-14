@@ -1117,8 +1117,6 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
     ) -> None:
         super().__init__(artifact_path, imgsz, class_names, class_count)
 
-        import struct
-
         import tensorrt as trt  # type: ignore[import-not-found]
 
         with open(self.artifact_path, "rb") as handle:
