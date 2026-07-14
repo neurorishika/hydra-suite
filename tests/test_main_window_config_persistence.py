@@ -1205,6 +1205,64 @@ def test_sequential_crop_batch_roundtrip_persists(
     reloaded_window.close()
 
 
+def test_yolo_direct_task_and_fixed_angle_roundtrip_persists(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.combo_yolo_direct_task.setCurrentIndex(1)  # "Detect"
+    window._detection_panel.spin_yolo_fixed_angle.setValue(42.5)
+
+    # The fixed-angle row should only be visible while "Detect" is selected.
+    # (isHidden() reflects the widget's own explicit visibility flag, unlike
+    # isVisible()/isVisibleTo(), which are also gated by ancestor tab/stack
+    # visibility and would be False here regardless of our own wiring.)
+    assert window._detection_panel.spin_yolo_fixed_angle.isHidden() is False
+
+    params = window.get_parameters_dict()
+    assert params["YOLO_OBB_DIRECT_TASK"] == "detect"
+    assert params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(42.5)
+
+    config_path = tmp_path / "yolo_direct_task_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_cfg["yolo_obb_direct_task"] == "detect"
+    assert saved_cfg["yolo_fixed_angle_deg"] == pytest.approx(42.5)
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert reloaded_window._detection_panel.combo_yolo_direct_task.currentIndex() == 1
+    assert (
+        reloaded_window._detection_panel.spin_yolo_fixed_angle.value()
+        == pytest.approx(42.5)
+    )
+    assert reloaded_window._detection_panel.spin_yolo_fixed_angle.isHidden() is False
+    reloaded_params = reloaded_window.get_parameters_dict()
+    assert reloaded_params["YOLO_OBB_DIRECT_TASK"] == "detect"
+    assert reloaded_params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(42.5)
+    reloaded_window.close()
+
+
+def test_yolo_direct_task_default_is_obb_and_hides_fixed_angle_row(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(monkeypatch)
+
+    assert window._detection_panel.combo_yolo_direct_task.currentIndex() == 0
+    assert window._detection_panel.spin_yolo_fixed_angle.isHidden() is True
+
+    params = window.get_parameters_dict()
+    assert params["YOLO_OBB_DIRECT_TASK"] == "obb"
+    assert params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(0.0)
+    window.close()
+
+
 def test_benchmark_recommendations_update_batch_ui(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,

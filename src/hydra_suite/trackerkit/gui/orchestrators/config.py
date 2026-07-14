@@ -334,6 +334,21 @@ class ConfigOrchestrator:
             1 if yolo_mode == "sequential" else 0
         )
 
+        yolo_direct_task = (
+            str(get_cfg("yolo_obb_direct_task", default="obb")).strip().lower()
+        )
+        if yolo_direct_task not in {"obb", "detect", "segment"}:
+            yolo_direct_task = "obb"
+        self._panels.detection.combo_yolo_direct_task.setCurrentIndex(
+            ["obb", "detect", "segment"].index(yolo_direct_task)
+        )
+        self._panels.detection.spin_yolo_fixed_angle.setValue(
+            float(get_cfg("yolo_fixed_angle_deg", default=0.0))
+        )
+        self._panels.detection._on_yolo_direct_task_changed(
+            self._panels.detection.combo_yolo_direct_task.currentIndex()
+        )
+
         yolo_direct_model = get_cfg(
             "yolo_obb_direct_model_path",
             "yolo_model_path",
@@ -1562,6 +1577,10 @@ class ConfigOrchestrator:
                 # Store relative path if model is in archive, otherwise absolute
                 "yolo_model_path": make_model_path_relative(yolo_path),
                 "yolo_obb_mode": yolo_mode,
+                "yolo_obb_direct_task": ["obb", "detect", "segment"][
+                    self._panels.detection.combo_yolo_direct_task.currentIndex()
+                ],
+                "yolo_fixed_angle_deg": self._panels.detection.spin_yolo_fixed_angle.value(),
                 "yolo_obb_direct_model_path": make_model_path_relative(
                     yolo_direct_path
                 ),
@@ -2168,6 +2187,10 @@ class ConfigOrchestrator:
             "END_FRAME": self._panels.setup.spin_end_frame.value(),
             "YOLO_MODEL_PATH": yolo_path,
             "YOLO_OBB_MODE": yolo_mode,
+            "YOLO_OBB_DIRECT_TASK": ["obb", "detect", "segment"][
+                self._panels.detection.combo_yolo_direct_task.currentIndex()
+            ],
+            "YOLO_OBB_FIXED_ANGLE_DEG": self._panels.detection.spin_yolo_fixed_angle.value(),
             "YOLO_OBB_DIRECT_MODEL_PATH": yolo_direct_path,
             "YOLO_DETECT_MODEL_PATH": yolo_detect_path,
             "YOLO_CROP_OBB_MODEL_PATH": yolo_crop_obb_path,

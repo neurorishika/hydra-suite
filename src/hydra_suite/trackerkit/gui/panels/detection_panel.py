@@ -589,6 +589,33 @@ class DetectionPanel(QWidget):
         self.lbl_obb_mode_warning.setVisible(False)
         f_yolo.addRow("", self.lbl_obb_mode_warning)
 
+        self.combo_yolo_direct_task = QComboBox()
+        self.combo_yolo_direct_task.addItems(
+            ["OBB (native)", "Detect (fixed angle)", "Segment (rotated mask)"]
+        )
+        self.combo_yolo_direct_task.setFixedHeight(30)
+        self.combo_yolo_direct_task.currentIndexChanged.connect(
+            self._on_yolo_direct_task_changed
+        )
+        self.combo_yolo_direct_task.setToolTip(
+            "Direct-mode model source: a native OBB checkpoint, a plain "
+            "detect checkpoint (fixed angle applied to every detection), or "
+            "a segmentation checkpoint (angle derived from a GPU-native "
+            "rotated-rectangle search over the predicted mask)."
+        )
+        f_yolo.addRow("Direct model task", self.combo_yolo_direct_task)
+
+        self.spin_yolo_fixed_angle = QDoubleSpinBox()
+        self.spin_yolo_fixed_angle.setRange(-180.0, 180.0)
+        self.spin_yolo_fixed_angle.setDecimals(1)
+        self.spin_yolo_fixed_angle.setSuffix(" deg")
+        self.spin_yolo_fixed_angle.setFixedHeight(30)
+        self.spin_yolo_fixed_angle.setToolTip(
+            "Fixed OBB angle applied to every detection when Direct model "
+            "task is 'Detect (fixed angle)'."
+        )
+        self.lbl_fixed_angle = f_yolo.addRow("Fixed angle", self.spin_yolo_fixed_angle)
+
         self.combo_yolo_model = QComboBox()
         self.combo_yolo_model.activated.connect(self.on_yolo_model_changed)
         self.combo_yolo_model.currentIndexChanged.connect(
@@ -791,6 +818,7 @@ class DetectionPanel(QWidget):
         )
         f_yolo.addRow("Classes (optional)", self.line_yolo_classes)
         self._on_yolo_mode_changed(self.combo_yolo_obb_mode.currentIndex())
+        self._on_yolo_direct_task_changed(self.combo_yolo_direct_task.currentIndex())
 
         l_yolo.addWidget(self.yolo_group)
 
@@ -2122,6 +2150,26 @@ class DetectionPanel(QWidget):
             )
         self._main_window._update_obb_mode_warning()
         self._sync_batch_policy_controls()
+
+    def _on_yolo_direct_task_changed(self, _index: object) -> object:
+        """Show the fixed-angle control only when the direct task is 'Detect'."""
+        form = self.yolo_group.layout()
+
+        def _set_row_visible(widget: object, visible: bool):
+            if widget is None:
+                return
+            widget.setVisible(bool(visible))
+            if form is None:
+                return
+            try:
+                label = form.labelForField(widget)
+            except Exception:
+                label = None
+            if label is not None:
+                label.setVisible(bool(visible))
+
+        is_detect = self.combo_yolo_direct_task.currentIndex() == 1
+        _set_row_visible(getattr(self, "spin_yolo_fixed_angle", None), is_detect)
 
     # =========================================================================
     # YOLO MODEL CHANGED (moved from MainWindow)
