@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from hydra_suite.utils.obb_from_mask import _letterbox_gain_pad, rotated_rect_from_masks
+from hydra_suite.utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
 
 
 def _rasterize_rotated_rect(
@@ -29,7 +29,7 @@ def _rasterize_rotated_rect(
 def test_letterbox_gain_pad_matches_scale_boxes_formula():
     # Square mask canvas (160x160), non-square original frame (1080x1920) --
     # the exact scenario that breaks a naive per-axis ratio.
-    gain, pad_x, pad_y = _letterbox_gain_pad((160, 160), (1080, 1920))
+    gain, pad_x, pad_y = letterbox_gain_pad((160, 160), (1080, 1920))
     expected_gain = min(160 / 1080, 160 / 1920)
     assert math.isclose(gain, expected_gain, rel_tol=1e-6)
     assert pad_x >= 0 and pad_y >= 0
@@ -134,3 +134,73 @@ def test_rotated_rect_from_masks_batched_multi_detection():
         math.pi - abs((angle1 % math.pi) - expected_rad),
     )
     assert diff < math.radians(6)
+
+
+def test_rotated_rect_from_masks_asymmetric_mask_reports_rect_center():
+    """The returned center must be the RECTANGLE's center, not the mask's mass
+    centroid: for an asymmetric wedge the two differ by many pixels."""
+    size = 128
+    ys, xs = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    # Right triangle wedge: x in [40, 90], y in [50, 70]; the mask's mass
+    # centroid sits well left/up of the bounding rectangle's center (65, 60).
+    inside = (
+        (xs >= 40)
+        & (xs <= 90)
+        & (ys >= 50)
+        & (ys <= 70)
+        & ((ys - 50) <= (xs - 40) * (20.0 / 50.0))
+    )
+    masks = inside.float().unsqueeze(0)
+    boxes = torch.tensor([[38.0, 48.0, 92.0, 72.0]])
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+    cx, cy, _, _, angle = rect[0].tolist()
+
+    # Ground truth, angle-agnostic: in the frame of the RETURNED angle, the
+    # rectangle's center is the midpoint of the foreground's (min, max) extent
+    # -- NOT the mask's mass centroid.
+    fg = torch.nonzero(inside, as_tuple=False).float()
+    px, py = fg[:, 1], fg[:, 0]
+    cos_t, sin_t = math.cos(angle), math.sin(angle)
+    u = px * cos_t + py * sin_t
+    v = -px * sin_t + py * cos_t
+    mid_u = float((u.max() + u.min()) / 2)
+    mid_v = float((v.max() + v.min()) / 2)
+    exp_cx = mid_u * cos_t - mid_v * sin_t
+    exp_cy = mid_u * sin_t + mid_v * cos_t
+
+    # Sanity: the mass centroid is far from the rect center, so this test can
+    # actually tell the two apart.
+    mass_cx, mass_cy = float(px.mean()), float(py.mean())
+    assert math.hypot(mass_cx - exp_cx, mass_cy - exp_cy) > 5.0
+
+    assert math.isclose(cx, exp_cx, abs_tol=2.0), f"cx={cx} expected {exp_cx}"
+    assert math.isclose(cy, exp_cy, abs_tol=2.0), f"cy={cy} expected {exp_cy}"
+
+
+def test_rotated_rect_from_masks_size_not_inflated_by_grid_endpoints():
+    """The local sampling grid must use roi_align bin CENTERS, not an
+    endpoint-inclusive linspace (which inflates w/h by crop_size/(crop_size-1)).
+
+    Fully-saturated crop: a 32x32 foreground square with the ROI box exactly on
+    it and ``pad_ratio=0`` means EVERY one of the 16x16 roi_align bins samples
+    foreground.  The bins sit at physical offsets (i + 0.5) * 2 px inside the
+    32 px ROI, so the true extent of the sampled foreground is 15 * 2 = 30 px.
+    The endpoint-inclusive grid instead reports the full 32 px ROI side.
+    """
+    canvas = torch.zeros((64, 64))
+    canvas[16:48, 16:48] = 1.0
+    rect = rotated_rect_from_masks(
+        canvas.unsqueeze(0),
+        torch.tensor([[16.0, 16.0, 48.0, 48.0]]),
+        num_angles=24,
+        crop_size=16,
+        pad_ratio=0.0,
+    )
+    _, _, w, h, _ = rect[0].tolist()
+    assert math.isclose(w, 30.0, abs_tol=0.05), f"w={w}"
+    assert math.isclose(h, 30.0, abs_tol=0.05), f"h={h}"

@@ -22,7 +22,11 @@ Method
    parabolic fit through the winning bin and its two neighbours (same idea as
    sub-pixel peak refinement in stereo/optical-flow disparity search), then
    recompute width/height once more at the refined angle.
-5. Canonicalize w/h so that the wider dimension is always ``w`` and ``angle``
+5. Recenter: the extents above are measured about the mass centroid, so the
+   emitted center is shifted to the MIDPOINT of the (min, max) extent in the
+   refined rotated frame — the rectangle's true center, which for an
+   asymmetric mask is not the mass centroid.
+6. Canonicalize w/h so that the wider dimension is always ``w`` and ``angle``
    always tracks the major axis (swap w/h and adjust angle by π/2 if needed).
 
 Everything after step 1 operates on a small, fixed-size tensor
@@ -38,16 +42,19 @@ import torch
 from torchvision.ops import roi_align
 
 
-def _letterbox_gain_pad(
+def letterbox_gain_pad(
     mask_shape: tuple[int, int], orig_shape: tuple[int, int]
 ) -> tuple[float, float, float]:
     """Return ``(gain, pad_x, pad_y)`` mapping ``orig_shape`` -> ``mask_shape``.
 
-    Mirrors ``ultralytics.utils.ops.scale_boxes``'s own formula exactly: a
+    Follows the same structure as ``ultralytics.utils.ops.scale_boxes``: a
     single uniform ``gain`` (``mask`` canvases are always square, matching a
     square YOLO letterboxed input) plus a symmetric pad per axis. Using a
     single scalar gain (rather than independent per-axis ratios) is what
     keeps rotation angles correct when the original frame is not square.
+    (``scale_boxes`` additionally subtracts 0.1 before rounding its pad; the
+    resulting sub-pixel difference is irrelevant here, where the pad only
+    re-centers a crop window, so this uses the plain rounded half-pad.)
 
     To go orig -> mask space: ``x_mask = x_orig * gain + pad_x`` (same for y).
     To go mask -> orig space: ``x_orig = (x_mask - pad_x) / gain``.
@@ -130,7 +137,15 @@ def rotated_rect_from_masks(
     weights_flat = weights.reshape(n, -1)  # (N, P), P = crop_size**2
 
     # --- 2. Mask-weighted centroid, in LOCAL unit-square coordinates. ---
-    lin = torch.linspace(-0.5, 0.5, crop_size, device=device, dtype=torch.float32)
+    # roi_align(aligned=True) samples the CENTER of each of the crop_size bins
+    # spanning the ROI, i.e. bin i sits at (i + 0.5)/crop_size of the ROI side.
+    # An endpoint-inclusive linspace(-0.5, 0.5, crop_size) would instead space
+    # samples by 1/(crop_size - 1), stretching every measured extent by
+    # crop_size/(crop_size - 1) (~1.6% at crop_size=64) and systematically
+    # over-estimating w/h (and hence `size`, which feeds the size filters).
+    lin = (
+        torch.arange(crop_size, device=device, dtype=torch.float32) + 0.5
+    ) / crop_size - 0.5
     grid_y, grid_x = torch.meshgrid(lin, lin, indexing="ij")
     grid = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=0)  # (2, P)
 
@@ -158,13 +173,15 @@ def rotated_rect_from_masks(
     proj = torch.einsum("npc,kdc->nkpd", coords, rot)
     u, v = proj[..., 0], proj[..., 1]  # each (N, K, P)
 
-    fg = weights_flat[:, None, :] > 0  # (N, 1, P) broadcast over K
-    pos_inf = torch.full_like(u, float("inf"))
-    neg_inf = torch.full_like(u, float("-inf"))
-    u_max = torch.where(fg, u, neg_inf).amax(dim=-1)
-    u_min = torch.where(fg, u, pos_inf).amin(dim=-1)
-    v_max = torch.where(fg, v, neg_inf).amax(dim=-1)
-    v_min = torch.where(fg, v, pos_inf).amin(dim=-1)
+    # Background pixels are pushed to +/-inf so they can never win a min/max.
+    # masked_fill (rather than torch.where against two full_like sentinel
+    # tensors) avoids materialising two extra (N, K, P) tensors -- ~300 MB of
+    # transient allocations at N=100, K=24, P=4096. Numerically identical.
+    bg = weights_flat[:, None, :] <= 0  # (N, 1, P), broadcasts over K
+    u_max = u.masked_fill(bg, float("-inf")).amax(dim=-1)
+    u_min = u.masked_fill(bg, float("inf")).amin(dim=-1)
+    v_max = v.masked_fill(bg, float("-inf")).amax(dim=-1)
+    v_min = v.masked_fill(bg, float("inf")).amin(dim=-1)
     width_k = (u_max - u_min).clamp(min=0.0)  # (N, K)
     height_k = (v_max - v_min).clamp(min=0.0)
     area_k = width_k * height_k
@@ -196,13 +213,28 @@ def rotated_rect_from_masks(
     )  # (N, 2, 2)
     proj_r = torch.bmm(coords, rot_r.transpose(1, 2))  # (N, P, 2)
     u_r, v_r = proj_r[..., 0], proj_r[..., 1]
-    fg2 = weights_flat > 0
-    u_r_max = torch.where(fg2, u_r, torch.full_like(u_r, float("-inf"))).amax(dim=-1)
-    u_r_min = torch.where(fg2, u_r, torch.full_like(u_r, float("inf"))).amin(dim=-1)
-    v_r_max = torch.where(fg2, v_r, torch.full_like(v_r, float("-inf"))).amax(dim=-1)
-    v_r_min = torch.where(fg2, v_r, torch.full_like(v_r, float("inf"))).amin(dim=-1)
+    bg2 = weights_flat <= 0
+    u_r_max = u_r.masked_fill(bg2, float("-inf")).amax(dim=-1)
+    u_r_min = u_r.masked_fill(bg2, float("inf")).amin(dim=-1)
+    v_r_max = v_r.masked_fill(bg2, float("-inf")).amax(dim=-1)
+    v_r_min = v_r.masked_fill(bg2, float("inf")).amin(dim=-1)
     w_local = (u_r_max - u_r_min).clamp(min=0.0)
     h_local = (v_r_max - v_r_min).clamp(min=0.0)
+
+    # --- Move the center from the mask's MASS CENTROID to the RECTANGLE's
+    #     center: w/h above are the full extents measured ABOUT the centroid,
+    #     so for any asymmetric mask (i.e. every real animal) a rectangle
+    #     centered on the centroid does not bound the mask and its center is
+    #     biased toward the heavier end. The rectangle's center is the midpoint
+    #     of the (min, max) extent in the refined rotated frame; rotate that
+    #     midpoint back into local coordinates (dx = u*cos - v*sin,
+    #     dy = u*sin + v*cos -- the inverse of the R(-theta) probe above).
+    #     Done BEFORE the w/h swap below, which does not move the center. ---
+    mid_u = (u_r_max + u_r_min) / 2.0
+    mid_v = (v_r_max + v_r_min) / 2.0
+    center_local = centroid_local + torch.stack(
+        [mid_u * cos_r - mid_v * sin_r, mid_u * sin_r + mid_v * cos_r], dim=1
+    )  # (N, 2)
 
     # --- Canonicalize: a rectangle probed at angle theta with (w, h) and at
     #     theta + pi/2 with (h, w) describe the identical physical rectangle
@@ -222,8 +254,8 @@ def rotated_rect_from_masks(
 
     # --- Map centroid + size back from local unit-square units to the input
     #     masks'/boxes' physical coordinate space. ---
-    cx = bcx + centroid_local[:, 0] * side
-    cy = bcy + centroid_local[:, 1] * side
+    cx = bcx + center_local[:, 0] * side
+    cy = bcy + center_local[:, 1] * side
     w = w_local * side
     h = h_local * side
 
