@@ -576,3 +576,101 @@ def test_load_obb_models_sequential_dynamic_batching_warning(monkeypatch, caplog
         "Sequential-mode OBB" in record.message and "dynamic-batch" in record.message
         for record in caplog.records
     ), "Should NOT warn for direct mode"
+
+
+def test_extract_obb_from_masks_computes_rotated_rect():
+    import math
+    from types import SimpleNamespace
+
+    import numpy as np
+    import torch
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    # A 40x20 axis-aligned rectangle mask at (50, 30) in a 100x60 "mask-space"
+    # canvas that is ALSO treated as the original frame (gain=1, no padding)
+    # for this test -- Task 3 already covers the gain/pad math independently.
+    mh = mw = 100
+    ys, xs = torch.meshgrid(
+        torch.arange(mh, dtype=torch.float32),
+        torch.arange(mw, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = (
+        ((xs >= 30) & (xs <= 70) & (ys >= 20) & (ys <= 40)).float().unsqueeze(0)
+    )  # (1, 100, 100)
+
+    result = SimpleNamespace(
+        masks=SimpleNamespace(data=mask),
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[30.0, 20.0, 70.0, 40.0]]),
+            conf=torch.tensor([0.8]),
+        ),
+        orig_shape=(100, 100),
+    )
+
+    out = _extract_obb_from_masks(result, frame_idx=5)
+
+    assert out.num_detections == 1
+    assert out.frame_idx == 5
+    np.testing.assert_allclose(out.centroids[0], [50.0, 30.0], atol=1.5)
+    np.testing.assert_allclose(out.sizes[0], 800.0, atol=60.0)  # ~40*20
+    assert out.angles[0] < math.radians(8) or out.angles[0] > math.radians(172)
+    np.testing.assert_allclose(out.confidences[0], 0.8, atol=1e-4)
+
+
+def test_extract_obb_from_masks_no_masks_returns_empty_result():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    result = SimpleNamespace(
+        masks=None, boxes=SimpleNamespace(conf=None), orig_shape=(10, 10)
+    )
+    out = _extract_obb_from_masks(result, frame_idx=1)
+    assert out.num_detections == 0
+
+
+def test_extract_raw_tensors_from_masks_keeps_everything_on_device():
+    from types import SimpleNamespace
+
+    import torch
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks
+
+    mh = mw = 100
+    ys, xs = torch.meshgrid(
+        torch.arange(mh, dtype=torch.float32),
+        torch.arange(mw, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = ((xs >= 30) & (xs <= 70) & (ys >= 20) & (ys <= 40)).float().unsqueeze(0)
+
+    result = SimpleNamespace(
+        masks=SimpleNamespace(data=mask),
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[30.0, 20.0, 70.0, 40.0]]),
+            conf=torch.tensor([0.8]),
+        ),
+        orig_shape=(100, 100),
+    )
+
+    raw = _extract_raw_tensors_from_masks(result, frame_idx=5, device="cpu")
+
+    assert raw.frame_idx == 5
+    assert isinstance(raw.xywhr, torch.Tensor)
+    assert raw.xywhr.shape == (1, 5)
+    assert raw.xywhr.device.type == "cpu"  # sanity: still a tensor, no numpy conversion
+    torch.testing.assert_close(raw.conf, torch.tensor([0.8]))
+
+
+def test_extract_raw_tensors_from_masks_no_masks_returns_empty():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks
+
+    result = SimpleNamespace(
+        masks=None, boxes=SimpleNamespace(conf=None), orig_shape=(10, 10)
+    )
+    raw = _extract_raw_tensors_from_masks(result, frame_idx=1, device="cpu")
+    assert raw.xywhr.shape == (0, 5)

@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from ...detectors._obb_from_mask import _letterbox_gain_pad, rotated_rect_from_masks
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, runtime_to_compute_runtime
@@ -712,6 +713,148 @@ def _extract_obb_from_boxes(
         confidences=conf.astype(np.float32),
         corners=corners.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
+    )
+
+
+def _extract_obb_from_masks(
+    result: Any,
+    frame_idx: int,
+    offset: tuple[float, float] = (0.0, 0.0),
+    scale: tuple[float, float] = (1.0, 1.0),
+) -> OBBResult:
+    """Build an OBBResult from a segmentation model's predicted masks.
+
+    Angle/size come from ``rotated_rect_from_masks`` (GPU-native, no cv2) run
+    on the mask tensor's own square coordinate space; ``_letterbox_gain_pad``
+    converts the caller's original-frame boxes into that space beforehand and
+    the resulting (cx, cy, w, h) back afterwards -- a single uniform gain plus
+    translation, which (unlike independent per-axis ratios) never distorts
+    the recovered angle. The result is then folded through the same
+    ``_normalize_obb_geometry`` / ``_corners_from_xywhr`` pipeline as every
+    other OBB source for output-contract consistency.
+    """
+    masks = result.masks
+    if masks is None or masks.data is None or masks.data.shape[0] == 0:
+        return _empty_obb_result(frame_idx)
+    mask_tensor = masks.data
+    boxes = result.boxes
+    conf_all = boxes.conf if boxes is not None else None
+    if conf_all is None or len(conf_all) == 0:
+        return _empty_obb_result(frame_idx)
+
+    gain, pad_x, pad_y = _letterbox_gain_pad(
+        tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
+    )
+    boxes_orig = boxes.xyxy
+    pad = torch.tensor(
+        [pad_x, pad_y, pad_x, pad_y], device=boxes_orig.device, dtype=boxes_orig.dtype
+    )
+    boxes_mask_space = boxes_orig * gain + pad
+
+    rect_mask_space = rotated_rect_from_masks(mask_tensor, boxes_mask_space)
+    cx_m, cy_m, w_m, h_m, angle_rad = rect_mask_space.unbind(-1)
+    cx = ((cx_m - pad_x) / gain).cpu().numpy()
+    cy = ((cy_m - pad_y) / gain).cpu().numpy()
+    w_arr = (w_m / gain).cpu().numpy()
+    h_arr = (h_m / gain).cpu().numpy()
+    angle_arr = angle_rad.cpu().numpy()
+    conf = conf_all.cpu().numpy()
+
+    ox, oy = offset
+    sx, sy = scale
+    cx = cx * sx + ox
+    cy = cy * sy + oy
+    w_arr = w_arr * sx
+    h_arr = h_arr * sy
+
+    angles_fixed, sizes, aspect = _normalize_obb_geometry(w_arr, h_arr, angle_arr)
+    mask_valid = _valid_detection_mask(cx, cy, w_arr, h_arr, angles_fixed, conf)
+    if not mask_valid.all():
+        dropped = int(mask_valid.size - int(mask_valid.sum()))
+        if dropped > 0:
+            logger.warning(
+                "Dropping %d invalid segment-as-OBB detections (non-finite "
+                "geometry or empty mask crop).",
+                dropped,
+            )
+        cx, cy, w_arr, h_arr = (
+            cx[mask_valid],
+            cy[mask_valid],
+            w_arr[mask_valid],
+            h_arr[mask_valid],
+        )
+        conf, angles_fixed, sizes, aspect = (
+            conf[mask_valid],
+            angles_fixed[mask_valid],
+            sizes[mask_valid],
+            aspect[mask_valid],
+        )
+    n = int(len(conf))
+    corners = _corners_from_xywhr(cx, cy, w_arr, h_arr, angles_fixed)
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=np.stack([cx, cy], axis=1).astype(np.float32),
+        angles=angles_fixed,
+        sizes=sizes,
+        shapes=np.stack([sizes, aspect], axis=1).astype(np.float32),
+        confidences=conf.astype(np.float32),
+        corners=corners.astype(np.float32),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, n),
+    )
+
+
+def _extract_raw_tensors_from_masks(
+    result: Any, frame_idx: int, device: str
+) -> _RawOBBTensors:
+    """Keep segment-as-OBB tensors on the compute device -- no .cpu() call.
+
+    Mirrors _extract_raw_tensors_from_boxes's contract: the gain/pad
+    conversion is plain tensor arithmetic (not a sync), and
+    rotated_rect_from_masks already returns a device tensor with no internal
+    .cpu() calls, so this function never leaves the accelerator.
+    normalize/corners/finite-value filtering is deferred to
+    materialize_tensors().
+    """
+    masks = result.masks
+    if masks is None or masks.data is None or masks.data.shape[0] == 0:
+        dev = torch.device(device)
+        return _RawOBBTensors(
+            frame_idx=frame_idx,
+            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
+            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
+            conf=torch.zeros(0, dtype=torch.float32, device=dev),
+        )
+    boxes = result.boxes
+    conf_all = boxes.conf if boxes is not None else None
+    if conf_all is None or len(conf_all) == 0:
+        dev = torch.device(device)
+        return _RawOBBTensors(
+            frame_idx=frame_idx,
+            xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
+            corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
+            conf=torch.zeros(0, dtype=torch.float32, device=dev),
+        )
+    gain, pad_x, pad_y = _letterbox_gain_pad(
+        tuple(masks.data.shape[-2:]), tuple(result.orig_shape)
+    )
+    boxes_orig = boxes.xyxy
+    pad = torch.tensor(
+        [pad_x, pad_y, pad_x, pad_y], device=boxes_orig.device, dtype=boxes_orig.dtype
+    )
+    boxes_mask_space = boxes_orig * gain + pad
+    rect_mask_space = rotated_rect_from_masks(masks.data, boxes_mask_space)
+    cx_m, cy_m, w_m, h_m, angle = rect_mask_space.unbind(-1)
+    cx, cy = (cx_m - pad_x) / gain, (cy_m - pad_y) / gain
+    w_arr, h_arr = w_m / gain, h_m / gain
+    xywhr = torch.stack([cx, cy, w_arr, h_arr, angle], dim=1)
+    # NaN rows from rotated_rect_from_masks (empty mask crops) are dropped
+    # later by materialize_tensors()'s existing isfinite-based valid-mask
+    # check -- no special-casing needed here.
+    corners = torch.zeros(
+        (xywhr.shape[0], 4, 2), dtype=torch.float32, device=xywhr.device
+    )
+    return _RawOBBTensors(
+        frame_idx=frame_idx, xywhr=xywhr, corners=corners, conf=conf_all
     )
 
 
