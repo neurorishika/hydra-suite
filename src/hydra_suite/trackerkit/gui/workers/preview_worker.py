@@ -508,6 +508,10 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
         ),
         "YOLO_MODEL_PATH": resolve_model_path(context.get("yolo_model_path", "")),
         "YOLO_OBB_MODE": str(context.get("yolo_obb_mode", "direct")).strip().lower(),
+        "YOLO_OBB_DIRECT_TASK": str(context.get("yolo_obb_direct_task", "obb"))
+        .strip()
+        .lower(),
+        "YOLO_OBB_FIXED_ANGLE_DEG": float(context.get("yolo_fixed_angle_deg", 0.0)),
         "ADVANCED_CONFIG": {
             "reference_aspect_ratio": float(context.get("reference_aspect_ratio", 2.0)),
             "enable_aspect_ratio_filtering": bool(

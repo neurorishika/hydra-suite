@@ -140,6 +140,8 @@ def get_tracking_cache_model_ids(
             "ENABLE_TENSORRT",
             "TENSORRT_MAX_BATCH_SIZE",
             "YOLO_OBB_MODE",
+            "YOLO_OBB_DIRECT_TASK",
+            "YOLO_OBB_FIXED_ANGLE_DEG",
             "YOLO_SEQ_CROP_PAD_RATIO",
             "YOLO_SEQ_MIN_CROP_SIZE_PX",
             "YOLO_SEQ_ENFORCE_SQUARE_CROP",

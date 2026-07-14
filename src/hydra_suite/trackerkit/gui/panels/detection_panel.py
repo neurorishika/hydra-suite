@@ -1897,6 +1897,10 @@ class DetectionPanel(QWidget):
                 if self.combo_yolo_obb_mode.currentIndex() == 1
                 else "direct"
             ),
+            "yolo_obb_direct_task": ["obb", "detect", "segment"][
+                self.combo_yolo_direct_task.currentIndex()
+            ],
+            "yolo_fixed_angle_deg": self.spin_yolo_fixed_angle.value(),
             "yolo_model_path": self._main_window._get_selected_yolo_model_path(),
             "yolo_obb_direct_model_path": self._main_window._get_selected_yolo_model_path(),
             "yolo_detect_model_path": self._main_window._get_selected_yolo_detect_model_path(),

@@ -81,6 +81,32 @@ def test_plan_tracking_cache_populates_model_ids(tmp_path):
     assert plan.detection_cache_path.endswith(f"{plan.inference_model_id}.npz")
 
 
+def test_get_tracking_cache_model_ids_varies_with_yolo_obb_direct_task():
+    base_params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "RESIZE_FACTOR": 1.0,
+        "MAX_TARGETS": 4,
+        "COMPUTE_RUNTIME": "cpu",
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": "yolo26s-obb.pt",
+        "YOLO_OBB_DIRECT_TASK": "obb",
+        "YOLO_OBB_FIXED_ANGLE_DEG": 0.0,
+    }
+
+    obb_task_ids = get_tracking_cache_model_ids(dict(base_params), "yolo_obb")
+    detect_task_params = dict(base_params, YOLO_OBB_DIRECT_TASK="detect")
+    detect_task_ids = get_tracking_cache_model_ids(detect_task_params, "yolo_obb")
+
+    assert obb_task_ids["inference"] != detect_task_ids["inference"]
+
+    angle_params = dict(
+        base_params, YOLO_OBB_DIRECT_TASK="detect", YOLO_OBB_FIXED_ANGLE_DEG=90.0
+    )
+    angle_ids = get_tracking_cache_model_ids(angle_params, "yolo_obb")
+
+    assert detect_task_ids["inference"] != angle_ids["inference"]
+
+
 def test_normalize_tracking_cache_value_handles_native_nonfinite_floats():
     normalized = normalize_tracking_cache_value(
         {
