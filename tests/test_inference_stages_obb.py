@@ -933,3 +933,172 @@ def test_load_obb_models_accepts_matching_checkpoint_task(monkeypatch):
     )
     models = obb_mod.load_obb_models(cfg, runtime)
     assert models.mode == "direct"
+
+
+# ---------------------------------------------------------------------------
+# Segment pre-cap optimization: cap detections by confidence BEFORE the
+# expensive rotated_rect_from_masks kernel runs. Pure optimization -- the final
+# OBBResult must be byte-identical to the old post-cap path.
+# ---------------------------------------------------------------------------
+
+
+def _make_segment_result(confs, frame_idx=0, canvas=120):
+    """Build a fake ultralytics segment result with len(confs) valid detections.
+
+    Each detection is a distinct axis-aligned filled rectangle so that every
+    row produces finite geometry (no valid-mask drops) and centroids differ,
+    letting equivalence assertions catch any mis-ordering. orig_shape == mask
+    shape (gain=1, no pad).
+    """
+    from types import SimpleNamespace
+
+    n = len(confs)
+    ys, xs = torch.meshgrid(
+        torch.arange(canvas, dtype=torch.float32),
+        torch.arange(canvas, dtype=torch.float32),
+        indexing="ij",
+    )
+    masks = []
+    boxes = []
+    for i in range(n):
+        cx = 20.0 + i * 8.0
+        cy = 60.0
+        x0, x1, y0, y1 = cx - 10, cx + 10, cy - 15, cy + 15
+        m = ((xs >= x0) & (xs <= x1) & (ys >= y0) & (ys <= y1)).float()
+        masks.append(m)
+        boxes.append([x0, y0, x1, y1])
+    return SimpleNamespace(
+        masks=SimpleNamespace(data=torch.stack(masks)),
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor(boxes, dtype=torch.float32),
+            conf=torch.tensor(confs, dtype=torch.float32),
+        ),
+        orig_shape=(canvas, canvas),
+    )
+
+
+def _spy_kernel(monkeypatch):
+    """Wrap rotated_rect_from_masks to record the N it is invoked with."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    real = obb_mod.rotated_rect_from_masks
+    calls = []
+
+    def spy(mask_tensor, boxes_mask_space):
+        calls.append(int(mask_tensor.shape[0]))
+        # sanity: inputs must still be device tensors, never numpy-converted
+        assert isinstance(mask_tensor, torch.Tensor)
+        assert isinstance(boxes_mask_space, torch.Tensor)
+        return real(mask_tensor, boxes_mask_space)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+    return calls
+
+
+def _assert_obb_equal(a, b):
+    assert a.frame_idx == b.frame_idx
+    assert a.num_detections == b.num_detections
+    np.testing.assert_allclose(a.centroids, b.centroids, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(a.angles, b.angles, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(a.sizes, b.sizes, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(a.confidences, b.confidences, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(a.detection_ids, b.detection_ids)
+
+
+def test_extract_obb_from_masks_precaps_before_kernel(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import (
+        _apply_raw_detection_cap,
+        _extract_obb_from_masks,
+    )
+
+    confs = [0.1, 0.9, 0.3, 0.7, 0.5, 0.8, 0.2, 0.6]
+    cap = 3
+
+    # OLD behaviour: kernel on all N, then post-cap.
+    expected = _apply_raw_detection_cap(
+        _extract_obb_from_masks(_make_segment_result(confs), frame_idx=5), cap
+    )
+
+    # NEW behaviour: pre-cap to top-`cap`, kernel sees only `cap`, then the
+    # caller's post-cap (a no-op re-sort) is applied.
+    calls = _spy_kernel(monkeypatch)
+    new_final = _apply_raw_detection_cap(
+        _extract_obb_from_masks(
+            _make_segment_result(confs), frame_idx=5, raw_detection_cap=cap
+        ),
+        cap,
+    )
+
+    assert calls == [cap]  # optimization fired: kernel processed only `cap`
+    _assert_obb_equal(new_final, expected)
+
+
+def test_extract_obb_from_masks_cap_disabled_processes_all(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    confs = [0.1, 0.9, 0.3, 0.7, 0.5]
+    calls = _spy_kernel(monkeypatch)
+    out = _extract_obb_from_masks(
+        _make_segment_result(confs), frame_idx=0, raw_detection_cap=0
+    )
+    assert calls == [len(confs)]  # cap<=0 disables pre-cap; kernel sees all N
+    assert out.num_detections == len(confs)
+
+
+def test_extract_raw_tensors_from_masks_precaps_before_kernel(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import (
+        _apply_raw_detection_cap,
+        _extract_raw_tensors_from_masks,
+        materialize_tensors,
+    )
+
+    confs = [0.1, 0.9, 0.3, 0.7, 0.5, 0.8, 0.2, 0.6]
+    cap = 3
+
+    # OLD: raw tensors for all N, materialize (which applies its own cap).
+    raw_all = _extract_raw_tensors_from_masks(
+        _make_segment_result(confs, frame_idx=7), frame_idx=7, device="cpu"
+    )
+    expected = materialize_tensors(raw_all, raw_detection_cap=cap)
+
+    # NEW: pre-cap so the kernel sees only `cap` detections.
+    calls = _spy_kernel(monkeypatch)
+    raw_new = _extract_raw_tensors_from_masks(
+        _make_segment_result(confs, frame_idx=7),
+        frame_idx=7,
+        device="cpu",
+        raw_detection_cap=cap,
+    )
+    new_final = materialize_tensors(raw_new, raw_detection_cap=cap)
+
+    assert calls == [cap]
+    # The raw pre-cap must keep tensors on-device (no numpy/host conversion).
+    assert isinstance(raw_new.conf, torch.Tensor)
+    assert raw_new.conf.shape[0] == cap
+    _assert_obb_equal(new_final, expected)
+
+    # Sanity: also matches a direct post-cap of the CPU-materializing path.
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    cpu_expected = _apply_raw_detection_cap(
+        _extract_obb_from_masks(_make_segment_result(confs), frame_idx=7), cap
+    )
+    _assert_obb_equal(new_final, cpu_expected)
+
+
+def test_extract_raw_tensors_from_masks_precap_is_cpu_free(monkeypatch):
+    """The raw path (pre-cap + kernel) must not sync: no .cpu/.item/.numpy/.tolist."""
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks
+
+    for name in ("cpu", "item", "numpy", "tolist"):
+
+        def _raise(self, *a, _n=name, **k):
+            raise AssertionError(f"raw path invoked Tensor.{_n}() -- host sync!")
+
+        monkeypatch.setattr(torch.Tensor, name, _raise, raising=True)
+
+    result = _make_segment_result([0.1, 0.9, 0.3, 0.7, 0.5], frame_idx=2)
+    raw = _extract_raw_tensors_from_masks(
+        result, frame_idx=2, device="cpu", raw_detection_cap=3
+    )
+    assert raw.conf.shape[0] == 3

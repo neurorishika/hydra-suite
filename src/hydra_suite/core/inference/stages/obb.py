@@ -533,12 +533,15 @@ def _run_direct(
         # materialize_tensors(), same as every other detection source.
         if runtime.tensor_on_cuda:
             return [
-                _extract_raw_tensors_from_masks(r, idx, runtime.device)
+                _extract_raw_tensors_from_masks(
+                    r, idx, runtime.device, config.raw_detection_cap
+                )
                 for idx, r in enumerate(results)
             ]
         return [
             _apply_raw_detection_cap(
-                _extract_obb_from_masks(r, idx), config.raw_detection_cap
+                _extract_obb_from_masks(r, idx, config.raw_detection_cap),
+                config.raw_detection_cap,
             )
             for idx, r in enumerate(results)
         ]
@@ -823,6 +826,7 @@ def _extract_obb_from_boxes(
 def _extract_obb_from_masks(
     result: Any,
     frame_idx: int,
+    raw_detection_cap: int = 0,
 ) -> OBBResult:
     """Build an OBBResult from a segmentation model's predicted masks.
 
@@ -843,11 +847,29 @@ def _extract_obb_from_masks(
     conf_all = boxes.conf if boxes is not None else None
     if conf_all is None or len(conf_all) == 0:
         return _empty_obb_result(frame_idx)
+    boxes_orig = boxes.xyxy
+
+    # Optimization: the downstream cap keeps only the top-`raw_detection_cap`
+    # detections by confidence (see _apply_raw_detection_cap). Select that same
+    # top-k HERE, before rotated_rect_from_masks -- whose cost is
+    # O(N . num_angles . crop^2) -- so the kernel never processes rows the cap
+    # would discard. Ordering mirrors _apply_raw_detection_cap exactly
+    # (confidence descending) and the caller re-applies the cap afterwards, so
+    # the final result is unchanged.
+    if raw_detection_cap > 0 and int(conf_all.shape[0]) > raw_detection_cap:
+        order = np.argsort(conf_all.detach().cpu().numpy())[::-1][:raw_detection_cap]
+        keep = torch.as_tensor(
+            np.ascontiguousarray(order),
+            device=mask_tensor.device,
+            dtype=torch.long,
+        )
+        mask_tensor = mask_tensor[keep]
+        boxes_orig = boxes_orig[keep]
+        conf_all = conf_all[keep]
 
     gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
     )
-    boxes_orig = boxes.xyxy
     pad = torch.tensor(
         [pad_x, pad_y, pad_x, pad_y], device=boxes_orig.device, dtype=boxes_orig.dtype
     )
@@ -899,7 +921,7 @@ def _extract_obb_from_masks(
 
 
 def _extract_raw_tensors_from_masks(
-    result: Any, frame_idx: int, device: str
+    result: Any, frame_idx: int, device: str, raw_detection_cap: int = 0
 ) -> _RawOBBTensors:
     """Keep segment-as-OBB tensors on the compute device -- no .cpu() call.
 
@@ -927,15 +949,27 @@ def _extract_raw_tensors_from_masks(
             corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
             conf=torch.zeros(0, dtype=torch.float32, device=dev),
         )
-    gain, pad_x, pad_y = letterbox_gain_pad(
-        tuple(masks.data.shape[-2:]), tuple(result.orig_shape)
-    )
+    mask_tensor = masks.data
     boxes_orig = boxes.xyxy
+    # Optimization mirroring _extract_obb_from_masks: pre-cap to the top-k
+    # detections by confidence BEFORE the O(N . num_angles . crop^2) kernel, so
+    # it never processes rows materialize_tensors()'s own cap would discard.
+    # torch.topk keeps the selection fully on-device (no .cpu()/.item()) --
+    # required by this raw fast path's zero-host-sync contract -- and returns
+    # indices in descending-confidence order, matching _apply_raw_detection_cap.
+    if raw_detection_cap > 0 and int(conf_all.shape[0]) > raw_detection_cap:
+        keep = torch.topk(conf_all, raw_detection_cap).indices
+        mask_tensor = mask_tensor[keep]
+        boxes_orig = boxes_orig[keep]
+        conf_all = conf_all[keep]
+    gain, pad_x, pad_y = letterbox_gain_pad(
+        tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
+    )
     pad = torch.tensor(
         [pad_x, pad_y, pad_x, pad_y], device=boxes_orig.device, dtype=boxes_orig.dtype
     )
     boxes_mask_space = boxes_orig * gain + pad
-    rect_mask_space = rotated_rect_from_masks(masks.data, boxes_mask_space)
+    rect_mask_space = rotated_rect_from_masks(mask_tensor, boxes_mask_space)
     cx_m, cy_m, w_m, h_m, angle = rect_mask_space.unbind(-1)
     cx, cy = (cx_m - pad_x) / gain, (cy_m - pad_y) / gain
     w_arr, h_arr = w_m / gain, h_m / gain
