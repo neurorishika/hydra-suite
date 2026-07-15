@@ -36,10 +36,70 @@ detections per frame and never performs a per-detection Python loop.
 
 from __future__ import annotations
 
+import logging
 import math
 
 import torch
 from torchvision.ops import roi_align
+
+_logger = logging.getLogger(__name__)
+
+# Set once the CPU fallback below has fired, so the warning is emitted a
+# single time per process rather than once per frame/detection batch.
+_warned_mps_roi_align_fallback = False
+
+
+def _is_mps_tensor(tensor: torch.Tensor) -> bool:
+    """Return whether ``tensor`` lives on an MPS device.
+
+    Factored out (rather than inlined) so tests can monkeypatch this single
+    predicate to deterministically exercise the MPS fallback branch below
+    without requiring actual MPS hardware.
+    """
+    return tensor.device.type == "mps"
+
+
+def _roi_align_with_mps_fallback(
+    input_tensor: torch.Tensor,
+    boxes: torch.Tensor,
+    *,
+    output_size: tuple[int, int],
+    aligned: bool,
+) -> torch.Tensor:
+    """Call ``torchvision.ops.roi_align``, tolerating a missing MPS kernel.
+
+    ``roi_align`` only gained a native MPS backend in torchvision 0.16.0 (see
+    the ``mps`` extra's ``torchvision>=0.16.0`` pin in ``pyproject.toml``); on
+    an older-but-otherwise-valid install it raises ``NotImplementedError`` for
+    MPS tensors, and since this repo does not set
+    ``PYTORCH_ENABLE_MPS_FALLBACK``, that would otherwise hard-crash the
+    segment-as-OBB path. Detect exactly that case -- ``NotImplementedError``
+    on an ``mps`` tensor -- and transparently retry on CPU, moving the result
+    back to the original device before returning. Any other exception, or a
+    ``NotImplementedError`` on a non-MPS device, propagates unchanged so real
+    errors are never swallowed.
+    """
+    try:
+        return roi_align(input_tensor, boxes, output_size=output_size, aligned=aligned)
+    except NotImplementedError:
+        if not _is_mps_tensor(input_tensor):
+            raise
+        global _warned_mps_roi_align_fallback
+        if not _warned_mps_roi_align_fallback:
+            _logger.warning(
+                "torchvision.ops.roi_align has no MPS kernel on this install "
+                "(requires torchvision>=0.16.0); falling back to a CPU "
+                "roi_align for the segment-as-OBB path. This is slower but "
+                "correct -- upgrade torchvision to remove this fallback."
+            )
+            _warned_mps_roi_align_fallback = True
+        result = roi_align(
+            input_tensor.cpu(),
+            boxes.cpu(),
+            output_size=output_size,
+            aligned=aligned,
+        )
+        return result.to(input_tensor.device)
 
 
 def letterbox_gain_pad(
@@ -125,7 +185,7 @@ def rotated_rect_from_masks(
     batch_idx = torch.arange(n, device=device, dtype=torch.float32)
     roi_boxes = torch.stack([batch_idx, sx1, sy1, sx2, sy2], dim=1)
 
-    crops = roi_align(
+    crops = _roi_align_with_mps_fallback(
         masks.unsqueeze(1).float(),
         roi_boxes,
         output_size=(crop_size, crop_size),

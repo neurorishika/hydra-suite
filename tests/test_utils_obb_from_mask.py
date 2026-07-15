@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 
 import torch
+import torchvision.ops as tv_ops
 
+import hydra_suite.utils.obb_from_mask as obb_from_mask
 from hydra_suite.utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
 
 
@@ -204,3 +206,77 @@ def test_rotated_rect_from_masks_size_not_inflated_by_grid_endpoints():
     _, _, w, h, _ = rect[0].tolist()
     assert math.isclose(w, 30.0, abs_tol=0.05), f"w={w}"
     assert math.isclose(h, 30.0, abs_tol=0.05), f"h={h}"
+
+
+def test_rotated_rect_from_masks_falls_back_to_cpu_when_mps_roi_align_missing(
+    monkeypatch,
+):
+    """Simulate an old-torchvision install where ``roi_align`` has no MPS
+    kernel: the first call raises ``NotImplementedError`` for an "mps"
+    tensor. The kernel must transparently retry on CPU rather than crash,
+    and still return correct geometry."""
+    mask = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    masks = mask.unsqueeze(0)
+    boxes = torch.tensor([[64 - 25 - 5, 64 - 10 - 5, 64 + 25 + 5, 64 + 10 + 5]])
+
+    real_roi_align = tv_ops.roi_align
+    calls = {"n": 0}
+
+    def fake_roi_align(input_tensor, boxes_arg, output_size, aligned):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise NotImplementedError(
+                "Could not run 'torchvision::roi_align' with arguments from "
+                "the 'MPS' backend."
+            )
+        return real_roi_align(
+            input_tensor, boxes_arg, output_size=output_size, aligned=aligned
+        )
+
+    monkeypatch.setattr(obb_from_mask, "roi_align", fake_roi_align)
+    monkeypatch.setattr(obb_from_mask, "_is_mps_tensor", lambda t: True)
+    obb_from_mask._warned_mps_roi_align_fallback = False
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=24, crop_size=64)
+
+    assert calls["n"] == 2  # first call raised, fallback retried on CPU
+    assert rect.shape == (1, 5)
+    cx, cy, w, h, angle = rect[0].tolist()
+    assert math.isclose(cx, 64, abs_tol=1.5)
+    assert math.isclose(cy, 64, abs_tol=1.5)
+    major, minor = max(w, h), min(w, h)
+    assert math.isclose(major, 50, abs_tol=3.0)
+    assert math.isclose(minor, 20, abs_tol=3.0)
+    assert min(angle % math.pi, math.pi - (angle % math.pi)) < math.radians(5)
+
+
+def test_rotated_rect_from_masks_reraises_non_mps_not_implemented_error(monkeypatch):
+    """A ``NotImplementedError`` on a non-MPS (e.g. CPU/CUDA) tensor must NOT
+    be swallowed -- the guard only catches the specific MPS-missing-kernel
+    signature, so a genuine error on another device propagates."""
+    masks = torch.zeros((1, 64, 64))
+    boxes = torch.tensor([[10.0, 10.0, 20.0, 20.0]])
+
+    def always_raise(*args, **kwargs):
+        raise NotImplementedError("some unrelated op is not implemented")
+
+    monkeypatch.setattr(obb_from_mask, "roi_align", always_raise)
+
+    try:
+        rotated_rect_from_masks(masks, boxes)
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected NotImplementedError to propagate")
+
+
+def test_rotated_rect_from_masks_normal_path_unaffected_by_guard():
+    """The guard must not change behavior on the common (no-exception) path."""
+    mask = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    masks = mask.unsqueeze(0)
+    boxes = torch.tensor([[64 - 25 - 5, 64 - 10 - 5, 64 + 25 + 5, 64 + 10 + 5]])
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=24, crop_size=64)
+
+    assert rect.shape == (1, 5)
+    assert torch.isfinite(rect).all()

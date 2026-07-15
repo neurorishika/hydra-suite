@@ -18,7 +18,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install hydra-suite[cuda]
 
 # Apple Silicon
-pip install hydra-suite[mps]
+pip install hydra-suite[mps]   # requires torchvision>=0.16.0 for the native MPS roi_align kernel
 ```
 
 ### Full Environment (conda)
