@@ -2191,6 +2191,15 @@ class ConfigOrchestrator:
                 self._panels.detection.combo_yolo_direct_task.currentIndex()
             ],
             "YOLO_OBB_FIXED_ANGLE_DEG": self._panels.detection.spin_yolo_fixed_angle.value(),
+            # Segment-as-OBB rotated-rect kernel knobs (advanced config only;
+            # only read when YOLO_OBB_DIRECT_TASK == "segment"). No dedicated
+            # detection-panel UI -- power users tune via advanced_config.json.
+            "YOLO_OBB_SEG_NUM_ANGLES": advanced_config.get("obb_seg_num_angles", 24),
+            "YOLO_OBB_SEG_CROP_SIZE": advanced_config.get("obb_seg_crop_size", 64),
+            "YOLO_OBB_SEG_PAD_RATIO": advanced_config.get("obb_seg_pad_ratio", 0.15),
+            "YOLO_OBB_SEG_MASK_THRESHOLD": advanced_config.get(
+                "obb_seg_mask_threshold", 0.5
+            ),
             "YOLO_OBB_DIRECT_MODEL_PATH": yolo_direct_path,
             "YOLO_DETECT_MODEL_PATH": yolo_detect_path,
             "YOLO_CROP_OBB_MODEL_PATH": yolo_crop_obb_path,
@@ -2800,6 +2809,13 @@ class ConfigOrchestrator:
             "identity_swap_conf_margin": 0.2,  # prob margin to count a frame as mutual mismatch
             "identity_rejoin_velocity_budget": 1.5,  # safety factor on (frames_lost * v_max) for identity rejoin distance
             "identity_rejoin_dist_floor": None,  # absolute min rejoin distance (None = 2 * body_size)
+            # Segment-as-OBB rotated-rect kernel (advanced; only read when
+            # YOLO_OBB_DIRECT_TASK == "segment" -- tune here only if the
+            # defaults are too slow/inaccurate for your footage).
+            "obb_seg_num_angles": 24,  # coarse angle-search steps over [0, pi); linear cost
+            "obb_seg_crop_size": 64,  # mask resample resolution (crop_size^2 pixels); quadratic cost
+            "obb_seg_pad_ratio": 0.15,  # fractional padding around the box before cropping (clip safety)
+            "obb_seg_mask_threshold": 0.5,  # foreground cutoff on the resampled soft mask
         }
 
         if os.path.exists(config_path):

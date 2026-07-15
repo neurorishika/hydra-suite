@@ -1447,6 +1447,68 @@ def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
     window.close()
 
 
+def test_advanced_config_defaults_include_obb_seg_kernel_params(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    advanced_path = tmp_path / "advanced_config.json"
+
+    monkeypatch.setattr(
+        "hydra_suite.paths.get_advanced_config_path",
+        lambda: advanced_path,
+    )
+
+    advanced = ConfigOrchestrator._load_advanced_config(object())
+
+    assert advanced["obb_seg_num_angles"] == 24
+    assert advanced["obb_seg_crop_size"] == 64
+    assert advanced["obb_seg_pad_ratio"] == pytest.approx(0.15)
+    assert advanced["obb_seg_mask_threshold"] == pytest.approx(0.5)
+
+    saved = json.loads(advanced_path.read_text(encoding="utf-8"))
+    assert saved["obb_seg_num_angles"] == 24
+    assert saved["obb_seg_mask_threshold"] == pytest.approx(0.5)
+
+
+def test_get_parameters_dict_exposes_obb_seg_kernel_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "obb_seg_num_angles": 48,
+            "obb_seg_crop_size": 128,
+            "obb_seg_pad_ratio": 0.25,
+            "obb_seg_mask_threshold": 0.35,
+        },
+    )
+
+    params = window.get_parameters_dict()
+
+    assert params["YOLO_OBB_SEG_NUM_ANGLES"] == 48
+    assert params["YOLO_OBB_SEG_CROP_SIZE"] == 128
+    assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.25)
+    assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.35)
+    assert params["ADVANCED_CONFIG"]["obb_seg_num_angles"] == 48
+    window.close()
+
+
+def test_get_parameters_dict_obb_seg_kernel_overrides_default_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(monkeypatch, advanced_config={})
+
+    params = window.get_parameters_dict()
+
+    assert params["YOLO_OBB_SEG_NUM_ANGLES"] == 24
+    assert params["YOLO_OBB_SEG_CROP_SIZE"] == 64
+    assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.15)
+    assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.5)
+    window.close()
+
+
 def test_identity_decoder_tuning_controls_roundtrip_through_tracker_config(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
