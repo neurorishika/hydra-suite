@@ -303,7 +303,7 @@ def test_tracking_worker_realtime_ignores_existing_detection_cache(
     )
 
     with pytest.raises(_StopOnWrite):
-        worker.run()
+        worker._run_impl()
 
     assert cache_modes == ["w"]
 
@@ -349,7 +349,7 @@ def test_tracking_worker_forward_yolo_without_detection_cache_still_initializes_
     )
 
     with pytest.raises(_StopAtDetection):
-        worker.run()
+        worker._run_impl()
 
     assert detector_calls == [{"created": True}]
 
@@ -452,7 +452,7 @@ def test_tracking_worker_backward_cached_yolo_skips_runtime_detector_init(
     )
 
     with pytest.raises(_StopAtAssociation):
-        worker.run()
+        worker._run_impl()
 
     assert captured["meas"].shape == (1, 3)
 
@@ -552,7 +552,7 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
         }
     )
 
-    worker.run()
+    worker._run_impl()
 
     assert results.get("success") is True
 

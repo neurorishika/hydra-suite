@@ -36,6 +36,7 @@ from hydra_suite.utils.batch_policy import (
     clamp_realtime_individual_batch_size,
     should_warn_for_padding_waste,
 )
+from hydra_suite.utils.conda_utils import run_conda
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
@@ -1459,9 +1460,7 @@ class IdentityPanel(QWidget):
             self._main_window.advanced_config.get("pose_sleap_env", "sleap")
         ).strip()
         try:
-            import subprocess
-
-            res = subprocess.run(
+            res = run_conda(
                 ["conda", "env", "list"],
                 capture_output=True,
                 text=True,

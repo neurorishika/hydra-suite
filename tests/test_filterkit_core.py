@@ -144,3 +144,28 @@ def test_filterkit_load_dataset_accepts_detected_and_interpolated_flat_names(
     assert dataset[1]["trajectory_id"] == 1
     assert dataset[1]["det_id"] < 0
     assert dataset[1]["annotations"][0]["filename"] == interp_name
+
+
+def test_filterkit_expand_to_full_frames_handles_multiple_distinct_frames() -> None:
+    """Verify expand_to_full_frames correctly handles multiple frames with distinct det_ids.
+
+    This test locks in the invariant that det_id is globally unique across frames
+    (derived from detection_id where frame_idx = detection_id // 10000,
+    det_idx = detection_id % 10000), confirming that the global dedup-by-det_id
+    is safe and does not cause unintended cross-frame collisions.
+    """
+    core = FilterKitCore()
+    full_dataset = [
+        {"det_id": 10000, "frame_idx": 1, "det_idx": 0, "path": "/tmp/f1_d0.png"},
+        {"det_id": 10001, "frame_idx": 1, "det_idx": 1, "path": "/tmp/f1_d1.png"},
+        {"det_id": 20000, "frame_idx": 2, "det_idx": 0, "path": "/tmp/f2_d0.png"},
+        {"det_id": 20001, "frame_idx": 2, "det_idx": 1, "path": "/tmp/f2_d1.png"},
+    ]
+    # Only one individual from each frame survived filtering.
+    kept = [full_dataset[0], full_dataset[2]]
+
+    expanded = core.expand_to_full_frames(kept, full_dataset)
+
+    assert {item["det_id"] for item in expanded} == {10000, 10001, 20000, 20001}
+    assert {item["frame_idx"] for item in expanded} == {1, 2}
+    assert len(expanded) == 4

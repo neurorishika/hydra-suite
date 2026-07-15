@@ -13,6 +13,7 @@ from hydra_suite.core.identity.pose.utils import (
     nested_get,
     safe_pos_int,
 )
+from hydra_suite.utils.conda_utils import conda_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,7 @@ def run_cli_command(cmd: List[str], timeout_sec: int = 1800) -> Tuple[bool, str]
             text=True,
             timeout=timeout_sec,
             check=False,
+            **(conda_subprocess_kwargs() if cmd and cmd[0] == "conda" else {}),
         )
     except Exception as exc:
         return False, str(exc)
