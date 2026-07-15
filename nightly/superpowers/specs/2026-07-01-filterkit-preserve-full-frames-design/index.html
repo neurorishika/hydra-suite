@@ -10,28 +10,24 @@
       
       
       
-        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/user-guide/detectkit/">
+        <link rel="canonical" href="https://neurorishika.github.io/hydra-suite/nightly/superpowers/specs/2026-07-01-filterkit-preserve-full-frames-design/">
       
       
-        <link rel="prev" href="../classkit/">
       
       
-        <link rel="next" href="../filterkit/">
-      
-      
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.43">
     
     
       
-        <title>DetectKit - HYDRA Suite Docs</title>
+        <title>FilterKit: Preserve Full Frames Mode - HYDRA Suite Docs</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.0253249f.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.0253249f.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -50,9 +46,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -78,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#detectkit" class="md-skip">
+        <a href="#filterkit-preserve-full-frames-mode" class="md-skip">
           Skip to content
         </a>
       
@@ -96,7 +92,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-header__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -116,7 +112,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              DetectKit
+              FilterKit: Preserve Full Frames Mode
             
           </span>
         </div>
@@ -225,7 +221,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../.." class="md-tabs__link">
         
   
     
@@ -244,7 +240,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../getting-started/installation/" class="md-tabs__link">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
           
   
   Getting Started
@@ -258,13 +254,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../overview/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/overview/" class="md-tabs__link">
           
   
   User Guide
@@ -282,7 +276,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../developer-guide/architecture/" class="md-tabs__link">
+        <a href="../../../developer-guide/architecture/" class="md-tabs__link">
           
   
   Developer Guide
@@ -300,7 +294,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../reference/api-index/" class="md-tabs__link">
+        <a href="../../../reference/api-index/" class="md-tabs__link">
           
   
   Reference
@@ -333,7 +327,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
+    <a href="../../.." title="HYDRA Suite Docs" class="md-nav__button md-logo" aria-label="HYDRA Suite Docs" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -363,7 +357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../.." class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -425,7 +419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/installation/" class="md-nav__link">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -446,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/environments/" class="md-nav__link">
+      <a href="../../../getting-started/environments/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -467,7 +461,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/integrations/" class="md-nav__link">
+      <a href="../../../getting-started/integrations/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -488,7 +482,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart-hydra/" class="md-nav__link">
+      <a href="../../../getting-started/quickstart-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -509,7 +503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart-posekit/" class="md-nav__link">
+      <a href="../../../getting-started/quickstart-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -530,7 +524,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/platforms/" class="md-nav__link">
+      <a href="../../../getting-started/platforms/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -555,30 +549,27 @@
       
   
   
-    
   
   
-  
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -589,7 +580,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             User Guide
@@ -603,7 +594,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../../user-guide/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -624,7 +615,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../workflow/" class="md-nav__link">
+      <a href="../../../user-guide/workflow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -645,7 +636,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../detection-modes/" class="md-nav__link">
+      <a href="../../../user-guide/detection-modes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -666,7 +657,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tracking-and-merging/" class="md-nav__link">
+      <a href="../../../user-guide/tracking-and-merging/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -687,7 +678,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../post-processing/" class="md-nav__link">
+      <a href="../../../user-guide/post-processing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -708,7 +699,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../configuration-reference/" class="md-nav__link">
+      <a href="../../../user-guide/configuration-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -729,7 +720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../compute-runtimes/" class="md-nav__link">
+      <a href="../../../user-guide/compute-runtimes/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -750,7 +741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../outputs-and-csv-schema/" class="md-nav__link">
+      <a href="../../../user-guide/outputs-and-csv-schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -771,7 +762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dataset-generation/" class="md-nav__link">
+      <a href="../../../user-guide/dataset-generation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -792,7 +783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../individual-analysis/" class="md-nav__link">
+      <a href="../../../user-guide/individual-analysis/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -813,7 +804,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../posekit/" class="md-nav__link">
+      <a href="../../../user-guide/posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -834,7 +825,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../classkit/" class="md-nav__link">
+      <a href="../../../user-guide/classkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -852,30 +843,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    DetectKit
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../user-guide/detectkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -884,62 +855,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
-    <span class="md-ellipsis">
-      Purpose
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#launch" class="md-nav__link">
-    <span class="md-ellipsis">
-      Launch
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      Workflow
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Key Features
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -952,7 +867,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filterkit/" class="md-nav__link">
+      <a href="../../../user-guide/filterkit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -973,7 +888,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../refinekit/" class="md-nav__link">
+      <a href="../../../user-guide/refinekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -994,7 +909,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../../user-guide/troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1064,7 +979,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/architecture/" class="md-nav__link">
+      <a href="../../../developer-guide/architecture/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1085,7 +1000,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/module-map/" class="md-nav__link">
+      <a href="../../../developer-guide/module-map/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1106,7 +1021,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/data-flow/" class="md-nav__link">
+      <a href="../../../developer-guide/data-flow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1127,7 +1042,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
+      <a href="../../../developer-guide/tracking-algorithm-deep-dive/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1148,7 +1063,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/tracking-optimization/" class="md-nav__link">
+      <a href="../../../developer-guide/tracking-optimization/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1169,7 +1084,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/gpu-backends/" class="md-nav__link">
+      <a href="../../../developer-guide/gpu-backends/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1190,7 +1105,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/runtime-integration/" class="md-nav__link">
+      <a href="../../../developer-guide/runtime-integration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1211,7 +1126,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
+      <a href="../../../developer-guide/dependency-cuda-updates/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1232,7 +1147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/performance-tuning/" class="md-nav__link">
+      <a href="../../../developer-guide/performance-tuning/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1253,7 +1168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/confidence-metrics/" class="md-nav__link">
+      <a href="../../../developer-guide/confidence-metrics/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1274,7 +1189,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-detection/" class="md-nav__link">
+      <a href="../../../developer-guide/extending-detection/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1295,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/extending-identity/" class="md-nav__link">
+      <a href="../../../developer-guide/extending-identity/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1316,7 +1231,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/code-health/" class="md-nav__link">
+      <a href="../../../developer-guide/code-health/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1337,7 +1252,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/publishing/" class="md-nav__link">
+      <a href="../../../developer-guide/publishing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1358,7 +1273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../developer-guide/contributing/" class="md-nav__link">
+      <a href="../../../developer-guide/contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1428,7 +1343,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-index/" class="md-nav__link">
+      <a href="../../../reference/api-index/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1449,7 +1364,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ui-components-hydra/" class="md-nav__link">
+      <a href="../../../reference/ui-components-hydra/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1470,7 +1385,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/ui-components-posekit/" class="md-nav__link">
+      <a href="../../../reference/ui-components-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1491,7 +1406,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-app/" class="md-nav__link">
+      <a href="../../../reference/api-app/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1512,7 +1427,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-core/" class="md-nav__link">
+      <a href="../../../reference/api-core/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1533,7 +1448,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-data/" class="md-nav__link">
+      <a href="../../../reference/api-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1554,7 +1469,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-gui/" class="md-nav__link">
+      <a href="../../../reference/api-gui/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1575,7 +1490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-widgets/" class="md-nav__link">
+      <a href="../../../reference/api-widgets/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1596,7 +1511,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-posekit/" class="md-nav__link">
+      <a href="../../../reference/api-posekit/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1617,7 +1532,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api-utils/" class="md-nav__link">
+      <a href="../../../reference/api-utils/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1638,7 +1553,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/cli-reference/" class="md-nav__link">
+      <a href="../../../reference/cli-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1659,7 +1574,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/technical-reference/" class="md-nav__link">
+      <a href="../../../reference/technical-reference/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1680,7 +1595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/changelog/" class="md-nav__link">
+      <a href="../../../reference/changelog/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1701,7 +1616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/faq/" class="md-nav__link">
+      <a href="../../../reference/faq/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1749,36 +1664,105 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#purpose" class="md-nav__link">
+  <a href="#problem" class="md-nav__link">
     <span class="md-ellipsis">
-      Purpose
+      Problem
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#launch" class="md-nav__link">
+  <a href="#goals" class="md-nav__link">
     <span class="md-ellipsis">
-      Launch
+      Goals
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#workflow" class="md-nav__link">
+  <a href="#non-goals" class="md-nav__link">
     <span class="md-ellipsis">
-      Workflow
+      Non-goals
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#key-features" class="md-nav__link">
+  <a href="#design" class="md-nav__link">
     <span class="md-ellipsis">
-      Key Features
+      Design
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#config" class="md-nav__link">
+    <span class="md-ellipsis">
+      Config
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diversity-stage-corepy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Diversity stage (core.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#finalize-expansion-step" class="md-nav__link">
+    <span class="md-ellipsis">
+      Finalize / expansion step
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gui-main_windowpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      GUI (main_window.py)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#export" class="md-nav__link">
+    <span class="md-ellipsis">
+      Export
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#open-questions-risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open questions / risks
     </span>
   </a>
   
@@ -1799,7 +1783,7 @@
                   
 
   
-    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/user-guide/detectkit.md" title="Edit this page" class="md-content__button md-icon">
+    <a href="https://github.com/neurorishika/hydra-suite/edit/main/docs/superpowers/specs/2026-07-01-filterkit-preserve-full-frames-design.md" title="Edit this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1807,26 +1791,108 @@
   
 
 
-<h1 id="detectkit">DetectKit<a class="headerlink" href="#detectkit" title="Permanent link">&para;</a></h1>
-<p>DetectKit is the detection model training tool, launched via <code>detectkit</code>.</p>
-<h2 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h2>
-<p>Train, evaluate, and manage YOLO detection models for use in TrackerKit.</p>
-<h2 id="launch">Launch<a class="headerlink" href="#launch" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>detectkit
-</span></code></pre></div>
-<h2 id="workflow">Workflow<a class="headerlink" href="#workflow" title="Permanent link">&para;</a></h2>
-<ol>
-<li>Curate detection training datasets from TrackerKit exports or external sources.</li>
-<li>Configure YOLO training parameters (epochs, batch size, image size).</li>
-<li>Launch training and monitor loss curves.</li>
-<li>Evaluate model performance on validation sets.</li>
-</ol>
-<h2 id="key-features">Key Features<a class="headerlink" href="#key-features" title="Permanent link">&para;</a></h2>
+<h1 id="filterkit-preserve-full-frames-mode">FilterKit: Preserve Full Frames Mode<a class="headerlink" href="#filterkit-preserve-full-frames-mode" title="Permanent link">&para;</a></h1>
+<h2 id="problem">Problem<a class="headerlink" href="#problem" title="Permanent link">&para;</a></h2>
+<p>FilterKit's diversity sampler currently treats each individual-animal crop as an
+independent item: it clusters on raw pixel features and keeps one representative
+crop per cluster, discarding the rest. This is fine for building a diverse
+<em>classification</em>-style dataset, but it destroys the ability to reconstruct a
+full video frame with all its animals — which is what's needed to later build
+multi-animal ("bottom-up") pose training data in PoseKit.</p>
+<p>We want an opt-in mode where, instead of keeping only the most diverse
+individual crops, FilterKit selects a diverse set of <em>frames</em> and keeps every
+individual's crop from each selected frame.</p>
+<h2 id="goals">Goals<a class="headerlink" href="#goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Dataset panel for assembling and inspecting training data</li>
-<li>Training panel with configurable hyperparameters</li>
-<li>Integration with TrackerKit's dataset generation exports</li>
+<li>Add a <code>preserve_full_frames</code> toggle to FilterKit's pipeline.</li>
+<li>When enabled, diversity sampling operates on frames (not individual crops),
+  and the final export expands each selected frame to include every
+  individual detected in it — even ones that would otherwise be dropped by
+  quality/dedup/temporal filtering.</li>
+<li>Keep <code>metadata.json</code> untouched so existing per-crop frame/OBB/canonicalization
+  data remains available for later reconstruction work (out of scope here).</li>
 </ul>
+<h2 id="non-goals">Non-goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Reconstructing an actual full-frame image or building multi-instance PoseKit
+  annotations. That is future PoseKit work (a planned "frame mode" toggle) and
+  is explicitly out of scope for this change.</li>
+<li>Changing <code>metadata.json</code>'s schema or the crop filename encoding.</li>
+<li>Changing behavior of any dataset type other than what FilterKit already
+  supports (MAT identity crop datasets with <code>frame_idx</code>/<code>det_idx</code>, and
+  COCO/YOLO/class-folder datasets, to whatever extent <code>frame_idx</code> is
+  meaningful for them).</li>
+</ul>
+<h2 id="design">Design<a class="headerlink" href="#design" title="Permanent link">&para;</a></h2>
+<h3 id="config">Config<a class="headerlink" href="#config" title="Permanent link">&para;</a></h3>
+<p>Add <code>preserve_full_frames: bool = False</code> to the pipeline config dict built in
+<code>filterkit/gui/main_window.py</code> (the same dict that carries
+<code>diversity_enabled</code>, <code>diversity_target</code>, etc. — not the persisted
+<code>FilterKitConfig</code> dataclass, which only tracks dataset path / pagination).</p>
+<h3 id="diversity-stage-corepy">Diversity stage (<code>core.py</code>)<a class="headerlink" href="#diversity-stage-corepy" title="Permanent link">&para;</a></h3>
+<p>When <code>preserve_full_frames</code> is <code>True</code>, <code>diversity_sample</code> clusters on frames
+instead of individual crops:</p>
+<ol>
+<li>Group the stage's input items by <code>frame_idx</code>.</li>
+<li>For each frame, average the existing 32×32 grayscale flattened feature
+   vectors of all individuals present in that frame into one 1024-d vector.</li>
+<li>Compute <code>avg_individuals_per_frame</code> from the full loaded dataset (total
+   crops ÷ total unique frames) — not just the post-filter subset.</li>
+<li>Back-solve the number of frames to select:
+   <code>n_frames = max(1, round(diversity_target / avg_individuals_per_frame))</code>.</li>
+<li>Run <code>MiniBatchKMeans</code> with <code>n_clusters=n_frames</code> over the per-frame
+   vectors, and pick the frame nearest each centroid (same
+   <code>pairwise_distances_argmin_min</code> approach as today), deduplicated.</li>
+</ol>
+<p>When <code>preserve_full_frames</code> is <code>False</code>, behavior is unchanged (per-crop
+clustering as today).</p>
+<p>If diversity is disabled but <code>preserve_full_frames</code> is enabled, this stage is
+skipped entirely — expansion (below) still applies to whatever
+temporal/dedup/quality left behind.</p>
+<h3 id="finalize-expansion-step">Finalize / expansion step<a class="headerlink" href="#finalize-expansion-step" title="Permanent link">&para;</a></h3>
+<p>After all enabled stages produce a "kept" set of items, if
+<code>preserve_full_frames</code> is <code>True</code>:</p>
+<ol>
+<li>Collect the unique <code>frame_idx</code> values present in the kept set.</li>
+<li>For each such <code>frame_idx</code>, look up every individual crop with that
+   <code>frame_idx</code> in the <strong>original, unfiltered</strong> loaded dataset (i.e. before
+   quality/dedup/temporal filtering was applied).</li>
+<li>The union of these becomes the final selection.</li>
+</ol>
+<p>This restores companions that would otherwise have been dropped by
+quality/dedup/temporal filtering — a selected frame always exports with
+complete individual coverage. This step is independent of which upstream
+stages ran, so it works whether diversity sampling is enabled or not.</p>
+<h3 id="gui-main_windowpy">GUI (<code>main_window.py</code>)<a class="headerlink" href="#gui-main_windowpy" title="Permanent link">&para;</a></h3>
+<p>Add a checkbox near the diversity controls:</p>
+<blockquote>
+<p>"Preserve all individuals per frame (for full-frame pose reconstruction)"</p>
+</blockquote>
+<p>When checked, update the target field's helper text to note that the number
+is now an approximate final-image-count target (actual output ≈ frames ×
+individuals/frame, since a back-solved frame count is used). Default is
+unchecked; existing presets are unaffected (leave the toggle off in all of
+them).</p>
+<h3 id="export">Export<a class="headerlink" href="#export" title="Permanent link">&para;</a></h3>
+<p>No changes to <code>process_dataset</code>. It already copies whatever ends up in the
+finalized selection by filename, and <code>metadata.json</code> is left in place with all
+original per-crop data intact.</p>
+<h2 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h2>
+<p>New tests in <code>tests/test_filterkit_core.py</code>:</p>
+<ul>
+<li>Frame-level feature aggregation produces one vector per unique <code>frame_idx</code>.</li>
+<li>Target back-solving picks a sensible <code>n_frames</code> given a known
+  <code>avg_individuals_per_frame</code>.</li>
+<li>Expansion restores companions that were removed by quality/dedup/temporal
+  filtering, when their frame was otherwise selected.</li>
+<li>With <code>preserve_full_frames=False</code>, behavior is byte-for-byte identical to
+  today.</li>
+</ul>
+<h2 id="open-questions-risks">Open questions / risks<a class="headerlink" href="#open-questions-risks" title="Permanent link">&para;</a></h2>
+<p>None outstanding — scope has been deliberately kept to FilterKit's selection
+and export logic. Downstream reconstruction (full-frame image assembly,
+multi-instance PoseKit format) is tracked separately as PoseKit's planned
+frame-mode toggle.</p>
 
 
 
@@ -1879,10 +1945,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "content.code.copy", "content.action.edit", "search.suggest", "search.highlight"], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.83f73b43.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.83f73b43.min.js"></script>
       
     
   </body>
