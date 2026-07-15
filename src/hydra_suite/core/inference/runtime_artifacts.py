@@ -240,7 +240,7 @@ def _create_direct_executor(
 
     ``task="segment"`` returns an executor that decodes the model's raw
     detection + mask-prototype outputs and derives OBB geometry via
-    ``core.detectors._obb_from_mask.rotated_rect_from_masks`` -- a GPU-native,
+    ``hydra_suite.utils.obb_from_mask.rotated_rect_from_masks`` -- a GPU-native,
     cv2-free batched rotated-rectangle search -- for treating a YOLO
     segmentation checkpoint as an OBB source.
     """
