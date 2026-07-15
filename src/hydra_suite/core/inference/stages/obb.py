@@ -531,16 +531,35 @@ def _run_direct(
         # runtime segment gets the exact same zero-CPU-sync _RawOBBTensors
         # fast path as "obb"/"detect" -- the sync is deferred to
         # materialize_tensors(), same as every other detection source.
+        seg_num_angles = config.direct.seg_num_angles if config.direct else 24
+        seg_crop_size = config.direct.seg_crop_size if config.direct else 64
+        seg_pad_ratio = config.direct.seg_pad_ratio if config.direct else 0.15
+        seg_mask_threshold = config.direct.seg_mask_threshold if config.direct else 0.5
         if runtime.tensor_on_cuda:
             return [
                 _extract_raw_tensors_from_masks(
-                    r, idx, runtime.device, config.raw_detection_cap
+                    r,
+                    idx,
+                    runtime.device,
+                    config.raw_detection_cap,
+                    num_angles=seg_num_angles,
+                    crop_size=seg_crop_size,
+                    pad_ratio=seg_pad_ratio,
+                    mask_threshold=seg_mask_threshold,
                 )
                 for idx, r in enumerate(results)
             ]
         return [
             _apply_raw_detection_cap(
-                _extract_obb_from_masks(r, idx, config.raw_detection_cap),
+                _extract_obb_from_masks(
+                    r,
+                    idx,
+                    config.raw_detection_cap,
+                    num_angles=seg_num_angles,
+                    crop_size=seg_crop_size,
+                    pad_ratio=seg_pad_ratio,
+                    mask_threshold=seg_mask_threshold,
+                ),
                 config.raw_detection_cap,
             )
             for idx, r in enumerate(results)
@@ -827,6 +846,11 @@ def _extract_obb_from_masks(
     result: Any,
     frame_idx: int,
     raw_detection_cap: int = 0,
+    *,
+    num_angles: int = 24,
+    crop_size: int = 64,
+    pad_ratio: float = 0.15,
+    mask_threshold: float = 0.5,
 ) -> OBBResult:
     """Build an OBBResult from a segmentation model's predicted masks.
 
@@ -875,7 +899,14 @@ def _extract_obb_from_masks(
     )
     boxes_mask_space = boxes_orig * gain + pad
 
-    rect_mask_space = rotated_rect_from_masks(mask_tensor, boxes_mask_space)
+    rect_mask_space = rotated_rect_from_masks(
+        mask_tensor,
+        boxes_mask_space,
+        num_angles=num_angles,
+        crop_size=crop_size,
+        pad_ratio=pad_ratio,
+        mask_threshold=mask_threshold,
+    )
     cx_m, cy_m, w_m, h_m, angle_rad = rect_mask_space.unbind(-1)
     cx = ((cx_m - pad_x) / gain).cpu().numpy()
     cy = ((cy_m - pad_y) / gain).cpu().numpy()
@@ -921,7 +952,15 @@ def _extract_obb_from_masks(
 
 
 def _extract_raw_tensors_from_masks(
-    result: Any, frame_idx: int, device: str, raw_detection_cap: int = 0
+    result: Any,
+    frame_idx: int,
+    device: str,
+    raw_detection_cap: int = 0,
+    *,
+    num_angles: int = 24,
+    crop_size: int = 64,
+    pad_ratio: float = 0.15,
+    mask_threshold: float = 0.5,
 ) -> _RawOBBTensors:
     """Keep segment-as-OBB tensors on the compute device -- no .cpu() call.
 
@@ -969,7 +1008,14 @@ def _extract_raw_tensors_from_masks(
         [pad_x, pad_y, pad_x, pad_y], device=boxes_orig.device, dtype=boxes_orig.dtype
     )
     boxes_mask_space = boxes_orig * gain + pad
-    rect_mask_space = rotated_rect_from_masks(mask_tensor, boxes_mask_space)
+    rect_mask_space = rotated_rect_from_masks(
+        mask_tensor,
+        boxes_mask_space,
+        num_angles=num_angles,
+        crop_size=crop_size,
+        pad_ratio=pad_ratio,
+        mask_threshold=mask_threshold,
+    )
     cx_m, cy_m, w_m, h_m, angle = rect_mask_space.unbind(-1)
     cx, cy = (cx_m - pad_x) / gain, (cy_m - pad_y) / gain
     w_arr, h_arr = w_m / gain, h_m / gain

@@ -107,6 +107,35 @@ def test_get_tracking_cache_model_ids_varies_with_yolo_obb_direct_task():
     assert detect_task_ids["inference"] != angle_ids["inference"]
 
 
+def test_get_tracking_cache_model_ids_varies_with_seg_kernel_params():
+    base_params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "RESIZE_FACTOR": 1.0,
+        "MAX_TARGETS": 4,
+        "COMPUTE_RUNTIME": "cpu",
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": "yolo26s-seg.pt",
+        "YOLO_OBB_DIRECT_TASK": "segment",
+        "YOLO_OBB_SEG_NUM_ANGLES": 24,
+        "YOLO_OBB_SEG_CROP_SIZE": 64,
+        "YOLO_OBB_SEG_PAD_RATIO": 0.15,
+        "YOLO_OBB_SEG_MASK_THRESHOLD": 0.5,
+    }
+    base_ids = get_tracking_cache_model_ids(dict(base_params), "yolo_obb")
+
+    for key, changed_value in (
+        ("YOLO_OBB_SEG_NUM_ANGLES", 48),
+        ("YOLO_OBB_SEG_CROP_SIZE", 128),
+        ("YOLO_OBB_SEG_PAD_RATIO", 0.25),
+        ("YOLO_OBB_SEG_MASK_THRESHOLD", 0.35),
+    ):
+        varied_params = dict(base_params, **{key: changed_value})
+        varied_ids = get_tracking_cache_model_ids(varied_params, "yolo_obb")
+        assert (
+            varied_ids["inference"] != base_ids["inference"]
+        ), f"{key} did not change the cache fingerprint"
+
+
 def test_normalize_tracking_cache_value_handles_native_nonfinite_floats():
     normalized = normalize_tracking_cache_value(
         {

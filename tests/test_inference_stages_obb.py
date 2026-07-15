@@ -984,12 +984,12 @@ def _spy_kernel(monkeypatch):
     real = obb_mod.rotated_rect_from_masks
     calls = []
 
-    def spy(mask_tensor, boxes_mask_space):
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
         calls.append(int(mask_tensor.shape[0]))
         # sanity: inputs must still be device tensors, never numpy-converted
         assert isinstance(mask_tensor, torch.Tensor)
         assert isinstance(boxes_mask_space, torch.Tensor)
-        return real(mask_tensor, boxes_mask_space)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
 
     monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
     return calls
@@ -1102,3 +1102,138 @@ def test_extract_raw_tensors_from_masks_precap_is_cpu_free(monkeypatch):
         result, frame_idx=2, device="cpu", raw_detection_cap=3
     )
     assert raw.conf.shape[0] == 3
+
+
+# ---------------------------------------------------------------------------
+# Segment-as-OBB kernel knobs: seg_num_angles/seg_crop_size/seg_pad_ratio/
+# seg_mask_threshold must be forwarded from OBBDirectConfig all the way to
+# rotated_rect_from_masks, not silently dropped in favor of its own defaults.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_obb_from_masks_forwards_configured_kernel_params(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+    obb_mod._extract_obb_from_masks(
+        result,
+        frame_idx=0,
+        num_angles=48,
+        crop_size=128,
+        pad_ratio=0.25,
+        mask_threshold=0.35,
+    )
+
+    assert recorded == {
+        "num_angles": 48,
+        "crop_size": 128,
+        "pad_ratio": 0.25,
+        "mask_threshold": 0.35,
+    }
+
+
+def test_extract_raw_tensors_from_masks_forwards_configured_kernel_params(
+    monkeypatch,
+):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+    obb_mod._extract_raw_tensors_from_masks(
+        result,
+        frame_idx=0,
+        device="cpu",
+        num_angles=48,
+        crop_size=128,
+        pad_ratio=0.25,
+        mask_threshold=0.35,
+    )
+
+    assert recorded == {
+        "num_angles": 48,
+        "crop_size": 128,
+        "pad_ratio": 0.25,
+        "mask_threshold": 0.35,
+    }
+
+
+def test_extract_obb_from_masks_defaults_match_kernel_defaults(monkeypatch):
+    """Omitting the kwargs must reproduce the kernel's own defaults exactly."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+    obb_mod._extract_obb_from_masks(result, frame_idx=0)
+
+    assert recorded == {
+        "num_angles": 24,
+        "crop_size": 64,
+        "pad_ratio": 0.15,
+        "mask_threshold": 0.5,
+    }
+
+
+def test_run_direct_segment_threads_configured_kernel_params(monkeypatch):
+    """_run_direct's segment branch must pull the four knobs from config.direct."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+
+    class _FakeModel:
+        def predict(self, frames, **kwargs):
+            return [result]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="/m.pt",
+            model_task="segment",
+            seg_num_angles=48,
+            seg_crop_size=128,
+            seg_pad_ratio=0.25,
+            seg_mask_threshold=0.35,
+        ),
+    )
+    frames = [np.zeros((120, 120, 3), dtype=np.uint8)]
+    obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+
+    assert recorded == {
+        "num_angles": 48,
+        "crop_size": 128,
+        "pad_ratio": 0.25,
+        "mask_threshold": 0.35,
+    }

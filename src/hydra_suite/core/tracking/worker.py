@@ -4489,6 +4489,47 @@ class TrackingWorker(QThread):
             model_task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
             if model_task not in {"obb", "detect", "segment"}:
                 model_task = "obb"
+
+            # Segment-as-OBB rotated-rect kernel knobs (power-user; advanced
+            # config only, no dedicated detection-panel UI). Only read when
+            # model_task == "segment", but always validated/clamped here so a
+            # garbage value can never reach OBBDirectConfig. Falls back to the
+            # kernel's own defaults (rotated_rect_from_masks signature) on
+            # missing/non-numeric/out-of-range input. Exposed as top-level
+            # params (like YOLO_OBB_DIRECT_TASK/YOLO_OBB_FIXED_ANGLE_DEG)
+            # rather than nested under ADVANCED_CONFIG so the same key set
+            # also drives the detection-cache fingerprint.
+            def _clamped_int(raw, default, lo, hi):
+                try:
+                    value = int(raw)
+                except (TypeError, ValueError):
+                    return default
+                if value < lo or value > hi:
+                    return default
+                return value
+
+            def _clamped_float(raw, default, lo, hi):
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    return default
+                if not math.isfinite(value) or value < lo or value > hi:
+                    return default
+                return value
+
+            seg_num_angles = _clamped_int(
+                params.get("YOLO_OBB_SEG_NUM_ANGLES", 24), 24, 4, 180
+            )
+            seg_crop_size = _clamped_int(
+                params.get("YOLO_OBB_SEG_CROP_SIZE", 64), 64, 16, 256
+            )
+            seg_pad_ratio = _clamped_float(
+                params.get("YOLO_OBB_SEG_PAD_RATIO", 0.15), 0.15, 0.0, 1.0
+            )
+            seg_mask_threshold = _clamped_float(
+                params.get("YOLO_OBB_SEG_MASK_THRESHOLD", 0.5), 0.5, 0.05, 0.95
+            )
+
             obb_cfg = OBBConfig(
                 mode="direct",
                 direct=OBBDirectConfig(
@@ -4498,6 +4539,10 @@ class TrackingWorker(QThread):
                     confidence_threshold=yolo_conf,
                     model_task=model_task,
                     fixed_angle_deg=float(params.get("YOLO_OBB_FIXED_ANGLE_DEG", 0.0)),
+                    seg_num_angles=seg_num_angles,
+                    seg_crop_size=seg_crop_size,
+                    seg_pad_ratio=seg_pad_ratio,
+                    seg_mask_threshold=seg_mask_threshold,
                 ),
                 target_classes=target_classes,
                 confidence_threshold=yolo_conf,

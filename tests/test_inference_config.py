@@ -186,3 +186,35 @@ def test_obb_direct_config_model_task_defaults_to_obb():
     direct = OBBDirectConfig(model_path="yolo26s-obb.pt")
     assert direct.model_task == "obb"
     assert direct.fixed_angle_deg == 0.0
+
+
+def test_obb_direct_config_seg_kernel_params_round_trip(tmp_path):
+    config = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                model_path="yolo26s-seg.pt",
+                model_task="segment",
+                seg_num_angles=48,
+                seg_crop_size=128,
+                seg_pad_ratio=0.25,
+                seg_mask_threshold=0.35,
+            ),
+        )
+    )
+    path = tmp_path / "cfg.json"
+    config.to_json(str(path))
+    loaded = InferenceConfig.from_json(str(path))
+
+    assert loaded.obb.direct.seg_num_angles == 48
+    assert loaded.obb.direct.seg_crop_size == 128
+    assert loaded.obb.direct.seg_pad_ratio == pytest.approx(0.25)
+    assert loaded.obb.direct.seg_mask_threshold == pytest.approx(0.35)
+
+
+def test_obb_direct_config_seg_kernel_params_default_to_kernel_defaults():
+    direct = OBBDirectConfig(model_path="yolo26s-seg.pt")
+    assert direct.seg_num_angles == 24
+    assert direct.seg_crop_size == 64
+    assert direct.seg_pad_ratio == pytest.approx(0.15)
+    assert direct.seg_mask_threshold == pytest.approx(0.5)

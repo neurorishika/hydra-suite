@@ -105,6 +105,25 @@ class OBBDirectConfig:
     # before being folded through the same normalize/corners pipeline as
     # native-OBB angles.
     fixed_angle_deg: float = 0.0
+    # The following four fields are only read when model_task == "segment";
+    # they are forwarded as keyword args to
+    # utils/obb_from_mask.py:rotated_rect_from_masks. Defaults match that
+    # function's own kernel defaults.
+    # Number of coarse candidate angles searched over [0, pi) before local
+    # refinement. Linear cost: doubling this roughly doubles per-detection
+    # kernel time.
+    seg_num_angles: int = 24
+    # Square resolution (crop_size x crop_size) the mask is resampled to
+    # before the rotated-rect search. Quadratic cost: doubling this
+    # roughly quadruples per-detection kernel time.
+    seg_crop_size: int = 64
+    # Fractional padding (of the axis-aligned box's own size) added around
+    # the crop region before resampling, so a tightly-fit mask isn't clipped
+    # at the crop border.
+    seg_pad_ratio: float = 0.15
+    # Foreground cutoff applied to the resampled soft mask before the
+    # rotated-rect search treats a pixel as "inside" the object.
+    seg_mask_threshold: float = 0.5
 
 
 @dataclass
