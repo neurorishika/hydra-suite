@@ -1138,6 +1138,8 @@ def test_extract_obb_from_masks_forwards_configured_kernel_params(monkeypatch):
         "crop_size": 128,
         "pad_ratio": 0.25,
         "mask_threshold": 0.35,
+        # CPU-materializing path opts into foreground-only projection.
+        "foreground_only": True,
     }
 
 
@@ -1174,6 +1176,42 @@ def test_extract_raw_tensors_from_masks_forwards_configured_kernel_params(
     }
 
 
+def test_extract_obb_from_masks_enables_foreground_only(monkeypatch):
+    """CPU-materializing path must opt into foreground_only=True."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+    obb_mod._extract_obb_from_masks(_make_segment_result([0.9]), frame_idx=0)
+    assert recorded.get("foreground_only") is True
+
+
+def test_extract_raw_tensors_from_masks_keeps_full_pixel_projection(monkeypatch):
+    """The zero-CPU-sync raw path must NOT opt into foreground_only (default
+    False / omitted), keeping its full-pixel, host-sync-free projection."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+    obb_mod._extract_raw_tensors_from_masks(
+        _make_segment_result([0.9]), frame_idx=0, device="cpu"
+    )
+    # Either omitted entirely or explicitly False -- never True.
+    assert recorded.get("foreground_only", False) is False
+
+
 def test_extract_obb_from_masks_defaults_match_kernel_defaults(monkeypatch):
     """Omitting the kwargs must reproduce the kernel's own defaults exactly."""
     import hydra_suite.core.inference.stages.obb as obb_mod
@@ -1195,6 +1233,7 @@ def test_extract_obb_from_masks_defaults_match_kernel_defaults(monkeypatch):
         "crop_size": 64,
         "pad_ratio": 0.15,
         "mask_threshold": 0.5,
+        "foreground_only": True,
     }
 
 
@@ -1236,4 +1275,7 @@ def test_run_direct_segment_threads_configured_kernel_params(monkeypatch):
         "crop_size": 128,
         "pad_ratio": 0.25,
         "mask_threshold": 0.35,
+        # _run_direct's segment branch under a CPU (materializing) runtime
+        # routes through _extract_obb_from_masks, which opts into foreground-only.
+        "foreground_only": True,
     }

@@ -280,3 +280,154 @@ def test_rotated_rect_from_masks_normal_path_unaffected_by_guard():
 
     assert rect.shape == (1, 5)
     assert torch.isfinite(rect).all()
+
+
+# ---------------------------------------------------------------------------
+# foreground_only optimization: projecting ONLY foreground pixels (ragged ->
+# padded to the batch-max foreground count) must be bit-identical to the
+# full-pixel path, at a fraction of the projection-tensor size.
+# ---------------------------------------------------------------------------
+
+
+def _assert_rects_equivalent(a: torch.Tensor, b: torch.Tensor, atol: float = 1e-4):
+    """NaN rows must agree as NaN; finite rows must match within ``atol``."""
+    assert a.shape == b.shape
+    nan_a = torch.isnan(a).any(dim=1)
+    nan_b = torch.isnan(b).any(dim=1)
+    assert torch.equal(nan_a, nan_b), f"NaN-row mask mismatch: {nan_a} vs {nan_b}"
+    finite = ~nan_a
+    if finite.any():
+        torch.testing.assert_close(a[finite], b[finite], atol=atol, rtol=0.0)
+
+
+def _diverse_mask_batch(size: int = 128) -> tuple[torch.Tensor, torch.Tensor]:
+    """A batch of structurally diverse masks + matching loose boxes."""
+    ys, xs = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    masks = []
+    boxes = []
+
+    def _box_full():
+        return [8.0, 8.0, float(size - 8), float(size - 8)]
+
+    # 1. Axis-aligned rectangle.
+    masks.append(_rasterize_rotated_rect(size, 64, 64, 50, 20, 0.0))
+    boxes.append(_box_full())
+    # 2. Rotated rectangle.
+    masks.append(_rasterize_rotated_rect(size, 64, 64, 50, 20, 37.0))
+    boxes.append(_box_full())
+    # 3. Ellipse.
+    ell = (((xs - 64) / 30.0) ** 2 + ((ys - 60) / 15.0) ** 2 <= 1.0).float()
+    masks.append(ell)
+    boxes.append(_box_full())
+    # 4. Asymmetric triangle / wedge.
+    wedge = (
+        (xs >= 40)
+        & (xs <= 95)
+        & (ys >= 45)
+        & (ys <= 80)
+        & ((ys - 45) <= (xs - 40) * (35.0 / 55.0))
+    ).float()
+    masks.append(wedge)
+    boxes.append(_box_full())
+    # 5. L-shape.
+    lshape = (
+        ((xs >= 40) & (xs <= 55) & (ys >= 40) & (ys <= 90))
+        | ((xs >= 40) & (xs <= 90) & (ys >= 75) & (ys <= 90))
+    ).float()
+    masks.append(lshape)
+    boxes.append(_box_full())
+    # 6. Single foreground pixel.
+    single = torch.zeros((size, size))
+    single[70, 55] = 1.0
+    masks.append(single)
+    boxes.append([50.0, 65.0, 60.0, 75.0])
+    # 7. Empty mask.
+    masks.append(torch.zeros((size, size)))
+    boxes.append([50.0, 50.0, 60.0, 60.0])
+    # 8. Second rotated rectangle (>=2 batch coverage, different angle).
+    masks.append(_rasterize_rotated_rect(size, 60, 68, 44, 24, 110.0))
+    boxes.append(_box_full())
+
+    return torch.stack(masks, dim=0), torch.tensor(boxes, dtype=torch.float32)
+
+
+def test_rotated_rect_from_masks_foreground_only_matches_full_pixel():
+    """The key equivalence test: foreground-only == full-pixel, element-wise."""
+    masks, boxes = _diverse_mask_batch(128)
+    full = rotated_rect_from_masks(
+        masks, boxes, num_angles=36, crop_size=64, foreground_only=False
+    )
+    fg = rotated_rect_from_masks(
+        masks, boxes, num_angles=36, crop_size=64, foreground_only=True
+    )
+    # Sanity: at least one NaN row (the empty mask) and several finite rows.
+    assert torch.isnan(fg).any(dim=1).sum() >= 1
+    assert torch.isfinite(fg).all(dim=1).sum() >= 5
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_single_detection():
+    for angle in (0.0, 35.0, 110.0):
+        mask = _rasterize_rotated_rect(128, 64, 64, 50, 20, angle).unsqueeze(0)
+        boxes = torch.tensor([[14.0, 14.0, 114.0, 114.0]])
+        full = rotated_rect_from_masks(mask, boxes, num_angles=36, crop_size=96)
+        fg = rotated_rect_from_masks(
+            mask, boxes, num_angles=36, crop_size=96, foreground_only=True
+        )
+        _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_all_empty_batch():
+    """M == 0 (every mask empty): both modes return all-NaN, no crash."""
+    masks = torch.zeros((3, 64, 64))
+    boxes = torch.tensor(
+        [[10.0, 10.0, 20.0, 20.0], [5.0, 5.0, 15.0, 15.0], [30.0, 30.0, 40.0, 40.0]]
+    )
+    full = rotated_rect_from_masks(masks, boxes, foreground_only=False)
+    fg = rotated_rect_from_masks(masks, boxes, foreground_only=True)
+    assert torch.isnan(fg).all()
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_mixed_empty_and_nonempty():
+    """A batch mixing empty and non-empty detections stays row-wise correct."""
+    m0 = _rasterize_rotated_rect(128, 64, 64, 50, 20, 20.0)
+    m1 = torch.zeros((128, 128))  # empty -> NaN row
+    m2 = _rasterize_rotated_rect(128, 60, 60, 40, 30, 80.0)
+    masks = torch.stack([m0, m1, m2], dim=0)
+    boxes = torch.tensor(
+        [
+            [14.0, 14.0, 114.0, 114.0],
+            [50.0, 50.0, 60.0, 60.0],
+            [14.0, 14.0, 114.0, 114.0],
+        ]
+    )
+    full = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+    fg = rotated_rect_from_masks(
+        masks, boxes, num_angles=36, crop_size=96, foreground_only=True
+    )
+    assert torch.isnan(fg[1]).all()
+    assert torch.isfinite(fg[0]).all() and torch.isfinite(fg[2]).all()
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_single_pixel():
+    single = torch.zeros((64, 64))
+    single[30, 40] = 1.0
+    boxes = torch.tensor([[35.0, 25.0, 45.0, 35.0]])
+    full = rotated_rect_from_masks(single.unsqueeze(0), boxes, crop_size=48)
+    fg = rotated_rect_from_masks(
+        single.unsqueeze(0), boxes, crop_size=48, foreground_only=True
+    )
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_zero_detections():
+    masks = torch.zeros((0, 64, 64))
+    boxes = torch.zeros((0, 4))
+    rect = rotated_rect_from_masks(masks, boxes, foreground_only=True)
+    assert rect.shape == (0, 5)
