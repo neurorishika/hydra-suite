@@ -2223,11 +2223,29 @@ Expected: all pass. Baseline before this work was 29 passed for
 
 - [ ] **Step 2: Verify the leaf constraint one final time**
 
-Run:
+Use the AST check, not a plain grep. A substring grep for `import hydra_suite`
+matches the package docstring ("imports nothing from hydra_suite") and reports a
+false VIOLATION every time — a check that always cries wolf is worse than none.
+
 ```bash
-grep -rn "from hydra_suite\|import hydra_suite" src/hydra_suite/core/identity/pose/vitpose/ && echo "VIOLATION" || echo "clean: leaf module imports nothing from hydra_suite"
+PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python - <<'PY'
+import ast, pathlib, sys
+root = pathlib.Path("src/hydra_suite/core/identity/pose/vitpose")
+bad = []
+for f in root.rglob("*.py"):
+    for node in ast.walk(ast.parse(f.read_text())):
+        if isinstance(node, ast.Import):
+            bad += [f"{f}:{node.lineno} import {a.name}"
+                    for a in node.names if a.name.startswith("hydra_suite")]
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+            "hydra_suite"
+        ):
+            bad.append(f"{f}:{node.lineno} from {node.module}")
+print("VIOLATIONS:", bad if bad else "none — leaf constraint holds")
+sys.exit(1 if bad else 0)
+PY
 ```
-Expected: `clean: ...`
+Expected: `VIOLATIONS: none — leaf constraint holds`
 
 - [ ] **Step 3: Confirm nothing was wired in (Spec 1 is standalone)**
 
