@@ -119,6 +119,15 @@ def run_bgsub_batch(frames, frame_indices, model, config, runtime) -> list[OBBRe
 Priming is the "load" — `BackgroundModel` slots naturally into the
 `XModel`-wraps-an-opaque-backend role.
 
+**Detection source becomes a choice.** `InferenceConfig.obb: OBBConfig`
+(`config.py:229`) is a **required** field, and `_AllModels.obb` (`runner.py:80`)
+is non-optional. bg-sub is an *alternative* detection source, not an addition, so
+both become optional and `InferenceConfig` gains an exactly-one validation plus a
+`detection_source -> Literal["obb", "bgsub"]` property. Note the asymmetry with
+`cache_only`: OBB must still load in that mode because it is needed for
+cache-key validation, whereas bg-sub's key needs no model and can skip loading
+entirely.
+
 **Ordering constraint.** `BackgroundModel` is stateful and strictly sequential.
 `Pipeline` runs windows through a single in-order consumer
 (`pipeline.py:38-42`), so this is safe, but it must be documented: bg-sub
@@ -184,10 +193,13 @@ backward-pass replay via `load_frame`, and `cache_only=True` skipping model load
 
 ### Runtime tiers
 
-`BackgroundModel._setup_gpu_acceleration` (`model.py:197`) currently
-**self-selects** CUDA > MPS > CPU, ignoring config. Under the runner this is a
-live bug: `runtime_tier="cpu"` would still run CuPy on the GPU. The port inverts
-control — `RuntimeContext` drives selection; the model stops deciding.
+`BackgroundModel._setup_gpu_acceleration` (`model.py:197-239`) gates on the
+`ENABLE_GPU_BACKGROUND` param and then **self-selects** CUDA > MPS > CPU. It
+never consults `runtime_tier`. Under the runner this is a live bug:
+`runtime_tier="cpu"` would still run CuPy on the GPU. The port inverts control —
+`RuntimeContext` drives selection via a new `configure_runtime()`; the model
+stops deciding. `_setup_gpu_acceleration` is retained for legacy callers that
+construct `BackgroundModel` without a runtime.
 
 | tier | bg-sub backend |
 |---|---|
