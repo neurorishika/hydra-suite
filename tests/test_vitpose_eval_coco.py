@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+import torch
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
 
@@ -10,6 +11,21 @@ requires_coco = pytest.mark.skipif(
     or not (ASSET_DIR / "COCO_val2017_detections_AP_H_56_person.json").exists(),
     reason="COCO val2017 + detections required; see Task 10 Step 1",
 )
+
+
+def _device() -> str:
+    """Pick the best available device.
+
+    The gates must run on whatever box they land on -- hardcoding "mps" made
+    them raise `PyTorch is not linked with support for mps devices` on the CUDA
+    box, defeating the whole point of validating on the deployment target. This
+    also honours the plan's "never hardcode a device" constraint.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 @requires_coco
@@ -23,7 +39,7 @@ def test_smoke_eval_on_20_images():
     """
     from tools.vitpose.eval_coco import evaluate
 
-    res = evaluate("B", "classic", ASSET_DIR / "vitpose-b.pth", "mps", limit=20)
+    res = evaluate("B", "classic", ASSET_DIR / "vitpose-b.pth", _device(), limit=20)
     assert res["AP"] > 0.5, f"smoke AP {res['AP']:.3f} — pipeline is broken"
 
 
@@ -39,7 +55,7 @@ def test_gate_c_classic_reproduces_published_ap():
     """
     from tools.vitpose.eval_coco import evaluate
 
-    res = evaluate("B", "classic", ASSET_DIR / "vitpose-b.pth", "mps")
+    res = evaluate("B", "classic", ASSET_DIR / "vitpose-b.pth", _device())
     assert abs(res["AP"] * 100 - 75.8) < 0.2, f"got {res['AP'] * 100:.2f} AP"
 
 
@@ -49,5 +65,5 @@ def test_gate_c_simple_reproduces_published_ap():
     """GATE C. Published ViTPose-B simple = 75.5 AP."""
     from tools.vitpose.eval_coco import evaluate
 
-    res = evaluate("B", "simple", ASSET_DIR / "vitpose-b-simple.pth", "mps")
+    res = evaluate("B", "simple", ASSET_DIR / "vitpose-b-simple.pth", _device())
     assert abs(res["AP"] * 100 - 75.5) < 0.2, f"got {res['AP'] * 100:.2f} AP"
