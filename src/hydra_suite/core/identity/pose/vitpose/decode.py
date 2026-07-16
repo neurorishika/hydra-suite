@@ -30,6 +30,8 @@ from typing import Sequence
 
 import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 
 
 def get_max_preds(heatmaps: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -169,3 +171,104 @@ def flip_back(
         out[:, a] = out[:, b]
         out[:, b] = tmp
     return out
+
+
+def _gaussian_kernel1d(kernel: int, device, dtype) -> torch.Tensor:
+    """Match cv2.GaussianBlur(..., 0): sigma derived from kernel size, and the
+    same normalised kernel cv2 builds."""
+    sigma = 0.3 * ((kernel - 1) * 0.5 - 1) + 0.8
+    x = torch.arange(kernel, device=device, dtype=dtype) - (kernel - 1) / 2
+    k = torch.exp(-(x**2) / (2 * sigma**2))
+    return k / k.sum()
+
+
+def decode_udp_torch(
+    heatmaps: torch.Tensor, kernel: int = 11
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Device-resident UDP/DARK decode: a faithful torch translation of
+    upstream `_get_max_preds` + `post_dark_udp`.
+
+    Verified against /tmp/vitpose-ref/top_down_eval.py lines 335-396 (Task 7
+    Step 1). An earlier draft of this function was written from memory and
+    was wrong in four independent ways (it normalised the blur by
+    orig_max/blur_max -- which belongs to the NON-UDP `_gaussian_blur`, not to
+    post_dark_udp; used a 2-step 0.25-scaled stencil instead of upstream's
+    1-step; guarded the Hessian on |det| instead of adding eps to the
+    diagonal; and padded 'reflect' instead of 'edge'). Any of those silently
+    shifts sub-pixel coordinates.
+
+    Upstream reference, verbatim:
+        cv2.GaussianBlur(heatmap, (kernel, kernel), 0, heatmap)   # in-place
+        np.clip(batch_heatmaps, 0.001, 50, batch_heatmaps)
+        np.log(batch_heatmaps, batch_heatmaps)
+        batch_heatmaps_pad = np.pad(..., ((0,0),(0,0),(1,1),(1,1)), mode='edge')
+        index  = coords[...,0] + 1 + (coords[...,1] + 1) * (W + 2)
+        dx  = 0.5 * (ix1 - ix1_)
+        dy  = 0.5 * (iy1 - iy1_)
+        dxx = ix1 - 2*i_ + ix1_
+        dyy = iy1 - 2*i_ + iy1_
+        dxy = 0.5 * (ix1y1 - ix1 - iy1 + i_ + i_ - ix1_ - iy1_ + ix1_y1_)
+        hessian = np.linalg.inv(hessian + np.finfo(np.float32).eps * np.eye(2))
+        coords -= np.einsum('ijmn,ijnk->ijmk', hessian, derivative).squeeze()
+
+    The 2x2 inverse is closed-form rather than torch.linalg.solve: MPS has
+    linalg gaps, and a 2x2 inverse is exact anyway.
+    """
+    n, k, h, w = heatmaps.shape
+    device, dtype = heatmaps.device, heatmaps.dtype
+
+    # --- _get_max_preds: integer argmax, masked to -1 where maxval <= 0
+    flat = heatmaps.reshape(n * k, -1)
+    maxvals, idx = flat.max(dim=1, keepdim=True)
+    px = (idx % w).to(dtype)
+    py = torch.div(idx, w, rounding_mode="floor").to(dtype)
+    coords = torch.cat([px, py], dim=1)
+    coords = torch.where(maxvals > 0.0, coords, torch.full_like(coords, -1.0))
+
+    # --- blur: separable, matching cv2.GaussianBlur(..., 0) with its default
+    #     BORDER_REFLECT_101 (torch's "reflect" is the same convention).
+    #     NOTE: no orig_max/blur_max renormalisation -- upstream post_dark_udp
+    #     does not do it.
+    k1 = _gaussian_kernel1d(kernel, device, dtype)
+    pad = kernel // 2
+    x = heatmaps.reshape(n * k, 1, h, w)
+    x = F.pad(x, (pad, pad, 0, 0), mode="reflect")
+    x = F.conv2d(x, k1.view(1, 1, 1, -1))
+    x = F.pad(x, (0, 0, pad, pad), mode="reflect")
+    x = F.conv2d(x, k1.view(1, 1, -1, 1))
+    blurred = x.clamp(0.001, 50.0).log()  # clip THEN log, as upstream
+
+    # --- pad by 1 with 'edge' (== replicate) and index at coords+1
+    hm = F.pad(blurred, (1, 1, 1, 1), mode="replicate").reshape(n * k, h + 2, w + 2)
+    bx = coords[:, 0].long() + 1
+    by = coords[:, 1].long() + 1
+    b = torch.arange(n * k, device=device)
+
+    i_ = hm[b, by, bx]
+    ix1 = hm[b, by, bx + 1]
+    ix1_ = hm[b, by, bx - 1]
+    iy1 = hm[b, by + 1, bx]
+    iy1_ = hm[b, by - 1, bx]
+    ix1y1 = hm[b, by + 1, bx + 1]
+    ix1_y1_ = hm[b, by - 1, bx - 1]
+
+    dx = 0.5 * (ix1 - ix1_)
+    dy = 0.5 * (iy1 - iy1_)
+    dxx = ix1 - 2.0 * i_ + ix1_
+    dyy = iy1 - 2.0 * i_ + iy1_
+    dxy = 0.5 * (ix1y1 - ix1 - iy1 + i_ + i_ - ix1_ - iy1_ + ix1_y1_)
+
+    # --- hessian + eps*I, closed-form 2x2 inverse, coords -= inv @ derivative
+    eps = torch.finfo(torch.float32).eps
+    a = dxx + eps
+    d = dyy + eps
+    bb = dxy
+    det = a * d - bb * bb
+    ox = (d * dx - bb * dy) / det
+    oy = (a * dy - bb * dx) / det
+
+    refined = coords.clone()
+    refined[:, 0] = coords[:, 0] - ox
+    refined[:, 1] = coords[:, 1] - oy
+
+    return refined.reshape(n, k, 2), maxvals.reshape(n, k, 1)
