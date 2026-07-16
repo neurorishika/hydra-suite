@@ -8,6 +8,7 @@ from hydra_suite.core.identity.pose.vitpose.config import (
     PIXEL_STD,
 )
 from hydra_suite.core.identity.pose.vitpose.transforms import (
+    affine_matrix,
     box2cs,
     get_warp_matrix,
     normalize,
@@ -44,13 +45,34 @@ def test_warp_matrix_shape():
 
 def test_warp_uses_size_minus_one_for_udp():
     """UDP defines unit length as pixel SPACING (size-1), not pixel count.
-    A centred square box must map its centre to the destination centre and its
-    edges to exactly 0 and size-1."""
-    img = np.zeros((400, 400, 3), np.uint8)
+
+    This exercises the actual top_down_affine call site (via affine_matrix,
+    which top_down_affine calls internally with no other -1 anywhere else),
+    not a standalone re-derivation of get_warp_matrix's own semantics. A
+    centred square box's edges must map to *exactly* the destination pixel
+    centres (0, 0) and (w-1, h-1), and the centre to ((w-1)/2, (h-1)/2). If
+    the call site's "- 1.0" is ever dropped, the far edge/centre land a full
+    pixel off and this fails outright (tolerance 1e-4, not the ~1.5px slack
+    needed to tolerate pixel-quantization noise in a warped-image test).
+    """
+    from hydra_suite.core.identity.pose.vitpose.config import IMAGE_SIZE_WH
+
     center = np.array([200.0, 200.0])
     scale = np.array([400.0, 400.0]) / PIXEL_STD
-    out = top_down_affine(img, center, scale)
-    assert out.shape == (256, 192, 3)
+    w, h = IMAGE_SIZE_WH
+
+    trans = affine_matrix(center, scale)
+
+    size_target = scale * PIXEL_STD
+    corner_lo = center - size_target / 2.0
+    corner_hi = center + size_target / 2.0
+
+    def apply(pt):
+        return trans @ np.array([pt[0], pt[1], 1.0])
+
+    assert np.allclose(apply(corner_lo), [0.0, 0.0], atol=1e-4)
+    assert np.allclose(apply(corner_hi), [w - 1, h - 1], atol=1e-4)
+    assert np.allclose(apply(center), [(w - 1) / 2, (h - 1) / 2], atol=1e-4)
 
 
 def test_affine_maps_marker_to_expected_pixel():

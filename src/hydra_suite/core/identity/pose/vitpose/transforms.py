@@ -76,6 +76,23 @@ def get_warp_matrix(
     return matrix
 
 
+def affine_matrix(
+    center: np.ndarray,
+    scale: np.ndarray,
+    rot: float = 0.0,
+) -> np.ndarray:
+    """The 2x3 UDP warp matrix top_down_affine applies. Exposed so tests can
+    assert the UDP corner correspondence, which is invisible from the warped
+    image alone."""
+    w, h = IMAGE_SIZE_WH
+    return get_warp_matrix(
+        rot,
+        center * 2.0,
+        np.array([w, h], dtype=np.float32) - 1.0,  # UDP: unit = pixel spacing
+        scale * PIXEL_STD,
+    )
+
+
 def top_down_affine(
     img: np.ndarray,
     center: np.ndarray,
@@ -83,12 +100,7 @@ def top_down_affine(
     rot: float = 0.0,
 ) -> np.ndarray:
     w, h = IMAGE_SIZE_WH
-    trans = get_warp_matrix(
-        rot,
-        center * 2.0,
-        np.array([w, h], dtype=np.float32) - 1.0,  # UDP: size - 1
-        scale * PIXEL_STD,
-    )
+    trans = affine_matrix(center, scale, rot)
     return cv2.warpAffine(img, trans, (w, h), flags=cv2.INTER_LINEAR)
 
 
