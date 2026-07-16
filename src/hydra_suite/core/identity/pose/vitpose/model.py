@@ -64,6 +64,45 @@ class Mlp(nn.Module):
         return self.fc2(self.act(self.fc1(x)))
 
 
+class MoEMlp(nn.Module):
+    """ViTPose+ FFN. ONLY the FFN differs from classic; attention, patch embed,
+    pos embed and norms are byte-identical.
+
+    Routing is NOT learned -- `indices` is the dataset index threaded in from
+    outside. Upstream runs all experts and masks (a DDP workaround); for
+    single-dataset inference we index the expert directly, which is numerically
+    identical and avoids 6x the expert-branch compute.
+    """
+
+    def __init__(
+        self, dim: int, hidden: int, part_features: int, num_expert: int = 6
+    ) -> None:
+        super().__init__()
+        self.part_features = part_features
+        self.fc1 = nn.Linear(dim, hidden)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(hidden, dim - part_features)
+        self.experts = nn.ModuleList(
+            [nn.Linear(hidden, part_features) for _ in range(num_expert)]
+        )
+
+    def forward(self, x: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+        x = self.act(self.fc1(x))
+        shared = self.fc2(x)
+        uniq = torch.unique(indices)
+        if uniq.numel() == 1:
+            expert = self.experts[int(uniq.item())](x)
+        else:
+            expert = torch.zeros(
+                *x.shape[:-1], self.part_features, device=x.device, dtype=x.dtype
+            )
+            for i, e in enumerate(self.experts):
+                mask = indices == i
+                if mask.any():
+                    expert[mask] = e(x[mask])
+        return torch.cat([shared, expert], dim=-1)
+
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -71,17 +110,32 @@ class Block(nn.Module):
         num_heads: int,
         mlp_ratio: float = 4.0,
         drop_path: float = 0.0,
+        part_features: int | None = None,
     ) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
         self.attn = Attention(dim, num_heads)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
-        self.mlp = Mlp(dim, int(dim * mlp_ratio))
+        hidden = int(dim * mlp_ratio)
+        if part_features is None:
+            self.mlp = Mlp(dim, hidden)
+        else:
+            self.mlp = MoEMlp(dim, hidden, part_features)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, dataset_index: torch.Tensor | int = 0
+    ) -> torch.Tensor:
         x = x + self.drop_path(self.attn(self.norm1(x)))
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        if isinstance(self.mlp, MoEMlp):
+            if not torch.is_tensor(dataset_index):
+                dataset_index = torch.full(
+                    (x.shape[0],), int(dataset_index), dtype=torch.long, device=x.device
+                )
+            mlp_out = self.mlp(self.norm2(x), dataset_index)
+        else:
+            mlp_out = self.mlp(self.norm2(x))
+        x = x + self.drop_path(mlp_out)
         return x
 
 
@@ -93,6 +147,7 @@ class ViT(nn.Module):
         num_heads: int,
         img_size_hw: tuple[int, int] = (256, 192),
         drop_path_rate: float = 0.0,
+        part_features: int | None = None,
     ) -> None:
         super().__init__()
         self.embed_dim = embed_dim
@@ -104,7 +159,15 @@ class ViT(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
         self.blocks = nn.ModuleList(
-            [Block(embed_dim, num_heads, drop_path=dpr[i]) for i in range(depth)]
+            [
+                Block(
+                    embed_dim,
+                    num_heads,
+                    drop_path=dpr[i],
+                    part_features=part_features,
+                )
+                for i in range(depth)
+            ]
         )
         self.last_norm = nn.LayerNorm(embed_dim, eps=1e-6)
         trunc_normal_(self.pos_embed, std=0.02)
@@ -117,11 +180,13 @@ class ViT(nn.Module):
         # broadcast to every token.
         return x + self.pos_embed[:, 1:] + self.pos_embed[:, :1]
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, dataset_index: torch.Tensor | int = 0
+    ) -> torch.Tensor:
         x, hp, wp = self.patch_embed(x)
         x = x + self.pos_embed[:, 1:] + self.pos_embed[:, :1]
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x, dataset_index)
         x = self.last_norm(x)
         b, _, c = x.shape
         return x.permute(0, 2, 1).reshape(b, c, hp, wp)

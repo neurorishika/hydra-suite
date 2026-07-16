@@ -58,3 +58,38 @@ def test_loaded_model_produces_finite_heatmaps():
         out = m(torch.zeros(1, 3, 256, 192))
     assert out.shape == (1, 17, 64, 48)
     assert torch.isfinite(out).all()
+
+
+from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+
+requires_plus = pytest.mark.skipif(
+    not (ASSET_DIR / "vitpose+_base.pth").exists(),
+    reason="run tools/vitpose/fetch_assets.py first",
+)
+
+
+@requires_plus
+def test_gate_a3_strict_load_moe():
+    """GATE A(3). ViTPose+ has 1 COCO head + 5 associate heads
+    (out_channels 14/16/17/17/133)."""
+    m = build_vitpose_moe("B")
+    load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)
+
+
+@requires_plus
+def test_moe_checkpoint_rejects_classic_module():
+    """A ViTPose+ checkpoint must NOT load into a classic ViT: MoE fc2 is
+    [D - part_features, 4D], not [D, 4D].
+
+    Matches on "size mismatch", not bare Exception -- a bare Exception would
+    also 'pass' on an ImportError or a typo in this test, asserting nothing.
+
+    Note it is torch's own RuntimeError that fires here, NOT our
+    CheckpointKeyError: load_state_dict(strict=False) still raises on a SHAPE
+    mismatch before returning missing/unexpected keys, and MoE fc2 is
+    [D - part_features, 4D] vs classic [D, 4D]. So this is a shape failure, not
+    a key failure.
+    """
+    m = build_vitpose("B", "classic")
+    with pytest.raises(RuntimeError, match="size mismatch"):
+        load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)

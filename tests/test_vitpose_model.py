@@ -67,3 +67,36 @@ def test_attention_head_dim_for_small():
     m = ViT(embed_dim=v.embed_dim, depth=1, num_heads=v.num_heads)
     assert m.blocks[0].attn.num_heads == 12
     assert m.blocks[0].attn.head_dim == 32
+
+
+from hydra_suite.core.identity.pose.vitpose.model import MoEMlp
+
+
+def test_moe_shapes_for_base():
+    """B: fc1 768->3072, fc2 3072->576 (D - part_features), 6 experts 3072->192.
+    Concat of shared (576) + expert (192) restores 768."""
+    m = MoEMlp(dim=768, hidden=3072, part_features=192, num_expert=6)
+    assert m.fc1.out_features == 3072
+    assert m.fc2.out_features == 768 - 192
+    assert len(m.experts) == 6
+    assert m.experts[0].out_features == 192
+    out = m(torch.zeros(2, 10, 768), torch.zeros(2, dtype=torch.long))
+    assert out.shape == (2, 10, 768)
+
+
+def test_moe_routing_is_by_dataset_index_not_learned():
+    """Routing is NOT learned: `indices` is the dataset index supplied from
+    outside. Different indices must select different experts."""
+    m = MoEMlp(dim=8, hidden=16, part_features=4, num_expert=6).eval()
+    with torch.no_grad():
+        for i, e in enumerate(m.experts):
+            e.weight.fill_(float(i + 1))
+            e.bias.zero_()
+        m.fc1.weight.zero_()
+        m.fc1.bias.fill_(1.0)
+        m.fc2.weight.zero_()
+        m.fc2.bias.zero_()
+        x = torch.zeros(1, 1, 8)
+        out0 = m(x, torch.zeros(1, dtype=torch.long))
+        out3 = m(x, torch.full((1,), 3, dtype=torch.long))
+    assert not torch.allclose(out0[..., -4:], out3[..., -4:])
