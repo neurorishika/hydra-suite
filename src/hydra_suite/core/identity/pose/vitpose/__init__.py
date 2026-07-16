@@ -17,3 +17,16 @@ torch/lib/libomp.dylib is now a symlink to the conda libomp, so exactly one
 OpenMP runtime maps and no import order matters. See
 docs/superpowers/specs/2026-07-16-vitpose-backend-roadmap.md.
 """
+
+from .config import VARIANTS, ViTPoseVariant  # noqa: E402
+from .vitpose import ViTPose, build_vitpose  # noqa: E402
+from .weights import CheckpointKeyError, load_checkpoint  # noqa: E402
+
+__all__ = [
+    "VARIANTS",
+    "ViTPoseVariant",
+    "ViTPose",
+    "build_vitpose",
+    "load_checkpoint",
+    "CheckpointKeyError",
+]
