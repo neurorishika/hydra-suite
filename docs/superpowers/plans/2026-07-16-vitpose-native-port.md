@@ -1715,16 +1715,39 @@ def _gaussian_kernel1d(kernel: int, device, dtype) -> torch.Tensor:
 def decode_udp_torch(
     heatmaps: torch.Tensor, kernel: int = 11
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Device-resident UDP/DARK decode. Mirrors decode_udp_cv2 exactly.
+    """Device-resident UDP/DARK decode: a faithful torch translation of
+    upstream `_get_max_preds` + `post_dark_udp`.
 
-    The Gaussian blur is a separable depthwise conv (cv2 uses a separable
-    kernel too, hence the 1-D construction). The 2x2 Hessian is solved in
-    closed form rather than via torch.linalg.solve: MPS has linalg gaps, and a
-    2x2 inverse is trivially exact anyway.
+    VERIFY THIS AGAINST /tmp/vitpose-ref/top_down_eval.py (Task 7 Step 1)
+    BEFORE TRUSTING IT. An earlier draft of this function was written from
+    memory and was wrong in four independent ways (it normalised the blur by
+    orig_max/blur_max -- which belongs to the NON-UDP `_gaussian_blur`, not to
+    post_dark_udp; used a 2-step 0.25-scaled stencil instead of upstream's
+    1-step; guarded the Hessian on |det| instead of adding eps to the diagonal;
+    and padded 'reflect' instead of 'edge'). Any of those silently shifts
+    sub-pixel coordinates.
+
+    Upstream reference, verbatim:
+        cv2.GaussianBlur(heatmap, (kernel, kernel), 0, heatmap)   # in-place
+        np.clip(batch_heatmaps, 0.001, 50, batch_heatmaps)
+        np.log(batch_heatmaps, batch_heatmaps)
+        batch_heatmaps_pad = np.pad(..., ((0,0),(0,0),(1,1),(1,1)), mode='edge')
+        index  = coords[...,0] + 1 + (coords[...,1] + 1) * (W + 2)
+        dx  = 0.5 * (ix1 - ix1_)
+        dy  = 0.5 * (iy1 - iy1_)
+        dxx = ix1 - 2*i_ + ix1_
+        dyy = iy1 - 2*i_ + iy1_
+        dxy = 0.5 * (ix1y1 - ix1 - iy1 + i_ + i_ - ix1_ - iy1_ + ix1_y1_)
+        hessian = np.linalg.inv(hessian + np.finfo(np.float32).eps * np.eye(2))
+        coords -= np.einsum('ijmn,ijnk->ijmk', hessian, derivative).squeeze()
+
+    The 2x2 inverse is closed-form rather than torch.linalg.solve: MPS has
+    linalg gaps, and a 2x2 inverse is exact anyway.
     """
     n, k, h, w = heatmaps.shape
     device, dtype = heatmaps.device, heatmaps.dtype
 
+    # --- _get_max_preds: integer argmax, masked to -1 where maxval <= 0
     flat = heatmaps.reshape(n * k, -1)
     maxvals, idx = flat.max(dim=1, keepdim=True)
     px = (idx % w).to(dtype)
@@ -1732,7 +1755,10 @@ def decode_udp_torch(
     coords = torch.cat([px, py], dim=1)
     coords = torch.where(maxvals > 0.0, coords, torch.full_like(coords, -1.0))
 
-    # Blur (separable depthwise), matching cv2's BORDER_REFLECT_101 default.
+    # --- blur: separable, matching cv2.GaussianBlur(..., 0) with its default
+    #     BORDER_REFLECT_101 (torch's "reflect" is the same convention).
+    #     NOTE: no orig_max/blur_max renormalisation -- upstream post_dark_udp
+    #     does not do it.
     k1 = _gaussian_kernel1d(kernel, device, dtype)
     pad = kernel // 2
     x = heatmaps.reshape(n * k, 1, h, w)
@@ -1740,43 +1766,40 @@ def decode_udp_torch(
     x = F.conv2d(x, k1.view(1, 1, 1, -1))
     x = F.pad(x, (0, 0, pad, pad), mode="reflect")
     x = F.conv2d(x, k1.view(1, 1, -1, 1))
-    blurred = x.reshape(n * k, h, w)
+    blurred = x.clamp(0.001, 50.0).log()          # clip THEN log, as upstream
 
-    # Upstream normalises the blurred map back to the original peak, then
-    # clips and takes the log before the Taylor step.
-    orig_max = heatmaps.reshape(n * k, -1).max(dim=1).values.view(-1, 1, 1)
-    blur_max = blurred.reshape(n * k, -1).max(dim=1).values.view(-1, 1, 1)
-    blurred = blurred * orig_max / blur_max.clamp_min(1e-12)
-    blurred = blurred.clamp(1e-3, 50.0).log()
-
-    bx = coords[:, 0].long().clamp(1, w - 2)
-    by = coords[:, 1].long().clamp(1, h - 2)
+    # --- pad by 1 with 'edge' (== replicate) and index at coords+1
+    hm = F.pad(blurred, (1, 1, 1, 1), mode="replicate").reshape(n * k, h + 2, w + 2)
+    bx = coords[:, 0].long() + 1
+    by = coords[:, 1].long() + 1
     b = torch.arange(n * k, device=device)
 
-    def at(dy: int, dx: int) -> torch.Tensor:
-        return blurred[b, by + dy, bx + dx]
+    i_ = hm[b, by, bx]
+    ix1 = hm[b, by, bx + 1]
+    ix1_ = hm[b, by, bx - 1]
+    iy1 = hm[b, by + 1, bx]
+    iy1_ = hm[b, by - 1, bx]
+    ix1y1 = hm[b, by + 1, bx + 1]
+    ix1_y1_ = hm[b, by - 1, bx - 1]
 
-    dx = 0.5 * (at(0, 1) - at(0, -1))
-    dy = 0.5 * (at(1, 0) - at(-1, 0))
-    dxx = 0.25 * (at(0, 2) - 2 * at(0, 0) + at(0, -2))
-    dyy = 0.25 * (at(2, 0) - 2 * at(0, 0) + at(-2, 0))
-    dxy = 0.25 * (at(1, 1) - at(-1, 1) - at(1, -1) + at(-1, -1))
+    dx = 0.5 * (ix1 - ix1_)
+    dy = 0.5 * (iy1 - iy1_)
+    dxx = ix1 - 2.0 * i_ + ix1_
+    dyy = iy1 - 2.0 * i_ + iy1_
+    dxy = 0.5 * (ix1y1 - ix1 - iy1 + i_ + i_ - ix1_ - iy1_ + ix1_y1_)
 
-    # Closed-form 2x2 inverse; skip refinement where the Hessian is singular.
-    det = dxx * dyy - dxy * dxy
-    ok = det.abs() > 1e-12
-    inv = torch.zeros_like(det)
-    inv[ok] = 1.0 / det[ok]
-    offset_x = -inv * (dyy * dx - dxy * dy)
-    offset_y = -inv * (dxx * dy - dxy * dx)
-    offset_x = torch.where(ok, offset_x, torch.zeros_like(offset_x))
-    offset_y = torch.where(ok, offset_y, torch.zeros_like(offset_y))
+    # --- hessian + eps*I, closed-form 2x2 inverse, coords -= inv @ derivative
+    eps = torch.finfo(torch.float32).eps
+    a = dxx + eps
+    d = dyy + eps
+    bb = dxy
+    det = a * d - bb * bb
+    ox = (d * dx - bb * dy) / det
+    oy = (a * dy - bb * dx) / det
 
     refined = coords.clone()
-    refined[:, 0] = coords[:, 0] + offset_x
-    refined[:, 1] = coords[:, 1] + offset_y
-    valid = (maxvals.squeeze(1) > 0.0).unsqueeze(1)
-    refined = torch.where(valid, refined, coords)
+    refined[:, 0] = coords[:, 0] - ox
+    refined[:, 1] = coords[:, 1] - oy
 
     return refined.reshape(n, k, 2), maxvals.reshape(n, k, 1)
 ```
