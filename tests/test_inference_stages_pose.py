@@ -4,7 +4,11 @@ from unittest.mock import MagicMock
 import numpy as np
 import torch
 
-from hydra_suite.core.inference.config import PoseConfig, PoseYOLOConfig
+from hydra_suite.core.inference.config import (
+    PoseConfig,
+    PoseSLEAPConfig,
+    PoseYOLOConfig,
+)
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.pose import PoseModel, load_pose_model, run_pose
@@ -16,6 +20,28 @@ def _cpu_rt():
         device="cpu",
         use_nvdec=False,
         default_runtime="cpu",
+        tensor_on_cuda=False,
+    )
+
+
+def _cuda_gpu_rt():
+    """gpu tier on a CUDA host: native torch, tensors stay on-device."""
+    return RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=True,
+        default_runtime="cuda",
+        tensor_on_cuda=True,
+    )
+
+
+def _cuda_gpu_fast_rt():
+    """gpu_fast tier on a CUDA host: TensorRT engines, CPU numpy outputs."""
+    return RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=True,
+        default_runtime="cuda",
         tensor_on_cuda=False,
     )
 
@@ -119,6 +145,63 @@ def test_load_pose_model_reads_canonical_skeleton_keys(tmp_path, monkeypatch):
     assert model.keypoint_names == ["head", "thorax", "abdomen"]
     assert model.n_keypoints == 3
     assert captured["keypoint_names"] == ["head", "thorax", "abdomen"]
+
+
+def test_load_pose_model_sleap_gpu_tier_uses_native_cuda(tmp_path, monkeypatch):
+    """gpu tier must run SLEAP's native (non-exported) model on CUDA via the
+    service backend -- matching every other stage's "gpu = native torch"
+    semantics -- instead of silently reaching for the gpu_fast (onnx) path.
+    """
+    import hydra_suite.core.identity.pose.api as api_mod
+
+    captured = {}
+
+    def _fake_create_pose_backend_from_config(config):
+        captured["runtime_flavor"] = config.runtime_flavor
+        captured["device"] = config.device
+        return MagicMock()
+
+    monkeypatch.setattr(
+        api_mod,
+        "create_pose_backend_from_config",
+        _fake_create_pose_backend_from_config,
+    )
+
+    config = PoseConfig(
+        backend="sleap",
+        sleap=PoseSLEAPConfig(model_path="/fake/sleap_model_dir"),
+    )
+    load_pose_model(config, _cuda_gpu_rt())
+
+    assert captured["runtime_flavor"] == "native"
+    assert captured["device"] == "cuda"
+
+
+def test_load_pose_model_sleap_gpu_fast_tier_uses_tensorrt(tmp_path, monkeypatch):
+    """gpu_fast tier keeps using the exported (TensorRT) SLEAP backend."""
+    import hydra_suite.core.identity.pose.api as api_mod
+
+    captured = {}
+
+    def _fake_create_pose_backend_from_config(config):
+        captured["runtime_flavor"] = config.runtime_flavor
+        captured["device"] = config.device
+        return MagicMock()
+
+    monkeypatch.setattr(
+        api_mod,
+        "create_pose_backend_from_config",
+        _fake_create_pose_backend_from_config,
+    )
+
+    config = PoseConfig(
+        backend="sleap",
+        sleap=PoseSLEAPConfig(model_path="/fake/sleap_model_dir"),
+    )
+    load_pose_model(config, _cuda_gpu_fast_rt())
+
+    assert captured["runtime_flavor"] == "tensorrt"
+    assert captured["device"] == "cuda"
 
 
 def test_run_pose_valid_mask_high_conf():
