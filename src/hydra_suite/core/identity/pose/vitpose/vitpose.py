@@ -33,7 +33,8 @@ def build_vitpose(variant: str, head: str, num_keypoints: int = 17) -> ViTPose:
 
 
 # out_channels for the 5 associate (non-COCO) datasets, in checkpoint order.
-ASSOCIATE_HEAD_CHANNELS = (14, 16, 17, 17, 133)  # AiC, MPII, AP-10K, APT-36K, WholeBody
+# AiC, MPII, AP-10K, APT-36K, WholeBody
+ASSOCIATE_HEAD_CHANNELS = (14, 16, 17, 17, 133)
 
 
 class ViTPoseMoE(nn.Module):

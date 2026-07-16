@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from timm.layers import DropPath, trunc_normal_
 
-from .config import PATCH_PADDING, PATCH_SIZE
+from .config import NUM_EXPERTS, PATCH_PADDING, PATCH_SIZE
 
 
 class PatchEmbed(nn.Module):
@@ -70,12 +70,20 @@ class MoEMlp(nn.Module):
 
     Routing is NOT learned -- `indices` is the dataset index threaded in from
     outside. Upstream runs all experts and masks (a DDP workaround); for
-    single-dataset inference we index the expert directly, which is numerically
-    identical and avoids 6x the expert-branch compute.
+    single-dataset inference (a plain Python `int`) we index the expert
+    directly on the whole batch, which is numerically identical and avoids
+    6x the expert-branch compute -- and, critically, never reads a tensor
+    value back to the host, so no GPU sync happens on the hot path. A
+    per-sample `torch.Tensor` of indices (multi-dataset training) takes the
+    masked/gathered path instead.
     """
 
     def __init__(
-        self, dim: int, hidden: int, part_features: int, num_expert: int = 6
+        self,
+        dim: int,
+        hidden: int,
+        part_features: int,
+        num_expert: int = NUM_EXPERTS,
     ) -> None:
         super().__init__()
         self.part_features = part_features
@@ -86,12 +94,12 @@ class MoEMlp(nn.Module):
             [nn.Linear(hidden, part_features) for _ in range(num_expert)]
         )
 
-    def forward(self, x: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, indices: torch.Tensor | int) -> torch.Tensor:
         x = self.act(self.fc1(x))
         shared = self.fc2(x)
-        uniq = torch.unique(indices)
-        if uniq.numel() == 1:
-            expert = self.experts[int(uniq.item())](x)
+        if isinstance(indices, int):
+            # Single dataset for the whole batch: no tensor, no host sync.
+            expert = self.experts[indices](x)
         else:
             expert = torch.zeros(
                 *x.shape[:-1], self.part_features, device=x.device, dtype=x.dtype
@@ -128,10 +136,6 @@ class Block(nn.Module):
     ) -> torch.Tensor:
         x = x + self.drop_path(self.attn(self.norm1(x)))
         if isinstance(self.mlp, MoEMlp):
-            if not torch.is_tensor(dataset_index):
-                dataset_index = torch.full(
-                    (x.shape[0],), int(dataset_index), dtype=torch.long, device=x.device
-                )
             mlp_out = self.mlp(self.norm2(x), dataset_index)
         else:
             mlp_out = self.mlp(self.norm2(x))

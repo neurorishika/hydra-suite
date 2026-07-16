@@ -100,3 +100,34 @@ def test_moe_routing_is_by_dataset_index_not_learned():
         out0 = m(x, torch.zeros(1, dtype=torch.long))
         out3 = m(x, torch.full((1,), 3, dtype=torch.long))
     assert not torch.allclose(out0[..., -4:], out3[..., -4:])
+
+
+def test_moe_int_index_takes_no_host_sync_path():
+    """`dataset_index` as a plain int must never touch torch.unique/.item()/
+    .cpu()/.tolist() -- those force a GPU->CPU sync every block. Assert on the
+    source so a future edit can't silently reintroduce the sync."""
+    import inspect
+
+    src = inspect.getsource(MoEMlp.forward)
+    for banned in (".item()", ".cpu()", ".tolist()", "torch.unique"):
+        assert banned not in src, f"{banned!r} must not appear in MoEMlp.forward"
+
+
+def test_moe_multi_index_matches_per_sample_single_index():
+    """FINDING 4: the masked/gathered multi-index path is otherwise untested.
+    For a batch with mixed dataset indices, each sample's output must equal
+    what that sample alone would get through the fast int path."""
+    m = MoEMlp(dim=8, hidden=16, part_features=4, num_expert=6).eval()
+    with torch.no_grad():
+        for i, e in enumerate(m.experts):
+            e.weight.fill_(float(i + 1))
+            e.bias.zero_()
+        x = torch.randn(4, 3, 8)
+        indices = torch.tensor([0, 2, 5, 2], dtype=torch.long)
+        out_mixed = m(x, indices)
+        for i in range(4):
+            out_single = m(x[i : i + 1], int(indices[i]))
+            assert torch.allclose(out_mixed[i : i + 1], out_single), (
+                f"sample {i} (dataset {int(indices[i])}) diverged from its "
+                "solo pass through the masked multi-index path"
+            )
