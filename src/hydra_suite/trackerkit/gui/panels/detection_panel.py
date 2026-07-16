@@ -1476,7 +1476,7 @@ class DetectionPanel(QWidget):
             message = (
                 "Sequential mode's stage-1 detection batching showed higher "
                 "run-to-run variation in detections during testing (see "
-                "docs/superpowers/specs/2026-07-03-tensorrt-coreml-cross-frame-"
+                "docs/superpowers/specs/done/2026-07-03-tensorrt-coreml-cross-frame-"
                 "batching-design.md). Stage-2 crop batch is usually the safer "
                 "place to batch."
             )

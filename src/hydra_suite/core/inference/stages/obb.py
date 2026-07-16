@@ -387,7 +387,7 @@ def load_obb_models(
             "fed to stage-2, and stage-2's tiny-crop OBB estimation is "
             "highly sensitive to that shift -- an architectural property of "
             "the sequential/crop-based pipeline, not a batching bug. See "
-            "docs/superpowers/specs/2026-07-03-tensorrt-coreml-"
+            "docs/superpowers/specs/done/2026-07-03-tensorrt-coreml-"
             "cross-frame-batching-design.md. Consider batch_size=1 for "
             "sequential OBB unless this cross-run divergence is acceptable "
             "for your use case.",

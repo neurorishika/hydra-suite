@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.paths import get_app_data_dir
+from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ..utils import (
@@ -475,7 +476,7 @@ class DatasetPanel(QWidget):
         """Scan for conda environments starting with 'x-anylabeling-'."""
         self.combo_xal_env.clear()
         try:
-            result = subprocess.run(
+            result = run_conda(
                 ["conda", "env", "list"],
                 capture_output=True,
                 text=True,

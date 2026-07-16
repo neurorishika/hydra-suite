@@ -119,8 +119,11 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
     if _flavor_override:
         runtime_flavor = _flavor_override
         device = "cpu" if _flavor_override == "onnx_cpu" else "cuda"
-    elif compute_runtime in ("cuda", "onnx_cuda"):
-        runtime_flavor = "onnx_cuda"
+    elif compute_runtime == "cuda":
+        # gpu tier: native torch CUDA everywhere else in the pipeline, so SLEAP
+        # runs its native (non-exported) model on CUDA too, via the service
+        # backend, instead of silently using the gpu_fast (onnx) path.
+        runtime_flavor = "native"
         device = "cuda"
     elif compute_runtime in ("mps", "coreml"):
         # On Apple Silicon, ONNX Runtime has no MPS provider and its CoreML
