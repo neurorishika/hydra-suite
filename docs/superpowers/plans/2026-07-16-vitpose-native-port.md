@@ -44,6 +44,23 @@
   `PADDING_FACTOR = 1.25`, `IMAGENET_MEAN = (0.485, 0.456, 0.406)`,
   `IMAGENET_STD = (0.229, 0.224, 0.225)`, `UDP_BLUR_KERNEL = 11`, `TARGET_SIGMA = 2.0`.
 
+## Tests must be proven to discriminate
+
+Every trap in this spec fails *silently* — same shapes, no exception, wrong
+numbers. So a test that merely passes proves nothing; it must be shown to FAIL
+against the specific bug it targets.
+
+Two tests in this plan were written and later found non-discriminating:
+- the ReLU-order test fed a spatially *constant* input — bilinear interpolation
+  of a constant is constant, so both orderings gave identical output;
+- the smoke eval asserted `0 <= AP <= 1`, true of every possible result.
+
+**Rule:** when a test targets a silent trap, temporarily break the production
+code, watch the test fail, then revert. State that observation in the task
+report. For "must equal X, not Y" cases, assert *both* that we match X **and**
+that X differs from Y under this input — the second assertion is what proves the
+input can tell them apart.
+
 ## Numerically-critical code: transcribe, do not recall
 
 For `get_warp_matrix` (Task 6) and `post_dark_udp` (Task 7), **fetch the upstream file and transcribe the body verbatim.** Do not write it from memory or reconstruct it from the paper. A single wrong sign or a `-1` dropped from a denominator costs ~1 AP and produces no error — exactly the silent failure this spec targets. Each task names the exact URL to fetch.
@@ -773,6 +790,8 @@ git commit -m "feat(vitpose): ViT backbone with upstream patch padding and pos-e
 # tests/test_vitpose_heads.py
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from hydra_suite.core.identity.pose.vitpose.config import HEATMAP_SIZE_WH
 from hydra_suite.core.identity.pose.vitpose.heads import (
     ClassicHead, SimpleHead, build_head,
 )
@@ -829,14 +848,58 @@ def test_simple_head_has_no_deconv_params():
 
 def test_simple_head_applies_relu_before_upsample():
     """The ReLU lives in upstream's _transform_inputs, BEFORE F.interpolate.
-    With a strictly-negative input, a pre-upsample ReLU zeroes everything, so
-    the final conv sees only its bias."""
+
+    A spatially CONSTANT input CANNOT test this: bilinear interpolation of a
+    constant field is constant, so relu(interp(x)) == interp(relu(x)) exactly,
+    and the test passes on the broken implementation it exists to reject. Use a
+    varying, mixed-sign input: relu-first zeroes the negatives then blurs the
+    survivors (clearly positive); interp-first averages +1/-1 toward zero, then
+    relu gives ~0.
+
+    Assert BOTH that we match relu-first AND that the two orderings differ --
+    without the second assertion the test still cannot tell them apart.
+    """
     h = SimpleHead(embed_dim=8, num_keypoints=2).eval()
     with torch.no_grad():
         h.final_layer.weight.fill_(1.0)
         h.final_layer.bias.zero_()
-        out = h(torch.full((1, 8, 16, 12), -5.0))
-    assert torch.count_nonzero(out) == 0, "ReLU is not applied before upsampling"
+        x = torch.zeros(1, 8, 16, 12)
+        x[:, :, ::2, :] = 1.0
+        x[:, :, 1::2, :] = -1.0
+        got = h(x)
+        w, hh = HEATMAP_SIZE_WH
+        relu_first = h.final_layer(
+            F.interpolate(F.relu(x), size=(hh, w), mode="bilinear", align_corners=False)
+        )
+        relu_after = h.final_layer(
+            F.relu(F.interpolate(x, size=(hh, w), mode="bilinear", align_corners=False))
+        )
+    assert torch.allclose(got, relu_first), "SimpleHead is not relu-before-upsample"
+    assert not torch.allclose(relu_first, relu_after), (
+        "input fails to discriminate the two orderings — fix the input, not the assert"
+    )
+
+
+def test_simple_head_uses_align_corners_false():
+    """Flipping align_corners shifts keypoints by a fraction of a heatmap cell,
+    which the x4 upsample and bbox-scale multiply amplify into several image
+    pixels. Silent: no error, no shape change. Same both-assertions structure --
+    the second assert proves the input can actually tell the two apart."""
+    h = SimpleHead(embed_dim=8, num_keypoints=2).eval()
+    with torch.no_grad():
+        h.final_layer.weight.fill_(1.0)
+        h.final_layer.bias.zero_()
+        x = torch.randn(1, 8, 16, 12).abs()  # positive so ReLU is a no-op here
+        got = h(x)
+        w, hh = HEATMAP_SIZE_WH
+        ac_false = h.final_layer(
+            F.interpolate(F.relu(x), size=(hh, w), mode="bilinear", align_corners=False)
+        )
+        ac_true = h.final_layer(
+            F.interpolate(F.relu(x), size=(hh, w), mode="bilinear", align_corners=True)
+        )
+    assert torch.allclose(got, ac_false), "SimpleHead is not using align_corners=False"
+    assert not torch.allclose(ac_false, ac_true), "input fails to discriminate"
 
 
 def test_build_head_dispatch():
@@ -926,7 +989,7 @@ Run:
 ```bash
 PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_vitpose_heads.py -q
 ```
-Expected: PASS (7 passed)
+Expected: PASS (8 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -1724,7 +1787,7 @@ Run:
 ```bash
 PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_vitpose_decode.py -q
 ```
-Expected: PASS (7 passed)
+Expected: PASS (8 passed)
 
 **If parity fails, this is a finding, not a nuisance. Do NOT loosen the bound.**
 Debug in this order:
@@ -2092,6 +2155,15 @@ addopts = -m "not benchmark and not slow" -p no:napari
 
 A command-line `-m` overrides `addopts`, so `pytest -m slow` still runs Gate C.
 
+**⚠️ Side effect — check before committing this.** `tests/test_classifier_integration_smoke.py:9`
+ALREADY carries `@pytest.mark.slow` (unregistered, hence its
+`PytestUnknownMarkWarning`). Because today's `addopts` filters only `benchmark`,
+that test currently RUNS by default. Adding `not slow` **silently stops running
+it**. Registering the marker is unambiguously good (it kills the warning), but
+the deselection is a behaviour change to someone else's test — surface it rather
+than sliding it in. If it should keep running, give Gate C its own marker (e.g.
+`coco_eval`) instead of overloading `slow`.
+
 - [ ] **Step 4: Implement the harness**
 
 ```python
@@ -2230,12 +2302,20 @@ git commit -m "feat(vitpose): GATE C - COCO val AP reproduction harness"
 
 - [ ] **Step 1: Run the full fast suite (no regressions elsewhere)**
 
-Run:
 ```bash
-PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/ -q -m "not slow"
+PYTHONPATH=.:src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/ -q \
+  -m "not slow" --ignore=tests/test_identity_postprocess.py
 ```
-Expected: all pass. Baseline before this work was 29 passed for
-`tests/test_pose_pipeline.py tests/test_inference_stages_pose.py`.
+
+**`--ignore` is required and is NOT our bug.** `tests/test_identity_postprocess.py`
+fails at COLLECTION on `main` (`AttributeError: module
+'identity_postprocess_under_test' has no attribute
+'apply_identity_postprocessing'`), which aborts the whole run. It was last
+touched by "Identity improvements (#11)" and this branch never touches it. Do not
+"fix" it here — that is someone else's regression; report it instead.
+
+Expected: all pass. Baseline for this work was 29 passed
+(`tests/test_pose_pipeline.py tests/test_inference_stages_pose.py`).
 
 - [ ] **Step 2: Verify the leaf constraint one final time**
 
