@@ -1,12 +1,19 @@
 """Native-PyTorch ViTPose. Standalone leaf: imports nothing from hydra_suite.
 
-Import order matters. cv2 must be imported before torch on this platform:
-conda ships libomp.dylib (@rpath) and torch vendors its own
-(/opt/llvm-openmp/lib/libomp.dylib). Loading torch first then cv2 aborts the
-process with `OMP: Error #15`. cv2-first is stable. Do not "fix" this with
-KMP_DUPLICATE_LIB_OK=TRUE: LLVM documents that as possibly producing silently
-incorrect results, which defeats the point of a numerical-parity module.
-"""
+Ports ViTPose (github.com/ViTAE-Transformer/ViTPose) with no mmcv/mmpose
+dependency. Upstream's backbone imports zero mmcv and no compiled op touches the
+forward pass; the whole coupling is config/registry/runner scaffolding.
 
-import cv2 as _cv2  # noqa: F401  (must precede torch; see module docstring)
-import torch as _torch  # noqa: F401
+Module attribute names deliberately mirror the upstream checkpoint's state_dict
+keys (`backbone.*`, `keypoint_head.*`, `blocks.{i}.attn.qkv`, `patch_embed.proj`,
+`last_norm`), so load_state_dict(strict=True) needs no rename map.
+
+Historical note on OpenMP: this package once imported cv2 before torch to dodge
+`OMP: Error #15` from two libomp copies (conda's @rpath/libomp.dylib and torch's
+vendored /opt/llvm-openmp/lib/libomp.dylib). That never actually worked -- isort
+sorts third-party `import torch` ahead of first-party `from hydra_suite...`, so
+torch always won the race anyway. The real fix was applied to the environment:
+torch/lib/libomp.dylib is now a symlink to the conda libomp, so exactly one
+OpenMP runtime maps and no import order matters. See
+docs/superpowers/specs/2026-07-16-vitpose-backend-roadmap.md.
+"""

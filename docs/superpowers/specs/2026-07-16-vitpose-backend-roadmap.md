@@ -183,6 +183,55 @@ Spec 2's abstraction is designed against two backends that both demonstrably wor
 — the same argument that rules out a premature plugin registry, applied to
 ourselves.
 
+## Environment fix: duplicate OpenMP runtime (applied 2026-07-16)
+
+**Symptom:** `import torch, cv2` aborted the process (`OMP: Error #15`, exit 134).
+`import cv2, torch` was fine. This bit any test importing both — i.e. all of
+Spec 1.
+
+**Cause:** two libomp copies mapped, and their *install names* diverged so dyld
+could not dedupe them:
+
+| copy | install_name |
+|---|---|
+| `$CONDA_PREFIX/lib/libomp.dylib` (llvm-openmp 22.1.2) | `@rpath/libomp.dylib` |
+| `.../site-packages/torch/lib/libomp.dylib` (vendored) | `/opt/llvm-openmp/lib/libomp.dylib` |
+
+torch links `@rpath/libomp.dylib` and resolves it via its own rpath to the
+vendored copy, which dyld then registers under a different name than conda's.
+
+**Fix applied** (to the `hydra-mps` env):
+
+```bash
+E=$CONDA_PREFIX  # hydra-mps
+T=$E/lib/python3.13/site-packages/torch/lib/libomp.dylib
+cp -p "$T" "$T.orig-backup"
+ln -sf "$E/lib/libomp.dylib" "$T"
+```
+
+Safe because the LC_ID_DYLIB compat versions match exactly (current 5.0.0,
+compatibility 5.0.0). Verified after: exactly one libomp maps; all import orders
+work; torch matmul + MPS compute fine; pre-existing pose suite still 29 passed;
+SLEAP/YOLO backends import.
+
+**⚠️ Not persistent.** `make env-create-mps` (or any torch reinstall) restores the
+vendored copy and the abort returns. Re-apply then.
+
+**Two rejected alternatives**, recorded so they are not re-litigated:
+- *`KMP_DUPLICATE_LIB_OK=TRUE`* — the repo's incumbent workaround
+  (`trackerkit/app.py:18`, `tools/equivalence/runner.py:31`,
+  `PARITY_AUDIT.md:83`). LLVM documents it as possibly producing *silently
+  incorrect results*, which is the exact failure mode a numerical-parity port
+  cannot tolerate. Now unnecessary; the `app.py` call is redundant but harmless.
+- *"import cv2 before torch"* — **does not work.** isort sorts third-party
+  `import torch` ahead of first-party `from hydra_suite...`, so torch wins the
+  race in any module importing both. This was tried and removed.
+
+**Root cause note:** OpenCV is also installed twice (conda-forge `opencv 4.13.0`
+*and* pip `opencv-python`/`-headless 4.13.0.92`; the pip wheel currently shadows
+conda's). That did not cause this abort — the pip wheel bundles no libomp — but
+it is worth cleaning up separately.
+
 ## Conventions that constrain all four specs
 
 - **Dependency direction** (CLAUDE.md:159-165, 192-198): Core/Runtime/Data/

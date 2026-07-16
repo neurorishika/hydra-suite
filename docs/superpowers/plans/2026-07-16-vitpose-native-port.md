@@ -14,7 +14,23 @@
 ## Global Constraints
 
 - **Imports only `torch`, `timm`, `numpy`, `cv2`. NOTHING from `hydra_suite`.** This module is a leaf; Spec 3 wires it in. A `from hydra_suite...` import anywhere in `vitpose/` is a plan violation.
-- **Import `cv2` BEFORE `torch`** in `vitpose/__init__.py`. Verified on this machine: `import torch, cv2` → OpenMP abort (`OMP: Error #15`, exit 134); `import cv2, torch` → OK. Cause: two libomp copies (conda `@rpath/libomp.dylib` from `llvm-openmp`, and torch's vendored `/opt/llvm-openmp/lib/libomp.dylib`). Do **not** reach for `KMP_DUPLICATE_LIB_OK=TRUE` — LLVM documents it as possibly producing *silently incorrect results*, which is the one failure mode this spec exists to prevent. (`trackerkit/app.py:18` uses it; that is a GUI-level fallback, not our precedent.)
+- **OpenMP: RESOLVED at the environment level 2026-07-16 — no import-order rule, no env var.**
+  Previously `import torch, cv2` aborted (`OMP: Error #15`, exit 134) because two
+  libomp copies mapped: conda's (`@rpath/libomp.dylib`) and torch's vendored
+  (`/opt/llvm-openmp/lib/libomp.dylib`). The divergent install_name is what stopped
+  dyld deduping them.
+  **The original "import cv2 before torch" rule was unworkable** and has been
+  removed: isort sorts third-party `import torch` ahead of first-party
+  `from hydra_suite...`, so torch always loaded first regardless.
+  **Fix applied:** `torch/lib/libomp.dylib` is now a symlink to
+  `$CONDA_PREFIX/lib/libomp.dylib` (compat versions match exactly, 5.0.0/5.0.0;
+  original saved as `libomp.dylib.orig-backup`). Exactly one libomp maps now; all
+  import orders work; pre-existing suite still 29 passed.
+  **Do not use `KMP_DUPLICATE_LIB_OK=TRUE`** — it is no longer needed, and LLVM
+  documents it as possibly producing *silently incorrect results*, the one failure
+  mode this spec exists to prevent.
+  **If the env is ever rebuilt** (`make env-create-mps`), the symlink is lost and
+  the abort returns. Re-apply it.
 - **`torch.load(..., weights_only=True)` always.** Checkpoints come from a third-party re-host; `weights_only=False` permits arbitrary code execution via unpickling.
 - **Never `Path(__file__).parents[N]`** (CLAUDE.md:199-201).
 - **~500-line rule** (CLAUDE.md:123). Model on `yolo.py` (293 lines), not `sleap.py` (1780).
@@ -394,17 +410,17 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'hydra_suite.core.ident
 # src/hydra_suite/core/identity/pose/vitpose/__init__.py
 """Native-PyTorch ViTPose. Standalone leaf: imports nothing from hydra_suite.
 
-Import order matters. cv2 must be imported before torch on this platform:
-conda ships libomp.dylib (@rpath) and torch vendors its own
-(/opt/llvm-openmp/lib/libomp.dylib). Loading torch first then cv2 aborts the
-process with `OMP: Error #15`. cv2-first is stable. Do not "fix" this with
-KMP_DUPLICATE_LIB_OK=TRUE: LLVM documents that as possibly producing silently
-incorrect results, which defeats the point of a numerical-parity module.
+Module attribute names deliberately mirror the upstream checkpoint's state_dict
+keys, so load_state_dict(strict=True) needs no rename map.
 """
-
-import cv2 as _cv2  # noqa: F401  (must precede torch; see module docstring)
-import torch as _torch  # noqa: F401
 ```
+
+**No `import cv2` / `import torch` here.** An earlier draft imported cv2 first to
+dodge an OpenMP abort; that was cargo cult — isort sorts third-party `import
+torch` ahead of first-party `from hydra_suite...`, so torch always loaded first
+and the rule never did anything. The conflict is fixed in the environment
+instead (see Global Constraints). A docstring may record the history; the
+imports must not come back.
 
 ```python
 # src/hydra_suite/core/identity/pose/vitpose/config.py
@@ -2096,7 +2112,7 @@ import json
 import os
 from pathlib import Path
 
-import cv2  # noqa: F401  (import before torch; see vitpose/__init__.py)
+import cv2
 import numpy as np
 import torch
 from pycocotools.coco import COCO
