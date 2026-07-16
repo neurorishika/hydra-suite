@@ -115,6 +115,21 @@ def test_detections_asset_pins_the_real_file_not_the_dummy():
     assert a.sha256 == (
         "53ba0ad8d0fd461c5a000cd90797fa8c39cd8c38cd125125c0412626ff592d59"
     )
+
+
+def test_fetch_refuses_unpinned_asset_by_default(tmp_path: Path, monkeypatch):
+    """An unpinned asset must fail loudly rather than silently skip
+    verification -- silently-unverified is the failure mode this module exists
+    to prevent."""
+    from tools.vitpose import fetch_assets
+
+    monkeypatch.setitem(
+        fetch_assets.ASSETS,
+        "_unpinned",
+        fetch_assets.Asset("hf", "repo", "f.bin", "", 0),
+    )
+    with pytest.raises(AssetIntegrityError, match="no pinned sha256"):
+        fetch_assets.fetch("_unpinned", tmp_path)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -199,8 +214,20 @@ def verify(path: Path, expected_sha256: str) -> None:
         )
 
 
-def fetch(name: str, dest_dir: Path) -> Path:
+def fetch(name: str, dest_dir: Path, allow_unpinned: bool = False) -> Path:
+    """Download (if absent) and verify an asset.
+
+    An unpinned asset (sha256="") raises unless allow_unpinned=True. Silently
+    skipping verification for unpinned entries would defeat the point of the
+    module: the bootstrap that DISCOVERS a digest must say so explicitly.
+    Only the Step 6 bootstrap passes allow_unpinned=True.
+    """
     asset = ASSETS[name]
+    if not asset.sha256 and not allow_unpinned:
+        raise AssetIntegrityError(
+            f"{name} has no pinned sha256; run the Step 6 bootstrap to record "
+            f"one, or pass allow_unpinned=True if you are that bootstrap"
+        )
     dest_dir.mkdir(parents=True, exist_ok=True)
     out = dest_dir / asset.filename
     if not out.exists():
@@ -233,7 +260,7 @@ Run:
 ```bash
 PYTHONPATH=.:src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_vitpose_assets.py -q
 ```
-Expected: PASS (3 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: Install fetch deps if absent, then download the real assets**
 
@@ -256,10 +283,14 @@ from pathlib import Path
 from tools.vitpose.fetch_assets import ASSETS, fetch, _sha256
 import os
 d = Path(os.path.expanduser("~/.cache/vitpose-assets"))
-for name in ("vitpose-b", "vitpose-b-simple", "vitpose-plus-base",
-             "coco_val2017_person_detections"):
-    p = fetch(name, d)
+# allow_unpinned=True ONLY here: this bootstrap is what discovers the digests.
+for name in ("vitpose-b", "vitpose-b-simple", "vitpose-plus-base"):
+    p = fetch(name, d, allow_unpinned=True)
     print(f"{name:34s} {p.stat().st_size:>12,} B  {_sha256(p)}")
+# The detections file is ALREADY pinned -- fetch it pinned, so a dummy or a
+# corrupt download fails loudly right here.
+p = fetch("coco_val2017_person_detections", d)
+print(f"{'coco detections (pinned, verified)':34s} {p.stat().st_size:>12,} B")
 PY
 ```
 
@@ -1772,9 +1803,19 @@ def test_gate_a3_strict_load_moe():
 @requires_plus
 def test_moe_checkpoint_rejects_classic_module():
     """A ViTPose+ checkpoint must NOT load into a classic ViT: MoE fc2 is
-    [D - part_features, 4D], not [D, 4D]."""
+    [D - part_features, 4D], not [D, 4D].
+
+    Matches on "size mismatch", not bare Exception -- a bare Exception would
+    also 'pass' on an ImportError or a typo in this test, asserting nothing.
+
+    Note it is torch's own RuntimeError that fires here, NOT our
+    CheckpointKeyError: load_state_dict(strict=False) still raises on a SHAPE
+    mismatch before returning missing/unexpected keys, and MoE fc2 is
+    [D - part_features, 4D] vs classic [D, 4D]. So this is a shape failure, not
+    a key failure.
+    """
     m = build_vitpose("B", "classic")
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError, match="size mismatch"):
         load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)
 ```
 
@@ -1968,11 +2009,17 @@ requires_coco = pytest.mark.skipif(
 
 @requires_coco
 def test_smoke_eval_on_20_images():
-    """Fast feedback before the full ~40min run."""
+    """Fast feedback before the full ~40min run.
+
+    Asserts AP > 0.5, not just 0<=AP<=1 (which is vacuously true for any
+    result, including a totally broken pipeline). A correctly-ported ViTPose-B
+    scores ~0.76 on full val; 20 images is noisy but a working pipeline clears
+    0.5 comfortably, while a broken one lands near 0.
+    """
     from tools.vitpose.eval_coco import evaluate
 
     res = evaluate("B", "classic", ASSET_DIR / "vitpose-b.pth", "mps", limit=20)
-    assert 0.0 <= res["AP"] <= 1.0
+    assert res["AP"] > 0.5, f"smoke AP {res['AP']:.3f} — pipeline is broken"
 
 
 @pytest.mark.slow
