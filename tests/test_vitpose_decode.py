@@ -165,3 +165,47 @@ def test_decode_udp_torch_degenerate_heatmap_returns_finite_coords():
     coords2, maxvals2 = decode_udp_torch(constant)
     assert torch.isfinite(coords2).all()
     assert torch.isfinite(maxvals2).all()
+
+
+# --- CUDA twins of the Gate B parity tests -------------------------------
+# The MPS tests above skipif on MPS availability, so on a CUDA box they all
+# skip and the on-device decode would go UNVERIFIED on the actual deployment
+# target -- the one place it has to be right. These close that gap.
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA unavailable"
+)
+
+
+@requires_cuda
+def test_gate_b_torch_decode_matches_cv2_on_cuda():
+    """GATE B on CUDA. Same bound as CPU/MPS: 1e-2 heatmap units, per-keypoint
+    max. The oracle is float64-on-CPU and CUDA runs float32, so this compares
+    across dtypes by design -- expect ~3.8e-06 from rounding alone.
+    """
+    hm = _random_peaky_heatmaps()
+    ref, _ = decode_udp_cv2(hm)
+    got, _ = decode_udp_torch(torch.from_numpy(hm).to("cuda"))
+    assert _max_coord_delta(ref, got.cpu().numpy()) < 1e-2
+
+
+@requires_cuda
+def test_gate_b_torch_decode_matches_cv2_on_cuda_near_edge():
+    """GATE B on CUDA with peaks against the border. Interior-peak fixtures are
+    structurally blind to a wrong blur border mode (they keep every peak >=6px
+    from the edge); this one catches it -- injecting reflect->replicate fails
+    here at ~0.59, ~59x the bound.
+    """
+    hm = _near_edge_peaky_heatmaps()
+    ref, _ = decode_udp_cv2(hm)
+    got, _ = decode_udp_torch(torch.from_numpy(hm).to("cuda"))
+    assert _max_coord_delta(ref, got.cpu().numpy()) < 1e-2
+
+
+@requires_cuda
+def test_torch_decode_never_leaves_device_cuda():
+    """The no-GPU->CPU-roundtrip requirement, on the deployment target."""
+    hm = torch.from_numpy(_random_peaky_heatmaps()).to("cuda")
+    coords, maxvals = decode_udp_torch(hm)
+    assert coords.device.type == "cuda"
+    assert maxvals.device.type == "cuda"
