@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+from hydra_suite.core.identity.pose.vitpose.config import HEATMAP_SIZE_WH
 from hydra_suite.core.identity.pose.vitpose.heads import (
     ClassicHead,
     SimpleHead,
@@ -58,15 +60,74 @@ def test_simple_head_has_no_deconv_params():
 
 
 def test_simple_head_applies_relu_before_upsample():
-    """The ReLU lives in upstream's _transform_inputs, BEFORE F.interpolate.
-    With a strictly-negative input, a pre-upsample ReLU zeroes everything, so
-    the final conv sees only its bias."""
+    """SimpleHead must apply ReLU BEFORE the upsample (upstream puts it in
+    _transform_inputs, ahead of the interpolation). Applying it after is a
+    silent bug: same shapes, different numbers.
+
+    A spatially CONSTANT input cannot test this -- bilinear interpolation of a
+    constant field is constant, so relu(interp(x)) == interp(relu(x)) and the
+    test would pass on the broken implementation. Use a varying, mixed-sign
+    input so the two orderings genuinely diverge.
+    """
     h = SimpleHead(embed_dim=8, num_keypoints=2).eval()
     with torch.no_grad():
         h.final_layer.weight.fill_(1.0)
         h.final_layer.bias.zero_()
-        out = h(torch.full((1, 8, 16, 12), -5.0))
-    assert torch.count_nonzero(out) == 0, "ReLU is not applied before upsampling"
+
+        x = torch.zeros(1, 8, 16, 12)
+        x[:, :, ::2, :] = 1.0
+        x[:, :, 1::2, :] = -1.0
+
+        got = h(x)
+
+        w, hh = HEATMAP_SIZE_WH
+        relu_first = h.final_layer(
+            F.interpolate(F.relu(x), size=(hh, w), mode="bilinear", align_corners=False)
+        )
+        relu_after = h.final_layer(
+            F.relu(F.interpolate(x, size=(hh, w), mode="bilinear", align_corners=False))
+        )
+
+    assert torch.allclose(
+        got, relu_first
+    ), "SimpleHead does not match relu-before-upsample"
+    assert not torch.allclose(relu_first, relu_after), (
+        "test input fails to discriminate the two ReLU orderings — fix the "
+        "input, not the assertion"
+    )
+
+
+def test_simple_head_uses_align_corners_false():
+    """SimpleHead's F.interpolate must use align_corners=False (upstream's
+    setting). Flipping it is a silent bug: it shifts keypoints by a fraction
+    of a heatmap cell, which downstream bbox scaling amplifies into several
+    image pixels of error -- same output shape, different numbers.
+    """
+    h = SimpleHead(embed_dim=8, num_keypoints=2).eval()
+    with torch.no_grad():
+        h.final_layer.weight.fill_(1.0)
+        h.final_layer.bias.zero_()
+
+        torch.manual_seed(0)
+        x = torch.randn(1, 8, 16, 12)
+
+        got = h(x)
+
+        w, hh = HEATMAP_SIZE_WH
+        false_ref = h.final_layer(
+            F.interpolate(F.relu(x), size=(hh, w), mode="bilinear", align_corners=False)
+        )
+        true_ref = h.final_layer(
+            F.interpolate(F.relu(x), size=(hh, w), mode="bilinear", align_corners=True)
+        )
+
+    assert torch.allclose(
+        got, false_ref
+    ), "SimpleHead does not match align_corners=False"
+    assert not torch.allclose(false_ref, true_ref), (
+        "test input fails to discriminate align_corners=False vs True — fix "
+        "the input, not the assertion"
+    )
 
 
 def test_build_head_dispatch():
