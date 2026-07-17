@@ -467,7 +467,6 @@ def _run_bg_trial_frame(
     bg_u8 = bg_model.update_and_get_background(
         gray,
         roi_mask,
-        tracking_stabilized=True,
     )
     if bg_u8 is None:
         return gray, None, None, [], [], []

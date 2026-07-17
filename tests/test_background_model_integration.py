@@ -283,9 +283,7 @@ class TestBackgroundUpdate:
             ret, frame = cap.read()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            bg = bg_model.update_and_get_background(
-                gray, roi_mask=None, tracking_stabilized=True
-            )
+            bg = bg_model.update_and_get_background(gray, roi_mask=None)
 
             assert bg is not None
             assert bg.shape == gray.shape
@@ -313,9 +311,7 @@ class TestBackgroundUpdate:
         # Create a fake gray frame
         gray = np.ones((240, 320), dtype=np.uint8) * 128
 
-        bg = bg_model.update_and_get_background(
-            gray, roi_mask=None, tracking_stabilized=True
-        )
+        bg = bg_model.update_and_get_background(gray, roi_mask=None)
 
         # Should return None if not primed
         assert bg is None
@@ -352,9 +348,7 @@ class TestForegroundMaskGeneration:
             ret, frame = cap.read()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            bg = bg_model.update_and_get_background(
-                gray, roi_mask=None, tracking_stabilized=True
-            )
+            bg = bg_model.update_and_get_background(gray, roi_mask=None)
             fg_mask = bg_model.generate_foreground_mask(gray, bg)
 
             # Check mask properties
@@ -399,9 +393,7 @@ class TestForegroundMaskGeneration:
                 ret, frame = cap.read()
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-                bg = bg_model.update_and_get_background(
-                    gray, roi_mask=None, tracking_stabilized=True
-                )
+                bg = bg_model.update_and_get_background(gray, roi_mask=None)
                 fg_mask = bg_model.generate_foreground_mask(gray, bg)
 
                 assert fg_mask is not None
@@ -438,9 +430,7 @@ class TestForegroundMaskGeneration:
                 ret, frame = cap.read()
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-                bg = bg_model.update_and_get_background(
-                    gray, roi_mask=None, tracking_stabilized=True
-                )
+                bg = bg_model.update_and_get_background(gray, roi_mask=None)
                 fg_mask = bg_model.generate_foreground_mask(gray, bg)
 
                 assert fg_mask is not None

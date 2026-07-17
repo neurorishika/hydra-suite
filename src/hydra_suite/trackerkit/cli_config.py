@@ -714,6 +714,12 @@ def build_tracking_parameters(
             _cfg_get(cfg, "trajectory_history_seconds", default=2.0)
         ),
         "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
+        "BACKGROUND_CONVERGENCE_EPSILON": float(
+            _cfg_get(cfg, "background_convergence_epsilon", default=0.05)
+        ),
+        "BACKGROUND_CONVERGENCE_FRAMES": int(
+            _cfg_get(cfg, "background_convergence_frames", default=30)
+        ),
         "ENABLE_LIGHTING_STABILIZATION": bool(
             _cfg_get(cfg, "enable_lighting_stabilization", default=True)
         ),

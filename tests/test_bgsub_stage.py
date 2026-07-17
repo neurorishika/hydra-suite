@@ -73,15 +73,68 @@ def test_priming_covers_video_temporally(synthetic_video):
 def test_adaptive_disabled_never_switches_to_frozen_snapshot():
     """ENABLE_ADAPTIVE_BACKGROUND=False must mean 'do not switch', not
     'switch to a stale primed snapshot'."""
-    model = BackgroundModel(_params(ENABLE_ADAPTIVE_BACKGROUND=False))
-    gray_a = np.full((16, 16), 200, dtype=np.uint8)
-    model.update_and_get_background(gray_a, None, tracking_stabilized=False)
-
-    gray_b = np.full((16, 16), 240, dtype=np.uint8)
-    model.update_and_get_background(gray_b, None, tracking_stabilized=False)
-
-    stabilized_bg = model.update_and_get_background(
-        gray_b, None, tracking_stabilized=True
+    model = BackgroundModel(
+        _params(
+            ENABLE_ADAPTIVE_BACKGROUND=False,
+            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_FRAMES=1,
+        )
     )
-    lightest = cv2.convertScaleAbs(model.lightest_background)
-    np.testing.assert_array_equal(stabilized_bg, lightest)
+    gray = np.full((16, 16), 200, dtype=np.uint8)
+    model.update_and_get_background(gray, None)
+    model.update_and_get_background(gray, None)
+    model.update_and_get_background(gray, None)
+    assert model.stabilized
+
+    result = model.update_and_get_background(gray, None)
+    np.testing.assert_array_equal(
+        result, cv2.convertScaleAbs(model.lightest_background)
+    )
+
+
+def test_convergence_latch_sets_when_lightest_stops_growing():
+    model = BackgroundModel(
+        _params(
+            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_FRAMES=3,
+        )
+    )
+    gray = np.full((16, 16), 200, dtype=np.uint8)
+    model.update_and_get_background(gray, None)  # first frame primes, returns None
+    assert not model.stabilized
+
+    for _ in range(3):
+        model.update_and_get_background(gray, None)
+    assert model.stabilized
+
+
+def test_convergence_latch_resets_counter_when_background_grows():
+    model = BackgroundModel(
+        _params(
+            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_FRAMES=3,
+        )
+    )
+    model.update_and_get_background(np.full((16, 16), 200, np.uint8), None)
+    model.update_and_get_background(np.full((16, 16), 200, np.uint8), None)
+    model.update_and_get_background(np.full((16, 16), 200, np.uint8), None)
+    # A brighter frame grows the running max -> counter resets.
+    model.update_and_get_background(np.full((16, 16), 250, np.uint8), None)
+    assert not model.stabilized
+
+
+def test_convergence_latch_is_monotonic():
+    """Once latched, never un-latches, even if the background grows again."""
+    model = BackgroundModel(
+        _params(
+            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_FRAMES=2,
+        )
+    )
+    gray = np.full((16, 16), 200, dtype=np.uint8)
+    for _ in range(4):
+        model.update_and_get_background(gray, None)
+    assert model.stabilized
+
+    model.update_and_get_background(np.full((16, 16), 255, np.uint8), None)
+    assert model.stabilized

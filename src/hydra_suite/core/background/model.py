@@ -186,12 +186,28 @@ class BackgroundModel:
         self.adaptive_background: Optional[np.ndarray] = None
         self.reference_intensity: Optional[float] = None
 
+        # Background-convergence latch. Replaces the old `tracking_stabilized`
+        # flag, which was fed in from the tracker (Hungarian assignment cost)
+        # and made detection depend on tracking state -- impossible to cache.
+        # The latch is monotonic: once set, never cleared.
+        self._stabilized: bool = False
+        self._converged_frames: int = 0
+
         # GPU acceleration setup
         self.use_gpu = False
         self.gpu_type = None  # 'cuda', 'mps', or None
         self.gpu_device = None
         self.torch_device = None
         self._setup_gpu_acceleration()
+
+    @property
+    def stabilized(self) -> bool:
+        """True once the lightest background has stopped growing.
+
+        Monotonic latch. Selects adaptive (True) over lightest (False) as the
+        subtraction background.
+        """
+        return self._stabilized
 
     def _setup_gpu_acceleration(self) -> None:
         """
@@ -408,7 +424,6 @@ class BackgroundModel:
         self,
         gray: np.ndarray,
         roi_mask: Optional[np.ndarray],
-        tracking_stabilized: bool,
     ) -> Optional[np.ndarray]:
         """Update the background model and return the active subtraction background."""
         p = self.params
@@ -418,17 +433,15 @@ class BackgroundModel:
             return None  # Indicates first frame
 
         # Update full-frame background (ROI masking happens during detection)
-        self.lightest_background = np.maximum(
-            self.lightest_background, gray.astype(np.float32)
-        )
+        gray_f32 = gray.astype(np.float32)
+        previous_lightest = self.lightest_background
+        self.lightest_background = np.maximum(previous_lightest, gray_f32)
 
-        if (
-            p.get("ENABLE_ADAPTIVE_BACKGROUND", True)
-            and self.adaptive_background is not None
-        ):
+        self._update_convergence(previous_lightest)
+
+        adaptive_enabled = p.get("ENABLE_ADAPTIVE_BACKGROUND", True)
+        if adaptive_enabled and self.adaptive_background is not None:
             learning_rate = p.get("BACKGROUND_LEARNING_RATE", 0.001)
-            gray_f32 = gray.astype(np.float32)
-
             if self.use_gpu:
                 self._adaptive_update_gpu(gray_f32, learning_rate)
             else:
@@ -437,10 +450,40 @@ class BackgroundModel:
         # Only switch when adaptive updating is actually on. Otherwise
         # adaptive_background is frozen at its primed value and switching to
         # it would silently subtract against a stale snapshot.
-        adaptive_enabled = p.get("ENABLE_ADAPTIVE_BACKGROUND", True)
-        if tracking_stabilized and adaptive_enabled:
+        if self._stabilized and adaptive_enabled:
             return cv2.convertScaleAbs(self.adaptive_background)
         return cv2.convertScaleAbs(self.lightest_background)
+
+    def _update_convergence(self, previous_lightest: np.ndarray) -> None:
+        """Latch stabilization once the lightest background stops growing.
+
+        This is what the old tracking-derived `tracking_stabilized` flag was
+        really proxying for: "has the background been revealed?".
+        MIN_TRACKING_COUNTS answered that indirectly via assignment cost; the
+        background can answer it about itself, deterministically -- which is
+        what makes bg-sub detection cacheable.
+        """
+        if self._stabilized:
+            return  # monotonic: never un-latch
+
+        p = self.params
+        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05)
+        needed = int(p.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30)
+
+        delta = float(np.mean(np.abs(self.lightest_background - previous_lightest)))
+        if delta < epsilon:
+            self._converged_frames += 1
+        else:
+            self._converged_frames = 0
+
+        if self._converged_frames >= needed:
+            self._stabilized = True
+            logger.info(
+                "Background converged (delta=%.4f < %.4f for %d frames)",
+                delta,
+                epsilon,
+                needed,
+            )
 
     def _foreground_mask_gpu(
         self, gray: np.ndarray, background: np.ndarray

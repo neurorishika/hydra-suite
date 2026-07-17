@@ -416,12 +416,9 @@ def _preview_run_bg_subtraction(
             interpolation=cv2.INTER_NEAREST,
         )
 
-    # Use update_and_get_background to match the production tracking
-    # pipeline. tracking_stabilized=False returns the lightest
-    # background, which is correct for a single preview frame.
-    bg_u8 = bg_model.update_and_get_background(
-        gray, roi_mask=None, tracking_stabilized=False
-    )
+    # Background selection is now internal to BackgroundModel via its
+    # convergence latch; the preview shows whatever the model would use.
+    bg_u8 = bg_model.update_and_get_background(gray, roi_mask=None)
     if bg_u8 is None:
         bg_u8 = cv2.convertScaleAbs(bg_model.lightest_background)
     fg_mask = bg_model.generate_foreground_mask(gray, bg_u8)

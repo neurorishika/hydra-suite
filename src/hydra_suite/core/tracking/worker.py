@@ -939,7 +939,7 @@ class TrackingWorker(QThread):
         tracking_continuity = [0] * N
         trajectory_ids, next_trajectory_id = list(range(N)), N
 
-        detection_initialized, tracking_stabilized = False, False
+        detection_initialized = False
         detection_counts, tracking_counts = 0, 0
 
         # Diagnostic: log gate parameters for debugging jumps
@@ -2294,9 +2294,7 @@ class TrackingWorker(QThread):
                         params.get("ENABLE_GPU_BACKGROUND", False),
                     )
 
-                bg_u8 = bg_model.update_and_get_background(
-                    gray, ROI_mask_current, tracking_stabilized
-                )
+                bg_u8 = bg_model.update_and_get_background(gray, ROI_mask_current)
                 if bg_u8 is None:
                     if frame is not None:
                         self.emit_frame(frame)
@@ -3653,12 +3651,6 @@ class TrackingWorker(QThread):
                     tracking_counts += 1
                 else:
                     tracking_counts = 0
-                if (
-                    tracking_counts >= params["MIN_TRACKING_COUNTS"]
-                    and not tracking_stabilized
-                ):
-                    tracking_stabilized = True
-                    logger.info(f"Tracking stabilized (avg cost={avg_cost:.2f})")
 
                 profiler.tock("kf_update")
 
