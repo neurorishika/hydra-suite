@@ -4,7 +4,6 @@ Functionally identical to the original implementation's background logic.
 """
 
 import logging
-import random
 from typing import Any, Dict, Optional
 
 import cv2
@@ -305,7 +304,11 @@ class BackgroundModel:
         ROI_mask = p.get("ROI_MASK", None)
         resize_f = p.get("RESIZE_FACTOR", 1.0)
 
-        idxs = random.sample(range(total), count)
+        # Evenly-spaced rather than random: deterministic without needing a
+        # seed (which makes the detection cache key honest -- see
+        # core/inference/cache/keys.py) and strictly guarantees the temporal
+        # coverage random sampling only achieves on average.
+        idxs = [int(round(i)) for i in np.linspace(0, total - 1, count)]
         bg_temp = None
         intensity_samples = []
 
