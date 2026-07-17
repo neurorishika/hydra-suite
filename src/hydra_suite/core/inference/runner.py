@@ -639,6 +639,14 @@ class InferenceRunner:
             at_result,
         )
 
+        # Task 10b: surface the bg-sub masks for the SHOW_FG / SHOW_BG preview
+        # overlays. Realtime-only, like streaming_payload below: run_bgsub just
+        # stashed these on the (strictly sequential) model, so "last" is this
+        # frame's. Left None on the OBB path, which has no such masks.
+        if self.config.detection_source == "bgsub" and self._models.bgsub is not None:
+            frame_result.fg_mask = self._models.bgsub.last_fg_mask
+            frame_result.bg_u8 = self._models.bgsub.last_bg_u8
+
         # Task 17g: build StreamingAnalysisPayload for legacy identity consumers.
         try:
             from hydra_suite.core.tracking.ingest.streaming_payload import (

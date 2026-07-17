@@ -404,7 +404,11 @@ def test_config_detection_source_reports_obb():
 
 from hydra_suite.core.inference.result import DETECTION_ID_STRIDE
 from hydra_suite.core.inference.runtime import RuntimeContext
-from hydra_suite.core.inference.stages.bgsub import load_bgsub_model, run_bgsub
+from hydra_suite.core.inference.stages.bgsub import (
+    load_bgsub_model,
+    run_bgsub,
+    run_bgsub_batch,
+)
 
 
 def _cpu_runtime() -> RuntimeContext:
@@ -613,6 +617,48 @@ def test_runner_batch_pass_bgsub_depth_invariant(tmp_path, synthetic_video):
         np.testing.assert_array_equal(a, b)
 
 
+def test_run_realtime_populates_fg_and_bg_masks(tmp_path, synthetic_video):
+    """SHOW_FG / SHOW_BG overlays read these off FrameResult."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _bgsub_inference_config()
+    runner = InferenceRunner(cfg, cache_dir=tmp_path, video_path=synthetic_video)
+    cap = cv2.VideoCapture(synthetic_video)
+    results = []
+    for i in range(3):
+        ok, frame = cap.read()
+        assert ok
+        results.append(runner.run_realtime(frame, i))
+    cap.release()
+    runner.close()
+
+    last = results[-1]
+    assert last.fg_mask is not None
+    assert last.bg_u8 is not None
+    assert last.fg_mask.shape == last.bg_u8.shape == (64, 64)
+    assert last.fg_mask.dtype == np.uint8
+
+
+def test_batch_pass_leaves_fg_and_bg_masks_none(tmp_path, synthetic_video):
+    """Realtime-only, exactly like streaming_payload: carrying full masks
+    through a cached batch pass would be pure waste."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _bgsub_inference_config(detection_batch_size=4, pipeline_depth=1)
+    runner = InferenceRunner(cfg, cache_dir=tmp_path, video_path=synthetic_video)
+    runner.run_batch_pass(Path(synthetic_video), start_frame=0, end_frame=7)
+    runner.close()
+
+    replay = InferenceRunner(
+        cfg, cache_dir=tmp_path, video_path=synthetic_video, cache_only=True
+    )
+    for i in range(8):
+        r = replay.load_frame(i)
+        assert r.fg_mask is None
+        assert r.bg_u8 is None
+    replay.close()
+
+
 def test_runner_close_is_safe_without_obb_model(tmp_path, synthetic_video):
     from hydra_suite.core.inference.runner import InferenceRunner
 
@@ -623,10 +669,11 @@ def test_runner_close_is_safe_without_obb_model(tmp_path, synthetic_video):
 
 
 def test_run_bgsub_resizes_roi_mask_to_match_scaled_frame():
-    """RESIZE_FACTOR < 1 scales the frame; the ROI mask must follow.
+    """The ROI mask must be resampled to whatever the frame's shape is.
 
-    Regression: the mask was passed through at full resolution and
-    cv2.bitwise_and raised a sizes-mismatch error.
+    Realtime callers hand the stage a mask already in resized space (a no-op
+    here); the batch path resizes the frame itself but still receives a
+    full-resolution mask, so the resolver must keep doing real work.
     """
     p = _params(
         RESIZE_FACTOR=0.5, BACKGROUND_PRIME_FRAMES=0, MAX_TARGETS=10, MIN_CONTOUR_AREA=5
@@ -636,12 +683,142 @@ def test_run_bgsub_resizes_roi_mask_to_match_scaled_frame():
         InferenceConfig(obb=None, bgsub=cfg, runtime_tier="cpu")
     )
     model = load_bgsub_model(cfg, rt)
-    frame = np.full((64, 64, 3), 200, dtype=np.uint8)
+    frame = np.full((32, 32, 3), 200, dtype=np.uint8)  # already scaled by the caller
     roi = np.full((64, 64), 255, dtype=np.uint8)  # full-res, as a caller supplies
 
     run_bgsub(frame, 0, model, cfg, rt, roi_mask=roi)  # frame 0 primes
     result = run_bgsub(frame, 1, model, cfg, rt, roi_mask=roi)
     assert result.frame_idx == 1
+
+
+# --- Task 10b: worker-seam parity ------------------------------------------
+
+
+def _blob_frame(size: int, cx: int, cy: int, radius: int) -> np.ndarray:
+    img = np.full((size, size, 3), 200, dtype=np.uint8)
+    cv2.circle(img, (cx, cy), radius, (30, 30, 30), -1)
+    return img
+
+
+def _resize_cfg(**overrides):
+    p = _params(
+        **_measure_params(),
+        BACKGROUND_PRIME_FRAMES=0,
+        ENABLE_LIGHTING_STABILIZATION=False,
+    )
+    p.update(overrides)
+    cfg = BgSubConfig.from_params(p)
+    rt = RuntimeContext.from_config(
+        InferenceConfig(obb=None, bgsub=cfg, runtime_tier="cpu")
+    )
+    return cfg, rt
+
+
+def test_run_bgsub_does_not_resize_the_frame():
+    """run_bgsub's contract: the frame arrives ALREADY scaled by RESIZE_FACTOR.
+
+    The worker pre-resizes at worker.py:2072 for every detection method, so a
+    stage that resized again would put every centroid off by resize_f**2.
+    """
+    cfg, rt = _resize_cfg(RESIZE_FACTOR=0.5, MIN_CONTOUR_AREA=5)
+    model = load_bgsub_model(cfg, rt)
+
+    # 64x64 frames handed in as-is: detections must land in 64x64 space.
+    run_bgsub(_blob_frame(64, 20, 32, 6), 0, model, cfg, rt)
+    result = run_bgsub(_blob_frame(64, 40, 32, 6), 1, model, cfg, rt)
+
+    assert result.num_detections == 1
+    cx, cy = result.centroids[0]
+    assert abs(float(cx) - 40.0) < 2.0, "centroid was rescaled by the stage"
+    assert abs(float(cy) - 32.0) < 2.0
+
+
+def test_run_bgsub_batch_resizes_and_matches_realtime():
+    """batch == realtime. RESIZE_FACTOR is in `_BGSUB_KEY_PARAMS`, so if the
+    batch path (raw frames from FrameSource) and the realtime path (pre-scaled
+    frames from the worker) disagree, the detection cache is a lie."""
+    raw = [_blob_frame(64, 16 + 8 * i, 32, 6) for i in range(4)]
+    scaled = [
+        cv2.resize(f, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA) for f in raw
+    ]
+
+    cfg, rt = _resize_cfg(RESIZE_FACTOR=0.5, MIN_CONTOUR_AREA=3)
+
+    rt_model = load_bgsub_model(cfg, rt)
+    realtime = [run_bgsub(f, i, rt_model, cfg, rt) for i, f in enumerate(scaled)]
+
+    b_model = load_bgsub_model(cfg, rt)
+    batch = run_bgsub_batch(raw, list(range(4)), b_model, cfg, rt)
+
+    assert sum(r.num_detections for r in realtime) > 0, "fixture detects nothing"
+    for a, b in zip(realtime, batch):
+        np.testing.assert_array_equal(a.centroids, b.centroids)
+        np.testing.assert_array_equal(a.angles, b.angles)
+        np.testing.assert_array_equal(a.corners, b.corners)
+
+
+def test_lighting_stabilization_applied_when_enabled():
+    model = BackgroundModel(_params(ENABLE_LIGHTING_STABILIZATION=True))
+    model.reference_intensity = 200.0
+    gray = np.full((16, 16), 100, dtype=np.uint8)
+    out = model.apply_lighting_stabilization(gray, None)
+    assert float(out.mean()) > 110.0, "frame was not brightened toward reference"
+
+
+def test_lighting_stabilization_skipped_when_disabled():
+    model = BackgroundModel(_params(ENABLE_LIGHTING_STABILIZATION=False))
+    model.reference_intensity = 200.0
+    gray = np.full((16, 16), 100, dtype=np.uint8)
+    out = model.apply_lighting_stabilization(gray, None)
+    np.testing.assert_array_equal(out, gray)
+
+
+def _lighting_model():
+    model = BackgroundModel(_params(ENABLE_LIGHTING_STABILIZATION=True))
+    model.reference_intensity = 190.0
+    return model
+
+
+def test_lighting_stabilization_state_persists_across_frames():
+    """The correction is a function of accumulated history, not of the current
+    frame alone -- which is exactly why the state must live on the model for
+    batch to reproduce realtime.
+
+    Proven by feeding the SAME final frame to two models with different
+    histories: if the state were not carried, the outputs would be identical.
+    """
+    fresh = _lighting_model()
+    warmed = _lighting_model()
+
+    dim = np.full((16, 16), 150, dtype=np.uint8)
+    bright = np.full((16, 16), 185, dtype=np.uint8)
+
+    for _ in range(4):
+        warmed.apply_lighting_stabilization(dim, None)
+    assert len(warmed._intensity_history) == 4, "history did not accumulate"
+
+    a = fresh.apply_lighting_stabilization(bright, None)
+    b = warmed.apply_lighting_stabilization(bright, None)
+    assert float(a.mean()) != float(b.mean()), (
+        "same frame produced the same output regardless of history -- "
+        "lighting state is not being carried across frames"
+    )
+
+    # Matches worker.py:967 -- a bounded deque, not an unbounded list.
+    assert warmed._intensity_history.maxlen == 50
+    # stabilize_lighting mutates the state dict in place; the worker never
+    # reassigns it from the return tuple (the 3rd value is the frame mean).
+    assert "last_correction" in warmed._lighting_state
+
+
+def test_run_bgsub_applies_lighting_stabilization():
+    """The stage must run stabilization, not silently drop it: the key param
+    ENABLE_LIGHTING_STABILIZATION is in the bg-sub cache key."""
+    cfg, rt = _resize_cfg(RESIZE_FACTOR=1.0, ENABLE_LIGHTING_STABILIZATION=True)
+    model = load_bgsub_model(cfg, rt)
+    model.bg_model.reference_intensity = 200.0
+    run_bgsub(_blob_frame(32, 16, 16, 4), 0, model, cfg, rt)
+    assert len(model.bg_model._intensity_history) == 1
 
 
 def test_cpu_tier_does_not_enable_gpu():

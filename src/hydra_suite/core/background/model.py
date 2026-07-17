@@ -4,7 +4,8 @@ Functionally identical to the original implementation's background logic.
 """
 
 import logging
-from typing import Any, Dict, Optional
+from collections import deque
+from typing import Any, Deque, Dict, Optional
 
 import cv2
 import numpy as np
@@ -19,7 +20,10 @@ from hydra_suite.utils.gpu_utils import (
     prange,
     torch,
 )
-from hydra_suite.utils.image_processing import apply_image_adjustments
+from hydra_suite.utils.image_processing import (
+    apply_image_adjustments,
+    stabilize_lighting,
+)
 
 # Provide fallback decorators if Numba not available
 if not NUMBA_AVAILABLE:
@@ -193,6 +197,16 @@ class BackgroundModel:
         self._stabilized: bool = False
         self._converged_frames: int = 0
 
+        # Lighting-stabilization state, moved off the worker loop (it used to
+        # live as locals initialised at worker.py:967). Initial values match
+        # that line exactly: a deque(maxlen=50) -- stabilize_lighting appends to
+        # it unconditionally, so None would raise -- and a dict that
+        # stabilize_lighting mutates in place. Keeping the state on the model is
+        # what lets the batch path reproduce realtime, which is mandatory:
+        # ENABLE_LIGHTING_STABILIZATION is in the bg-sub cache key.
+        self._intensity_history: Deque[float] = deque(maxlen=50)
+        self._lighting_state: Dict[str, Any] = {}
+
         # GPU acceleration setup
         self.use_gpu = False
         self.gpu_type = None  # 'cuda', 'mps', or None
@@ -346,6 +360,46 @@ class BackgroundModel:
         if np.sum(mask) > 0:
             return float(np.mean(pixels[mask]))
         return None
+
+    def apply_lighting_stabilization(
+        self, gray: np.ndarray, roi_mask: Optional[np.ndarray] = None
+    ) -> np.ndarray:
+        """Normalize frame intensity toward the primed reference.
+
+        Moved off the worker loop (worker.py:2286): this is bg-sub
+        preprocessing, and the model already owns `reference_intensity` -- the
+        very input stabilize_lighting consumes. Keeping the state here is what
+        lets the batch path reproduce realtime exactly; ENABLE_LIGHTING_STABILIZATION
+        is in the bg-sub cache key, so the two MUST agree.
+
+        Note on the third return value: stabilize_lighting returns
+        (stabilized_frame, updated_intensity_history, current_mean_intensity) --
+        the third is the frame's measured mean, NOT the lighting state. The
+        worker discards it as `_`, and so do we. `_lighting_state` is instead a
+        dict passed IN and mutated in place by stabilize_lighting, which is why
+        it is never reassigned from the return tuple.
+
+        Args:
+            gray: Grayscale frame, already RESIZE_FACTOR-scaled by the caller.
+            roi_mask: Binary mask in the SAME coordinate space as `gray`.
+
+        Returns:
+            The stabilized frame, or `gray` unchanged when the feature is off.
+        """
+        p = self.params
+        if not p.get("ENABLE_LIGHTING_STABILIZATION", True):
+            return gray
+        gray, self._intensity_history, _ = stabilize_lighting(
+            gray,
+            self.reference_intensity,
+            self._intensity_history,
+            p.get("LIGHTING_SMOOTH_FACTOR", 0.95),
+            roi_mask,
+            p.get("LIGHTING_MEDIAN_WINDOW", 5),
+            self._lighting_state,
+            self.use_gpu,
+        )
+        return gray
 
     def _fallback_reference_intensity(
         self, bg_temp: np.ndarray, roi_resized: Optional[np.ndarray]
