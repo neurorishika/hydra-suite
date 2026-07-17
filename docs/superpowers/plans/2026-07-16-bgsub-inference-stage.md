@@ -1501,7 +1501,14 @@ In `src/hydra_suite/core/inference/cache/keys.py`, add to `_BGSUB_KEY_PARAMS`:
 ```python
     "BACKGROUND_CONVERGENCE_EPSILON",
     "BACKGROUND_CONVERGENCE_FRAMES",
+    "BACKGROUND_CONVERGENCE_PIXEL_DELTA",
 ```
+
+All THREE must be keyed. They decide which background is subtracted on every
+frame past the latch, so they change detections as directly as the neighbouring
+`ENABLE_ADAPTIVE_BACKGROUND` / `BACKGROUND_LEARNING_RATE`, which are keyed. If
+they are not keyed, retuning epsilon and rerunning silently serves a stale
+cache — the exact bug Task 1 fixed.
 
 Change `bgsub_detection_cache_key` to:
 

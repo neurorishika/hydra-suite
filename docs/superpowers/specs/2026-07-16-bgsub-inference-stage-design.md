@@ -175,6 +175,25 @@ positions, baking them into the EMA: precisely the failure the lightest-pixel
 phase exists to prevent. Unit tests at 64x64 cannot catch this, because the same
 event moves their mean by 1000x the threshold.
 
+**PIXEL_DELTA is the noise gate and MUST exceed the sensor noise floor.** A
+running max never stops growing under noise: every frame, noise pushes some
+pixels above the previous max, so the growing fraction plateaus at a
+noise-dependent floor instead of reaching zero. Measured steady-state fraction
+at 256x256 with epsilon=1e-4:
+
+| sensor noise sd | pd=1.0 | pd=3.0 | pd=5.0 |
+|---|---|---|---|
+| 1.0 | 2.6e-5 latches | 0 latches | 0 latches |
+| 2.0 | 3.9e-4 NEVER | 6.4e-6 latches | 0 latches |
+| 4.0 | 1.2e-3 NEVER | 2.3e-4 NEVER | 3.7e-5 latches |
+
+With `pd=1.0` and any realistic sensor noise (sd>=2), the latch NEVER fires: the
+model sits on the lightest background forever, never switching to adaptive, and
+silently loses the lighting-drift tracking adaptive exists for. Default is
+therefore `5.0` -- comfortably above sensor noise, far below a genuine animal
+reveal (~50-150 grey levels), so it discriminates correctly. It remains the
+knob to raise on a noisier rig.
+
 The changed-pixel fraction is scale-invariant: the same animal on the same
 proportion of frame yields the same fraction at any resolution, so the default
 epsilon is portable across rigs. It is also robust to single hot pixels, which a
