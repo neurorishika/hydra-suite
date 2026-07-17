@@ -1057,6 +1057,89 @@ def test_bgsub_config_retains_raw_params():
 Run: `python -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
+- [ ] **Step 6b: Make the detection source a choice (moved here from Task 9)**
+
+Task 7's stage tests need `InferenceConfig(obb=None, bgsub=...)` to build a
+`RuntimeContext`, so the config change must land here, not in Task 9.
+
+`InferenceConfig.obb: OBBConfig` (`config.py:229`) is REQUIRED. bg-sub is an
+*alternative* detection source, so make it optional and validate exactly-one:
+
+```python
+@dataclass
+class InferenceConfig:
+    # Exactly one detection source must be set. OBB is the YOLO path; bgsub is
+    # background subtraction. They are alternatives, not composable.
+    obb: OBBConfig | None = None
+    bgsub: BgSubConfig | None = None
+    headtail: HeadTailConfig | None = None
+```
+
+(remaining fields unchanged), plus:
+
+```python
+    def __post_init__(self) -> None:
+        self._validate_pipeline_depth()
+        self._validate_detection_source()
+
+    def _validate_detection_source(self) -> None:
+        if (self.obb is None) == (self.bgsub is None):
+            raise InferenceConfigError(
+                "InferenceConfig requires exactly one detection source: set "
+                "either `obb` or `bgsub`, not both and not neither."
+            )
+
+    @property
+    def detection_source(self) -> Literal["obb", "bgsub"]:
+        return "obb" if self.obb is not None else "bgsub"
+```
+
+Guard `_collect_all_runtimes` against `obb is None`:
+
+```python
+        if self.obb is not None and self.obb.direct:
+            runtimes.add(self.obb.direct.compute_runtime)
+        if self.obb is not None and self.obb.sequential:
+            runtimes.add(self.obb.sequential.detect_compute_runtime)
+            runtimes.add(self.obb.sequential.obb_compute_runtime)
+```
+
+Update `_dict_to_config` / `_config_to_dict` to round-trip `bgsub`, mirroring
+`obb`. Read both first and follow their existing style.
+
+Add these tests to `tests/test_bgsub_stage.py`:
+
+```python
+from hydra_suite.core.inference.config import (
+    InferenceConfig,
+    InferenceConfigError,
+    OBBConfig,
+)
+
+
+def test_config_requires_exactly_one_detection_source():
+    with pytest.raises(InferenceConfigError, match="exactly one"):
+        InferenceConfig(obb=None, bgsub=None)
+
+    with pytest.raises(InferenceConfigError, match="exactly one"):
+        InferenceConfig(obb=OBBConfig(), bgsub=BgSubConfig.from_params({}))
+
+
+def test_config_detection_source_reports_bgsub():
+    cfg = InferenceConfig(obb=None, bgsub=BgSubConfig.from_params({}))
+    assert cfg.detection_source == "bgsub"
+
+
+def test_config_detection_source_reports_obb():
+    cfg = InferenceConfig(obb=OBBConfig())
+    assert cfg.detection_source == "obb"
+```
+
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v --timeout=60` plus
+`$PY -m pytest tests/test_inference_config_pipeline_depth.py tests/test_inference_config_tier_migration.py -q --timeout=60`
+Expected: all pass. Existing callers passing `obb=` positionally still work
+since `obb` stays the first field.
+
 - [ ] **Step 7: Commit**
 
 ```bash
