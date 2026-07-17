@@ -33,6 +33,19 @@ class ExportError(RuntimeError):
 _MIN_OPSET = 14
 
 
+def _require_eval_mode(model: nn.Module) -> None:
+    """Shared guard for every export target: a train()-mode model would silently
+    emit training-mode BatchNorm2d (classic head) and a random DropPath node,
+    producing a garbage artifact rather than a loud failure."""
+    if model.training:
+        raise ExportError(
+            "model must be in eval() mode before export: the classic head's "
+            "BatchNorm2d layers would otherwise emit training-mode "
+            "BatchNormalization and silently produce garbage (and DropPath "
+            "would trace to a random node)"
+        )
+
+
 def export_onnx(
     model: nn.Module,
     path: Path,
@@ -51,13 +64,7 @@ def export_onnx(
     opset 17, not 11: mmpose's exporter asserts opset_version == 11, but
     that is an mmpose-era constraint, not a model one.
     """
-    if model.training:
-        raise ExportError(
-            "model must be in eval() mode before export: the classic head's "
-            "BatchNorm2d layers would otherwise emit training-mode "
-            "BatchNormalization and silently produce garbage (and DropPath "
-            "would trace to a random node)"
-        )
+    _require_eval_mode(model)
 
     if opset < _MIN_OPSET:
         raise ExportError(
@@ -207,3 +214,49 @@ def build_tensorrt_engine(
     engine_path.parent.mkdir(parents=True, exist_ok=True)
     engine_path.write_bytes(bytes(plan))
     return engine_path
+
+
+def export_coreml(
+    model: nn.Module,
+    path: Path,
+    *,
+    compute_units: str = "ALL",
+) -> Path:
+    """Export ViTPose to a CoreML .mlpackage at a fixed (1, 3, 256, 192) input.
+
+    Batch stays 1, not dynamic: the OBB CoreML path pins batch=1 for a documented
+    reason (core/inference/runtime_artifacts.py:293-299) -- dynamic batch combined
+    with spatial dims crashes the CoreML compiler. This model has the same fixed-
+    resolution constraint as export_onnx (pos_embed has no interpolation path), so
+    a fully-static input shape costs nothing extra here.
+
+    Uses torch.jit.trace + coremltools' mlprogram conversion, mirroring the OBB
+    export path's use of ultralytics' underlying trace-based CoreML conversion.
+    """
+    import coremltools as ct
+
+    _require_eval_mode(model)
+
+    w, h = IMAGE_SIZE_WH
+    dummy = torch.zeros(1, 3, h, w)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with torch.no_grad():
+        traced = torch.jit.trace(model, dummy)
+
+    mlmodel = ct.convert(
+        traced,
+        inputs=[ct.TensorType(name="input", shape=dummy.shape)],
+        outputs=[ct.TensorType(name="output")],
+        convert_to="mlprogram",
+        compute_units=getattr(ct.ComputeUnit, compute_units),
+        # mlprogram defaults to FLOAT16 compute precision, which alone
+        # accounts for ~1e-3 max-abs drift against the FP32 torch reference
+        # (Gate D's bound). FLOAT32 keeps this export numerically comparable
+        # to export_onnx/build_tensorrt_engine rather than silently trading
+        # keypoint precision for speed -- the same "no half for keypoints"
+        # rule build_tensorrt_engine documents (sleap.py:420-421).
+        compute_precision=ct.precision.FLOAT32,
+    )
+    mlmodel.save(str(path))
+    return path

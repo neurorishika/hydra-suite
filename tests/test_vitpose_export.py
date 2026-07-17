@@ -169,3 +169,42 @@ def test_gate_d_tensorrt_matches_torch(tmp_path):
     assert (
         np.abs(ref - got).max() < 1e-3
     ), f"max|trt-torch| = {np.abs(ref - got).max():.3e}"
+
+
+requires_coreml = pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="CoreML export is macOS-only"
+)
+
+
+@requires_coreml
+def test_export_coreml_refuses_a_training_mode_model(tmp_path):
+    """Same guard as export_onnx, reused rather than duplicated: exporting a
+    train()-mode model would silently bake training-mode BatchNorm into the
+    mlpackage."""
+    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
+
+    m = build_vitpose("B", "classic").train()
+    with pytest.raises(ExportError, match="eval"):
+        export_coreml(m, tmp_path / "x.mlpackage")
+
+
+@requires_coreml
+@requires_weights
+def test_gate_d_coreml_matches_torch(tmp_path):
+    """GATE D(coreml). Same slack as TRT: CoreML rearranges kernels."""
+    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    pkg = export_coreml(m, tmp_path / "vitpose-b.mlpackage")
+
+    import coremltools as ct
+
+    x = torch.randn(1, 3, 256, 192)
+    with torch.no_grad():
+        ref = m(x).numpy()
+    mlmodel = ct.models.MLModel(str(pkg))
+    got = list(mlmodel.predict({"input": x.numpy()}).values())[0]
+    assert (
+        np.abs(ref - got).max() < 1e-3
+    ), f"max|coreml-torch| = {np.abs(ref - got).max():.3e}"
