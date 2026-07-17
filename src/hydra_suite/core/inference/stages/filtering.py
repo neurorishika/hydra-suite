@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import cv2
 import numpy as np
 import torch
@@ -304,6 +306,27 @@ def filter_with_indices(
         indices = indices[order]
         subset = _select(raw, indices)
     return subset, indices.astype(np.int32)
+
+
+def filter_for_source(
+    config: Any,
+    raw: OBBResult,
+    roi_mask: np.ndarray | None = None,
+) -> tuple[OBBResult, np.ndarray]:
+    """Detection-source-aware dispatch in front of ``filter_with_indices``.
+
+    OBB emits raw, un-gated detections, so the gates live here. bg-sub does not:
+    ``BackgroundMeasurer.detect_objects`` already applies the contour-area, size,
+    aspect, and MAX_TARGETS gates, and ``run_bgsub`` already intersects the ROI
+    with the foreground mask — so by the time a bg-sub ``OBBResult`` reaches this
+    layer there is nothing left to filter and the identity is correct. There is
+    also no ``OBBConfig`` to gate with (``config.obb is None``), and bg-sub's
+    confidences are NaN, so running the OBB gates would silently drop every
+    detection on the confidence comparison.
+    """
+    if config.detection_source == "bgsub":
+        return raw, np.arange(raw.num_detections, dtype=np.int32)
+    return filter_with_indices(raw, config.obb, roi_mask)
 
 
 def _empty_obb_result(frame_idx: int) -> OBBResult:

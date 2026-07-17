@@ -7,7 +7,7 @@ def _fake_pipeline(window_size: int, depth: int) -> Pipeline:
     pipe = Pipeline.for_test(
         window_size=window_size, depth=depth, stage=lambda w: list(w.frames)
     )
-    pipe._run_obb_for_window = lambda window: []
+    pipe._run_detection_for_window = lambda window: []
     pipe._process_obb_results = lambda window, raw_list: list(window.frames)
     return pipe
 

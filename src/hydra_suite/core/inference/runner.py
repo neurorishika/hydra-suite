@@ -11,6 +11,7 @@ import numpy as np
 
 from .cache.keys import (
     apriltag_cache_key,
+    bgsub_detection_cache_key,
     cnn_cache_key,
     detection_cache_key,
     headtail_cache_key,
@@ -40,9 +41,10 @@ from .result import (
 )
 from .runtime import RuntimeContext
 from .stages.apriltag import AprilTagModel, run_apriltag
+from .stages.bgsub import BgSubModel, run_bgsub
 from .stages.cnn import CNNModel, run_cnn
 from .stages.crops import extract_aabb_crops, extract_canonical_crops
-from .stages.filtering import filter_with_indices
+from .stages.filtering import filter_for_source
 from .stages.headtail import HeadTailModel, run_headtail
 from .stages.obb import OBBModels, _RawOBBTensors, materialize_tensors, run_obb
 from .stages.pose import PoseModel, run_pose
@@ -77,11 +79,14 @@ def _rt_prof_flush() -> None:
 
 @dataclass
 class _AllModels:
-    obb: OBBModels
+    # Exactly one of obb/bgsub is set, mirroring InferenceConfig.detection_source
+    # (bgsub is last with a default so existing keyword constructions still work).
+    obb: OBBModels | None
     headtail: HeadTailModel | None
     cnn: list[CNNModel]
     pose: PoseModel | None
     apriltag: AprilTagModel | None
+    bgsub: BgSubModel | None = None
 
 
 @dataclass
@@ -111,6 +116,7 @@ def _load_all_models(
     runtime: RuntimeContext,
     *,
     cache_only: bool = False,
+    video_path: str | None = None,
 ) -> _AllModels:
     """Load all inference models.
 
@@ -120,20 +126,37 @@ def _load_all_models(
     required to look up cache-key validity; HeadTail, CNN, Pose, and AprilTag
     models are never invoked during replay so we avoid the expensive backend
     initialisation (notably the ~8 s per-session SLEAP/ORT-TRT-EP init).
+
+    bg-sub is the exception to the OBB rule: its cache key hashes params only
+    (there is no model file — the "model" is a BackgroundModel primed from the
+    video), so under *cache_only* it is skipped entirely rather than loaded.
+    Priming reads ~BACKGROUND_PRIME_FRAMES frames off the video, so this is a
+    real saving, and a replay pass never calls the stage anyway.
     """
     from .stages.apriltag import load_apriltag_model
+    from .stages.bgsub import load_bgsub_model
     from .stages.cnn import load_cnn_model
     from .stages.headtail import load_headtail_model
     from .stages.obb import load_obb_models
     from .stages.pose import load_pose_model
 
-    obb = load_obb_models(config.obb, runtime, batch_size=config.detection_batch_size)
+    obb = None
+    bgsub = None
+    if config.detection_source == "obb":
+        obb = load_obb_models(
+            config.obb, runtime, batch_size=config.detection_batch_size
+        )
+    elif not cache_only:
+        bgsub = load_bgsub_model(config.bgsub, runtime, video_path=video_path)
+
     if cache_only:
         logger.debug(
             "InferenceRunner cache_only=True: skipping HeadTail/CNN/Pose/AprilTag "
             "model init (backward/replay pass reads from cache only)."
         )
-        return _AllModels(obb=obb, headtail=None, cnn=[], pose=None, apriltag=None)
+        return _AllModels(
+            obb=obb, headtail=None, cnn=[], pose=None, apriltag=None, bgsub=bgsub
+        )
 
     headtail = (
         load_headtail_model(config.headtail, runtime)
@@ -143,7 +166,14 @@ def _load_all_models(
     cnn = [load_cnn_model(c, runtime) for c in config.cnn_phases]
     pose = load_pose_model(config.pose, runtime) if config.pose is not None else None
     apriltag = load_apriltag_model(config.apriltag) if config.apriltag.enabled else None
-    return _AllModels(obb=obb, headtail=headtail, cnn=cnn, pose=pose, apriltag=apriltag)
+    return _AllModels(
+        obb=obb,
+        headtail=headtail,
+        cnn=cnn,
+        pose=pose,
+        apriltag=apriltag,
+        bgsub=bgsub,
+    )
 
 
 def _open_caches(
@@ -155,10 +185,16 @@ def _open_caches(
     def _k(key):
         return with_video_signature(key, video_sig)
 
+    detection_key = (
+        detection_cache_key(config.obb)
+        if config.detection_source == "obb"
+        else bgsub_detection_cache_key(config.bgsub)
+    )
+
     return _CacheSet(
         detection=DetectionCacheHandle(
             path=cache_dir / "detection.npz",
-            key=_k(detection_cache_key(config.obb)),
+            key=_k(detection_key),
         ),
         headtail=(
             HeadTailCacheHandle(
@@ -343,9 +379,17 @@ class InferenceRunner:
         self.cache_only = cache_only
         # Fingerprint of the source video; folded into every cache key so caches
         # are only reused for the exact file they were computed from.
-        self._video_sig = video_signature(str(video_path) if video_path else None)
+        self._video_path = str(video_path) if video_path else None
+        self._video_sig = video_signature(self._video_path)
         self.runtime = RuntimeContext.from_config(config)
-        self._models = _load_all_models(config, self.runtime, cache_only=cache_only)
+        # bg-sub's "model" is a BackgroundModel primed from the video itself, so
+        # the loader needs the path; the OBB loader ignores it.
+        self._models = _load_all_models(
+            config,
+            self.runtime,
+            cache_only=cache_only,
+            video_path=self._video_path,
+        )
         self._caches: _CacheSet | None = None
         # True when self._caches was opened for WRITING (realtime persistence);
         # False when opened read-only by load_frame. close() only flushes when
@@ -401,12 +445,25 @@ class InferenceRunner:
 
         _prof = _rt_prof_on()
         _ts = time.perf_counter() if _prof else 0.0
-        raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
-        raw = raw_list[0]
-        if isinstance(raw, _RawOBBTensors):
-            raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
+        if self.config.detection_source == "bgsub":
+            # bg-sub is CPU numpy end to end: it never produces _RawOBBTensors, so
+            # the materialize / raw-cap step does not apply. It is also strictly
+            # sequential — safe here because run_realtime is driven in frame order.
+            raw_obb = run_bgsub(
+                frame,
+                frame_idx,
+                self._models.bgsub,
+                self.config.bgsub,
+                self.runtime,
+                roi_mask=roi_mask,
+            )
         else:
-            raw_obb = raw
+            raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
+            raw = raw_list[0]
+            if isinstance(raw, _RawOBBTensors):
+                raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
+            else:
+                raw_obb = raw
         # Re-stamp detection_ids with the real frame_idx (materialize_tensors / the
         # CPU OBB path generate them at frame 0) so cached ids are unique per frame.
         raw_obb = OBBResult(
@@ -429,9 +486,7 @@ class InferenceRunner:
             _rt_prof_add("obb", _now - _ts)
             _ts = _now
 
-        filtered_obb, det_indices = filter_with_indices(
-            raw_obb, self.config.obb, roi_mask
-        )
+        filtered_obb, det_indices = filter_for_source(self.config, raw_obb, roi_mask)
 
         if filtered_obb.num_detections == 0:
             if _prof:
@@ -609,6 +664,7 @@ class InferenceRunner:
         stages = PipelineStages(
             config=self.config,
             obb_models=self._models.obb,
+            bgsub_model=self._models.bgsub,
             headtail_model=self._models.headtail,
             cnn_models=self._models.cnn,
             pose_model=self._models.pose,
@@ -728,7 +784,10 @@ class InferenceRunner:
         if raw_obb is None:
             raise KeyError(f"Frame {frame_idx} not found in detection cache")
 
-        filtered_obb, det_indices = filter_with_indices(raw_obb, self.config.obb)
+        # Cache-only by construction: bg-sub carries cross-frame state and must
+        # never be re-run for random access — filter_for_source is the identity
+        # on the bg-sub branch, so this stays a pure cache read.
+        filtered_obb, det_indices = filter_for_source(self.config, raw_obb)
 
         ht_result = _load_headtail_for_indices(
             self._caches.headtail, frame_idx, det_indices, filtered_obb
@@ -760,7 +819,10 @@ class InferenceRunner:
                 h.close()
             self._caches = None
             self._caches_writable = False
-        self._models.obb.close()
+        if self._models.obb is not None:
+            self._models.obb.close()
+        if self._models.bgsub is not None:
+            self._models.bgsub.close()
         if self._models.headtail is not None:
             self._models.headtail.close()
         for mdl in self._models.cnn:

@@ -3,6 +3,7 @@
 import ast
 import inspect
 import re
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -471,3 +472,151 @@ def test_to_gray_tolerates_underspecified_params():
     out = _to_gray(frame, cfg, False)
     assert out.shape == (8, 8)
     np.testing.assert_array_equal(out, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+
+
+# --- Task 9: InferenceRunner integration ------------------------------------
+
+
+def _bgsub_inference_config(**overrides):
+    from hydra_suite.core.inference.config import InferenceConfig
+
+    kwargs = dict(
+        obb=None,
+        bgsub=BgSubConfig.from_params(_params(**_measure_params())),
+        runtime_tier="cpu",
+    )
+    kwargs.update(overrides)
+    return InferenceConfig(**kwargs)
+
+
+def test_open_caches_uses_bgsub_detection_key(tmp_path):
+    """Under bg-sub the detection cache must key off BgSubConfig, not OBBConfig."""
+    from hydra_suite.core.inference.cache.keys import (
+        bgsub_detection_cache_key,
+        with_video_signature,
+    )
+    from hydra_suite.core.inference.runner import _open_caches
+
+    cfg = _bgsub_inference_config()
+    caches = _open_caches(cfg, tmp_path, "sig")
+    assert caches.detection is not None
+    assert caches.detection.key == with_video_signature(
+        bgsub_detection_cache_key(cfg.bgsub), "sig"
+    )
+
+
+def test_load_all_models_cache_only_skips_bgsub(monkeypatch, synthetic_video):
+    """cache_only must not prime the background: the bg-sub key needs no model.
+
+    This is asymmetric with OBB, whose model IS still loaded under cache_only
+    because its cache key reads the model path/mtime.
+    """
+    import hydra_suite.core.inference.runner as runner_mod
+
+    calls = []
+
+    def _boom(*a, **k):
+        calls.append(a)
+        raise AssertionError("load_bgsub_model must not run under cache_only")
+
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.stages.bgsub.load_bgsub_model", _boom
+    )
+    cfg = _bgsub_inference_config()
+    models = runner_mod._load_all_models(
+        cfg,
+        RuntimeContext.from_config(cfg),
+        cache_only=True,
+        video_path=synthetic_video,
+    )
+    assert models.obb is None
+    assert models.bgsub is None
+    assert calls == []
+
+
+def test_load_all_models_primes_bgsub_from_video(synthetic_video):
+    import hydra_suite.core.inference.runner as runner_mod
+
+    cfg = _bgsub_inference_config()
+    models = runner_mod._load_all_models(
+        cfg, RuntimeContext.from_config(cfg), video_path=synthetic_video
+    )
+    assert models.obb is None
+    assert models.bgsub is not None
+    assert models.bgsub.bg_model.lightest_background is not None
+
+
+def test_runner_realtime_bgsub_writes_and_replays_cache(tmp_path, synthetic_video):
+    """Realtime bg-sub gets the detection cache the OBB path already had."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _bgsub_inference_config()
+    runner = InferenceRunner(cfg, cache_dir=tmp_path, video_path=synthetic_video)
+    cap = cv2.VideoCapture(synthetic_video)
+    counts = []
+    for i in range(10):
+        ok, frame = cap.read()
+        assert ok
+        counts.append(runner.run_realtime(frame, i).obb.num_detections)
+    cap.release()
+    runner.close()
+
+    assert sum(counts) > 0, "bg-sub found nothing; fixture is not exercising the stage"
+
+    replay = InferenceRunner(
+        cfg, cache_dir=tmp_path, video_path=synthetic_video, cache_only=True
+    )
+    assert replay.caches_all_valid()
+    assert replay.detection_cache_covers_range(0, 9)
+    for i, n in enumerate(counts):
+        assert replay.load_frame(i).obb.num_detections == n
+    replay.close()
+
+
+def test_runner_batch_pass_bgsub_populates_cache(tmp_path, synthetic_video):
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _bgsub_inference_config(detection_batch_size=4, pipeline_depth=1)
+    runner = InferenceRunner(cfg, cache_dir=tmp_path, video_path=synthetic_video)
+    runner.run_batch_pass(Path(synthetic_video), start_frame=0, end_frame=11)
+    runner.close()
+
+    replay = InferenceRunner(
+        cfg, cache_dir=tmp_path, video_path=synthetic_video, cache_only=True
+    )
+    assert replay.detection_cache_covers_range(0, 11)
+    total = sum(replay.load_frame(i).obb.num_detections for i in range(12))
+    assert total > 0
+    replay.close()
+
+
+def test_runner_batch_pass_bgsub_depth_invariant(tmp_path, synthetic_video):
+    """depth>=2 must produce the same detections as depth=1 despite bg-sub's
+    cross-frame state (the producer is the only thing that touches the model)."""
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    per_depth = []
+    for depth in (1, 2):
+        d = tmp_path / f"d{depth}"
+        d.mkdir()
+        cfg = _bgsub_inference_config(detection_batch_size=4, pipeline_depth=depth)
+        runner = InferenceRunner(cfg, cache_dir=d, video_path=synthetic_video)
+        runner.run_batch_pass(Path(synthetic_video), start_frame=0, end_frame=11)
+        runner.close()
+        replay = InferenceRunner(
+            cfg, cache_dir=d, video_path=synthetic_video, cache_only=True
+        )
+        per_depth.append([replay.load_frame(i).obb.centroids for i in range(12)])
+        replay.close()
+
+    for a, b in zip(*per_depth):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_runner_close_is_safe_without_obb_model(tmp_path, synthetic_video):
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    runner = InferenceRunner(
+        _bgsub_inference_config(), cache_dir=tmp_path, video_path=synthetic_video
+    )
+    runner.close()  # must not AttributeError on a None obb model
