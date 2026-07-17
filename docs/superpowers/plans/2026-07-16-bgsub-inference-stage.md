@@ -2180,13 +2180,47 @@ Read each site first: `grep -n "ObjectDetector\|DetectionFilter\|_advanced_confi
 - `DetectionFilter` (lines 1159, 1751) → `apply_detection_filter` from `hydra_suite.core.inference.api`, matching how `optimizer.py:36` already imports it.
 - `_advanced_config_value` is in `core/detectors/_utils.py`, which survives (YOLO still uses it). Leave that import alone.
 
-- [ ] **Step 2: Migrate `dataset_generation.py`**
+- [ ] **Step 2: Migrate `dataset_generation.py`** *(CORRECTED — the original step text was wrong)*
 
-Replace `create_detector(params)` with an `InferenceRunner` built as in Task 11. Update `detect_objects` unpacking to the 4-tuple. Where `detect_objects_batched` is used on the YOLO path, leave it alone — this task only touches the bg-sub branch.
+**This site is YOLO-ONLY. It has no bg-sub branch.** `_init_yolo_detector`
+(`:413-428`) early-returns `None` unless `DETECTION_METHOD == "yolo_obb"`
+(`:417-418`) — the `"background_subtraction"` string at `:417` is only the
+`.get()` default *inside* that guard. Every downstream consumer is the YOLO
+detector: `:531` `detect_objects_batched`, `:552` `detect_objects` (5-tuple,
+`YOLOOBBDetector`'s, untouched by this plan), `:579`
+`hasattr(detector, "detect_objects_batched")`, and `:927-931`
+`detector.use_tensorrt` / `detector.tensorrt_batch_size` — both `YOLOOBBDetector`
+attributes (`yolo_detector.py:44,48`). `grep -c ObjectDetector` on this file
+returns 0.
 
-- [ ] **Step 3: Migrate `optimizer_workers.py`**
+Swapping in `BackgroundMeasurer` here would break `:441`/`:531`/`:927-931` at
+runtime — it has no `detect_objects_batched`, no `use_tensorrt`, no
+`tensorrt_batch_size`.
 
-It already imports the new filter shim (`optimizer_workers.py:38`). Replace the remaining `create_detector` (line 367) and `detect_objects` (line 372) with `BackgroundMeasurer`; leave `detect_objects_batched` (line 441, YOLO) alone.
+`create_detector` was only a dispatcher (`factory.py`: `yolo_obb` →
+`YOLOOBBDetector`, else → `ObjectDetector`), so where the method is statically
+known to be `yolo_obb`, constructing the class directly is behavior-identical.
+
+Do exactly this and nothing more:
+- `:415`: `from ..core.detectors import create_detector` → `from ..core.detectors.yolo_detector import YOLOOBBDetector`
+- `:421`: `create_detector(params)` → `YOLOOBBDetector(params)`
+- Keep the `DETECTION_METHOD` guard as-is.
+- **Do NOT touch `:531`, `:552`, `:579`, or `:927-931`.** They are YOLO paths and
+  their tuple contracts do not change. The 4-tuple is `BackgroundMeasurer`'s new
+  contract ONLY.
+
+- [ ] **Step 3: Migrate `optimizer_workers.py`** *(CORRECTED — the original step text was wrong)*
+
+**`DetectionCacheBuilderWorker` is YOLO-ONLY.** Its own docstring (`:330-338`)
+says "runs YOLO detection on a frame range and writes a DetectionCache", and its
+`create_detector` at `:372` feeds `detector.detect_objects_batched(...)` at
+`:441` — a method `BackgroundMeasurer` does not have (it exists only on
+`YOLOOBBDetector`, `yolo_detector.py:2318`).
+
+Do exactly this and nothing more:
+- `:367`: function-local import → `from hydra_suite.core.detectors.yolo_detector import YOLOOBBDetector`
+- `:372`: `create_detector(self.params)` → `YOLOOBBDetector(self.params)`
+- **Leave `:441` alone.**
 
 - [ ] **Step 4: Verify no legacy references remain**
 
@@ -2260,6 +2294,22 @@ Update `src/hydra_suite/trackerkit/gui/dialogs/bg_parameter_helper.py:45` to imp
 grep -rn "create_detector\|bg_detector\|bg_optimizer" src/ tests/
 ```
 Expected: no output.
+
+Then keep the endpoint honest:
+
+```bash
+grep -rn "YOLOOBBDetector" src/
+```
+Expected: `core/detectors/__init__.py`, `core/detectors/yolo_detector.py`,
+`data/dataset_generation.py`, `core/tracking/optimization/optimizer_workers.py`.
+
+The last two are **known, accepted follow-on debt** — they are the call sites
+needing the one-shot detect API that `core/inference` does not expose. Do NOT try
+to migrate them to `InferenceRunner` in this plan: the runner needs an
+`InferenceConfig` + video + cache and eagerly loads every model, which suits
+neither a per-frame dimension-extraction loop nor a cache-builder. That belongs to
+the `core/detectors` retirement project, alongside relocating
+`_direct_obb_runtime.py`.
 
 ```bash
 $PY -c "import hydra_suite"
