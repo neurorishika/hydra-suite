@@ -240,7 +240,7 @@ class Pipeline:
     ) -> list[FrameResult]:
         """Consumer stage: crops → HT/CNN/pose → AprilTag → scatter + cache write.
 
-        ``raw_list`` is the OBB output (from ``_run_detection_for_window``) for
+        ``raw_list`` is the detection output (from ``_run_detection_for_window``) for
         ``window``. Cache writes mirror ``runner._run_batch`` exactly (raw stage
         results, no foreign-keypoint suppression at cache time — that is an
         assemble-layer concern). The returned :class:`FrameResult`s are the

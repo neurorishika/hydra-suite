@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 class BgSubModel:
     bg_model: BackgroundModel
     measurer: BackgroundMeasurer
+    roi_cache_key: tuple | None = None
+    roi_cache: np.ndarray | None = None
 
     def close(self) -> None:
         # BackgroundModel holds only numpy/CuPy arrays; nothing to release.
@@ -90,6 +92,28 @@ def _to_gray(frame: np.ndarray, config: BgSubConfig, use_gpu: bool) -> np.ndarra
     )
 
 
+def _resolve_roi_mask(
+    model: BgSubModel, roi_mask: np.ndarray | None, target_shape: tuple
+) -> np.ndarray | None:
+    """Resize the ROI mask to match the (possibly RESIZE_FACTOR-scaled) frame.
+
+    Cached because ROI geometry is static for a run — resampling the same binary
+    mask every frame is pure waste. Mirrors worker.py::_resolve_resized_roi_mask.
+    """
+    if roi_mask is None:
+        return None
+    h, w = int(target_shape[0]), int(target_shape[1])
+    if roi_mask.shape[:2] == (h, w):
+        return roi_mask
+    key = (id(roi_mask), h, w)
+    if model.roi_cache_key == key and model.roi_cache is not None:
+        return model.roi_cache
+    resized = cv2.resize(roi_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+    model.roi_cache_key = key
+    model.roi_cache = resized
+    return resized
+
+
 def run_bgsub(
     frame: np.ndarray,
     frame_idx: int,
@@ -100,14 +124,15 @@ def run_bgsub(
 ) -> OBBResult:
     """Detect on one frame. Frames MUST arrive in order."""
     gray = _to_gray(frame, config, model.bg_model.use_gpu)
+    roi_resized = _resolve_roi_mask(model, roi_mask, gray.shape)
 
-    background = model.bg_model.update_and_get_background(gray, roi_mask)
+    background = model.bg_model.update_and_get_background(gray, roi_resized)
     if background is None:
         return _empty_result(frame_idx)  # first frame: model has no history yet
 
     fg_mask = model.bg_model.generate_foreground_mask(gray, background)
-    if roi_mask is not None:
-        fg_mask = cv2.bitwise_and(fg_mask, roi_mask)
+    if roi_resized is not None:
+        fg_mask = cv2.bitwise_and(fg_mask, roi_resized)
 
     if config.enable_conservative_split:
         fg_mask = model.measurer.apply_conservative_split(fg_mask, gray, background)

@@ -446,6 +446,12 @@ class InferenceRunner:
         _prof = _rt_prof_on()
         _ts = time.perf_counter() if _prof else 0.0
         if self.config.detection_source == "bgsub":
+            if self._models.bgsub is None:
+                raise RuntimeError(
+                    "run_realtime() requires a loaded bg-sub model, but this runner "
+                    "was constructed with cache_only=True (replay only). Construct "
+                    "without cache_only to run detection."
+                )
             # bg-sub is CPU numpy end to end: it never produces _RawOBBTensors, so
             # the materialize / raw-cap step does not apply. It is also strictly
             # sequential — safe here because run_realtime is driven in frame order.

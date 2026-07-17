@@ -620,3 +620,25 @@ def test_runner_close_is_safe_without_obb_model(tmp_path, synthetic_video):
         _bgsub_inference_config(), cache_dir=tmp_path, video_path=synthetic_video
     )
     runner.close()  # must not AttributeError on a None obb model
+
+
+def test_run_bgsub_resizes_roi_mask_to_match_scaled_frame():
+    """RESIZE_FACTOR < 1 scales the frame; the ROI mask must follow.
+
+    Regression: the mask was passed through at full resolution and
+    cv2.bitwise_and raised a sizes-mismatch error.
+    """
+    p = _params(
+        RESIZE_FACTOR=0.5, BACKGROUND_PRIME_FRAMES=0, MAX_TARGETS=10, MIN_CONTOUR_AREA=5
+    )
+    cfg = BgSubConfig.from_params(p)
+    rt = RuntimeContext.from_config(
+        InferenceConfig(obb=None, bgsub=cfg, runtime_tier="cpu")
+    )
+    model = load_bgsub_model(cfg, rt)
+    frame = np.full((64, 64, 3), 200, dtype=np.uint8)
+    roi = np.full((64, 64), 255, dtype=np.uint8)  # full-res, as a caller supplies
+
+    run_bgsub(frame, 0, model, cfg, rt, roi_mask=roi)  # frame 0 primes
+    result = run_bgsub(frame, 1, model, cfg, rt, roi_mask=roi)
+    assert result.frame_idx == 1
