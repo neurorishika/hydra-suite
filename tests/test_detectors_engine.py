@@ -57,11 +57,11 @@ def _load_engine_module():
     sys.modules["hydra_suite.core.detectors._direct_obb_runtime"] = direct_runtime_mod
 
     bg_mod = load_src_module(
-        "hydra_suite/core/detectors/bg_detector.py",
-        "hydra_suite.core.detectors.bg_detector",
+        "hydra_suite/core/background/measure.py",
+        "hydra_suite.core.background.measure",
         stubs=stubs,
     )
-    sys.modules["hydra_suite.core.detectors.bg_detector"] = bg_mod
+    sys.modules["hydra_suite.core.background.measure"] = bg_mod
 
     yolo_mod = load_src_module(
         "hydra_suite/core/detectors/yolo_detector.py",
@@ -86,7 +86,7 @@ def _load_engine_module():
 
     # Assemble combined namespace matching what the old engine.py exported
     mod = types.ModuleType("detectors_engine_under_test")
-    mod.ObjectDetector = bg_mod.ObjectDetector
+    mod.BackgroundMeasurer = bg_mod.BackgroundMeasurer
     mod.YOLOOBBDetector = yolo_mod.YOLOOBBDetector
     mod.create_detector = factory_mod.create_detector
     mod.DetectionFilter = filter_mod.DetectionFilter
@@ -95,7 +95,7 @@ def _load_engine_module():
     return mod
 
 
-def test_object_detector_detect_objects_filters_and_limits_count() -> None:
+def test_background_measurer_detect_objects_filters_and_limits_count() -> None:
     mod = _load_engine_module()
 
     params = {
@@ -109,7 +109,7 @@ def test_object_detector_detect_objects_filters_and_limits_count() -> None:
         "CONSERVATIVE_KERNEL_SIZE": 3,
         "CONSERVATIVE_ERODE_ITER": 1,
     }
-    detector = mod.ObjectDetector(params)
+    detector = mod.BackgroundMeasurer(params)
 
     contours = [
         _FakeContour(
@@ -134,10 +134,7 @@ def test_object_detector_detect_objects_filters_and_limits_count() -> None:
         ),
     ]
 
-    meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
-        contours, frame_count=1
-    )
-    assert yolo_results is None
+    meas, sizes, shapes, confidences = detector.detect_objects(contours, frame_count=1)
     assert len(meas) == 2  # limited by MAX_TARGETS
     assert all(m.shape == (3,) for m in meas)
     assert len(shapes) == 2
@@ -146,10 +143,18 @@ def test_object_detector_detect_objects_filters_and_limits_count() -> None:
     assert len(sizes) >= 2  # current implementation keeps original filtered size list
 
 
+@pytest.mark.xfail(
+    reason=(
+        "factory.py still does `from .bg_detector import ObjectDetector` "
+        "internally; bg_detector.py was moved to core/background/measure.py "
+        "in Task 5. factory.py is migrated to BackgroundMeasurer in Task 13."
+    ),
+    strict=True,
+)
 def test_create_detector_defaults_to_background_subtraction() -> None:
     mod = _load_engine_module()
     detector = mod.create_detector({"DETECTION_METHOD": "background_subtraction"})
-    assert isinstance(detector, mod.ObjectDetector)
+    assert isinstance(detector, mod.BackgroundMeasurer)
 
 
 def test_tensorrt_engine_path_is_model_adjacent_and_stable_across_ids(

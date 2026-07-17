@@ -228,3 +228,63 @@ def test_convergence_latch_survives_sensor_noise():
         "background never latched under realistic sensor noise -- "
         "BACKGROUND_CONVERGENCE_PIXEL_DELTA is too close to the noise floor"
     )
+
+
+from hydra_suite.core.background.measure import BackgroundMeasurer
+
+
+def _measure_params(**overrides) -> dict:
+    p = {
+        "MAX_TARGETS": 10,
+        "MIN_CONTOUR_AREA": 5,
+        "MAX_CONTOUR_MULTIPLIER": 20,
+        "ENABLE_SIZE_FILTERING": False,
+        "MIN_OBJECT_SIZE": 0,
+        "MAX_OBJECT_SIZE": float("inf"),
+        "THRESHOLD_VALUE": 20,
+        "CONSERVATIVE_KERNEL_SIZE": 3,
+        "CONSERVATIVE_ERODE_ITER": 1,
+        "RESIZE_FACTOR": 1.0,
+    }
+    p.update(overrides)
+    return p
+
+
+def _mask_with_ellipse() -> np.ndarray:
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    cv2.ellipse(mask, (32, 32), (12, 6), 30, 0, 360, 255, -1)
+    return mask
+
+
+def test_detect_objects_returns_four_tuple_without_yolo_stub():
+    measurer = BackgroundMeasurer(_measure_params())
+    result = measurer.detect_objects(_mask_with_ellipse(), 0)
+    assert len(result) == 4
+    meas, sizes, shapes, confidences = result
+    assert len(meas) == 1
+    assert len(sizes) == 1
+    assert len(shapes) == 1
+    assert len(confidences) == 1
+
+
+def test_detect_objects_confidence_is_nan():
+    measurer = BackgroundMeasurer(_measure_params())
+    _, _, _, confidences = measurer.detect_objects(_mask_with_ellipse(), 0)
+    assert np.isnan(confidences[0])
+
+
+def test_detect_objects_angle_is_radians():
+    measurer = BackgroundMeasurer(_measure_params())
+    meas, _, _, _ = measurer.detect_objects(_mask_with_ellipse(), 0)
+    assert 0.0 <= float(meas[0][2]) <= np.pi
+
+
+def test_too_many_contours_returns_empty_four_tuple():
+    measurer = BackgroundMeasurer(
+        _measure_params(MAX_TARGETS=1, MAX_CONTOUR_MULTIPLIER=1)
+    )
+    mask = np.zeros((64, 64), dtype=np.uint8)
+    for x in range(4, 60, 8):
+        for y in range(4, 60, 8):
+            cv2.circle(mask, (x, y), 2, 255, -1)
+    assert measurer.detect_objects(mask, 0) == ([], [], [], [])
