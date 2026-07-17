@@ -210,16 +210,64 @@ class BackgroundModel:
         return self._stabilized
 
     def configure_runtime(self, runtime) -> None:
-        """Let the caller's runtime drive GPU selection.
+        """Let the caller's RuntimeContext drive GPU selection.
 
-        Task 11 replaces the ENABLE_GPU_BACKGROUND self-selection with this.
+        Previously the model self-selected CUDA > MPS > CPU from
+        ENABLE_GPU_BACKGROUND alone and never consulted runtime_tier, so a
+        cpu-tier run could silently execute CuPy kernels. The tier now wins.
+
+        Gated on `runtime.requested_gpu` rather than `runtime.device`:
+        `device` alone can't distinguish "cpu" from "gpu" tier on a non-CUDA
+        (e.g. Apple Silicon) host, where both resolve to the same
+        MPS-or-CPU value -- `requested_gpu` carries the tier decision
+        explicitly (see RuntimeContext).
         """
-        pass
+        self.use_gpu = False
+        self.gpu_type = None
+        self.gpu_device = None
+        self.torch_device = None
+
+        if not runtime.requested_gpu:
+            logger.info("bg-sub: cpu tier -- using Numba CPU path")
+            return
+
+        if runtime.cuda_mode and CUDA_AVAILABLE:
+            try:
+                self.gpu_device = cp.cuda.Device(self.params.get("GPU_DEVICE_ID", 0))
+                self.gpu_type = "cuda"
+                self.use_gpu = True
+                logger.info("bg-sub: CUDA (CuPy) path")
+                return
+            except Exception as e:
+                logger.warning("bg-sub: CUDA init failed (%s); falling back to CPU", e)
+                self.use_gpu = False
+                self.gpu_type = None
+                return
+
+        if runtime.device == "mps" and MPS_AVAILABLE:
+            try:
+                self.torch_device = torch.device("mps")
+                _ = torch.zeros(1, device=self.torch_device)
+                self.gpu_type = "mps"
+                self.use_gpu = True
+                logger.info("bg-sub: MPS (PyTorch) path")
+                return
+            except Exception as e:
+                logger.warning("bg-sub: MPS init failed (%s); falling back to CPU", e)
+                self.use_gpu = False
+                self.gpu_type = None
+                return
+
+        logger.info("bg-sub: no GPU available for tier -- using Numba CPU path")
 
     def _setup_gpu_acceleration(self) -> None:
         """
         Initialize GPU acceleration if available.
         Priority: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU fallback
+
+        NOTE: this is the legacy self-selection path, used by callers that
+        construct BackgroundModel without a RuntimeContext. Runner-driven
+        callers should use configure_runtime(), which lets runtime_tier win.
         """
         if not self.params.get("ENABLE_GPU_BACKGROUND", False):
             logger.info("GPU background processing disabled in config")

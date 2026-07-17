@@ -200,6 +200,15 @@ def _pipeline_supports_runtime(pipeline: str, runtime: str) -> bool:
     if p == "head_tail":
         return _pipeline_supports_runtime("cnn_identity", runtime)
 
+    # bg-sub is elementwise CPU/CuPy/torch work with no exported-model story:
+    # it supports cpu/mps/cuda (handled by the baseline checks above) and
+    # explicitly does NOT support any ONNX/TensorRT flavor, regardless of
+    # host availability.
+    if p == "bgsub":
+        if rt in {"onnx_coreml", "onnx_cpu", "onnx_cuda", "tensorrt"}:
+            return False
+        return True
+
     # SLEAP has its own ONNX/TRT availability logic.
     if p == "sleap_pose":
         if rt in {"onnx_coreml", "onnx_cpu", "onnx_cuda"}:

@@ -33,6 +33,15 @@ class RuntimeContext:
     tensor_on_cuda: bool = False
     # True when the resolver selected CoreML (Apple gpu_fast + artifact available).
     coreml_mode: bool = False
+    # True when runtime_tier is "gpu" or "gpu_fast" -- i.e. the caller asked
+    # for GPU acceleration, independent of whether the host actually has one.
+    # `cuda_mode`/`device` alone cannot distinguish "cpu" from "gpu" tier on a
+    # non-CUDA host: both resolve device to the same MPS-or-CPU value (see
+    # `_cpu_or_mps_device`), so a stage with no CUDA/ONNX/TensorRT/CoreML
+    # story of its own (e.g. bg-sub, which only ever chooses between Numba
+    # CPU, CuPy CUDA, and PyTorch MPS) needs this explicit signal to honor a
+    # "cpu" tier request rather than opportunistically using MPS.
+    requested_gpu: bool = False
 
     def handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
         """Producer-side stream-sync: record a CUDA event on the current stream.
@@ -106,6 +115,7 @@ class RuntimeContext:
             device = _cpu_or_mps_device()
             nvdec = False
         default: ComputeRuntime = "cuda" if cuda_mode else "cpu"
+        requested_gpu = config.runtime_tier in ("gpu", "gpu_fast")
         return RuntimeContext(
             cuda_mode=cuda_mode,
             device=device,
@@ -113,6 +123,7 @@ class RuntimeContext:
             default_runtime=default,
             tensor_on_cuda=tensor_on_cuda,
             coreml_mode=coreml_mode,
+            requested_gpu=requested_gpu,
         )
 
 

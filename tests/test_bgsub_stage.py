@@ -642,3 +642,71 @@ def test_run_bgsub_resizes_roi_mask_to_match_scaled_frame():
     run_bgsub(frame, 0, model, cfg, rt, roi_mask=roi)  # frame 0 primes
     result = run_bgsub(frame, 1, model, cfg, rt, roi_mask=roi)
     assert result.frame_idx == 1
+
+
+def test_cpu_tier_does_not_enable_gpu():
+    """runtime_tier='cpu' must win over ENABLE_GPU_BACKGROUND=True.
+
+    Regression: BackgroundModel used to self-select CUDA>MPS>CPU and never
+    consulted the tier, so a cpu-tier run could silently use CuPy.
+    """
+    model = BackgroundModel(_params(ENABLE_GPU_BACKGROUND=True))
+    cfg = InferenceConfig(
+        obb=None, bgsub=BgSubConfig.from_params(_params()), runtime_tier="cpu"
+    )
+    model.configure_runtime(RuntimeContext.from_config(cfg))
+    assert model.use_gpu is False
+    assert model.gpu_type is None
+
+
+def test_gpu_tier_selects_mps_when_no_cuda():
+    """runtime_tier='gpu' on a CUDA-less, MPS-capable host selects the MPS path.
+
+    Meaningful on this box (Apple Silicon, no CUDA): before the fix,
+    configure_runtime was a no-op, so this would leave use_gpu False.
+    """
+    model = BackgroundModel(_params())
+    cfg = InferenceConfig(
+        obb=None, bgsub=BgSubConfig.from_params(_params()), runtime_tier="gpu"
+    )
+    runtime = RuntimeContext.from_config(cfg)
+    assert not runtime.cuda_mode  # sanity: this box has no CUDA
+    model.configure_runtime(runtime)
+    assert model.use_gpu is True
+    assert model.gpu_type == "mps"
+
+
+def test_gpu_tier_selects_cuda_when_available(monkeypatch):
+    """runtime_tier='gpu' selects CUDA (CuPy) when CUDA is available.
+
+    This box has no real CUDA hardware, so CUDA_AVAILABLE and cp are
+    monkeypatched -- this exercises the CUDA branch of configure_runtime
+    deterministically rather than skipping it, and asserts the concrete
+    resulting state so the test cannot silently pass by doing nothing.
+    """
+    import hydra_suite.core.background.model as model_mod
+
+    class _FakeCuda:
+        @staticmethod
+        def Device(idx):
+            return object()
+
+    class _FakeCp:
+        cuda = _FakeCuda()
+
+    monkeypatch.setattr(model_mod, "CUDA_AVAILABLE", True)
+    monkeypatch.setattr(model_mod, "cp", _FakeCp())
+
+    model = BackgroundModel(_params())
+    runtime = RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=False,
+        default_runtime="cuda",
+        tensor_on_cuda=True,
+        requested_gpu=True,
+    )
+    model.configure_runtime(runtime)
+    assert model.use_gpu is True
+    assert model.gpu_type == "cuda"
+    assert model.gpu_device is not None
