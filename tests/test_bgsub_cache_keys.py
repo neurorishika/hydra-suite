@@ -1,5 +1,6 @@
 """Regression tests for background-subtraction cache keys."""
 
+import numpy as np
 import pytest
 
 from hydra_suite.core.inference.cache.keys import bgsub_detection_cache_key
@@ -148,3 +149,45 @@ def test_bgsub_param_is_keyed(param, old, new):
     p[param] = new
     b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
     assert a.config_hash != b.config_hash, f"{param} change did not affect config_hash"
+
+
+def test_roi_mask_middle_pixel_change_invalidates_cache_key():
+    """A single-pixel difference buried in the middle of a large mask must
+    still change the config_hash.
+
+    str(ndarray) truncates large arrays with '...', so a naive
+    f"{k}={params.get(k)}" payload would stringify two masks differing only
+    in the middle identically and silently collide. This is the case that
+    catches that bug.
+    """
+    mask_a = np.zeros((1000, 1000), dtype=np.uint8)
+    mask_b = mask_a.copy()
+    mask_b[500, 500] = 255
+    assert str(mask_a) == str(mask_b), "test premise: str() truncation hides this diff"
+
+    p = _base_params()
+    p["ROI_MASK"] = mask_a
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["ROI_MASK"] = mask_b
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash
+
+
+def test_roi_mask_same_content_produces_same_hash():
+    mask_a = np.zeros((1000, 1000), dtype=np.uint8)
+    mask_a[10, 20] = 255
+    mask_b = mask_a.copy()
+
+    p = _base_params()
+    p["ROI_MASK"] = mask_a
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["ROI_MASK"] = mask_b
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash == b.config_hash
+
+
+def test_roi_mask_none_does_not_crash():
+    p = _base_params()
+    p["ROI_MASK"] = None
+    key = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert key.config_hash

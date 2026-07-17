@@ -4,6 +4,8 @@ import hashlib
 import os
 from dataclasses import replace
 
+import numpy as np
+
 from ..config import (
     AprilTagConfig,
     BgSubConfig,
@@ -97,7 +99,26 @@ _BGSUB_KEY_PARAMS = (
     "BACKGROUND_CONVERGENCE_EPSILON",
     "BACKGROUND_CONVERGENCE_FRAMES",
     "BACKGROUND_CONVERGENCE_PIXEL_DELTA",
+    "ROI_MASK",
 )
+
+
+def _param_repr(value: object) -> str:
+    """Stringify a param for the cache-key payload.
+
+    ndarrays (e.g. ROI_MASK) must hash by CONTENT: str(ndarray) truncates with
+    '...' for large arrays, so two masks differing only in the middle would
+    stringify identically and collide -- a silent stale-cache hit. Contiguity
+    is forced before `.tobytes()` because a non-contiguous view (e.g. from
+    slicing or a transpose) would otherwise hash its strided memory layout
+    rather than its logical content, so two logically-identical masks could
+    hash differently.
+    """
+    if isinstance(value, np.ndarray):
+        contiguous = np.ascontiguousarray(value)
+        digest = hashlib.sha256(contiguous.tobytes()).hexdigest()
+        return f"ndarray:{contiguous.shape}:{contiguous.dtype}:{digest}"
+    return str(value)
 
 
 def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
@@ -114,7 +135,7 @@ def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     be a lie.
     """
     params = config.params
-    payload = "|".join(f"{k}={params.get(k)}" for k in _BGSUB_KEY_PARAMS)
+    payload = "|".join(f"{k}={_param_repr(params.get(k))}" for k in _BGSUB_KEY_PARAMS)
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path="background_subtraction",
