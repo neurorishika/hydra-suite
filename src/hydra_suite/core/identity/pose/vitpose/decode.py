@@ -239,6 +239,16 @@ def decode_udp_torch(
     blurred = x.clamp(0.001, 50.0).log()  # clip THEN log, as upstream
 
     # --- pad by 1 with 'edge' (== replicate) and index at coords+1
+    # NOTE on the coords == -1 (maxval <= 0) masked path: bx/by below become 0,
+    # so torch reads the padded top-left corner -- not numpy's flat-index
+    # wraparound. This is inert: maxval <= 0 means the whole channel is <= 0
+    # (the blur kernel is non-negative and normalized, so it can't create a
+    # positive), and the clamp's strictly-positive lower bound (0.001, below)
+    # then floors that whole channel to a uniform log(0.001), everywhere
+    # including the padded border. All seven samples are equal, so
+    # dx=dy=dxx=dyy=dxy=0, the Hessian is exactly eps*I, and the offset is 0 --
+    # which pixel bx/by point at no longer matters. If the clamp's lower bound
+    # is ever made <= 0, this argument breaks.
     hm = F.pad(blurred, (1, 1, 1, 1), mode="replicate").reshape(n * k, h + 2, w + 2)
     bx = coords[:, 0].long() + 1
     by = coords[:, 1].long() + 1

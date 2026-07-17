@@ -160,11 +160,15 @@ def evaluate(
     dt = coco.loadRes(final_results)
     e = COCOeval(coco, dt, "keypoints")
     # COCOeval defaults to evaluating every image_id in the ground truth
-    # (5000 for val2017). Our results only cover the images that have
+    # (5000 for val2017), whereas our results only cover images that have
     # standard-detection boxes (3,893 for the full run; fewer under `limit`).
-    # Leaving imgIds unset silently counts every uncovered image as pure
-    # false negatives and craters AP -- restrict to exactly the images we
-    # produced detections for, matching upstream top-down eval convention.
+    # Measured: the AP_H_56 detection set covers all 2,693 GT-person images,
+    # and the remaining 1,107 excluded images have neither GT persons nor
+    # detections -- so restricting imgIds is a no-op against today's assets
+    # (bit-identical AP either way). It's kept anyway to guard against a
+    # future detection set with gaps in GT-person coverage, matching upstream
+    # top-down eval convention. Note upstream's own
+    # `_do_python_keypoint_eval` does not set imgIds at all.
     e.params.imgIds = sorted({d["image_id"] for d in dets})
     e.evaluate()
     e.accumulate()

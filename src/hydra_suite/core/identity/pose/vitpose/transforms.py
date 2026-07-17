@@ -143,8 +143,8 @@ def transform_preds(
     assert len(scale) == 2
     assert len(output_size) == 2
 
-    # Recover the scale which is normalized by a factor of 200.
-    scale = scale * 200.0
+    # Recover the scale which is normalized by a factor of PIXEL_STD (200).
+    scale = scale * PIXEL_STD
 
     scale_x = scale[0] / (output_size[0] - 1.0)
     scale_y = scale[1] / (output_size[1] - 1.0)
