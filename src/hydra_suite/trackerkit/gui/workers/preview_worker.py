@@ -391,7 +391,7 @@ def _preview_bg_size_thresholds(context, resize_f, use_detection_filters):
 def _preview_run_bg_subtraction(
     frame_bgr, test_frame, context, resize_f, use_detection_filters
 ):
-    from hydra_suite.core.detectors import ObjectDetector
+    from hydra_suite.core.background.measure import BackgroundMeasurer
     from hydra_suite.utils.image_processing import apply_image_adjustments
 
     bg_model, bg_params = _build_preview_background_model(context)
@@ -431,7 +431,7 @@ def _preview_run_bg_subtraction(
     # Apply conservative split to separate merged blobs, matching the
     # production pipeline in worker.py.
     if bg_params.get("ENABLE_CONSERVATIVE_SPLIT", True):
-        det = ObjectDetector(bg_params)
+        det = BackgroundMeasurer(bg_params)
         fg_mask = det.apply_conservative_split(fg_mask, gray, bg_u8)
 
     cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
