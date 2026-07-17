@@ -124,3 +124,48 @@ def test_moe_export_bakes_one_expert(tmp_path):
     # single-expert graph. Bound generously -- the point is 1x not 6x.
     gemms = sum(1 for n in g.node if n.op_type in ("Gemm", "MatMul"))
     assert gemms < 12 * 10, f"{gemms} Gemm/MatMul nodes — masked-sum likely exported"
+
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA unavailable"
+)
+
+
+@requires_cuda
+@requires_weights
+def test_tensorrt_defaults_to_fp32(tmp_path):
+    """FP32 is a deliberate decision, not an oversight: sleap.py:420-421 keeps FP32 'to
+    preserve keypoint precision' and compute_runtime.py:141-142 states the same rule.
+    A future edit flipping this default must break a test, not slip through."""
+    import inspect
+
+    from hydra_suite.core.identity.pose.vitpose import export
+
+    sig = inspect.signature(export.build_tensorrt_engine)
+    assert sig.parameters["fp16"].default is False
+
+
+@requires_cuda
+@requires_weights
+def test_gate_d_tensorrt_matches_torch(tmp_path):
+    """GATE D(tensorrt). TRT rearranges kernels, so it gets more slack than ONNX -- but
+    FP32 keeps it close. Bound is max-abs per element."""
+    from hydra_suite.core.identity.pose.vitpose.export import (
+        build_tensorrt_engine,
+        export_onnx,
+    )
+    from tools.vitpose.trt_runner import run_engine  # test-only helper, see Step 3
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "b.onnx")
+    engine = build_tensorrt_engine(onnx_path, tmp_path / "b.engine")
+
+    x = torch.randn(2, 3, 256, 192)
+    with torch.no_grad():
+        ref = m(x).numpy()
+    got = run_engine(engine, x.numpy())
+    assert got.shape == ref.shape
+    assert (
+        np.abs(ref - got).max() < 1e-3
+    ), f"max|trt-torch| = {np.abs(ref - got).max():.3e}"

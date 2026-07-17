@@ -117,3 +117,93 @@ def export_onnx(
             f"torch 2.11 defaults to the dynamo exporter, which requires onnxscript."
         ) from e
     return path
+
+
+def build_tensorrt_engine(
+    onnx_path: Path,
+    engine_path: Path,
+    *,
+    fp16: bool = False,
+    workspace_gb: float = 4.0,
+    max_batch: int = 64,
+) -> Path:
+    """Build a native TensorRT engine from an exported ONNX file.
+
+    Structural precedent: sleap.py's ``_build_trt_engine_from_onnx``
+    (sleap.py:374-465) -- builder + explicit-batch network + ``OnnxParser``
+    from an existing ONNX file, never ``trtexec`` (this repo's convention is
+    the Python API). Unlike that helper, this one raises instead of returning
+    False: it is the export recipe, not a runtime with an ORT-TRT-EP fallback
+    to drop to, so a build failure must surface as an ExportError.
+
+    fp16 defaults to False -- a deliberate decision, not an oversight. SLEAP
+    keeps FP32 "to preserve keypoint precision" (sleap.py:420-421) and
+    compute_runtime.py:141-142 states the same rule. ViTPose's entire value is
+    sub-pixel keypoint accuracy, so the OBB path's half=True is the wrong
+    analog here.
+    """
+    import tensorrt as trt
+
+    trt_logger = trt.Logger(trt.Logger.WARNING)
+    builder = trt.Builder(trt_logger)
+    network_flags = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+    network = builder.create_network(network_flags)
+    parser = trt.OnnxParser(network, trt_logger)
+    onnx_bytes = onnx_path.read_bytes()
+    if not parser.parse(onnx_bytes):
+        msgs = [parser.get_error(i).desc() for i in range(parser.num_errors)]
+        raise ExportError(
+            f"TensorRT ONNX parser failed for {onnx_path}: {'; '.join(msgs)}"
+        )
+
+    config = builder.create_builder_config()
+    workspace_bytes = int(workspace_gb * (1 << 30))
+    # Version-tolerant workspace-limit call: TRT >= 8.4 exposes
+    # set_memory_pool_limit; TRT 10 removed max_workspace_size entirely, so
+    # hardcoding either alone is brittle. Mirrors sleap.py:410-413.
+    if hasattr(config, "set_memory_pool_limit"):
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_bytes)
+    elif hasattr(config, "max_workspace_size"):  # pragma: no cover (TRT < 8.4)
+        config.max_workspace_size = workspace_bytes
+
+    if fp16:
+        config.set_flag(trt.BuilderFlag.FP16)
+
+    # export_onnx's graph has a single dynamic leading (batch) dim. TensorRT
+    # refuses to build a network with dynamic inputs unless an optimization
+    # profile pins the min/opt/max shapes. Mirror sleap.py:420-444's 1 /
+    # min(64, max_batch) / max_batch convention.
+    profile = builder.create_optimization_profile()
+    has_dynamic = False
+    for idx in range(network.num_inputs):
+        inp = network.get_input(idx)
+        shape = list(inp.shape)
+        if not any(int(d) < 0 for d in shape):
+            continue
+        # Only the leading batch dim may be dynamic; a dynamic H/W/C would
+        # need a concrete size we can't infer, so refuse rather than build a
+        # silently-wrong engine (sleap.py:429-439's guard).
+        if any(int(d) < 0 for d in shape[1:]):
+            raise ExportError(
+                f"input {inp.name!r} has dynamic non-batch dims {shape}: this "
+                "exporter only supports a dynamic leading batch dim, refusing "
+                "to build an engine that would silently pin the wrong shape."
+            )
+        static = [int(d) for d in shape[1:]]
+        min_shape = (1, *static)
+        opt_shape = (min(64, max_batch), *static)
+        max_shape = (max_batch, *static)
+        profile.set_shape(inp.name, min_shape, opt_shape, max_shape)
+        has_dynamic = True
+    if has_dynamic:
+        config.add_optimization_profile(profile)
+
+    plan = builder.build_serialized_network(network, config)
+    if plan is None:
+        raise ExportError(
+            f"TensorRT build_serialized_network returned None for {onnx_path}"
+        )
+
+    engine_path.parent.mkdir(parents=True, exist_ok=True)
+    engine_path.write_bytes(bytes(plan))
+    return engine_path
