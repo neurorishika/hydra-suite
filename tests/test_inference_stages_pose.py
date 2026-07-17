@@ -32,6 +32,7 @@ def _cuda_gpu_rt():
         use_nvdec=True,
         default_runtime="cuda",
         tensor_on_cuda=True,
+        requested_gpu=True,
     )
 
 
@@ -43,6 +44,7 @@ def _cuda_gpu_fast_rt():
         use_nvdec=True,
         default_runtime="cuda",
         tensor_on_cuda=False,
+        requested_gpu=True,
     )
 
 

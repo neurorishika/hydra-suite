@@ -41,7 +41,30 @@ class RuntimeContext:
     # story of its own (e.g. bg-sub, which only ever chooses between Numba
     # CPU, CuPy CUDA, and PyTorch MPS) needs this explicit signal to honor a
     # "cpu" tier request rather than opportunistically using MPS.
+    #
+    # WARNING: this defaults to False. Any hand-built ``RuntimeContext``
+    # (tests, GUI workers, `api.py`) MUST set it explicitly -- forgetting it
+    # silently forces tier-agnostic stages like bg-sub onto CPU even when the
+    # rest of the context describes a live GPU. The `__post_init__` guard
+    # below catches the `cuda_mode`/`coreml_mode` cases, but it CANNOT catch a
+    # hand-built context that only sets ``device="mps"`` (or "cuda:0") without
+    # `cuda_mode`/`coreml_mode` -- that combination passes the guard silently
+    # while still being wrong if `requested_gpu` was meant to be True.
     requested_gpu: bool = False
+
+    def __post_init__(self) -> None:
+        # cuda_mode/coreml_mode are only ever selected on the "gpu"/"gpu_fast"
+        # tiers, so either one implies requested_gpu. Guarding here turns a
+        # silent wrong-default on a hand-built context (which would force
+        # tier-agnostic stages like bg-sub onto CPU despite a live GPU) into a
+        # loud error at construction.
+        if (self.cuda_mode or self.coreml_mode) and not self.requested_gpu:
+            raise ValueError(
+                "RuntimeContext with cuda_mode/coreml_mode set must also set "
+                "requested_gpu=True — GPU backends are only selected on the "
+                "'gpu'/'gpu_fast' tiers. A hand-built context that omits it "
+                "silently forces bg-sub onto CPU."
+            )
 
     def handoff(self, tensor: "_torch.Tensor") -> "_torch.Tensor":
         """Producer-side stream-sync: record a CUDA event on the current stream.

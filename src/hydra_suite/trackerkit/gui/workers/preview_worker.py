@@ -591,6 +591,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cuda",
             tensor_on_cuda=True,
             coreml_mode=False,
+            requested_gpu=True,
         )
     if rt == "tensorrt":
         return RuntimeContext(
@@ -600,6 +601,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cuda",
             tensor_on_cuda=False,
             coreml_mode=False,
+            requested_gpu=True,
         )
     if rt == "coreml":
         return RuntimeContext(
@@ -609,6 +611,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cpu",
             tensor_on_cuda=False,
             coreml_mode=True,
+            requested_gpu=True,
         )
     if rt == "mps":
         return RuntimeContext(
@@ -618,6 +621,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cpu",
             tensor_on_cuda=False,
             coreml_mode=False,
+            requested_gpu=True,
         )
     return RuntimeContext(
         cuda_mode=False,
@@ -626,6 +630,7 @@ def _preview_runtime_context_for(compute_runtime: str):
         default_runtime="cpu",
         tensor_on_cuda=False,
         coreml_mode=False,
+        requested_gpu=False,
     )
 
 

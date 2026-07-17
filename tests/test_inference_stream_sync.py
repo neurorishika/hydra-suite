@@ -7,7 +7,6 @@ These tests cover:
   - await_handoff on a tensor that never went through handoff is a safe no-op
 """
 
-import pytest
 import torch
 
 from hydra_suite.core.inference.runtime import _HANDOFF_EVENTS, RuntimeContext
@@ -64,6 +63,7 @@ def test_handoff_keying_survives_multielement_tensor(monkeypatch):
         use_nvdec=False,
         tensor_on_cuda=True,
         default_runtime="cuda",
+        requested_gpu=True,
     )
     t = torch.arange(12).reshape(3, 4)  # multi-element — the exact trap
     assert rt.handoff(t) is t

@@ -57,9 +57,10 @@ class RuntimeResolver:
             # bg-sub has no TensorRT/CoreML implementation -- it is elementwise
             # work, not a network. gpu_fast resolves to the same backend as
             # gpu, always flagged as a fallback (the "fast" tier bought nothing).
-            if self.tier == "gpu_fast":
-                backend, device = self._native_gpu()
-                return ResolvedBackend(backend, device, used_fallback=True)
+            # The "cpu" and "gpu" tiers already returned above, so self.tier
+            # can only be "gpu_fast" here -- no need to check it again.
+            backend, device = self._native_gpu()
+            return ResolvedBackend(backend, device, used_fallback=True)
 
         # gpu_fast
         if self.platform.has_cuda:
