@@ -1,0 +1,88 @@
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+from hydra_suite.core.identity.pose.vitpose.export import ExportError, export_onnx
+from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+
+ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
+requires_weights = pytest.mark.skipif(
+    not (ASSET_DIR / "vitpose-b.pth").exists(),
+    reason="run tools/vitpose/fetch_assets.py first",
+)
+
+
+def test_export_refuses_a_training_mode_model(tmp_path):
+    """model.eval() is mandatory: the classic head's BatchNorm2d layers are the only
+    stateful modules, and exporting in train mode emits training-mode
+    BatchNormalization that silently produces garbage. Refuse loudly instead."""
+    m = build_vitpose("B", "classic").train()
+    with pytest.raises(ExportError, match="eval"):
+        export_onnx(m, tmp_path / "x.onnx")
+
+
+@requires_weights
+def test_gate_d_onnx_matches_torch(tmp_path):
+    """GATE D(onnx). ONNX on the CPU EP is the same math at the same precision, so it
+    should be near-exact. Bound is max-abs per element, not a mean -- an averaged bound
+    hides a single bad output channel, which is the failure that matters."""
+    import onnxruntime as ort
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "vitpose-b.onnx")
+
+    x = torch.randn(2, 3, 256, 192)
+    with torch.no_grad():
+        ref = m(x).numpy()
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    got = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
+
+    assert got.shape == ref.shape
+    assert (
+        np.abs(ref - got).max() < 1e-4
+    ), f"max|onnx-torch| = {np.abs(ref - got).max():.3e}"
+
+
+@requires_weights
+def test_onnx_honours_dynamic_batch(tmp_path):
+    """forward() reshapes with ints from .shape, which trace to literals -- without
+    dynamic_axes the graph is pinned to the export batch size. Export at batch 2, run
+    at batch 5."""
+    import onnxruntime as ort
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "dyn.onnx", dynamic_batch=True)
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    out = sess.run(
+        None, {sess.get_inputs()[0].name: np.zeros((5, 3, 256, 192), np.float32)}
+    )[0]
+    assert out.shape == (5, 17, 64, 48)
+
+
+@requires_weights
+def test_moe_export_bakes_one_expert(tmp_path):
+    """Upstream's masked-sum runs all 6 experts and zeroes 5 (a DDP workaround). Exporting
+    that would put 6x the expert-branch compute in the graph for no benefit. With a
+    concrete dataset_index the graph must carry exactly one expert's Gemm per block.
+
+    Asserts on the graph, not on wall-clock: timing is noisy, node counts are not.
+    """
+    import onnx
+
+    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+
+    m = build_vitpose_moe("B").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "moe.onnx", dataset_index=0)
+    g = onnx.load(str(onnx_path)).graph
+    # 12 blocks; a 6-expert masked sum would add >= 6 Gemm/MatMul per block over the
+    # single-expert graph. Bound generously -- the point is 1x not 6x.
+    gemms = sum(1 for n in g.node if n.op_type in ("Gemm", "MatMul"))
+    assert gemms < 12 * 10, f"{gemms} Gemm/MatMul nodes — masked-sum likely exported"
