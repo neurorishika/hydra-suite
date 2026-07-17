@@ -715,10 +715,13 @@ def build_tracking_parameters(
         ),
         "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
         "BACKGROUND_CONVERGENCE_EPSILON": float(
-            _cfg_get(cfg, "background_convergence_epsilon", default=0.05)
+            _cfg_get(cfg, "background_convergence_epsilon", default=1e-4)
         ),
         "BACKGROUND_CONVERGENCE_FRAMES": int(
             _cfg_get(cfg, "background_convergence_frames", default=30)
+        ),
+        "BACKGROUND_CONVERGENCE_PIXEL_DELTA": float(
+            _cfg_get(cfg, "background_convergence_pixel_delta", default=1.0)
         ),
         "ENABLE_LIGHTING_STABILIZATION": bool(
             _cfg_get(cfg, "enable_lighting_stabilization", default=True)

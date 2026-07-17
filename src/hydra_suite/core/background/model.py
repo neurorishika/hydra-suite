@@ -467,11 +467,20 @@ class BackgroundModel:
             return  # monotonic: never un-latch
 
         p = self.params
-        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05)
+        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4)
         needed = int(p.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30)
+        pixel_delta = float(p.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 1.0) or 1.0)
 
-        delta = float(np.mean(np.abs(self.lightest_background - previous_lightest)))
-        if delta < epsilon:
+        # lightest_background is a running max, so growth is non-negative --
+        # no abs() needed. Count the FRACTION of pixels still being revealed
+        # rather than a mean delta: a mean is frame-size dependent and latches
+        # early at production resolutions (one animal on a 2048x2048 frame moves
+        # the mean ~0.007, far below any usable threshold), whereas a fraction is
+        # scale-invariant and robust to single hot pixels.
+        grew = (self.lightest_background - previous_lightest) > pixel_delta
+        frac = float(np.count_nonzero(grew)) / float(grew.size)
+
+        if frac < epsilon:
             self._converged_frames += 1
         else:
             self._converged_frames = 0
@@ -479,9 +488,10 @@ class BackgroundModel:
         if self._converged_frames >= needed:
             self._stabilized = True
             logger.info(
-                "Background converged (delta=%.4f < %.4f for %d frames)",
-                delta,
-                epsilon,
+                "Background converged (%.4f%% of pixels still growing < %.4f%% "
+                "for %d frames)",
+                frac * 100.0,
+                epsilon * 100.0,
                 needed,
             )
 

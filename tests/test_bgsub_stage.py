@@ -123,6 +123,62 @@ def test_convergence_latch_resets_counter_when_background_grows():
     assert not model.stabilized
 
 
+def test_convergence_latch_scale_invariance_large_frame():
+    """A mean-delta convergence metric is frame-size dependent: the same
+    per-frame revealing event that swamps a small test frame's mean is far
+    below any usable threshold at production resolutions, so a mean-based
+    latch fires while the animal is still mid-reveal of its resting
+    footprint. This test uses a realistically large 512x512 frame with an
+    animal (~2000px resting patch, "a couple animal-widths") walking away in
+    small steps, so the reveal is spread over many frames rather than
+    completing in a single jump.
+
+    This intentionally does NOT pass BACKGROUND_CONVERGENCE_EPSILON, relying
+    on `_update_convergence`'s own default -- so this test tracks whichever
+    metric (and whichever default) is actually wired up. Only
+    BACKGROUND_CONVERGENCE_FRAMES is pinned, to bound how long the test runs.
+
+    Under the old whole-frame mean-delta metric (default epsilon 0.05),
+    delta stays ~0.028 every single frame -- below that epsilon -- so the
+    old code latches after exactly `needed` frames (frame 8), less than
+    half-way through the ~17-frame reveal. Under the scale-invariant
+    changed-pixel-fraction metric (default epsilon 1e-4), the fraction of
+    still-growing pixels (~5.6e-4) stays far above epsilon for the entire
+    reveal, so the latch correctly does not fire until well after frame 20.
+    """
+    size = 512
+    background_value = 200
+    blob_value = 150
+    radius = 25  # area ~ pi*25^2 =~ 1963px resting patch
+    step = 3  # small per-frame translation: reveal spreads over ~17 frames
+
+    model = BackgroundModel(_params(BACKGROUND_CONVERGENCE_FRAMES=8))
+
+    def frame_at(cx):
+        img = np.full((size, size), background_value, dtype=np.uint8)
+        cv2.circle(img, (cx, size // 2), radius, blob_value, -1)
+        return img
+
+    # First call just primes the model: the animal has been resting here,
+    # so its whole footprint is dark from frame zero.
+    model.update_and_get_background(frame_at(80), None)
+    assert not model.stabilized
+
+    # Walk the animal away in small steps. Each step uncovers only a thin
+    # trailing sliver of the resting footprint (never-before-revealed
+    # background), so the reveal is still in progress through frame 20
+    # (full reveal completes around frame ~17, at 3px/frame over a 50px
+    # diameter). The latch must not fire while any of that is still
+    # unrevealed.
+    for i in range(1, 21):
+        model.update_and_get_background(frame_at(80 + i * step), None)
+        assert not model.stabilized, (
+            f"latched after step {i} while the animal was still revealing "
+            "its resting footprint -- convergence metric is not "
+            "scale-invariant"
+        )
+
+
 def test_convergence_latch_is_monotonic():
     """Once latched, never un-latches, even if the background grows again."""
     model = BackgroundModel(
