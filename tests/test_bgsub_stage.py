@@ -68,3 +68,20 @@ def test_priming_covers_video_temporally(synthetic_video):
     # light plate everywhere, so its minimum stays near the plate value.
     assert model.lightest_background is not None
     assert float(model.lightest_background.min()) > 150.0
+
+
+def test_adaptive_disabled_never_switches_to_frozen_snapshot():
+    """ENABLE_ADAPTIVE_BACKGROUND=False must mean 'do not switch', not
+    'switch to a stale primed snapshot'."""
+    model = BackgroundModel(_params(ENABLE_ADAPTIVE_BACKGROUND=False))
+    gray_a = np.full((16, 16), 200, dtype=np.uint8)
+    model.update_and_get_background(gray_a, None, tracking_stabilized=False)
+
+    gray_b = np.full((16, 16), 240, dtype=np.uint8)
+    model.update_and_get_background(gray_b, None, tracking_stabilized=False)
+
+    stabilized_bg = model.update_and_get_background(
+        gray_b, None, tracking_stabilized=True
+    )
+    lightest = cv2.convertScaleAbs(model.lightest_background)
+    np.testing.assert_array_equal(stabilized_bg, lightest)

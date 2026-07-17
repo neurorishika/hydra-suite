@@ -434,10 +434,13 @@ class BackgroundModel:
             else:
                 self._adaptive_update_cpu(gray_f32, learning_rate)
 
-        if tracking_stabilized:
+        # Only switch when adaptive updating is actually on. Otherwise
+        # adaptive_background is frozen at its primed value and switching to
+        # it would silently subtract against a stale snapshot.
+        adaptive_enabled = p.get("ENABLE_ADAPTIVE_BACKGROUND", True)
+        if tracking_stabilized and adaptive_enabled:
             return cv2.convertScaleAbs(self.adaptive_background)
-        else:
-            return cv2.convertScaleAbs(self.lightest_background)
+        return cv2.convertScaleAbs(self.lightest_background)
 
     def _foreground_mask_gpu(
         self, gray: np.ndarray, background: np.ndarray
