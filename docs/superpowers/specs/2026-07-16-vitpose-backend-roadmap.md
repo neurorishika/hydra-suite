@@ -105,6 +105,11 @@ within ~0.2. Requires downloading COCO val2017 + standard person detections.
 Extract a shared native-torch runtime: device resolution, warmup, AMP,
 `torch.compile`, batching, ONNX session, TensorRT engine, artifact auto-export.
 
+**Note (2026-07-16):** the export *recipe* moved into Spec 1 (`vitpose/export.py`) —
+it is model-specific, and it is the piece ultralytics supplies for YOLO. Spec 2 owns
+runtime EXECUTION (sessions, engine lifecycle, warmup/AMP/batching) and consumes
+artifacts Spec 1 has already proven exportable and numerically faithful (Gate D).
+
 **Motivated by existing duplication, not speculation.** `sleap.py` is 1780 lines
 (against CLAUDE.md's ~500-line rule) and hides `_DirectOnnxSession` (`sleap.py:343`)
 and `_DirectTensorRTEngine` (`sleap.py:468`); `core/detectors/_direct_obb_runtime.py`
@@ -237,6 +242,109 @@ vendored copy and the abort returns. Re-apply then.
 *and* pip `opencv-python`/`-headless 4.13.0.92`; the pip wheel currently shadows
 conda's). That did not cause this abort — the pip wheel bundles no libomp — but
 it is worth cleaning up separately.
+
+## Export/artifact conventions in this repo (mapped 2026-07-16)
+
+Read before adding export or runtime code to ANY backend. This is what the existing code
+actually does — including where it disagrees with itself.
+
+### The key structural fact
+
+`auto_export_yolo_model` (`yolo.py:38`) and `auto_export_sleap_model` (`sleap.py:1353`) are
+**not the export**. They are the caching wrapper — signature, location, sidecar, staleness —
+and they delegate the actual conversion to ultralytics' `model.export()` and SLEAP's
+conda-env exporter respectively. For ViTPose nobody supplies that conversion, so we own it,
+and the layering falls out cleanly:
+
+| layer | YOLO | SLEAP | ViTPose |
+|---|---|---|---|
+| recipe (torch -> artifact) | ultralytics `model.export()` | SLEAP exporter | `vitpose/export.py` (Spec 1, leaf) |
+| caching wrapper | `auto_export_yolo_model` | `auto_export_sleap_model` | `backends/vitpose.py` (Spec 3) |
+| lazy trigger | `api.py:75` | `api.py:117` | `api.py` (Spec 3) |
+
+### There is no single canonical export module — there are four systems
+
+| domain | export entry | file |
+|---|---|---|
+| YOLO pose | `auto_export_yolo_model` | `pose/backends/yolo.py:38` |
+| SLEAP pose | `auto_export_sleap_model` | `pose/backends/sleap.py:1353` |
+| OBB detector (legacy mixin) | `RuntimeArtifactMixin._prepare_runtime_artifact_for_task` | `core/detectors/_runtime_artifacts.py:1007` |
+| OBB detector (clean rewrite) | `load_obb_executor` / `_export_artifact` | `core/inference/runtime_artifacts.py:412,123` |
+
+`core/inference/runtime_artifacts.py` is an explicit, documented **clean rewrite** of the
+legacy mixin, created to fix parity-audit finding **H4** (the legacy code silently fell back
+to PyTorch instead of erroring). Its stance is the more recent and more defensible one.
+
+### Conventions that are consistent everywhere — safe to copy
+
+- **Co-locate the artifact with the source checkpoint.** `paths.get_models_dir()` exists but
+  is used by ZERO export paths (0 hits in `core/`). Do not "improve" this.
+- **Sidecar `<artifact>.runtime_meta.json`** holding the signature; written only after a
+  successful export, checked before reuse.
+- **Lazy, on-first-use export**, never a separate pre-export step; always on a `QThread`
+  worker (`posekit/gui/workers.py` `QObject.run()`), never the GUI thread.
+- **`pose/artifacts.py` is the shared primitive set** for the pose package —
+  `path_fingerprint_token` (:71), `artifact_meta_path` (:82), `artifact_meta_matches` (:92),
+  `write_artifact_meta` (:107). Both `yolo.py` and `sleap.py` use them. A ViTPose backend
+  must too. (The detector code ignores them and reimplements its own — twice.)
+- **`derive_onnx_execution_providers(compute_runtime)`** (`compute_runtime.py:160-184`) is
+  the ONE genuinely canonical shared piece. Any ONNX session must get its providers there.
+- **Python API export, never a `trtexec` subprocess** (zero hits repo-wide).
+
+### Where the code contradicts itself — decide deliberately, do not copy blindly
+
+1. **FP16.** OBB hardcodes `half=True` (`_runtime_artifacts.py:896`,
+   `runtime_artifacts.py:162`). SLEAP deliberately keeps FP32 — `sleap.py:420-421`: "fp16 is
+   deferred to preserve keypoint precision" — and `compute_runtime.py:141-142` states the
+   same rule for the ORT-TRT-EP path. **DECIDED for ViTPose: FP32**, following the SLEAP
+   keypoint precedent. A keypoint model with sub-pixel decoding is the SLEAP case, not OBB's.
+2. **Failure semantics.** The pose package silently downgrades a failed export to
+   native/service (`api.py:78-85`, `133-141`). The clean OBB rewrite raises
+   `ArtifactExportError` precisely because silent fallback was a real parity bug (H4).
+   **Unresolved — Spec 3 must choose.** The rewrite's stance looks right, but note it still
+   defaults `auto_export=True`; it only refuses to silently downgrade to a *different runtime*.
+3. **Signature scheme.** Hash-with-version-tag (pose package; OBB legacy bakes in
+   `onnx_v4_static_imgsz{N}_opset17...` so a recipe change forces a rebuild) vs. plain
+   mtime+imgsz freshness (clean rewrite, which traded that robustness for simplicity and
+   LOST recipe-versioning). The pose package's own signatures have no version tag either —
+   bumping `opset` in `yolo.py:93` would silently reuse stale artifacts. **A ViTPose signature
+   should include a recipe version tag.**
+4. **GPU fingerprinting in the TRT cache key: absent everywhere**, despite TensorRT engines
+   being GPU/driver-specific. `_get_tensorrt_build_context()` collects `gpu_name`/`cuda_version`
+   and writes them to the sidecar, but `_artifact_signature()` never includes them — so a
+   `.engine` built on a different GPU is happily reused. Mismatches are caught only
+   reactively, by sniffing exception text (`_is_fatal_tensorrt_environment_error`). **Copying
+   "the convention" here copies a known gap.** Fixing it for ViTPose would be an improvement,
+   not a departure.
+
+### CoreML for pose does not exist
+
+The pose runtime vocabulary (`normalize_runtime_flavor`, `pose/utils.py:350`) is
+`native | onnx | tensorrt` — no CoreML. Only the OBB/detector world has CoreML, via
+ultralytics' own `model.export(format="coreml")` (`runtime_artifacts.py:168-176`), which we
+cannot use for a hand-rolled model. `YoloNativeBackend`'s "CoreML" is ORT's
+`CoreMLExecutionProvider` at *inference* time, not a `.mlpackage` export.
+
+Commit `ebf5296` ("Apple GPU-Fast to CoreML with native-MPS fallback") is a **resolver**
+change, not an export mechanism: it makes the Apple `gpu_fast` tier return CoreML only if an
+artifact already exists, else fall back to native MPS.
+
+So **CoreML for ViTPose is new design, not convention-following.** Risk: `coremltools 9.0`
+warns torch 2.11 is untested (max tested 2.7).
+
+### Verification convention
+
+`tools/equivalence/verify_sleap_exported_vs_service.py` is the template: build BOTH backends
+through the *production selector* (`create_pose_backend_from_config`), feed identical real
+crops, compare keypoints pixel-for-pixel. `PARITY_AUDIT.md` is the living ledger of
+findings. A ViTPose backend should get an analogous `verify_vitpose_*.py` at Spec 3.
+
+### Doc drift to be aware of
+
+`docs/developer-guide/runtime-integration.md:21` cites
+`src/hydra_suite/core/runtime/compute_runtime.py`; the real path has no `core/`. Line 29
+references `derive_detection_runtime_settings(...)`, which has been **deleted**. The
+checklist is structurally authoritative; its function/path names are not.
 
 ## Conventions that constrain all four specs
 

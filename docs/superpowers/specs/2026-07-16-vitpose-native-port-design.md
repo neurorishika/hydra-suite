@@ -51,10 +51,13 @@ src/hydra_suite/core/identity/pose/vitpose/
 ├── heads.py        # classic deconv head, simple decoder
 ├── weights.py      # download, load, strict-load assertions
 ├── transforms.py   # bbox→center/scale, UDP affine warp, normalize
-└── decode.py       # decode_udp_cv2 (oracle), decode_udp_torch (production)
+├── decode.py       # decode_udp_cv2 (oracle), decode_udp_torch (production)
+└── export.py       # torch -> ONNX / TensorRT / CoreML recipe
 ```
 
 **Imports only `torch`, `timm`, `numpy`, `cv2`. Nothing from `hydra_suite`.**
+(`export.py` additionally imports `onnx`/`tensorrt`/`coremltools` for whichever
+target it is asked for — still nothing from `hydra_suite`.)
 It lives in the repo (testable and reviewable in place) but is wired into nothing —
 `create_pose_backend_from_config` does not learn it exists until Spec 3. Being a
 leaf, it cannot violate the dependency direction in CLAUDE.md:159-165.
@@ -269,6 +272,56 @@ with `output_size = [48, 64]` (heatmap w, h).
 **`shift_heatmap=False`** — do *not* apply the `[:, :, :, 1:] = [:, :, :, :-1]`
 column shift. That shift is the non-UDP correction; applying both double-corrects.
 
+### Export (`export.py`) — the recipe, not the runtime
+
+**Added to Spec 1 on 2026-07-16.** Reading the existing backends showed that
+`auto_export_yolo_model` (`yolo.py:38`) and `auto_export_sleap_model` (`sleap.py:1353`) are
+**not the export** — they are the caching wrapper (signature, location, sidecar, staleness),
+delegating the actual conversion to ultralytics' `model.export()` and SLEAP's exporter.
+Nobody supplies that conversion for ViTPose, so we do, and it belongs in the leaf beside the
+model it encodes.
+
+| layer | YOLO | SLEAP | ViTPose |
+|---|---|---|---|
+| recipe (torch -> artifact) | ultralytics `model.export()` | SLEAP exporter | **`export.py` — HERE** |
+| caching wrapper | `auto_export_yolo_model` | `auto_export_sleap_model` | `backends/vitpose.py` — Spec 3 |
+| lazy trigger | `api.py:75` | `api.py:117` | `api.py` — Spec 3 |
+
+`export.py` takes a live `nn.Module` and a destination path. It knows nothing about
+`PoseRuntimeConfig`, artifact caching, or where models live on disk — that is the wrapper's
+job at Spec 3, and putting it here would break the leaf.
+
+**The recipe. Every item is a ViTPose-specific fact verified during this port:**
+
+- **`model.eval()` is mandatory.** The classic head's two `BatchNorm2d` layers are the only
+  stateful modules; exporting in train mode emits training-mode `BatchNormalization` and
+  silently produces garbage. Eval also makes `DropPath` a no-op, which otherwise traces to
+  a random node.
+- **Fixed 256x192 input.** `pos_embed` is a `(1, 193, D)` parameter with no interpolation
+  path, and constant-folding bakes the `[:, 1:] + [:, :1]` slice-add into a constant. A
+  frozen graph cannot serve another resolution — and 256x192 is the only shape the
+  checkpoints target.
+- **Dynamic batch only**, via `dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}}`.
+  `forward` does `x.permute(0,2,1).reshape(b, c, hp, wp)` with ints from `.shape`, which
+  trace to literals; without `dynamic_axes` the graph pins the batch size too.
+- **opset 14+.** mmpose's exporter asserts `opset_version == 11`; that is an mmpose-era
+  constraint, not a model one.
+- **`SimpleHead` already uses explicit `size=(64, 48)`**, not `scale_factor=4`. Task 4 did
+  this deliberately: `scale_factor` traces to a `Resize` with computed sizes and is the
+  classic ONNX shape-mismatch source. Do not "simplify" it back.
+- **MoE exports a single expert.** Upstream's masked-sum runs all 6 and zeroes 5 (a DDP
+  workaround); Task 9's int `dataset_index` path already indexes directly. Export with a
+  concrete index: numerically identical for single-dataset inference, 6x less expert-branch
+  compute in the graph.
+- **TensorRT builds FP32.** Decided 2026-07-16 following the SLEAP keypoint precedent
+  (`sleap.py:420-421` "fp16 is deferred to preserve keypoint precision"; same rule at
+  `compute_runtime.py:141-142`). OBB's `half=True` is the wrong analog for a keypoint model
+  whose entire value is sub-pixel accuracy.
+- **Pre/post-processing is NOT exported and must not be.** The affine warp (cv2), the UDP
+  decode, and `transform_preds` stay outside the graph. Export the model only. A correct
+  graph with a sloppy decode looks exactly like "ONNX broke my model" — which is precisely
+  how this project's first Gate C failure presented.
+
 ## Verification
 
 ### Gate A — strict load
@@ -381,6 +434,34 @@ which stopped working in 3.13). It is only installable from git master
 carries an unreleased 2026-01-07 setup fix). We avoid needing it. Note this
 constrains us to our own eval loop — mmpose's `CocoMetric` module-level
 hard-imports xtcocotools — which we want anyway.
+
+### Gate D — artifact parity (added 2026-07-16)
+
+Every exported artifact must produce the same heatmaps as the torch model it came from. Same
+discipline as Gate B: torch is the oracle, the artifact is under test, the bound is asserted
+per-element rather than averaged.
+
+| artifact | runner | where | bound |
+|---|---|---|---|
+| ONNX | `onnxruntime` (CPU EP) | mac + mehek | max abs diff < 1e-4 |
+| TensorRT (FP32) | `tensorrt` python API | mehek only | max abs diff < 1e-3 |
+| CoreML | `coremltools` | mac only | max abs diff < 1e-3 |
+
+Bounds differ deliberately: ONNX-on-CPU is the same math at the same precision and should be
+near-exact; TRT and CoreML rearrange kernels and get more slack, but FP32 keeps them close.
+If an artifact misses its bound that is a finding about the recipe — **do not loosen the
+bound**, and do not change `src/` to chase it (Gates A/B/C stand).
+
+**Heatmap parity is necessary but not sufficient.** A small heatmap delta can still move a
+decoded keypoint, and AP is what users feel. So the TensorRT artifact — the deployment
+target — additionally gets a **Gate C run through the exported engine**, expected at
+75.8 +/- 0.2 like the native path. ONNX and CoreML get heatmap parity only; a full AP run per
+artifact is not worth the wall-clock.
+
+**Risk — CoreML.** `coremltools 9.0` warns `Torch version 2.11.0 has not been tested with
+coremltools. Torch 2.7.0 is the most recent version that has been tested.` CoreML export may
+simply not work on this torch. It is sequenced last for that reason, and BLOCKED there does
+not invalidate ONNX or TensorRT.
 
 ### Dependencies to acquire
 

@@ -2422,6 +2422,424 @@ git commit -m "test(vitpose): CUDA parity twin for on-device decode"
 
 ---
 
+---
+
+### Task 12: ONNX export + GATE D(onnx)
+
+The recipe, not the runtime. `export.py` plays the role ultralytics' `model.export()` plays
+for the YOLO backend: it converts a live model to an artifact and knows nothing about
+caching, config, or where models live (that is `auto_export_vitpose_model` at Spec 3).
+
+**Files:**
+- Create: `src/hydra_suite/core/identity/pose/vitpose/export.py`
+- Test: `tests/test_vitpose_export.py`
+
+**Interfaces:**
+- Consumes: `ViTPose`/`build_vitpose` (`vitpose.py`), `build_vitpose_moe`, `config.IMAGE_SIZE_WH`.
+- Produces:
+  - `export_onnx(model: nn.Module, path: Path, *, opset: int = 17, dynamic_batch: bool = True, dataset_index: int | None = None) -> Path`
+  - `class ExportError(RuntimeError)`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_vitpose_export.py
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+from hydra_suite.core.identity.pose.vitpose.export import export_onnx, ExportError
+from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+
+ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
+requires_weights = pytest.mark.skipif(
+    not (ASSET_DIR / "vitpose-b.pth").exists(),
+    reason="run tools/vitpose/fetch_assets.py first",
+)
+
+
+def test_export_refuses_a_training_mode_model(tmp_path):
+    """model.eval() is mandatory: the classic head's BatchNorm2d layers are the only
+    stateful modules, and exporting in train mode emits training-mode
+    BatchNormalization that silently produces garbage. Refuse loudly instead."""
+    m = build_vitpose("B", "classic").train()
+    with pytest.raises(ExportError, match="eval"):
+        export_onnx(m, tmp_path / "x.onnx")
+
+
+@requires_weights
+def test_gate_d_onnx_matches_torch(tmp_path):
+    """GATE D(onnx). ONNX on the CPU EP is the same math at the same precision, so it
+    should be near-exact. Bound is max-abs per element, not a mean -- an averaged bound
+    hides a single bad output channel, which is the failure that matters."""
+    import onnxruntime as ort
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "vitpose-b.onnx")
+
+    x = torch.randn(2, 3, 256, 192)
+    with torch.no_grad():
+        ref = m(x).numpy()
+
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    got = sess.run(None, {sess.get_inputs()[0].name: x.numpy()})[0]
+
+    assert got.shape == ref.shape
+    assert np.abs(ref - got).max() < 1e-4, f"max|onnx-torch| = {np.abs(ref-got).max():.3e}"
+
+
+@requires_weights
+def test_onnx_honours_dynamic_batch(tmp_path):
+    """forward() reshapes with ints from .shape, which trace to literals -- without
+    dynamic_axes the graph is pinned to the export batch size. Export at batch 2, run
+    at batch 5."""
+    import onnxruntime as ort
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "dyn.onnx", dynamic_batch=True)
+    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+    out = sess.run(None, {sess.get_inputs()[0].name: np.zeros((5, 3, 256, 192), np.float32)})[0]
+    assert out.shape == (5, 17, 64, 48)
+
+
+@requires_weights
+def test_moe_export_bakes_one_expert(tmp_path):
+    """Upstream's masked-sum runs all 6 experts and zeroes 5 (a DDP workaround). Exporting
+    that would put 6x the expert-branch compute in the graph for no benefit. With a
+    concrete dataset_index the graph must carry exactly one expert's Gemm per block.
+
+    Asserts on the graph, not on wall-clock: timing is noisy, node counts are not.
+    """
+    import onnx
+
+    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+
+    m = build_vitpose_moe("B").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose+_base.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "moe.onnx", dataset_index=0)
+    g = onnx.load(str(onnx_path)).graph
+    # 12 blocks; a 6-expert masked sum would add >= 6 Gemm/MatMul per block over the
+    # single-expert graph. Bound generously -- the point is 1x not 6x.
+    gemms = sum(1 for n in g.node if n.op_type in ("Gemm", "MatMul"))
+    assert gemms < 12 * 10, f"{gemms} Gemm/MatMul nodes — masked-sum likely exported"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run:
+```bash
+PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_vitpose_export.py -q
+```
+Expected: FAIL — `ModuleNotFoundError: No module named '...vitpose.export'`
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# src/hydra_suite/core/identity/pose/vitpose/export.py
+"""ViTPose export recipe: a live torch model -> a deployable artifact.
+
+This is the RECIPE, not the runtime. It is the piece ultralytics' model.export()
+supplies for the YOLO backend and SLEAP's exporter supplies for SLEAP -- nobody supplies
+it for ViTPose, so we do, and it lives beside the model whose quirks it encodes.
+
+It deliberately knows nothing about PoseRuntimeConfig, artifact caching, signatures, or
+where checkpoints live on disk. That is auto_export_vitpose_model's job in
+backends/vitpose.py (Spec 3), mirroring auto_export_yolo_model (yolo.py:38) and
+auto_export_sleap_model (sleap.py:1353), which use pose/artifacts.py's shared helpers.
+Putting any of it here would break this package's leaf constraint.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+
+from .config import IMAGE_SIZE_WH
+
+
+class ExportError(RuntimeError):
+    """Raised when a model cannot be exported safely."""
+
+
+def export_onnx(
+    model: nn.Module,
+    path: Path,
+    *,
+    opset: int = 17,
+    dynamic_batch: bool = True,
+    dataset_index: int | None = None,
+) -> Path:
+    """Export ViTPose to ONNX at a fixed 256x192 input.
+
+    Fixed resolution is not a limitation we chose: pos_embed is a (1, 193, D) parameter
+    with no interpolation path, and constant-folding bakes the [:, 1:] + [:, :1] slice-add
+    into a constant. 256x192 is the only shape the checkpoints target.
+
+    opset 17, not 11: mmpose's exporter asserts opset_version == 11, but that is an
+    mmpose-era constraint, not a model one.
+    """
+    if model.training:
+        raise ExportError(
+            "model must be in eval() mode before export: the classic head's BatchNorm2d "
+            "layers would otherwise emit training-mode BatchNormalization and silently "
+            "produce garbage (and DropPath would trace to a random node)"
+        )
+
+    w, h = IMAGE_SIZE_WH
+    dummy = torch.zeros(1, 3, h, w)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # MoE takes dataset_index; classic does not. Wrap so the exported graph has a single
+    # tensor input either way, and so a concrete index bakes in ONE expert per block
+    # rather than upstream's 6-expert masked sum.
+    if dataset_index is not None:
+        class _Fixed(nn.Module):
+            def __init__(self, inner: nn.Module, idx: int) -> None:
+                super().__init__()
+                self.inner = inner
+                self.idx = idx
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self.inner(x, dataset_index=self.idx)
+
+        model = _Fixed(model, dataset_index).eval()
+
+    dynamic_axes = (
+        {"input": {0: "batch"}, "output": {0: "batch"}} if dynamic_batch else None
+    )
+    torch.onnx.export(
+        model,
+        dummy,
+        str(path),
+        input_names=["input"],
+        output_names=["output"],
+        opset_version=opset,
+        do_constant_folding=True,
+        dynamic_axes=dynamic_axes,
+    )
+    return path
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run:
+```bash
+PYTHONPATH=src /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python -m pytest tests/test_vitpose_export.py -q
+```
+Expected: PASS (4 passed)
+
+If `test_gate_d_onnx_matches_torch` misses 1e-4, **do not loosen the bound and do not touch
+`src/`** — Gates A/B/C stand. Debug the recipe:
+| symptom | suspect |
+|---|---|
+| large diff everywhere | model exported in train mode (BatchNorm), or wrong dummy shape |
+| diff only near output edges | `F.interpolate` traced with `scale_factor` instead of `size=` |
+| diff grows with batch | `dynamic_axes` missing, graph pinned to batch 1 |
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/hydra_suite/core/identity/pose/vitpose/export.py tests/test_vitpose_export.py
+git commit -m "feat(vitpose): GATE D(onnx) - ONNX export recipe with torch parity"
+```
+
+---
+
+### Task 13: TensorRT engine + GATE D(tensorrt) + Gate C through the engine
+
+**Runs on mehek, not the mac.** TensorRT engines are GPU/driver-specific; this is the
+deployment target.
+
+**Files:**
+- Modify: `src/hydra_suite/core/identity/pose/vitpose/export.py`
+- Modify: `tests/test_vitpose_export.py`
+
+**Interfaces:**
+- Consumes: `export_onnx` (Task 12).
+- Produces: `build_tensorrt_engine(onnx_path: Path, engine_path: Path, *, fp16: bool = False, workspace_gb: float = 4.0, max_batch: int = 64) -> Path`
+
+**The FP32 decision is load-bearing.** `fp16` defaults to **False**, following the SLEAP
+keypoint precedent: `sleap.py:420-421` keeps FP32 "to preserve keypoint precision", and
+`compute_runtime.py:141-142` states the same rule. The OBB path's `half=True` is the wrong
+analog for a model whose entire value is sub-pixel accuracy. Do not flip the default.
+
+**Follow `sleap.py:374-465` (`_build_trt_engine_from_onnx`) as the structural precedent** —
+it builds from an existing ONNX via the tensorrt Python API with a hand-rolled optimization
+profile. Do NOT shell out to `trtexec` (zero hits repo-wide; the convention is the Python API).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# append to tests/test_vitpose_export.py
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA unavailable"
+)
+
+
+@requires_cuda
+@requires_weights
+def test_tensorrt_defaults_to_fp32(tmp_path):
+    """FP32 is a deliberate decision, not an oversight: sleap.py:420-421 keeps FP32 'to
+    preserve keypoint precision' and compute_runtime.py:141-142 states the same rule.
+    A future edit flipping this default must break a test, not slip through."""
+    import inspect
+
+    from hydra_suite.core.identity.pose.vitpose import export
+
+    sig = inspect.signature(export.build_tensorrt_engine)
+    assert sig.parameters["fp16"].default is False
+
+
+@requires_cuda
+@requires_weights
+def test_gate_d_tensorrt_matches_torch(tmp_path):
+    """GATE D(tensorrt). TRT rearranges kernels, so it gets more slack than ONNX -- but
+    FP32 keeps it close. Bound is max-abs per element."""
+    from hydra_suite.core.identity.pose.vitpose.export import (
+        build_tensorrt_engine, export_onnx,
+    )
+    from tools.vitpose.trt_runner import run_engine  # test-only helper, see Step 3
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    onnx_path = export_onnx(m, tmp_path / "b.onnx")
+    engine = build_tensorrt_engine(onnx_path, tmp_path / "b.engine")
+
+    x = torch.randn(2, 3, 256, 192)
+    with torch.no_grad():
+        ref = m(x).numpy()
+    got = run_engine(engine, x.numpy())
+    assert got.shape == ref.shape
+    assert np.abs(ref - got).max() < 1e-3, f"max|trt-torch| = {np.abs(ref-got).max():.3e}"
+```
+
+- [ ] **Step 2: Run on mehek to verify it fails**
+
+```bash
+ssh rutalab@mehek.taild08eb9.ts.net
+E=/home/rutalab/mambaforge/envs/hydra-cuda
+cd /home/rutalab/hydra-vitpose && git pull origin vitpose-native-port
+LD_LIBRARY_PATH=$E/lib PYTHONPATH=.:src $E/bin/python -m pytest tests/test_vitpose_export.py -q -k tensorrt
+```
+Expected: FAIL — `build_tensorrt_engine` does not exist.
+
+**`LD_LIBRARY_PATH=$CONDA_PREFIX/lib` is REQUIRED on mehek**, not optional: without it
+`import torch, cv2` dies with `CXXABI_1.3.15 not found` (pip's cv2 wheel needs a newer
+libstdc++ than the system's; torch loads the system one first). This is already the repo
+makefile's own pattern.
+
+- [ ] **Step 3: Implement**
+
+Transcribe the structure from `sleap.py:374-465`. Two pieces:
+1. `build_tensorrt_engine` in `export.py` — builder + network + parser from the ONNX, an
+   optimization profile (min=1 / opt=8 / max=`max_batch` on the batch axis), `workspace_gb`
+   via `config.set_memory_pool_limit`, FP32 unless `fp16=True`, serialize to `engine_path`.
+2. `tools/vitpose/trt_runner.py` — a minimal `run_engine(engine_path, x) -> np.ndarray` for
+   the parity test only. This is test scaffolding, NOT the production runtime: the real TRT
+   execution path is Spec 2's job (it will extract `sleap.py:468`'s `_DirectTensorRTEngine`
+   into the shared runtime). Do not build a production engine wrapper here.
+
+- [ ] **Step 4: Run Gate D(tensorrt) on mehek**
+
+Expected: PASS.
+
+- [ ] **Step 5: GATE C through the exported engine**
+
+Heatmap parity is necessary but not sufficient — a small delta can still move a decoded
+keypoint, and AP is what users feel. Run the full COCO eval through the TRT engine:
+
+```bash
+LD_LIBRARY_PATH=$E/lib PYTHONPATH=.:src $E/bin/python -m pytest \
+  tests/test_vitpose_eval_coco.py -q -m coco_eval -k classic
+```
+against a variant of `evaluate()` that runs the engine instead of the torch model.
+Expected: **75.8 ± 0.2**, matching the native path (native CUDA measured exactly 0.758).
+
+If AP drops but Gate D(tensorrt) passed, the loss is in the decode/scoring wiring of the
+engine path, not the engine.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/hydra_suite/core/identity/pose/vitpose/export.py tools/vitpose/trt_runner.py tests/test_vitpose_export.py
+git commit -m "feat(vitpose): GATE D(tensorrt) - FP32 engine build with torch parity"
+```
+
+---
+
+### Task 14: CoreML export + GATE D(coreml)
+
+**Runs on the mac only.** **This is new design, not convention-following** — the pose
+runtime vocabulary (`normalize_runtime_flavor`, `pose/utils.py:350`) is
+`native | onnx | tensorrt` with no CoreML at all. Only the OBB world has CoreML, via
+ultralytics' `model.export(format="coreml")`, which we cannot use for a hand-rolled model.
+
+**Sequenced last because it carries real risk:** `coremltools 9.0` warns
+`Torch version 2.11.0 has not been tested with coremltools. Torch 2.7.0 is the most recent
+version that has been tested.` **BLOCKED here does not invalidate Tasks 12-13.** If
+coremltools cannot trace torch 2.11, report BLOCKED with the error and stop — do not
+downgrade torch, and do not spend hours fighting it.
+
+**Files:**
+- Modify: `src/hydra_suite/core/identity/pose/vitpose/export.py`
+- Modify: `tests/test_vitpose_export.py`
+
+**Interfaces:**
+- Produces: `export_coreml(model: nn.Module, path: Path, *, compute_units: str = "ALL") -> Path`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# append to tests/test_vitpose_export.py
+requires_coreml = pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="CoreML export is macOS-only"
+)
+
+
+@requires_coreml
+@requires_weights
+def test_gate_d_coreml_matches_torch(tmp_path):
+    """GATE D(coreml). Same slack as TRT: CoreML rearranges kernels."""
+    from hydra_suite.core.identity.pose.vitpose.export import export_coreml
+
+    m = build_vitpose("B", "classic").eval()
+    load_checkpoint(m, ASSET_DIR / "vitpose-b.pth", strict=True)
+    pkg = export_coreml(m, tmp_path / "vitpose-b.mlpackage")
+
+    import coremltools as ct
+
+    x = torch.randn(1, 3, 256, 192)
+    with torch.no_grad():
+        ref = m(x).numpy()
+    mlmodel = ct.models.MLModel(str(pkg))
+    got = list(mlmodel.predict({"input": x.numpy()}).values())[0]
+    assert np.abs(ref - got).max() < 1e-3, f"max|coreml-torch| = {np.abs(ref-got).max():.3e}"
+```
+
+- [ ] **Step 2-4: TDD cycle**
+
+Implement `export_coreml` via `ct.convert(torch.jit.trace(model, dummy), ...)` with a fixed
+`(1, 3, 256, 192)` input. Batch stays 1: the OBB CoreML path pins batch=1 for the same
+reason (`runtime_artifacts.py:293-299` documents that dynamic batch + spatial dims together
+crash the CoreML compiler).
+
+- [ ] **Step 5: Commit (or report BLOCKED)**
+
+```bash
+git commit -m "feat(vitpose): GATE D(coreml) - CoreML export with torch parity"
+```
+
+If BLOCKED, commit nothing and record the coremltools/torch incompatibility in the roadmap's
+open questions.
+
 ## Definition of Done
 
 | gate | check | target |
@@ -2433,6 +2851,10 @@ git commit -m "test(vitpose): CUDA parity twin for on-device decode"
 | C | COCO val AP, classic | 75.8 ± 0.2 |
 | C | COCO val AP, simple | 75.5 ± 0.2 |
 | — | detections file SHA256 | `53ba0ad8…` (guards against the dummy) |
+| D(onnx) | ONNX vs torch heatmaps | max abs < 1e-4 |
+| D(tensorrt) | TRT FP32 vs torch heatmaps, on mehek | max abs < 1e-3 |
+| D(tensorrt) | COCO AP through the exported engine | 75.8 ± 0.2 |
+| D(coreml) | CoreML vs torch heatmaps, on mac | max abs < 1e-3 (may be BLOCKED: torch 2.11 untested) |
 | — | leaf constraint | no `hydra_suite` imports in `vitpose/` |
 | — | no integration | zero diff in `pose/api.py`, `pose/types.py`, `core/inference/` |
 
