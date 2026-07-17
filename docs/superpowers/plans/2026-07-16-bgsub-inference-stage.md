@@ -1131,7 +1131,7 @@ def test_bgsub_config_from_params_reads_legacy_keys():
     )
     assert cfg.threshold_value == 42.0
     assert cfg.background_prime_frames == 99
-    assert cfg.convergence_epsilon == 0.05  # default
+    assert cfg.convergence_epsilon == 1e-4  # default (see canonical table)
 
 
 def test_bgsub_config_retains_raw_params():
