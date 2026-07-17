@@ -83,7 +83,7 @@ CLAUDE.md) is the live pytest config; it already applies `-m "not benchmark"`.
 - **Corner ordering:** TL/TR/BR/BL, matching `_corners_from_xywhr` (`core/inference/stages/obb.py:249`). Wrong ordering put SLEAP ~86 px off historically.
 - **Angles:** radians (bg-sub already emits `np.deg2rad(ang)`).
 - **Confidences:** `np.nan` for bg-sub. All downstream consumers must be NaN-safe.
-- **Formatting:** run `make format` before committing (autopep8 → black → isort). Pre-commit hooks run black/ruff/flake8/isort automatically.
+- **Formatting:** do NOT run `make format` (BROKEN — see Execution Environment). Pre-commit hooks run black/ruff/flake8/isort automatically on `git commit`.
 - **Tests:** named files only, never the full suite — see "Execution Environment" above. `$PY -m pytest tests/test_<name>.py -v --timeout=60`.
 - **Legacy policy:** never import from `legacy/` in `src/` or `tests/`.
 - **Spec corrections found during planning** (the spec is slightly wrong on both; trust this plan):
