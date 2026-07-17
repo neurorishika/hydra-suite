@@ -469,7 +469,7 @@ class BackgroundModel:
         p = self.params
         epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4)
         needed = int(p.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30)
-        pixel_delta = float(p.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 1.0) or 1.0)
+        pixel_delta = float(p.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 5.0) or 5.0)
 
         # lightest_background is a running max, so growth is non-negative --
         # no abs() needed. Count the FRACTION of pixels still being revealed
@@ -477,6 +477,14 @@ class BackgroundModel:
         # early at production resolutions (one animal on a 2048x2048 frame moves
         # the mean ~0.007, far below any usable threshold), whereas a fraction is
         # scale-invariant and robust to single hot pixels.
+        #
+        # PIXEL_DELTA is the NOISE GATE: it must exceed the sensor noise floor,
+        # or the running max never stops growing under ordinary sensor noise
+        # (every frame, noise pushes some pixels above the previous max) and the
+        # latch never fires. It sits far below a genuine animal reveal
+        # (~50-150 grey levels), which is what lets it discriminate noise from a
+        # real reveal. The default of 5.0 is comfortably in that gap; raise it
+        # on a noisier rig.
         grew = (self.lightest_background - previous_lightest) > pixel_delta
         frac = float(np.count_nonzero(grew)) / float(grew.size)
 

@@ -721,7 +721,7 @@ def build_tracking_parameters(
             _cfg_get(cfg, "background_convergence_frames", default=30)
         ),
         "BACKGROUND_CONVERGENCE_PIXEL_DELTA": float(
-            _cfg_get(cfg, "background_convergence_pixel_delta", default=1.0)
+            _cfg_get(cfg, "background_convergence_pixel_delta", default=5.0)
         ),
         "ENABLE_LIGHTING_STABILIZATION": bool(
             _cfg_get(cfg, "enable_lighting_stabilization", default=True)

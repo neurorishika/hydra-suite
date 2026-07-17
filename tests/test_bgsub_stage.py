@@ -194,3 +194,37 @@ def test_convergence_latch_is_monotonic():
 
     model.update_and_get_background(np.full((16, 16), 255, np.uint8), None)
     assert model.stabilized
+
+
+def test_convergence_latch_survives_sensor_noise():
+    """BACKGROUND_CONVERGENCE_PIXEL_DELTA must exceed the sensor noise floor.
+
+    `lightest_background` is a running max, so under Gaussian sensor noise it
+    never truly stops growing: every frame, noise pushes some pixels above
+    the previous max. If PIXEL_DELTA sits inside the noise (e.g. 1.0 grey
+    level for sd=2.0 noise), the "still growing" fraction plateaus at a
+    noise-dependent floor above epsilon and the latch never fires -- the
+    model then never switches to adaptive and silently loses lighting-drift
+    tracking. PIXEL_DELTA=5.0 clears the noise floor while staying far below
+    a genuine animal reveal (~50-150 grey levels), so the latch fires.
+    """
+    rng = np.random.default_rng(0)
+    frames = [
+        np.clip(rng.normal(200, 2.0, (256, 256)), 0, 255).astype(np.uint8)
+        for _ in range(150)
+    ]
+
+    model = BackgroundModel(
+        _params(
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
+            BACKGROUND_CONVERGENCE_FRAMES=10,
+            BACKGROUND_CONVERGENCE_PIXEL_DELTA=5.0,
+        )
+    )
+    for gray in frames:
+        model.update_and_get_background(gray, None)
+
+    assert model.stabilized, (
+        "background never latched under realistic sensor noise -- "
+        "BACKGROUND_CONVERGENCE_PIXEL_DELTA is too close to the noise floor"
+    )
