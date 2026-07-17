@@ -158,10 +158,27 @@ This retires the `yolo_results=None` compatibility stub in legacy
 Stabilization becomes internal to `BackgroundModel`:
 
 ```
-delta = mean(|lightest_background_new - lightest_background_old|)
-if delta < BACKGROUND_CONVERGENCE_EPSILON for BACKGROUND_CONVERGENCE_FRAMES consecutive frames:
+# lightest_background is a running max, so growth is non-negative (no abs needed).
+grew = (lightest_background_new - lightest_background_old) > BACKGROUND_CONVERGENCE_PIXEL_DELTA
+frac = count_nonzero(grew) / grew.size
+if frac < BACKGROUND_CONVERGENCE_EPSILON for BACKGROUND_CONVERGENCE_FRAMES consecutive frames:
     self._stabilized = True   # monotonic latch, as before
 ```
+
+**Why a changed-pixel FRACTION and not a mean delta.** An earlier draft of this
+spec used `mean(|delta|)` over the whole frame. That is frame-size dependent and
+silently wrong at production resolutions: one 200px animal revealing background
+at ~150 grey levels moves the whole-frame mean by 7.32 on a 64x64 test fixture
+but only 0.007 on a 2048x2048 rig -- seven times BELOW a 0.05 threshold. The
+latch would fire almost immediately while animals still sat on their start
+positions, baking them into the EMA: precisely the failure the lightest-pixel
+phase exists to prevent. Unit tests at 64x64 cannot catch this, because the same
+event moves their mean by 1000x the threshold.
+
+The changed-pixel fraction is scale-invariant: the same animal on the same
+proportion of frame yields the same fraction at any resolution, so the default
+epsilon is portable across rigs. It is also robust to single hot pixels, which a
+max-delta metric is not.
 
 Same latch semantics, same monotonicity — sourced from the background rather than
 from Hungarian assignment cost. Cheap: the running-max update already touches

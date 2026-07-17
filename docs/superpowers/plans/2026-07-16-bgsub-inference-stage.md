@@ -483,7 +483,7 @@ The replacement measures the thing directly: the lightest background has converg
 - Produces:
   - `BackgroundModel.update_and_get_background(gray, roi_mask) -> Optional[np.ndarray]` — **`tracking_stabilized` parameter REMOVED**
   - `BackgroundModel.stabilized -> bool` (read-only property)
-  - New params: `BACKGROUND_CONVERGENCE_EPSILON: float = 0.05`, `BACKGROUND_CONVERGENCE_FRAMES: int = 30`
+  - New params: `BACKGROUND_CONVERGENCE_EPSILON: float = 1e-4` (changed-pixel FRACTION), `BACKGROUND_CONVERGENCE_FRAMES: int = 30`, `BACKGROUND_CONVERGENCE_PIXEL_DELTA: float = 1.0` (grey levels)
 
 - [ ] **Step 1: Write the failing test**
 
