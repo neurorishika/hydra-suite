@@ -10,6 +10,26 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-16-bgsub-inference-stage-design.md`
 
+## CANONICAL CONVERGENCE DEFAULTS (single source of truth)
+
+Earlier drafts of this plan used a whole-frame MEAN delta with
+`BACKGROUND_CONVERGENCE_EPSILON = 0.05`. That design was replaced (it was
+frame-size dependent and latched early). Any `0.05` still visible in a code
+snippet below is STALE — it already caused one real defect, where Task 6 copied
+it verbatim and shipped a 500x disagreement against `model.py`.
+
+The CANONICAL values, which `core/background/model.py` actually reads, are:
+
+| param | default | meaning |
+|---|---|---|
+| `BACKGROUND_CONVERGENCE_EPSILON` | `1e-4` | changed-pixel FRACTION below which a frame counts as settled |
+| `BACKGROUND_CONVERGENCE_FRAMES` | `30` | consecutive settled frames required to latch |
+| `BACKGROUND_CONVERGENCE_PIXEL_DELTA` | `5.0` | grey levels; the NOISE GATE — must exceed sensor noise |
+
+**Any task adding a typed field or default for these MUST cross-check against
+`core/background/model.py::_update_convergence` rather than trusting a snippet
+here.**
+
 ## Execution Environment (READ FIRST — the plan's test commands depend on this)
 
 Work happens in the worktree `.worktrees/bgsub-inference-stage` on branch
@@ -493,7 +513,7 @@ Append to `tests/test_bgsub_stage.py`:
 def test_convergence_latch_sets_when_lightest_stops_growing():
     model = BackgroundModel(
         _params(
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=3,
         )
     )
@@ -509,7 +529,7 @@ def test_convergence_latch_sets_when_lightest_stops_growing():
 def test_convergence_latch_resets_counter_when_background_grows():
     model = BackgroundModel(
         _params(
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=3,
         )
     )
@@ -525,7 +545,7 @@ def test_convergence_latch_is_monotonic():
     """Once latched, never un-latches, even if the background grows again."""
     model = BackgroundModel(
         _params(
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=2,
         )
     )
@@ -624,7 +644,7 @@ Replace the whole method body (`model.py:404-437`, as amended by Task 3) with:
             return  # monotonic: never un-latch
 
         p = self.params
-        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05)
+        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4)
         needed = int(p.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30)
 
         delta = float(
@@ -659,7 +679,7 @@ def test_adaptive_disabled_never_switches_to_frozen_snapshot():
     model = BackgroundModel(
         _params(
             ENABLE_ADAPTIVE_BACKGROUND=False,
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=1,
         )
     )
@@ -743,7 +763,7 @@ and define the two locals near the other background defaults, following the surr
 
 ```python
     background_convergence_epsilon = float(
-        cfg.get("background_convergence_epsilon", 0.05)
+        cfg.get("background_convergence_epsilon", 1e-4)
     )
     background_convergence_frames = int(cfg.get("background_convergence_frames", 30))
 ```
@@ -1041,8 +1061,9 @@ class BgSubConfig:
     enable_adaptive_background: bool = True
     background_learning_rate: float = 0.001
     background_prime_frames: int = 30
-    convergence_epsilon: float = 0.05
+    convergence_epsilon: float = 1e-4
     convergence_frames: int = 30
+    convergence_pixel_delta: float = 5.0
     enable_conservative_split: bool = False
     morph_kernel_size: int = 5
     dilation_kernel_size: int = 3
@@ -1072,7 +1093,10 @@ class BgSubConfig:
             ),
             background_prime_frames=int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 30),
             convergence_epsilon=float(
-                params.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05
+                params.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4
+            ),
+            convergence_pixel_delta=float(
+                params.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 5.0) or 5.0
             ),
             convergence_frames=int(
                 params.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30
