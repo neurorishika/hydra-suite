@@ -138,6 +138,73 @@ class OBBConfig:
 
 
 @dataclass
+class BgSubConfig:
+    """Background-subtraction detection.
+
+    Unlike OBB there is no model file: the 'model' is the primed
+    BackgroundModel, derived from the video itself.
+    """
+
+    threshold_value: float = 20.0
+    dark_on_light_background: bool = True
+    enable_adaptive_background: bool = True
+    background_learning_rate: float = 0.001
+    background_prime_frames: int = 30
+    convergence_epsilon: float = 0.05
+    convergence_frames: int = 30
+    enable_conservative_split: bool = False
+    morph_kernel_size: int = 5
+    dilation_kernel_size: int = 3
+    conservative_kernel_size: int = 3
+    max_targets: int = 20
+    min_contour_area: float = 5.0
+    max_contour_multiplier: int = 20
+    enable_size_filtering: bool = False
+    min_object_size: float = 0.0
+    max_object_size: float = float("inf")
+    # The raw param dict, retained for BackgroundModel/BackgroundMeasurer,
+    # which still read params by legacy UPPER_SNAKE key.
+    params: dict = field(default_factory=dict)
+
+    @staticmethod
+    def from_params(params: dict) -> "BgSubConfig":
+        return BgSubConfig(
+            threshold_value=float(params.get("THRESHOLD_VALUE", 20) or 20),
+            dark_on_light_background=bool(params.get("DARK_ON_LIGHT_BACKGROUND", True)),
+            enable_adaptive_background=bool(
+                params.get("ENABLE_ADAPTIVE_BACKGROUND", True)
+            ),
+            background_learning_rate=float(
+                params.get("BACKGROUND_LEARNING_RATE", 0.001) or 0.001
+            ),
+            background_prime_frames=int(
+                params.get("BACKGROUND_PRIME_FRAMES", 30) or 30
+            ),
+            convergence_epsilon=float(
+                params.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05
+            ),
+            convergence_frames=int(
+                params.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30
+            ),
+            enable_conservative_split=bool(
+                params.get("ENABLE_CONSERVATIVE_SPLIT", False)
+            ),
+            morph_kernel_size=int(params.get("MORPH_KERNEL_SIZE", 5) or 5),
+            dilation_kernel_size=int(params.get("DILATION_KERNEL_SIZE", 3) or 3),
+            conservative_kernel_size=int(
+                params.get("CONSERVATIVE_KERNEL_SIZE", 3) or 3
+            ),
+            max_targets=int(params.get("MAX_TARGETS", 20) or 20),
+            min_contour_area=float(params.get("MIN_CONTOUR_AREA", 5) or 5),
+            max_contour_multiplier=int(params.get("MAX_CONTOUR_MULTIPLIER", 20) or 20),
+            enable_size_filtering=bool(params.get("ENABLE_SIZE_FILTERING", False)),
+            min_object_size=float(params.get("MIN_OBJECT_SIZE", 0) or 0),
+            max_object_size=float(params.get("MAX_OBJECT_SIZE", float("inf"))),
+            params=dict(params),
+        )
+
+
+@dataclass
 class HeadTailConfig:
     model_path: str
     # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
@@ -225,7 +292,10 @@ class AprilTagConfig:
 
 @dataclass
 class InferenceConfig:
-    obb: OBBConfig
+    # Exactly one detection source must be set. OBB is the YOLO path; bgsub is
+    # background subtraction. They are alternatives, not composable.
+    obb: OBBConfig | None = None
+    bgsub: BgSubConfig | None = None
     headtail: HeadTailConfig | None = None
     cnn_phases: list[CNNConfig] = field(default_factory=list)
     pose: PoseConfig | None = None
@@ -251,6 +321,7 @@ class InferenceConfig:
 
     def __post_init__(self) -> None:
         self._validate_pipeline_depth()
+        self._validate_detection_source()
 
     def _validate_pipeline_depth(self) -> None:
         if self.pipeline_depth < 1:
@@ -258,11 +329,22 @@ class InferenceConfig:
                 f"pipeline_depth must be >= 1, got {self.pipeline_depth}"
             )
 
+    def _validate_detection_source(self) -> None:
+        if (self.obb is None) == (self.bgsub is None):
+            raise InferenceConfigError(
+                "InferenceConfig requires exactly one detection source: set "
+                "either `obb` or `bgsub`, not both and not neither."
+            )
+
+    @property
+    def detection_source(self) -> Literal["obb", "bgsub"]:
+        return "obb" if self.obb is not None else "bgsub"
+
     def _collect_all_runtimes(self) -> set[str]:
         runtimes: set[str] = set()
-        if self.obb.direct:
+        if self.obb is not None and self.obb.direct:
             runtimes.add(self.obb.direct.compute_runtime)
-        if self.obb.sequential:
+        if self.obb is not None and self.obb.sequential:
             runtimes.add(self.obb.sequential.detect_compute_runtime)
             runtimes.add(self.obb.sequential.obb_compute_runtime)
         if self.headtail:
@@ -293,39 +375,54 @@ class InferenceConfig:
 
 def _config_to_dict(config: InferenceConfig) -> dict[str, Any]:
     d = asdict(config)
-    obb = d["obb"]
-    if obb.get("max_object_size") == float("inf"):
-        obb["max_object_size"] = None
-    if obb.get("max_aspect_ratio") == float("inf"):
-        obb["max_aspect_ratio"] = None
+    obb = d.get("obb")
+    if obb is not None:
+        if obb.get("max_object_size") == float("inf"):
+            obb["max_object_size"] = None
+        if obb.get("max_aspect_ratio") == float("inf"):
+            obb["max_aspect_ratio"] = None
+    bgsub = d.get("bgsub")
+    if bgsub is not None and bgsub.get("max_object_size") == float("inf"):
+        bgsub["max_object_size"] = None
     return d
 
 
 def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
-    obb_d = d["obb"]
-    if obb_d.get("max_object_size") is None:
-        obb_d["max_object_size"] = float("inf")
-    if obb_d.get("max_aspect_ratio") is None:
-        obb_d["max_aspect_ratio"] = float("inf")
+    obb_d = d.get("obb")
+    obb = None
+    if obb_d:
+        if obb_d.get("max_object_size") is None:
+            obb_d["max_object_size"] = float("inf")
+        if obb_d.get("max_aspect_ratio") is None:
+            obb_d["max_aspect_ratio"] = float("inf")
 
-    direct = OBBDirectConfig(**obb_d["direct"]) if obb_d.get("direct") else None
-    sequential = (
-        OBBSequentialConfig(**obb_d["sequential"]) if obb_d.get("sequential") else None
-    )
-    obb = OBBConfig(
-        mode=obb_d["mode"],
-        direct=direct,
-        sequential=sequential,
-        target_classes=obb_d.get("target_classes", []),
-        max_detections=obb_d.get("max_detections", 20),
-        raw_detection_cap=obb_d.get("raw_detection_cap", 0),
-        min_object_size=obb_d.get("min_object_size", 0.0),
-        max_object_size=obb_d.get("max_object_size", float("inf")),
-        min_aspect_ratio=obb_d.get("min_aspect_ratio", 0.0),
-        max_aspect_ratio=obb_d.get("max_aspect_ratio", float("inf")),
-        confidence_threshold=obb_d.get("confidence_threshold", 0.25),
-        iou_threshold=obb_d.get("iou_threshold", 0.45),
-    )
+        direct = OBBDirectConfig(**obb_d["direct"]) if obb_d.get("direct") else None
+        sequential = (
+            OBBSequentialConfig(**obb_d["sequential"])
+            if obb_d.get("sequential")
+            else None
+        )
+        obb = OBBConfig(
+            mode=obb_d["mode"],
+            direct=direct,
+            sequential=sequential,
+            target_classes=obb_d.get("target_classes", []),
+            max_detections=obb_d.get("max_detections", 20),
+            raw_detection_cap=obb_d.get("raw_detection_cap", 0),
+            min_object_size=obb_d.get("min_object_size", 0.0),
+            max_object_size=obb_d.get("max_object_size", float("inf")),
+            min_aspect_ratio=obb_d.get("min_aspect_ratio", 0.0),
+            max_aspect_ratio=obb_d.get("max_aspect_ratio", float("inf")),
+            confidence_threshold=obb_d.get("confidence_threshold", 0.25),
+            iou_threshold=obb_d.get("iou_threshold", 0.45),
+        )
+
+    bgsub_d = d.get("bgsub")
+    bgsub = None
+    if bgsub_d:
+        if bgsub_d.get("max_object_size") is None:
+            bgsub_d["max_object_size"] = float("inf")
+        bgsub = BgSubConfig(**bgsub_d)
 
     ht_d = d.get("headtail")
     headtail = HeadTailConfig(**ht_d) if ht_d else None
@@ -364,6 +461,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
 
     return InferenceConfig(
         obb=obb,
+        bgsub=bgsub,
         headtail=headtail,
         cnn_phases=cnn_phases,
         pose=pose,

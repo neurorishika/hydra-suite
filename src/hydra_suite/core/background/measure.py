@@ -13,6 +13,29 @@ logger = logging.getLogger(__name__)
 _CONSERVATIVE_SPLIT_MIN_ANIMALS = 1.6
 
 
+def corners_from_ellipse(
+    cx: float, cy: float, major: float, minor: float, angle_rad: float
+) -> np.ndarray:
+    """Derive rotated-rect corners from a fitted ellipse.
+
+    Returns (4, 2) float32 in TL/TR/BR/BL order, matching
+    core/inference/stages/obb.py::_corners_from_xywhr. The ordering is
+    load-bearing: canonical crops come out mirrored if it is wrong, which
+    historically put SLEAP ~86 px off instead of ~2.7 px.
+
+    *major*/*minor* are full axis lengths (not semi-axes), matching what
+    cv2.fitEllipse returns.
+    """
+    hw = major / 2.0
+    hh = minor / 2.0
+    # TL, TR, BR, BL in the ellipse's own frame.
+    local = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], dtype=np.float32)
+    cos_a = np.cos(angle_rad)
+    sin_a = np.sin(angle_rad)
+    rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=np.float32)
+    return (local @ rot.T + np.array([cx, cy], dtype=np.float32)).astype(np.float32)
+
+
 class BackgroundMeasurer:
     """
     Detects objects in foreground masks and extracts measurements.

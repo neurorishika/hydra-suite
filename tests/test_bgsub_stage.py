@@ -288,3 +288,71 @@ def test_too_many_contours_returns_empty_four_tuple():
         for y in range(4, 60, 8):
             cv2.circle(mask, (x, y), 2, 255, -1)
     assert measurer.detect_objects(mask, 0) == ([], [], [], [])
+
+
+from hydra_suite.core.background.measure import corners_from_ellipse
+
+
+def test_corners_from_ellipse_axis_aligned_order_is_tl_tr_br_bl():
+    """Order must match _corners_from_xywhr (stages/obb.py:249). Wrong order
+    historically put SLEAP ~86 px off."""
+    corners = corners_from_ellipse(10.0, 20.0, 8.0, 4.0, 0.0)
+    assert corners.shape == (4, 2)
+    expected = np.array(
+        [[6.0, 18.0], [14.0, 18.0], [14.0, 22.0], [6.0, 22.0]], dtype=np.float32
+    )
+    np.testing.assert_allclose(corners, expected, atol=1e-4)
+
+
+def test_corners_from_ellipse_rotated_90_degrees():
+    corners = corners_from_ellipse(0.0, 0.0, 8.0, 4.0, np.pi / 2)
+    # Major axis now vertical: bounding corners swap extents.
+    assert np.isclose(np.abs(corners[:, 0]).max(), 2.0, atol=1e-4)
+    assert np.isclose(np.abs(corners[:, 1]).max(), 4.0, atol=1e-4)
+
+
+def test_corners_from_ellipse_centroid_is_mean_of_corners():
+    corners = corners_from_ellipse(5.0, 7.0, 10.0, 3.0, 0.7)
+    np.testing.assert_allclose(corners.mean(axis=0), [5.0, 7.0], atol=1e-4)
+
+
+from hydra_suite.core.inference.config import BgSubConfig
+
+
+def test_bgsub_config_from_params_reads_legacy_keys():
+    cfg = BgSubConfig.from_params(
+        {"THRESHOLD_VALUE": 42, "BACKGROUND_PRIME_FRAMES": 99}
+    )
+    assert cfg.threshold_value == 42.0
+    assert cfg.background_prime_frames == 99
+    assert cfg.convergence_epsilon == 0.05  # default
+
+
+def test_bgsub_config_retains_raw_params():
+    cfg = BgSubConfig.from_params({"THRESHOLD_VALUE": 42, "CUSTOM": "x"})
+    assert cfg.params["CUSTOM"] == "x"
+
+
+from hydra_suite.core.inference.config import (
+    InferenceConfig,
+    InferenceConfigError,
+    OBBConfig,
+)
+
+
+def test_config_requires_exactly_one_detection_source():
+    with pytest.raises(InferenceConfigError, match="exactly one"):
+        InferenceConfig(obb=None, bgsub=None)
+
+    with pytest.raises(InferenceConfigError, match="exactly one"):
+        InferenceConfig(obb=OBBConfig(), bgsub=BgSubConfig.from_params({}))
+
+
+def test_config_detection_source_reports_bgsub():
+    cfg = InferenceConfig(obb=None, bgsub=BgSubConfig.from_params({}))
+    assert cfg.detection_source == "bgsub"
+
+
+def test_config_detection_source_reports_obb():
+    cfg = InferenceConfig(obb=OBBConfig())
+    assert cfg.detection_source == "obb"
