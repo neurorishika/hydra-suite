@@ -2739,9 +2739,27 @@ makefile's own pattern.
 - [ ] **Step 3: Implement**
 
 Transcribe the structure from `sleap.py:374-465`. Two pieces:
-1. `build_tensorrt_engine` in `export.py` — builder + network + parser from the ONNX, an
-   optimization profile (min=1 / opt=8 / max=`max_batch` on the batch axis), `workspace_gb`
-   via `config.set_memory_pool_limit`, FP32 unless `fp16=True`, serialize to `engine_path`.
+1. `build_tensorrt_engine` in `export.py` — builder + explicit-batch network + `OnnxParser`,
+   an optimization profile, workspace limit, FP32 unless `fp16=True`, serialize to
+   `engine_path`. Follow sleap's actual conventions, which I verified against the source:
+   - **Profile shapes: min=1, `opt = min(64, max_batch)`, max=`max_batch`** — that is
+     `sleap.py:442`'s convention (`opt_shape = tuple([min(64, _TRT_PROFILE_MAX_BATCH), *static])`),
+     mirroring the classifier backend's profile ceiling. (An earlier draft of this plan said
+     `opt=8`; that was invented, not observed. Use sleap's.)
+   - **Workspace: use the version-tolerant `hasattr` pattern from `sleap.py:410-413`:**
+     ```python
+     if hasattr(config, "set_memory_pool_limit"):
+         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_bytes)
+     elif hasattr(config, "max_workspace_size"):   # TRT < 8.4
+         config.max_workspace_size = workspace_bytes
+     ```
+     `max_workspace_size` is REMOVED in TensorRT 10 (verified on mehek: tensorrt 10.16.1.11
+     has `set_memory_pool_limit`, not `max_workspace_size`). Hardcoding either call alone
+     makes the code version-brittle; sleap already solved this.
+   - **Only the leading batch dim may be dynamic.** `sleap.py:432-439` bails rather than
+     building a wrong engine if H/W/C are dynamic. Our ONNX is fixed 256x192 with dynamic
+     batch only, so this should never trigger — but keep the guard; a silently-wrong engine
+     is exactly this project's recurring failure mode.
 2. `tools/vitpose/trt_runner.py` — a minimal `run_engine(engine_path, x) -> np.ndarray` for
    the parity test only. This is test scaffolding, NOT the production runtime: the real TRT
    execution path is Spec 2's job (it will extract `sleap.py:468`'s `_DirectTensorRTEngine`
