@@ -16,8 +16,6 @@ import numpy as np
 from PySide6.QtCore import QMutex, QThread, Signal, Slot
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
-from hydra_suite.core.background.model import BackgroundModel
-from hydra_suite.core.detectors import create_detector
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.identity.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -60,10 +58,6 @@ from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
 from hydra_suite.utils.frame_prefetcher import FramePrefetcher
 from hydra_suite.utils.geometry import estimate_detection_crop_quality
-from hydra_suite.utils.image_processing import (
-    apply_image_adjustments,
-    stabilize_lighting,
-)
 from hydra_suite.utils.video_artifacts import (
     build_detected_properties_cache_path,
     build_individual_properties_cache_path,
@@ -82,7 +76,6 @@ from hydra_suite.core.inference.cache.store import DetectionCacheHandle  # noqa:
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
 from hydra_suite.core.inference.config import BgSubConfig, InferenceConfig  # noqa: E402
-from hydra_suite.core.inference.result import OBBResult as _OBBResult  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     build_density_cache_dict,
@@ -221,7 +214,7 @@ class TrackingWorker(QThread):
             resized_mask = cv2.resize(
                 roi_mask,
                 (resolved_target_w, resolved_target_h),
-                cv2.INTER_NEAREST,
+                interpolation=cv2.INTER_NEAREST,
             )
         else:
             resized_mask = roi_mask
@@ -812,12 +805,10 @@ class TrackingWorker(QThread):
         elif detection_method == "yolo_obb" and not self.preview_mode:
             logger.info("Using frame-by-frame YOLO detection")
 
-        # Initialize background model only if using background subtraction
-        # Skip priming in backward mode since it uses cached detections.
-        bg_model = None
-        if detection_method == "background_subtraction" and not self.backward_mode:
-            bg_model = BackgroundModel(p)
-            bg_model.prime_background(cap)
+        # Background model priming (formerly done here) now lives inside the
+        # InferenceRunner bg-sub stage: load_bgsub_model primes the model from
+        # the video when the runner is constructed below. Backward mode replays
+        # cached detections and never constructs a runner.
 
         # Seek to start frame if not at beginning
         if start_frame > 0:
@@ -964,7 +955,10 @@ class TrackingWorker(QThread):
         )
 
         start_time, self.frame_count, fps_list = time.time(), 0, []
-        local_counts, intensity_history, lighting_state = [0] * N, deque(maxlen=50), {}
+        # Lighting stabilization state (intensity_history / lighting_state) now
+        # lives on BackgroundModel inside the bg-sub stage, so the worker no
+        # longer tracks it here.
+        local_counts = [0] * N
         roi_fill_color = None  # Average color outside ROI for visualization overlay
 
         # Pipeline profiler — store run metadata now that all params are known,
@@ -989,15 +983,16 @@ class TrackingWorker(QThread):
         # For YOLO OBB: InferenceRunner owns detection, caching, and all per-frame
         # inference (headtail, CNN, pose, AprilTag).  The legacy DetectionCache is
         # not used for this path.
-        # For background subtraction: legacy detector is kept as-is.
+        # For background subtraction: InferenceRunner bg-sub stage drives forward
+        # detection live (constructed below); backward replays a cache.
         inference_runner = None  # InferenceRunner for yolo_obb mode
+        bgsub_runner = None  # InferenceRunner for background-subtraction mode
         detection_cache = None  # Legacy cache — only used for background subtraction
         # Refactor-native detection cache for background subtraction: forward writes
         # per-frame detections, backward replays them (parity with the OBB path).
         bgsub_detection_cache = None
         use_cached_detections = False
         cached_frame_indices = set()
-        detector = None
 
         if detection_method == "yolo_obb":
             # ── YOLO OBB: InferenceRunner path ──────────────────────────────
@@ -1158,7 +1153,35 @@ class TrackingWorker(QThread):
                     _bgsub_cache_path,
                 )
             else:
-                detector = create_detector(p)
+                # Forward bg-sub detection now runs through InferenceRunner's
+                # bgsub stage (owns lighting stabilization + background update +
+                # foreground mask + measure). Mirrors the yolo_obb branch's
+                # construction/tier resolution, but with cache_dir=None: the
+                # worker keeps its own DetectionCacheHandle (bgsub_detection_cache)
+                # for the backward replay, so the runner must NOT also open a
+                # detection cache. bg-sub is sequential, so run_realtime is driven
+                # in frame order below — never run_batch_pass.
+                from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+                _compute_runtime = str(p.get("COMPUTE_RUNTIME", "cpu"))
+                _raw_tier = str(p.get("RUNTIME_TIER", "") or "").strip().lower()
+                _runtime_tier = (
+                    _raw_tier
+                    if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+                    else migrate_runtime_to_tier({_compute_runtime})
+                )
+                bgsub_inference_config = InferenceConfig(
+                    obb=None,
+                    bgsub=BgSubConfig.from_params(p),
+                    runtime_tier=_runtime_tier,
+                    detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
+                )
+                bgsub_runner = InferenceRunner(
+                    bgsub_inference_config,
+                    cache_dir=None,
+                    video_path=self.video_path,
+                    cache_only=False,
+                )
                 if bgsub_detection_cache is not None:
                     logger.info(
                         "Forward pass caching bg-sub detections to %s",
@@ -2273,52 +2296,47 @@ class TrackingWorker(QThread):
                 raw_canonical_affines = None
 
             elif detection_method == "background_subtraction" and frame is not None:
-                # Background subtraction detection pipeline
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = apply_image_adjustments(
-                    gray,
-                    params["BRIGHTNESS"],
-                    params["CONTRAST"],
-                    params["GAMMA"],
-                    params.get("ENABLE_GPU_BACKGROUND", False),
+                # Background subtraction detection pipeline. The InferenceRunner
+                # bg-sub stage owns the whole sequence the worker used to inline:
+                # grayscale + image adjustments, lighting stabilization, adaptive
+                # background update, foreground mask, ROI intersection,
+                # conservative split, and contour measurement. The frame MUST
+                # already be scaled by RESIZE_FACTOR (done at frame_resize above),
+                # and ROI_mask_current is already in that resized space, so the
+                # stage's ROI resolver is a shape no-op. bg-sub is strictly
+                # sequential; this loop feeds frames in ascending order.
+                _bgsub_result = bgsub_runner.run_realtime(
+                    frame, actual_frame_index, roi_mask=ROI_mask_current
                 )
-
-                if params.get("ENABLE_LIGHTING_STABILIZATION", True):
-                    gray, intensity_history, _ = stabilize_lighting(
-                        gray,
-                        bg_model.reference_intensity,
-                        intensity_history,
-                        params.get("LIGHTING_SMOOTH_FACTOR", 0.95),
-                        ROI_mask_current,
-                        params.get("LIGHTING_MEDIAN_WINDOW", 5),
-                        lighting_state,
-                        params.get("ENABLE_GPU_BACKGROUND", False),
-                    )
-
-                bg_u8 = bg_model.update_and_get_background(gray, ROI_mask_current)
+                # SHOW_FG / SHOW_BG overlays read these (realtime-only; the stage
+                # stashes the exact mask detection ran on).
+                fg_mask = _bgsub_result.fg_mask
+                bg_u8 = _bgsub_result.bg_u8
                 if bg_u8 is None:
+                    # First frame(s): the background model has no history yet, so
+                    # there are no detections. Emit the raw frame and skip the
+                    # rest of the loop, matching the legacy warmup behavior.
                     if frame is not None:
                         self.emit_frame(frame)
                     continue
 
-                fg_mask = bg_model.generate_foreground_mask(gray, bg_u8)
-
-                # Apply ROI mask to foreground mask
-                if ROI_mask_current is not None:
-                    fg_mask = cv2.bitwise_and(fg_mask, fg_mask, mask=ROI_mask_current)
-                if detection_initialized and params.get(
-                    "ENABLE_CONSERVATIVE_SPLIT", True
-                ):
-                    fg_mask = detector.apply_conservative_split(fg_mask, gray, bg_u8)
-                meas, sizes, shapes, yolo_results, detection_confidences = (
-                    detector.detect_objects(fg_mask, actual_frame_index)
-                )
-                # No OBB corners for background subtraction
-                filtered_obb_corners = []
-                # Calculate DetectionID for each detection using actual frame index
-                detection_ids = [
-                    actual_frame_index * 10000 + i for i in range(len(meas))
+                _obb = _bgsub_result.obb
+                # meas carries the OBB axis angle in [0, pi); downstream
+                # resolve_tracking_theta disambiguates theta vs theta+pi.
+                meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
+                shapes = [
+                    (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                    for i in range(_obb.num_detections)
                 ]
+                # bg-sub confidences are NaN by design (legacy); do NOT gate on them.
+                detection_confidences = [
+                    float(_obb.confidences[i]) for i in range(_obb.num_detections)
+                ]
+                # No OBB corners are drawn for background subtraction.
+                filtered_obb_corners = []
+                # detection_ids match legacy (frame_idx * STRIDE + slot).
+                detection_ids = [int(did) for did in _obb.detection_ids]
                 raw_meas = meas
                 raw_sizes = sizes
                 raw_shapes = shapes
@@ -2332,24 +2350,13 @@ class TrackingWorker(QThread):
 
                 # Cache this frame's detections so the backward pass can replay
                 # them. Every frame is written (even empty) so the cache covers the
-                # full range; bg-sub has no OBB corners, so they are stored as zeros.
+                # full range. The stage's OBBResult is written directly; its
+                # ellipse corners are unused by the replay path (which reads only
+                # meas/sizes/shapes/confidences/detection_ids).
                 if bgsub_detection_cache is not None:
-                    _n = len(meas)
-                    _meas_arr = np.asarray(meas, dtype=np.float32).reshape(_n, 3)
                     bgsub_detection_cache.write_frame(
                         actual_frame_index,
-                        result=_OBBResult(
-                            frame_idx=actual_frame_index,
-                            centroids=_meas_arr[:, :2].copy(),
-                            angles=_meas_arr[:, 2].copy(),
-                            sizes=np.asarray(sizes, dtype=np.float32).reshape(_n),
-                            shapes=np.asarray(shapes, dtype=np.float32).reshape(_n, 2),
-                            confidences=np.asarray(
-                                detection_confidences, dtype=np.float32
-                            ).reshape(_n),
-                            corners=np.zeros((_n, 4, 2), dtype=np.float32),
-                            detection_ids=np.asarray(detection_ids, dtype=np.int64),
-                        ),
+                        result=_obb,
                     )
 
             elif (
@@ -4151,6 +4158,12 @@ class TrackingWorker(QThread):
         # can replay them; close() is a no-op flush for read-only (backward) handles.
         if inference_runner is not None:
             inference_runner.close()
+
+        # Release the bg-sub runner's background model (numpy/CuPy arrays). It has
+        # no cache of its own (cache_dir=None), so close() is a resource release,
+        # not a flush — the worker's bgsub_detection_cache above owns persistence.
+        if bgsub_runner is not None:
+            bgsub_runner.close()
 
         # Finalize individual dataset if enabled
         if individual_generator is not None and not stop_requested:
