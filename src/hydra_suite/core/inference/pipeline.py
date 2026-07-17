@@ -49,9 +49,10 @@ import numpy as np
 
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
+from .stages.bgsub import run_bgsub_batch
 from .stages.cnn import run_cnn_batch
 from .stages.crops import extract_aabb_crops, extract_canonical_crops_batch
-from .stages.filtering import filter_with_indices
+from .stages.filtering import filter_for_source
 from .stages.headtail import run_headtail_batch
 from .stages.obb import _RawOBBTensors, materialize_tensors, run_obb
 from .stages.pose import run_pose_batch
@@ -101,6 +102,9 @@ class PipelineStages:
     cnn_models: list
     pose_model: Any
     apriltag_model: Any
+    # Set instead of ``obb_models`` when config.detection_source == "bgsub".
+    # Last, with a default, so existing keyword constructions are unaffected.
+    bgsub_model: Any = None
 
 
 # --- test-only frame shim -------------------------------------------------
@@ -188,17 +192,31 @@ class Pipeline:
 
     # --- production stage sequence -------------------------------------
 
-    def _run_obb_for_window(self, window: BatchWindow) -> list:
-        """Producer stage: run OBB for one window and hand off its output tensors.
+    def _run_detection_for_window(self, window: BatchWindow) -> list:
+        """Producer stage: run the detection source for one window.
 
-        Returns the raw ``run_obb`` output list (``_RawOBBTensors`` or
-        ``OBBResult`` per frame). On CUDA the raw tensors are passed through
+        Returns the raw per-frame detection list (``_RawOBBTensors`` or
+        ``OBBResult`` per frame). On CUDA the raw OBB tensors are passed through
         ``RuntimeContext.handoff`` so the consumer thread can ``await_handoff``
         the SAME tensor objects before reading them — the tensor objects are
         returned unchanged (no detach/clone), preserving the handoff key. On
         CPU/MPS ``handoff`` is an identity no-op.
+
+        bg-sub is CPU numpy throughout and never yields ``_RawOBBTensors``, so
+        the handoff/CUDA-event path does not apply to it. It is also strictly
+        sequential (the BackgroundModel carries cross-frame state) — safe here
+        because the producer is the single thread that ever touches the model,
+        and it walks windows in ascending frame order.
         """
         cfg = self.stages.config
+        if cfg.detection_source == "bgsub":
+            return run_bgsub_batch(
+                window.frames,
+                window.frame_indices,
+                self.stages.bgsub_model,
+                cfg.bgsub,
+                self.runtime,
+            )
         raw_list = run_obb(window.frames, self.stages.obb_models, cfg.obb, self.runtime)
         for raw in raw_list:
             if isinstance(raw, _RawOBBTensors):
@@ -214,7 +232,7 @@ class Pipeline:
 
         Synchronous (depth=1) entry point: OBB then downstream in one thread.
         """
-        raw_list = self._run_obb_for_window(window)
+        raw_list = self._run_detection_for_window(window)
         return self._process_obb_results(window, raw_list)
 
     def _process_obb_results(
@@ -222,7 +240,7 @@ class Pipeline:
     ) -> list[FrameResult]:
         """Consumer stage: crops → HT/CNN/pose → AprilTag → scatter + cache write.
 
-        ``raw_list`` is the OBB output (from ``_run_obb_for_window``) for
+        ``raw_list`` is the detection output (from ``_run_detection_for_window``) for
         ``window``. Cache writes mirror ``runner._run_batch`` exactly (raw stage
         results, no foreign-keypoint suppression at cache time — that is an
         assemble-layer concern). The returned :class:`FrameResult`s are the
@@ -273,7 +291,7 @@ class Pipeline:
             )
             self.cache_writer.write_detection(frame_idx, obb_result)
 
-            filtered_obb, det_indices = filter_with_indices(obb_result, cfg.obb)
+            filtered_obb, det_indices = filter_for_source(cfg, obb_result)
             if filtered_obb.num_detections == 0:
                 # _run_batch ``continue``s: no downstream stage / cache writes.
                 continue
@@ -476,7 +494,7 @@ class Pipeline:
                     if stop.is_set() or (should_stop is not None and should_stop()):
                         stop.set()
                         break
-                    raw_list = self._run_obb_for_window(window)
+                    raw_list = self._run_detection_for_window(window)
                     read_counter["n"] += len(window)
                     # Carry the running read count so the consumer can emit
                     # progress with the same cadence as the sync path.

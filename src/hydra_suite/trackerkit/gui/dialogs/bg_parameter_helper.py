@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.detectors.bg_optimizer import (
+from hydra_suite.core.background.optimizer import (
     BgDetectionPreviewWorker,
     BgOptimizationResult,
     BgSubtractionOptimizer,

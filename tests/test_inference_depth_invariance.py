@@ -105,11 +105,7 @@ def test_depth2_stage_exception_propagates_and_cleans_up():
     promptly and the (async) CacheWriter is closed so its worker thread exits.
     """
     from hydra_suite.core.inference.cache.writer import CacheWriter
-    from hydra_suite.core.inference.pipeline import (
-        BatchWindow,
-        Pipeline,
-        PipelineStages,
-    )
+    from hydra_suite.core.inference.pipeline import Pipeline, PipelineStages
     from hydra_suite.core.inference.runtime import RuntimeContext
 
     class _Boom(RuntimeError):
@@ -148,7 +144,7 @@ def test_depth2_stage_exception_propagates_and_cleans_up():
     def boom(window, raw_list):
         raise _Boom("stage exploded")
 
-    pipe._run_obb_for_window = ok_obb  # type: ignore[assignment]
+    pipe._run_detection_for_window = ok_obb  # type: ignore[assignment]
     pipe._process_obb_results = boom  # type: ignore[assignment]
 
     frames = [(i, object()) for i in range(6)]
@@ -195,7 +191,7 @@ def test_depth2_producer_exception_propagates_without_hang():
     def boom_obb(window):
         raise ValueError("decode/OBB failed")
 
-    pipe._run_obb_for_window = boom_obb  # type: ignore[assignment]
+    pipe._run_detection_for_window = boom_obb  # type: ignore[assignment]
 
     frames = [(i, object()) for i in range(6)]
     with pytest.raises(ValueError, match="decode/OBB failed"):

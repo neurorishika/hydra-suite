@@ -4,7 +4,16 @@ import hashlib
 import os
 from dataclasses import replace
 
-from ..config import AprilTagConfig, CNNConfig, HeadTailConfig, OBBConfig, PoseConfig
+import numpy as np
+
+from ..config import (
+    AprilTagConfig,
+    BgSubConfig,
+    CNNConfig,
+    HeadTailConfig,
+    OBBConfig,
+    PoseConfig,
+)
 from .base import CACHE_SCHEMA_VERSION, CacheKey
 
 
@@ -58,12 +67,12 @@ def detection_cache_key(config: OBBConfig) -> CacheKey:
 # reusable only when these (and the video signature) match — mirroring how the OBB
 # detection cache keys on model + config.
 _BGSUB_KEY_PARAMS = (
-    "SUBTRACTION_THRESHOLD",
+    "THRESHOLD_VALUE",
     "DARK_ON_LIGHT_BACKGROUND",
     "ENABLE_CONSERVATIVE_SPLIT",
     "ENABLE_ADAPTIVE_BACKGROUND",
     "BACKGROUND_LEARNING_RATE",
-    "BACKGROUND_PRIME_SECONDS",
+    "BACKGROUND_PRIME_FRAMES",
     "ENABLE_SIZE_FILTERING",
     "MIN_OBJECT_SIZE",
     "MAX_OBJECT_SIZE",
@@ -72,23 +81,61 @@ _BGSUB_KEY_PARAMS = (
     "CONTRAST",
     "GAMMA",
     "ENABLE_LIGHTING_STABILIZATION",
+    "LIGHTING_SMOOTH_FACTOR",
+    "LIGHTING_MEDIAN_WINDOW",
     "MORPH_KERNEL_SIZE",
     "DILATION_KERNEL_SIZE",
+    "ENABLE_ADDITIONAL_DILATION",
+    "DILATION_ITERATIONS",
     "CONSERVATIVE_KERNEL_SIZE",
+    "CONSERVATIVE_ERODE_ITER",
+    "REFERENCE_BODY_SIZE",
+    "MIN_CONTOUR_AREA",
+    "MAX_TARGETS",
+    "MAX_CONTOUR_MULTIPLIER",
     "START_FRAME",
     "END_FRAME",
     "RESIZE_FACTOR",
+    "BACKGROUND_CONVERGENCE_EPSILON",
+    "BACKGROUND_CONVERGENCE_FRAMES",
+    "BACKGROUND_CONVERGENCE_PIXEL_DELTA",
+    "ROI_MASK",
 )
 
 
-def bgsub_detection_cache_key(params: dict) -> CacheKey:
+def _param_repr(value: object) -> str:
+    """Stringify a param for the cache-key payload.
+
+    ndarrays (e.g. ROI_MASK) must hash by CONTENT: str(ndarray) truncates with
+    '...' for large arrays, so two masks differing only in the middle would
+    stringify identically and collide -- a silent stale-cache hit. Contiguity
+    is forced before `.tobytes()` because a non-contiguous view (e.g. from
+    slicing or a transpose) would otherwise hash its strided memory layout
+    rather than its logical content, so two logically-identical masks could
+    hash differently.
+    """
+    if isinstance(value, np.ndarray):
+        contiguous = np.ascontiguousarray(value)
+        digest = hashlib.sha256(contiguous.tobytes()).hexdigest()
+        return f"ndarray:{contiguous.shape}:{contiguous.dtype}:{digest}"
+    return str(value)
+
+
+def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     """Cache key for background-subtraction detections.
 
-    There is no model file, so model_path is a sentinel and the detection-affecting
-    parameters are hashed into config_hash. Callers should fold in the video
-    signature via ``with_video_signature`` so the cache is bound to the source file.
+    There is no model file, so model_path is a sentinel and the
+    detection-affecting parameters are hashed into config_hash. Callers should
+    fold in the video signature via ``with_video_signature`` so the cache is
+    bound to the source file.
+
+    Soundness depends on deterministic priming (core/background/model.py samples
+    evenly-spaced frames, not unseeded random ones) -- without that, identical
+    params would legitimately produce different detections and this key would
+    be a lie.
     """
-    payload = "|".join(f"{k}={params.get(k)}" for k in _BGSUB_KEY_PARAMS)
+    params = config.params
+    payload = "|".join(f"{k}={_param_repr(params.get(k))}" for k in _BGSUB_KEY_PARAMS)
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path="background_subtraction",

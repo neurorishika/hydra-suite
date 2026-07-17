@@ -412,13 +412,13 @@ def _make_dataset_dir(output_dir, dataset_name):
 
 def _init_yolo_detector(params):
     """Initialize YOLO detector if detection method is yolo_obb."""
-    from ..core.detectors import create_detector
+    from ..core.detectors.yolo_detector import YOLOOBBDetector
 
     detection_method = params.get("DETECTION_METHOD", "background_subtraction")
     if detection_method != "yolo_obb":
         return None
     try:
-        detector = create_detector(params)
+        detector = YOLOOBBDetector(params)
         logger.info("YOLO detector initialized for dimension extraction")
         return detector
     except Exception as e:

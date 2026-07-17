@@ -8,7 +8,6 @@ object detection, and track assignment.
 
 from .assigners.hungarian import TrackAssigner
 from .background.model import BackgroundModel
-from .detectors import ObjectDetector
 from .filters.kalman import KalmanFilterManager
 from .identity.dataset.generator import IndividualDatasetGenerator
 from .post.processing import (
@@ -23,7 +22,6 @@ __all__ = [
     "TrackingWorker",
     "KalmanFilterManager",
     "BackgroundModel",
-    "ObjectDetector",
     "TrackAssigner",
     "process_trajectories",
     "process_trajectories_from_csv",

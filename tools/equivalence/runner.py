@@ -301,12 +301,10 @@ def main() -> int:
         n_frames = 0
 
     # Deterministic seeding so the run is reproducible and legacy-vs-new is
-    # comparable. The bgsub background priming (core/background/model.py) samples
-    # frames via the global `random` module with no seed of its own; without this
-    # both legacy and new pick different frames every run, making worm_bgsub
-    # non-deterministic (new_a != new_b) and never equal to legacy. The bgsub
-    # path is identical code in both checkouts, so seeding identically here yields
-    # an identical background prime. No-op for the YOLO/OBB clips.
+    # comparable. NOTE: bgsub background priming no longer consumes the global
+    # `random` module -- core/background/model.py now samples evenly-spaced
+    # frames, which is deterministic without a seed. These seeds are retained
+    # for any other stochastic code paths; they are a no-op for bgsub priming.
     import random as _random
 
     import numpy as _np

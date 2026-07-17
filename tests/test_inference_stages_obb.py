@@ -40,6 +40,7 @@ def _cuda_rt() -> RuntimeContext:
         use_nvdec=False,
         default_runtime="cuda",
         tensor_on_cuda=True,
+        requested_gpu=True,
     )
 
 
@@ -51,6 +52,7 @@ def _onnx_cuda_rt() -> RuntimeContext:
         use_nvdec=False,
         default_runtime="cuda",
         tensor_on_cuda=False,
+        requested_gpu=True,
     )
 
 
@@ -290,6 +292,7 @@ def test_load_obb_models_direct_mode_uses_detection_batch_size(monkeypatch):
         use_nvdec=False,
         default_runtime="tensorrt",
         tensor_on_cuda=False,
+        requested_gpu=True,
     )
     obb_mod.load_obb_models(config, runtime, batch_size=8)
     assert captured["batch_size"] == 8
@@ -319,6 +322,7 @@ def test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model(
         use_nvdec=False,
         default_runtime="tensorrt",
         tensor_on_cuda=False,
+        requested_gpu=True,
     )
 
     # stage2_batch_size explicitly set -> obb model uses it, not batch_size.
@@ -463,6 +467,7 @@ def test_load_obb_models_sequential_dynamic_batching_warning(monkeypatch, caplog
         use_nvdec=False,
         default_runtime="tensorrt",
         tensor_on_cuda=False,
+        requested_gpu=True,
     )
 
     # Test 1: sequential mode with batch_size > 1 → WARNING

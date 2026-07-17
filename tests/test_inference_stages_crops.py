@@ -28,6 +28,7 @@ def _onnx_cuda_rt() -> RuntimeContext:
         use_nvdec=False,
         default_runtime="cuda",
         tensor_on_cuda=False,
+        requested_gpu=True,
     )
 
 

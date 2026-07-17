@@ -117,6 +117,14 @@ class FrameResult:
     # consumers that expect a StreamingAnalysisPayload (identity evidence,
     # live feature pre-compute workers).  None in batch-pass results.
     streaming_payload: "StreamingAnalysisPayload | None" = None  # noqa: F821
+    # Task 10b: bg-sub preview overlays (SHOW_FG / SHOW_BG). Populated by
+    # InferenceRunner.run_realtime() on the bgsub detection source only; None in
+    # batch-pass results and under any other detection source, since carrying
+    # full-frame masks through a cached batch pass would be pure waste (they are
+    # only ever drawn on a live preview). Both are in the RESIZE_FACTOR-scaled
+    # coordinate space the stage detected in.
+    fg_mask: np.ndarray | None = None  # (H, W) uint8, the mask detection ran on
+    bg_u8: np.ndarray | None = None  # (H, W) uint8, the background it ran against
 
 
 def assemble_resolved_headings(

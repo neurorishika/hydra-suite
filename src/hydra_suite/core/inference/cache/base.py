@@ -8,7 +8,10 @@ from dataclasses import dataclass
 # - Changing whether the cache stores raw vs calibrated outputs
 # v1 = legacy pre-redesign caches (DetectionCache, CNNIdentityCache, etc.)
 # v2 = new pipeline (this redesign)
-CACHE_SCHEMA_VERSION = 2
+# v3 = bumped for bg-sub: every prior bgsub cache was produced under unseeded
+#      random priming and keyed by a hash that ignored THRESHOLD_VALUE. Those
+#      artifacts are unsound and must not be inherited.
+CACHE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)

@@ -146,3 +146,24 @@ def test_tensor_on_cuda_true_only_for_native_cuda():
         ctx2 = RuntimeContext.from_config(_gpu_fast_config())
     assert ctx2.cuda_mode is True  # CUDA group
     assert ctx2.tensor_on_cuda is False  # TensorRT returns CPU numpy
+
+
+def test_runtime_context_rejects_gpu_backend_without_requested_gpu():
+    """cuda_mode implies the gpu/gpu_fast tier, so requested_gpu must be True.
+
+    Guards the footgun: a hand-built context that omits requested_gpu would
+    silently force tier-agnostic stages (bg-sub) onto CPU despite a live GPU.
+    """
+    import pytest
+
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    with pytest.raises(ValueError, match="requested_gpu"):
+        RuntimeContext(
+            cuda_mode=True,
+            device="cuda:0",
+            use_nvdec=False,
+            default_runtime="cuda",
+            tensor_on_cuda=True,
+            coreml_mode=False,
+        )

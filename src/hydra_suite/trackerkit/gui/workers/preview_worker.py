@@ -391,7 +391,7 @@ def _preview_bg_size_thresholds(context, resize_f, use_detection_filters):
 def _preview_run_bg_subtraction(
     frame_bgr, test_frame, context, resize_f, use_detection_filters
 ):
-    from hydra_suite.core.detectors import ObjectDetector
+    from hydra_suite.core.background.measure import BackgroundMeasurer
     from hydra_suite.utils.image_processing import apply_image_adjustments
 
     bg_model, bg_params = _build_preview_background_model(context)
@@ -416,12 +416,9 @@ def _preview_run_bg_subtraction(
             interpolation=cv2.INTER_NEAREST,
         )
 
-    # Use update_and_get_background to match the production tracking
-    # pipeline. tracking_stabilized=False returns the lightest
-    # background, which is correct for a single preview frame.
-    bg_u8 = bg_model.update_and_get_background(
-        gray, roi_mask=None, tracking_stabilized=False
-    )
+    # Background selection is now internal to BackgroundModel via its
+    # convergence latch; the preview shows whatever the model would use.
+    bg_u8 = bg_model.update_and_get_background(gray, roi_mask=None)
     if bg_u8 is None:
         bg_u8 = cv2.convertScaleAbs(bg_model.lightest_background)
     fg_mask = bg_model.generate_foreground_mask(gray, bg_u8)
@@ -434,7 +431,7 @@ def _preview_run_bg_subtraction(
     # Apply conservative split to separate merged blobs, matching the
     # production pipeline in worker.py.
     if bg_params.get("ENABLE_CONSERVATIVE_SPLIT", True):
-        det = ObjectDetector(bg_params)
+        det = BackgroundMeasurer(bg_params)
         fg_mask = det.apply_conservative_split(fg_mask, gray, bg_u8)
 
     cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -594,6 +591,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cuda",
             tensor_on_cuda=True,
             coreml_mode=False,
+            requested_gpu=True,
         )
     if rt == "tensorrt":
         return RuntimeContext(
@@ -603,6 +601,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cuda",
             tensor_on_cuda=False,
             coreml_mode=False,
+            requested_gpu=True,
         )
     if rt == "coreml":
         return RuntimeContext(
@@ -612,6 +611,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cpu",
             tensor_on_cuda=False,
             coreml_mode=True,
+            requested_gpu=True,
         )
     if rt == "mps":
         return RuntimeContext(
@@ -621,6 +621,7 @@ def _preview_runtime_context_for(compute_runtime: str):
             default_runtime="cpu",
             tensor_on_cuda=False,
             coreml_mode=False,
+            requested_gpu=True,
         )
     return RuntimeContext(
         cuda_mode=False,
@@ -629,6 +630,7 @@ def _preview_runtime_context_for(compute_runtime: str):
         default_runtime="cpu",
         tensor_on_cuda=False,
         coreml_mode=False,
+        requested_gpu=False,
     )
 
 

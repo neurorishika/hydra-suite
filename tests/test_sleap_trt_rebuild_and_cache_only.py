@@ -453,7 +453,7 @@ class TestInferenceRunnerCacheOnly:
             ),
             patch(
                 "hydra_suite.core.inference.runner._load_all_models",
-                wraps=lambda config, runtime, *, cache_only=False: (
+                wraps=lambda config, runtime, *, cache_only=False, video_path=None: (
                     __import__(
                         "hydra_suite.core.inference.runner", fromlist=["_AllModels"]
                     )._AllModels(

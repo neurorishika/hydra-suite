@@ -129,8 +129,6 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
     background_model = types.ModuleType("hydra_suite.core.background.model")
     background_model.BackgroundModel = object
 
-    core_detectors.create_detector = lambda *_args, **_kwargs: None
-
     assigner = types.ModuleType("hydra_suite.core.assigners.hungarian")
     assigner.TrackAssigner = object
 

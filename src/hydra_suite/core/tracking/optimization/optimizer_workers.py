@@ -364,12 +364,12 @@ class DetectionCacheBuilderWorker(QThread):
         import time
         from collections import deque
 
-        from hydra_suite.core.detectors import create_detector
+        from hydra_suite.core.detectors.yolo_detector import YOLOOBBDetector
         from hydra_suite.utils.batch_optimizer import BatchOptimizer
 
         # --- Load detector (YOLO model) ---
         try:
-            detector = create_detector(self.params)
+            detector = YOLOOBBDetector(self.params)
         except Exception as e:
             logger.error("DetectionCacheBuilder: could not create detector: %s", e)
             self.finished_signal.emit(False, "")

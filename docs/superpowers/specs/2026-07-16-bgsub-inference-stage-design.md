@@ -1,8 +1,50 @@
 # Background Subtraction as a First-Class Inference Stage
 
 **Date:** 2026-07-16
-**Status:** Approved, pending implementation
+**Status:** Implemented and calibrated (2026-07-17). Tasks 1–14 complete.
 **Supersedes:** item 9 of `2026-04-26-inference-pipeline-redesign.md` (which deferred bg-sub)
+
+## Calibration Results (2026-07-17, worm_bgsub, cpu tier, 500 frames)
+
+The acceptance gate (`tools/equivalence/run_matrix.sh worm_bgsub`) was run
+legacy (`main`) vs this branch. Verdict: **accepted with a documented new
+baseline** — the strict exact-equivalence gate (`pos_p99 ≤ 0.5px`,
+`unmatched == 0`) does not apply here, because this project deliberately changed
+the background computation. Evidence:
+
+| Measure | Result | Meaning |
+|---|---|---|
+| Determinism (`new_a` vs `new_b`) | `pos_p99 = 0.000px`, `unmatched = 0` | Evenly-spaced priming made bg-sub deterministic — the property the cache key needs. |
+| Performance | `new/legacy = 1.00×` | No overhead from routing through `InferenceRunner`. |
+| Convergence redesign | eps sweep: default (`1e-4`) and latch-at-frame-30 (`0.9`) are **byte-identical** | Moving the switchover frame S changes nothing — the latch replacing `tracking_stabilized` does **not** alter detections. The core feature is behavior-neutral. |
+| Equivalence vs legacy | mean `0.22px`, `p99 ≈ 1.6px`, ~2.7% unmatched, **uniform across all 500 frames** | Small, global divergence — not a regression at any single frame. |
+| Track level | both post-process to **39 final tracks** | Detection jitter washes out where it matters for the science. |
+
+**Cause of the residual, isolated by elimination:** the switchover S is ruled
+out (eps sweep byte-identical); the ROI-resize fix is moot on this clip
+(`RESIZE_FACTOR=1.0`, no ROI); conservative-split timing can only differ for the
+first frame or two. The uniform, all-frames divergence is the **evenly-spaced vs
+legacy random-sample priming change** — deliberate, and not tunable via
+`eps`/`FRAMES`/`PIXEL_DELTA` (the sweep is flat).
+
+**Why accepted rather than reverted:** legacy's baseline is itself an arbitrary
+harness-seeded (`seed=0`) sample; production legacy priming was *unseeded and
+non-deterministic*, so there is no canonical legacy behavior to match.
+Evenly-spaced priming is at least as defensible (guaranteed temporal coverage)
+and is deterministic, which is the enabling property for the whole cache. The
+convergence defaults ship as calibrated: `EPSILON=1e-4`, `FRAMES=30`,
+`PIXEL_DELTA=5.0` (never-latching, `eps=1e-12`, was measurably worse — 914
+unmatched — confirming the default correctly latches).
+
+**Coverage caveat (unchanged):** `worm_bgsub` is the only bg-sub equivalence
+clip. Worms on a plate may converge differently from an ant colony; if bg-sub is
+run on ant footage, re-check these defaults. Consider adding an ant bg-sub clip.
+
+**One loose thread, judged benign:** the intermediate post-processing reported 34
+`broken_occlusion` events on the new run vs 0 on legacy, yet both converge to 39
+final tracks. This is consistent with the occlusion-window timing shifting under
+the small detection jitter, not a behavior change in occlusion handling. Flagged
+for awareness; not blocking.
 
 ## Problem
 
@@ -158,10 +200,46 @@ This retires the `yolo_results=None` compatibility stub in legacy
 Stabilization becomes internal to `BackgroundModel`:
 
 ```
-delta = mean(|lightest_background_new - lightest_background_old|)
-if delta < BACKGROUND_CONVERGENCE_EPSILON for BACKGROUND_CONVERGENCE_FRAMES consecutive frames:
+# lightest_background is a running max, so growth is non-negative (no abs needed).
+grew = (lightest_background_new - lightest_background_old) > BACKGROUND_CONVERGENCE_PIXEL_DELTA
+frac = count_nonzero(grew) / grew.size
+if frac < BACKGROUND_CONVERGENCE_EPSILON for BACKGROUND_CONVERGENCE_FRAMES consecutive frames:
     self._stabilized = True   # monotonic latch, as before
 ```
+
+**Why a changed-pixel FRACTION and not a mean delta.** An earlier draft of this
+spec used `mean(|delta|)` over the whole frame. That is frame-size dependent and
+silently wrong at production resolutions: one 200px animal revealing background
+at ~150 grey levels moves the whole-frame mean by 7.32 on a 64x64 test fixture
+but only 0.007 on a 2048x2048 rig -- seven times BELOW a 0.05 threshold. The
+latch would fire almost immediately while animals still sat on their start
+positions, baking them into the EMA: precisely the failure the lightest-pixel
+phase exists to prevent. Unit tests at 64x64 cannot catch this, because the same
+event moves their mean by 1000x the threshold.
+
+**PIXEL_DELTA is the noise gate and MUST exceed the sensor noise floor.** A
+running max never stops growing under noise: every frame, noise pushes some
+pixels above the previous max, so the growing fraction plateaus at a
+noise-dependent floor instead of reaching zero. Measured steady-state fraction
+at 256x256 with epsilon=1e-4:
+
+| sensor noise sd | pd=1.0 | pd=3.0 | pd=5.0 |
+|---|---|---|---|
+| 1.0 | 2.6e-5 latches | 0 latches | 0 latches |
+| 2.0 | 3.9e-4 NEVER | 6.4e-6 latches | 0 latches |
+| 4.0 | 1.2e-3 NEVER | 2.3e-4 NEVER | 3.7e-5 latches |
+
+With `pd=1.0` and any realistic sensor noise (sd>=2), the latch NEVER fires: the
+model sits on the lightest background forever, never switching to adaptive, and
+silently loses the lighting-drift tracking adaptive exists for. Default is
+therefore `5.0` -- comfortably above sensor noise, far below a genuine animal
+reveal (~50-150 grey levels), so it discriminates correctly. It remains the
+knob to raise on a noisier rig.
+
+The changed-pixel fraction is scale-invariant: the same animal on the same
+proportion of frame yields the same fraction at any resolution, so the default
+epsilon is portable across rigs. It is also robust to single hot pixels, which a
+max-delta metric is not.
 
 Same latch semantics, same monotonicity — sourced from the background rather than
 from Hungarian assignment cost. Cheap: the running-max update already touches

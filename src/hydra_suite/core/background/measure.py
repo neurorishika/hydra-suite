@@ -1,4 +1,4 @@
-"""Background-subtraction based object detector."""
+"""Measure objects from a background-subtraction foreground mask."""
 
 import logging
 import math
@@ -6,12 +6,37 @@ import math
 import cv2
 import numpy as np
 
-from ._utils import _CONSERVATIVE_SPLIT_MIN_ANIMALS
-
 logger = logging.getLogger(__name__)
 
+# Copied from core/detectors/_utils.py: core/background must not import from
+# core/detectors (and detectors is being retired from the bg-sub path).
+_CONSERVATIVE_SPLIT_MIN_ANIMALS = 1.6
 
-class ObjectDetector:
+
+def corners_from_ellipse(
+    cx: float, cy: float, major: float, minor: float, angle_rad: float
+) -> np.ndarray:
+    """Derive rotated-rect corners from a fitted ellipse.
+
+    Returns (4, 2) float32 in TL/TR/BR/BL order, matching
+    core/inference/stages/obb.py::_corners_from_xywhr. The ordering is
+    load-bearing: canonical crops come out mirrored if it is wrong, which
+    historically put SLEAP ~86 px off instead of ~2.7 px.
+
+    *major*/*minor* are full axis lengths (not semi-axes), matching what
+    cv2.fitEllipse returns.
+    """
+    hw = major / 2.0
+    hh = minor / 2.0
+    # TL, TR, BR, BL in the ellipse's own frame.
+    local = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], dtype=np.float32)
+    cos_a = np.cos(angle_rad)
+    sin_a = np.sin(angle_rad)
+    rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]], dtype=np.float32)
+    return (local @ rot.T + np.array([cx, cy], dtype=np.float32)).astype(np.float32)
+
+
+class BackgroundMeasurer:
     """
     Detects objects in foreground masks and extracts measurements.
     """
@@ -155,15 +180,17 @@ class ObjectDetector:
 
         return fg_mask
 
-    def detect_objects(self: object, fg_mask: object, frame_count: object) -> object:
-        """Detects and measures objects from the final foreground mask.
+    def detect_objects(
+        self, fg_mask: np.ndarray, frame_count: int
+    ) -> tuple[list, list, list, list]:
+        """Detect and measure objects from the final foreground mask.
 
         Returns:
-            meas: List of measurements [cx, cy, angle]
-            sizes: List of detection areas
-            shapes: List of (area, aspect_ratio) tuples
-            yolo_results: None (for compatibility with YOLO detector)
-            confidences: List of detection confidence scores (0-1)
+            meas: list of np.array([cx, cy, angle_radians], float32)
+            sizes: list of ellipse areas (px^2)
+            shapes: list of (ellipse_area, aspect_ratio) tuples
+            confidences: list of np.nan -- confidence is not feasible for
+                background subtraction (quality is too context-specific).
         """
         p = self.params
         cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -175,7 +202,7 @@ class ObjectDetector:
             logger.debug(
                 f"Frame {frame_count}: Too many contours ({len(cnts)}), skipping."
             )
-            return [], [], [], None, []
+            return [], [], [], []
 
         meas, sizes, shapes, confidences = [], [], [], []
         for c in cnts:
@@ -235,4 +262,4 @@ class ObjectDetector:
             shapes = [shapes[i] for i in idxs]
             confidences = [confidences[i] for i in idxs]
 
-        return meas, sizes, shapes, None, confidences
+        return meas, sizes, shapes, confidences

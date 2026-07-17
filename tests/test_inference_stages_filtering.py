@@ -31,6 +31,7 @@ def _cuda_rt() -> RuntimeContext:
         use_nvdec=False,
         default_runtime="cuda",
         tensor_on_cuda=True,
+        requested_gpu=True,
     )
 
 

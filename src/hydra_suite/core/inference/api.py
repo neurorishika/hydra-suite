@@ -83,6 +83,9 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
             use_nvdec=False,
             default_runtime="cpu",
             tensor_on_cuda=False,
+            # Explicit CPU fallback (GPU device construction failed above),
+            # so no GPU was actually requested for this run.
+            requested_gpu=False,
         )
 
     model = _load_pose_model(pose_config, runtime)

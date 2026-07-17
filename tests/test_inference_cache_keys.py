@@ -15,6 +15,7 @@ from hydra_suite.core.inference.cache.keys import (
 )
 from hydra_suite.core.inference.config import (
     AprilTagConfig,
+    BgSubConfig,
     CNNConfig,
     HeadTailConfig,
     OBBConfig,
@@ -184,19 +185,21 @@ def test_detection_key_sequential_encodes_both_models():
 
 
 def test_bgsub_key_changes_with_detection_params():
-    k1 = bgsub_detection_cache_key({"SUBTRACTION_THRESHOLD": 25})
-    k2 = bgsub_detection_cache_key({"SUBTRACTION_THRESHOLD": 100})
+    k1 = bgsub_detection_cache_key(BgSubConfig.from_params({"THRESHOLD_VALUE": 25}))
+    k2 = bgsub_detection_cache_key(BgSubConfig.from_params({"THRESHOLD_VALUE": 100}))
     assert k1 != k2
     assert k1.model_path == "background_subtraction"
 
 
 def test_bgsub_key_stable_for_same_params():
-    params = {"SUBTRACTION_THRESHOLD": 25, "START_FRAME": 0, "END_FRAME": 499}
-    assert bgsub_detection_cache_key(params) == bgsub_detection_cache_key(dict(params))
+    params = {"THRESHOLD_VALUE": 25, "START_FRAME": 0, "END_FRAME": 499}
+    assert bgsub_detection_cache_key(
+        BgSubConfig.from_params(params)
+    ) == bgsub_detection_cache_key(BgSubConfig.from_params(dict(params)))
 
 
 def test_bgsub_key_video_bound():
-    k = bgsub_detection_cache_key({"SUBTRACTION_THRESHOLD": 25})
+    k = bgsub_detection_cache_key(BgSubConfig.from_params({"THRESHOLD_VALUE": 25}))
     assert with_video_signature(k, "111:222") != with_video_signature(k, "333:444")
 
 

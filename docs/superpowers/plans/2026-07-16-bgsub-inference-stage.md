@@ -10,6 +10,92 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-16-bgsub-inference-stage-design.md`
 
+## CANONICAL CONVERGENCE DEFAULTS (single source of truth)
+
+Earlier drafts of this plan used a whole-frame MEAN delta with
+`BACKGROUND_CONVERGENCE_EPSILON = 0.05`. That design was replaced (it was
+frame-size dependent and latched early). Any `0.05` still visible in a code
+snippet below is STALE — it already caused one real defect, where Task 6 copied
+it verbatim and shipped a 500x disagreement against `model.py`.
+
+The CANONICAL values, which `core/background/model.py` actually reads, are:
+
+| param | default | meaning |
+|---|---|---|
+| `BACKGROUND_CONVERGENCE_EPSILON` | `1e-4` | changed-pixel FRACTION below which a frame counts as settled |
+| `BACKGROUND_CONVERGENCE_FRAMES` | `30` | consecutive settled frames required to latch |
+| `BACKGROUND_CONVERGENCE_PIXEL_DELTA` | `5.0` | grey levels; the NOISE GATE — must exceed sensor noise |
+
+**Any task adding a typed field or default for these MUST cross-check against
+`core/background/model.py::_update_convergence` rather than trusting a snippet
+here.**
+
+## Execution Environment (READ FIRST — the plan's test commands depend on this)
+
+Work happens in the worktree `.worktrees/bgsub-inference-stage` on branch
+`feature/bgsub-inference-stage`.
+
+**The conda env's editable install points at the MAIN checkout, not this
+worktree.** Without an override, `import hydra_suite` resolves to
+`<repo>/src/hydra_suite` — so you would edit worktree files while pytest
+imported a different tree, and your tests would pass against code you never
+changed. Verified: `PYTHONPATH` wins over the editable `.pth`, including under
+pytest.
+
+**Every python/pytest invocation in this plan MUST use this form:**
+
+```bash
+PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/$PY -m pytest <files> -v --timeout=60
+```
+
+Shorthand used below: `PY` = `PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python`.
+
+Sanity-check the override at any time:
+
+```bash
+PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/$PY -c "import hydra_suite; print(hydra_suite.__file__)"
+# MUST contain 'bgsub-inference-stage'. If it does not, STOP — you are testing the wrong tree.
+```
+
+**DO NOT run `make format`** — it is BROKEN in this environment, for reasons
+unrelated to this work: it shells out to the base conda env's `black`
+(`~/miniforge3/bin/black`), whose `pathspec` dependency is broken
+(`ModuleNotFoundError: No module named 'pathspec.patterns.gitignore'`). The
+repo's pre-commit hooks run black/ruff/flake8/isort in their own isolated envs
+and DO work — they run automatically on `git commit`, so formatting is handled.
+If you want to format manually, use the working copies in the hydra-mps env:
+`/Users/neurorishika/miniforge3/envs/hydra-mps/bin/black <files>` and
+`/Users/neurorishika/miniforge3/envs/hydra-mps/bin/isort <files>`.
+
+**NEVER run the full suite** (`pytest tests/`). It is messy and contains hangs.
+Run only the named files, always with `--timeout=60` (pytest-timeout is
+installed) so a hang fails instead of stalling.
+
+**Known pre-existing failure — do NOT try to fix it, it is unrelated:**
+`tests/test_bg_parameter_helper.py::test_bg_parameter_helper_slider_scrub_does_not_render_until_release`
+(asserts `"3/3"`, gets `"0/0"`). It fails on a clean baseline.
+
+**Baseline (established before any work):** 107 passed, 1 failed (the above)
+across `test_background_model.py`, `test_background_model_integration.py`,
+`test_detectors_engine.py`, `test_detector_integration.py`,
+`test_inference_cache_keys.py`, `test_bg_parameter_helper.py`.
+
+**Existing tests this plan will break — they must be updated by the task that
+breaks them, not left red:**
+
+| File | Broken by |
+|---|---|
+| `tests/test_background_model.py` | Task 4 (`update_and_get_background` loses `tracking_stabilized`) |
+| `tests/test_background_model_integration.py` | Task 2 (deterministic priming), Task 4 |
+| `tests/test_detectors_engine.py` | Task 5 (`ObjectDetector` → `BackgroundMeasurer`, 5-tuple → 4-tuple) |
+| `tests/test_detector_integration.py` | Task 5, Task 13 (`create_detector` deleted) |
+| `tests/test_inference_cache_keys.py` | Task 8 (schema bump; may assert a literal version) |
+| `tests/test_bg_parameter_helper.py` | Task 13 (`bg_optimizer` moves to `core/background/optimizer.py`) |
+
+Each task's verification step must run its own new tests AND the affected
+existing files from this table. Note `pytest.ini` (not `pyproject.toml`, despite
+CLAUDE.md) is the live pytest config; it already applies `-m "not benchmark"`.
+
 ## Global Constraints
 
 - **Dependency direction:** `core/inference` must NEVER import from `core/detectors`. `core/inference -> core/background` is legal. Core must never import from any app layer (trackerkit, posekit, etc.).
@@ -17,8 +103,8 @@
 - **Corner ordering:** TL/TR/BR/BL, matching `_corners_from_xywhr` (`core/inference/stages/obb.py:249`). Wrong ordering put SLEAP ~86 px off historically.
 - **Angles:** radians (bg-sub already emits `np.deg2rad(ang)`).
 - **Confidences:** `np.nan` for bg-sub. All downstream consumers must be NaN-safe.
-- **Formatting:** run `make format` before committing (autopep8 → black → isort). Pre-commit hooks run black/ruff/flake8/isort automatically.
-- **Tests:** `python -m pytest tests/ -m "not benchmark"`. Single file: `python -m pytest tests/test_<name>.py -v`.
+- **Formatting:** do NOT run `make format` (BROKEN — see Execution Environment). Pre-commit hooks run black/ruff/flake8/isort automatically on `git commit`.
+- **Tests:** named files only, never the full suite — see "Execution Environment" above. `$PY -m pytest tests/test_<name>.py -v --timeout=60`.
 - **Legacy policy:** never import from `legacy/` in `src/` or `tests/`.
 - **Spec corrections found during planning** (the spec is slightly wrong on both; trust this plan):
   - `BackgroundModel._setup_gpu_acceleration` (`core/background/model.py:197-239`) DOES gate on the `ENABLE_GPU_BACKGROUND` param. It is not config-blind — it simply never consults `runtime_tier`. Task 11 changes only the tier consultation.
@@ -127,7 +213,7 @@ def test_key_params_all_exist_in_codebase_naming():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: `test_threshold_change_invalidates_cache_key` FAILS (hashes equal — both params resolve to `None`), `test_prime_frames_change_invalidates_cache_key` FAILS, `test_key_params_all_exist_in_codebase_naming` FAILS.
 
 - [ ] **Step 3: Fix the param names**
@@ -138,13 +224,12 @@ In `src/hydra_suite/core/inference/cache/keys.py`, in `_BGSUB_KEY_PARAMS`:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-make format
 git add tests/test_bgsub_cache_keys.py src/hydra_suite/core/inference/cache/keys.py
 git commit -m "fix(cache): bg-sub cache key hashed two param names that do not exist
 
@@ -252,7 +337,7 @@ def test_priming_covers_video_temporally(synthetic_video):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: `test_priming_is_deterministic` FAILS — arrays differ because `random.sample` picks different frames each construction.
 
 - [ ] **Step 3: Replace random sampling with evenly-spaced indices**
@@ -277,7 +362,7 @@ Then remove the now-unused `import random` at line 7.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Update the equivalence harness comment**
@@ -296,13 +381,12 @@ Leave the `_random.seed(0)` / `_np.random.seed(0)` calls in place — they are h
 
 - [ ] **Step 6: Run the full test suite**
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
-Expected: no new failures.
+Run: `$PY -m pytest tests/test_background_model.py tests/test_background_model_integration.py tests/test_detectors_engine.py tests/test_detector_integration.py tests/test_inference_cache_keys.py -q --timeout=60`
+Expected: no failures beyond the known-bad listed in "Execution Environment". NEVER run the full suite.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-make format
 git add tests/test_bgsub_stage.py src/hydra_suite/core/background/model.py tools/equivalence/runner.py
 git commit -m "fix(background): deterministic evenly-spaced priming
 
@@ -355,7 +439,7 @@ def test_adaptive_disabled_never_switches_to_frozen_snapshot():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py::test_adaptive_disabled_never_switches_to_frozen_snapshot -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py::test_adaptive_disabled_never_switches_to_frozen_snapshot -v`
 Expected: FAIL — returns the frozen `adaptive_background` (200s) rather than the lightest (240s).
 
 - [ ] **Step 3: Gate the switch on adaptive being enabled**
@@ -383,13 +467,12 @@ with:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-make format
 git add tests/test_bgsub_stage.py src/hydra_suite/core/background/model.py
 git commit -m "fix(background): ENABLE_ADAPTIVE_BACKGROUND=False no longer switches
 
@@ -420,7 +503,7 @@ The replacement measures the thing directly: the lightest background has converg
 - Produces:
   - `BackgroundModel.update_and_get_background(gray, roi_mask) -> Optional[np.ndarray]` — **`tracking_stabilized` parameter REMOVED**
   - `BackgroundModel.stabilized -> bool` (read-only property)
-  - New params: `BACKGROUND_CONVERGENCE_EPSILON: float = 0.05`, `BACKGROUND_CONVERGENCE_FRAMES: int = 30`
+  - New params: `BACKGROUND_CONVERGENCE_EPSILON: float = 1e-4` (changed-pixel FRACTION), `BACKGROUND_CONVERGENCE_FRAMES: int = 30`, `BACKGROUND_CONVERGENCE_PIXEL_DELTA: float = 1.0` (grey levels)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -430,7 +513,7 @@ Append to `tests/test_bgsub_stage.py`:
 def test_convergence_latch_sets_when_lightest_stops_growing():
     model = BackgroundModel(
         _params(
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=3,
         )
     )
@@ -446,7 +529,7 @@ def test_convergence_latch_sets_when_lightest_stops_growing():
 def test_convergence_latch_resets_counter_when_background_grows():
     model = BackgroundModel(
         _params(
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=3,
         )
     )
@@ -462,7 +545,7 @@ def test_convergence_latch_is_monotonic():
     """Once latched, never un-latches, even if the background grows again."""
     model = BackgroundModel(
         _params(
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=2,
         )
     )
@@ -477,7 +560,7 @@ def test_convergence_latch_is_monotonic():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k convergence -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k convergence -v`
 Expected: FAIL — `BackgroundModel` has no `stabilized` attribute, and `update_and_get_background` still requires `tracking_stabilized`.
 
 - [ ] **Step 3: Add the latch to `BackgroundModel.__init__`**
@@ -561,7 +644,7 @@ Replace the whole method body (`model.py:404-437`, as amended by Task 3) with:
             return  # monotonic: never un-latch
 
         p = self.params
-        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05)
+        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4)
         needed = int(p.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30)
 
         delta = float(
@@ -584,7 +667,7 @@ Replace the whole method body (`model.py:404-437`, as amended by Task 3) with:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k convergence -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k convergence -v`
 Expected: 3 passed.
 
 Note `test_adaptive_disabled_never_switches_to_frozen_snapshot` from Task 3 now fails to call — update it to drop the `tracking_stabilized` argument:
@@ -596,7 +679,7 @@ def test_adaptive_disabled_never_switches_to_frozen_snapshot():
     model = BackgroundModel(
         _params(
             ENABLE_ADAPTIVE_BACKGROUND=False,
-            BACKGROUND_CONVERGENCE_EPSILON=0.05,
+            BACKGROUND_CONVERGENCE_EPSILON=1e-4,
             BACKGROUND_CONVERGENCE_FRAMES=1,
         )
     )
@@ -610,7 +693,7 @@ def test_adaptive_disabled_never_switches_to_frozen_snapshot():
     np.testing.assert_array_equal(result, cv2.convertScaleAbs(model.lightest_background))
 ```
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: 6 passed.
 
 - [ ] **Step 6: Update the three callers**
@@ -680,7 +763,7 @@ and define the two locals near the other background defaults, following the surr
 
 ```python
     background_convergence_epsilon = float(
-        cfg.get("background_convergence_epsilon", 0.05)
+        cfg.get("background_convergence_epsilon", 1e-4)
     )
     background_convergence_frames = int(cfg.get("background_convergence_frames", 30))
 ```
@@ -692,13 +775,12 @@ Expected: no output.
 
 - [ ] **Step 9: Run the full test suite**
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
-Expected: no new failures.
+Run: `$PY -m pytest tests/test_background_model.py tests/test_background_model_integration.py tests/test_detectors_engine.py tests/test_detector_integration.py tests/test_inference_cache_keys.py -q --timeout=60`
+Expected: no failures beyond the known-bad listed in "Execution Environment". NEVER run the full suite.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-make format
 git add -A src/ tests/test_bgsub_stage.py
 git commit -m "feat(background): replace tracking_stabilized with a convergence latch
 
@@ -834,7 +916,7 @@ def test_too_many_contours_returns_empty_four_tuple():
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
 - [ ] **Step 4: Delete the old module and fix re-exports**
@@ -855,7 +937,6 @@ Expected: only `factory.py` (deleted in Task 13) and `preview_worker.py` (migrat
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add -A src/hydra_suite/core/background/measure.py src/hydra_suite/core/detectors/ src/hydra_suite/core/__init__.py tests/test_bgsub_stage.py
 git commit -m "refactor(background): move mask->ellipse measurement out of detectors
 
@@ -920,7 +1001,7 @@ def test_corners_from_ellipse_centroid_is_mean_of_corners():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k corners -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k corners -v`
 Expected: FAIL — `ImportError: cannot import name 'corners_from_ellipse'`.
 
 - [ ] **Step 3: Implement `corners_from_ellipse`**
@@ -957,7 +1038,7 @@ def corners_from_ellipse(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k corners -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k corners -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Add `BgSubConfig`**
@@ -980,8 +1061,9 @@ class BgSubConfig:
     enable_adaptive_background: bool = True
     background_learning_rate: float = 0.001
     background_prime_frames: int = 30
-    convergence_epsilon: float = 0.05
+    convergence_epsilon: float = 1e-4
     convergence_frames: int = 30
+    convergence_pixel_delta: float = 5.0
     enable_conservative_split: bool = False
     morph_kernel_size: int = 5
     dilation_kernel_size: int = 3
@@ -1011,7 +1093,10 @@ class BgSubConfig:
             ),
             background_prime_frames=int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 30),
             convergence_epsilon=float(
-                params.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05
+                params.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4
+            ),
+            convergence_pixel_delta=float(
+                params.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 5.0) or 5.0
             ),
             convergence_frames=int(
                 params.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30
@@ -1046,7 +1131,7 @@ def test_bgsub_config_from_params_reads_legacy_keys():
     )
     assert cfg.threshold_value == 42.0
     assert cfg.background_prime_frames == 99
-    assert cfg.convergence_epsilon == 0.05  # default
+    assert cfg.convergence_epsilon == 1e-4  # default (see canonical table)
 
 
 def test_bgsub_config_retains_raw_params():
@@ -1054,7 +1139,7 @@ def test_bgsub_config_retains_raw_params():
     assert cfg.params["CUSTOM"] == "x"
 ```
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
 - [ ] **Step 6b: Make the detection source a choice (moved here from Task 9)**
@@ -1143,7 +1228,6 @@ since `obb` stays the first field.
 - [ ] **Step 7: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/config.py src/hydra_suite/core/background/measure.py tests/test_bgsub_stage.py
 git commit -m "feat(inference): add BgSubConfig and ellipse->corners derivation
 
@@ -1235,7 +1319,7 @@ def test_run_bgsub_is_deterministic(synthetic_video):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
 Expected: FAIL — `ModuleNotFoundError: hydra_suite.core.inference.stages.bgsub`.
 
 - [ ] **Step 3: Implement the stage**
@@ -1446,13 +1530,12 @@ Task 11 implements tier-driven selection. For now add to `src/hydra_suite/core/b
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
-Expected: 2 passed. (`test_run_bgsub_emits_obbresult_with_corners` requires Task 9's `InferenceConfig(obb=None, bgsub=...)`; if it errors on config construction, skip it with `pytest.mark.xfail(reason="needs Task 9 config wiring")` and remove the marker in Task 9.)
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
+Expected: 2 passed. `InferenceConfig(obb=None, bgsub=...)` already exists (Task 6b), so no xfail is needed — if these tests cannot construct a config, STOP and report rather than marking them xfail.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/stages/bgsub.py src/hydra_suite/core/background/model.py tests/test_bgsub_stage.py
 git commit -m "feat(inference): add the bgsub detection stage
 
@@ -1515,7 +1598,7 @@ Update the four Task 1 tests to pass `BgSubConfig.from_params(...)` instead of a
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: FAIL — `bgsub_detection_cache_key` calls `.get()` on a `BgSubConfig`.
 
 - [ ] **Step 3: Add the convergence params and change the signature**
@@ -1525,7 +1608,14 @@ In `src/hydra_suite/core/inference/cache/keys.py`, add to `_BGSUB_KEY_PARAMS`:
 ```python
     "BACKGROUND_CONVERGENCE_EPSILON",
     "BACKGROUND_CONVERGENCE_FRAMES",
+    "BACKGROUND_CONVERGENCE_PIXEL_DELTA",
 ```
+
+All THREE must be keyed. They decide which background is subtracted on every
+frame past the latch, so they change detections as directly as the neighbouring
+`ENABLE_ADAPTIVE_BACKGROUND` / `BACKGROUND_LEARNING_RATE`, which are keyed. If
+they are not keyed, retuning epsilon and rerunning silently serves a stale
+cache — the exact bug Task 1 fixed.
 
 Change `bgsub_detection_cache_key` to:
 
@@ -1568,16 +1658,15 @@ CACHE_SCHEMA_VERSION = <previous + 1>
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: 7 passed.
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
+Run: `$PY -m pytest tests/test_inference_cache_keys.py -q --timeout=60`
 Expected: cache tests that assert a literal schema version may fail — update those literals; do not revert the bump.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/cache/keys.py tests/test_bgsub_cache_keys.py
 git commit -m "feat(cache): bgsub key takes BgSubConfig; bump schema version
 
@@ -1593,7 +1682,7 @@ unsound and must be invalidated rather than inherited."
 `InferenceConfig.obb` is a REQUIRED field (`config.py:229`) and `_AllModels.obb` is non-optional (`runner.py:80`). bg-sub is an *alternative* detection source, so both must become optional with an exactly-one validation.
 
 **Files:**
-- Modify: `src/hydra_suite/core/inference/config.py` (`InferenceConfig`, `_dict_to_config`, `_config_to_dict`, `_collect_all_runtimes`)
+- (config.py changes moved to Task 6b — `InferenceConfig.obb` optional, `bgsub` field, `detection_source`, exactly-one validation are ALREADY DONE. Do not redo them.)
 - Modify: `src/hydra_suite/core/inference/runner.py` (`_AllModels`, `_load_all_models`, `_open_caches`, `run_realtime`, `_build_pipeline`, `load_frame`, `close`)
 - Test: `tests/test_bgsub_stage.py` (append)
 
@@ -1633,7 +1722,7 @@ def test_config_detection_source_reports_obb():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k detection_source -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k detection_source -v`
 Expected: FAIL — `InferenceConfig` has no `bgsub` field and `obb` is required.
 
 - [ ] **Step 3: Make the detection source a choice**
@@ -1781,22 +1870,18 @@ bg-sub never returns `_RawOBBTensors` (it is CPU numpy throughout), so any `tens
             self._models.bgsub.close()
 ```
 
-- [ ] **Step 5: Remove the Task 7 xfail marker**
-
-If `test_run_bgsub_emits_obbresult_with_corners` was marked xfail in Task 7, remove the marker now.
-
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
-Expected: no new failures. Any test constructing `InferenceConfig(obb=...)` positionally still works since `obb` stays first.
+Run: `$PY -m pytest tests/test_background_model.py tests/test_background_model_integration.py tests/test_detectors_engine.py tests/test_detector_integration.py tests/test_inference_cache_keys.py -q --timeout=60`
+Expected: no failures beyond the known-bad listed in "Execution Environment". NEVER run the full suite. Any test constructing `InferenceConfig(obb=...)` positionally still works since `obb` stays first.
 
 - [ ] **Step 7: Verify imports still resolve**
 
 ```bash
-python -c "import hydra_suite"
+$PY -c "import hydra_suite"
 python -c "from hydra_suite.core.inference import InferenceConfig, InferenceRunner"
 ```
 Expected: no output, exit 0.
@@ -1804,7 +1889,6 @@ Expected: no output, exit 0.
 - [ ] **Step 8: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/ tests/test_bgsub_stage.py
 git commit -m "feat(inference): wire bgsub into InferenceConfig and InferenceRunner
 
@@ -1856,7 +1940,7 @@ def test_cpu_tier_does_not_enable_gpu():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py::test_cpu_tier_does_not_enable_gpu -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py::test_cpu_tier_does_not_enable_gpu -v`
 Expected: FAIL — `configure_runtime` is a no-op stub (Task 7).
 
 - [ ] **Step 3: Add the `"bgsub"` pipeline key to the resolver**
@@ -1943,13 +2027,12 @@ In `src/hydra_suite/runtime/compute_runtime.py`, add `"bgsub"` to `_pipeline_sup
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/runtime/ src/hydra_suite/core/background/model.py tests/test_bgsub_stage.py
 git commit -m "feat(runtime): bg-sub honors runtime_tier instead of self-selecting
 
@@ -1961,6 +2044,125 @@ control: the tier wins.
 Adds the 'bgsub' pipeline key. gpu_fast resolves to gpu with used_fallback
 (bg-sub is elementwise work, not a network -- no TensorRT/CoreML path)."
 ```
+
+---
+
+## Task 10b: Close the worker-seam gaps the stage does not cover
+
+**Why this task exists.** Task 11 (the `worker.py` migration) was BLOCKED: the
+bg-sub stage is correct in isolation but does not cover everything `worker.py`
+does around the detector. The stage was designed from the cache key's parameter
+list rather than from the worker loop. Three verified gaps, all silent:
+
+| Gap | Reality | Consequence |
+|---|---|---|
+| Double resize | `worker.py:2072` already scales the frame by `RESIZE_FACTOR`; `bgsub._to_gray` scales it AGAIN | every centroid off by `resize_f**2`, no error |
+| Lighting stabilization | `worker.py:2286` applies `stabilize_lighting` (default ON, stateful); no stage equivalent | feature silently dropped — and it IS in `_BGSUB_KEY_PARAMS` |
+| `SHOW_FG`/`SHOW_BG` | `FrameResult` carries no `fg_mask`/`bg_u8` | preview overlays silently stop rendering |
+
+**Files:**
+- Modify: `src/hydra_suite/core/inference/stages/bgsub.py`
+- Modify: `src/hydra_suite/core/background/model.py`
+- Modify: `src/hydra_suite/core/inference/result.py`
+- Modify: `src/hydra_suite/core/inference/runner.py`
+- Test: `tests/test_bgsub_stage.py`
+
+**Interfaces produced:**
+- `run_bgsub(frame, ...)` — frame MUST already be scaled by `RESIZE_FACTOR`
+- `run_bgsub_batch(frames, ...)` — scales frames itself (they arrive raw from `FrameSource`)
+- `BackgroundModel.apply_lighting_stabilization(gray, roi_mask) -> np.ndarray`
+- `FrameResult.fg_mask`, `FrameResult.bg_u8` — optional, realtime-only
+
+### 10b.1 — Fix the resize contract
+
+The runner applies NO resize anywhere (verified: not in `sources.py`, `pipeline.py`,
+or `runner.py`). The worker pre-resizes for EVERY detection method at
+`worker.py:2072`, and its whole loop then works in resized coordinate space —
+`worker.py:2088-2090` sizes the ROI mask from `frame.shape` AFTER the resize. So
+the worker CANNOT stop pre-resizing without breaking everything downstream.
+
+Therefore **the stage must not resize**, and the batch path must scale instead so
+that batch and realtime agree (mandatory — `RESIZE_FACTOR` is in the cache key, so
+disagreement makes the cache a lie).
+
+- Remove the `RESIZE_FACTOR` block from `_to_gray`.
+- Document on `run_bgsub`: the frame must ALREADY be scaled; the worker's realtime
+  loop does this at `worker.py:2072`.
+- In `run_bgsub_batch`, scale each frame by `RESIZE_FACTOR` (`cv2.INTER_AREA`,
+  matching `worker.py::_resize_tracking_frame`) BEFORE delegating, because batch
+  frames arrive raw from `FrameSource`.
+- Note the asymmetry loudly in both docstrings — it is deliberate, not an oversight.
+
+### 10b.2 — Move lighting stabilization onto `BackgroundModel`
+
+`BackgroundModel` already owns `reference_intensity`, which `stabilize_lighting`
+consumes — the feature belongs there. Only its stateful bits are stranded in the
+worker loop.
+
+Add to `__init__`: `self._intensity_history = None`, `self._lighting_state = None`
+(match whatever initial values `worker.py` uses — read them, do not guess).
+
+Add:
+
+```python
+    def apply_lighting_stabilization(self, gray, roi_mask=None):
+        """Normalize frame intensity toward the primed reference.
+
+        Moved off the worker loop: this is bg-sub preprocessing, and the model
+        already owns `reference_intensity`. Keeping the state here is what lets
+        the batch path reproduce realtime exactly -- ENABLE_LIGHTING_STABILIZATION
+        is in the bg-sub cache key, so the two MUST agree.
+        """
+        p = self.params
+        if not p.get("ENABLE_LIGHTING_STABILIZATION", True):
+            return gray
+        gray, self._intensity_history, self._lighting_state = stabilize_lighting(
+            gray,
+            self.reference_intensity,
+            self._intensity_history,
+            p.get("LIGHTING_SMOOTH_FACTOR", 0.95),
+            roi_mask,
+            p.get("LIGHTING_MEDIAN_WINDOW", 5),
+            self._lighting_state,
+            self.use_gpu,
+        )
+        return gray
+```
+
+VERIFY the return arity and the third return value against
+`src/hydra_suite/utils/image_processing.py:188` and the worker call at
+`worker.py:2286-2296` — the worker discards the third value as `_`, so confirm what
+it is before storing it as `_lighting_state`. If the worker discards it, storing it
+may be wrong: match the worker's semantics exactly.
+
+Call it from `run_bgsub` after `_to_gray` and BEFORE `update_and_get_background`,
+passing the RESOLVED (resized) roi mask.
+
+### 10b.3 — Surface the masks for `SHOW_FG` / `SHOW_BG`
+
+`FrameResult` already has the pattern: `streaming_payload` is realtime-only,
+`None` in batch results. Follow it.
+
+- Add to `FrameResult`: `fg_mask: np.ndarray | None = None`, `bg_u8: np.ndarray | None = None`,
+  documented as realtime-only (populated by `run_realtime`, `None` in batch-pass
+  results, since carrying full masks through a cached batch pass would be pure waste).
+- `BgSubModel` is already stateful and strictly sequential, so stash the last
+  computed mask/background on it (e.g. `last_fg_mask`, `last_bg_u8`) inside
+  `run_bgsub`, and have `run_realtime` read them into the `FrameResult` on the
+  bgsub branch only.
+
+### Tests
+
+- `run_bgsub` does NOT resize: a pre-scaled frame comes back with detections in
+  that same coordinate space (this test must FAIL against the current
+  double-resizing code).
+- `run_bgsub_batch` DOES resize: raw frames + `RESIZE_FACTOR=0.5` produce the same
+  detections as `run_bgsub` fed the pre-scaled frame. This is the batch==realtime
+  property the cache key depends on — the most important test here.
+- Lighting stabilization is applied when enabled and skipped when disabled, and its
+  state persists across frames (two identical frames must not produce identical
+  internal state if history is accumulating).
+- `run_realtime` populates `fg_mask`/`bg_u8`; a batch pass leaves them `None`.
 
 ---
 
@@ -2023,15 +2225,14 @@ At `worker.py:20`, drop `create_detector` from the `core.detectors` import. If i
 - [ ] **Step 5: Verify**
 
 ```bash
-python -c "import hydra_suite.core.tracking.worker"
-python -m pytest tests/ -m "not benchmark" -q
+$PY -c "import hydra_suite.core.tracking.worker"
+$PY -m pytest tests/test_background_model.py tests/test_detectors_engine.py tests/test_inference_cache_keys.py -q --timeout=60
 ```
 Expected: import succeeds; no new failures.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/tracking/worker.py
 git commit -m "refactor(tracking): worker uses InferenceRunner for bg-sub detection
 
@@ -2062,13 +2263,47 @@ Read each site first: `grep -n "ObjectDetector\|DetectionFilter\|_advanced_confi
 - `DetectionFilter` (lines 1159, 1751) → `apply_detection_filter` from `hydra_suite.core.inference.api`, matching how `optimizer.py:36` already imports it.
 - `_advanced_config_value` is in `core/detectors/_utils.py`, which survives (YOLO still uses it). Leave that import alone.
 
-- [ ] **Step 2: Migrate `dataset_generation.py`**
+- [ ] **Step 2: Migrate `dataset_generation.py`** *(CORRECTED — the original step text was wrong)*
 
-Replace `create_detector(params)` with an `InferenceRunner` built as in Task 11. Update `detect_objects` unpacking to the 4-tuple. Where `detect_objects_batched` is used on the YOLO path, leave it alone — this task only touches the bg-sub branch.
+**This site is YOLO-ONLY. It has no bg-sub branch.** `_init_yolo_detector`
+(`:413-428`) early-returns `None` unless `DETECTION_METHOD == "yolo_obb"`
+(`:417-418`) — the `"background_subtraction"` string at `:417` is only the
+`.get()` default *inside* that guard. Every downstream consumer is the YOLO
+detector: `:531` `detect_objects_batched`, `:552` `detect_objects` (5-tuple,
+`YOLOOBBDetector`'s, untouched by this plan), `:579`
+`hasattr(detector, "detect_objects_batched")`, and `:927-931`
+`detector.use_tensorrt` / `detector.tensorrt_batch_size` — both `YOLOOBBDetector`
+attributes (`yolo_detector.py:44,48`). `grep -c ObjectDetector` on this file
+returns 0.
 
-- [ ] **Step 3: Migrate `optimizer_workers.py`**
+Swapping in `BackgroundMeasurer` here would break `:441`/`:531`/`:927-931` at
+runtime — it has no `detect_objects_batched`, no `use_tensorrt`, no
+`tensorrt_batch_size`.
 
-It already imports the new filter shim (`optimizer_workers.py:38`). Replace the remaining `create_detector` (line 367) and `detect_objects` (line 372) with `BackgroundMeasurer`; leave `detect_objects_batched` (line 441, YOLO) alone.
+`create_detector` was only a dispatcher (`factory.py`: `yolo_obb` →
+`YOLOOBBDetector`, else → `ObjectDetector`), so where the method is statically
+known to be `yolo_obb`, constructing the class directly is behavior-identical.
+
+Do exactly this and nothing more:
+- `:415`: `from ..core.detectors import create_detector` → `from ..core.detectors.yolo_detector import YOLOOBBDetector`
+- `:421`: `create_detector(params)` → `YOLOOBBDetector(params)`
+- Keep the `DETECTION_METHOD` guard as-is.
+- **Do NOT touch `:531`, `:552`, `:579`, or `:927-931`.** They are YOLO paths and
+  their tuple contracts do not change. The 4-tuple is `BackgroundMeasurer`'s new
+  contract ONLY.
+
+- [ ] **Step 3: Migrate `optimizer_workers.py`** *(CORRECTED — the original step text was wrong)*
+
+**`DetectionCacheBuilderWorker` is YOLO-ONLY.** Its own docstring (`:330-338`)
+says "runs YOLO detection on a frame range and writes a DetectionCache", and its
+`create_detector` at `:372` feeds `detector.detect_objects_batched(...)` at
+`:441` — a method `BackgroundMeasurer` does not have (it exists only on
+`YOLOOBBDetector`, `yolo_detector.py:2318`).
+
+Do exactly this and nothing more:
+- `:367`: function-local import → `from hydra_suite.core.detectors.yolo_detector import YOLOOBBDetector`
+- `:372`: `create_detector(self.params)` → `YOLOOBBDetector(self.params)`
+- **Leave `:441` alone.**
 
 - [ ] **Step 4: Verify no legacy references remain**
 
@@ -2080,18 +2315,17 @@ Expected: only `core/detectors/factory.py` and `core/detectors/__init__.py` (del
 - [ ] **Step 5: Verify every entry point imports**
 
 ```bash
-python -c "import hydra_suite"
+$PY -c "import hydra_suite"
 for kit in trackerkit posekit classkit refinekit detectkit filterkit; do
-  python -c "import hydra_suite.$kit" || echo "FAILED: $kit"
+  $PY -c "import hydra_suite.$kit" || echo "FAILED: $kit"
 done
-python -m pytest tests/ -m "not benchmark" -q
+$PY -m pytest tests/test_background_model.py tests/test_detectors_engine.py tests/test_inference_cache_keys.py -q --timeout=60
 ```
 Expected: no ImportError; no new test failures.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/trackerkit/gui/workers/preview_worker.py src/hydra_suite/data/dataset_generation.py src/hydra_suite/core/tracking/optimization/optimizer_workers.py
 git commit -m "refactor: migrate remaining bg-sub call sites off core/detectors
 
@@ -2144,10 +2378,26 @@ grep -rn "create_detector\|bg_detector\|bg_optimizer" src/ tests/
 ```
 Expected: no output.
 
+Then keep the endpoint honest:
+
 ```bash
-python -c "import hydra_suite"
-python -c "import hydra_suite.trackerkit"
-python -m pytest tests/ -m "not benchmark" -q
+grep -rn "YOLOOBBDetector" src/
+```
+Expected: `core/detectors/__init__.py`, `core/detectors/yolo_detector.py`,
+`data/dataset_generation.py`, `core/tracking/optimization/optimizer_workers.py`.
+
+The last two are **known, accepted follow-on debt** — they are the call sites
+needing the one-shot detect API that `core/inference` does not expose. Do NOT try
+to migrate them to `InferenceRunner` in this plan: the runner needs an
+`InferenceConfig` + video + cache and eagerly loads every model, which suits
+neither a per-frame dimension-extraction loop nor a cache-builder. That belongs to
+the `core/detectors` retirement project, alongside relocating
+`_direct_obb_runtime.py`.
+
+```bash
+$PY -c "import hydra_suite"
+$PY -c "import hydra_suite.trackerkit"
+$PY -m pytest tests/test_background_model.py tests/test_detectors_engine.py tests/test_inference_cache_keys.py -q --timeout=60
 ```
 Expected: no ImportError; no new failures.
 
@@ -2163,7 +2413,6 @@ Expected: `__init__.py`, `_direct_obb_runtime.py`, `_obb_geometry.py`, `_runtime
 - [ ] **Step 5: Commit**
 
 ```bash
-make format
 git add -A src/
 git commit -m "refactor(detectors): delete create_detector; move bg_optimizer to background
 
@@ -2236,8 +2485,6 @@ Note the coverage caveat: `worm_bgsub` is a single worm clip and the only bg-sub
 
 ```bash
 git worktree remove /tmp/bgsub-baseline
-make format
-make lint-moderate
 git add -A
 git commit -m "feat(background): calibrate convergence defaults against worm_bgsub
 
@@ -2274,4 +2521,6 @@ are calibrated on worms alone."
 
 **Type consistency check:** `BackgroundMeasurer.detect_objects` returns a 4-tuple in Tasks 5, 7, 11, 12, 13. `update_and_get_background(gray, roi_mask)` (2 args) consistent from Task 4 onward. `bgsub_detection_cache_key(config: BgSubConfig)` consistent in Tasks 8, 9. `corners_from_ellipse(cx, cy, major, minor, angle_rad)` consistent in Tasks 6, 7.
 
-**Known gap:** Task 7's `_major_from_shape`/`_minor_from_shape` recover ellipse axes from `(area, aspect)` rather than carrying them through. This is a deliberate trade to avoid changing the `shapes` contract mid-plan. If Task 14's gate fails on `pos_p99`, this round-trip is a prime suspect — a `sqrt` of a product of two floats loses precision that the 0.5px gate may notice.
+**Resolved (was a suspected gap):** Task 7's `_major_from_shape`/`_minor_from_shape` recover ellipse axes from `(area, aspect)` rather than carrying them through, to avoid widening the `shapes` contract mid-plan. The inversion is algebraically exact — `detect_objects` stores `area = pi*(ax1/2)*(ax2/2)` and `aspect = ax1/ax2`, so `ax1 = sqrt(4*area*aspect/pi)` recovers it losslessly up to float rounding. Measured worst-case error over 200k random ellipses: **2.8e-14 px**, against a 0.5px gate — 13 orders of magnitude of headroom. Do NOT chase this if Task 14's gate fails; it is not the cause.
+
+Note `measure.py` CANNOT return `OBBResult` directly: `OBBResult` lives in `core/inference/result.py`, and `core/inference -> core/background` is the established edge, so the reverse would be circular. Assembling `OBBResult` is necessarily the stage's job.
