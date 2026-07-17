@@ -399,3 +399,60 @@ def test_config_detection_source_reports_bgsub():
 def test_config_detection_source_reports_obb():
     cfg = InferenceConfig(obb=OBBConfig())
     assert cfg.detection_source == "obb"
+
+
+from hydra_suite.core.inference.result import DETECTION_ID_STRIDE
+from hydra_suite.core.inference.runtime import RuntimeContext
+from hydra_suite.core.inference.stages.bgsub import load_bgsub_model, run_bgsub
+
+
+def _cpu_runtime() -> RuntimeContext:
+    from hydra_suite.core.inference.config import InferenceConfig
+
+    return RuntimeContext.from_config(
+        InferenceConfig(
+            obb=None, bgsub=BgSubConfig.from_params(_params()), runtime_tier="cpu"
+        )
+    )
+
+
+def test_run_bgsub_emits_obbresult_with_corners(synthetic_video):
+    cfg = BgSubConfig.from_params(_params(**_measure_params()))
+    model = load_bgsub_model(cfg, _cpu_runtime(), video_path=synthetic_video)
+
+    cap = cv2.VideoCapture(synthetic_video)
+    cap.read()  # first frame primes the running state
+    ok, frame = cap.read()
+    cap.release()
+    assert ok
+
+    result = run_bgsub(frame, 1, model, cfg, _cpu_runtime())
+    assert result.frame_idx == 1
+    assert result.corners.ndim == 3
+    assert result.corners.shape[1:] == (4, 2)
+    assert result.centroids.shape[0] == result.corners.shape[0]
+    if result.num_detections:
+        assert np.isnan(result.confidences).all()
+        assert result.detection_ids[0] == 1 * DETECTION_ID_STRIDE
+
+
+def test_run_bgsub_is_deterministic(synthetic_video):
+    """Same video + params twice -> identical detections. This is what makes
+    the bgsub cache key sound."""
+    runs = []
+    for _ in range(2):
+        cfg = BgSubConfig.from_params(_params(**_measure_params()))
+        model = load_bgsub_model(cfg, _cpu_runtime(), video_path=synthetic_video)
+        cap = cv2.VideoCapture(synthetic_video)
+        outs = []
+        for i in range(5):
+            ok, frame = cap.read()
+            if not ok:
+                break
+            outs.append(run_bgsub(frame, i, model, cfg, _cpu_runtime()).centroids)
+        cap.release()
+        runs.append(outs)
+
+    assert len(runs[0]) == len(runs[1])
+    for a, b in zip(runs[0], runs[1]):
+        np.testing.assert_array_equal(a, b)

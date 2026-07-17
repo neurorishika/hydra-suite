@@ -209,6 +209,13 @@ class BackgroundModel:
         """
         return self._stabilized
 
+    def configure_runtime(self, runtime) -> None:
+        """Let the caller's runtime drive GPU selection.
+
+        Task 11 replaces the ENABLE_GPU_BACKGROUND self-selection with this.
+        """
+        pass
+
     def _setup_gpu_acceleration(self) -> None:
         """
         Initialize GPU acceleration if available.
