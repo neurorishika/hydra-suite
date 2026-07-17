@@ -757,6 +757,45 @@ def test_run_bgsub_batch_resizes_and_matches_realtime():
         np.testing.assert_array_equal(a.corners, b.corners)
 
 
+def test_run_bgsub_batch_matches_realtime_with_roi_mask():
+    """Same proof as test_run_bgsub_batch_resizes_and_matches_realtime, but with
+    a ROI mask in play. Realtime callers hand the stage a mask already in
+    resized space (worker.py:2088-2090 sizes it off the post-resize frame);
+    batch callers hand a full-resolution mask that _resolve_roi_mask must
+    resize itself. Without this test the ROI path of that resize contract was
+    unproven, even though RESIZE_FACTOR (and the ROI resize it drives) is part
+    of what the bg-sub cache key rests on being identical between the two
+    paths."""
+    raw = [_blob_frame(64, 16 + 8 * i, 32, 6) for i in range(4)]
+    scaled = [
+        cv2.resize(f, (0, 0), fx=0.5, fy=0.5, interpolation=cv2.INTER_AREA) for f in raw
+    ]
+
+    cfg, rt = _resize_cfg(RESIZE_FACTOR=0.5, MIN_CONTOUR_AREA=3)
+
+    roi_full = np.full(
+        (64, 64), 255, dtype=np.uint8
+    )  # full-res, as a batch caller supplies
+    roi_resized = np.full(
+        (32, 32), 255, dtype=np.uint8
+    )  # already resized, as the worker supplies
+
+    rt_model = load_bgsub_model(cfg, rt)
+    realtime = [
+        run_bgsub(f, i, rt_model, cfg, rt, roi_mask=roi_resized)
+        for i, f in enumerate(scaled)
+    ]
+
+    b_model = load_bgsub_model(cfg, rt)
+    batch = run_bgsub_batch(raw, list(range(4)), b_model, cfg, rt, roi_mask=roi_full)
+
+    assert sum(r.num_detections for r in realtime) > 0, "fixture detects nothing"
+    for a, b in zip(realtime, batch):
+        np.testing.assert_array_equal(a.centroids, b.centroids)
+        np.testing.assert_array_equal(a.angles, b.angles)
+        np.testing.assert_array_equal(a.corners, b.corners)
+
+
 def test_lighting_stabilization_applied_when_enabled():
     model = BackgroundModel(_params(ENABLE_LIGHTING_STABILIZATION=True))
     model.reference_intensity = 200.0

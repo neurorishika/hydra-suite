@@ -99,3 +99,21 @@ def test_convergence_pixel_delta_is_keyed():
     p["BACKGROUND_CONVERGENCE_PIXEL_DELTA"] = 10.0
     b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
     assert a.config_hash != b.config_hash
+
+
+def test_lighting_smooth_factor_is_keyed():
+    p = _base_params()
+    p["LIGHTING_SMOOTH_FACTOR"] = 0.95
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["LIGHTING_SMOOTH_FACTOR"] = 0.5
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash
+
+
+def test_lighting_median_window_is_keyed():
+    p = _base_params()
+    p["LIGHTING_MEDIAN_WINDOW"] = 5
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["LIGHTING_MEDIAN_WINDOW"] = 11
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash
