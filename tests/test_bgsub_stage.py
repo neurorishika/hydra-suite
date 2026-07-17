@@ -659,6 +659,52 @@ def test_batch_pass_leaves_fg_and_bg_masks_none(tmp_path, synthetic_video):
     replay.close()
 
 
+def test_run_realtime_bg_u8_survives_post_warmup_zero_detections(synthetic_video):
+    """Regression: a zero-detection frame AFTER the background is established
+    must still surface a real `bg_u8` array, not the warmup `None` sentinel.
+
+    worker.py uses `bg_u8 is None` as the warmup marker: True on it means
+    "skip Kalman predict/aging and the CSV row for this frame". If the
+    zero-detection early-return in run_realtime forgets to surface
+    last_bg_u8, a post-warmup frame with zero detections (all animals
+    occluded, left, a threshold blip, ...) gets misread as still-warming-up
+    and silently drops a track-aging step and a CSV row that legacy would
+    have emitted.
+
+    BACKGROUND_PRIME_FRAMES=0 disables video priming, so the very first
+    frame fed to run_realtime is the true warmup frame (must yield
+    bg_u8=None). The second frame -- identical to the first, so no
+    foreground survives thresholding -- is post-warmup with zero
+    detections, and must yield a real bg_u8 array.
+    """
+    from hydra_suite.core.inference.runner import InferenceRunner
+
+    cfg = _bgsub_inference_config(
+        bgsub=BgSubConfig.from_params(
+            _params(**_measure_params(), BACKGROUND_PRIME_FRAMES=0)
+        )
+    )
+
+    runner = InferenceRunner(cfg, video_path=synthetic_video)
+
+    blank = np.full((64, 64, 3), 200, dtype=np.uint8)
+
+    first = runner.run_realtime(blank, 0)
+    assert first.obb.num_detections == 0
+    assert first.bg_u8 is None, "true first frame must still be the warmup sentinel"
+
+    second = runner.run_realtime(blank, 1)
+    runner.close()
+
+    assert (
+        second.obb.num_detections == 0
+    ), "fixture must exercise a post-warmup zero-detection frame"
+    assert second.bg_u8 is not None, (
+        "post-warmup frame with zero detections must surface the real "
+        "background, not the warmup None sentinel"
+    )
+
+
 def test_runner_close_is_safe_without_obb_model(tmp_path, synthetic_video):
     from hydra_suite.core.inference.runner import InferenceRunner
 

@@ -498,9 +498,26 @@ class InferenceRunner:
             if _prof:
                 _rt_prof_add("frames", 1)
                 _rt_prof_flush()
-            return _build_frame_result(
+            empty_result = _build_frame_result(
                 frame_idx, filtered_obb, np.zeros(0, np.int32), None, [], None, None
             )
+            # Task 11 fix: surface the bg-sub masks here too, exactly like the
+            # non-empty path below (646-648). last_bg_u8 is the source of
+            # truth for "was the background established" -- it is None ONLY
+            # during the true first-frame warmup (see bgsub.py:167-170) and a
+            # real array on every frame after, even with zero detections.
+            # worker.py:2314 uses `bg_u8 is None` as its warmup sentinel; if
+            # this early return skipped the assignment, a post-warmup
+            # zero-detection frame (occlusion, animal left, threshold blip)
+            # would be misread as still-warming-up and silently drop Kalman
+            # aging + the CSV row for that frame.
+            if (
+                self.config.detection_source == "bgsub"
+                and self._models.bgsub is not None
+            ):
+                empty_result.fg_mask = self._models.bgsub.last_fg_mask
+                empty_result.bg_u8 = self._models.bgsub.last_bg_u8
+            return empty_result
 
         ar = (
             self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
