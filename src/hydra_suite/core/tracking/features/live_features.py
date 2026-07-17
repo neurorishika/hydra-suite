@@ -170,7 +170,7 @@ class LiveTagObservationStore:
 
 
 class LiveCNNIdentityStore:
-    """In-memory CNN prediction store compatible with cnn_build_association_entries()."""
+    """In-memory CNN prediction store consumed by the identity evidence pipeline."""
 
     def __init__(self, catalog_labels: Optional[Sequence[str]] = None) -> None:
         self._frames: Dict[int, List[ClassPrediction]] = {}

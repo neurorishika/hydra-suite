@@ -70,6 +70,7 @@ class TestInitTensorrtRunner:
         obj.min_valid_conf = 0.2
         obj.batch_size = 4
         obj._last_profile = {}
+        obj._input_hw = None
         return obj
 
     def test_valid_trt_routes_to_direct_engine(self, tmp_path):
@@ -117,7 +118,7 @@ class TestInitTensorrtRunner:
         ):
             result = backend._init_tensorrt_runner(trt_file)
 
-        mock_build.assert_called_once_with(onnx_file, trt_file)
+        mock_build.assert_called_once_with(onnx_file, trt_file, fixed_hw=None)
         assert result is mock_engine
 
     def test_stale_trt_rebuild_fails_falls_back_to_ort_ep(self, tmp_path):
@@ -169,7 +170,7 @@ class TestInitTensorrtRunner:
         ):
             result = backend._init_tensorrt_runner(onnx_file)
 
-        mock_build.assert_called_once_with(onnx_file, expected_trt)
+        mock_build.assert_called_once_with(onnx_file, expected_trt, fixed_hw=None)
         MockEngine.assert_called_once_with(expected_trt)
         assert result is mock_engine
 
@@ -335,6 +336,84 @@ class TestBuildTrtEngineFromOnnx:
             result = _build_trt_engine_from_onnx(onnx_path, engine_path)
 
         assert result is False
+
+    def _mock_trt_with_dynamic_hw_input(self):
+        """A mock `tensorrt` module whose parsed network has one input with a
+        dynamic batch dim AND dynamic (symbolic) H/W dims -- mirrors SLEAP's
+        sleap-nn ONNX export, whose graph declares [batch, 3, height, width]
+        all as symbolic except channels.
+        """
+        mock_trt = MagicMock()
+        mock_trt.Logger.WARNING = 0
+        mock_trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH = 0
+        mock_trt.MemoryPoolType.WORKSPACE = 0
+
+        mock_builder = MagicMock()
+        mock_network = MagicMock()
+        mock_parser = MagicMock()
+        mock_config = MagicMock()
+        mock_profile = MagicMock()
+
+        mock_trt.Builder.return_value = mock_builder
+        mock_builder.create_network.return_value = mock_network
+        mock_trt.OnnxParser.return_value = mock_parser
+        mock_parser.parse.return_value = True
+        mock_builder.create_builder_config.return_value = mock_config
+        mock_builder.create_optimization_profile.return_value = mock_profile
+        mock_builder.build_serialized_network.return_value = bytearray(b"plan")
+
+        mock_input = MagicMock()
+        mock_input.name = "image"
+        mock_input.shape = [-1, 3, -1, -1]
+        mock_network.num_inputs = 1
+        mock_network.get_input.return_value = mock_input
+
+        return mock_trt, mock_profile
+
+    def test_dynamic_hw_pinned_when_fixed_hw_given(self, tmp_path):
+        """A dynamic H/W input is pinned to *fixed_hw* instead of bailing --
+        this is the actual bug fix: SLEAP's exporter emits symbolic H/W even
+        though every crop is always resized to one fixed size before inference.
+        """
+        from hydra_suite.core.identity.pose.backends.sleap import (
+            _build_trt_engine_from_onnx,
+        )
+
+        onnx_path = tmp_path / "model.onnx"
+        onnx_path.write_bytes(b"fake")
+        engine_path = tmp_path / "model.trt"
+
+        mock_trt, mock_profile = self._mock_trt_with_dynamic_hw_input()
+
+        with patch.dict("sys.modules", {"tensorrt": mock_trt}):
+            result = _build_trt_engine_from_onnx(
+                onnx_path, engine_path, fixed_hw=(224, 224)
+            )
+
+        assert result is True
+        assert engine_path.exists()
+        mock_profile.set_shape.assert_called_once_with(
+            "image", (1, 3, 224, 224), (64, 3, 224, 224), (512, 3, 224, 224)
+        )
+
+    def test_dynamic_hw_without_fixed_hw_bails(self, tmp_path):
+        """No fixed_hw hint -> bail to ORT-EP rather than build a wrong engine."""
+        from hydra_suite.core.identity.pose.backends.sleap import (
+            _build_trt_engine_from_onnx,
+        )
+
+        onnx_path = tmp_path / "model.onnx"
+        onnx_path.write_bytes(b"fake")
+        engine_path = tmp_path / "model.trt"
+
+        mock_trt, mock_profile = self._mock_trt_with_dynamic_hw_input()
+
+        with patch.dict("sys.modules", {"tensorrt": mock_trt}):
+            result = _build_trt_engine_from_onnx(onnx_path, engine_path)
+
+        assert result is False
+        assert not engine_path.exists()
+        mock_profile.set_shape.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

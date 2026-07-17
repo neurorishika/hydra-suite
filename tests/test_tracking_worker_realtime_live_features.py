@@ -5,13 +5,6 @@ import numpy as np
 import pytest
 
 import hydra_suite.core.tracking.worker as worker_mod
-from hydra_suite.core.identity.classification.cnn import (
-    ClassPrediction,
-    CNNIdentityCache,
-)
-from hydra_suite.core.tracking.features.cnn_features import (
-    cnn_build_association_entries,
-)
 
 
 class _StopAtAssociation(RuntimeError):
@@ -555,32 +548,3 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
     worker._run_impl()
 
     assert results.get("success") is True
-
-
-def test_cnn_build_association_entries_supports_detection_only_cache_reads(tmp_path):
-    cache_path = tmp_path / "cnn_detection_only_assoc.npz"
-    cache = CNNIdentityCache(cache_path)
-    cache.save(
-        0,
-        [
-            ClassPrediction(
-                det_index=0,
-                factor_names=("flat",),
-                class_names=("alpha",),
-                confidences=(0.91,),
-            )
-        ],
-    )
-    cache.flush()
-
-    det_classes, track_identities, frame_preds = cnn_build_association_entries(
-        CNNIdentityCache(str(cache_path)),
-        None,
-        0,
-        1,
-        2,
-    )
-
-    assert det_classes == ["alpha"]
-    assert track_identities == [None, None]
-    assert len(frame_preds) == 1

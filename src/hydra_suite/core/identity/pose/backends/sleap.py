@@ -375,6 +375,7 @@ def _build_trt_engine_from_onnx(
     onnx_path: Path,
     engine_path: Path,
     workspace_gb: float = 4.0,
+    fixed_hw: Optional[Tuple[int, int]] = None,
 ) -> bool:
     """Build a native TensorRT engine from an ONNX file and serialize it.
 
@@ -385,6 +386,14 @@ def _build_trt_engine_from_onnx(
     This function requires CUDA and the ``tensorrt`` package.  On non-CUDA
     platforms (e.g. macOS/MPS) it returns False immediately without attempting
     any imports so the code path is safe to unit-test with mocks.
+
+    *fixed_hw* is the (height, width) every crop is actually letterboxed to
+    before inference (see ``_prepare_export_crop``/``SleapExportedBackend._input_hw``).
+    SLEAP's sleap-nn exporter emits a fully-convolutional graph with symbolic
+    H/W dims (it can technically run at any resolution), but our own
+    pre-processing always resizes to one fixed size — so any dynamic H/W dims
+    can be safely pinned to *fixed_hw* in the optimization profile, leaving
+    only the batch dim actually dynamic.
     """
     try:
         import tensorrt as trt  # noqa: PLC0415
@@ -426,21 +435,32 @@ def _build_trt_engine_from_onnx(
             shape = list(inp.shape)
             if not any(int(d) < 0 for d in shape):
                 continue
-            # Only the leading batch dim may be dynamic; a dynamic H/W/C would
-            # need a concrete size we can't infer, so bail to ORT-EP instead of
-            # building a wrong engine.
-            if any(int(d) < 0 for d in shape[1:]):
-                logger.warning(
-                    "TRT build: input %s has dynamic non-batch dims %s; cannot "
-                    "build a native engine — using ORT-TRT-EP.",
-                    inp.name,
-                    shape,
-                )
-                return False
-            static = [int(d) for d in shape[1:]]
-            min_shape = tuple([1, *static])
-            opt_shape = tuple([min(64, _TRT_PROFILE_MAX_BATCH), *static])
-            max_shape = tuple([_TRT_PROFILE_MAX_BATCH, *static])
+            non_batch = [int(d) for d in shape[1:]]
+            dynamic_non_batch = [d for d in non_batch if d < 0]
+            if dynamic_non_batch:
+                # A dynamic H/W (or other non-batch dim) needs a concrete size
+                # we can't infer from the graph alone. If the caller told us
+                # what fixed size every crop is actually resized to, pin the
+                # dynamic dims to that (in encounter order); otherwise bail to
+                # ORT-EP rather than building a wrong/unusable engine.
+                if fixed_hw is None or len(dynamic_non_batch) != len(fixed_hw):
+                    logger.warning(
+                        "TRT build: input %s has %d dynamic non-batch dim(s) %s "
+                        "with no matching fixed-size hint (got %s); cannot build "
+                        "a native engine — using ORT-TRT-EP.",
+                        inp.name,
+                        len(dynamic_non_batch),
+                        shape,
+                        fixed_hw,
+                    )
+                    return False
+                fill = iter(fixed_hw)
+                static = [int(next(fill)) if d < 0 else d for d in non_batch]
+            else:
+                static = non_batch
+            min_shape = (1, *static)
+            opt_shape = (min(64, _TRT_PROFILE_MAX_BATCH), *static)
+            max_shape = (_TRT_PROFILE_MAX_BATCH, *static)
             profile.set_shape(inp.name, min_shape, opt_shape, max_shape)
             has_dynamic = True
         if has_dynamic:
@@ -834,7 +854,9 @@ class SleapExportedBackend:
                     return self._ort_trt_ep_fallback()
                 onnx_path = onnx_siblings[0]
                 rebuilt = model_path  # rebuild in-place
-                if _build_trt_engine_from_onnx(onnx_path, rebuilt):
+                if _build_trt_engine_from_onnx(
+                    onnx_path, rebuilt, fixed_hw=self._input_hw
+                ):
                     try:
                         return _DirectTensorRTEngine(rebuilt)
                     except Exception as build_exc:  # incl. ImportError
@@ -850,7 +872,9 @@ class SleapExportedBackend:
         if is_onnx:
             # No .trt engine exists yet — attempt to build one beside the .onnx
             engine_path = model_path.with_suffix(".trt")
-            if _build_trt_engine_from_onnx(model_path, engine_path):
+            if _build_trt_engine_from_onnx(
+                model_path, engine_path, fixed_hw=self._input_hw
+            ):
                 try:
                     engine = _DirectTensorRTEngine(engine_path)
                     # Update model_path so the next warmup / profile reflects it
