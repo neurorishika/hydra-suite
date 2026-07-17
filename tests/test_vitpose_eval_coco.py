@@ -43,6 +43,62 @@ def test_smoke_eval_on_20_images():
     assert res["AP"] > 0.5, f"smoke AP {res['AP']:.3f} — pipeline is broken"
 
 
+@requires_coco
+def test_forward_fn_injection_actually_drives_the_pipeline():
+    """The Task 13 Step 5 TensorRT eval routes forward passes through
+    ``forward_fn`` instead of the torch model. Guard against the two ways that
+    injection could be silently wrong:
+
+    1. A real bug where ``evaluate`` still builds/loads the default torch
+       model even when ``forward_fn`` is given (a "silent fallback") -- caught
+       here by pointing ``ckpt`` at a path that does not exist. If the
+       fallback ever fires, ``load_checkpoint`` raises before this test's
+       assertions even run.
+    2. ``forward_fn`` being accepted but never actually called for both the
+       normal and flipped passes -- caught by counting calls on a wrapper
+       around the real model and checking against AP computed the ordinary
+       (non-injected) way on the same 20 images. If the injected path skipped
+       the flip test, or fell back to zeros/identity, the AP would diverge
+       from the baseline.
+    """
+    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+    from tools.vitpose.eval_coco import evaluate
+
+    device = _device()
+    baseline = evaluate("B", "classic", ASSET_DIR / "vitpose-b.pth", device, limit=20)
+
+    model = build_vitpose("B", "classic").eval().to(device)
+    load_checkpoint(model, ASSET_DIR / "vitpose-b.pth", strict=True)
+
+    calls = {"n": 0}
+
+    def counting_forward(x: torch.Tensor) -> torch.Tensor:
+        calls["n"] += 1
+        with torch.no_grad():
+            return model(x)
+
+    injected = evaluate(
+        "B",
+        "classic",
+        ASSET_DIR / "this-checkpoint-does-not-exist.pth",
+        device,
+        limit=20,
+        forward_fn=counting_forward,
+    )
+
+    assert calls["n"] > 0, "forward_fn was never invoked -- injection is dead code"
+    assert calls["n"] % 2 == 0, (
+        "forward_fn must be called in pairs (normal + flipped) per batch, "
+        f"got {calls['n']} calls"
+    )
+    assert injected["AP"] == pytest.approx(baseline["AP"], abs=1e-9), (
+        f"injected forward_fn produced AP={injected['AP']:.4f} vs baseline "
+        f"{baseline['AP']:.4f} -- the injected path is not equivalent to the "
+        "default torch path"
+    )
+
+
 @pytest.mark.coco_eval
 @requires_coco
 def test_gate_c_classic_reproduces_published_ap():

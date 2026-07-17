@@ -14,6 +14,7 @@ import json
 import os
 from collections import defaultdict
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -58,7 +59,17 @@ def evaluate(
     device: str = "cpu",
     limit: int | None = None,
     batch_size: int = 16,
+    forward_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> dict[str, float]:
+    """Run the Gate C harness.
+
+    ``forward_fn``, if given, replaces the torch model's forward pass (e.g. to
+    route the batch through a TensorRT engine instead) while reusing every other
+    stage of this pipeline verbatim -- the flip test, UDP decode,
+    transform_preds, rescoring, and OKS-NMS. It must accept and return a
+    ``torch.Tensor`` on ``device`` with shape ``(N, 17, 64, 48)``. When omitted,
+    the torch model built below is used, matching prior behaviour exactly.
+    """
     ann_file = ASSET_DIR / "annotations" / "person_keypoints_val2017.json"
     det_file = ASSET_DIR / "COCO_val2017_detections_AP_H_56_person.json"
     coco = COCO(str(ann_file))
@@ -68,8 +79,10 @@ def evaluate(
         keep = set(sorted({d["image_id"] for d in dets})[:limit])
         dets = [d for d in dets if d["image_id"] in keep]
 
-    model = build_vitpose(variant, head).eval().to(device)
-    load_checkpoint(model, ckpt, strict=True)
+    if forward_fn is None:
+        model = build_vitpose(variant, head).eval().to(device)
+        load_checkpoint(model, ckpt, strict=True)
+        forward_fn = model
 
     results = []
     for start in range(0, len(dets), batch_size):
@@ -85,9 +98,9 @@ def evaluate(
             metas.append((d, c, s))
         batch = torch.from_numpy(np.stack(crops)).to(device)
         with torch.no_grad():
-            hm = model(batch)
+            hm = forward_fn(batch)
             # Flip test: every ViTPose config sets flip_test=True.
-            hm_flip = model(torch.flip(batch, dims=[3]))
+            hm_flip = forward_fn(torch.flip(batch, dims=[3]))
             hm_flip = torch.from_numpy(
                 flip_back(hm_flip.cpu().numpy(), COCO_FLIP_PAIRS)
             ).to(device)
