@@ -1,4 +1,4 @@
-.PHONY: env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
+.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
@@ -91,6 +91,13 @@ install-apriltag-fork:
 	cmake --install build; \
 	echo "Installed apriltag fork $(APRILTAG_FORK_REF)."
 
+configure-mps-libs:
+	@if [ -z "$$CONDA_PREFIX" ]; then \
+		echo "ERROR: activate the MPS conda env first (conda activate $(ENV_NAME_MPS))"; \
+		exit 1; \
+	fi
+	@$(PYTHON_BIN) tools/configure_mps_libs.py
+
 install:
 	@echo "Installing CPU packages..."
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements.txt
@@ -113,6 +120,7 @@ install-mps:
 	$(call reset_onnxruntime_packages)
 	$(UV_PIP) install $(UV_PIP_PYTHON) -v -r requirements-mps.txt
 	@$(MAKE) install-apriltag-fork
+	@$(MAKE) configure-mps-libs
 
 # =============================================================================
 # ENVIRONMENT MAINTENANCE
