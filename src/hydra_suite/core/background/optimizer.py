@@ -358,7 +358,7 @@ def _resize_roi_mask(roi_mask, frame_shape):
 def _prime_background_from_frames(prime_frames, trial_params, roi_mask):
     """Prime the lightest-pixel background model from cached raw frames."""
     from ...utils.image_processing import apply_image_adjustments
-    from ..background.model import BackgroundModel
+    from .model import BackgroundModel
 
     if not prime_frames:
         return None, None, None
@@ -408,8 +408,8 @@ def _prime_background_from_frames(prime_frames, trial_params, roi_mask):
 
 def _init_trial_pipeline(trial_params, frame_cache):
     """Create a fresh BG-sub pipeline state for one trial evaluation."""
-    from ..background.model import BackgroundModel
-    from .bg_detector import ObjectDetector
+    from .measure import BackgroundMeasurer
+    from .model import BackgroundModel
 
     bg_model = BackgroundModel(trial_params)
     prime_count = max(0, int(trial_params.get("BACKGROUND_PRIME_FRAMES", 0) or 0))
@@ -425,7 +425,7 @@ def _init_trial_pipeline(trial_params, frame_cache):
 
     return (
         bg_model,
-        ObjectDetector(trial_params),
+        BackgroundMeasurer(trial_params),
         deque(maxlen=50),
         {},
     )
@@ -477,7 +477,7 @@ def _run_bg_trial_frame(
     if trial_params.get("ENABLE_CONSERVATIVE_SPLIT", True):
         fg_mask = detector.apply_conservative_split(fg_mask, gray, bg_u8)
 
-    meas, sizes, shapes, _yolo, _conf = detector.detect_objects(fg_mask, frame_index)
+    meas, sizes, shapes, _conf = detector.detect_objects(fg_mask, frame_index)
     return gray, bg_u8, fg_mask, meas, sizes, shapes
 
 

@@ -15,7 +15,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from hydra_suite.core.detectors.bg_optimizer import _suggest_trial_params  # noqa: E402
+from hydra_suite.core.background.optimizer import _suggest_trial_params  # noqa: E402
 from hydra_suite.trackerkit.gui.dialogs.bg_parameter_helper import (  # noqa: E402
     BgParameterHelperDialog,
 )

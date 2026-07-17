@@ -77,18 +77,10 @@ def _load_engine_module():
     )
     sys.modules["hydra_suite.core.detectors.detection_filter"] = filter_mod
 
-    factory_mod = load_src_module(
-        "hydra_suite/core/detectors/factory.py",
-        "hydra_suite.core.detectors.factory",
-        stubs=stubs,
-    )
-    sys.modules["hydra_suite.core.detectors.factory"] = factory_mod
-
     # Assemble combined namespace matching what the old engine.py exported
     mod = types.ModuleType("detectors_engine_under_test")
     mod.BackgroundMeasurer = bg_mod.BackgroundMeasurer
     mod.YOLOOBBDetector = yolo_mod.YOLOOBBDetector
-    mod.create_detector = factory_mod.create_detector
     mod.DetectionFilter = filter_mod.DetectionFilter
     mod._normalize_detection_ids = utils_mod._normalize_detection_ids
     mod.Path = Path
@@ -141,20 +133,6 @@ def test_background_measurer_detect_objects_filters_and_limits_count() -> None:
     assert len(confidences) == 2
     assert all(np.isnan(c) for c in confidences)
     assert len(sizes) >= 2  # current implementation keeps original filtered size list
-
-
-@pytest.mark.xfail(
-    reason=(
-        "factory.py still does `from .bg_detector import ObjectDetector` "
-        "internally; bg_detector.py was moved to core/background/measure.py "
-        "in Task 5. factory.py is migrated to BackgroundMeasurer in Task 13."
-    ),
-    strict=True,
-)
-def test_create_detector_defaults_to_background_subtraction() -> None:
-    mod = _load_engine_module()
-    detector = mod.create_detector({"DETECTION_METHOD": "background_subtraction"})
-    assert isinstance(detector, mod.BackgroundMeasurer)
 
 
 def test_tensorrt_engine_path_is_model_adjacent_and_stable_across_ids(
