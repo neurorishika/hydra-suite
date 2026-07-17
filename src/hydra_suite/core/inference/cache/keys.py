@@ -4,7 +4,14 @@ import hashlib
 import os
 from dataclasses import replace
 
-from ..config import AprilTagConfig, CNNConfig, HeadTailConfig, OBBConfig, PoseConfig
+from ..config import (
+    AprilTagConfig,
+    BgSubConfig,
+    CNNConfig,
+    HeadTailConfig,
+    OBBConfig,
+    PoseConfig,
+)
 from .base import CACHE_SCHEMA_VERSION, CacheKey
 
 
@@ -78,16 +85,26 @@ _BGSUB_KEY_PARAMS = (
     "START_FRAME",
     "END_FRAME",
     "RESIZE_FACTOR",
+    "BACKGROUND_CONVERGENCE_EPSILON",
+    "BACKGROUND_CONVERGENCE_FRAMES",
+    "BACKGROUND_CONVERGENCE_PIXEL_DELTA",
 )
 
 
-def bgsub_detection_cache_key(params: dict) -> CacheKey:
+def bgsub_detection_cache_key(config: BgSubConfig) -> CacheKey:
     """Cache key for background-subtraction detections.
 
-    There is no model file, so model_path is a sentinel and the detection-affecting
-    parameters are hashed into config_hash. Callers should fold in the video
-    signature via ``with_video_signature`` so the cache is bound to the source file.
+    There is no model file, so model_path is a sentinel and the
+    detection-affecting parameters are hashed into config_hash. Callers should
+    fold in the video signature via ``with_video_signature`` so the cache is
+    bound to the source file.
+
+    Soundness depends on deterministic priming (core/background/model.py samples
+    evenly-spaced frames, not unseeded random ones) -- without that, identical
+    params would legitimately produce different detections and this key would
+    be a lie.
     """
+    params = config.params
     payload = "|".join(f"{k}={params.get(k)}" for k in _BGSUB_KEY_PARAMS)
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,

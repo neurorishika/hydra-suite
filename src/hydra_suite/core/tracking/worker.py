@@ -81,7 +81,7 @@ from hydra_suite.core.inference.cache.store import DetectionCacheHandle  # noqa:
 
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
-from hydra_suite.core.inference.config import InferenceConfig  # noqa: E402
+from hydra_suite.core.inference.config import BgSubConfig, InferenceConfig  # noqa: E402
 from hydra_suite.core.inference.result import OBBResult as _OBBResult  # noqa: E402
 from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
 from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
@@ -1133,7 +1133,8 @@ class TrackingWorker(QThread):
                 _cache_dir.mkdir(parents=True, exist_ok=True)
                 _bgsub_cache_path = _cache_dir / "bgsub_detection.npz"
                 _bgsub_key = with_video_signature(
-                    bgsub_detection_cache_key(p), video_signature(self.video_path)
+                    bgsub_detection_cache_key(BgSubConfig.from_params(p)),
+                    video_signature(self.video_path),
                 )
                 bgsub_detection_cache = DetectionCacheHandle(
                     path=_bgsub_cache_path, key=_bgsub_key

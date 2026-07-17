@@ -1,6 +1,7 @@
 """Regression tests for background-subtraction cache keys."""
 
 from hydra_suite.core.inference.cache.keys import bgsub_detection_cache_key
+from hydra_suite.core.inference.config import BgSubConfig
 
 
 def _base_params() -> dict:
@@ -25,30 +26,35 @@ def _base_params() -> dict:
         "START_FRAME": 0,
         "END_FRAME": 500,
         "RESIZE_FACTOR": 1.0,
+        "BACKGROUND_CONVERGENCE_EPSILON": 1e-4,
+        "BACKGROUND_CONVERGENCE_FRAMES": 30,
+        "BACKGROUND_CONVERGENCE_PIXEL_DELTA": 5.0,
     }
 
 
 def test_threshold_change_invalidates_cache_key():
     """THRESHOLD_VALUE is the most important bg-sub param; it must be keyed."""
-    a = bgsub_detection_cache_key(_base_params())
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(_base_params()))
     p = _base_params()
     p["THRESHOLD_VALUE"] = 40
-    b = bgsub_detection_cache_key(p)
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
     assert a.config_hash != b.config_hash
 
 
 def test_prime_frames_change_invalidates_cache_key():
-    a = bgsub_detection_cache_key(_base_params())
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(_base_params()))
     p = _base_params()
     p["BACKGROUND_PRIME_FRAMES"] = 60
-    b = bgsub_detection_cache_key(p)
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
     assert a.config_hash != b.config_hash
 
 
 def test_identical_params_produce_identical_key():
     assert (
-        bgsub_detection_cache_key(_base_params()).config_hash
-        == bgsub_detection_cache_key(_base_params()).config_hash
+        bgsub_detection_cache_key(BgSubConfig.from_params(_base_params())).config_hash
+        == bgsub_detection_cache_key(
+            BgSubConfig.from_params(_base_params())
+        ).config_hash
     )
 
 
@@ -60,3 +66,36 @@ def test_key_params_all_exist_in_codebase_naming():
     assert "BACKGROUND_PRIME_SECONDS" not in _BGSUB_KEY_PARAMS
     assert "THRESHOLD_VALUE" in _BGSUB_KEY_PARAMS
     assert "BACKGROUND_PRIME_FRAMES" in _BGSUB_KEY_PARAMS
+
+
+def test_cache_key_accepts_bgsub_config():
+    cfg = BgSubConfig.from_params(_base_params())
+    key = bgsub_detection_cache_key(cfg)
+    assert key.model_path == "background_subtraction"
+
+
+def test_convergence_epsilon_is_keyed():
+    p = _base_params()
+    p["BACKGROUND_CONVERGENCE_EPSILON"] = 1e-4
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["BACKGROUND_CONVERGENCE_EPSILON"] = 5e-1
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash
+
+
+def test_convergence_frames_are_keyed():
+    p = _base_params()
+    p["BACKGROUND_CONVERGENCE_FRAMES"] = 30
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["BACKGROUND_CONVERGENCE_FRAMES"] = 60
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash
+
+
+def test_convergence_pixel_delta_is_keyed():
+    p = _base_params()
+    p["BACKGROUND_CONVERGENCE_PIXEL_DELTA"] = 5.0
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p["BACKGROUND_CONVERGENCE_PIXEL_DELTA"] = 10.0
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash
