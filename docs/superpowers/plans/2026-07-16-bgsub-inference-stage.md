@@ -1964,6 +1964,125 @@ Adds the 'bgsub' pipeline key. gpu_fast resolves to gpu with used_fallback
 
 ---
 
+## Task 10b: Close the worker-seam gaps the stage does not cover
+
+**Why this task exists.** Task 11 (the `worker.py` migration) was BLOCKED: the
+bg-sub stage is correct in isolation but does not cover everything `worker.py`
+does around the detector. The stage was designed from the cache key's parameter
+list rather than from the worker loop. Three verified gaps, all silent:
+
+| Gap | Reality | Consequence |
+|---|---|---|
+| Double resize | `worker.py:2072` already scales the frame by `RESIZE_FACTOR`; `bgsub._to_gray` scales it AGAIN | every centroid off by `resize_f**2`, no error |
+| Lighting stabilization | `worker.py:2286` applies `stabilize_lighting` (default ON, stateful); no stage equivalent | feature silently dropped — and it IS in `_BGSUB_KEY_PARAMS` |
+| `SHOW_FG`/`SHOW_BG` | `FrameResult` carries no `fg_mask`/`bg_u8` | preview overlays silently stop rendering |
+
+**Files:**
+- Modify: `src/hydra_suite/core/inference/stages/bgsub.py`
+- Modify: `src/hydra_suite/core/background/model.py`
+- Modify: `src/hydra_suite/core/inference/result.py`
+- Modify: `src/hydra_suite/core/inference/runner.py`
+- Test: `tests/test_bgsub_stage.py`
+
+**Interfaces produced:**
+- `run_bgsub(frame, ...)` — frame MUST already be scaled by `RESIZE_FACTOR`
+- `run_bgsub_batch(frames, ...)` — scales frames itself (they arrive raw from `FrameSource`)
+- `BackgroundModel.apply_lighting_stabilization(gray, roi_mask) -> np.ndarray`
+- `FrameResult.fg_mask`, `FrameResult.bg_u8` — optional, realtime-only
+
+### 10b.1 — Fix the resize contract
+
+The runner applies NO resize anywhere (verified: not in `sources.py`, `pipeline.py`,
+or `runner.py`). The worker pre-resizes for EVERY detection method at
+`worker.py:2072`, and its whole loop then works in resized coordinate space —
+`worker.py:2088-2090` sizes the ROI mask from `frame.shape` AFTER the resize. So
+the worker CANNOT stop pre-resizing without breaking everything downstream.
+
+Therefore **the stage must not resize**, and the batch path must scale instead so
+that batch and realtime agree (mandatory — `RESIZE_FACTOR` is in the cache key, so
+disagreement makes the cache a lie).
+
+- Remove the `RESIZE_FACTOR` block from `_to_gray`.
+- Document on `run_bgsub`: the frame must ALREADY be scaled; the worker's realtime
+  loop does this at `worker.py:2072`.
+- In `run_bgsub_batch`, scale each frame by `RESIZE_FACTOR` (`cv2.INTER_AREA`,
+  matching `worker.py::_resize_tracking_frame`) BEFORE delegating, because batch
+  frames arrive raw from `FrameSource`.
+- Note the asymmetry loudly in both docstrings — it is deliberate, not an oversight.
+
+### 10b.2 — Move lighting stabilization onto `BackgroundModel`
+
+`BackgroundModel` already owns `reference_intensity`, which `stabilize_lighting`
+consumes — the feature belongs there. Only its stateful bits are stranded in the
+worker loop.
+
+Add to `__init__`: `self._intensity_history = None`, `self._lighting_state = None`
+(match whatever initial values `worker.py` uses — read them, do not guess).
+
+Add:
+
+```python
+    def apply_lighting_stabilization(self, gray, roi_mask=None):
+        """Normalize frame intensity toward the primed reference.
+
+        Moved off the worker loop: this is bg-sub preprocessing, and the model
+        already owns `reference_intensity`. Keeping the state here is what lets
+        the batch path reproduce realtime exactly -- ENABLE_LIGHTING_STABILIZATION
+        is in the bg-sub cache key, so the two MUST agree.
+        """
+        p = self.params
+        if not p.get("ENABLE_LIGHTING_STABILIZATION", True):
+            return gray
+        gray, self._intensity_history, self._lighting_state = stabilize_lighting(
+            gray,
+            self.reference_intensity,
+            self._intensity_history,
+            p.get("LIGHTING_SMOOTH_FACTOR", 0.95),
+            roi_mask,
+            p.get("LIGHTING_MEDIAN_WINDOW", 5),
+            self._lighting_state,
+            self.use_gpu,
+        )
+        return gray
+```
+
+VERIFY the return arity and the third return value against
+`src/hydra_suite/utils/image_processing.py:188` and the worker call at
+`worker.py:2286-2296` — the worker discards the third value as `_`, so confirm what
+it is before storing it as `_lighting_state`. If the worker discards it, storing it
+may be wrong: match the worker's semantics exactly.
+
+Call it from `run_bgsub` after `_to_gray` and BEFORE `update_and_get_background`,
+passing the RESOLVED (resized) roi mask.
+
+### 10b.3 — Surface the masks for `SHOW_FG` / `SHOW_BG`
+
+`FrameResult` already has the pattern: `streaming_payload` is realtime-only,
+`None` in batch results. Follow it.
+
+- Add to `FrameResult`: `fg_mask: np.ndarray | None = None`, `bg_u8: np.ndarray | None = None`,
+  documented as realtime-only (populated by `run_realtime`, `None` in batch-pass
+  results, since carrying full masks through a cached batch pass would be pure waste).
+- `BgSubModel` is already stateful and strictly sequential, so stash the last
+  computed mask/background on it (e.g. `last_fg_mask`, `last_bg_u8`) inside
+  `run_bgsub`, and have `run_realtime` read them into the `FrameResult` on the
+  bgsub branch only.
+
+### Tests
+
+- `run_bgsub` does NOT resize: a pre-scaled frame comes back with detections in
+  that same coordinate space (this test must FAIL against the current
+  double-resizing code).
+- `run_bgsub_batch` DOES resize: raw frames + `RESIZE_FACTOR=0.5` produce the same
+  detections as `run_bgsub` fed the pre-scaled frame. This is the batch==realtime
+  property the cache key depends on — the most important test here.
+- Lighting stabilization is applied when enabled and skipped when disabled, and its
+  state persists across frames (two identical frames must not produce identical
+  internal state if history is accumulating).
+- `run_realtime` populates `fg_mask`/`bg_u8`; a batch pass leaves them `None`.
+
+---
+
 ## Task 11: Migrate `worker.py` to the runner for bg-sub
 
 **Files:**
