@@ -23,7 +23,16 @@ Explicitly out of scope, deferred to Specs 2–4:
 
 - No `PoseInferenceBackend` implementation, no backend class.
 - No changes to `PoseRuntimeConfig`, `PoseConfig`, or `create_pose_backend_from_config`.
-- No registry, no runtime layer, no ONNX/TensorRT export.
+- No registry, no runtime layer.
+- **Export recipe IS in scope** (added 2026-07-16): `vitpose/export.py` converts a torch
+  ViTPose to ONNX / TensorRT / CoreML, with a parity test per artifact. This is the
+  model-specific half and stays inside the leaf -- it plays exactly the role
+  ultralytics' `model.export()` plays for the YOLO backend.
+- **Runtime EXECUTION stays out** (Spec 2): ONNX sessions, TRT engine lifecycle, CoreML
+  sessions, warmup/AMP/batching. Also out: the auto-export *caching wrapper*
+  (`auto_export_vitpose_model`), which belongs in `backends/vitpose.py` at Spec 3
+  alongside `auto_export_yolo_model` (`yolo.py:38`) and `auto_export_sleap_model`
+  (`sleap.py:1353`).
 - No training, no fine-tuning.
 - No GUI, no PoseKit changes.
 - No SLEAP changes.

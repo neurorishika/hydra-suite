@@ -2436,8 +2436,26 @@ git commit -m "test(vitpose): CUDA parity twin for on-device decode"
 | — | leaf constraint | no `hydra_suite` imports in `vitpose/` |
 | — | no integration | zero diff in `pose/api.py`, `pose/types.py`, `core/inference/` |
 
+## Export (added to Spec 1, 2026-07-16)
+
+The export RECIPE is in scope; runtime EXECUTION is not. The seam follows the existing
+backends exactly: `auto_export_yolo_model`/`auto_export_sleap_model` are not the export --
+they are the caching wrapper (signature + location + sidecar + staleness), and delegate the
+actual conversion to ultralytics / SLEAP's exporter. For ViTPose we own the recipe, so:
+
+| layer | YOLO | SLEAP | ViTPose |
+|---|---|---|---|
+| recipe (torch -> artifact) | ultralytics `model.export()` | SLEAP exporter | **`vitpose/export.py` (Spec 1, leaf)** |
+| caching wrapper | `auto_export_yolo_model` (`yolo.py:38`) | `auto_export_sleap_model` (`sleap.py:1353`) | `auto_export_vitpose_model` (`backends/vitpose.py`, Spec 3) |
+| lazy trigger | `api.py:75` | `api.py:117` | `api.py` (Spec 3) |
+
+**DECIDED: TensorRT builds FP32**, following the SLEAP keypoint precedent
+(`sleap.py:420-421` "fp16 is deferred to preserve keypoint precision"; same rule stated at
+`compute_runtime.py:141-142`). The OBB path's `half=True` is the wrong analog for a
+keypoint model with sub-pixel decoding.
+
 ## Out of scope (Specs 2-4)
 
 No backend class, no `PoseInferenceBackend`, no `PoseRuntimeConfig` changes, no
-registry, no runtime layer, no ONNX/TensorRT export, no training, no GUI, no
+registry, no runtime layer, no training, no GUI, no
 SLEAP changes.

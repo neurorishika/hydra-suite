@@ -86,8 +86,14 @@ Ordering is deliberate and argued below. Each links to its own design doc when w
 **Status:** in design (`2026-07-16-vitpose-native-port-design.md`)
 
 Backbone (classic + MoE), both heads (classic deconv + simple), weight loader,
-and pre/post-processing. **Imports nothing from `hydra_suite`.** No repo
-integration whatsoever.
+pre/post-processing, and (added 2026-07-16) the **export recipe** (`vitpose/export.py`:
+torch -> ONNX/TensorRT/CoreML, one parity test per artifact). **Imports nothing from
+`hydra_suite`.** No repo integration whatsoever.
+
+The export recipe belongs here because it is model-specific -- it is the piece ultralytics'
+`model.export()` supplies for YOLO, which nobody supplies for ViTPose. The auto-export
+*caching wrapper* is NOT here; it goes in `backends/vitpose.py` at Spec 3, mirroring
+`auto_export_yolo_model`/`auto_export_sleap_model`.
 
 **Done when:** `vitpose-b.pth` and `vitpose+_base.pth` load with `strict=True`,
 and COCO val AP reproduces published numbers (75.8 classic / 75.5 simple for B)
