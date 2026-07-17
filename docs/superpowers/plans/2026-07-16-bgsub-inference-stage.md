@@ -1420,7 +1420,7 @@ Task 11 implements tier-driven selection. For now add to `src/hydra_suite/core/b
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `$PY -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
-Expected: 2 passed. (`test_run_bgsub_emits_obbresult_with_corners` requires Task 9's `InferenceConfig(obb=None, bgsub=...)`; if it errors on config construction, skip it with `pytest.mark.xfail(reason="needs Task 9 config wiring")` and remove the marker in Task 9.)
+Expected: 2 passed. `InferenceConfig(obb=None, bgsub=...)` already exists (Task 6b), so no xfail is needed — if these tests cannot construct a config, STOP and report rather than marking them xfail.
 
 - [ ] **Step 6: Commit**
 
@@ -1566,7 +1566,7 @@ unsound and must be invalidated rather than inherited."
 `InferenceConfig.obb` is a REQUIRED field (`config.py:229`) and `_AllModels.obb` is non-optional (`runner.py:80`). bg-sub is an *alternative* detection source, so both must become optional with an exactly-one validation.
 
 **Files:**
-- Modify: `src/hydra_suite/core/inference/config.py` (`InferenceConfig`, `_dict_to_config`, `_config_to_dict`, `_collect_all_runtimes`)
+- (config.py changes moved to Task 6b — `InferenceConfig.obb` optional, `bgsub` field, `detection_source`, exactly-one validation are ALREADY DONE. Do not redo them.)
 - Modify: `src/hydra_suite/core/inference/runner.py` (`_AllModels`, `_load_all_models`, `_open_caches`, `run_realtime`, `_build_pipeline`, `load_frame`, `close`)
 - Test: `tests/test_bgsub_stage.py` (append)
 
@@ -1753,10 +1753,6 @@ bg-sub never returns `_RawOBBTensors` (it is CPU numpy throughout), so any `tens
         if self._models.bgsub is not None:
             self._models.bgsub.close()
 ```
-
-- [ ] **Step 5: Remove the Task 7 xfail marker**
-
-If `test_run_bgsub_emits_obbresult_with_corners` was marked xfail in Task 7, remove the marker now.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -2247,4 +2243,6 @@ are calibrated on worms alone."
 
 **Type consistency check:** `BackgroundMeasurer.detect_objects` returns a 4-tuple in Tasks 5, 7, 11, 12, 13. `update_and_get_background(gray, roi_mask)` (2 args) consistent from Task 4 onward. `bgsub_detection_cache_key(config: BgSubConfig)` consistent in Tasks 8, 9. `corners_from_ellipse(cx, cy, major, minor, angle_rad)` consistent in Tasks 6, 7.
 
-**Known gap:** Task 7's `_major_from_shape`/`_minor_from_shape` recover ellipse axes from `(area, aspect)` rather than carrying them through. This is a deliberate trade to avoid changing the `shapes` contract mid-plan. If Task 14's gate fails on `pos_p99`, this round-trip is a prime suspect — a `sqrt` of a product of two floats loses precision that the 0.5px gate may notice.
+**Resolved (was a suspected gap):** Task 7's `_major_from_shape`/`_minor_from_shape` recover ellipse axes from `(area, aspect)` rather than carrying them through, to avoid widening the `shapes` contract mid-plan. The inversion is algebraically exact — `detect_objects` stores `area = pi*(ax1/2)*(ax2/2)` and `aspect = ax1/ax2`, so `ax1 = sqrt(4*area*aspect/pi)` recovers it losslessly up to float rounding. Measured worst-case error over 200k random ellipses: **2.8e-14 px**, against a 0.5px gate — 13 orders of magnitude of headroom. Do NOT chase this if Task 14's gate fails; it is not the cause.
+
+Note `measure.py` CANNOT return `OBBResult` directly: `OBBResult` lives in `core/inference/result.py`, and `core/inference -> core/background` is the established edge, so the reverse would be circular. Assembling `OBBResult` is necessarily the stage's job.
