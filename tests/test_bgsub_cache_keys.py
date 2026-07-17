@@ -1,5 +1,7 @@
 """Regression tests for background-subtraction cache keys."""
 
+import pytest
+
 from hydra_suite.core.inference.cache.keys import bgsub_detection_cache_key
 from hydra_suite.core.inference.config import BgSubConfig
 
@@ -29,6 +31,13 @@ def _base_params() -> dict:
         "BACKGROUND_CONVERGENCE_EPSILON": 1e-4,
         "BACKGROUND_CONVERGENCE_FRAMES": 30,
         "BACKGROUND_CONVERGENCE_PIXEL_DELTA": 5.0,
+        "ENABLE_ADDITIONAL_DILATION": False,
+        "DILATION_ITERATIONS": 2,
+        "CONSERVATIVE_ERODE_ITER": 1,
+        "REFERENCE_BODY_SIZE": 50.0,
+        "MIN_CONTOUR_AREA": 5.0,
+        "MAX_TARGETS": 20,
+        "MAX_CONTOUR_MULTIPLIER": 20,
     }
 
 
@@ -117,3 +126,25 @@ def test_lighting_median_window_is_keyed():
     p["LIGHTING_MEDIAN_WINDOW"] = 11
     b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
     assert a.config_hash != b.config_hash
+
+
+@pytest.mark.parametrize(
+    "param,old,new",
+    [
+        ("ENABLE_ADDITIONAL_DILATION", False, True),
+        ("DILATION_ITERATIONS", 2, 5),
+        ("CONSERVATIVE_ERODE_ITER", 1, 3),
+        ("REFERENCE_BODY_SIZE", 50.0, 100.0),
+        ("MIN_CONTOUR_AREA", 5.0, 10.0),
+        ("MAX_TARGETS", 20, 10),
+        ("MAX_CONTOUR_MULTIPLIER", 20, 10),
+    ],
+)
+def test_bgsub_param_is_keyed(param, old, new):
+    """Each of these affects bg-sub detection output and must invalidate the cache."""
+    p = _base_params()
+    p[param] = old
+    a = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    p[param] = new
+    b = bgsub_detection_cache_key(BgSubConfig.from_params(p))
+    assert a.config_hash != b.config_hash, f"{param} change did not affect config_hash"
