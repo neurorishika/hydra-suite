@@ -58,12 +58,12 @@ def detection_cache_key(config: OBBConfig) -> CacheKey:
 # reusable only when these (and the video signature) match — mirroring how the OBB
 # detection cache keys on model + config.
 _BGSUB_KEY_PARAMS = (
-    "SUBTRACTION_THRESHOLD",
+    "THRESHOLD_VALUE",
     "DARK_ON_LIGHT_BACKGROUND",
     "ENABLE_CONSERVATIVE_SPLIT",
     "ENABLE_ADAPTIVE_BACKGROUND",
     "BACKGROUND_LEARNING_RATE",
-    "BACKGROUND_PRIME_SECONDS",
+    "BACKGROUND_PRIME_FRAMES",
     "ENABLE_SIZE_FILTERING",
     "MIN_OBJECT_SIZE",
     "MAX_OBJECT_SIZE",
