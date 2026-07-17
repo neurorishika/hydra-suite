@@ -10,6 +10,62 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-16-bgsub-inference-stage-design.md`
 
+## Execution Environment (READ FIRST — the plan's test commands depend on this)
+
+Work happens in the worktree `.worktrees/bgsub-inference-stage` on branch
+`feature/bgsub-inference-stage`.
+
+**The conda env's editable install points at the MAIN checkout, not this
+worktree.** Without an override, `import hydra_suite` resolves to
+`<repo>/src/hydra_suite` — so you would edit worktree files while pytest
+imported a different tree, and your tests would pass against code you never
+changed. Verified: `PYTHONPATH` wins over the editable `.pth`, including under
+pytest.
+
+**Every python/pytest invocation in this plan MUST use this form:**
+
+```bash
+PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/$PY -m pytest <files> -v --timeout=60
+```
+
+Shorthand used below: `PY` = `PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/python`.
+
+Sanity-check the override at any time:
+
+```bash
+PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/$PY -c "import hydra_suite; print(hydra_suite.__file__)"
+# MUST contain 'bgsub-inference-stage'. If it does not, STOP — you are testing the wrong tree.
+```
+
+**NEVER run the full suite** (`pytest tests/`). It is messy and contains hangs.
+Run only the named files, always with `--timeout=60` (pytest-timeout is
+installed) so a hang fails instead of stalling.
+
+**Known pre-existing failure — do NOT try to fix it, it is unrelated:**
+`tests/test_bg_parameter_helper.py::test_bg_parameter_helper_slider_scrub_does_not_render_until_release`
+(asserts `"3/3"`, gets `"0/0"`). It fails on a clean baseline.
+
+**Baseline (established before any work):** 107 passed, 1 failed (the above)
+across `test_background_model.py`, `test_background_model_integration.py`,
+`test_detectors_engine.py`, `test_detector_integration.py`,
+`test_inference_cache_keys.py`, `test_bg_parameter_helper.py`.
+
+**Existing tests this plan will break — they must be updated by the task that
+breaks them, not left red:**
+
+| File | Broken by |
+|---|---|
+| `tests/test_background_model.py` | Task 4 (`update_and_get_background` loses `tracking_stabilized`) |
+| `tests/test_background_model_integration.py` | Task 2 (deterministic priming), Task 4 |
+| `tests/test_detectors_engine.py` | Task 5 (`ObjectDetector` → `BackgroundMeasurer`, 5-tuple → 4-tuple) |
+| `tests/test_detector_integration.py` | Task 5, Task 13 (`create_detector` deleted) |
+| `tests/test_inference_cache_keys.py` | Task 8 (schema bump; may assert a literal version) |
+| `tests/test_bg_parameter_helper.py` | Task 13 (`bg_optimizer` moves to `core/background/optimizer.py`) |
+
+Each task's verification step must run its own new tests AND the affected
+existing files from this table. Note `pytest.ini` (not `pyproject.toml`, despite
+CLAUDE.md) is the live pytest config; it already applies `-m "not benchmark"`.
+
 ## Global Constraints
 
 - **Dependency direction:** `core/inference` must NEVER import from `core/detectors`. `core/inference -> core/background` is legal. Core must never import from any app layer (trackerkit, posekit, etc.).
@@ -18,7 +74,7 @@
 - **Angles:** radians (bg-sub already emits `np.deg2rad(ang)`).
 - **Confidences:** `np.nan` for bg-sub. All downstream consumers must be NaN-safe.
 - **Formatting:** run `make format` before committing (autopep8 → black → isort). Pre-commit hooks run black/ruff/flake8/isort automatically.
-- **Tests:** `python -m pytest tests/ -m "not benchmark"`. Single file: `python -m pytest tests/test_<name>.py -v`.
+- **Tests:** named files only, never the full suite — see "Execution Environment" above. `$PY -m pytest tests/test_<name>.py -v --timeout=60`.
 - **Legacy policy:** never import from `legacy/` in `src/` or `tests/`.
 - **Spec corrections found during planning** (the spec is slightly wrong on both; trust this plan):
   - `BackgroundModel._setup_gpu_acceleration` (`core/background/model.py:197-239`) DOES gate on the `ENABLE_GPU_BACKGROUND` param. It is not config-blind — it simply never consults `runtime_tier`. Task 11 changes only the tier consultation.
@@ -127,7 +183,7 @@ def test_key_params_all_exist_in_codebase_naming():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: `test_threshold_change_invalidates_cache_key` FAILS (hashes equal — both params resolve to `None`), `test_prime_frames_change_invalidates_cache_key` FAILS, `test_key_params_all_exist_in_codebase_naming` FAILS.
 
 - [ ] **Step 3: Fix the param names**
@@ -138,7 +194,7 @@ In `src/hydra_suite/core/inference/cache/keys.py`, in `_BGSUB_KEY_PARAMS`:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
@@ -252,7 +308,7 @@ def test_priming_covers_video_temporally(synthetic_video):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: `test_priming_is_deterministic` FAILS — arrays differ because `random.sample` picks different frames each construction.
 
 - [ ] **Step 3: Replace random sampling with evenly-spaced indices**
@@ -277,7 +333,7 @@ Then remove the now-unused `import random` at line 7.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: 2 passed.
 
 - [ ] **Step 5: Update the equivalence harness comment**
@@ -296,8 +352,8 @@ Leave the `_random.seed(0)` / `_np.random.seed(0)` calls in place — they are h
 
 - [ ] **Step 6: Run the full test suite**
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
-Expected: no new failures.
+Run: `$PY -m pytest tests/test_background_model.py tests/test_background_model_integration.py tests/test_detectors_engine.py tests/test_detector_integration.py tests/test_inference_cache_keys.py -q --timeout=60`
+Expected: no failures beyond the known-bad listed in "Execution Environment". NEVER run the full suite.
 
 - [ ] **Step 7: Commit**
 
@@ -355,7 +411,7 @@ def test_adaptive_disabled_never_switches_to_frozen_snapshot():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py::test_adaptive_disabled_never_switches_to_frozen_snapshot -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py::test_adaptive_disabled_never_switches_to_frozen_snapshot -v`
 Expected: FAIL — returns the frozen `adaptive_background` (200s) rather than the lightest (240s).
 
 - [ ] **Step 3: Gate the switch on adaptive being enabled**
@@ -383,7 +439,7 @@ with:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Commit**
@@ -477,7 +533,7 @@ def test_convergence_latch_is_monotonic():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k convergence -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k convergence -v`
 Expected: FAIL — `BackgroundModel` has no `stabilized` attribute, and `update_and_get_background` still requires `tracking_stabilized`.
 
 - [ ] **Step 3: Add the latch to `BackgroundModel.__init__`**
@@ -584,7 +640,7 @@ Replace the whole method body (`model.py:404-437`, as amended by Task 3) with:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k convergence -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k convergence -v`
 Expected: 3 passed.
 
 Note `test_adaptive_disabled_never_switches_to_frozen_snapshot` from Task 3 now fails to call — update it to drop the `tracking_stabilized` argument:
@@ -610,7 +666,7 @@ def test_adaptive_disabled_never_switches_to_frozen_snapshot():
     np.testing.assert_array_equal(result, cv2.convertScaleAbs(model.lightest_background))
 ```
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: 6 passed.
 
 - [ ] **Step 6: Update the three callers**
@@ -692,8 +748,8 @@ Expected: no output.
 
 - [ ] **Step 9: Run the full test suite**
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
-Expected: no new failures.
+Run: `$PY -m pytest tests/test_background_model.py tests/test_background_model_integration.py tests/test_detectors_engine.py tests/test_detector_integration.py tests/test_inference_cache_keys.py -q --timeout=60`
+Expected: no failures beyond the known-bad listed in "Execution Environment". NEVER run the full suite.
 
 - [ ] **Step 10: Commit**
 
@@ -834,7 +890,7 @@ def test_too_many_contours_returns_empty_four_tuple():
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
 - [ ] **Step 4: Delete the old module and fix re-exports**
@@ -920,7 +976,7 @@ def test_corners_from_ellipse_centroid_is_mean_of_corners():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k corners -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k corners -v`
 Expected: FAIL — `ImportError: cannot import name 'corners_from_ellipse'`.
 
 - [ ] **Step 3: Implement `corners_from_ellipse`**
@@ -957,7 +1013,7 @@ def corners_from_ellipse(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k corners -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k corners -v`
 Expected: 3 passed.
 
 - [ ] **Step 5: Add `BgSubConfig`**
@@ -1054,7 +1110,7 @@ def test_bgsub_config_retains_raw_params():
     assert cfg.params["CUSTOM"] == "x"
 ```
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
 - [ ] **Step 7: Commit**
@@ -1152,7 +1208,7 @@ def test_run_bgsub_is_deterministic(synthetic_video):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
 Expected: FAIL — `ModuleNotFoundError: hydra_suite.core.inference.stages.bgsub`.
 
 - [ ] **Step 3: Implement the stage**
@@ -1363,7 +1419,7 @@ Task 11 implements tier-driven selection. For now add to `src/hydra_suite/core/b
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k run_bgsub -v`
 Expected: 2 passed. (`test_run_bgsub_emits_obbresult_with_corners` requires Task 9's `InferenceConfig(obb=None, bgsub=...)`; if it errors on config construction, skip it with `pytest.mark.xfail(reason="needs Task 9 config wiring")` and remove the marker in Task 9.)
 
 - [ ] **Step 6: Commit**
@@ -1432,7 +1488,7 @@ Update the four Task 1 tests to pass `BgSubConfig.from_params(...)` instead of a
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: FAIL — `bgsub_detection_cache_key` calls `.get()` on a `BgSubConfig`.
 
 - [ ] **Step 3: Add the convergence params and change the signature**
@@ -1485,10 +1541,10 @@ CACHE_SCHEMA_VERSION = <previous + 1>
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_cache_keys.py -v`
+Run: `$PY -m pytest tests/test_bgsub_cache_keys.py -v`
 Expected: 7 passed.
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
+Run: `$PY -m pytest tests/test_inference_cache_keys.py -q --timeout=60`
 Expected: cache tests that assert a literal schema version may fail — update those literals; do not revert the bump.
 
 - [ ] **Step 6: Commit**
@@ -1550,7 +1606,7 @@ def test_config_detection_source_reports_obb():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -k detection_source -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -k detection_source -v`
 Expected: FAIL — `InferenceConfig` has no `bgsub` field and `obb` is required.
 
 - [ ] **Step 3: Make the detection source a choice**
@@ -1704,16 +1760,16 @@ If `test_run_bgsub_emits_obbresult_with_corners` was marked xfail in Task 7, rem
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
-Run: `python -m pytest tests/ -m "not benchmark" -q`
-Expected: no new failures. Any test constructing `InferenceConfig(obb=...)` positionally still works since `obb` stays first.
+Run: `$PY -m pytest tests/test_background_model.py tests/test_background_model_integration.py tests/test_detectors_engine.py tests/test_detector_integration.py tests/test_inference_cache_keys.py -q --timeout=60`
+Expected: no failures beyond the known-bad listed in "Execution Environment". NEVER run the full suite. Any test constructing `InferenceConfig(obb=...)` positionally still works since `obb` stays first.
 
 - [ ] **Step 7: Verify imports still resolve**
 
 ```bash
-python -c "import hydra_suite"
+$PY -c "import hydra_suite"
 python -c "from hydra_suite.core.inference import InferenceConfig, InferenceRunner"
 ```
 Expected: no output, exit 0.
@@ -1773,7 +1829,7 @@ def test_cpu_tier_does_not_enable_gpu():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_bgsub_stage.py::test_cpu_tier_does_not_enable_gpu -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py::test_cpu_tier_does_not_enable_gpu -v`
 Expected: FAIL — `configure_runtime` is a no-op stub (Task 7).
 
 - [ ] **Step 3: Add the `"bgsub"` pipeline key to the resolver**
@@ -1860,7 +1916,7 @@ In `src/hydra_suite/runtime/compute_runtime.py`, add `"bgsub"` to `_pipeline_sup
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_bgsub_stage.py -v`
+Run: `$PY -m pytest tests/test_bgsub_stage.py -v`
 Expected: all pass.
 
 - [ ] **Step 7: Commit**
@@ -1940,8 +1996,8 @@ At `worker.py:20`, drop `create_detector` from the `core.detectors` import. If i
 - [ ] **Step 5: Verify**
 
 ```bash
-python -c "import hydra_suite.core.tracking.worker"
-python -m pytest tests/ -m "not benchmark" -q
+$PY -c "import hydra_suite.core.tracking.worker"
+$PY -m pytest tests/test_background_model.py tests/test_detectors_engine.py tests/test_inference_cache_keys.py -q --timeout=60
 ```
 Expected: import succeeds; no new failures.
 
@@ -1997,11 +2053,11 @@ Expected: only `core/detectors/factory.py` and `core/detectors/__init__.py` (del
 - [ ] **Step 5: Verify every entry point imports**
 
 ```bash
-python -c "import hydra_suite"
+$PY -c "import hydra_suite"
 for kit in trackerkit posekit classkit refinekit detectkit filterkit; do
-  python -c "import hydra_suite.$kit" || echo "FAILED: $kit"
+  $PY -c "import hydra_suite.$kit" || echo "FAILED: $kit"
 done
-python -m pytest tests/ -m "not benchmark" -q
+$PY -m pytest tests/test_background_model.py tests/test_detectors_engine.py tests/test_inference_cache_keys.py -q --timeout=60
 ```
 Expected: no ImportError; no new test failures.
 
@@ -2062,9 +2118,9 @@ grep -rn "create_detector\|bg_detector\|bg_optimizer" src/ tests/
 Expected: no output.
 
 ```bash
-python -c "import hydra_suite"
-python -c "import hydra_suite.trackerkit"
-python -m pytest tests/ -m "not benchmark" -q
+$PY -c "import hydra_suite"
+$PY -c "import hydra_suite.trackerkit"
+$PY -m pytest tests/test_background_model.py tests/test_detectors_engine.py tests/test_inference_cache_keys.py -q --timeout=60
 ```
 Expected: no ImportError; no new failures.
 
