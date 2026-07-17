@@ -37,6 +37,16 @@ PYTHONPATH="$PWD/src" /Users/neurorishika/miniforge3/envs/hydra-mps/bin/$PY -c "
 # MUST contain 'bgsub-inference-stage'. If it does not, STOP — you are testing the wrong tree.
 ```
 
+**DO NOT run `make format`** — it is BROKEN in this environment, for reasons
+unrelated to this work: it shells out to the base conda env's `black`
+(`~/miniforge3/bin/black`), whose `pathspec` dependency is broken
+(`ModuleNotFoundError: No module named 'pathspec.patterns.gitignore'`). The
+repo's pre-commit hooks run black/ruff/flake8/isort in their own isolated envs
+and DO work — they run automatically on `git commit`, so formatting is handled.
+If you want to format manually, use the working copies in the hydra-mps env:
+`/Users/neurorishika/miniforge3/envs/hydra-mps/bin/black <files>` and
+`/Users/neurorishika/miniforge3/envs/hydra-mps/bin/isort <files>`.
+
 **NEVER run the full suite** (`pytest tests/`). It is messy and contains hangs.
 Run only the named files, always with `--timeout=60` (pytest-timeout is
 installed) so a hang fails instead of stalling.
@@ -200,7 +210,6 @@ Expected: 4 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format
 git add tests/test_bgsub_cache_keys.py src/hydra_suite/core/inference/cache/keys.py
 git commit -m "fix(cache): bg-sub cache key hashed two param names that do not exist
 
@@ -358,7 +367,6 @@ Expected: no failures beyond the known-bad listed in "Execution Environment". NE
 - [ ] **Step 7: Commit**
 
 ```bash
-make format
 git add tests/test_bgsub_stage.py src/hydra_suite/core/background/model.py tools/equivalence/runner.py
 git commit -m "fix(background): deterministic evenly-spaced priming
 
@@ -445,7 +453,6 @@ Expected: 3 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-make format
 git add tests/test_bgsub_stage.py src/hydra_suite/core/background/model.py
 git commit -m "fix(background): ENABLE_ADAPTIVE_BACKGROUND=False no longer switches
 
@@ -754,7 +761,6 @@ Expected: no failures beyond the known-bad listed in "Execution Environment". NE
 - [ ] **Step 10: Commit**
 
 ```bash
-make format
 git add -A src/ tests/test_bgsub_stage.py
 git commit -m "feat(background): replace tracking_stabilized with a convergence latch
 
@@ -911,7 +917,6 @@ Expected: only `factory.py` (deleted in Task 13) and `preview_worker.py` (migrat
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add -A src/hydra_suite/core/background/measure.py src/hydra_suite/core/detectors/ src/hydra_suite/core/__init__.py tests/test_bgsub_stage.py
 git commit -m "refactor(background): move mask->ellipse measurement out of detectors
 
@@ -1116,7 +1121,6 @@ Expected: all pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/config.py src/hydra_suite/core/background/measure.py tests/test_bgsub_stage.py
 git commit -m "feat(inference): add BgSubConfig and ellipse->corners derivation
 
@@ -1425,7 +1429,6 @@ Expected: 2 passed. `InferenceConfig(obb=None, bgsub=...)` already exists (Task 
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/stages/bgsub.py src/hydra_suite/core/background/model.py tests/test_bgsub_stage.py
 git commit -m "feat(inference): add the bgsub detection stage
 
@@ -1550,7 +1553,6 @@ Expected: cache tests that assert a literal schema version may fail — update t
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/cache/keys.py tests/test_bgsub_cache_keys.py
 git commit -m "feat(cache): bgsub key takes BgSubConfig; bump schema version
 
@@ -1773,7 +1775,6 @@ Expected: no output, exit 0.
 - [ ] **Step 8: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/inference/ tests/test_bgsub_stage.py
 git commit -m "feat(inference): wire bgsub into InferenceConfig and InferenceRunner
 
@@ -1918,7 +1919,6 @@ Expected: all pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/runtime/ src/hydra_suite/core/background/model.py tests/test_bgsub_stage.py
 git commit -m "feat(runtime): bg-sub honors runtime_tier instead of self-selecting
 
@@ -2000,7 +2000,6 @@ Expected: import succeeds; no new failures.
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/core/tracking/worker.py
 git commit -m "refactor(tracking): worker uses InferenceRunner for bg-sub detection
 
@@ -2060,7 +2059,6 @@ Expected: no ImportError; no new test failures.
 - [ ] **Step 6: Commit**
 
 ```bash
-make format
 git add src/hydra_suite/trackerkit/gui/workers/preview_worker.py src/hydra_suite/data/dataset_generation.py src/hydra_suite/core/tracking/optimization/optimizer_workers.py
 git commit -m "refactor: migrate remaining bg-sub call sites off core/detectors
 
@@ -2132,7 +2130,6 @@ Expected: `__init__.py`, `_direct_obb_runtime.py`, `_obb_geometry.py`, `_runtime
 - [ ] **Step 5: Commit**
 
 ```bash
-make format
 git add -A src/
 git commit -m "refactor(detectors): delete create_detector; move bg_optimizer to background
 
@@ -2205,8 +2202,6 @@ Note the coverage caveat: `worm_bgsub` is a single worm clip and the only bg-sub
 
 ```bash
 git worktree remove /tmp/bgsub-baseline
-make format
-make lint-moderate
 git add -A
 git commit -m "feat(background): calibrate convergence defaults against worm_bgsub
 
