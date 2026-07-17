@@ -1,5 +1,9 @@
 """Tests for the background-subtraction inference stage."""
 
+import ast
+import inspect
+import re
+
 import cv2
 import numpy as np
 import pytest
@@ -325,12 +329,51 @@ def test_bgsub_config_from_params_reads_legacy_keys():
     )
     assert cfg.threshold_value == 42.0
     assert cfg.background_prime_frames == 99
-    assert cfg.convergence_epsilon == 0.05  # default
+    assert cfg.convergence_epsilon == 1e-4  # default
 
 
 def test_bgsub_config_retains_raw_params():
     cfg = BgSubConfig.from_params({"THRESHOLD_VALUE": 42, "CUSTOM": "x"})
     assert cfg.params["CUSTOM"] == "x"
+
+
+def test_bgsub_config_defaults_match_model_defaults():
+    """Drift guard: BgSubConfig's typed defaults must never silently diverge
+    from the legacy-key defaults that BackgroundModel._update_convergence
+    actually reads via `params.get(KEY, default)`. This class of bug (a typed
+    contract copied from a stale design doc, disagreeing with the code that
+    really consumes the params) is exactly what caused convergence_epsilon to
+    default to 0.05 instead of the real 1e-4.
+    """
+    # Empty params dict -> BackgroundModel falls back to its own hardcoded
+    # defaults, read out via the same `p.get(KEY, default) or default`
+    # pattern for every convergence-related key.
+    source = inspect.getsource(BackgroundModel._update_convergence)
+
+    field_to_key = {
+        "convergence_epsilon": "BACKGROUND_CONVERGENCE_EPSILON",
+        "convergence_frames": "BACKGROUND_CONVERGENCE_FRAMES",
+        "convergence_pixel_delta": "BACKGROUND_CONVERGENCE_PIXEL_DELTA",
+    }
+
+    cfg = BgSubConfig.from_params({})
+
+    for field_name, legacy_key in field_to_key.items():
+        match = re.search(
+            r'p\.get\(\s*["\']' + re.escape(legacy_key) + r'["\']\s*,\s*([^)]+?)\s*\)',
+            source,
+        )
+        assert (
+            match is not None
+        ), f"{legacy_key} not found in _update_convergence source"
+        # Safe: only ever evaluates a numeric/bool literal extracted via regex
+        # from the source of _update_convergence, never arbitrary input.
+        model_default = ast.literal_eval(match.group(1))
+        assert getattr(cfg, field_name) == model_default, (
+            f"BgSubConfig.{field_name} default {getattr(cfg, field_name)!r} "
+            f"disagrees with BackgroundModel's {legacy_key} default "
+            f"{model_default!r}"
+        )
 
 
 from hydra_suite.core.inference.config import (

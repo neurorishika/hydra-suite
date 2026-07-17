@@ -150,8 +150,9 @@ class BgSubConfig:
     enable_adaptive_background: bool = True
     background_learning_rate: float = 0.001
     background_prime_frames: int = 30
-    convergence_epsilon: float = 0.05
+    convergence_epsilon: float = 1e-4
     convergence_frames: int = 30
+    convergence_pixel_delta: float = 5.0
     enable_conservative_split: bool = False
     morph_kernel_size: int = 5
     dilation_kernel_size: int = 3
@@ -181,10 +182,13 @@ class BgSubConfig:
                 params.get("BACKGROUND_PRIME_FRAMES", 30) or 30
             ),
             convergence_epsilon=float(
-                params.get("BACKGROUND_CONVERGENCE_EPSILON", 0.05) or 0.05
+                params.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4
             ),
             convergence_frames=int(
                 params.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30
+            ),
+            convergence_pixel_delta=float(
+                params.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 5.0) or 5.0
             ),
             enable_conservative_split=bool(
                 params.get("ENABLE_CONSERVATIVE_SPLIT", False)
