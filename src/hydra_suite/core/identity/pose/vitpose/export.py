@@ -25,6 +25,14 @@ class ExportError(RuntimeError):
     """Raised when a model cannot be exported safely."""
 
 
+#: mmpose's exporter asserts opset_version == 11, but that is an mmpose-era
+#: constraint, not one this model imposes. We require 14+ because the graph
+#: this exporter produces (scaled-dot-product attention decomposition,
+#: GELU, and the interpolation-free pos_embed slice-add baked in by
+#: constant folding) relies on opset-14 operator semantics.
+_MIN_OPSET = 14
+
+
 def export_onnx(
     model: nn.Module,
     path: Path,
@@ -35,18 +43,28 @@ def export_onnx(
 ) -> Path:
     """Export ViTPose to ONNX at a fixed 256x192 input.
 
-    Fixed resolution is not a limitation we chose: pos_embed is a (1, 193, D) parameter
-    with no interpolation path, and constant-folding bakes the [:, 1:] + [:, :1] slice-add
-    into a constant. 256x192 is the only shape the checkpoints target.
+    Fixed resolution is not a limitation we chose: pos_embed is a (1, 193, D)
+    parameter with no interpolation path, and constant-folding bakes the
+    [:, 1:] + [:, :1] slice-add into a constant. 256x192 is the only shape
+    the checkpoints target.
 
-    opset 17, not 11: mmpose's exporter asserts opset_version == 11, but that is an
-    mmpose-era constraint, not a model one.
+    opset 17, not 11: mmpose's exporter asserts opset_version == 11, but
+    that is an mmpose-era constraint, not a model one.
     """
     if model.training:
         raise ExportError(
-            "model must be in eval() mode before export: the classic head's BatchNorm2d "
-            "layers would otherwise emit training-mode BatchNormalization and silently "
-            "produce garbage (and DropPath would trace to a random node)"
+            "model must be in eval() mode before export: the classic head's "
+            "BatchNorm2d layers would otherwise emit training-mode "
+            "BatchNormalization and silently produce garbage (and DropPath "
+            "would trace to a random node)"
+        )
+
+    if opset < _MIN_OPSET:
+        raise ExportError(
+            f"opset={opset} is below the minimum this exporter supports "
+            f"({_MIN_OPSET}). mmpose's exporter asserts opset_version == 11, "
+            "but that is an mmpose-era constraint, not one this model's graph "
+            f"tolerates -- request opset={_MIN_OPSET} or higher."
         )
 
     w, h = IMAGE_SIZE_WH
@@ -76,15 +94,26 @@ def export_onnx(
     # exporter, which requires the optional `onnxscript` package. This environment
     # only ships `onnx`/`onnxruntime`, and the legacy TorchScript-based exporter is
     # sufficient (and traces this model's control flow the same way regardless).
-    torch.onnx.export(
-        model,
-        dummy,
-        str(path),
-        input_names=["input"],
-        output_names=["output"],
-        opset_version=opset,
-        do_constant_folding=True,
-        dynamic_axes=dynamic_axes,
-        dynamo=False,
-    )
+    try:
+        torch.onnx.export(
+            model,
+            dummy,
+            str(path),
+            input_names=["input"],
+            output_names=["output"],
+            opset_version=opset,
+            do_constant_folding=True,
+            dynamic_axes=dynamic_axes,
+            dynamo=False,
+        )
+    except (TypeError, ImportError) as e:
+        # TypeError: a future torch drops the `dynamo` kwarg entirely.
+        # ImportError/ModuleNotFoundError: the kwarg survives but the legacy
+        # TorchScript-based exporter module it selects has been removed.
+        raise ExportError(
+            f"torch.onnx.export rejected the legacy exporter on torch "
+            f"{torch.__version__}: {e}. Either install `onnxscript` and switch to "
+            f"dynamo=True, or pin an older torch. dynamo=False is used here because "
+            f"torch 2.11 defaults to the dynamo exporter, which requires onnxscript."
+        ) from e
     return path

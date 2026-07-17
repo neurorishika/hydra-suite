@@ -25,6 +25,44 @@ def test_export_refuses_a_training_mode_model(tmp_path):
         export_onnx(m, tmp_path / "x.onnx")
 
 
+def test_export_refuses_a_sub_minimum_opset(tmp_path):
+    """The recipe documents 'opset 14+'; a caller passing an older opset (mmpose's
+    exporter historically asserted opset_version == 11) must get an ExportError naming
+    the minimum, not an opaque failure deep inside torch.onnx.export or onnxruntime."""
+    m = build_vitpose("B", "classic").eval()
+    with pytest.raises(ExportError, match="opset"):
+        export_onnx(m, tmp_path / "x.onnx", opset=11)
+
+
+def test_legacy_exporter_rejection_raises_export_error(tmp_path, monkeypatch):
+    """When torch.onnx.export can no longer honour dynamo=False (kwarg removed, or the
+    legacy TorchScript exporter module it selects is gone), export_onnx must translate
+    the raw TypeError/ImportError into an ExportError naming the cause and the two real
+    remedies -- not let the upstream exception leak through unexplained.
+
+    We cannot force a real future torch to drop the legacy exporter here, so this
+    exercises the wrapper directly: monkeypatch torch.onnx.export to raise the failure
+    modes we catch and assert the translation happens with a useful message.
+    """
+    import hydra_suite.core.identity.pose.vitpose.export as export_mod
+
+    m = build_vitpose("B", "classic").eval()
+
+    def _raise_type_error(*args, **kwargs):
+        raise TypeError("export() got an unexpected keyword argument 'dynamo'")
+
+    monkeypatch.setattr(export_mod.torch.onnx, "export", _raise_type_error)
+    with pytest.raises(ExportError, match="legacy exporter"):
+        export_onnx(m, tmp_path / "x.onnx")
+
+    def _raise_import_error(*args, **kwargs):
+        raise ImportError("No module named 'torch.onnx._internal.torchscript_exporter'")
+
+    monkeypatch.setattr(export_mod.torch.onnx, "export", _raise_import_error)
+    with pytest.raises(ExportError, match="legacy exporter"):
+        export_onnx(m, tmp_path / "y.onnx")
+
+
 @requires_weights
 def test_gate_d_onnx_matches_torch(tmp_path):
     """GATE D(onnx). ONNX on the CPU EP is the same math at the same precision, so it
