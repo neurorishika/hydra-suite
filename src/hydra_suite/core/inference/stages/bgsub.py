@@ -22,7 +22,7 @@ from hydra_suite.core.background.model import BackgroundModel
 from hydra_suite.utils.image_processing import apply_image_adjustments
 
 from ..config import BgSubConfig
-from ..result import DETECTION_ID_STRIDE, OBBResult
+from ..result import OBBResult
 from ..runtime import RuntimeContext
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def _empty_result(frame_idx: int) -> OBBResult:
         shapes=np.zeros((0, 2), np.float32),
         confidences=np.zeros((0,), np.float32),
         corners=np.zeros((0, 4, 2), np.float32),
-        detection_ids=np.zeros((0,), np.int64),
+        detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
     )
 
 
@@ -79,8 +79,14 @@ def _to_gray(frame: np.ndarray, config: BgSubConfig, use_gpu: bool) -> np.ndarra
             frame, (0, 0), fx=resize_f, fy=resize_f, interpolation=cv2.INTER_AREA
         )
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Defaults are the identity transform and match cli_config.py:783-785, so an
+    # under-specified param dict is a no-op here rather than a KeyError.
     return apply_image_adjustments(
-        gray, p["BRIGHTNESS"], p["CONTRAST"], p["GAMMA"], use_gpu
+        gray,
+        p.get("BRIGHTNESS", 0),
+        p.get("CONTRAST", 1.0),
+        p.get("GAMMA", 1.0),
+        use_gpu,
     )
 
 
@@ -128,9 +134,7 @@ def run_bgsub(
         ]
     ).astype(np.float32)
 
-    detection_ids = np.array(
-        [frame_idx * DETECTION_ID_STRIDE + i for i in range(len(meas))], np.int64
-    )
+    detection_ids = OBBResult.make_detection_ids(frame_idx, len(meas))
 
     return OBBResult(
         frame_idx=frame_idx,

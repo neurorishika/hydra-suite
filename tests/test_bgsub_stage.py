@@ -456,3 +456,18 @@ def test_run_bgsub_is_deterministic(synthetic_video):
     assert len(runs[0]) == len(runs[1])
     for a, b in zip(runs[0], runs[1]):
         np.testing.assert_array_equal(a, b)
+
+
+def test_to_gray_tolerates_underspecified_params():
+    """An under-specified param dict must be a no-op, not a KeyError.
+
+    BRIGHTNESS/CONTRAST/GAMMA have no typed field on BgSubConfig, so a caller
+    building one from a sparse dict would otherwise crash on the first frame.
+    """
+    from hydra_suite.core.inference.stages.bgsub import _to_gray
+
+    cfg = BgSubConfig.from_params({})
+    frame = np.full((8, 8, 3), 128, dtype=np.uint8)
+    out = _to_gray(frame, cfg, False)
+    assert out.shape == (8, 8)
+    np.testing.assert_array_equal(out, cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
