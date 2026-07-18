@@ -62,3 +62,18 @@ def test_no_src_module_reads_the_removed_batching_keys():
         text=True,
     )
     assert result.stdout == ""
+
+
+def test_worker_module_no_longer_reads_enable_yolo_batching():
+    """The key is gone from config; worker.py must not read it back.
+
+    A stale advanced_config.get('enable_yolo_batching') would silently read
+    False for every project saved after this change, flipping the prefetcher
+    on for everyone -- the exact regression this plan avoids.
+    """
+    from pathlib import Path
+
+    import hydra_suite.core.tracking.worker as worker_mod
+
+    source = Path(worker_mod.__file__).read_text()
+    assert "enable_yolo_batching" not in source

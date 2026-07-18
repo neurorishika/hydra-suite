@@ -759,14 +759,18 @@ class TrackingWorker(QThread):
                 == "realtime",
             )
         )
+        # NOTE: this no longer selects a detection architecture -- the legacy
+        # two-phase prepass it once gated is gone, and InferenceRunner owns the
+        # batch pass. It survives as the condition for the Phase 2 frame
+        # prefetcher (see use_prefetcher below), profiler metadata, and the
+        # status string. The old GPU-batching-toggle term was dropped with
+        # the legacy batching config; it defaulted to True, so this is
+        # unchanged for any config that did not explicitly disable it.
         use_batched_detection = (
             not self.preview_mode  # Not preview mode
             and not self.backward_mode  # Not backward mode (uses cache)
             and detection_method == "yolo_obb"  # Only YOLO benefits from batching
             and not realtime_tracking_mode_requested
-            and advanced_config.get(
-                "enable_yolo_batching", True
-            )  # Batching enabled in config
             and self.detection_cache_path
             is not None  # Need cache path for two-phase approach
         )
