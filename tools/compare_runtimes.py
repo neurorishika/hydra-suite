@@ -66,7 +66,7 @@ def read_frame(idx: int) -> np.ndarray:
 from ultralytics import YOLO
 
 # ─── Build the three direct executors ─────────────────────────────────────────
-from hydra_suite.core.detectors._direct_obb_runtime import (
+from hydra_suite.core.inference.direct_executors import (
     DirectONNXOBBExecutor,
     DirectPyTorchCUDAOBBExecutor,
     DirectTensorRTOBBExecutor,

@@ -46,7 +46,9 @@ class RuntimeArtifactMixin:
         if not str(getattr(self, "device", "")).startswith("cuda"):
             return
         try:
-            from ._direct_obb_runtime import create_direct_obb_executor
+            from hydra_suite.core.inference.direct_executors import (
+                create_direct_obb_executor,
+            )
 
             self._direct_obb_executor = create_direct_obb_executor(
                 runtime=runtime,
@@ -95,7 +97,9 @@ class RuntimeArtifactMixin:
         if not str(getattr(self, "device", "")).startswith("cuda"):
             return
         try:
-            from ._direct_obb_runtime import create_direct_obb_executor
+            from hydra_suite.core.inference.direct_executors import (
+                create_direct_obb_executor,
+            )
 
             self._direct_obb_executor = create_direct_obb_executor(
                 runtime="cuda",
@@ -136,7 +140,9 @@ class RuntimeArtifactMixin:
         if not str(getattr(self, "device", "")).startswith("cuda"):
             return
         try:
-            from ._direct_obb_runtime import create_direct_detect_executor
+            from hydra_suite.core.inference.direct_executors import (
+                create_direct_detect_executor,
+            )
 
             self._direct_detect_executor = create_direct_detect_executor(
                 runtime=runtime,

@@ -3,10 +3,10 @@
 This is a CLEAN port of the load + auto-export + direct-executor selection logic
 from the legacy ``core/detectors/_runtime_artifacts.py`` (``_try_load_onnx_model``,
 ``_try_load_tensorrt_model``, ``_maybe_enable_direct_obb_executor``,
-``_maybe_enable_direct_cuda_obb_executor``) and ``core/detectors/_direct_obb_runtime.py``
+``_maybe_enable_direct_cuda_obb_executor``) and ``core/inference/direct_executors.py``
 (``create_direct_obb_executor``).
 
-It deliberately does NOT import from ``core/detectors`` — the legacy code is a
+It delegates to the sibling ``direct_executors`` module — the legacy code is a
 mixin entangled with detector state (``self.params``, ``self.device``,
 session-disable tracking, CoreML CPU-fallback bookkeeping, batch-override
 machinery). Here we port only the standalone essence needed by the new
@@ -31,7 +31,7 @@ Note: onnx_* runtimes are NOT supported for OBB. The production pipeline
 (runtime_to_compute_runtime) only emits {cpu, mps, cuda, tensorrt, coreml}.
 
 Square-letterbox parity: the direct executors (ported in
-``core/detectors/_direct_obb_runtime.py``) use ``LetterBox(auto=False)`` so the
+``core/inference/direct_executors.py``) use ``LetterBox(auto=False)`` so the
 model always sees a square ``imgsz×imgsz`` input — identical preprocessing for
 the PyTorch-CUDA, ONNX, and TensorRT paths. The CUDA runtime here returns the
 plain torch model (the existing ``run_obb`` native-CUDA path consumes its raw
@@ -224,7 +224,7 @@ def _create_direct_executor(
 ) -> Any:
     """Create a direct ONNX/TRT executor (square-letterbox preprocessing).
 
-    Delegates to the ported ``core/detectors/_direct_obb_runtime`` factory. The
+    Delegates to the ported ``core/inference/direct_executors`` factory. The
     executors there use ``LetterBox(auto=False)`` — identical square-letterbox
     preprocessing across the PyTorch-CUDA, ONNX, and TRT paths, which is the
     parity guarantee enforced by legacy ``_maybe_enable_direct_cuda_obb_executor``.
@@ -238,7 +238,7 @@ def _create_direct_executor(
     as an angle and always yields ``Results.boxes is None`` (mirrors legacy's
     separate ``_maybe_enable_direct_detect_executor``).
     """
-    from hydra_suite.core.detectors._direct_obb_runtime import (
+    from .direct_executors import (
         create_direct_detect_executor,
         create_direct_obb_executor,
     )
