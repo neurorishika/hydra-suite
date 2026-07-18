@@ -685,6 +685,47 @@ class InferenceRunner:
 
         return frame_result
 
+    def detect_batch(
+        self,
+        frames: "list[np.ndarray]",
+        frame_indices: "list[int] | None" = None,
+        roi_mask: "np.ndarray | None" = None,
+    ) -> "list[OBBResult]":
+        """Run OBB detection over a list of frames, returning filtered results
+        in memory. No cache is read or written. Mirrors run_realtime's
+        detect+filter prefix; for the dataset-generation batched path.
+        """
+        if self._models.obb is None:
+            raise RuntimeError(
+                "detect_batch requires an OBB detection config (config.obb)"
+            )
+        frames = list(frames)
+        if frame_indices is None:
+            frame_indices = list(range(len(frames)))
+
+        raw_list = run_obb(frames, self._models.obb, self.config.obb, self.runtime)
+        results: list[OBBResult] = []
+        for raw, f_idx in zip(raw_list, frame_indices):
+            if isinstance(raw, _RawOBBTensors):
+                raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
+            else:
+                raw_obb = raw
+            raw_obb = OBBResult(
+                frame_idx=f_idx,
+                centroids=raw_obb.centroids,
+                angles=raw_obb.angles,
+                sizes=raw_obb.sizes,
+                shapes=raw_obb.shapes,
+                confidences=raw_obb.confidences,
+                corners=raw_obb.corners,
+                detection_ids=OBBResult.make_detection_ids(
+                    f_idx, raw_obb.num_detections
+                ),
+            )
+            filtered_obb, _ = filter_for_source(self.config, raw_obb, roi_mask)
+            results.append(filtered_obb)
+        return results
+
     def _build_pipeline(self, caches: _CacheSet) -> Pipeline:
         """Construct the depth=1 Pipeline that drives the batch stage layer.
 
