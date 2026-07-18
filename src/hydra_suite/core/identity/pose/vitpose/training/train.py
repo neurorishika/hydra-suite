@@ -87,7 +87,7 @@ def train(cfg: RunConfig) -> dict:
         )
 
     metrics_path = out_dir / "metrics.csv"
-    if not metrics_path.exists():
+    if start_epoch == 0 or not metrics_path.exists():
         metrics_path.write_text(
             "epoch,train_loss,val_loss,pck@0.05,pck@0.1\n", encoding="utf-8"
         )

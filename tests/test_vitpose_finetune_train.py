@@ -157,3 +157,48 @@ def test_resume_restores_lr_scheduler_and_metrics_header(tmp_path):
     # Only epoch 4 ran (resumed at start_epoch=4, epochs=5).
     assert len(lines) == 2
     assert lines[1].split(",")[0] == "4"
+
+
+def test_fresh_rerun_overwrites_stale_metrics_csv(tmp_path):
+    # Regression guard: a non-resume run (start_epoch == 0) into an output_dir
+    # that already has a metrics.csv from a prior run must truncate + rewrite
+    # the header, not append onto the stale file (which would produce a
+    # headerless file with duplicate epoch numbers).
+    ds = tmp_path / "ds"
+    _tiny_dataset(ds)
+    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+
+    pre = tmp_path / "pre.pth"
+    torch.save({"state_dict": build_vitpose("S", "classic", 3).state_dict()}, pre)
+
+    out = tmp_path / "run"
+    cfg = RunConfig(
+        init_checkpoint=str(pre),
+        variant="S",
+        num_keypoints=3,
+        dataset_dir=str(ds),
+        output_dir=str(out),
+        device="cpu",
+        epochs=2,
+        batch_size=4,
+        lr=1e-3,
+        val_fraction=0.25,
+        drop_path=0.0,
+        seed=0,
+    )
+    train(cfg)
+
+    metrics_path = out / "metrics.csv"
+    assert metrics_path.exists()
+    first_run_lines = metrics_path.read_text().strip().splitlines()
+    assert len(first_run_lines) == 3  # header + 2 epoch rows
+
+    # Rerun fresh (no resume_from) into the SAME output_dir.
+    train(cfg)
+
+    lines = metrics_path.read_text().strip().splitlines()
+    assert lines[0] == "epoch,train_loss,val_loss,pck@0.05,pck@0.1"
+    assert lines.count(lines[0]) == 1  # exactly one header row
+    assert len(lines) == 3  # header + 2 epoch rows, no stale duplicates
+    assert lines[1].split(",")[0] == "0"
+    assert lines[2].split(",")[0] == "1"
