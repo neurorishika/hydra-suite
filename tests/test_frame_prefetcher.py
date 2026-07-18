@@ -18,7 +18,6 @@ import numpy as np
 
 from hydra_suite.utils.frame_prefetcher import (
     FramePrefetcher,
-    FramePrefetcherBackward,
     SequentialScanPrefetcher,
     SparseFramePrefetcher,
 )
@@ -244,110 +243,6 @@ class TestFramePrefetcher:
             # Should not crash
             prefetcher.stop()
 
-            cap.release()
-        finally:
-            Path(video_path).unlink(missing_ok=True)
-
-
-class TestFramePrefetcherBackward:
-    """Test suite for FramePrefetcherBackward class."""
-
-    def test_initialization_with_total_frames(self):
-        """Test initialization with explicit total_frames."""
-        video_path = create_test_video(15)
-        try:
-            cap = cv2.VideoCapture(video_path)
-            prefetcher = FramePrefetcherBackward(cap, buffer_size=2, total_frames=15)
-
-            assert prefetcher.total_frames == 15
-            assert prefetcher.current_frame_idx == 14  # 0-indexed, so last frame is 14
-
-            cap.release()
-        finally:
-            Path(video_path).unlink(missing_ok=True)
-
-    def test_initialization_auto_detect_frames(self):
-        """Test initialization with auto-detected total_frames."""
-        video_path = create_test_video(20)
-        try:
-            cap = cv2.VideoCapture(video_path)
-            prefetcher = FramePrefetcherBackward(cap, buffer_size=2)
-
-            # Should auto-detect from video properties
-            assert prefetcher.total_frames >= 20
-            assert prefetcher.current_frame_idx >= 19
-
-            cap.release()
-        finally:
-            Path(video_path).unlink(missing_ok=True)
-
-    def test_read_backward(self):
-        """Test reading frames in backward order."""
-        num_frames = 10
-        video_path = create_test_video(num_frames)
-        try:
-            cap = cv2.VideoCapture(video_path)
-            prefetcher = FramePrefetcherBackward(
-                cap, buffer_size=2, total_frames=num_frames
-            )
-            prefetcher.start()
-
-            frames_read = []
-            while True:
-                ret, frame = prefetcher.read()
-                if not ret:
-                    break
-                frames_read.append(frame)
-
-            # Should read all frames in reverse order
-            assert len(frames_read) == num_frames
-
-            prefetcher.stop()
-            cap.release()
-        finally:
-            Path(video_path).unlink(missing_ok=True)
-
-    def test_backward_context_manager(self):
-        """Test using FramePrefetcherBackward as a context manager."""
-        video_path = create_test_video(10)
-        try:
-            cap = cv2.VideoCapture(video_path)
-
-            with FramePrefetcherBackward(
-                cap, buffer_size=2, total_frames=10
-            ) as prefetcher:
-                assert prefetcher._started
-                ret, frame = prefetcher.read()
-                assert ret is True
-                assert frame is not None
-
-            assert not prefetcher._started
-
-            cap.release()
-        finally:
-            Path(video_path).unlink(missing_ok=True)
-
-    def test_backward_full_iteration(self):
-        """Test full backward iteration through video."""
-        num_frames = 15
-        video_path = create_test_video(num_frames)
-        try:
-            cap = cv2.VideoCapture(video_path)
-            prefetcher = FramePrefetcherBackward(
-                cap, buffer_size=3, total_frames=num_frames
-            )
-            prefetcher.start()
-
-            count = 0
-            while True:
-                ret, frame = prefetcher.read()
-                if not ret:
-                    break
-                count += 1
-
-            assert count == num_frames
-
-            prefetcher.stop()
             cap.release()
         finally:
             Path(video_path).unlink(missing_ok=True)
