@@ -174,3 +174,42 @@ Once Phases A/C/D land, no live consumer remains. In dependency order:
   omits the four private modules that postdate it, and it warns its own final-scan
   greps "pass vacuously." This spec supersedes it; fold any live remnant (the
   `api.py` pose helper, pose-backend deletions) into Phases B/C/E.
+
+### Deferred follow-ups inherited from the bg-sub stage work (merge 939e91d)
+
+The bg-sub-as-first-class-stage branch (`docs/superpowers/specs/2026-07-16-bgsub-inference-stage-design.md`)
+left three follow-ups whose natural home is this project. Two others from that
+review were quick fixes, landed separately in the bg-sub follow-up branch
+(GPU-vs-CPU lighting rounding parity in `utils/image_processing.py`; deletion of
+the dead `tracking_counts`/`total_cost` chain in `worker.py`).
+
+- **Move the Qt worker classes out of `core/background/optimizer.py` (Phase A/E).**
+  `optimizer.py` (relocated from `core/detectors/bg_optimizer.py`, moved as-is)
+  defines two classes that structurally inherit `QThread` —
+  `BgSubtractionOptimizer(QThread)` (`:523`) and `BgDetectionPreviewWorker(QThread)`
+  (`:846`), with `PySide6` `Signal`s. This is a `core`→GUI-framework
+  dependency-direction violation baked into the class hierarchy, not a stray
+  import. Fix: separate the pure Optuna/optimization logic (stays in `core`) from
+  the Qt wrapper (moves to the `trackerkit` app layer), or rewrite the workers not
+  to inherit `QThread`. This is the same class of "Qt worker sitting in `core`"
+  cleanup Phase A already contemplates for the runtime layer — do them together.
+
+- **Retire the now-orphaned `MIN_TRACKING_COUNTS` / `min_track_seconds` param
+  (config-deprecation, pair with Phase C or F).** The bg-sub work deleted its only
+  reader (the `tracking_stabilized` latch), so this user-facing knob is now a
+  no-op. It still ships in `resources/configs/default.json`,
+  `resources/configs/ooceraea_biroi.json`, `trackerkit/cli_config.py:712`, and
+  `trackerkit/gui/orchestrators/config.py:2248`. Removing it is a user-facing
+  config change: existing user configs carry the key and the GUI exposes a control,
+  so it needs a deprecation path (accept-and-ignore, or a config migration), not a
+  bare delete. (The internal dead variable it drove is already removed in the
+  bg-sub follow-up branch; only the user-facing param remains.)
+
+- **Re-cover the legacy detector-init path (Phase F — Tests + verification).** Task 13
+  of the bg-sub work deleted `tests/test_tracking_worker_realtime_live_features.py`
+  (210 lines) because it monkeypatched removed symbols (`create_detector`,
+  `DetectionCache`). The behavior it exercised (backward-cached runs skipping
+  runtime detector init; cache-write mode when reuse is disabled) now lives in
+  `core/tracking/ingest/detection_phase.py`. Write fresh tests against that ingest
+  path rather than restoring the old ones — the old assertions targeted internals
+  that no longer exist.
