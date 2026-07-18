@@ -2163,7 +2163,7 @@ class ConfigOrchestrator:
             "USE_CUSTOM_OBB_IOU_FILTERING": True,
             "YOLO_TARGET_CLASSES": yolo_cls,
             # Live Detection Batching: feeds InferenceConfig.detection_batch_size
-            # via worker.py:_build_inference_config_from_params.
+            # via config.build_inference_config_from_params.
             "YOLO_BATCH_SIZE": self._panels.detection.spin_detection_batch_size.value(),
             "COMPUTE_RUNTIME": compute_runtime,
             "RUNTIME_TIER": self._mw._selected_runtime_tier(),
