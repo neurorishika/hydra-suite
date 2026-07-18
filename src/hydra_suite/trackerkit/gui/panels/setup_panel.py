@@ -949,7 +949,7 @@ class SetupPanel(QWidget):
     def _sync_batch_policy_controls(self, *_args) -> None:
         """Notify dependent panels when realtime or animal-count policy changes."""
         if hasattr(self._main_window, "_detection_panel"):
-            self._main_window._detection_panel._sync_batch_policy_controls()
+            self._main_window._detection_panel._sync_live_detection_batch_controls()
         if hasattr(self._main_window, "_identity_panel"):
             self._main_window._identity_panel._sync_realtime_individual_batch_ui()
 

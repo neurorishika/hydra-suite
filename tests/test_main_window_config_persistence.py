@@ -1074,7 +1074,7 @@ def test_realtime_batch_policy_clamps_identity_controls_to_animal_count(
     assert (
         "one frame at a time" in window._detection_panel.lbl_batch_policy_notice.text()
     )
-    assert window._detection_panel.spin_yolo_batch_size.isEnabled() is False
+    assert window._detection_panel.spin_detection_batch_size.isEnabled() is False
     assert window._identity_panel.spin_pose_batch.maximum() == 3
     assert window._identity_panel.spin_pose_batch.value() == 3
     assert row.spin_batch.maximum() == 3
@@ -1100,7 +1100,7 @@ def test_realtime_sequential_mode_keeps_crop_batch_setting_visible(
     window._detection_panel.spin_yolo_seq_individual_batch_size.setValue(7)
     window._setup_panel.chk_realtime_mode.setChecked(True)
 
-    assert window._detection_panel.spin_yolo_batch_size.isEnabled() is False
+    assert window._detection_panel.spin_detection_batch_size.isEnabled() is False
     assert (
         window._detection_panel.spin_yolo_seq_individual_batch_size.isEnabled() is True
     )
@@ -1132,7 +1132,7 @@ def test_realtime_direct_mode_exposes_micro_batch_controls(
 
     window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
     window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(4)
-    window._detection_panel._sync_batch_policy_controls()
+    window._detection_panel._sync_live_detection_batch_controls()
 
     assert (
         window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is True
@@ -1231,9 +1231,9 @@ def test_benchmark_recommendations_update_batch_ui(
         )
     }
 
-    # _sync_batch_policy_controls reads _current_detection_benchmark_recommendation()
+    # _sync_live_detection_batch_controls reads _current_detection_benchmark_recommendation()
     # directly from _benchmark_recommendations — no populate call needed.
-    window._detection_panel._sync_batch_policy_controls()
+    window._detection_panel._sync_live_detection_batch_controls()
     assert (
         "Benchmark recommendation"
         in window._detection_panel.lbl_batch_policy_notice.text()

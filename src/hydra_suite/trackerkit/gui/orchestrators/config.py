@@ -3775,7 +3775,7 @@ class ConfigOrchestrator:
                 if recommendation is not None:
                     row.spin_batch.setValue(int(recommendation.batch_size))
 
-        self._panels.detection._sync_batch_policy_controls()
+        self._panels.detection._sync_live_detection_batch_controls()
         self._panels.identity._sync_realtime_individual_batch_ui()
         return notes
 

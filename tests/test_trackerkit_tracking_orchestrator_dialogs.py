@@ -1500,7 +1500,7 @@ def test_apply_benchmark_recommendations_sets_tier_directly_without_migration(
         detection=SimpleNamespace(
             combo_yolo_obb_mode=SimpleNamespace(currentIndex=lambda: 0),
             spin_detection_batch_size=detection_batch_spin,
-            _sync_batch_policy_controls=lambda: None,
+            _sync_live_detection_batch_controls=lambda: None,
         ),
         setup=SimpleNamespace(combo_runtime_tier=tier_combo),
         identity=SimpleNamespace(
