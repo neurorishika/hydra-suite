@@ -2349,8 +2349,8 @@ class YOLOOBBDetector(OBBGeometryMixin, RuntimeArtifactMixin):
         raw_conf_floor = max(1e-4, float(p.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3)))
         max_det = self._raw_detection_cap()
 
-        # Clear per-batch timing from any previous call so detection_phase.py
-        # can always safely read self._batch_timings after this returns.
+        # Clear per-batch timing from any previous call so callers can
+        # always safely read self._batch_timings after this returns.
         self._batch_timings: dict = {}
 
         # Sequential mode requires per-frame OBB processing because each frame

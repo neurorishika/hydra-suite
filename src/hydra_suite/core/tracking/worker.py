@@ -665,35 +665,6 @@ class TrackingWorker(QThread):
             )
         )
 
-    def _run_batched_detection_phase(
-        self,
-        cap,
-        detection_cache,
-        detector,
-        params,
-        start_frame,
-        end_frame,
-        profiler=None,
-    ):
-        """Phase 1: Run batched YOLO detection and cache results."""
-        from hydra_suite.core.tracking.ingest.detection_phase import (
-            run_batched_detection_phase,
-        )
-
-        return run_batched_detection_phase(
-            cap,
-            detection_cache,
-            detector,
-            params,
-            start_frame,
-            end_frame,
-            is_stop_requested=lambda: self._stop_requested,
-            on_progress=lambda pct, msg: self.progress_signal.emit(pct, msg),
-            on_stats=lambda stats: self.stats_signal.emit(stats),
-            profiler=profiler,
-            video_path=self.video_path,
-        )
-
     def run(self: object) -> object:
         """QThread entry point: delegate to ``_run_impl``, guaranteeing ``finished_signal``.
 
