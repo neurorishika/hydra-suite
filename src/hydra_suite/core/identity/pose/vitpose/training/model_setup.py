@@ -60,3 +60,38 @@ def load_finetune_init(model: ViTPose, ckpt_path: Path) -> None:
             f"  not-actually-missing: {sorted(_EXPECTED_MISSING - missing)}\n"
             f"  unexpected keys: {sorted(unexpected)[:10]}"
         )
+
+
+def _layer_id_for(name: str, num_layers: int) -> int:
+    if name.startswith("backbone.patch_embed") or name == "backbone.pos_embed":
+        return 0
+    if name.startswith("backbone.blocks."):
+        return int(name.split(".")[2]) + 1
+    return num_layers - 1  # head, last_norm, everything downstream
+
+
+def _no_decay(name: str, param) -> bool:
+    return param.ndim <= 1 or name.endswith("pos_embed")
+
+
+def build_param_groups(
+    model, base_lr: float, layer_decay: float, weight_decay: float
+) -> list[dict]:
+    depth = len(model.backbone.blocks)
+    num_layers = depth + 2
+    buckets: dict[tuple[int, bool], dict] = {}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        lid = _layer_id_for(name, num_layers)
+        scale = layer_decay ** (num_layers - lid - 1)
+        decayed = not _no_decay(name, param)
+        key = (lid, decayed)
+        if key not in buckets:
+            buckets[key] = {
+                "params": [],
+                "lr": base_lr * scale,
+                "weight_decay": weight_decay if decayed else 0.0,
+            }
+        buckets[key]["params"].append(param)
+    return list(buckets.values())
