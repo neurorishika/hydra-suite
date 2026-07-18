@@ -623,11 +623,15 @@ def build_tracking_parameters(
         "ENABLE_GPU_BACKGROUND": detection_runtime["enable_gpu_background"],
         "ENABLE_TENSORRT": detection_runtime["enable_tensorrt"],
         "ENABLE_ONNX_RUNTIME": detection_runtime["enable_onnx_runtime"],
+        # Defaults to the detection batch the engine will actually be fed.
+        # Previously defaulted to yolo_manual_batch_size, a legacy-detector key.
         "TENSORRT_MAX_BATCH_SIZE": int(
             _cfg_get(
                 cfg,
                 "tensorrt_max_batch_size",
-                default=max(1, int(advanced["yolo_manual_batch_size"])),
+                default=max(
+                    1, int(_cfg_get(cfg, "detection_batch_size", default=1) or 1)
+                ),
             )
         ),
         "TENSORRT_BUILD_WORKSPACE_GB": float(

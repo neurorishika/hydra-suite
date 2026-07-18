@@ -97,6 +97,29 @@ def _get_video_config_path(video_path: str):
     return os.path.join(video_dir, f"{video_name}_config.json")
 
 
+def resolve_tensorrt_max_batch_size(
+    *, detection_batch_size: int, fixed_runtime: bool
+) -> int:
+    """Return the TensorRT engine's max batch size.
+
+    On a fixed runtime (TensorRT, or gpu_fast-on-CoreML) this must match the
+    detection batch the engine will actually be fed, so it tracks
+    detection_batch_size -- the single detection-batching value in the UI.
+
+    On any other runtime TensorRT is off (enable_tensorrt is derived from the
+    runtime; see cli_config.legacy_detection_runtime_fields) and this value is
+    inert, so it is pinned to 1 rather than carrying a stale widget value into
+    the engine-cache key.
+
+    Previously the fixed-runtime branch read the legacy 'Frame batch' spin from
+    the 'Legacy Detector Batching' box -- a control whose own help text claimed
+    it did not affect live tracking.
+    """
+    if not fixed_runtime:
+        return 1
+    return max(1, int(detection_batch_size or 1))
+
+
 class ConfigOrchestrator:
     """Manages configuration load/save, presets, ROI, and video file setup."""
 
@@ -1635,10 +1658,11 @@ class ConfigOrchestrator:
                 "detection_batch_size": self._panels.detection.spin_detection_batch_size.value(),
                 # TensorRT (legacy detector: cache build / preview / benchmark only)
                 "enable_tensorrt": runtime_detection["enable_tensorrt"],
-                "tensorrt_max_batch_size": (
-                    self._panels.detection.spin_yolo_batch_size.value()
-                    if self._mw._runtime_requires_fixed_yolo_batch(compute_runtime)
-                    else self._panels.detection.spin_tensorrt_batch.value()
+                "tensorrt_max_batch_size": resolve_tensorrt_max_batch_size(
+                    detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
+                    fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(
+                        compute_runtime
+                    ),
                 ),
                 # YOLO Batching
                 "enable_yolo_batching": self._panels.detection.chk_enable_yolo_batching.isChecked(),
@@ -2128,10 +2152,9 @@ class ConfigOrchestrator:
         headtail_runtime = self._mw._selected_headtail_runtime()
         cnn_runtime = self._mw._selected_cnn_runtime()
         runtime_detection = legacy_detection_runtime_fields(compute_runtime)
-        trt_batch_size = (
-            self._panels.detection.spin_yolo_batch_size.value()
-            if self._mw._runtime_requires_fixed_yolo_batch(compute_runtime)
-            else self._panels.detection.spin_tensorrt_batch.value()
+        trt_batch_size = resolve_tensorrt_max_batch_size(
+            detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
+            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(compute_runtime),
         )
         trt_build_batch_size_raw = advanced_config.get(
             "tensorrt_build_batch_size", None
