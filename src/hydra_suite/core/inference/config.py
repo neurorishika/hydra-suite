@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -476,4 +477,248 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         realtime=d.get("realtime", False),
         use_cache=d.get("use_cache", True),
         cache_dir=d.get("cache_dir"),
+    )
+
+
+def build_inference_config_from_params(params: dict) -> InferenceConfig:
+    """Build an InferenceConfig from a tracking-worker params dict.
+
+    Maps legacy YOLO/headtail/CNN/pose/AprilTag params to the structured
+    InferenceConfig dataclasses consumed by InferenceRunner. Stages whose
+    params are absent/disabled stay unset, so an OBB-only params dict yields
+    an OBB-only config (headtail=None, cnn_phases=[], pose=None).
+    """
+    compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
+    _raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+    runtime_tier = (
+        _raw_tier
+        if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+        else migrate_runtime_to_tier({compute_runtime})
+    )
+    obb_mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
+    if obb_mode not in {"direct", "sequential"}:
+        obb_mode = "direct"
+
+    direct_model_path = str(
+        params.get(
+            "YOLO_OBB_DIRECT_MODEL_PATH",
+            params.get("YOLO_MODEL_PATH", "yolo26s-obb.pt"),
+        )
+        or "yolo26s-obb.pt"
+    )
+    yolo_conf = float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25))
+    yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
+    min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
+    max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
+    max_targets = max(1, int(params.get("MAX_TARGETS", 8)))
+    raw_cap = 2 * max_targets
+    max_dets = max_targets
+
+    _target_classes_raw = params.get("YOLO_TARGET_CLASSES", None)
+    target_classes = (
+        [int(c) for c in _target_classes_raw] if _target_classes_raw else []
+    )
+
+    _adv = params.get("ADVANCED_CONFIG", {}) or {}
+    if _adv.get("enable_aspect_ratio_filtering", False):
+        ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
+        min_ar = ref_ar * float(_adv.get("min_aspect_ratio_multiplier", 0.5))
+        max_ar = ref_ar * float(_adv.get("max_aspect_ratio_multiplier", 2.0))
+    else:
+        min_ar, max_ar = 0.0, float("inf")
+
+    if obb_mode == "sequential":
+        detect_path = str(params.get("YOLO_DETECT_MODEL_PATH", "") or "")
+        crop_path = str(params.get("YOLO_CROP_OBB_MODEL_PATH", "") or direct_model_path)
+        obb_cfg = OBBConfig(
+            mode="sequential",
+            sequential=OBBSequentialConfig(
+                detect_model_path=detect_path,
+                obb_model_path=crop_path,
+                detect_compute_runtime=compute_runtime,
+                obb_compute_runtime=compute_runtime,
+                detect_confidence_threshold=float(
+                    params.get("YOLO_SEQ_DETECT_CONF_THRESHOLD", 0.25)
+                ),
+                obb_confidence_threshold=yolo_conf,
+                detect_image_size=int(params.get("YOLO_SEQ_DETECT_IMGSZ", 0)),
+                crop_pad_ratio=float(params.get("YOLO_SEQ_CROP_PAD_RATIO", 0.15)),
+                min_crop_size_px=float(params.get("YOLO_SEQ_MIN_CROP_SIZE_PX", 64.0)),
+                enforce_square_crop=bool(
+                    params.get("YOLO_SEQ_ENFORCE_SQUARE_CROP", True)
+                ),
+                stage2_image_size=int(params.get("YOLO_SEQ_STAGE2_IMGSZ", 160)),
+                stage2_batch_size=(
+                    int(params["YOLO_SEQ_INDIVIDUAL_BATCH_SIZE"])
+                    if params.get("YOLO_SEQ_INDIVIDUAL_BATCH_SIZE")
+                    else None
+                ),
+            ),
+            target_classes=target_classes,
+            confidence_threshold=yolo_conf,
+            iou_threshold=yolo_iou,
+            min_object_size=min_obj,
+            max_object_size=max_obj,
+            min_aspect_ratio=min_ar,
+            max_aspect_ratio=max_ar,
+            max_detections=max_dets,
+            raw_detection_cap=raw_cap,
+        )
+    else:
+        obb_cfg = OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                model_path=direct_model_path,
+                compute_runtime=compute_runtime,
+                confidence_floor=1e-3,
+                confidence_threshold=yolo_conf,
+            ),
+            target_classes=target_classes,
+            confidence_threshold=yolo_conf,
+            iou_threshold=yolo_iou,
+            min_object_size=min_obj,
+            max_object_size=max_obj,
+            min_aspect_ratio=min_ar,
+            max_aspect_ratio=max_ar,
+            max_detections=max_dets,
+            raw_detection_cap=raw_cap,
+        )
+
+    headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip()
+    headtail_cfg = None
+    if headtail_model_path and os.path.exists(headtail_model_path):
+        ht_runtime = str(
+            params.get("HEADTAIL_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+        )
+        headtail_cfg = HeadTailConfig(
+            model_path=headtail_model_path,
+            compute_runtime=ht_runtime,
+            confidence_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
+            candidate_confidence_threshold=float(
+                params.get(
+                    "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD",
+                    params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25),
+                )
+            ),
+            batch_size=int(params.get("HEADTAIL_BATCH_SIZE", 64)),
+            canonical_aspect_ratio=float(
+                params.get("ADVANCED_CONFIG", {}).get("reference_aspect_ratio", 2.0)
+            ),
+            canonical_margin=float(
+                params.get("ADVANCED_CONFIG", {}).get(
+                    "yolo_headtail_canonical_margin", 1.3
+                )
+            ),
+        )
+
+    cnn_phases: list[CNNConfig] = []
+    cnn_runtime = str(
+        params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+    )
+    for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
+        cnn_model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
+        if not cnn_model_path or not os.path.exists(cnn_model_path):
+            continue
+        cnn_label = str(cnn_cfg_dict.get("label", "cnn_identity"))
+        cnn_phases.append(
+            CNNConfig(
+                label=cnn_label,
+                model_path=cnn_model_path,
+                compute_runtime=cnn_runtime,
+                confidence_threshold=float(cnn_cfg_dict.get("confidence", 0.5)),
+                batch_size=int(cnn_cfg_dict.get("batch_size", 64)),
+                scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
+                match_bonus=float(cnn_cfg_dict.get("match_bonus", 0.1)),
+                mismatch_penalty=float(cnn_cfg_dict.get("mismatch_penalty", 0.3)),
+                calibration_temperature=float(
+                    cnn_cfg_dict.get(
+                        "calibration_temperature", cnn_cfg_dict.get("temperature", 1.0)
+                    )
+                ),
+            )
+        )
+
+    pose_cfg = None
+    if bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
+        pose_model_type = str(params.get("POSE_MODEL_TYPE", "")).strip().lower()
+        pose_runtime = str(
+            params.get("POSE_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
+        )
+        common_pose_kwargs = dict(
+            skeleton_file=str(params.get("POSE_SKELETON_FILE", "") or "").strip(),
+            crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
+            suppress_foreign_regions=bool(
+                params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True)
+            ),
+            min_keypoint_confidence=float(params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
+            min_valid_keypoints=int(
+                params.get("POSE_DIRECTION_MIN_VALID_KEYPOINTS", 1)
+            ),
+            anterior_keypoints=list(
+                params.get("POSE_DIRECTION_ANTERIOR_KEYPOINTS", []) or []
+            ),
+            posterior_keypoints=list(
+                params.get("POSE_DIRECTION_POSTERIOR_KEYPOINTS", []) or []
+            ),
+            ignore_keypoints=list(params.get("POSE_IGNORE_KEYPOINTS", []) or []),
+            overrides_headtail=bool(params.get("POSE_OVERRIDES_HEADTAIL", True)),
+        )
+        sleap_model_path = str(
+            params.get("POSE_SLEAP_MODEL_DIR", params.get("POSE_MODEL_DIR", "")) or ""
+        ).strip()
+        yolo_model_path = str(
+            params.get(
+                "POSE_YOLO_MODEL_DIR",
+                params.get("POSE_MODEL_PATH", params.get("YOLO_POSE_MODEL_PATH", "")),
+            )
+            or ""
+        ).strip()
+        if pose_model_type == "sleap" and sleap_model_path:
+            pose_cfg = PoseConfig(
+                backend="sleap",
+                sleap=PoseSLEAPConfig(
+                    model_path=sleap_model_path,
+                    compute_runtime=pose_runtime,
+                    batch_size=int(params.get("POSE_BATCH_SIZE", 4)),
+                ),
+                **common_pose_kwargs,
+            )
+        elif yolo_model_path and os.path.exists(yolo_model_path):
+            pose_cfg = PoseConfig(
+                backend="yolo",
+                yolo=PoseYOLOConfig(
+                    model_path=yolo_model_path,
+                    compute_runtime=pose_runtime,
+                    confidence_threshold=float(
+                        params.get("POSE_CONFIDENCE_THRESHOLD", 1e-4)
+                    ),
+                    iou_threshold=float(params.get("POSE_IOU_THRESHOLD", 0.7)),
+                    max_detections_per_crop=1,
+                    batch_size=int(params.get("POSE_BATCH_SIZE", 64)),
+                ),
+                **common_pose_kwargs,
+            )
+
+    apriltag_cfg = AprilTagConfig(
+        enabled=bool(params.get("USE_APRILTAGS", False)),
+        tag_family=str(params.get("APRILTAG_FAMILY", "tag36h11")),
+        threads=int(params.get("APRILTAG_THREADS", 4)),
+        max_hamming=int(params.get("APRILTAG_MAX_HAMMING", 1)),
+        decimate=float(params.get("APRILTAG_DECIMATE", 1.0)),
+        blur=float(params.get("APRILTAG_BLUR", 0.8)),
+        crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
+    )
+
+    batch_size = int(params.get("YOLO_BATCH_SIZE", params.get("BATCH_SIZE", 1)))
+
+    return InferenceConfig(
+        obb=obb_cfg,
+        headtail=headtail_cfg,
+        cnn_phases=cnn_phases,
+        pose=pose_cfg,
+        apriltag=apriltag_cfg,
+        detection_batch_size=batch_size,
+        realtime=False,
+        use_cache=True,
+        runtime_tier=runtime_tier,
     )

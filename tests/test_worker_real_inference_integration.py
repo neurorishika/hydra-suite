@@ -71,16 +71,17 @@ def test_frame_result_bridge_imported_at_module_level():
 
 
 # ---------------------------------------------------------------------------
-# _build_inference_config_from_params
+# build_inference_config_from_params
 # ---------------------------------------------------------------------------
 
 
 def test_build_inference_config_returns_inference_config(tmp_path):
-    """_build_inference_config_from_params returns a valid InferenceConfig."""
-    from hydra_suite.core.inference.config import InferenceConfig
-    from hydra_suite.core.tracking.worker import TrackingWorker
+    """build_inference_config_from_params returns a valid InferenceConfig."""
+    from hydra_suite.core.inference.config import (
+        InferenceConfig,
+        build_inference_config_from_params,
+    )
 
-    worker_obj = TrackingWorker.__new__(TrackingWorker)
     # Minimal params
     params = {
         "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "model.pt"),
@@ -88,7 +89,7 @@ def test_build_inference_config_returns_inference_config(tmp_path):
         "COMPUTE_RUNTIME": "cpu",
         "YOLO_OBB_MODE": "direct",
     }
-    cfg = worker_obj._build_inference_config_from_params(params)
+    cfg = build_inference_config_from_params(params)
     assert isinstance(cfg, InferenceConfig)
     assert cfg.obb is not None
     assert cfg.obb.confidence_threshold == pytest.approx(0.5)
@@ -96,15 +97,14 @@ def test_build_inference_config_returns_inference_config(tmp_path):
 
 def test_build_inference_config_sets_compute_runtime(tmp_path):
     """Compute runtime from params propagates into the OBBDirectConfig sub-object."""
-    from hydra_suite.core.tracking.worker import TrackingWorker
+    from hydra_suite.core.inference.config import build_inference_config_from_params
 
-    worker_obj = TrackingWorker.__new__(TrackingWorker)
     params = {
         "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "model.pt"),
         "COMPUTE_RUNTIME": "mps",
         "YOLO_OBB_MODE": "direct",
     }
-    cfg = worker_obj._build_inference_config_from_params(params)
+    cfg = build_inference_config_from_params(params)
     # compute_runtime lives on OBBDirectConfig, not OBBConfig itself
     assert cfg.obb.direct is not None
     assert cfg.obb.direct.compute_runtime == "mps"
