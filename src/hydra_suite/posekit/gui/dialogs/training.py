@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.paths import get_models_dir, get_training_runs_dir
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
@@ -52,6 +53,12 @@ from ...core.extensions import (
     build_coco_keypoints_dataset,
     build_yolo_pose_dataset,
     list_labeled_indices,
+)
+from ...core.vitpose_checkpoints import CATALOG
+from ...core.vitpose_training import (
+    build_training_command,
+    parse_progress_line,
+    prepare_run,
 )
 from .evaluation import EvaluationDashboardDialog
 from .utils import (
@@ -293,6 +300,112 @@ class TrainingWorker(QObject):
             pass
 
 
+class ViTPoseTrainingWorker(QObject):
+    """Runs ViTPose fine-tuning as an in-env subprocess (mirrors TrainingWorker)."""
+
+    log = Signal(str)
+    progress = Signal(int, int)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        image_paths,
+        labels_dir,
+        run_dir,
+        cache_dir,
+        class_names,
+        keypoint_names,
+        skeleton_edges,
+        variant,
+        init_checkpoint,
+        num_keypoints,
+        epochs,
+        batch,
+        device,
+    ):
+        super().__init__()
+        self.image_paths = list(image_paths)
+        self.labels_dir = Path(labels_dir)
+        self.run_dir = Path(run_dir)
+        self.cache_dir = Path(cache_dir)
+        self.class_names = list(class_names)
+        self.keypoint_names = list(keypoint_names)
+        self.skeleton_edges = list(skeleton_edges)
+        self.variant = variant
+        self.init_checkpoint = init_checkpoint
+        self.num_keypoints = int(num_keypoints)
+        self.epochs = int(epochs)
+        self.batch = int(batch)
+        self.device = device
+        self._cancel = False
+        self._proc = None
+
+    def cancel(self):
+        self._cancel = True
+        try:
+            if self._proc and self._proc.poll() is None:
+                self._proc.terminate()
+        except Exception:
+            pass
+
+    def run(self):
+        try:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            self.log.emit("Building COCO-keypoints dataset…")
+            ds = build_coco_keypoints_dataset(
+                image_paths=self.image_paths,
+                labels_dir=self.labels_dir,
+                output_dir=self.run_dir / "dataset",
+                class_names=self.class_names,
+                keypoint_names=self.keypoint_names,
+                skeleton_edges=self.skeleton_edges,
+            )
+            params = dict(
+                init_checkpoint=self.init_checkpoint,
+                variant=self.variant,
+                num_keypoints=self.num_keypoints,
+                dataset_dir=str(ds["dataset_dir"]),
+                device=self.device,
+                epochs=self.epochs,
+                batch_size=self.batch,
+            )
+            run_json = prepare_run(params, self.run_dir, self.cache_dir)
+            cmd = build_training_command(run_json)
+            self.log.emit(f"Launching: {' '.join(cmd)}")
+            self.progress.emit(0, max(1, self.epochs))
+
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=os.environ.copy(),
+            )
+            for line in self._proc.stdout:
+                if self._cancel:
+                    break
+                self.log.emit(line.rstrip())
+                prog = parse_progress_line(line)
+                if prog is not None:
+                    self.progress.emit(prog["epoch"] + 1, self.epochs)
+            code = self._proc.wait()
+            if self._cancel:
+                self.failed.emit("Training cancelled.")
+            elif code != 0:
+                self.failed.emit(f"Training subprocess exited with code {code}.")
+            else:
+                self.finished.emit(
+                    {
+                        "run_dir": str(self.run_dir),
+                        "best": str(self.run_dir / "best.pt"),
+                    }
+                )
+        except Exception as exc:  # surfaced to the dialog
+            self.failed.emit(str(exc))
+
+
 class SleapExportWorker(QObject):
     """Worker for exporting to SLEAP."""
 
@@ -459,10 +572,26 @@ class TrainingRunnerDialog(QDialog):
         backend_layout = QFormLayout(self.backend_group)
 
         self.backend_combo = QComboBox()
-        self.backend_combo.addItems(["YOLO Pose", "ViTPose (soon)", "SLEAP"])
+        self.backend_combo.addItems(["YOLO Pose", "ViTPose", "SLEAP"])
         backend_layout.addRow("Backend", self.backend_combo)
 
         content_layout.addWidget(self.backend_group)
+
+        # ViTPose config (variant + init checkpoint)
+        self.vitpose_group = QGroupBox("ViTPose Config")
+        vitpose_layout = QFormLayout(self.vitpose_group)
+
+        self.vitpose_variant_combo = QComboBox()
+        self.vitpose_variant_combo.addItems(["B", "L", "H"])
+        self.vitpose_variant_combo.setCurrentText("B")
+        vitpose_layout.addRow("Variant", self.vitpose_variant_combo)
+
+        self.vitpose_checkpoint_combo = QComboBox()
+        self.vitpose_checkpoint_combo.setEditable(True)
+        self.vitpose_checkpoint_combo.addItems(list(CATALOG.keys()) + ["Browse…"])
+        vitpose_layout.addRow("Init checkpoint", self.vitpose_checkpoint_combo)
+
+        content_layout.addWidget(self.vitpose_group)
 
         # Config
         self.cfg_group = QGroupBox("Config")
@@ -749,6 +878,9 @@ class TrainingRunnerDialog(QDialog):
         self.btn_sleap_export.clicked.connect(self._export_sleap_labels)
         self.btn_sleap_open.clicked.connect(self._open_sleap)
         self.backend_combo.currentIndexChanged.connect(self._update_backend_ui)
+        self.vitpose_checkpoint_combo.activated.connect(
+            self._on_vitpose_checkpoint_activated
+        )
 
         self._toggle_aug_widgets(self.cb_augment.isChecked())
         self._apply_settings()
@@ -925,20 +1057,38 @@ class TrainingRunnerDialog(QDialog):
     def _update_backend_ui(self):
         backend = self.backend_combo.currentText()
         is_yolo = backend == "YOLO Pose"
+        is_vitpose = backend == "ViTPose"
         is_sleap = backend.startswith("SLEAP")
 
         self.cfg_group.setVisible(is_yolo)
         self.aug_group.setVisible(is_yolo)
-        self.info_group.setVisible(is_yolo)
-        self.progress.setVisible(is_yolo)
+        self.info_group.setVisible(is_yolo or is_vitpose)
+        self.progress.setVisible(is_yolo or is_vitpose)
         self.lbl_loss_plot.setVisible(is_yolo)
         self.loss_components_box.setVisible(is_yolo)
-        self.log_view.setVisible(is_yolo)
-        self.btn_start.setVisible(is_yolo)
-        self.btn_stop.setVisible(is_yolo)
+        self.log_view.setVisible(is_yolo or is_vitpose)
+        self.btn_start.setVisible(is_yolo or is_vitpose)
+        self.btn_stop.setVisible(is_yolo or is_vitpose)
         self.btn_open_eval.setVisible(is_yolo)
 
+        self.vitpose_group.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
+
+    def _on_vitpose_checkpoint_activated(self, index: int):
+        if self.vitpose_checkpoint_combo.itemText(index) == "Browse…":
+            self._resolve_vitpose_checkpoint()
+
+    def _resolve_vitpose_checkpoint(self) -> str:
+        text = self.vitpose_checkpoint_combo.currentText().strip()
+        if text == "Browse…":
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select checkpoint", "", "*.pth *.pt"
+            )
+            if path:
+                self.vitpose_checkpoint_combo.setCurrentText(path)
+                return path
+            return ""
+        return text
 
     def _default_sleap_out_path(self) -> Path:
         base = self.project.out_root / "posekit" / "sleap"
@@ -1171,11 +1321,14 @@ class TrainingRunnerDialog(QDialog):
 
     def _start_training(self):
         backend = self.backend_combo.currentText()
+        if backend == "ViTPose":
+            self._start_vitpose_training()
+            return
         if backend != "YOLO Pose":
             QMessageBox.information(
                 self,
                 "Not Implemented",
-                "Only YOLO Pose is wired up right now. Other backends are coming soon.",
+                "Only YOLO Pose and ViTPose are wired up right now. Other backends are coming soon.",
             )
             return
 
@@ -1280,6 +1433,67 @@ class TrainingRunnerDialog(QDialog):
             degrees=self.degrees_spin.value(),
             translate=self.translate_spin.value(),
             scale=self.scale_spin.value(),
+        )
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.log.connect(self._append_log)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
+
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.btn_open_eval.setEnabled(False)
+
+    def _start_vitpose_training(self):
+        labeled_count = len(
+            list_labeled_indices(self.image_paths, self.project.labels_dir)
+        )
+        if labeled_count < 2:
+            QMessageBox.warning(
+                self,
+                "Not enough labels",
+                "Need at least 2 labeled frames to train.",
+            )
+            return
+
+        checkpoint = self._resolve_vitpose_checkpoint()
+        if not checkpoint:
+            QMessageBox.warning(
+                self, "No checkpoint", "Select or browse for an init checkpoint."
+            )
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        run_dir = get_training_runs_dir() / "vitpose" / timestamp
+        cache_dir = get_models_dir()
+
+        self._last_run_dir = run_dir
+        self._train_start_ts = time.time()
+        self._loss_source_path = None
+        self.lbl_run_dir.setText(f"Run dir: {run_dir}")
+        self.log_view.clear()
+        self.progress.setValue(0)
+
+        self._thread = QThread()
+        self._worker = ViTPoseTrainingWorker(
+            image_paths=self.image_paths,
+            labels_dir=self.project.labels_dir,
+            run_dir=run_dir,
+            cache_dir=cache_dir,
+            class_names=self.project.class_names,
+            keypoint_names=self.project.keypoint_names,
+            skeleton_edges=self.project.skeleton_edges,
+            variant=self.vitpose_variant_combo.currentText(),
+            init_checkpoint=checkpoint,
+            num_keypoints=len(self.project.keypoint_names),
+            epochs=self.epochs_spin.value(),
+            batch=self.batch_spin.value(),
+            device=self.device_combo.currentText(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
