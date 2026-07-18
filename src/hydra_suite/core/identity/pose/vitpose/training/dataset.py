@@ -80,8 +80,20 @@ class CocoKeypointsDataset(Dataset):
         joints_in = _warp_joints(kp[:, :2], matrix)  # input-crop space
         joints_hm = joints_in / FEAT_STRIDE  # heatmap space
         vis = kp[:, 2]
+        # Zero out visibility (for target/weight generation only) for joints
+        # that warp outside the heatmap bounds under augmentation, so
+        # JointsMSELoss does not train those channels toward "no keypoint
+        # anywhere" on samples where the joint was actually present.
+        w_hm, h_hm = HEATMAP_SIZE_WH
+        in_bounds = (
+            (joints_hm[:, 0] >= 0)
+            & (joints_hm[:, 0] <= w_hm - 1)
+            & (joints_hm[:, 1] >= 0)
+            & (joints_hm[:, 1] <= h_hm - 1)
+        )
+        vis_eff = vis * in_bounds.astype(vis.dtype)
         target, weight = generate_udp_gaussian(
-            joints_hm, vis, HEATMAP_SIZE_WH, self.sigma
+            joints_hm, vis_eff, HEATMAP_SIZE_WH, self.sigma
         )
 
         return {
