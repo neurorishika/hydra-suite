@@ -86,3 +86,74 @@ def test_tiny_overfit_drives_metrics(tmp_path):
     blob = torch.load(out / "best.pt", map_location="cpu", weights_only=True)
     assert blob["num_keypoints"] == 3
     build_vitpose("S", "classic", 3).load_state_dict(blob["model_state"])
+
+
+def test_resume_restores_lr_scheduler_and_metrics_header(tmp_path):
+    # Verifies the review-round-1 fix: last.pt now carries the scheduler state so
+    # a resumed run continues the cosine curve instead of restarting it, and a
+    # resume into a fresh output_dir still writes a metrics.csv header.
+    ds = tmp_path / "ds"
+    _tiny_dataset(ds)
+    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+
+    pre = tmp_path / "pre.pth"
+    torch.save({"state_dict": build_vitpose("S", "classic", 3).state_dict()}, pre)
+
+    out = tmp_path / "run"
+    cfg = RunConfig(
+        init_checkpoint=str(pre),
+        variant="S",
+        num_keypoints=3,
+        dataset_dir=str(ds),
+        output_dir=str(out),
+        device="cpu",
+        epochs=4,
+        batch_size=4,
+        lr=1e-3,
+        val_fraction=0.25,
+        drop_path=0.0,
+        seed=0,
+    )
+    train(cfg)
+
+    last = out / "last.pt"
+    assert last.exists()
+    ckpt = torch.load(last, map_location="cpu", weights_only=True)
+    assert "sched_state" in ckpt
+
+    # The saved scheduler state reflects the completed 4-epoch run (construction
+    # steps once, then epochs 0..3 each call sched.step() once more), i.e.
+    # last_epoch == 4 -- not a scheduler restarted from last_epoch == -1.
+    probe_model = build_vitpose("S", "classic", 3)
+    probe_opt = torch.optim.AdamW(probe_model.parameters(), lr=1e-3)
+    probe_sched = torch.optim.lr_scheduler.CosineAnnealingLR(probe_opt, T_max=4)
+    probe_sched.load_state_dict(ckpt["sched_state"])
+    assert probe_sched.last_epoch == 4
+
+    # Resume into a brand-new output_dir (no pre-existing metrics.csv) for one more
+    # epoch; the header guard must still fire even though start_epoch > 0.
+    resume_out = tmp_path / "resume_run"
+    resume_cfg = RunConfig(
+        init_checkpoint=str(pre),
+        variant="S",
+        num_keypoints=3,
+        dataset_dir=str(ds),
+        output_dir=str(resume_out),
+        device="cpu",
+        epochs=5,
+        batch_size=4,
+        lr=1e-3,
+        val_fraction=0.25,
+        drop_path=0.0,
+        seed=0,
+        resume_from=str(last),
+    )
+    train(resume_cfg)
+
+    resumed_metrics = resume_out / "metrics.csv"
+    assert resumed_metrics.exists()
+    lines = resumed_metrics.read_text().strip().splitlines()
+    assert lines[0] == "epoch,train_loss,val_loss,pck@0.05,pck@0.1"
+    # Only epoch 4 ran (resumed at start_epoch=4, epochs=5).
+    assert len(lines) == 2
+    assert lines[1].split(",")[0] == "4"

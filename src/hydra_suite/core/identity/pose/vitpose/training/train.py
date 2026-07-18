@@ -61,19 +61,33 @@ def train(cfg: RunConfig) -> dict:
         model, cfg.lr, VARIANTS[cfg.variant].layer_decay, cfg.weight_decay
     )
     opt = torch.optim.AdamW(groups)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg.epochs)
     crit = JointsMSELoss(True)
 
     start_epoch, best_pck, best_epoch = 0, -1.0, 0
+    resume_ckpt = None
     if cfg.resume_from:
-        ckpt = torch.load(cfg.resume_from, map_location="cpu", weights_only=True)
-        model.load_state_dict(ckpt["model_state"])
-        opt.load_state_dict(ckpt["optim_state"])
-        start_epoch = int(ckpt["epoch"]) + 1
-        best_pck = float(ckpt.get("pck", -1.0))
+        resume_ckpt = torch.load(cfg.resume_from, map_location="cpu", weights_only=True)
+        model.load_state_dict(resume_ckpt["model_state"])
+        opt.load_state_dict(resume_ckpt["optim_state"])
+        start_epoch = int(resume_ckpt["epoch"]) + 1
+        best_pck = float(resume_ckpt.get("pck", -1.0))
+
+    if resume_ckpt is not None and "sched_state" in resume_ckpt:
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cfg.epochs)
+        sched.load_state_dict(resume_ckpt["sched_state"])
+    else:
+        if start_epoch > 0:
+            # Older checkpoints don't carry sched_state: seed 'initial_lr' from the
+            # freshly-built param groups (their base lr, unaffected by the optimizer
+            # state we just loaded) so CosineAnnealingLR can resume at last_epoch>=0.
+            for group, base_group in zip(opt.param_groups, groups):
+                group.setdefault("initial_lr", base_group["lr"])
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=cfg.epochs, last_epoch=start_epoch - 1
+        )
 
     metrics_path = out_dir / "metrics.csv"
-    if start_epoch == 0:
+    if not metrics_path.exists():
         metrics_path.write_text(
             "epoch,train_loss,val_loss,pck@0.05,pck@0.1\n", encoding="utf-8"
         )
@@ -121,6 +135,7 @@ def train(cfg: RunConfig) -> dict:
             "num_keypoints": cfg.num_keypoints,
             "epoch": epoch,
             "pck": p05,
+            "sched_state": sched.state_dict(),
         }
         torch.save(ckpt, out_dir / "last.pt")
         if p05 >= best_pck:
