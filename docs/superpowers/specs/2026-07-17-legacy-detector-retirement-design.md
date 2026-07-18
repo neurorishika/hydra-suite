@@ -1,10 +1,16 @@
 # Design spec: retire `core/detectors`, converge on InferenceRunner
 
 **Date:** 2026-07-17
-**Status:** design — not yet a task-by-task plan.
+**Status:** planned — decomposed into four sequenced implementation plans (below).
 **Runs after:** `plans/2026-07-16-bgsub-inference-stage.md` (with correction note
 `plans/notes/2026-07-17-bgsub-task12-yolo-scope-correction.md`) **and**
-`plans/2026-07-16-legacy-batching-vestige-removal.md` have both landed on `main`.
+`plans/2026-07-16-legacy-batching-vestige-removal.md` — both landed on `main`.
+
+**Implementation plans (execute in order):**
+1. `plans/2026-07-17-detector-retirement-1-foundation.md` — Phases A+B (relocate direct executors, config builder, api.py fix, `detect_batch`).
+2. `plans/2026-07-17-detector-retirement-2-consumers.md` — Phase C (migrate all consumers onto InferenceRunner).
+3. `plans/2026-07-17-detector-retirement-3-benchmarking.md` — Phase D (delete in-UI + old CLI benchmarking; new tier CLI). Independent of Plan 2; must precede Plan 4.
+4. `plans/2026-07-17-detector-retirement-4-retire.md` — Phases E+F + deferred follow-ups (delete `core/detectors`, Qt-in-core split, param deprecation, parity gate).
 
 ## Goal
 
