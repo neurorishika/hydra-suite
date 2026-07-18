@@ -931,7 +931,7 @@ class TrackingWorker(QThread):
         trajectory_ids, next_trajectory_id = list(range(N)), N
 
         detection_initialized = False
-        detection_counts, tracking_counts = 0, 0
+        detection_counts = 0
 
         # Diagnostic: log gate parameters for debugging jumps
         _diag_body = float(
@@ -3249,7 +3249,6 @@ class TrackingWorker(QThread):
                 # --- KF Update & State Update ---
                 profiler.tock("state_update")
                 profiler.tick("kf_update")
-                total_cost = 0.0
                 # Identity-rejoin pairs use the same KF correct path but skip hard reset
                 for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
                     meas_x = float(meas[c][0])
@@ -3503,8 +3502,6 @@ class TrackingWorker(QThread):
 
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
-                    current_cost = cost[r, c]
-                    total_cost += current_cost
 
                 # --- CSV for Unmatched & Final Respawn (Identical to Original) ---
                 if self.csv_writer_thread:
@@ -3653,12 +3650,6 @@ class TrackingWorker(QThread):
                             local_counts[track_idx] = 0
                             next_trajectory_id += 1
                             break
-
-                avg_cost = total_cost / len(rows) if rows else float("inf")
-                if avg_cost < params["MAX_DISTANCE_THRESHOLD"]:
-                    tracking_counts += 1
-                else:
-                    tracking_counts = 0
 
                 profiler.tock("kf_update")
 

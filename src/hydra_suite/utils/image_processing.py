@@ -77,8 +77,16 @@ def apply_image_adjustments(
     if use_gpu and CUDA_AVAILABLE:
         gray_gpu = cp.asarray(gray)
 
-        # Apply brightness and contrast
-        adj_gpu = cp.clip(gray_gpu * contrast + brightness, 0, 255).astype(cp.uint8)
+        # Round (cp.rint) to match the CPU path's cv2.convertScaleAbs, which
+        # rounds rather than truncates. Both round half-to-even (cvRound uses the
+        # default FPU mode), so cp.rint reproduces it exactly — floor(x+0.5) would
+        # differ at exact half-values. Without this the GPU and CPU paths differ
+        # by up to 1 grey level, and since runtime_tier is not part of the bg-sub
+        # detection cache key, a GPU-tier and a CPU-tier run could otherwise write
+        # divergent detections under the same key.
+        adj_gpu = cp.clip(cp.rint(gray_gpu * contrast + brightness), 0, 255).astype(
+            cp.uint8
+        )
 
         # Apply gamma correction if needed
         if abs(gamma - 1.0) > 1e-3:
@@ -254,7 +262,12 @@ def stabilize_lighting(
     # Apply lighting correction (GPU or CPU)
     if use_gpu and CUDA_AVAILABLE:
         frame_gpu = cp.asarray(frame)
-        stabilized_gpu = cp.clip(frame_gpu * correction_factor, 0, 255).astype(cp.uint8)
+        # Round (cp.rint) to match the CPU path's cv2.convertScaleAbs (see the
+        # brightness/contrast path above for why tier-consistent rounding matters
+        # to the bg-sub cache key).
+        stabilized_gpu = cp.clip(cp.rint(frame_gpu * correction_factor), 0, 255).astype(
+            cp.uint8
+        )
         stabilized = cp.asnumpy(stabilized_gpu)
     else:
         stabilized = cv2.convertScaleAbs(frame, alpha=correction_factor, beta=0)
