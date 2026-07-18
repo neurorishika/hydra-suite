@@ -12,7 +12,6 @@ def test_predict_pose_for_image_wires_crops_to_run_pose(monkeypatch):
     calls = {}
 
     fake_model = object()
-    monkeypatch.setattr(api, "_HAS_RUN", True, raising=False)
 
     def fake_load_pose_model(cfg, runtime):
         calls["loaded"] = True
@@ -51,3 +50,4 @@ def test_predict_pose_for_image_wires_crops_to_run_pose(monkeypatch):
     assert calls["run_pose_crops"] == "CROPS_TENSOR"  # crops, not raw [image]
     assert calls["run_pose_model"] is fake_model
     assert calls["loaded"] is True
+    assert calls["crops_frame_shape"] == (64, 32, 3)

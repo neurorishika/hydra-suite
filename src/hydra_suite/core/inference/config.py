@@ -489,6 +489,10 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     an OBB-only config (headtail=None, cnn_phases=[], pose=None).
     """
     compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
+    # Pipeline-wide compute tier drives backend/device selection in the
+    # redesign (per-stage compute_runtime fields are inert). Prefer an
+    # explicit RUNTIME_TIER param; otherwise derive it from the legacy
+    # per-stage runtime so old params still take effect.
     _raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
     runtime_tier = (
         _raw_tier
@@ -510,15 +514,29 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     yolo_iou = float(params.get("YOLO_IOU_THRESHOLD", 0.7))
     min_obj = float(params.get("MIN_OBJECT_SIZE", 0.0))
     max_obj = float(params.get("MAX_OBJECT_SIZE", float("inf")) or float("inf"))
+    # Detection caps mirror legacy core/detectors/_obb_geometry:
+    #   * RAW cap = 2 * MAX_TARGETS, applied at OBB extraction sorted by
+    #     confidence, BEFORE size/aspect/IoU filtering.
+    #   * FINAL cap = MAX_TARGETS, applied AFTER filtering, keeping the
+    #     LARGEST detections (filtering sorts the cap by size, not conf).
+    # Setting max_detections = MAX_TARGETS (not 2*MAX_TARGETS) restores the
+    # legacy post-filter count cap (`_obb_geometry:587`) the redesign dropped.
     max_targets = max(1, int(params.get("MAX_TARGETS", 8)))
     raw_cap = 2 * max_targets
     max_dets = max_targets
 
+    # Restrict detections to specific class IDs (legacy YOLO_TARGET_CLASSES;
+    # None/empty == all classes). Threaded into OBBConfig.target_classes and
+    # passed to every model.predict() (legacy yolo_detector.py:489,1078,1665).
     _target_classes_raw = params.get("YOLO_TARGET_CLASSES", None)
     target_classes = (
         [int(c) for c in _target_classes_raw] if _target_classes_raw else []
     )
 
+    # Aspect-ratio gate (major/minor), mirroring legacy _obb_geometry: only
+    # applied when enabled; bounds = ref_ar * mult. These are power-user
+    # settings stored under ADVANCED_CONFIG (lowercase keys), matching legacy
+    # _advanced_config_value access in core/detectors/_obb_geometry.py.
     _adv = params.get("ADVANCED_CONFIG", {}) or {}
     if _adv.get("enable_aspect_ratio_filtering", False):
         ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
@@ -530,6 +548,10 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     if obb_mode == "sequential":
         detect_path = str(params.get("YOLO_DETECT_MODEL_PATH", "") or "")
         crop_path = str(params.get("YOLO_CROP_OBB_MODEL_PATH", "") or direct_model_path)
+        # YOLO_SEQ_* keys mirror the legacy per-stage sequential-OBB knobs
+        # (yolo_detector.py:_seq_*); threading them through here keeps the
+        # redesign's sequential pipeline config-driven instead of silently
+        # falling back to OBBSequentialConfig's dataclass defaults.
         obb_cfg = OBBConfig(
             mode="sequential",
             sequential=OBBSequentialConfig(
@@ -584,6 +606,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             raw_detection_cap=raw_cap,
         )
 
+    # HeadTail
     headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip()
     headtail_cfg = None
     if headtail_model_path and os.path.exists(headtail_model_path):
@@ -594,6 +617,10 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             model_path=headtail_model_path,
             compute_runtime=ht_runtime,
             confidence_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
+            # Mirrors legacy's separate, stricter head-tail candidate gate
+            # (_select_headtail_candidate_indices): detections below this
+            # confidence never get classified at all (stay undirected),
+            # independent of the main OBB filter's own confidence_threshold.
             candidate_confidence_threshold=float(
                 params.get(
                     "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD",
@@ -611,6 +638,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             ),
         )
 
+    # CNN phases
     cnn_phases: list[CNNConfig] = []
     cnn_runtime = str(
         params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
@@ -638,6 +666,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             )
         )
 
+    # Pose — supports both YOLO-pose and SLEAP backends.
     pose_cfg = None
     if bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
         pose_model_type = str(params.get("POSE_MODEL_TYPE", "")).strip().lower()
@@ -699,6 +728,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 **common_pose_kwargs,
             )
 
+    # AprilTag
     apriltag_cfg = AprilTagConfig(
         enabled=bool(params.get("USE_APRILTAGS", False)),
         tag_family=str(params.get("APRILTAG_FAMILY", "tag36h11")),
