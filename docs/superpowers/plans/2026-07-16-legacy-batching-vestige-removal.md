@@ -626,134 +626,76 @@ to True, so behavior is unchanged for any config that did not disable it."
 
 ---
 
-## Task 5: Delete the group box from the detection panel
+## Task 5: Remove config/CLI persistence of the group-box widgets
 
-With Task 3 done, no config site reads these widgets. Delete the box, its five widgets, its four
-handlers, and `_sync_batch_policy_controls`.
+> **Reordered during execution (2026-07-17):** this task (config/CLI consumer removal) now runs
+> BEFORE the panel-widget deletion (Task 6). Reason: the orchestrator reads the widgets — including a
+> TensorRT loader block that the original plan missed — so deleting the widgets first would leave the
+> orchestrator referencing deleted attributes (an AttributeError on project load, and a broken
+> intermediate commit). Removing every consumer first keeps each commit coherent. The augmented
+> TensorRT-loader removal (Step 2 below) was also added then.
 
-**Files:**
-- Modify: `src/hydra_suite/trackerkit/gui/panels/detection_panel.py:840-982, 1287-1311, 1317-1379`
-
-**Interfaces:**
-- Consumes: Task 3's `resolve_tensorrt_max_batch_size` (removes the last reader of these widgets)
-- Produces: `detection_panel` exposes no `chk_enable_yolo_batching`, `combo_yolo_batch_mode`, `spin_yolo_batch_size`, `chk_enable_tensorrt`, `spin_tensorrt_batch`, `lbl_yolo_batch_mode`, `lbl_yolo_batch_size`, `lbl_tensorrt_batch`, `g_gpu_accel`
-
-- [ ] **Step 1: Enumerate every reference before deleting**
-
-```bash
-grep -rn "g_gpu_accel\|chk_enable_yolo_batching\|combo_yolo_batch_mode\|spin_yolo_batch_size\|chk_enable_tensorrt\|spin_tensorrt_batch\|lbl_yolo_batch_mode\|lbl_yolo_batch_size\|lbl_tensorrt_batch\|_sync_batch_policy_controls\|_on_yolo_batching_toggled\|_on_yolo_batch_mode_changed\|_on_yolo_manual_batch_size_changed\|_on_tensorrt_toggled" src/ tests/
-```
-
-Every hit must land in one of: the group-box construction block, the handlers listed below, or the
-sites Task 3 already rewrote. **If a hit appears outside `detection_panel.py` and the already-handled
-orchestrator sites, STOP and record it** — an unmapped consumer exists.
-
-Expect a hit in `benchmarking.py` — verify it reads `spin_detection_batch_size` (the new key, keep)
-and not `spin_yolo_batch_size`. `benchmarking.py:678` was the former as of 2026-07-16.
-
-- [ ] **Step 2: Delete the group-box construction block**
-
-In `src/hydra_suite/trackerkit/gui/panels/detection_panel.py`, delete lines 840-982 in their entirety
-— from the `# ====` comment banner introducing "Legacy Detector Batching" through
-`self._sync_batch_policy_controls()`.
-
-That block ends immediately before:
-
-```python
-        # Add pages to stack
-        self.stack_detection.addWidget(page_bg)
-```
-
-Which must remain.
-
-- [ ] **Step 3: Replace the deleted `_sync_batch_policy_controls()` call**
-
-The deleted block's final line called `self._sync_batch_policy_controls()`, which ended by calling
-`self._sync_live_detection_batch_controls()` (`:1379`). That second call is still needed — it
-initializes the surviving Frame-batch-size control. Immediately before `# Add pages to stack`, add:
-
-```python
-        self._sync_live_detection_batch_controls()
-```
-
-- [ ] **Step 4: Delete the four dead handlers**
-
-Delete these methods entirely from `detection_panel.py`:
-
-- `_on_yolo_batching_toggled` (the method ending at line 1291 with `self._sync_batch_policy_controls()`)
-- `_on_yolo_manual_batch_size_changed` (1293-1299)
-- `_on_yolo_batch_mode_changed` (1301-1303)
-- `_on_tensorrt_toggled` (1305-1311)
-- `_sync_batch_policy_controls` (1317-1379)
-
-Keep `_on_detection_batch_size_changed` (1313-1315) and `_sync_live_detection_batch_controls`
-(1381 onward) — both serve the surviving control.
-
-- [ ] **Step 5: Find and fix orphaned callers of `_sync_batch_policy_controls`**
-
-```bash
-grep -rn "_sync_batch_policy_controls" src/ tests/
-```
-
-Any remaining caller must become `_sync_live_detection_batch_controls`, which is what the deleted
-method delegated to for the surviving control. Fix each hit.
-
-- [ ] **Step 6: Verify the panel constructs**
-
-```bash
-python -c "import hydra_suite.trackerkit.gui.panels.detection_panel; print('ok')"
-python -m pytest tests/ -m "not benchmark" -q
-```
-Expected: `ok`; no new failures.
-
-- [ ] **Step 7: Launch the GUI and confirm the box is gone**
-
-```bash
-trackerkit
-```
-
-Navigate to the detection settings, YOLO page. Confirm: the "Legacy Detector Batching" box is absent;
-"Live Detection Batching" with its "Frame batch size" spin remains and is interactive; no traceback in
-the console. Close the app.
-
-- [ ] **Step 8: Commit**
-
-```bash
-make format
-git add src/hydra_suite/trackerkit/gui/panels/detection_panel.py
-git commit -m "feat(trackerkit): delete the Legacy Detector Batching group box
-
-The box claimed to affect only cache build / preview / benchmark. It was
-wrong three ways: preview is excluded at worker.py:799, benchmark reads
-detection_batch_size, and it did affect live tracking. Its 'GPU batching'
-checkbox had become an inverted frame-prefetcher toggle, and its TensorRT
-controls were invisible (setVisible(False)) and never read.
-
-detection_batch_size in 'Live Detection Batching' is now the single
-detection-batching control."
-```
-
----
-
-## Task 6: Remove the three keys from config persistence
+Remove every orchestrator and CLI reference to the group-box widgets. After this task, the ONLY code
+mentioning `chk_enable_yolo_batching`, `combo_yolo_batch_mode`, `spin_yolo_batch_size`,
+`chk_enable_tensorrt`, `spin_tensorrt_batch`, and their labels is the panel construction in
+`detection_panel.py` (deleted in Task 6). `tensorrt_max_batch_size` stays as a saved config key — it
+is written via `resolve_tensorrt_max_batch_size` (Task 3); only the load-into-a-widget is removed.
 
 **Files:**
-- Modify: `src/hydra_suite/trackerkit/gui/orchestrators/config.py:532-542, 1643-1651, 2064-2076`
-- Modify: `src/hydra_suite/trackerkit/cli_config.py:310-330`
+- Modify: `src/hydra_suite/trackerkit/gui/orchestrators/config.py` (load blocks, save block, inject block)
+- Modify: `src/hydra_suite/trackerkit/cli_config.py` (the three-key translation block)
 
 **Interfaces:**
-- Consumes: Task 5's widget deletion
-- Produces: no orchestrator or CLI code reads/writes the three keys
+- Consumes: Task 3's `resolve_tensorrt_max_batch_size` (the save site already uses it; this task removes the remaining direct widget reads/writes)
+- Produces: no orchestrator or CLI code reads/writes `enable_yolo_batching` / `yolo_batch_size_mode` / `yolo_manual_batch_size`, and no orchestrator code reads/writes the group-box widgets. Only `detection_panel.py` still names them.
 
-- [ ] **Step 1: Remove the load block**
+**Locating targets:** the line numbers below are approximate (a bg-sub migration shifted them). Find
+each block by content — grep for `spin_yolo_batch_size`, `spin_tensorrt_batch`, `enable_yolo_batching`
+in `config.py` and `cli_config.py`.
 
-In `src/hydra_suite/trackerkit/gui/orchestrators/config.py`, delete lines 532-542 — the
-`# YOLO Batching settings` block setting `chk_enable_yolo_batching`, `combo_yolo_batch_mode`, and
-`spin_yolo_batch_size`. Keep the `# Live Detection Batching` block immediately after it.
+- [ ] **Step 1: Remove the YOLO-batching load block**
 
-- [ ] **Step 2: Remove the save block**
+In `src/hydra_suite/trackerkit/gui/orchestrators/config.py`, delete the `# YOLO Batching settings`
+block — the three statements setting `chk_enable_yolo_batching.setChecked(...)`,
+`combo_yolo_batch_mode.setCurrentIndex(...)`, and `spin_yolo_batch_size.setValue(...)` (was ~532-542,
+now ~555-565). Keep the `# Live Detection Batching` block that follows.
 
-Delete these entries from the `cfg.update({...})` at lines 1643-1651:
+- [ ] **Step 2: Remove the orphaned TensorRT loader block (added in reorder)**
+
+Immediately above the YOLO-batching load block is a TensorRT loader that pushes the kept
+`tensorrt_max_batch_size` value into widgets Task 6 deletes. Delete this whole block (the comment plus
+all three widget calls — `spin_tensorrt_batch.setValue`, `spin_tensorrt_batch.setEnabled`,
+`lbl_tensorrt_batch.setEnabled`, was ~537-553):
+
+```python
+        # TensorRT batch size is still configurable (runtime-derived usage).
+        self._panels.detection.spin_tensorrt_batch.setValue(
+            get_cfg("tensorrt_max_batch_size", default=16)
+        )
+        self._panels.detection.spin_tensorrt_batch.setEnabled(
+            bool(
+                legacy_detection_runtime_fields(self._mw._selected_compute_runtime())[
+                    "enable_tensorrt"
+                ]
+            )
+        )
+        self._panels.detection.lbl_tensorrt_batch.setEnabled(
+            bool(
+                legacy_detection_runtime_fields(self._mw._selected_compute_runtime())[
+                    "enable_tensorrt"
+                ]
+            )
+        )
+```
+
+This is a UI-display loader only; `tensorrt_max_batch_size` is still saved via
+`resolve_tensorrt_max_batch_size` and still consumed by the engine. If removing this block leaves
+`legacy_detection_runtime_fields` or `get_cfg` unused in the surrounding method, leave them — they are
+used elsewhere in the same method; verify with a grep before removing any import.
+
+- [ ] **Step 3: Remove the save block**
+
+Delete these entries from the `cfg.update({...})` (was ~1643-1651):
 
 ```python
                 # YOLO Batching
@@ -766,7 +708,7 @@ Delete these entries from the `cfg.update({...})` at lines 1643-1651:
                 "yolo_manual_batch_size": self._panels.detection.spin_yolo_batch_size.value(),
 ```
 
-Also update the now-stale comment above `enable_tensorrt` at line 1636 from:
+Also update the now-stale comment above the `enable_tensorrt` cfg entry from:
 
 ```python
                 # TensorRT (legacy detector: cache build / preview / benchmark only)
@@ -779,9 +721,9 @@ to:
                 # legacy config round-tripping and the engine-cache key.
 ```
 
-- [ ] **Step 3: Remove the advanced_config injection**
+- [ ] **Step 4: Remove the advanced_config injection**
 
-Delete lines 2064-2076's three assignments:
+Delete the three `advanced_config[...]` assignments for the YOLO batching keys (was ~2064-2076):
 
 ```python
         # YOLO Batching settings from UI (overrides advanced_config defaults)
@@ -810,31 +752,164 @@ The result should read:
         )
 ```
 
-- [ ] **Step 4: Remove the CLI translation block**
+- [ ] **Step 5: Remove the CLI translation block**
 
-In `src/hydra_suite/trackerkit/cli_config.py`, delete the three `advanced[...]` assignments at lines
-310-330 for `enable_yolo_batching`, `yolo_batch_size_mode`, and `yolo_manual_batch_size`. Keep
+In `src/hydra_suite/trackerkit/cli_config.py`, delete the three `advanced[...]` assignments (was
+~310-330) for `enable_yolo_batching`, `yolo_batch_size_mode`, and `yolo_manual_batch_size`. Keep
 `advanced["yolo_seq_individual_batch_size"]` immediately after them.
 
-- [ ] **Step 5: Verify**
+- [ ] **Step 6: Verify**
 
 ```bash
+source /Users/neurorishika/miniforge3/etc/profile.d/conda.sh && conda activate hydra-mps
+# 1) the three keys are gone from the trackerkit code paths (batch_optimizer.py is allowed elsewhere)
 grep -rn "enable_yolo_batching\|yolo_batch_size_mode\|yolo_manual_batch_size" src/hydra_suite/trackerkit/
-python -c "import hydra_suite.trackerkit.cli_config; print('ok')"
-python -m pytest tests/ -m "not benchmark" -q
+# 2) the orchestrator no longer reads the widgets this task handles
+grep -rn "spin_tensorrt_batch\|lbl_tensorrt_batch\|chk_enable_yolo_batching\|combo_yolo_batch_mode\|spin_yolo_batch_size" src/hydra_suite/trackerkit/gui/orchestrators/
+# 3) modules still import
+python -c "import hydra_suite.trackerkit.gui.orchestrators.config; import hydra_suite.trackerkit.cli_config; print('ok')"
 ```
-Expected: first command produces no output; `ok`; no new failures.
+Expected: (1) no output; (2) no output; (3) `ok`.
 
-- [ ] **Step 6: Commit**
+Then a targeted test run (NOT the full suite — it hangs in this env; see below):
+
+```bash
+python -m pytest tests/test_legacy_batching_removal.py tests/test_trackerkit_headless_tracking.py \
+  --timeout=90 --timeout-method=thread -p no:cacheprovider -q
+```
+Expected: the `resolve_tensorrt_max_batch_size` tests pass; `test_no_src_module_reads_the_removed_batching_keys` still fails (Task 7 gate). No NEW failures beyond the known pre-existing ones.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 make format
 git add src/hydra_suite/trackerkit/gui/orchestrators/config.py src/hydra_suite/trackerkit/cli_config.py
-git commit -m "chore(trackerkit): drop the three legacy batching keys from config
+git commit -m "chore(trackerkit): drop group-box config persistence
 
-enable_yolo_batching / yolo_batch_size_mode / yolo_manual_batch_size are no
-longer read by any code path. Old project configs still carrying them load
-fine -- unknown keys are ignored."
+Removes every orchestrator/CLI read and write of enable_yolo_batching /
+yolo_batch_size_mode / yolo_manual_batch_size, plus the TensorRT loader block
+that pushed tensorrt_max_batch_size into the (now-unread) spin_tensorrt_batch
+widget. tensorrt_max_batch_size is still saved via resolve_tensorrt_max_batch_size
+and consumed by the engine; only the load-into-a-widget is gone. Old project
+configs carrying the three keys still load -- unknown keys are ignored.
+
+After this, only detection_panel.py references the group-box widgets, so the
+panel deletion that follows is a clean, self-contained removal."
+```
+
+---
+
+## Task 6: Delete the group box from the detection panel
+
+> **Reordered during execution (2026-07-17):** now runs AFTER Task 5 (config/CLI consumer removal).
+> Because Task 5 removed every orchestrator reference to these widgets, the Step 1 grep below now
+> finds hits only inside `detection_panel.py` — the panel deletion is self-contained.
+
+Delete the box, its widgets, its four handlers, and `_sync_batch_policy_controls`.
+
+**Files:**
+- Modify: `src/hydra_suite/trackerkit/gui/panels/detection_panel.py` (group-box construction ~840-982; handlers ~1287-1379)
+
+**Interfaces:**
+- Consumes: Task 5's config/CLI removal (no external code references these widgets)
+- Produces: `detection_panel` exposes no `chk_enable_yolo_batching`, `combo_yolo_batch_mode`, `spin_yolo_batch_size`, `chk_enable_tensorrt`, `spin_tensorrt_batch`, `lbl_yolo_batch_mode`, `lbl_yolo_batch_size`, `lbl_tensorrt_batch`, `g_gpu_accel`
+
+- [ ] **Step 1: Enumerate every reference before deleting**
+
+```bash
+grep -rn "g_gpu_accel\|chk_enable_yolo_batching\|combo_yolo_batch_mode\|spin_yolo_batch_size\|chk_enable_tensorrt\|spin_tensorrt_batch\|lbl_yolo_batch_mode\|lbl_yolo_batch_size\|lbl_tensorrt_batch\|_sync_batch_policy_controls\|_on_yolo_batching_toggled\|_on_yolo_batch_mode_changed\|_on_yolo_manual_batch_size_changed\|_on_tensorrt_toggled" src/ tests/
+```
+
+After Task 5 every hit must be inside `detection_panel.py` (group-box construction or the handlers
+below). **If a hit appears in any OTHER file, STOP and record it** — an unmapped consumer exists that
+Task 5 should have cleared.
+
+Also confirm `benchmarking.py` reads `spin_detection_batch_size` (the surviving control), not
+`spin_yolo_batch_size`.
+
+- [ ] **Step 2: Delete the group-box construction block**
+
+In `src/hydra_suite/trackerkit/gui/panels/detection_panel.py`, delete the block from the `# ====`
+comment banner introducing "Legacy Detector Batching" through the final `self._sync_batch_policy_controls()`
+call (was ~840-982). Locate it by the banner and the trailing sync call, not by line number.
+
+That block ends immediately before:
+
+```python
+        # Add pages to stack
+        self.stack_detection.addWidget(page_bg)
+```
+
+Which must remain.
+
+- [ ] **Step 3: Replace the deleted `_sync_batch_policy_controls()` call**
+
+The deleted block's final line called `self._sync_batch_policy_controls()`, which ended by calling
+`self._sync_live_detection_batch_controls()`. That second call is still needed — it initializes the
+surviving Frame-batch-size control. Immediately before `# Add pages to stack`, add:
+
+```python
+        self._sync_live_detection_batch_controls()
+```
+
+- [ ] **Step 4: Delete the four dead handlers and the sync method**
+
+Delete these methods entirely from `detection_panel.py` (locate by name):
+
+- `_on_yolo_batching_toggled`
+- `_on_yolo_manual_batch_size_changed`
+- `_on_yolo_batch_mode_changed`
+- `_on_tensorrt_toggled`
+- `_sync_batch_policy_controls`
+
+Keep `_on_detection_batch_size_changed` and `_sync_live_detection_batch_controls` — both serve the
+surviving control.
+
+- [ ] **Step 5: Find and fix orphaned callers of `_sync_batch_policy_controls`**
+
+```bash
+grep -rn "_sync_batch_policy_controls" src/ tests/
+```
+
+Any remaining caller must become `_sync_live_detection_batch_controls`, which is what the deleted
+method delegated to for the surviving control. Fix each hit.
+
+- [ ] **Step 6: Verify the panel constructs**
+
+```bash
+source /Users/neurorishika/miniforge3/etc/profile.d/conda.sh && conda activate hydra-mps
+python -c "import hydra_suite.trackerkit.gui.panels.detection_panel; print('ok')"
+# targeted, NOT the full suite (it hangs in this env)
+python -m pytest tests/test_trackerkit_preview_worker.py tests/test_trackerkit_benchmarking.py \
+  --timeout=90 --timeout-method=thread -p no:cacheprovider -q
+```
+Expected: `ok`; no NEW failures beyond the known pre-existing ones.
+
+- [ ] **Step 7: Launch the GUI and confirm the box is gone** (manual — controller/human)
+
+```bash
+trackerkit
+```
+
+Navigate to the detection settings, YOLO page. Confirm: the "Legacy Detector Batching" box is absent;
+"Live Detection Batching" with its "Frame batch size" spin remains and is interactive; no traceback in
+the console. Close the app.
+
+- [ ] **Step 8: Commit**
+
+```bash
+make format
+git add src/hydra_suite/trackerkit/gui/panels/detection_panel.py
+git commit -m "feat(trackerkit): delete the Legacy Detector Batching group box
+
+The box claimed to affect only cache build / preview / benchmark. It was
+wrong three ways: preview is excluded at worker.py:799, benchmark reads
+detection_batch_size, and it did affect live tracking. Its 'GPU batching'
+checkbox had become an inverted frame-prefetcher toggle, and its TensorRT
+controls were invisible (setVisible(False)) and never read.
+
+detection_batch_size in 'Live Detection Batching' is now the single
+detection-batching control."
 ```
 
 ---
