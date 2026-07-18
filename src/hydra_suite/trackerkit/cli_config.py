@@ -603,7 +603,7 @@ def build_tracking_parameters(
         "ENABLE_TENSORRT": detection_runtime["enable_tensorrt"],
         "ENABLE_ONNX_RUNTIME": detection_runtime["enable_onnx_runtime"],
         # Defaults to the detection batch the engine will actually be fed.
-        # Previously defaulted to yolo_manual_batch_size, a legacy-detector key.
+        # Previously defaulted to the legacy manual YOLO batch key (now removed).
         "TENSORRT_MAX_BATCH_SIZE": int(
             _cfg_get(
                 cfg,

@@ -44,24 +44,31 @@ def test_trt_batch_clamps_to_at_least_one():
 
 
 def test_no_src_module_reads_the_removed_batching_keys():
-    """Completion gate for the whole legacy-batching-removal effort (Task 7).
+    """Guard against re-introducing the three removed batching keys in src/.
 
-    Expected to still FAIL after this task -- the legacy widgets/keys are
-    only re-sourced here, not yet deleted.
+    utils/batch_optimizer.py is the one sanctioned exception: it still reads
+    all three via .get() with defaults and is intentionally retained (it backs
+    DetectionCacheBuilderWorker). With the keys gone from config it falls back
+    to auto GPU-memory sizing. Everything else must stay clean; this scan is a
+    raw-text scan, so even a comment mentioning a key name should be reworded
+    rather than reintroduced.
     """
-    import subprocess
+    from pathlib import Path
 
-    result = subprocess.run(
-        [
-            "grep",
-            "-rn",
-            "spin_yolo_batch_size\\|spin_tensorrt_batch",
-            "src/hydra_suite/trackerkit/gui/orchestrators/",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.stdout == ""
+    import hydra_suite
+
+    root = Path(hydra_suite.__file__).parent
+    allowed = {root / "utils" / "batch_optimizer.py"}
+    removed = ("enable_yolo_batching", "yolo_batch_size_mode", "yolo_manual_batch_size")
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path in allowed:
+            continue
+        text = path.read_text()
+        for key in removed:
+            if key in text:
+                offenders.append(f"{path}: {key}")
+    assert offenders == [], f"removed keys still referenced: {offenders}"
 
 
 def test_worker_module_no_longer_reads_enable_yolo_batching():
