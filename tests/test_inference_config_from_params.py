@@ -25,3 +25,13 @@ def test_direct_obb_minimal_params():
     assert cfg.obb.max_detections == 8
     assert cfg.obb.raw_detection_cap == 16
     assert cfg.runtime_tier == "cpu"
+
+
+def test_build_obb_only_config_is_detection_only():
+    from hydra_suite.core.inference.config import build_obb_only_config
+
+    cfg = build_obb_only_config("m.pt", compute_runtime="cpu", confidence_threshold=0.3)
+    assert cfg.obb is not None and cfg.obb.direct.model_path == "m.pt"
+    assert cfg.obb.confidence_threshold == 0.3
+    assert cfg.headtail is None and cfg.cnn_phases == [] and cfg.pose is None
+    assert cfg.apriltag.enabled is False
