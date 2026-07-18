@@ -309,27 +309,6 @@ def build_tracking_parameters(
 ) -> dict[str, Any]:
     """Translate saved TrackerKit JSON config into worker params."""
     advanced = dict(advanced_config or load_advanced_tracker_config())
-    advanced["enable_yolo_batching"] = bool(
-        _cfg_get(
-            cfg,
-            "enable_yolo_batching",
-            default=advanced.get("enable_yolo_batching", False),
-        )
-    )
-    advanced["yolo_batch_size_mode"] = str(
-        _cfg_get(
-            cfg,
-            "yolo_batch_size_mode",
-            default=advanced.get("yolo_batch_size_mode", "auto"),
-        )
-    )
-    advanced["yolo_manual_batch_size"] = int(
-        _cfg_get(
-            cfg,
-            "yolo_manual_batch_size",
-            default=advanced.get("yolo_manual_batch_size", 4),
-        )
-    )
     advanced["yolo_seq_individual_batch_size"] = int(
         _cfg_get(
             cfg,

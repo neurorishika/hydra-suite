@@ -533,37 +533,6 @@ class ConfigOrchestrator:
             self._mw.config.runtime_tier = tier
         self._mw._on_runtime_context_changed()
 
-        # TensorRT batch size is still configurable (runtime-derived usage).
-        self._panels.detection.spin_tensorrt_batch.setValue(
-            get_cfg("tensorrt_max_batch_size", default=16)
-        )
-        self._panels.detection.spin_tensorrt_batch.setEnabled(
-            bool(
-                legacy_detection_runtime_fields(self._mw._selected_compute_runtime())[
-                    "enable_tensorrt"
-                ]
-            )
-        )
-        self._panels.detection.lbl_tensorrt_batch.setEnabled(
-            bool(
-                legacy_detection_runtime_fields(self._mw._selected_compute_runtime())[
-                    "enable_tensorrt"
-                ]
-            )
-        )
-
-        # YOLO Batching settings
-        self._panels.detection.chk_enable_yolo_batching.setChecked(
-            get_cfg("enable_yolo_batching", default=True)
-        )
-        batch_mode = get_cfg("yolo_batch_size_mode", default="auto")
-        self._panels.detection.combo_yolo_batch_mode.setCurrentIndex(
-            0 if batch_mode == "auto" else 1
-        )
-        self._panels.detection.spin_yolo_batch_size.setValue(
-            get_cfg("yolo_manual_batch_size", default=16)
-        )
-
         # Live Detection Batching (drives InferenceConfig.detection_batch_size)
         self._panels.detection.spin_detection_batch_size.setValue(
             get_cfg("detection_batch_size", default=1)
@@ -1656,7 +1625,8 @@ class ConfigOrchestrator:
             {
                 # Live Detection Batching (drives InferenceConfig.detection_batch_size)
                 "detection_batch_size": self._panels.detection.spin_detection_batch_size.value(),
-                # TensorRT (legacy detector: cache build / preview / benchmark only)
+                # TensorRT: derived from the selected runtime, retained for
+                # legacy config round-tripping and the engine-cache key.
                 "enable_tensorrt": runtime_detection["enable_tensorrt"],
                 "tensorrt_max_batch_size": resolve_tensorrt_max_batch_size(
                     detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
@@ -1664,14 +1634,6 @@ class ConfigOrchestrator:
                         compute_runtime
                     ),
                 ),
-                # YOLO Batching
-                "enable_yolo_batching": self._panels.detection.chk_enable_yolo_batching.isChecked(),
-                "yolo_batch_size_mode": (
-                    "auto"
-                    if self._panels.detection.combo_yolo_batch_mode.currentIndex() == 0
-                    else "manual"
-                ),
-                "yolo_manual_batch_size": self._panels.detection.spin_yolo_batch_size.value(),
                 # === CORE TRACKING ===
                 "max_targets": self._panels.setup.spin_max_targets.value(),
                 "max_assignment_distance_multiplier": self._panels.tracking.spin_max_dist.value(),
@@ -2085,19 +2047,7 @@ class ConfigOrchestrator:
         stitch_max_gap_frames = _seconds_to_frames(
             self._panels.postprocess.spin_stitch_max_gap_seconds.value(), min_frames=0
         )
-        # YOLO Batching settings from UI (overrides advanced_config defaults)
         advanced_config = self._mw.advanced_config.copy()
-        advanced_config["enable_yolo_batching"] = (
-            self._panels.detection.chk_enable_yolo_batching.isChecked()
-        )
-        advanced_config["yolo_batch_size_mode"] = (
-            "auto"
-            if self._panels.detection.combo_yolo_batch_mode.currentIndex() == 0
-            else "manual"
-        )
-        advanced_config["yolo_manual_batch_size"] = (
-            self._panels.detection.spin_yolo_batch_size.value()
-        )
         advanced_config["detection_batch_size"] = (
             self._panels.detection.spin_detection_batch_size.value()
         )
