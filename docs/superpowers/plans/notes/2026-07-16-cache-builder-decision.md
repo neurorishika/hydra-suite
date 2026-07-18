@@ -63,3 +63,26 @@ there is no convergence at all — this is a clean KEEP.
 (2) migrate `DetectionCacheBuilderWorker`, the optimizer scorer, and `TrackingPreviewWorker`
 together in one change, since they share the on-disk format and API. That is out of scope
 here.
+
+## End-to-end verification (Task 8) — 2026-07-17
+
+Automated (controller-run, hydra-mps env):
+- No functional vestige survives: grep clean for detection_phase / FramePrefetcherBackward /
+  g_gpu_accel / the deleted widgets & handler. Remaining hits are SetupPanel's own kept
+  _sync_batch_policy_controls (delegates to live sync) and explanatory comments/docstrings.
+- The three removed keys appear only in allowlisted files (utils/batch_optimizer.py, its test,
+  test_tracking_worker_helpers stub, and comments) — never in a live trackerkit read path.
+- All 6 kits import (trackerkit/posekit/classkit/refinekit/detectkit/filterkit).
+- Old project config carrying enable_yolo_batching/yolo_batch_size_mode/yolo_manual_batch_size loads
+  fine (unknown keys ignored); legacy_detection_runtime_fields still derives.
+- Offscreen MainWindow construction: builds cleanly; group box + all its widgets/handler ABSENT
+  (g_gpu_accel, chk_enable_yolo_batching, spin_tensorrt_batch, _sync_batch_policy_controls);
+  surviving Live Detection Batching present (spin_detection_batch_size, g_live_batching,
+  _sync_live_detection_batch_controls). PASS.
+
+Pending (needs a real video + display — user):
+- A real forward tracking run to confirm PHASE 1 (InferenceRunner batch pass) + PHASE 2 appear and the
+  "Frame prefetching ENABLED/disabled" log line (worker.py) is UNCHANGED vs pre-change for the same
+  project. Code analysis + review established use_batched_detection computes identically (only the
+  True-defaulting enable_yolo_batching term was dropped), so on default config this is provably a
+  no-op; the real run is the final confirmation.
