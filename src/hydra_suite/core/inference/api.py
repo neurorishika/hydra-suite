@@ -62,6 +62,7 @@ def load_pose_backend(
         PoseConfig,
         PoseSLEAPConfig,
         PoseYOLOConfig,
+        migrate_runtime_to_tier,
     )
     from .runtime import RuntimeContext
     from .stages.pose import load_pose_model
@@ -89,12 +90,18 @@ def load_pose_backend(
             min_keypoint_confidence=min_valid_confidence,
         )
 
+    # RuntimeContext.from_config derives its tier from cfg.runtime_tier, NOT
+    # from the deprecated per-stage OBBDirectConfig.compute_runtime (see
+    # runtime.py's from_config / runtime_to_compute_runtime). Without this,
+    # the minimal InferenceConfig keeps the default "gpu" runtime_tier and
+    # the requested compute_runtime is silently ignored.
     _min_cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
         ),
         pose=pose_cfg,
+        runtime_tier=migrate_runtime_to_tier({compute_runtime}),
     )
     runtime = RuntimeContext.from_config(_min_cfg)
     model = load_pose_model(pose_cfg, runtime)
@@ -110,7 +117,12 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     """
     import numpy as np
 
-    from .config import InferenceConfig, OBBConfig, OBBDirectConfig
+    from .config import (
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+        migrate_runtime_to_tier,
+    )
     from .result import OBBResult
     from .runtime import RuntimeContext
     from .stages.crops import extract_canonical_crops
@@ -123,12 +135,16 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
         elif getattr(pose_config, "sleap", None) is not None:
             compute_runtime = getattr(pose_config.sleap, "compute_runtime", "cpu")
 
+    # See load_pose_backend above: RuntimeContext.from_config reads
+    # cfg.runtime_tier, not the deprecated per-stage compute_runtime fields,
+    # so runtime_tier must be derived from the resolved compute_runtime here.
     _min_cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
         ),
         pose=pose_config,
+        runtime_tier=migrate_runtime_to_tier({compute_runtime}),
     )
     try:
         runtime = RuntimeContext.from_config(_min_cfg)

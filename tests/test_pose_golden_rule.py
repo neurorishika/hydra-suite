@@ -120,6 +120,132 @@ def test_load_pose_backend_returns_backend_not_wrapper(monkeypatch):
     assert captured["pose_cfg"].yolo is None
 
 
+def test_load_pose_backend_end_to_end_cpu_routes_native_cpu(monkeypatch):
+    """REAL end-to-end routing: api.load_pose_backend(compute_runtime="cpu")
+    must actually resolve to the native/cpu SLEAP path.
+
+    Unlike test_load_pose_backend_returns_backend_not_wrapper (which
+    monkeypatches stages.pose.load_pose_model itself and therefore cannot
+    catch a broken tier translation), this exercises the full
+    shim -> runtime_tier -> RuntimeContext -> load_pose_model -> factory
+    path, patching only the innermost SLEAP backend factory.
+
+    torch.backends.mps.is_available is forced False so the cpu-tier request
+    resolves device="cpu" deterministically on this (Apple Silicon) test
+    host, where MPS would otherwise be opportunistically selected even for
+    the cpu tier (see RuntimeContext.from_config / _cpu_or_mps_device).
+    """
+    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.inference.api as inference_api
+
+    monkeypatch.setattr("torch.backends.mps.is_available", lambda: False)
+
+    captured = {}
+
+    def _fake_create_pose_backend_from_config(config):
+        captured["runtime_flavor"] = config.runtime_flavor
+        captured["device"] = config.device
+        return MagicMock()
+
+    monkeypatch.setattr(
+        api_mod,
+        "create_pose_backend_from_config",
+        _fake_create_pose_backend_from_config,
+    )
+
+    inference_api.load_pose_backend(
+        backend_family="sleap", model_path="m", compute_runtime="cpu"
+    )
+
+    assert captured["runtime_flavor"] == "native"
+    assert captured["device"] == "cpu"
+
+
+def test_load_pose_backend_end_to_end_cuda_routes_native_cuda(monkeypatch):
+    """REAL end-to-end routing for compute_runtime="cuda" -> native/cuda.
+
+    detect_platform and torch.cuda.is_available are patched so the "gpu"
+    tier resolves to a CUDA device deterministically on this no-CUDA test
+    host -- this exercises the same tier-resolution code path a real CUDA
+    box would take, it just supplies the platform facts a CUDA box would
+    have. Only the innermost SLEAP backend factory is faked.
+    """
+    import torch
+
+    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.inference.api as inference_api
+    import hydra_suite.runtime.resolver as resolver_mod
+
+    monkeypatch.setattr(
+        resolver_mod,
+        "detect_platform",
+        lambda: resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    captured = {}
+
+    def _fake_create_pose_backend_from_config(config):
+        captured["runtime_flavor"] = config.runtime_flavor
+        captured["device"] = config.device
+        return MagicMock()
+
+    monkeypatch.setattr(
+        api_mod,
+        "create_pose_backend_from_config",
+        _fake_create_pose_backend_from_config,
+    )
+
+    inference_api.load_pose_backend(
+        backend_family="sleap", model_path="m", compute_runtime="cuda"
+    )
+
+    assert captured["runtime_flavor"] == "native"
+    assert captured["device"] == "cuda"
+
+
+def test_load_pose_backend_end_to_end_tensorrt_routes_tensorrt_cuda(monkeypatch):
+    """REAL end-to-end routing for compute_runtime="tensorrt" -> tensorrt/cuda.
+
+    Same platform-faking rationale as the cuda test above: this host has no
+    CUDA, so detect_platform / torch.cuda.is_available are patched to
+    supply CUDA platform facts, letting the real gpu_fast tier-resolution
+    code run its CUDA+TensorRT branch deterministically.
+    """
+    import torch
+
+    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.inference.api as inference_api
+    import hydra_suite.runtime.resolver as resolver_mod
+
+    monkeypatch.setattr(
+        resolver_mod,
+        "detect_platform",
+        lambda: resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    captured = {}
+
+    def _fake_create_pose_backend_from_config(config):
+        captured["runtime_flavor"] = config.runtime_flavor
+        captured["device"] = config.device
+        return MagicMock()
+
+    monkeypatch.setattr(
+        api_mod,
+        "create_pose_backend_from_config",
+        _fake_create_pose_backend_from_config,
+    )
+
+    inference_api.load_pose_backend(
+        backend_family="sleap", model_path="m", compute_runtime="tensorrt"
+    )
+
+    assert captured["runtime_flavor"] == "tensorrt"
+    assert captured["device"] == "cuda"
+
+
 def test_load_pose_backend_yolo_dispatch(monkeypatch):
     """backend_family="yolo" must build a PoseConfig(backend="yolo", yolo=...)."""
     import hydra_suite.core.inference.api as inference_api
