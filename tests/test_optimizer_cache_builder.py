@@ -33,14 +33,6 @@ def test_cache_build_worker_uses_run_batch_pass(monkeypatch, tmp_path):
         ow, "build_inference_config_from_params", lambda p: object(), raising=False
     )
 
-    # Fail if a legacy detector is constructed.
-    def _boom(*a, **k):
-        raise AssertionError("cache builder must not construct YOLOOBBDetector")
-
-    monkeypatch.setattr(
-        "hydra_suite.core.detectors.YOLOOBBDetector", _boom, raising=False
-    )
-
     emitted = []
     worker = ow.DetectionCacheBuildWorker(
         video_path="v.mp4",

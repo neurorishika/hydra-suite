@@ -189,6 +189,23 @@ def test_filter_preserves_detection_ids_through_subset():
     )
 
 
+def test_filter_suppresses_overlapping_detection_keeping_highest_conf():
+    """Ported from the deleted legacy ``_filter_overlapping_detections`` test:
+    two heavily-overlapping OBBs (IoU >= iou_threshold) must collapse to one,
+    and the surviving detection is the higher-confidence one. Exercises the
+    real corner-polygon IoU NMS in ``_obb_nms`` (legacy parity)."""
+    # Box A centred ~(100,100) and box B centred ~(98,100), both 20x20:
+    # overlap x-extent 18 -> IoU 360/440 ~= 0.82 >= default 0.7 threshold.
+    corners = [
+        [[90, 90], [110, 90], [110, 110], [90, 110]],
+        [[88, 90], [108, 90], [108, 110], [88, 110]],
+    ]
+    raw = _make_obb([[100, 100], [98, 100]], [0.80, 0.95], corners=corners)
+    result = filter_detections(raw, _cpu_config(confidence_threshold=0.0))
+    assert result.num_detections == 1
+    assert result.confidences[0] == pytest.approx(0.95)
+
+
 def test_filter_from_tensors_confidence_gate():
     raw = _make_raw_tensors([[100, 100], [200, 200]], [0.3, 0.8])
     result = filter_from_tensors(

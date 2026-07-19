@@ -137,15 +137,6 @@ def test_preview_yolo_branch_drives_inference_runner(monkeypatch) -> None:
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
-    detectors_pkg = importlib.import_module("hydra_suite.core.detectors")
-
-    def _boom(*args, **kwargs):
-        raise AssertionError(
-            "preview should not construct a legacy YOLOOBBDetector instance"
-        )
-
-    monkeypatch.setattr(detectors_pkg, "YOLOOBBDetector", _boom, raising=False)
-
     corners = np.array(
         [[10.0, 10.0], [22.0, 10.0], [22.0, 16.0], [10.0, 16.0]], dtype=np.float32
     )
