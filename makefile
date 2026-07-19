@@ -1,4 +1,4 @@
-.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark benchmark-quick benchmark-obb benchmark-pose benchmark-classify build publish publish-test help
+.PHONY: configure-mps-libs env-create env-create-cuda env-create-mps env-update env-update-cuda env-update-mps env-remove env-remove-cuda env-remove-mps install install-cuda install-mps install-apriltag-fork install-dev configure-cuda-ort setup setup-cuda setup-mps test pytest test-cov test-cov-html clean docs-install docs-serve docs-build docs-quality docs-check techref-build techref-clean pre-commit-install pre-commit-autopep8 pre-commit-run pre-commit-update format format-check lint lint-fix lint-strict lint-report dead-code dead-code-fix dep-graph dep-graph-text type-check audit benchmark build publish publish-test help
 
 # Environment names for different platforms
 ENV_NAME = hydra
@@ -218,39 +218,8 @@ test-cov-html:
 CONDA_RUN_GPU = conda run -p $(shell conda info --base)/envs/$(ENV_NAME_GPU) --no-capture-output
 
 benchmark:
-	@echo "⏱  Running full model benchmark (CUDA env)..."
-	$(CONDA_RUN_GPU) python tools/benchmark_models.py \
-		--warmup 5 --iterations 50 \
-		--batch-sizes 1 8 32 \
-		$(BENCHMARK_ARGS)
-
-benchmark-quick:
-	@echo "⚡ Running quick model benchmark (CUDA env)..."
-	$(CONDA_RUN_GPU) python tools/benchmark_models.py \
-		--warmup 2 --iterations 10 \
-		--batch-sizes 1 8 \
-		$(BENCHMARK_ARGS)
-
-benchmark-obb:
-	@echo "⏱  Benchmarking OBB detection models (CUDA env)..."
-	$(CONDA_RUN_GPU) python tools/benchmark_models.py \
-		--skip-pose --skip-classify \
-		--warmup 5 --iterations 50 \
-		$(BENCHMARK_ARGS)
-
-benchmark-pose:
-	@echo "⏱  Benchmarking pose estimation models (CUDA env)..."
-	$(CONDA_RUN_GPU) python tools/benchmark_models.py \
-		--skip-obb --skip-classify \
-		--warmup 5 --iterations 50 \
-		$(BENCHMARK_ARGS)
-
-benchmark-classify:
-	@echo "⏱  Benchmarking classification models (CUDA env)..."
-	$(CONDA_RUN_GPU) python tools/benchmark_models.py \
-		--skip-obb --skip-pose \
-		--warmup 5 --iterations 50 \
-		$(BENCHMARK_ARGS)
+	@echo "⏱  Running tier-based pipeline benchmark (CUDA env). Set BENCHMARK_CONFIG=path/to/config.json"
+	$(CONDA_RUN_GPU) python tools/benchmark_pipeline.py $(BENCHMARK_CONFIG) $(BENCHMARK_ARGS)
 
 clean:
 	@echo "🧹 Cleaning Python cache files..."

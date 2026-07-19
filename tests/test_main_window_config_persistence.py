@@ -15,7 +15,6 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-from hydra_suite.trackerkit.benchmarking import BenchmarkRecommendation
 from hydra_suite.trackerkit.gui.main_window import MainWindow
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
@@ -1203,42 +1202,6 @@ def test_sequential_crop_batch_roundtrip_persists(
         == 9
     )
     reloaded_window.close()
-
-
-def test_benchmark_recommendations_update_batch_ui(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-    tmp_path: Path,
-) -> None:
-    """Benchmark recommendations update batch policy controls via sync."""
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
-
-    window = _make_main_window(monkeypatch)
-    window._detection_panel.combo_detection_method.setCurrentIndex(1)
-    # OBB mode defaults to index 0 (direct), so recommendation key must be detection_direct.
-    window._benchmark_recommendations = {
-        "detection_direct": BenchmarkRecommendation(
-            target_key="detection_direct",
-            target_label="Detection",
-            runtime="cpu",
-            runtime_label="CPU",
-            batch_size=8,
-            mean_ms=20.0,
-            throughput_fps=400.0,
-            reason="test",
-            model_path="/tmp/direct.pt",
-            mean_per_frame_ms=2.5,
-        )
-    }
-
-    # _sync_live_detection_batch_controls reads _current_detection_benchmark_recommendation()
-    # directly from _benchmark_recommendations — no populate call needed.
-    window._detection_panel._sync_live_detection_batch_controls()
-    assert (
-        "Benchmark recommendation"
-        in window._detection_panel.lbl_batch_policy_notice.text()
-    )
-    window.close()
 
 
 def test_legacy_shared_suppress_setting_populates_both_export_toggles(

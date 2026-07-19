@@ -1098,7 +1098,6 @@ class SessionOrchestrator:
     def _on_runtime_context_changed(self, *_args):
         """Sync dependent controls when the runtime tier or context changes."""
         self._update_runtime_fallback_hint()
-        self._mw._refresh_benchmark_recommendations()
         self._mw._update_obb_mode_warning()
         if hasattr(self._mw, "_detection_panel"):
             self._mw._detection_panel._sync_live_detection_batch_controls()
