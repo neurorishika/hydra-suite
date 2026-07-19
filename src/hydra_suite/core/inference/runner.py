@@ -396,6 +396,21 @@ class InferenceRunner:
         # writable, so a backward (read) pass never overwrites the forward cache.
         self._caches_writable = False
 
+    @property
+    def obb_class_names(self) -> "dict[int, str] | None":
+        """id->name map from the loaded OBB model, for label display. None if no OBB model."""
+        if self._models.obb is None:
+            return None
+        # direct mode uses direct_model; sequential's classes come from the stage-2 obb_model
+        model = self._models.obb.direct_model or self._models.obb.obb_model
+        names = getattr(model, "names", None)
+        if names is None:
+            return None
+        # normalize to dict[int,str] (ultralytics .names may be a dict or list)
+        if isinstance(names, dict):
+            return {int(k): str(v) for k, v in names.items()}
+        return {int(i): str(v) for i, v in enumerate(names)}
+
     def caches_all_valid(self) -> bool:
         if self.cache_dir is None:
             return False

@@ -943,9 +943,11 @@ def _preview_run_yolo_branch(
             np.asarray(obb.corners[i], dtype=np.float32) for i in range(num_dets)
         ]
         detection_confidences = [float(obb.confidences[i]) for i in range(num_dets)]
-        # OBBResult carries no class ids, so per-detection class labels cannot be
-        # recovered from FrameResult; fall back to a neutral label.
-        filtered_class_labels = ["obj"] * num_dets
+        names = runner.obb_class_names or {}
+        class_ids = obb.class_ids_or_zeros if obb is not None else []
+        filtered_class_labels = [
+            _preview_class_label(names, int(class_ids[i])) for i in range(num_dets)
+        ]
 
         ht = getattr(fr, "headtail", None)
         filtered_headtail = []

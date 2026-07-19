@@ -66,13 +66,22 @@ def test_preview_build_inference_params_maps_overlay_and_runtime_keys() -> None:
 class _FakeOBBResult:
     """Minimal stand-in for ``core.inference.result.OBBResult``."""
 
-    def __init__(self, corners, confidences) -> None:
+    def __init__(self, corners, confidences, class_ids=None) -> None:
         self.corners = np.asarray(corners, dtype=np.float32)
         self.confidences = np.asarray(confidences, dtype=np.float32)
+        self.class_ids = (
+            np.asarray(class_ids, dtype=np.int32) if class_ids is not None else None
+        )
 
     @property
     def num_detections(self) -> int:
         return int(self.corners.shape[0])
+
+    @property
+    def class_ids_or_zeros(self) -> np.ndarray:
+        if self.class_ids is None:
+            return np.zeros(self.num_detections, dtype=np.int32)
+        return self.class_ids
 
 
 class _FakeHeadTail:
@@ -95,7 +104,9 @@ class _FakeFrameResult:
         self.apriltag = apriltag
 
 
-def _install_fake_runner(monkeypatch, preview_worker, frame_result):
+def _install_fake_runner(
+    monkeypatch, preview_worker, frame_result, obb_class_names=None
+):
     """Replace the module-level ``InferenceRunner`` with a fake returning
     ``frame_result``; returns the shared capture dict."""
     built: dict[str, object] = {}
@@ -103,6 +114,10 @@ def _install_fake_runner(monkeypatch, preview_worker, frame_result):
     class _FakeRunner:
         def __init__(self, cfg, **kwargs) -> None:
             built["cfg"] = cfg
+
+        @property
+        def obb_class_names(self):
+            return obb_class_names
 
         def run_realtime(self, frame, frame_idx=0, roi_mask=None):
             built["ran"] = True
@@ -247,6 +262,59 @@ def test_preview_yolo_branch_forwards_headtail_hints_to_draw(monkeypatch) -> Non
     assert conf == pytest.approx(0.88, abs=1e-4)
     assert directed == 1
     assert captured["detection_confidences"][0] == pytest.approx(0.91, abs=1e-4)
+
+
+def test_preview_yolo_branch_uses_real_class_labels(monkeypatch) -> None:
+    """When the OBB model exposes class names, the preview must draw the real
+    class label per detection instead of the generic "obj" fallback."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+
+    corners = np.array(
+        [[10.0, 10.0], [22.0, 10.0], [22.0, 16.0], [10.0, 16.0]], dtype=np.float32
+    )
+    two_corners = np.stack([corners, corners + 30.0])
+    obb = _FakeOBBResult(two_corners, [0.91, 0.80], class_ids=[1, 0])
+    fr = _FakeFrameResult(obb=obb)
+    _install_fake_runner(
+        monkeypatch, preview_worker, fr, obb_class_names={0: "ant", 1: "queen"}
+    )
+
+    monkeypatch.setattr(
+        preview_worker,
+        "_preview_resize_frame",
+        lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
+    )
+    monkeypatch.setattr(
+        preview_worker, "_preview_draw_yolo_footer", lambda *args, **kwargs: None
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture_annotations(
+        test_frame,
+        filtered_corners,
+        detection_confidences,
+        filtered_class_labels,
+        label_stacks,
+        label_anchors,
+        pose_keypoints_by_det,
+        filtered_headtail,
+        context,
+    ):
+        captured["filtered_class_labels"] = list(filtered_class_labels)
+
+    monkeypatch.setattr(
+        preview_worker, "_preview_draw_obb_annotations", _capture_annotations
+    )
+
+    test_frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    preview_worker._preview_run_yolo_branch(
+        test_frame, test_frame.copy(), {"yolo_model_path": "d.pt"}, 1.0, False
+    )
+
+    assert captured["filtered_class_labels"] == ["queen", "ant"]
 
 
 def test_preview_run_cnn_overlay_formats_multihead_predictions() -> None:
