@@ -1020,13 +1020,14 @@ class MainWindow(QMainWindow):
     def _build_optimizer_detection_cache(
         self, video_path: str, cache_path: str, params: dict
     ):
-        """Spin up a DetectionCacheBuilderWorker and show progress in the main window."""
+        """Spin up a DetectionCacheBuildWorker and show progress in the main window."""
         self._config_orch._build_optimizer_detection_cache(
             video_path, cache_path, params
         )
 
     def _on_optimizer_cache_built(self, ok: bool, cache_path: str):
-        """Called when DetectionCacheBuilderWorker finishes."""
+        """Called when DetectionCacheBuildWorker finishes. ``cache_path`` is the
+        InferenceRunner cache directory."""
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
 
@@ -1047,7 +1048,7 @@ class MainWindow(QMainWindow):
         self._open_parameter_helper()
 
     def _on_preview_cache_built(self, ok: bool, cache_path: str):
-        """Called when DetectionCacheBuilderWorker finishes building the preview cache."""
+        """Called when a detection-cache builder worker finishes building the preview cache."""
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
 

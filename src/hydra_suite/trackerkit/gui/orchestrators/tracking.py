@@ -274,7 +274,7 @@ class TrackingOrchestrator:
         # Stop all active workers and subprocess-like threads.
         self._request_qthread_stop(
             getattr(self._mw, "_cache_builder_worker", None),
-            "DetectionCacheBuilderWorker",
+            "DetectionCacheBuildWorker",
         )
         self._request_qthread_stop(
             getattr(self._mw, "merge_worker", None), "MergeWorker", timeout_ms=1200

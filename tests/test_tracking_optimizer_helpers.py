@@ -93,7 +93,7 @@ class _StubTrackAssigner:
 
 
 class _FakeCache:
-    def get_frame(self, frame_idx):
+    def read_frame(self, frame_idx):
         return (
             [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
             [50.0],
@@ -246,7 +246,7 @@ def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> Non
     mod = _load_optimizer_module()
 
     class _WeakPoseOnlyCache(_FakeCache):
-        def get_frame(self, frame_idx):
+        def read_frame(self, frame_idx):
             return (
                 [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
                 [50.0],
