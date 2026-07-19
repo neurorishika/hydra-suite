@@ -124,7 +124,7 @@ def _invert_letterbox_on_result(
     float32 tensor, ultralytics treats ``orig_shape == tensor_shape == imgsz``
     and therefore does NOT rescale boxes back to original-frame coordinates.
     This function applies the inverse letterbox so that downstream extract
-    functions (``_extract_raw_tensors``, ``_extract_obb_result``) always see
+    functions (``_extract_raw_tensors``, ``extract_obb_result``) always see
     original-frame coordinates, exactly as they would on the numpy list path.
 
     Inverse formula (all on-device tensor ops, no .cpu() call):
@@ -342,7 +342,7 @@ def load_obb_models(
         batch_size=batch_size,
     )
     # stage2_image_size is always the effective input size (the pipeline
-    # pre-resizes every crop to it in _resize_crops_for_stage2), so the
+    # pre-resizes every crop to it in resize_crops_for_stage2), so the
     # artifact must be built at that size, not the checkpoint's own default.
     # stage2_batch_size, when set, is the number of crops stage-2 is called
     # with per chunk (see _run_sequential's `batch_size = seq.stage2_batch_size
@@ -441,7 +441,7 @@ def _run_direct(
             for idx, r in enumerate(results)
         ]
     return [
-        _apply_raw_detection_cap(_extract_obb_result(r, idx), config.raw_detection_cap)
+        _apply_raw_detection_cap(extract_obb_result(r, idx), config.raw_detection_cap)
         for idx, r in enumerate(results)
     ]
 
@@ -471,7 +471,7 @@ def _run_sequential(
         if boxes is None or len(boxes) == 0:
             results.append(_empty_obb_result(frame_idx))
             continue
-        crops, offsets = _build_crops(frame, boxes, seq, runtime)
+        crops, offsets = build_crops(frame, boxes, seq, runtime)
         if not crops:
             results.append(_empty_obb_result(frame_idx))
             continue
@@ -481,7 +481,7 @@ def _run_sequential(
         # rather than letting Ultralytics' internal letterbox resize it (which
         # can pick a different interpolation/stride-padded shape and shift
         # borderline detections across the confidence threshold).
-        crops = _resize_crops_for_stage2(crops, seq.stage2_image_size)
+        crops = resize_crops_for_stage2(crops, seq.stage2_image_size)
         batch_size = seq.stage2_batch_size or len(crops)
         sub: list[OBBResult] = []
         for i in range(0, len(crops), batch_size):
@@ -502,19 +502,17 @@ def _run_sequential(
                     else (1.0, 1.0)
                 )
                 sub.append(
-                    _extract_obb_result(
-                        r, frame_idx, offset=offsets[i + j], scale=scale
-                    )
+                    extract_obb_result(r, frame_idx, offset=offsets[i + j], scale=scale)
                 )
         results.append(
             _apply_raw_detection_cap(
-                _merge_obb_results(frame_idx, sub), config.raw_detection_cap
+                merge_obb_results(frame_idx, sub), config.raw_detection_cap
             )
         )
     return results
 
 
-def _resize_crops_for_stage2(
+def resize_crops_for_stage2(
     crops: list[np.ndarray], stage2_image_size: int
 ) -> list[np.ndarray]:
     if stage2_image_size <= 0:
@@ -535,7 +533,7 @@ def _resize_crops_for_stage2(
     return out
 
 
-def _build_crops(
+def build_crops(
     frame: np.ndarray | torch.Tensor,
     boxes: Any,
     seq: Any,
@@ -615,7 +613,7 @@ def _extract_class_ids(obb: Any, n: int) -> np.ndarray:
     return np.zeros(n, dtype=np.int64)
 
 
-def _extract_obb_result(
+def extract_obb_result(
     result: Any,
     frame_idx: int,
     offset: tuple[float, float] = (0.0, 0.0),
@@ -725,7 +723,7 @@ def _empty_obb_result(frame_idx: int) -> OBBResult:
     )
 
 
-def _merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
+def merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
     non_empty = [r for r in parts if r.num_detections > 0]
     if not non_empty:
         return _empty_obb_result(frame_idx)
