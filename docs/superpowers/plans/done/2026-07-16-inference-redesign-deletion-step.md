@@ -1,5 +1,12 @@
 # Task Brief: Complete the deletion step of the inference pipeline redesign
 
+> **SUPERSEDED (2026-07-19).** This brief predates the four `2026-07-17-detector-retirement-*` plans and
+> the pose golden-rule work, and its assumptions (e.g. which files were live, its parent spec's deletion
+> list) are stale. The `core/detectors` retirement was completed by those plans instead: Plan 1 (foundation),
+> Plan 2 (consumer migration + class_ids), Plan 3 (benchmarking replacement), Plan 4 (package deletion),
+> plus the pose runtime golden rule. `core/detectors` is deleted; `core/inference` is the sole pipeline.
+> Kept for history only — do NOT execute.
+
 **For:** a fresh agent with no context on this codebase
 **Parent spec:** `docs/superpowers/specs/2026-04-26-inference-pipeline-redesign.md`
 (the deletion list is the fenced block under *"Explicitly deleted after new pipeline is verified working"*, and the

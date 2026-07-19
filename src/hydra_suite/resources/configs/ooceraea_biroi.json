@@ -103,7 +103,6 @@
   "min_respawn_distance_multiplier": 0.7,
   "min_detections_to_start_seconds": 0.2,
   "min_detect_seconds": 0.4,
-  "min_track_seconds": 0.4,
   "enable_postprocessing": true,
   "min_trajectory_length_seconds": 0.4,
   "max_velocity_break": 15.0,

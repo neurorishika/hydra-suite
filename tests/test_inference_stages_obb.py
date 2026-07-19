@@ -349,6 +349,61 @@ def test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model(
     assert calls == [("/detect.pt", 8), ("/obb.pt", 8)]
 
 
+def test_load_obb_models_sequential_uses_stage2_imgsz_not_checkpoint(monkeypatch):
+    """Regression (ported from the deleted legacy seq-OBB imgsz test): the
+    stage-2 (crop/OBB) model must be built at the configured stage-2 crop imgsz,
+    NOT the checkpoint's own embedded imgsz. Using the wrong imgsz here fed
+    already-resized crops into an executor letterboxed for a different square
+    size, inflating CUDA confidences and producing ~10x over-detection.
+
+    Direct mode is unaffected: it passes no imgsz_override, so the model runs
+    on full frames at the checkpoint's own imgsz (via _resolve_imgsz).
+    """
+    import hydra_suite.core.inference.stages.obb as obb_mod
+    from hydra_suite.core.inference.config import (
+        OBBConfig,
+        OBBDirectConfig,
+        OBBSequentialConfig,
+    )
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    calls = []
+
+    def fake_load_yolo(model_path, compute_runtime, **kwargs):
+        calls.append((model_path, kwargs.get("imgsz_override")))
+        return object()
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", fake_load_yolo)
+
+    runtime = RuntimeContext(
+        cuda_mode=True,
+        device="cuda:0",
+        use_nvdec=False,
+        default_runtime="tensorrt",
+        tensor_on_cuda=False,
+        requested_gpu=True,
+    )
+
+    # Sequential: stage-2 OBB model built at the configured stage-2 crop imgsz.
+    config = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/detect.pt",
+            obb_model_path="/obb.pt",
+            stage2_image_size=128,
+        ),
+    )
+    obb_mod.load_obb_models(config, runtime, batch_size=1)
+    # Stage-2 (/obb.pt) uses the stage-2 crop imgsz, not the checkpoint's own.
+    assert ("/obb.pt", 128) in calls
+
+    # Direct mode passes no imgsz_override (checkpoint imgsz is used at runtime).
+    calls.clear()
+    direct = OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="/m.pt"))
+    obb_mod.load_obb_models(direct, runtime, batch_size=1)
+    assert calls == [("/m.pt", None)]
+
+
 import warnings
 
 

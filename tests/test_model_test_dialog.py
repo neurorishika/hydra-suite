@@ -216,13 +216,6 @@ def test_test_worker_execute_uses_load_obb_executor_not_legacy_detector(monkeypa
         fake_load_obb_executor,
     )
 
-    def _fail_if_called(*_a, **_k):
-        raise AssertionError("_TestWorker.execute must not construct YOLOOBBDetector")
-
-    monkeypatch.setattr(
-        "hydra_suite.core.detectors.YOLOOBBDetector", _fail_if_called, raising=False
-    )
-
     # cv2.imread is monkeypatched so this test doesn't depend on real image files.
     fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
     monkeypatch.setattr(dialog_module.cv2, "imread", lambda path: fake_frame.copy())
