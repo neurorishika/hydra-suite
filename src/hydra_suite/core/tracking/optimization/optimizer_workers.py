@@ -51,7 +51,9 @@ logger = logging.getLogger(__name__)
 def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
     """Read a frame from cache and apply detection filtering for preview.
 
-    Supports both new OBBResult API (Correction 21) and legacy 12-tuple.
+    Detection caches are always ``OBBResult`` (InferenceRunner-based
+    builder); filtering is applied via ``apply_detection_filter`` from
+    ``core/inference/api``.
     """
     frame_data = cache.read_frame(f_idx)
 
@@ -76,58 +78,11 @@ def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         detection_ids = filtered_obb.detection_ids.tolist()
         return meas, shapes, _confs, detection_ids, [], []
 
-    # Legacy 12-tuple path
-    (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confs,
-        raw_obb,
-        raw_det_ids,
-        raw_heading_hints,
-        raw_heading_confidences,
-        raw_directed_mask,
-        _raw_canonical_affines,
-        _raw_canvas_dims,
-        _raw_M_inverse,
-    ) = frame_data
-    if raw_heading_hints:
-        filtered = det_filter.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            roi_mask=roi_mask,
-            detection_ids=raw_det_ids,
-            heading_hints=raw_heading_hints,
-            heading_confidences=raw_heading_confidences,
-            directed_mask=raw_directed_mask,
-        )
-        (
-            meas,
-            _,
-            shapes,
-            _confs,
-            _obb_out,
-            detection_ids,
-            _headtail_hints,
-            _,
-            _headtail_directed,
-        ) = filtered
-    else:
-        filtered = det_filter.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            roi_mask=roi_mask,
-            detection_ids=raw_det_ids,
-        )
-        meas, _, shapes, _confs, _obb_out, detection_ids = filtered
-        _headtail_hints, _, _headtail_directed = [], [], []
-    return meas, shapes, _confs, detection_ids, _headtail_hints, _headtail_directed
+    raise TypeError(
+        "detection cache must contain OBBResult frames "
+        f"(got {type(frame_data).__name__}); rebuild the cache with the "
+        "current InferenceRunner-based builder."
+    )
 
 
 def _preview_compute_pose_features(
