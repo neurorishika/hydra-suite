@@ -20,6 +20,7 @@ from hydra_suite.core.identity.properties.export import (
     flatten_pose_keypoints_row,
     pose_wide_columns_for_labels,
 )
+from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.utils.geometry import wrap_angle_degs
 from hydra_suite.widgets.workers import BaseWorker
@@ -128,10 +129,11 @@ class InterpolatedCropsWorker(BaseWorker):
     def _init_pose_backend(self, output_dir):
         """Initialize pose estimation backend. Returns (backend, kpt_source_names, kpt_labels).
 
-        Constructs the backend directly (YOLO or SLEAP) rather than routing
-        through the legacy ``build_runtime_config``/``create_pose_backend_from_config``
-        translation layer, mirroring ``core/inference/stages/pose.py::load_pose_model``
-        and ``preview_worker.py::_preview_run_pose_overlay``.
+        Routes through ``core/inference/api.load_pose_backend`` (the shared shim
+        over ``stages/pose.load_pose_model`` — the single source of the pose
+        runtime golden rule) instead of duplicating the runtime-flavor ladder
+        here. ``load_pose_model`` still honors the SLEAP-flavor debug override
+        internally.
         """
         if not bool(self.params.get("ENABLE_POSE_EXTRACTOR", False)):
             return None, [], []
@@ -147,80 +149,35 @@ class InterpolatedCropsWorker(BaseWorker):
             skeleton_file = str(self.params.get("POSE_SKELETON_FILE", "") or "")
             keypoint_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
 
-            # Mirror core/inference/stages/pose.py::load_pose_model's
-            # compute_runtime derivation (same ladder Task 3's preview overlay
-            # uses). This worker's params dict only ever carries an
-            # already-resolved compute_runtime string, never a runtime tier.
+            # This worker's params dict only ever carries an already-resolved
+            # compute_runtime string, never a runtime tier.
             compute_runtime = str(
                 self.params.get(
                     "POSE_COMPUTE_RUNTIME", self.params.get("COMPUTE_RUNTIME", "cpu")
                 )
             )
 
-            if backend_family == "yolo":
-                from hydra_suite.core.identity.pose.backends.yolo import (
-                    YoloNativeBackend,
-                )
+            backend = load_pose_backend(
+                backend_family=backend_family,
+                model_path=model_path,
+                compute_runtime=compute_runtime,
+                keypoint_names=list(keypoint_names),
+                skeleton_edges=skeleton_edges,
+                batch_size=max(1, batch_size),
+                min_valid_confidence=min_valid_conf,
+                out_root=str(Path(output_dir).expanduser()),
+                sleap_env=str(self.params.get("POSE_SLEAP_ENV", "sleap")),
+                sleap_batch=max(1, batch_size),
+                sleap_max_instances=int(self.params.get("POSE_SLEAP_MAX_INSTANCES", 1)),
+            )
 
-                device = (
-                    "cuda:0"
-                    if compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
-                    else ("mps" if compute_runtime in ("mps", "coreml") else "cpu")
-                )
-                backend = YoloNativeBackend(
-                    model_path=model_path,
-                    device=device,
-                    min_valid_conf=min_valid_conf,
-                    keypoint_names=keypoint_names if keypoint_names else None,
-                    batch_size=batch_size,
-                )
-            else:
-                from hydra_suite.core.identity.pose.api import (
-                    create_pose_backend_from_config,
-                )
-                from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-
-                # Debug/A-B override kept for parity with load_pose_model: lets
-                # us force a SLEAP runtime flavor independent of compute_runtime.
-                _flavor_override = (
-                    os.environ.get("HYDRA_SLEAP_FLAVOR", "").strip().lower()
-                )
-                if _flavor_override:
-                    runtime_flavor = _flavor_override
-                    device = "cpu" if _flavor_override == "onnx_cpu" else "cuda"
-                elif compute_runtime in ("cuda", "onnx_cuda"):
-                    runtime_flavor = "onnx_cuda"
-                    device = "cuda"
-                elif compute_runtime in ("mps", "coreml"):
-                    runtime_flavor = "native"
-                    device = "mps"
-                elif compute_runtime == "tensorrt":
-                    runtime_flavor = "tensorrt"
-                    device = "cuda"
-                else:
-                    runtime_flavor = "onnx_cpu"
-                    device = "cpu"
-
-                pose_config = PoseRuntimeConfig(
-                    backend_family="sleap",
-                    runtime_flavor=runtime_flavor,
-                    device=device,
-                    batch_size=max(1, batch_size),
-                    model_path=model_path,
-                    out_root=str(Path(output_dir).expanduser()),
-                    min_valid_conf=min_valid_conf,
-                    sleap_env=str(self.params.get("POSE_SLEAP_ENV", "sleap")),
-                    sleap_device=device,
-                    sleap_batch=max(1, batch_size),
-                    sleap_max_instances=int(
-                        self.params.get("POSE_SLEAP_MAX_INSTANCES", 1)
-                    ),
-                    keypoint_names=list(keypoint_names),
-                    skeleton_edges=skeleton_edges,
-                )
-                backend = create_pose_backend_from_config(pose_config)
-
-            backend.warmup()
+            # NOTE: do NOT call backend.warmup() here -- load_pose_backend
+            # (-> stages/pose.load_pose_model) already warms the backend it
+            # returns. A second warmup() is redundant, and for the SLEAP
+            # service backend it is not idempotent w.r.t. ownership: the
+            # first warmup sets _service_started_here=True, a second sees
+            # was_running=True and flips it back to False, so close() later
+            # skips shutdown and leaks the SLEAP service subprocess.
             kpt_source_names = list(getattr(backend, "output_keypoint_names", []) or [])
             kpt_labels = build_pose_keypoint_labels(
                 kpt_source_names, len(kpt_source_names)

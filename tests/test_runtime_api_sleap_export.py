@@ -220,89 +220,6 @@ def test_prepare_export_crop_uses_rgb_letterbox_and_inverse_mapping() -> None:
     assert np.allclose(restored[:, 2], np.array([0.9, 0.7]), atol=1e-6)
 
 
-def test_sleap_native_backend_uses_temp_files_when_array_video_unsupported(
-    tmp_path: Path,
-) -> None:
-    calls = []
-
-    class _FakePoseInferenceService:
-        def __init__(self, out_root, keypoint_names, skeleton_edges=None):
-            self.out_root = Path(out_root)
-            self.keypoint_names = list(keypoint_names)
-            self.skeleton_edges = list(skeleton_edges or [])
-
-        @classmethod
-        def sleap_service_running(cls):
-            return False
-
-        @classmethod
-        def start_sleap_service(cls, env_name, out_root):
-            return True, "", Path(out_root) / "log.txt"
-
-        @classmethod
-        def shutdown_sleap_service(cls):
-            return None
-
-        @classmethod
-        def sleap_native_array_video_supported(cls):
-            return False
-
-        def predict(self, model_path, image_paths, **kwargs):
-            calls.append(
-                {
-                    "model_path": str(model_path),
-                    "image_paths": list(image_paths),
-                    "kwargs": dict(kwargs),
-                }
-            )
-            preds = {}
-            for i, p in enumerate(image_paths):
-                preds[str(p)] = [
-                    (10.0 + i, 20.0, 0.9),
-                    (30.0 + i, 40.0, 0.7),
-                ]
-            return preds, ""
-
-    stubs = {
-        "hydra_suite.utils.gpu_utils": _gpu_stub(),
-        "hydra_suite.integrations.sleap.service": types.SimpleNamespace(
-            PoseInferenceService=_FakePoseInferenceService
-        ),
-    }
-    mod = _load_sleap_backend_module(stubs)
-
-    model_dir = tmp_path / "sleap_model"
-    model_dir.mkdir()
-
-    with _patched_modules(stubs):
-        backend = mod.SleapServiceBackend(
-            model_dir=str(model_dir),
-            out_root=str(tmp_path),
-            keypoint_names=["k1", "k2"],
-            min_valid_conf=0.2,
-            sleap_env="sleap",
-            sleap_device="cpu",
-            sleap_batch=4,
-            sleap_max_instances=1,
-            runtime_flavor="native",
-        )
-
-        crops = [
-            np.zeros((24, 24, 3), dtype=np.uint8),
-            np.zeros((26, 26, 3), dtype=np.uint8),
-        ]
-        out = backend.predict_batch(crops)
-
-        assert calls
-        assert calls[0]["kwargs"]["sleap_runtime_flavor"] == "native"
-        assert calls[0]["kwargs"].get("image_payloads") is None
-        assert calls[0]["kwargs"]["cache_predictions"] is False
-        assert list(backend._tmp_root.glob("crop_*.png"))
-        assert len(out) == 2
-        assert out[0].num_valid == 2
-        backend.close()
-
-
 def test_sleap_native_backend_uses_in_memory_transport_when_supported(
     tmp_path: Path,
 ) -> None:
@@ -382,7 +299,6 @@ def test_sleap_native_backend_uses_in_memory_transport_when_supported(
         assert len(calls[0]["kwargs"]["image_payloads"]) == 2
         assert calls[0]["kwargs"]["image_payloads"][0]["shm_name"]
         assert calls[0]["kwargs"]["cache_predictions"] is False
-        assert list(backend._tmp_root.glob("crop_*.png")) == []
         assert len(out) == 2
         assert out[0].num_valid == 2
         backend.close()

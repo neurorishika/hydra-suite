@@ -144,38 +144,40 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     assert observed["headtail_device"] == "cuda"
 
 
-def test_init_pose_backend_yolo_no_build_runtime_config(monkeypatch, tmp_path) -> None:
-    """Task 5: the YOLO pose branch must construct ``YoloNativeBackend``
-    directly (mirroring ``core/inference/stages/pose.py::load_pose_model`` and
-    Task 3's ``_preview_run_pose_overlay``) instead of calling the legacy
-    ``build_runtime_config`` translation step.
-
-    Task 8: ``build_runtime_config`` was since deleted from
-    ``core/identity/pose/api.py`` entirely (zero real callers remained), so
-    it cannot be called here."""
-    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
-    yolo_module = importlib.import_module(
-        "hydra_suite.core.identity.pose.backends.yolo"
+def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
+    monkeypatch, tmp_path
+) -> None:
+    """Golden rule: the YOLO pose branch routes through the shared
+    ``core/inference/api.load_pose_backend`` shim (patched here in the worker's
+    module) instead of duplicating the runtime-flavor ladder."""
+    crops_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.crops_worker"
     )
+    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
 
-    assert not hasattr(pose_api, "build_runtime_config")
+    monkeypatch.setattr(
+        pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0", "kpt1"], [])
+    )
 
     captured: dict[str, object] = {}
 
-    class FakeYoloBackend:
-        def __init__(
-            self, model_path, device, min_valid_conf, keypoint_names, batch_size
-        ):
-            captured["model_path"] = model_path
-            captured["device"] = device
-            captured["min_valid_conf"] = min_valid_conf
-            captured["batch_size"] = batch_size
-            self.output_keypoint_names = ["kpt0", "kpt1"]
+    class FakeBackend:
+        output_keypoint_names = ["kpt0", "kpt1"]
+
+        def __init__(self) -> None:
+            self.warmup_calls = 0
 
         def warmup(self) -> None:
+            self.warmup_calls += 1
             captured["warmed_up"] = True
 
-    monkeypatch.setattr(yolo_module, "YoloNativeBackend", FakeYoloBackend)
+    fake_backend = FakeBackend()
+
+    def _fake_load_pose_backend(**kwargs):
+        captured.update(kwargs)
+        return fake_backend
+
+    monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
 
     worker = InterpolatedCropsWorker(
         "tracks.csv",
@@ -193,44 +195,55 @@ def test_init_pose_backend_yolo_no_build_runtime_config(monkeypatch, tmp_path) -
 
     backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
 
-    assert isinstance(backend, FakeYoloBackend)
-    assert captured["device"] == "cuda:0"
+    assert backend is fake_backend
+    assert captured["backend_family"] == "yolo"
     assert captured["model_path"] == "/models/yolo_pose.pt"
-    assert captured["warmed_up"] is True
+    assert captured["compute_runtime"] == "cuda"
+    # Regression guard: load_pose_backend (-> load_pose_model) already warms
+    # the backend it returns; a second GUI-side warmup() call is redundant
+    # and, for the SLEAP service backend, breaks _service_started_here
+    # ownership tracking, leaking the service subprocess past close().
+    assert fake_backend.warmup_calls == 0
+    assert "warmed_up" not in captured
     assert kpt_source_names == ["kpt0", "kpt1"]
     assert kpt_labels
 
 
-def test_init_pose_backend_sleap_no_build_runtime_config(monkeypatch, tmp_path) -> None:
-    """Task 5: the SLEAP pose branch must construct ``PoseRuntimeConfig``
-    directly instead of calling the legacy ``build_runtime_config`` translation
-    step.
+def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
+    monkeypatch, tmp_path
+) -> None:
+    """Golden rule: the SLEAP pose branch routes through the shared
+    ``load_pose_backend`` shim and threads SLEAP settings (env, max_instances)
+    through -- the tier -> flavor decision lives in ``load_pose_model``, not
+    here, so this asserts delegation + settings, not the resolved flavor."""
+    crops_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.crops_worker"
+    )
+    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
 
-    Task 8: ``build_runtime_config`` was since deleted from
-    ``core/identity/pose/api.py`` entirely (zero real callers remained), so
-    it cannot be called here."""
-    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
-    pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
-
-    assert not hasattr(pose_api, "build_runtime_config")
+    monkeypatch.setattr(
+        pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0"], [(0, 1)])
+    )
 
     captured: dict[str, object] = {}
 
     class FakeBackend:
         output_keypoint_names = ["kpt0"]
 
+        def __init__(self) -> None:
+            self.warmup_calls = 0
+
         def warmup(self) -> None:
+            self.warmup_calls += 1
             captured["warmed_up"] = True
 
-    def _fake_create_pose_backend_from_config(config):
-        captured["pose_config"] = config
-        return FakeBackend()
+    fake_backend = FakeBackend()
 
-    monkeypatch.setattr(
-        pose_api,
-        "create_pose_backend_from_config",
-        _fake_create_pose_backend_from_config,
-    )
+    def _fake_load_pose_backend(**kwargs):
+        captured.update(kwargs)
+        return fake_backend
+
+    monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
 
     worker = InterpolatedCropsWorker(
         "tracks.csv",
@@ -250,16 +263,37 @@ def test_init_pose_backend_sleap_no_build_runtime_config(monkeypatch, tmp_path) 
 
     backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
 
-    assert isinstance(backend, FakeBackend)
-    assert captured["warmed_up"] is True
+    assert backend is fake_backend
+    # Regression guard: same double-warmup leak as the YOLO case above, but
+    # more severe for SLEAP -- the service backend's warmup() ownership
+    # bookkeeping (_service_started_here) is not idempotent across calls, so
+    # a second warmup() here leaves the SLEAP service process orphaned after
+    # close().
+    assert fake_backend.warmup_calls == 0
+    assert "warmed_up" not in captured
     assert kpt_source_names == ["kpt0"]
 
-    pose_config = captured["pose_config"]
-    assert isinstance(pose_config, pose_types.PoseRuntimeConfig)
-    assert pose_config.backend_family == "sleap"
-    assert pose_config.runtime_flavor == "onnx_cuda"
-    assert pose_config.device == "cuda"
-    assert pose_config.sleap_device == "cuda"
-    assert pose_config.sleap_env == "sleap_env_x"
-    assert pose_config.sleap_max_instances == 2
-    assert pose_config.model_path == "/models/sleap_model"
+    assert captured["backend_family"] == "sleap"
+    assert captured["compute_runtime"] == "cuda"
+    assert captured["sleap_env"] == "sleap_env_x"
+    assert captured["sleap_max_instances"] == 2
+    assert captured["model_path"] == "/models/sleap_model"
+    assert captured["out_root"] == str(tmp_path)
+
+
+def test_crops_worker_has_no_divergent_flavor_ladder() -> None:
+    """Source guard: the deleted runtime-flavor ladder must not reappear."""
+    from pathlib import Path as _Path
+
+    src = _Path(
+        importlib.import_module(
+            "hydra_suite.trackerkit.gui.workers.crops_worker"
+        ).__file__
+    ).read_text(encoding="utf-8")
+    for banned in (
+        "is_cuda_like",
+        "onnx_cuda",
+        "create_pose_backend_from_config",
+        "YoloNativeBackend",
+    ):
+        assert banned not in src, f"divergent pose ladder token still present: {banned}"

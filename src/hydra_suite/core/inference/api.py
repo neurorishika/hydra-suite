@@ -38,6 +38,104 @@ def apply_detection_filter(raw: OBBResult, config: OBBConfig) -> OBBResult:
     return filter_detections(raw, config, roi_mask=None)
 
 
+def load_pose_backend(
+    *,
+    backend_family,
+    model_path,
+    compute_runtime,
+    keypoint_names=None,
+    skeleton_edges=None,
+    skeleton_file="",
+    confidence_threshold=1e-4,
+    batch_size=64,
+    min_valid_confidence=0.2,
+    out_root=".",
+    exported_model_path="",
+    sleap_env="sleap",
+    sleap_batch=None,
+    sleap_max_instances=1,
+):
+    """Build a pose backend (with predict_batch) via the canonical stages/pose loader.
+
+    Single source of the tier->backend golden rule; returns the backend, not the
+    PoseModel wrapper. GUI pose workers (PoseKit's ``_build_pose_backend`` and
+    TrackerKit's ``crops_worker._init_pose_backend``) route their SLEAP/YOLO
+    settings through here instead of hand-rolling the runtime-flavor ladder, so
+    CPU/GPU/GPU-Fast tiers all resolve through ``stages.pose.load_pose_model``.
+
+    ``keypoint_names``/``skeleton_edges`` are threaded through as an explicit
+    override (GUI callers already hold them and have no ``skeleton_file`` path);
+    ``out_root`` and ``exported_model_path`` are forwarded to the SLEAP backend
+    (the SLEAP export/service backend is where they are read).
+    """
+    from .config import (
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+        PoseConfig,
+        PoseSLEAPConfig,
+        PoseYOLOConfig,
+        migrate_runtime_to_tier,
+    )
+    from .runtime import RuntimeContext
+    from .stages.pose import load_pose_model
+
+    family = (backend_family or "").strip().lower()
+    if family == "yolo":
+        pose_cfg = PoseConfig(
+            backend="yolo",
+            skeleton_file=skeleton_file or "",
+            yolo=PoseYOLOConfig(
+                model_path=model_path,
+                compute_runtime=compute_runtime,
+                confidence_threshold=confidence_threshold,
+                batch_size=batch_size,
+            ),
+            min_keypoint_confidence=min_valid_confidence,
+        )
+    else:
+        # SLEAP uses its own batch (sleap_batch) when supplied; fall back to the
+        # shared batch_size otherwise. PoseSLEAPConfig has a single batch field
+        # which load_pose_model forwards to PoseRuntimeConfig.sleap_batch.
+        sleap_bs = sleap_batch if sleap_batch is not None else batch_size
+        pose_cfg = PoseConfig(
+            backend="sleap",
+            skeleton_file=skeleton_file or "",
+            sleap=PoseSLEAPConfig(
+                model_path=model_path,
+                compute_runtime=compute_runtime,
+                conda_env=sleap_env or "sleap",
+                batch_size=max(1, int(sleap_bs)),
+                max_instances=int(sleap_max_instances),
+            ),
+            min_keypoint_confidence=min_valid_confidence,
+        )
+
+    # RuntimeContext.from_config derives its tier from cfg.runtime_tier, NOT
+    # from the deprecated per-stage OBBDirectConfig.compute_runtime (see
+    # runtime.py's from_config / runtime_to_compute_runtime). Without this,
+    # the minimal InferenceConfig keeps the default "gpu" runtime_tier and
+    # the requested compute_runtime is silently ignored.
+    _min_cfg = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
+        ),
+        pose=pose_cfg,
+        runtime_tier=migrate_runtime_to_tier({compute_runtime}),
+    )
+    runtime = RuntimeContext.from_config(_min_cfg)
+    model = load_pose_model(
+        pose_cfg,
+        runtime,
+        keypoint_names=keypoint_names,
+        skeleton_edges=skeleton_edges,
+        out_root=out_root,
+        exported_model_path=exported_model_path,
+    )
+    return model.backend  # PoseModel.backend is the predict_batch-capable object
+
+
 def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     """One-shot pose prediction on a single image, used by PoseKit labeling UI.
 
@@ -47,7 +145,12 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     """
     import numpy as np
 
-    from .config import InferenceConfig, OBBConfig, OBBDirectConfig
+    from .config import (
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+        migrate_runtime_to_tier,
+    )
     from .result import OBBResult
     from .runtime import RuntimeContext
     from .stages.crops import extract_canonical_crops
@@ -60,12 +163,16 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
         elif getattr(pose_config, "sleap", None) is not None:
             compute_runtime = getattr(pose_config.sleap, "compute_runtime", "cpu")
 
+    # See load_pose_backend above: RuntimeContext.from_config reads
+    # cfg.runtime_tier, not the deprecated per-stage compute_runtime fields,
+    # so runtime_tier must be derived from the resolved compute_runtime here.
     _min_cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
         ),
         pose=pose_config,
+        runtime_tier=migrate_runtime_to_tier({compute_runtime}),
     )
     try:
         runtime = RuntimeContext.from_config(_min_cfg)

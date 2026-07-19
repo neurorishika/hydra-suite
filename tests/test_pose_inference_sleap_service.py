@@ -280,7 +280,10 @@ def test_sleap_service_code_supports_in_memory_native_video_creation() -> None:
     assert "tempfile,time,uuid" in code
     assert "def _make_video_from_arrays(image_arrays):" in code
     assert "video = _make_video(native_images, image_arrays=image_arrays)" in code
-    assert "falling back to temporary image files" in code
+    # Pose golden rule: the in-memory video path is authoritative. The old
+    # disk-materialization fallback must be gone (fail loud, never round-trip).
+    assert "falling back to temporary image files" not in code
+    assert "_materialize_image_arrays" not in code
     assert "native_array_video_supported" in code
 
 

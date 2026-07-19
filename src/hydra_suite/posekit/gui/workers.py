@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -11,6 +10,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
+from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.integrations.sleap.service import PoseInferenceService
 
 from .utils import _maybe_empty_cuda_cache
@@ -34,79 +34,35 @@ def _build_pose_backend(
     sleap_batch: Optional[int] = None,
     sleap_max_instances: int = 1,
 ) -> Any:
-    """Construct a pose backend directly from already-resolved settings.
+    """Construct a pose backend via the canonical ``load_pose_backend`` shim.
 
-    Mirrors ``core/inference/stages/pose.py::load_pose_model`` and the same
-    direct-construction pattern already applied to
-    ``trackerkit/gui/workers/preview_worker.py::_preview_run_pose_overlay``
-    (Task 3) and ``trackerkit/gui/workers/crops_worker.py::_init_pose_backend``
-    (Task 5) — no ``build_runtime_config``/legacy-flavor translation layer.
+    Delegates the entire runtime-flavor decision to
+    ``core/inference/api.load_pose_backend`` (which routes through
+    ``stages/pose.load_pose_model`` — the single source of the pose runtime
+    golden rule), instead of duplicating a CUDA/ONNX runtime-flavor ladder
+    here. ``load_pose_model`` still honors the SLEAP-flavor debug override
+    internally.
 
     ``compute_runtime`` is the tier-resolved canonical runtime string (e.g.
     ``"cpu"``, ``"mps"``, ``"cuda"``, ``"tensorrt"``/``"tensorrt_cuda"``,
     ``"coreml"``) as produced by ``runtimes.tier_to_canonical_runtime`` via
     ``MainWindow._pred_runtime_flavor``.
     """
-    rt = str(compute_runtime or "cpu").strip().lower()
-    is_cuda_like = rt in ("cuda", "onnx_cuda") or rt.startswith("tensorrt")
-    is_apple_like = rt in ("mps", "coreml") or rt.startswith(
-        ("onnx_mps", "onnx_coreml")
-    )
-
-    if backend_family == "yolo":
-        from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
-
-        device = "cuda:0" if is_cuda_like else ("mps" if is_apple_like else "cpu")
-        return YoloNativeBackend(
-            model_path=model_path,
-            device=device,
-            min_valid_conf=min_valid_conf,
-            keypoint_names=keypoint_names if keypoint_names else None,
-            conf=conf,
-            batch_size=max(1, batch_size),
-        )
-
-    from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-    from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-
-    # Debug/A-B override kept for parity with load_pose_model: lets us force a
-    # SLEAP runtime flavor independent of the resolved compute_runtime.
-    flavor_override = os.environ.get("HYDRA_SLEAP_FLAVOR", "").strip().lower()
-    if flavor_override:
-        runtime_flavor = flavor_override
-        device = "cpu" if flavor_override == "onnx_cpu" else "cuda"
-    elif is_cuda_like:
-        runtime_flavor = "onnx_cuda"
-        device = "cuda"
-    elif is_apple_like:
-        # On Apple Silicon, ONNX Runtime has no MPS provider and its CoreML
-        # provider fails on SLEAP's UNet (dynamic-shape errors). Use SLEAP's
-        # native TensorFlow runtime (Metal-accelerated via the sleap conda
-        # env) instead of CoreML.
-        runtime_flavor = "native"
-        device = "mps"
-    else:
-        runtime_flavor = "onnx_cpu"
-        device = "cpu"
-
-    effective_sleap_batch = sleap_batch if sleap_batch is not None else batch_size
-    pose_config = PoseRuntimeConfig(
-        backend_family="sleap",
-        runtime_flavor=runtime_flavor,
-        device=device,
-        batch_size=max(1, batch_size),
+    return load_pose_backend(
+        backend_family=backend_family,
         model_path=model_path,
-        exported_model_path=exported_model_path,
-        out_root=out_root,
-        min_valid_conf=min_valid_conf,
-        sleap_env=sleap_env or "sleap",
-        sleap_device=device,
-        sleap_batch=max(1, int(effective_sleap_batch)),
-        sleap_max_instances=int(sleap_max_instances),
+        compute_runtime=compute_runtime,
         keypoint_names=list(keypoint_names),
         skeleton_edges=skeleton_edges,
+        confidence_threshold=conf,
+        batch_size=max(1, int(batch_size)),
+        min_valid_confidence=min_valid_conf,
+        out_root=out_root,
+        exported_model_path=exported_model_path,
+        sleap_env=sleap_env,
+        sleap_batch=sleap_batch,
+        sleap_max_instances=sleap_max_instances,
     )
-    return create_pose_backend_from_config(pose_config)
 
 
 class PosePredictWorker(QObject):
@@ -189,11 +145,10 @@ class PosePredictWorker(QObject):
                 self.finished.emit(cached)
                 return
 
-            # Preferred path: direct backend construction (no legacy
-            # build_runtime_config/create_pose_backend_from_config translation
-            # layer for the resolution logic itself) — mirrors
-            # core/inference/stages/pose.py::load_pose_model and the pattern
-            # already applied to preview_worker.py/crops_worker.py.
+            # Preferred path: the shared load_pose_backend shim (single source
+            # of the pose runtime golden rule via
+            # core/inference/stages/pose.py::load_pose_model), not a hand-rolled
+            # runtime-flavor ladder.
             try:
                 backend = _build_pose_backend(
                     backend_family=self.backend,
@@ -218,7 +173,12 @@ class PosePredictWorker(QObject):
                 if resolved_path:
                     self.resolved_exported_model_signal.emit(resolved_path)
                 try:
-                    backend.warmup()
+                    # NOTE: no backend.warmup() here -- load_pose_backend
+                    # (-> stages/pose.load_pose_model) already warms the
+                    # backend it returns. A redundant second warmup() breaks
+                    # the SLEAP service backend's _service_started_here
+                    # ownership tracking and leaks the service subprocess
+                    # past close().
                     img = cv2.imread(str(self.image_path))
                     if img is None:
                         raise RuntimeError(f"Failed to read image: {self.image_path}")
@@ -364,11 +324,10 @@ class BulkPosePredictWorker(QObject):
                 self.out_root, self.keypoint_names, self.skeleton_edges
             )
 
-            # Preferred path: direct backend construction with chunked image
-            # loading (no legacy build_runtime_config/create_pose_backend_from_config
-            # translation layer for the resolution logic itself) — mirrors
-            # core/inference/stages/pose.py::load_pose_model and the pattern
-            # already applied to preview_worker.py/crops_worker.py.
+            # Preferred path: the shared load_pose_backend shim (single source
+            # of the pose runtime golden rule via
+            # core/inference/stages/pose.py::load_pose_model) with chunked image
+            # loading, not a hand-rolled runtime-flavor ladder.
             try:
                 backend = _build_pose_backend(
                     backend_family=self.backend,
@@ -393,7 +352,12 @@ class BulkPosePredictWorker(QObject):
                 if resolved_path:
                     self.resolved_exported_model_signal.emit(resolved_path)
                 try:
-                    backend.warmup()
+                    # NOTE: no backend.warmup() here -- load_pose_backend
+                    # (-> stages/pose.load_pose_model) already warms the
+                    # backend it returns. A redundant second warmup() breaks
+                    # the SLEAP service backend's _service_started_here
+                    # ownership tracking and leaks the service subprocess
+                    # past close().
                     preds: Dict[str, List[Tuple[float, float, float]]] = {}
                     total = len(self.image_paths)
                     done = 0

@@ -60,15 +60,32 @@ class PoseModel:
         pass
 
 
-def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
+def load_pose_model(
+    config: PoseConfig,
+    runtime: RuntimeContext,
+    *,
+    keypoint_names: "list[str] | None" = None,
+    skeleton_edges: "list | None" = None,
+    out_root: str = ".",
+    exported_model_path: str = "",
+) -> PoseModel:
     from hydra_suite.core.identity.pose.utils import load_skeleton_from_json
 
     # Reuse the canonical skeleton loader so both legacy and new pipelines accept
     # the same JSON formats ("keypoint_names"/"skeleton_edges" and the legacy
     # "keypoints"/"edges" aliases) and resolve/validate the path identically.
-    if config.skeleton_file:
+    #
+    # GUI pose workers already hold the resolved keypoint names/edges (from the
+    # project or a loaded skeleton) and pass them directly via the shared shim;
+    # batch/config callers instead provide only config.skeleton_file and we
+    # derive them here. An explicit override wins so PoseKit -- which has no
+    # skeleton_file path -- can still supply the names SLEAP requires.
+    if keypoint_names is not None:
+        keypoint_names = list(keypoint_names)
+        skeleton_edges = [tuple(e) for e in (skeleton_edges or [])]
+    elif config.skeleton_file:
         names, edges = load_skeleton_from_json(config.skeleton_file)
-        keypoint_names: list[str] = list(names)
+        keypoint_names = list(names)
         skeleton_edges = [tuple(e) for e in edges]
     else:
         keypoint_names = []
@@ -136,7 +153,11 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
         runtime_flavor = "tensorrt"
         device = "cuda"
     else:
-        runtime_flavor = "onnx_cpu"
+        # cpu tier: SLEAP runs its native (non-exported) sleap-nn model on
+        # torch-CPU via the service backend -- consistent with the cuda/mps
+        # native path, no ONNX export. Slower than exported ONNX-CPU, but keeps
+        # a single service backend across tiers (pose runtime golden rule).
+        runtime_flavor = "native"
         device = "cpu"
 
     runtime_cfg = PoseRuntimeConfig(
@@ -145,7 +166,8 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
         device=device,
         batch_size=int(sleap_cfg.batch_size),
         model_path=str(sleap_cfg.model_path),
-        out_root=".",
+        exported_model_path=str(exported_model_path or ""),
+        out_root=str(out_root or "."),
         min_valid_conf=float(config.min_keypoint_confidence),
         sleap_env=str(sleap_cfg.conda_env),
         sleap_device=device,
