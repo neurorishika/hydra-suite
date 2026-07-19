@@ -173,7 +173,12 @@ class PosePredictWorker(QObject):
                 if resolved_path:
                     self.resolved_exported_model_signal.emit(resolved_path)
                 try:
-                    backend.warmup()
+                    # NOTE: no backend.warmup() here -- load_pose_backend
+                    # (-> stages/pose.load_pose_model) already warms the
+                    # backend it returns. A redundant second warmup() breaks
+                    # the SLEAP service backend's _service_started_here
+                    # ownership tracking and leaks the service subprocess
+                    # past close().
                     img = cv2.imread(str(self.image_path))
                     if img is None:
                         raise RuntimeError(f"Failed to read image: {self.image_path}")
@@ -347,7 +352,12 @@ class BulkPosePredictWorker(QObject):
                 if resolved_path:
                     self.resolved_exported_model_signal.emit(resolved_path)
                 try:
-                    backend.warmup()
+                    # NOTE: no backend.warmup() here -- load_pose_backend
+                    # (-> stages/pose.load_pose_model) already warms the
+                    # backend it returns. A redundant second warmup() breaks
+                    # the SLEAP service backend's _service_started_here
+                    # ownership tracking and leaks the service subprocess
+                    # past close().
                     preds: Dict[str, List[Tuple[float, float, float]]] = {}
                     total = len(self.image_paths)
                     done = 0

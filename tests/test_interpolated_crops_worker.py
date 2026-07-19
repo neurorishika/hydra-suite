@@ -164,12 +164,18 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
     class FakeBackend:
         output_keypoint_names = ["kpt0", "kpt1"]
 
+        def __init__(self) -> None:
+            self.warmup_calls = 0
+
         def warmup(self) -> None:
+            self.warmup_calls += 1
             captured["warmed_up"] = True
+
+    fake_backend = FakeBackend()
 
     def _fake_load_pose_backend(**kwargs):
         captured.update(kwargs)
-        return FakeBackend()
+        return fake_backend
 
     monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
 
@@ -189,11 +195,16 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
 
     backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
 
-    assert isinstance(backend, FakeBackend)
+    assert backend is fake_backend
     assert captured["backend_family"] == "yolo"
     assert captured["model_path"] == "/models/yolo_pose.pt"
     assert captured["compute_runtime"] == "cuda"
-    assert captured["warmed_up"] is True
+    # Regression guard: load_pose_backend (-> load_pose_model) already warms
+    # the backend it returns; a second GUI-side warmup() call is redundant
+    # and, for the SLEAP service backend, breaks _service_started_here
+    # ownership tracking, leaking the service subprocess past close().
+    assert fake_backend.warmup_calls == 0
+    assert "warmed_up" not in captured
     assert kpt_source_names == ["kpt0", "kpt1"]
     assert kpt_labels
 
@@ -219,12 +230,18 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
     class FakeBackend:
         output_keypoint_names = ["kpt0"]
 
+        def __init__(self) -> None:
+            self.warmup_calls = 0
+
         def warmup(self) -> None:
+            self.warmup_calls += 1
             captured["warmed_up"] = True
+
+    fake_backend = FakeBackend()
 
     def _fake_load_pose_backend(**kwargs):
         captured.update(kwargs)
-        return FakeBackend()
+        return fake_backend
 
     monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
 
@@ -246,8 +263,14 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
 
     backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
 
-    assert isinstance(backend, FakeBackend)
-    assert captured["warmed_up"] is True
+    assert backend is fake_backend
+    # Regression guard: same double-warmup leak as the YOLO case above, but
+    # more severe for SLEAP -- the service backend's warmup() ownership
+    # bookkeeping (_service_started_here) is not idempotent across calls, so
+    # a second warmup() here leaves the SLEAP service process orphaned after
+    # close().
+    assert fake_backend.warmup_calls == 0
+    assert "warmed_up" not in captured
     assert kpt_source_names == ["kpt0"]
 
     assert captured["backend_family"] == "sleap"

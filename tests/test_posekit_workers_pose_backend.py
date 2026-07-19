@@ -18,6 +18,8 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import numpy as np
+
 
 def _workers_module():
     return importlib.import_module("hydra_suite.posekit.gui.workers")
@@ -111,6 +113,107 @@ def test_posekit_workers_has_no_divergent_flavor_ladder() -> None:
         "YoloNativeBackend",
     ):
         assert banned not in src, f"divergent pose ladder token still present: {banned}"
+
+
+class _FakePose:
+    def __init__(self, keypoints) -> None:
+        self.keypoints = keypoints
+
+
+class _FakeWarmupCountingBackend:
+    """Backend stub that tracks warmup()/close() calls without doing real work."""
+
+    def __init__(self, n_kpts: int) -> None:
+        self.warmup_calls = 0
+        self.closed = False
+        self._n_kpts = n_kpts
+
+    def warmup(self) -> None:
+        self.warmup_calls += 1
+
+    def predict_batch(self, images):
+        return [_FakePose([(0.0, 0.0, 1.0)] * self._n_kpts) for _ in images]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_pose_predict_worker_does_not_double_warmup(monkeypatch, tmp_path) -> None:
+    """Regression: PosePredictWorker.run() must not call backend.warmup() --
+    load_pose_backend (-> stages/pose.load_pose_model) already warms the
+    backend it returns. A redundant second warmup() breaks the SLEAP service
+    backend's ``_service_started_here`` ownership tracking and leaks the
+    service subprocess past ``close()``."""
+    workers = _workers_module()
+
+    fake_backend = _FakeWarmupCountingBackend(n_kpts=2)
+
+    def _fake_build_pose_backend(**kwargs):
+        return fake_backend
+
+    monkeypatch.setattr(workers, "_build_pose_backend", _fake_build_pose_backend)
+    monkeypatch.setattr(workers.cv2, "imread", lambda _p: np.zeros((4, 4, 3)))
+
+    image_path = tmp_path / "img.png"
+    image_path.write_bytes(b"fake")
+
+    results: dict[str, object] = {}
+    worker = workers.PosePredictWorker(
+        model_path=tmp_path / "model.pt",
+        image_path=image_path,
+        out_root=tmp_path,
+        keypoint_names=["a", "b"],
+        skeleton_edges=[],
+        backend="yolo",
+        runtime_flavor="cpu",
+    )
+    worker.finished.connect(lambda preds: results.update(finished=preds))
+    worker.failed.connect(lambda msg: results.update(failed=msg))
+
+    worker.run()
+
+    assert results.get("failed") is None, results.get("failed")
+    assert fake_backend.warmup_calls == 0
+    assert fake_backend.closed is True
+
+
+def test_bulk_pose_predict_worker_does_not_double_warmup(monkeypatch, tmp_path) -> None:
+    """Same double-warmup regression guard as
+    ``test_pose_predict_worker_does_not_double_warmup``, for the bulk path."""
+    workers = _workers_module()
+
+    fake_backend = _FakeWarmupCountingBackend(n_kpts=1)
+
+    def _fake_build_pose_backend(**kwargs):
+        return fake_backend
+
+    monkeypatch.setattr(workers, "_build_pose_backend", _fake_build_pose_backend)
+    monkeypatch.setattr(
+        workers.cv2, "imread", lambda _p: __import__("numpy").zeros((4, 4, 3))
+    )
+
+    image_paths = [tmp_path / "a.png", tmp_path / "b.png"]
+    for p in image_paths:
+        p.write_bytes(b"fake")
+
+    results: dict[str, object] = {}
+    worker = workers.BulkPosePredictWorker(
+        model_path=tmp_path / "model.pt",
+        image_paths=image_paths,
+        out_root=tmp_path,
+        keypoint_names=["a"],
+        skeleton_edges=[],
+        backend="yolo",
+        runtime_flavor="cpu",
+    )
+    worker.finished.connect(lambda preds: results.update(finished=preds))
+    worker.failed.connect(lambda msg: results.update(failed=msg))
+
+    worker.run()
+
+    assert results.get("failed") is None, results.get("failed")
+    assert fake_backend.warmup_calls == 0
+    assert fake_backend.closed is True
 
 
 def test_pred_runtime_flavor_returns_coreml_not_onnx_mps() -> None:

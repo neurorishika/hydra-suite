@@ -171,7 +171,13 @@ class InterpolatedCropsWorker(BaseWorker):
                 sleap_max_instances=int(self.params.get("POSE_SLEAP_MAX_INSTANCES", 1)),
             )
 
-            backend.warmup()
+            # NOTE: do NOT call backend.warmup() here -- load_pose_backend
+            # (-> stages/pose.load_pose_model) already warms the backend it
+            # returns. A second warmup() is redundant, and for the SLEAP
+            # service backend it is not idempotent w.r.t. ownership: the
+            # first warmup sets _service_started_here=True, a second sees
+            # was_running=True and flips it back to False, so close() later
+            # skips shutdown and leaks the SLEAP service subprocess.
             kpt_source_names = list(getattr(backend, "output_keypoint_names", []) or [])
             kpt_labels = build_pose_keypoint_labels(
                 kpt_source_names, len(kpt_source_names)
