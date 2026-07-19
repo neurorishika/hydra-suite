@@ -730,19 +730,9 @@ class SetupPanel(QWidget):
         self.btn_clear_detection_caches.clicked.connect(
             self._main_window._clear_detection_caches
         )
-        self.btn_benchmark_models = QPushButton("Benchmark Models...")
-        self.btn_benchmark_models.setFixedHeight(28)
-        self.btn_benchmark_models.setToolTip(
-            "Benchmark the currently selected TrackerKit model pipelines across runtimes\n"
-            "and batch sizes using the loaded video geometry and body-size settings."
-        )
-        self.btn_benchmark_models.clicked.connect(
-            self._main_window._open_benchmark_dialog
-        )
         _perf_actions_row = QHBoxLayout()
         _perf_actions_row.setContentsMargins(0, 0, 0, 0)
         _perf_actions_row.addStretch(1)
-        _perf_actions_row.addWidget(self.btn_benchmark_models)
         _perf_actions_row.addWidget(self.btn_clear_detection_caches)
         vl_sys.addLayout(_perf_actions_row)
 

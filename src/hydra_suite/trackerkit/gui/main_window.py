@@ -403,7 +403,6 @@ class MainWindow(QMainWindow):
 
         # Advanced configuration (for power users)
         self.advanced_config = self._load_advanced_config()
-        self._benchmark_recommendations = {}
 
         # Video player state
         self.video_cap = None  # cv2.VideoCapture for video playback
@@ -1082,52 +1081,6 @@ class MainWindow(QMainWindow):
     def _open_bg_parameter_helper(self):
         """Open the BG-subtraction parameter auto-tuner dialog."""
         self._config_orch._open_bg_parameter_helper()
-
-    def _open_benchmark_dialog(self):
-        """Open the runtime and batch benchmarking dialog."""
-        self._config_orch._open_benchmark_dialog()
-
-    def _refresh_benchmark_recommendations(self) -> None:
-        """Refresh cached benchmark recommendations for the current UI state."""
-        self._config_orch._refresh_benchmark_recommendations()
-
-    def _current_detection_benchmark_recommendation(self):
-        """Return the active detection recommendation for the current OBB mode."""
-        key = "detection_sequential"
-        if (
-            hasattr(self, "_detection_panel")
-            and self._detection_panel.combo_yolo_obb_mode.currentIndex() == 0
-        ):
-            key = "detection_direct"
-        return self._benchmark_recommendations.get(key)
-
-    def _current_headtail_benchmark_recommendation(self):
-        """Return the cached head-tail recommendation, if available."""
-        return self._benchmark_recommendations.get("headtail")
-
-    def _current_pose_benchmark_recommendation(self):
-        """Return the cached pose recommendation for the active backend."""
-        return self._benchmark_recommendations.get(
-            f"pose_{self._current_pose_backend_key()}"
-        )
-
-    def _current_cnn_benchmark_recommendations(self):
-        """Return cached CNN recommendations keyed by classifier index."""
-        return {
-            key: value
-            for key, value in self._benchmark_recommendations.items()
-            if str(key).startswith("cnn_")
-        }
-
-    def _current_cnn_runtime_recommendation(self):
-        """Return a shared CNN runtime recommendation only when all rows agree."""
-        recommendations = list(self._current_cnn_benchmark_recommendations().values())
-        if not recommendations:
-            return None
-        runtimes = {recommendation.runtime for recommendation in recommendations}
-        if len(runtimes) != 1:
-            return None
-        return recommendations[0]
 
     def _ensure_pose_model_path_store(self):
         if not hasattr(self, "_pose_model_path_by_backend"):

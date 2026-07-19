@@ -1163,20 +1163,6 @@ class DetectionPanel(QWidget):
         sequential = self.combo_yolo_obb_mode.currentIndex() == 1
         coreml_locked = self._main_window._gpu_fast_obb_is_coreml_only()
 
-        recommendation = self._main_window._current_detection_benchmark_recommendation()
-        recommendation_text = ""
-        if recommendation is not None:
-            individual_batch_size = getattr(
-                recommendation, "individual_batch_size", None
-            )
-            if individual_batch_size:
-                recommendation_text = (
-                    "Benchmark recommendation: "
-                    f"{recommendation.runtime_label} at frame batch {recommendation.batch_size} / crop batch {int(individual_batch_size)}."
-                )
-            else:
-                recommendation_text = f"Benchmark recommendation: {recommendation.runtime_label} at batch {recommendation.batch_size}."
-
         if realtime_enabled:
             self.spin_detection_batch_size.blockSignals(True)
             self.spin_detection_batch_size.setValue(1)
@@ -1202,8 +1188,6 @@ class DetectionPanel(QWidget):
                 "classification (identity/head-tail/CNN) is unaffected "
                 "and still batches normally."
             )
-            if recommendation_text:
-                message += "\n" + recommendation_text
             self.lbl_batch_policy_notice.setText(message)
             self.lbl_batch_policy_notice.setVisible(True)
             return
@@ -1217,12 +1201,7 @@ class DetectionPanel(QWidget):
                 "batching-design.md). Stage-2 crop batch is usually the safer "
                 "place to batch."
             )
-            if recommendation_text:
-                message += "\n" + recommendation_text
             self.lbl_batch_policy_notice.setText(message)
-            self.lbl_batch_policy_notice.setVisible(True)
-        elif recommendation_text:
-            self.lbl_batch_policy_notice.setText(recommendation_text)
             self.lbl_batch_policy_notice.setVisible(True)
         else:
             self.lbl_batch_policy_notice.clear()
