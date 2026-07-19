@@ -17,6 +17,7 @@ from PySide6.QtCore import QThread, Signal
 
 from hydra_suite.core.inference.config import build_inference_config_from_params
 from hydra_suite.core.inference.runner import InferenceRunner
+from hydra_suite.core.tracking.optimization.optimizer import TrackingOptimizerCore
 from hydra_suite.core.tracking.optimization.optimizer_workers import (
     run_tracking_preview,
 )
@@ -134,3 +135,63 @@ class TrackingPreviewWorker(QThread):
             )
         finally:
             self.finished_signal.emit()
+
+
+class TrackingOptimizer(QThread):
+    """Thin Qt wrapper around :class:`TrackingOptimizerCore`.
+
+    Runs the Bayesian tracking-parameter optimizer on a background thread and
+    forwards the core's progress/result callbacks to Qt signals. All logic lives
+    in the Qt-free core class.
+    """
+
+    progress_signal = Signal(int, str)
+    result_signal = Signal(list)  # List of OptimizationResult
+    finished_signal = Signal()
+
+    def __init__(
+        self,
+        video_path: str,
+        detection_cache_path: str,
+        start_frame: int,
+        end_frame: int,
+        base_params: Dict[str, Any],
+        tuning_config: Dict[str, bool],
+        n_trials: int = 50,
+        n_seeds: int = 3,
+        on_plateau: str = "restart",
+        sampler_type: str = "auto",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._core = TrackingOptimizerCore(
+            video_path,
+            detection_cache_path,
+            start_frame,
+            end_frame,
+            base_params,
+            tuning_config,
+            n_trials=n_trials,
+            n_seeds=n_seeds,
+            on_plateau=on_plateau,
+            sampler_type=sampler_type,
+            progress_cb=lambda p, m: self.progress_signal.emit(p, m),
+            result_cb=lambda results: self.result_signal.emit(results),
+        )
+
+    def stop(self):
+        self._core.request_stop()
+
+    def run(self):
+        try:
+            self._core.optimize()
+        except RuntimeError as e:
+            # Dialog was closed before the thread finished; ignore orphaned signals.
+            logger.warning("Optimizer signal emission skipped (dialog closed?): %s", e)
+        finally:
+            try:
+                self.finished_signal.emit()
+            except RuntimeError as e:
+                logger.warning(
+                    "Optimizer finished-signal emission skipped (dialog closed?): %s", e
+                )

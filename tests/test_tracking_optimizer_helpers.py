@@ -207,7 +207,7 @@ def _load_optimizer_module():
 
 def test_optimizer_replay_uses_directed_heading_for_assignment_and_kf() -> None:
     mod = _load_optimizer_module()
-    optimizer = mod.TrackingOptimizer(
+    optimizer = mod.TrackingOptimizerCore(
         video_path="dummy.mp4",
         detection_cache_path="dummy.npz",
         start_frame=0,
@@ -262,7 +262,7 @@ def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> Non
                 None,
             )
 
-    optimizer = mod.TrackingOptimizer(
+    optimizer = mod.TrackingOptimizerCore(
         video_path="dummy.mp4",
         detection_cache_path="dummy.npz",
         start_frame=0,

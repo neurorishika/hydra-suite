@@ -4,7 +4,7 @@ optimizer UI.
 ``run_tracking_preview`` runs the tracking/assignment/rendering loop over
 cached detections and reports each rendered frame via a callback; the
 ``_preview_*`` helpers are its building blocks. This module has no Qt
-dependency — the QThread wrappers that drive it from the GUI
+dependency — the background-thread wrappers that drive it from the GUI
 (``DetectionCacheBuildWorker``, ``TrackingPreviewWorker``) live in the
 trackerkit app layer.
 """

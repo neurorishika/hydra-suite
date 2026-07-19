@@ -40,9 +40,9 @@ from PySide6.QtWidgets import (
 from hydra_suite.core.tracking.optimization.optimizer import (
     _PARAM_RANGES,
     OptimizationResult,
-    TrackingOptimizer,
 )
 from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
+    TrackingOptimizer,
     TrackingPreviewWorker,
 )
 from hydra_suite.utils.video_artifacts import build_autotune_state_path
