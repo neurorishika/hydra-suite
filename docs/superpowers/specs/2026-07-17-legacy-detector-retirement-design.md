@@ -1,7 +1,10 @@
 # Design spec: retire `core/detectors`, converge on InferenceRunner
 
 **Date:** 2026-07-17
-**Status:** planned — decomposed into four sequenced implementation plans (below).
+**Status:** DONE (2026-07-19) — all four plans + the pose runtime golden rule merged to `main`.
+`core/detectors` is deleted; `core/inference` is the sole detection/inference pipeline. Remaining: the
+Qt-in-core split (`core/background/optimizer.py`, deferred as a separate follow-up, unrelated to detectors)
+and the mandatory frame-by-frame parity gate (to be run on a GPU box with real models/video).
 **Runs after:** `plans/2026-07-16-bgsub-inference-stage.md` (with correction note
 `plans/notes/2026-07-17-bgsub-task12-yolo-scope-correction.md`) **and**
 `plans/2026-07-16-legacy-batching-vestige-removal.md` — both landed on `main`.
