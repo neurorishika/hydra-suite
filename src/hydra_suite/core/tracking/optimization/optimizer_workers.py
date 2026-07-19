@@ -1,8 +1,12 @@
-"""QThread workers for the parameter optimizer UI.
+"""Pure tracking-preview and detection-cache helpers for the parameter
+optimizer UI.
 
-DetectionCacheBuildWorker — builds an InferenceRunner detection cache for a
-    frame range via ``InferenceRunner.run_batch_pass``.
-TrackingPreviewWorker — emits preview frames using cached detections.
+``run_tracking_preview`` runs the tracking/assignment/rendering loop over
+cached detections and reports each rendered frame via a callback; the
+``_preview_*`` helpers are its building blocks. This module has no Qt
+dependency — the QThread wrappers that drive it from the GUI
+(``DetectionCacheBuildWorker``, ``TrackingPreviewWorker``) live in the
+trackerkit app layer.
 """
 
 import logging
@@ -12,7 +16,6 @@ from typing import Any, Callable, Dict, Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QThread, Signal
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
@@ -39,11 +42,7 @@ from hydra_suite.core.inference.api import (
     apply_detection_filter as _apply_detection_filter,
 )
 from hydra_suite.core.inference.config import build_inference_config_from_params
-from hydra_suite.core.inference.runner import (
-    InferenceRunner,
-    _open_caches,
-    video_signature,
-)
+from hydra_suite.core.inference.runner import _open_caches, video_signature
 
 logger = logging.getLogger(__name__)
 
@@ -281,73 +280,6 @@ def _preview_render_tracks(
                 1,
                 cv2.LINE_AA,
             )
-
-
-class DetectionCacheBuildWorker(QThread):
-    """Phase-1-only worker: runs InferenceRunner.run_batch_pass over a frame
-    range to populate an InferenceRunner detection cache for the Bayesian
-    optimizer. No Kalman/CSV/pose stages.
-    """
-
-    progress_signal = Signal(int, str)
-    finished_signal = Signal(bool, str)  # (success, cache_dir)
-
-    def __init__(
-        self,
-        video_path: str,
-        cache_dir: str,
-        params: Dict[str, Any],
-        start_frame: int,
-        end_frame: int,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.video_path = video_path
-        self.cache_dir = cache_dir
-        self.params = params.copy()
-        self.start_frame = start_frame
-        self.end_frame = end_frame
-        self._stop_requested = False
-
-    def stop(self):
-        self._stop_requested = True
-
-    def run(self):
-        from pathlib import Path
-
-        try:
-            cfg = build_inference_config_from_params(self.params)
-            runner = InferenceRunner(
-                cfg, cache_dir=Path(self.cache_dir), video_path=self.video_path
-            )
-        except Exception as e:
-            logger.error("DetectionCacheBuild: could not build runner: %s", e)
-            self.finished_signal.emit(False, "")
-            return
-        try:
-
-            def _progress_cb(processed, range_total):
-                pct = int(processed * 100 / range_total) if range_total else 0
-                self.progress_signal.emit(pct, f"Building detection cache: {pct}%")
-
-            runner.run_batch_pass(
-                Path(self.video_path),
-                progress_cb=_progress_cb,
-                start_frame=self.start_frame,
-                end_frame=self.end_frame,
-                should_stop=lambda: self._stop_requested,
-            )
-            if self._stop_requested:
-                self.progress_signal.emit(0, "Cancelled.")
-                self.finished_signal.emit(False, "")
-                return
-            logger.info("DetectionCacheBuild: cache saved to %s", self.cache_dir)
-            self.finished_signal.emit(True, str(self.cache_dir))
-        except Exception:
-            logger.exception("DetectionCacheBuild error")
-            self.finished_signal.emit(False, "")
-        finally:
-            runner.close()
 
 
 def run_tracking_preview(
@@ -656,50 +588,3 @@ def run_tracking_preview(
                 _pose_cache.close()
             except Exception:
                 pass
-
-
-class TrackingPreviewWorker(QThread):
-    """
-    Emits visualization frames for previewing optimization results.
-    """
-
-    frame_signal = Signal(np.ndarray)
-    finished_signal = Signal()
-
-    def __init__(
-        self,
-        video_path: str,
-        detection_cache_path: str,
-        start_frame: int,
-        end_frame: int,
-        params: Dict[str, Any],
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.video_path = video_path
-        self.detection_cache_path = detection_cache_path
-        self.start_frame = start_frame
-        self.end_frame = end_frame
-        self.params = params
-        self._stop_requested = False
-
-    def stop(self):
-        self._stop_requested = True
-
-    def _emit_frame(self, rgb: np.ndarray) -> None:
-        self.frame_signal.emit(rgb)
-        self.msleep(20)
-
-    def run(self):
-        try:
-            run_tracking_preview(
-                self.video_path,
-                self.detection_cache_path,
-                self.start_frame,
-                self.end_frame,
-                self.params,
-                frame_cb=self._emit_frame,
-                stop_check=lambda: self._stop_requested,
-            )
-        finally:
-            self.finished_signal.emit()
