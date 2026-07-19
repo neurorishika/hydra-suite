@@ -7,7 +7,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
-import tempfile
 import time
 from multiprocessing import shared_memory
 from pathlib import Path
@@ -1490,8 +1489,6 @@ class SleapServiceBackend:
         )
         self._service_started_here = False
         self._native_in_memory_supported: Optional[bool] = None
-        self._tmp_dir = tempfile.TemporaryDirectory(prefix="hydra_posekit_")
-        self._tmp_root = Path(self._tmp_dir.name)
         self._last_profile: Dict[str, float] = {}
 
     @property
@@ -1556,24 +1553,12 @@ class SleapServiceBackend:
         # (shared-memory and temp-file) feed SLEAP 8-bit images regardless of the
         # incoming dtype/range (see _to_uint8_image).
         crops = [self._to_uint8_image(c) for c in crops]
-        # Prefer zero-copy shared-memory transport: raw uint8 arrays straight to
-        # the service's warm in-process predictor — no PNG encode, no disk write/
-        # read, no decode. (The old sio array-video gate is obsolete now that the
-        # service builds inference tensors from the arrays directly.) Fall back to
-        # temp-file PNGs only if shared memory genuinely fails.
-        try:
-            return self._predict_batch_via_shared_memory(crops)
-        except Exception:
-            # Shared-memory transport failed; fall back to temp-file PNGs. Logged
-            # once at WARNING since the fallback is markedly slower (disk I/O).
-            if not getattr(SleapServiceBackend, "_shm_fallback_logged", False):
-                SleapServiceBackend._shm_fallback_logged = True
-                logger.warning(
-                    "SLEAP shared-memory transport failed; falling back to "
-                    "temp-file transport (slower).",
-                    exc_info=True,
-                )
-            return self._predict_batch_via_temp_files(crops)
+        # Pose golden rule: inference must never do a disk round-trip. Use the
+        # zero-copy shared-memory transport exclusively — raw uint8 arrays go
+        # straight to the service's warm in-process predictor with no PNG encode,
+        # no disk write/read, no decode. If shared memory fails, fail loud and let
+        # the exception propagate rather than silently retrying via disk.
+        return self._predict_batch_via_shared_memory(crops)
 
     def consume_last_profile(self) -> Dict[str, float]:
         """Return and clear the most recent SLEAP batch timing profile."""
@@ -1715,80 +1700,6 @@ class SleapServiceBackend:
 
         return outputs
 
-    def _predict_batch_via_temp_files(
-        self, crops: Sequence[np.ndarray]
-    ) -> List[PoseResult]:
-        from concurrent.futures import ThreadPoolExecutor
-
-        def _write_crop(args):
-            i, crop = args
-            p = self._tmp_root / f"crop_{i:06d}.png"
-            ok = cv2.imwrite(str(p), crop)
-            return p if ok else Path("__invalid__")
-
-        transport_start = time.perf_counter()
-        with ThreadPoolExecutor(
-            max_workers=min(4, len(crops)),
-            thread_name_prefix="sleap-crop-write",
-        ) as pool:
-            paths: List[Path] = list(pool.map(_write_crop, enumerate(crops)))
-        transport_s = time.perf_counter() - transport_start
-
-        valid_paths = [p for p in paths if p.exists()]
-        preds: Dict[str, List[Any]] = {}
-        if valid_paths:
-            service_call_start = time.perf_counter()
-            pred_map, err = self._infer.predict(
-                model_path=self.model_dir,
-                image_paths=valid_paths,
-                device="auto",
-                imgsz=640,
-                conf=1e-4,
-                batch=min(self.sleap_batch, max(1, len(valid_paths))),
-                backend="sleap",
-                sleap_env=self.sleap_env,
-                sleap_device=self.sleap_device,
-                sleap_batch=min(self.sleap_batch, max(1, len(valid_paths))),
-                sleap_max_instances=self.sleap_max_instances,
-                sleap_runtime_flavor=self.runtime_flavor,
-                sleap_exported_model_path=self.exported_model_path,
-                sleap_export_input_hw=self.export_input_hw,
-                cache_predictions=False,
-            )
-            service_call_s = time.perf_counter() - service_call_start
-            if pred_map is None:
-                raise RuntimeError(err or "SLEAP inference failed.")
-            preds = pred_map
-        else:
-            service_call_s = 0.0
-
-        outputs: List[PoseResult] = []
-        postprocess_start = time.perf_counter()
-        for p in paths:
-            if not p.exists():
-                outputs.append(empty_pose_result())
-                continue
-            pred = preds.get(str(p))
-            if pred is None:
-                pred = preds.get(str(p.resolve()))
-            if not pred:
-                outputs.append(empty_pose_result())
-                continue
-            arr = np.asarray(pred, dtype=np.float32)
-            if arr.ndim != 2 or arr.shape[1] != 3:
-                outputs.append(empty_pose_result())
-                continue
-            outputs.append(summarize_keypoints(arr, self.min_valid_conf))
-
-        self._finalize_profile(
-            transport_s,
-            service_call_s,
-            self._consume_service_metrics(),
-            time.perf_counter() - postprocess_start,
-        )
-
-        return outputs
-
     def close(self) -> None:
         if self._service_started_here:
             try:
@@ -1798,7 +1709,3 @@ class SleapServiceBackend:
                     "Failed to stop SLEAP service from backend close.", exc_info=True
                 )
             self._service_started_here = False
-        try:
-            self._tmp_dir.cleanup()
-        except Exception:
-            pass

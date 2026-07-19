@@ -1331,36 +1331,6 @@ def _decode_image_payloads(payloads):
         image_arrays.append(arr)
     return image_ids, image_arrays
 
-def _save_array_image(path, arr):
-    arr = np.asarray(arr, dtype=np.uint8)
-    if cv2 is not None:
-        if cv2.imwrite(str(path), arr):
-            return
-    if Image is not None:
-        if arr.ndim == 2:
-            image = Image.fromarray(arr)
-        elif arr.ndim == 3 and arr.shape[2] == 1:
-            image = Image.fromarray(arr[:, :, 0])
-        else:
-            image = Image.fromarray(arr[:, :, ::-1])
-        image.save(path)
-        return
-    raise RuntimeError(
-        "Unable to persist in-memory image payload. Install either opencv-python or pillow in the SLEAP env."
-    )
-
-def _materialize_image_arrays(image_ids, image_arrays, tmp_dir):
-    if len(image_ids) != len(image_arrays):
-        raise RuntimeError("In-memory SLEAP image ids and arrays length mismatch.")
-    root = Path(tmp_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    paths = []
-    for idx, arr in enumerate(image_arrays):
-        path = root / f"img_{idx:06d}.png"
-        _save_array_image(path, arr)
-        paths.append(str(path))
-    return paths
-
 def _prepare_export_crop(crop, input_hw, input_channels):
     arr = np.asarray(crop, dtype=np.uint8)
     if arr.ndim == 2:
@@ -2165,21 +2135,12 @@ class Handler(BaseHTTPRequestHandler):
             request_tmp_dir = None
             native_images = images
             if image_arrays is not None:
-                try:
-                    _video_start = time.perf_counter()
-                    video = _make_video(native_images, image_arrays=image_arrays)
-                    timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _video_start)
-                except Exception as image_array_exc:
-                    _log(
-                        f"native in-memory video construction failed: {image_array_exc}; falling back to temporary image files"
-                    )
-                    request_tmp_dir = Path(cfg.get('tmp_dir') or tempfile.gettempdir()) / f"req_{uuid.uuid4().hex}"
-                    _materialize_start = time.perf_counter()
-                    native_images = _materialize_image_arrays(images, image_arrays, request_tmp_dir)
-                    timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _materialize_start)
-                    _video_start = time.perf_counter()
-                    video = _make_video(native_images)
-                    timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _video_start)
+                # Pose golden rule: build the video from the in-memory arrays
+                # only. If construction fails, fail loud and let it propagate
+                # rather than materializing PNGs to disk.
+                _video_start = time.perf_counter()
+                video = _make_video(native_images, image_arrays=image_arrays)
+                timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _video_start)
             else:
                 _video_start = time.perf_counter()
                 video=_make_video(native_images)
