@@ -39,12 +39,11 @@ from hydra_suite.core.inference.api import (
     apply_detection_filter as _apply_detection_filter,
 )
 from hydra_suite.core.inference.config import build_inference_config_from_params
-from hydra_suite.core.inference.runner import InferenceRunner
-
-# TrackingPreviewWorker (below) still reads via the legacy DetectionCache API;
-# it is a separate, unconnected-by-default preview path (see
-# ParameterHelperDialog) not covered by the InferenceRunner cache migration.
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.runner import (
+    InferenceRunner,
+    _open_caches,
+    video_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
 
     Supports both new OBBResult API (Correction 21) and legacy 12-tuple.
     """
-    frame_data = cache.get_frame(f_idx)
+    frame_data = cache.read_frame(f_idx)
 
     from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
@@ -425,13 +424,24 @@ class TrackingPreviewWorker(QThread):
         self._stop_requested = True
 
     def run(self):
+        from pathlib import Path
+
         cap = cv2.VideoCapture(self.video_path)
-        cache = DetectionCache(self.detection_cache_path, mode="r")
+        # Open the InferenceRunner detection cache read-only. This handle
+        # must never have close() called on it: DetectionCacheHandle.close()
+        # flushes its (empty, since we never write) buffer and would clobber
+        # the on-disk cache with zero frames (see optimizer._open_and_validate_cache).
+        cfg = build_inference_config_from_params(self.params)
+        cache = _open_caches(
+            cfg,
+            Path(self.detection_cache_path),
+            video_signature(self.video_path),
+        ).detection
         try:
             if not cap.isOpened():
                 logger.error("PreviewWorker: could not open video: %s", self.video_path)
                 return
-            if not cache.is_compatible():
+            if cache is None or not cache.is_valid():
                 logger.error("PreviewWorker: incompatible detection cache.")
                 return
 
@@ -692,7 +702,9 @@ class TrackingPreviewWorker(QThread):
             logger.exception("PreviewWorker encountered an error.")
         finally:
             cap.release()
-            cache.close()
+            # Do NOT call cache.close() here: this is a read-only
+            # DetectionCacheHandle and close() would clobber the on-disk
+            # cache (see the comment where it is opened, above).
             if _pose_cache is not None:
                 try:
                     _pose_cache.close()
