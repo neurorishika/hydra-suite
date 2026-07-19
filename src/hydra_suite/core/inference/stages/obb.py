@@ -193,6 +193,11 @@ class _RawOBBTensors(NamedTuple):
     xywhr: torch.Tensor  # (N, 5): cx, cy, w, h, angle_rad on device
     corners: torch.Tensor  # (N, 4, 2): corner coords on device
     conf: torch.Tensor  # (N,): confidence on device
+    # (N,): model class id on device. Optional (defaults to None) so existing
+    # call sites/tests that pre-date the class-id feature keep constructing
+    # this NamedTuple without a `cls=` kwarg; treated as "all class 0"
+    # everywhere it is consumed (materialize_tensors, filter_from_tensors).
+    cls: torch.Tensor | None = None
 
 
 @dataclass
@@ -578,13 +583,36 @@ def _extract_raw_tensors(result: Any, frame_idx: int, device: str) -> _RawOBBTen
             xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
             corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
             conf=torch.zeros(0, dtype=torch.float32, device=dev),
+            cls=torch.zeros(0, dtype=torch.float32, device=dev),
         )
     return _RawOBBTensors(
         frame_idx=frame_idx,
         xywhr=obb.xywhr,
         corners=obb.xyxyxyxy,
         conf=obb.conf,
+        # getattr guard: real ultralytics OBB objects always expose `.cls`,
+        # but test doubles / older exports without a class column should not
+        # hard-crash here -- materialize_tensors already treats cls=None as
+        # "all class 0".
+        cls=getattr(obb, "cls", None),
     )
+
+
+def _extract_class_ids(obb: Any, n: int) -> np.ndarray:
+    """Read per-detection model class ids from an ultralytics OBB result.
+
+    Prefers the ``obb.cls`` property (a view over ``data[:, 6]`` -- see the
+    column-layout comment on ``_invert_letterbox_on_result``); falls back to
+    zeros for models/exports that omit the class column entirely, so callers
+    never see a KeyError/AttributeError for a class-less OBB head.
+    """
+    try:
+        cls = obb.cls
+        if cls is not None and len(cls) == n:
+            return cls.cpu().numpy().astype(np.int64)
+    except Exception:
+        pass
+    return np.zeros(n, dtype=np.int64)
 
 
 def _extract_obb_result(
@@ -598,6 +626,7 @@ def _extract_obb_result(
         return _empty_obb_result(frame_idx)
     xywhr = obb.xywhr.cpu().numpy().copy()  # (N, 5): cx,cy,w,h,angle
     conf = obb.conf.cpu().numpy()  # (N,)
+    cls = _extract_class_ids(obb, xywhr.shape[0])
     ox, oy = offset
     sx, sy = scale
     # Stage-2 predicts on a crop resized to a fixed square (stage2_image_size);
@@ -629,6 +658,7 @@ def _extract_obb_result(
             )
         xywhr = xywhr[mask]
         conf = conf[mask]
+        cls = cls[mask]
         centroids = centroids[mask]
         angles_fixed = angles_fixed[mask]
         sizes = sizes[mask]
@@ -648,6 +678,7 @@ def _extract_obb_result(
         confidences=conf.astype(np.float32),
         corners=corners.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
+        class_ids=cls,
     )
 
 
@@ -676,6 +707,7 @@ def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
         confidences=np.ascontiguousarray(r.confidences[order]),
         corners=np.ascontiguousarray(r.corners[order]),
         detection_ids=OBBResult.make_detection_ids(r.frame_idx, n),
+        class_ids=np.ascontiguousarray(r.class_ids_or_zeros[order]),
     )
 
 
@@ -689,6 +721,7 @@ def _empty_obb_result(frame_idx: int) -> OBBResult:
         confidences=np.zeros(0, dtype=np.float32),
         corners=np.zeros((0, 4, 2), dtype=np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+        class_ids=np.zeros(0, dtype=np.int64),
     )
 
 
@@ -707,6 +740,7 @@ def _merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
         corners=np.concatenate([r.corners for r in non_empty], axis=0),
         # Regenerate IDs across the merged frame so they remain contiguous
         detection_ids=OBBResult.make_detection_ids(frame_idx, total),
+        class_ids=np.concatenate([r.class_ids_or_zeros for r in non_empty]),
     )
 
 
@@ -799,6 +833,11 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         return _empty_obb_result(raw.frame_idx)
     xywhr_np = raw.xywhr.cpu().numpy()
     conf_np = raw.conf.cpu().numpy()
+    cls_np = (
+        raw.cls.cpu().numpy().astype(np.int64)
+        if raw.cls is not None
+        else np.zeros(xywhr_np.shape[0], dtype=np.int64)
+    )
     angles_fixed, sizes, aspect = _normalize_obb_geometry(
         xywhr_np[:, 2], xywhr_np[:, 3], xywhr_np[:, 4]
     )
@@ -822,6 +861,7 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
             )
         xywhr_np = xywhr_np[mask]
         conf_np = conf_np[mask]
+        cls_np = cls_np[mask]
         angles_fixed = angles_fixed[mask]
         sizes = sizes[mask]
         aspect = aspect[mask]
@@ -839,5 +879,6 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         confidences=conf_np.astype(np.float32),
         corners=corners_np.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(raw.frame_idx, n),
+        class_ids=cls_np,
     )
     return _apply_raw_detection_cap(result, raw_detection_cap)

@@ -288,6 +288,7 @@ class Pipeline:
                 detection_ids=OBBResult.make_detection_ids(
                     frame_idx, obb_result.num_detections
                 ),
+                class_ids=obb_result.class_ids,
             )
             self.cache_writer.write_detection(frame_idx, obb_result)
 

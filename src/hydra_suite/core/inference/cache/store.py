@@ -128,6 +128,10 @@ class DetectionCacheHandle(CacheHandle):
         self._ensure_data()
         d = self._data
         mask = d["frame_indices"] == frame_idx
+        # Backward compatibility: caches written before class_ids existed have
+        # no such key. Fall back to None (-> all class 0 via
+        # class_ids_or_zeros) rather than a KeyError.
+        class_ids = d["class_ids"][mask] if "class_ids" in d else None
         return OBBResult(
             frame_idx=frame_idx,
             centroids=d["centroids"][mask],
@@ -137,6 +141,7 @@ class DetectionCacheHandle(CacheHandle):
             confidences=d["confidences"][mask],
             corners=d["corners"][mask],
             detection_ids=d["detection_ids"][mask],
+            class_ids=class_ids,
         )
 
     def close(self) -> None:
@@ -154,10 +159,20 @@ class DetectionCacheHandle(CacheHandle):
                 confidences=np.zeros(0, np.float32),
                 corners=np.zeros((0, 4, 2), np.float32),
                 detection_ids=np.zeros(0, np.int64),
+                class_ids=np.zeros(0, np.int64),
             )
             return
         fi_list = []
-        cents, angs, szs, shps, confs, corns, dids = [], [], [], [], [], [], []
+        cents, angs, szs, shps, confs, corns, dids, clss = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
         for r in self._buffer:
             n = r.num_detections
             fi_list.extend([r.frame_idx] * n)
@@ -169,6 +184,7 @@ class DetectionCacheHandle(CacheHandle):
                 confs.append(r.confidences)
                 corns.append(r.corners)
                 dids.append(r.detection_ids)
+                clss.append(r.class_ids_or_zeros)
         _npz_save(
             self.path,
             self.key,
@@ -188,6 +204,7 @@ class DetectionCacheHandle(CacheHandle):
                 np.concatenate(corns) if corns else np.zeros((0, 4, 2), np.float32)
             ),
             detection_ids=(np.concatenate(dids) if dids else np.zeros(0, np.int64)),
+            class_ids=(np.concatenate(clss) if clss else np.zeros(0, np.int64)),
         )
 
 

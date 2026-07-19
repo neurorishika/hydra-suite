@@ -76,6 +76,7 @@ def _empty_result(frame_idx: int) -> OBBResult:
         confidences=np.zeros((0,), np.float32),
         corners=np.zeros((0, 4, 2), np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+        class_ids=np.zeros(0, dtype=np.int64),
     )
 
 
@@ -214,6 +215,9 @@ def run_bgsub(
         confidences=np.array(confidences, np.float32),
         corners=corners,
         detection_ids=detection_ids,
+        # bg-sub has no class head -- all detections are the single generic
+        # "object" class (0).
+        class_ids=np.zeros(len(meas), dtype=np.int64),
     )
 
 

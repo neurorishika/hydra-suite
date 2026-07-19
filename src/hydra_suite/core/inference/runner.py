@@ -483,6 +483,7 @@ class InferenceRunner:
             detection_ids=OBBResult.make_detection_ids(
                 frame_idx, raw_obb.num_detections
             ),
+            class_ids=raw_obb.class_ids,
         )
         if caches is not None and caches.detection is not None:
             caches.detection.write_frame(frame_idx, result=raw_obb)
@@ -721,6 +722,7 @@ class InferenceRunner:
                 detection_ids=OBBResult.make_detection_ids(
                     f_idx, raw_obb.num_detections
                 ),
+                class_ids=raw_obb.class_ids,
             )
             filtered_obb, _ = filter_for_source(self.config, raw_obb, roi_mask)
             results.append(filtered_obb)
