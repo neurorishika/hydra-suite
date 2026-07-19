@@ -101,7 +101,7 @@ def test_load_pose_backend_returns_backend_not_wrapper(monkeypatch):
         def __init__(self, backend):
             self.backend = backend
 
-    def _fake_load_pose_model(pose_cfg, runtime):
+    def _fake_load_pose_model(pose_cfg, runtime, **kwargs):
         captured["pose_cfg"] = pose_cfg
         return _FakePoseModel(sentinel_backend)
 
@@ -258,7 +258,7 @@ def test_load_pose_backend_yolo_dispatch(monkeypatch):
         def __init__(self, backend):
             self.backend = backend
 
-    def _fake_load_pose_model(pose_cfg, runtime):
+    def _fake_load_pose_model(pose_cfg, runtime, **kwargs):
         captured["pose_cfg"] = pose_cfg
         return _FakePoseModel(sentinel_backend)
 

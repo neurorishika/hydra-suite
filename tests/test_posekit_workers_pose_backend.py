@@ -1,39 +1,39 @@
-"""Task 6 regression tests: PoseKit's direct pose-backend construction.
+"""Pose runtime golden rule: PoseKit's ``_build_pose_backend`` delegates.
 
-``posekit/gui/workers.py``'s ``_build_pose_backend`` replaces the legacy
-``build_runtime_config``/``create_pose_backend_from_config`` translation path
-(Step 5 of the Task 6 brief), mirroring
-``core/inference/stages/pose.py::load_pose_model`` and the pattern already
-applied to ``trackerkit/gui/workers/preview_worker.py`` (Task 3) and
-``trackerkit/gui/workers/crops_worker.py`` (Task 5).
+``posekit/gui/workers.py``'s ``_build_pose_backend`` no longer carries its own
+runtime-flavor ladder (``is_cuda_like`` / ``onnx_cuda`` /
+``create_pose_backend_from_config`` / ``HYDRA_SLEAP_FLAVOR``). It now routes
+every backend build through ``core/inference/api.load_pose_backend`` (the shared
+shim over ``stages/pose.load_pose_model``), so the tier -> flavor decision lives
+in exactly one place (the pose runtime golden rule).
 
-The critical case under test: Apple GPU-Fast resolves to the canonical
-runtime ``"coreml"`` (Task 6's core fix, in ``posekit/gui/runtimes.py``).
-These tests confirm that value flows all the way through to backend
-construction without being silently collapsed back into an ONNX CoreML-EP
-path (the bug this task fixes) for either backend family.
+These tests assert the delegation (call args) rather than the resolved
+runtime_flavor/device -- the latter is covered by
+``tests/test_pose_golden_rule.py`` / ``tests/test_inference_stages_pose.py``
+against ``load_pose_model`` directly.
 """
 
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 
 
 def _workers_module():
     return importlib.import_module("hydra_suite.posekit.gui.workers")
 
 
-def test_build_pose_backend_yolo_coreml_uses_mps_device(monkeypatch) -> None:
+def test_build_pose_backend_delegates_to_load_pose_backend(monkeypatch) -> None:
     workers = _workers_module()
-    yolo_mod = importlib.import_module("hydra_suite.core.identity.pose.backends.yolo")
 
     captured: dict[str, object] = {}
+    sentinel = object()
 
-    class FakeYoloBackend:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
+    def _fake_load_pose_backend(**kwargs):
+        captured.update(kwargs)
+        return sentinel
 
-    monkeypatch.setattr(yolo_mod, "YoloNativeBackend", FakeYoloBackend)
+    monkeypatch.setattr(workers, "load_pose_backend", _fake_load_pose_backend)
 
     backend = workers._build_pose_backend(
         backend_family="yolo",
@@ -50,138 +50,75 @@ def test_build_pose_backend_yolo_coreml_uses_mps_device(monkeypatch) -> None:
         sleap_max_instances=1,
     )
 
-    assert isinstance(backend, FakeYoloBackend)
-    assert captured["device"] == "mps"
+    assert backend is sentinel
+    assert captured["backend_family"] == "yolo"
     assert captured["model_path"] == "/models/yolo_pose.pt"
+    assert captured["compute_runtime"] == "coreml"
+    assert captured["keypoint_names"] == ["a", "b"]
+    assert captured["min_valid_confidence"] == 0.0
+    assert captured["confidence_threshold"] == 0.25
 
 
-def test_build_pose_backend_yolo_mps_and_coreml_use_same_device(monkeypatch) -> None:
-    """The "gpu" and "gpu_fast" tiers on Apple Silicon both resolve YOLO to
-    the mps device — YoloNativeBackend has no separate native-CoreML export
-    path, matching ``core/inference/stages/pose.py::load_pose_model``."""
+def test_build_pose_backend_sleap_threads_sleap_settings(monkeypatch) -> None:
+    """SLEAP settings (env, batch, max_instances, exported/out_root) must be
+    threaded through to the shim, not silently dropped."""
     workers = _workers_module()
-    yolo_mod = importlib.import_module("hydra_suite.core.identity.pose.backends.yolo")
-
-    devices: list[str] = []
-
-    class FakeYoloBackend:
-        def __init__(self, **kwargs):
-            devices.append(kwargs["device"])
-
-    monkeypatch.setattr(yolo_mod, "YoloNativeBackend", FakeYoloBackend)
-
-    for compute_runtime in ("mps", "coreml"):
-        workers._build_pose_backend(
-            backend_family="yolo",
-            model_path="/models/yolo_pose.pt",
-            exported_model_path="",
-            compute_runtime=compute_runtime,
-            min_valid_conf=0.0,
-            batch_size=4,
-            conf=0.25,
-            keypoint_names=[],
-            skeleton_edges=[],
-            out_root="/tmp/out",
-            sleap_env=None,
-            sleap_max_instances=1,
-        )
-
-    assert devices == ["mps", "mps"]
-
-
-def test_build_pose_backend_yolo_tensorrt_cuda_uses_cuda_device(monkeypatch) -> None:
-    """``_pred_runtime_flavor`` can hand this helper the legacy-shaped
-    "tensorrt_cuda" string (from ``derive_pose_runtime_settings``); it must
-    still resolve to the CUDA device like the plain "tensorrt"/"cuda" case."""
-    workers = _workers_module()
-    yolo_mod = importlib.import_module("hydra_suite.core.identity.pose.backends.yolo")
 
     captured: dict[str, object] = {}
 
-    class FakeYoloBackend:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(yolo_mod, "YoloNativeBackend", FakeYoloBackend)
-
-    workers._build_pose_backend(
-        backend_family="yolo",
-        model_path="/models/yolo_pose.pt",
-        exported_model_path="",
-        compute_runtime="tensorrt_cuda",
-        min_valid_conf=0.0,
-        batch_size=4,
-        conf=0.25,
-        keypoint_names=[],
-        skeleton_edges=[],
-        out_root="/tmp/out",
-        sleap_env=None,
-        sleap_max_instances=1,
-    )
-
-    assert captured["device"] == "cuda:0"
-
-
-def test_build_pose_backend_sleap_coreml_uses_native_flavor(monkeypatch) -> None:
-    """SLEAP has no ONNX-CoreML EP support (dynamic-shape failures on its
-    UNet), so both "mps" and "coreml" compute_runtime must resolve to the
-    native SLEAP (TensorFlow/Metal) runtime flavor, matching
-    ``core/inference/stages/pose.py::load_pose_model``'s SLEAP branch."""
-    workers = _workers_module()
-    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
-    pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
-
-    captured: dict[str, object] = {}
-
-    def _fake_create_pose_backend_from_config(config):
-        captured["config"] = config
+    def _fake_load_pose_backend(**kwargs):
+        captured.update(kwargs)
         return object()
 
-    monkeypatch.setattr(
-        pose_api,
-        "create_pose_backend_from_config",
-        _fake_create_pose_backend_from_config,
-    )
-    # workers._build_pose_backend imports create_pose_backend_from_config
-    # locally from hydra_suite.core.identity.pose.api — patch the module
-    # attribute it will resolve at call time.
-    import hydra_suite.core.identity.pose.api as _pose_api_mod
+    monkeypatch.setattr(workers, "load_pose_backend", _fake_load_pose_backend)
 
-    monkeypatch.setattr(
-        _pose_api_mod,
-        "create_pose_backend_from_config",
-        _fake_create_pose_backend_from_config,
+    workers._build_pose_backend(
+        backend_family="sleap",
+        model_path="/models/sleap_model",
+        exported_model_path="/exports/model.onnx",
+        compute_runtime="cuda",
+        min_valid_conf=0.2,
+        batch_size=2,
+        conf=0.25,
+        keypoint_names=["a", "b"],
+        skeleton_edges=[(0, 1)],
+        out_root="/tmp/out",
+        sleap_env="sleap_env_x",
+        sleap_batch=8,
+        sleap_max_instances=3,
     )
 
-    for compute_runtime in ("mps", "coreml"):
-        workers._build_pose_backend(
-            backend_family="sleap",
-            model_path="/models/sleap_model",
-            exported_model_path="",
-            compute_runtime=compute_runtime,
-            min_valid_conf=0.2,
-            batch_size=2,
-            conf=0.25,
-            keypoint_names=["a", "b"],
-            skeleton_edges=[],
-            out_root="/tmp/out",
-            sleap_env="sleap_env_x",
-            sleap_max_instances=1,
-        )
-        cfg = captured["config"]
-        assert isinstance(cfg, pose_types.PoseRuntimeConfig)
-        assert cfg.runtime_flavor == "native"
-        assert cfg.device == "mps"
-        assert cfg.sleap_env == "sleap_env_x"
+    assert captured["backend_family"] == "sleap"
+    assert captured["model_path"] == "/models/sleap_model"
+    assert captured["compute_runtime"] == "cuda"
+    assert captured["exported_model_path"] == "/exports/model.onnx"
+    assert captured["out_root"] == "/tmp/out"
+    assert captured["sleap_env"] == "sleap_env_x"
+    assert captured["sleap_batch"] == 8
+    assert captured["sleap_max_instances"] == 3
+    assert captured["skeleton_edges"] == [(0, 1)]
+
+
+def test_posekit_workers_has_no_divergent_flavor_ladder() -> None:
+    """Source guard: the deleted runtime-flavor ladder must not reappear."""
+    src = Path(
+        importlib.import_module("hydra_suite.posekit.gui.workers").__file__
+    ).read_text(encoding="utf-8")
+    for banned in (
+        "is_cuda_like",
+        "onnx_cuda",
+        "create_pose_backend_from_config",
+        "YoloNativeBackend",
+    ):
+        assert banned not in src, f"divergent pose ladder token still present: {banned}"
 
 
 def test_pred_runtime_flavor_returns_coreml_not_onnx_mps() -> None:
     """Critical-finding regression test: ``MainWindow._pred_runtime_flavor``
     must not route ``"coreml"`` through ``derive_pose_runtime_settings``
     (whose ``_normalize_runtime`` collapses "coreml" -> "onnx_coreml" ->
-    "onnx_mps" flavor), or the exact ONNX-CoreML-EP bug Task 6 fixes in
-    ``runtimes.py`` reappears one function away for cache-key construction
-    and exported-model-path browsing.
+    "onnx_mps" flavor), or the exact ONNX-CoreML-EP bug reappears one function
+    away for cache-key construction and exported-model-path browsing.
 
     Exercises the unbound method against a minimal fake ``self`` (mirroring
     ``tests/test_posekit_main_window.py``'s ``SimpleNamespace`` pattern)
