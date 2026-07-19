@@ -411,11 +411,6 @@ def build_tracking_parameters(
             cfg, "min_detect_seconds", "min_detection_counts", default_seconds=0.33
         )
     )
-    min_tracking_counts = _seconds_to_frames(
-        _cfg_get_time(
-            cfg, "min_track_seconds", "min_tracking_counts", default_seconds=0.33
-        )
-    )
     min_trajectory_length = _seconds_to_frames(
         _cfg_get_time(
             cfg,
@@ -692,7 +687,6 @@ def build_tracking_parameters(
         "MIN_RESPAWN_DISTANCE": min_respawn_multiplier * scaled_body_size,
         "MIN_DETECTION_COUNTS": min_detection_counts,
         "MIN_DETECTIONS_TO_START": MIN_DETECTIONS_TO_START_CONST,
-        "MIN_TRACKING_COUNTS": min_tracking_counts,
         "TRAJECTORY_HISTORY_SECONDS": float(
             _cfg_get(cfg, "trajectory_history_seconds", default=2.0)
         ),

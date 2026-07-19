@@ -708,14 +708,6 @@ class ConfigOrchestrator:
                 default_seconds=0.33,
             )
         )
-        self._panels.tracking.spin_min_track.setValue(
-            get_cfg_time(
-                "min_track_seconds",
-                "min_track_frames",
-                "min_track_counts",
-                default_seconds=0.33,
-            )
-        )
 
     def _load_config_postprocessing(self, get_cfg, get_cfg_time):
         self._panels.postprocess.enable_postprocessing.setChecked(
@@ -1678,7 +1670,6 @@ class ConfigOrchestrator:
                 "min_respawn_distance_multiplier": self._panels.tracking.spin_min_respawn_distance.value(),
                 "min_detections_to_start_seconds": self._panels.tracking._min_detections_to_start_seconds,
                 "min_detect_seconds": self._panels.tracking.spin_min_detect.value(),
-                "min_track_seconds": self._panels.tracking.spin_min_track.value(),
                 # === POST-PROCESSING ===
                 "enable_postprocessing": self._panels.postprocess.enable_postprocessing.isChecked(),
                 "identity_postprocess_mode": self._panels.postprocess.cmb_identity_postprocess_mode.currentText(),
@@ -2027,9 +2018,6 @@ class ConfigOrchestrator:
         min_detection_counts = _seconds_to_frames(
             self._panels.tracking.spin_min_detect.value()
         )
-        min_tracking_counts = _seconds_to_frames(
-            self._panels.tracking.spin_min_track.value()
-        )
         min_trajectory_length = _seconds_to_frames(
             self._panels.postprocess.spin_min_trajectory_length.value()
         )
@@ -2213,7 +2201,6 @@ class ConfigOrchestrator:
             "MIN_RESPAWN_DISTANCE": min_respawn_distance_pixels,
             "MIN_DETECTION_COUNTS": min_detection_counts,
             "MIN_DETECTIONS_TO_START": min_detections_to_start,
-            "MIN_TRACKING_COUNTS": min_tracking_counts,
             "TRAJECTORY_HISTORY_SECONDS": self._panels.setup.spin_traj_hist.value(),
             "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
             "ENABLE_LIGHTING_STABILIZATION": self._panels.detection.chk_lighting_stab.isChecked(),

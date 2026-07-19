@@ -61,7 +61,6 @@ def test_cli_session_builds_basic_tracking_conversions_and_roi_mask(tmp_path):
             "kalman_maturity_age_seconds": 0.5,
             "background_prime_seconds": 0.25,
             "min_detect_seconds": 0.2,
-            "min_track_seconds": 0.3,
             "min_trajectory_length_seconds": 0.4,
             "max_occlusion_gap_seconds": 0.6,
             "velocity_zscore_window_seconds": 0.1,
@@ -95,7 +94,6 @@ def test_cli_session_builds_basic_tracking_conversions_and_roi_mask(tmp_path):
     assert params["KALMAN_MATURITY_AGE"] == 10
     assert params["BACKGROUND_PRIME_FRAMES"] == 5
     assert params["MIN_DETECTION_COUNTS"] == 4
-    assert params["MIN_TRACKING_COUNTS"] == 6
     assert params["MIN_TRAJECTORY_LENGTH"] == 8
     assert params["MAX_OCCLUSION_GAP"] == 12
     assert params["VELOCITY_ZSCORE_WINDOW"] == 5
@@ -105,6 +103,21 @@ def test_cli_session_builds_basic_tracking_conversions_and_roi_mask(tmp_path):
     assert params["ROI_MASK"].shape == (5, 5)
     assert params["ROI_MASK"][0, 0] == 255
     assert params["ROI_MASK"][2, 2] == 0
+
+
+def test_cli_session_ignores_orphaned_min_track_seconds_key(tmp_path):
+    """Old configs may still carry `min_track_seconds`; it must load without
+    error and must no longer be threaded into params as MIN_TRACKING_COUNTS."""
+    session = load_tracker_cli_session(
+        str(tmp_path / "legacy.mp4"),
+        config_data={
+            "fps": 20.0,
+            "min_track_seconds": 0.3,
+        },
+        video_probe=TrackerCliVideoProbe(fps=20.0, total_frames=50, width=5, height=5),
+    )
+
+    assert "MIN_TRACKING_COUNTS" not in session.params
 
 
 def test_cli_session_direct_run_support_is_gated_by_gui_owned_features(tmp_path):
