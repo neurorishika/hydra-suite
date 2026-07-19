@@ -42,7 +42,7 @@ from hydra_suite.core.tracking.optimization.optimizer import (
     OptimizationResult,
     TrackingOptimizer,
 )
-from hydra_suite.core.tracking.optimization.optimizer_workers import (
+from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
     TrackingPreviewWorker,
 )
 from hydra_suite.utils.video_artifacts import build_autotune_state_path

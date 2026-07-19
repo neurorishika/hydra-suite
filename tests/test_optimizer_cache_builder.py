@@ -3,7 +3,7 @@ a legacy YOLOOBBDetector."""
 
 import types
 
-import hydra_suite.core.tracking.optimization.optimizer_workers as ow
+import hydra_suite.trackerkit.gui.workers.param_optimizer_worker as ow
 
 
 def test_cache_build_worker_uses_run_batch_pass(monkeypatch, tmp_path):
