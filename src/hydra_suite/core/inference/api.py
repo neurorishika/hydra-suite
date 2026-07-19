@@ -38,6 +38,69 @@ def apply_detection_filter(raw: OBBResult, config: OBBConfig) -> OBBResult:
     return filter_detections(raw, config, roi_mask=None)
 
 
+def load_pose_backend(
+    *,
+    backend_family,
+    model_path,
+    compute_runtime,
+    keypoint_names=None,
+    confidence_threshold=1e-4,
+    batch_size=64,
+    min_valid_confidence=0.2,
+):
+    """Build a pose backend (with predict_batch) via the canonical stages/pose loader.
+
+    Single source of the tier->backend golden rule; returns the backend, not the
+    PoseModel wrapper. GUI pose workers should migrate onto this instead of
+    hand-rolling backend construction so CPU/GPU/GPU-Fast tiers all resolve
+    through `stages.pose.load_pose_model`.
+    """
+    from .config import (
+        InferenceConfig,
+        OBBConfig,
+        OBBDirectConfig,
+        PoseConfig,
+        PoseSLEAPConfig,
+        PoseYOLOConfig,
+    )
+    from .runtime import RuntimeContext
+    from .stages.pose import load_pose_model
+
+    family = (backend_family or "").strip().lower()
+    if family == "yolo":
+        pose_cfg = PoseConfig(
+            backend="yolo",
+            yolo=PoseYOLOConfig(
+                model_path=model_path,
+                compute_runtime=compute_runtime,
+                confidence_threshold=confidence_threshold,
+                batch_size=batch_size,
+            ),
+            min_keypoint_confidence=min_valid_confidence,
+        )
+    else:
+        pose_cfg = PoseConfig(
+            backend="sleap",
+            sleap=PoseSLEAPConfig(
+                model_path=model_path,
+                compute_runtime=compute_runtime,
+                batch_size=batch_size,
+            ),
+            min_keypoint_confidence=min_valid_confidence,
+        )
+
+    _min_cfg = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
+        ),
+        pose=pose_cfg,
+    )
+    runtime = RuntimeContext.from_config(_min_cfg)
+    model = load_pose_model(pose_cfg, runtime)
+    return model.backend  # PoseModel.backend is the predict_batch-capable object
+
+
 def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     """One-shot pose prediction on a single image, used by PoseKit labeling UI.
 

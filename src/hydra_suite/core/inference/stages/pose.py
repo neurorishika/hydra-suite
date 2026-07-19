@@ -136,7 +136,11 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
         runtime_flavor = "tensorrt"
         device = "cuda"
     else:
-        runtime_flavor = "onnx_cpu"
+        # cpu tier: SLEAP runs its native (non-exported) sleap-nn model on
+        # torch-CPU via the service backend -- consistent with the cuda/mps
+        # native path, no ONNX export. Slower than exported ONNX-CPU, but keeps
+        # a single service backend across tiers (pose runtime golden rule).
+        runtime_flavor = "native"
         device = "cpu"
 
     runtime_cfg = PoseRuntimeConfig(
