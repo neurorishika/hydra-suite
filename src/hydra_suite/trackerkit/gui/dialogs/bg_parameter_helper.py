@@ -42,9 +42,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.background.optimizer import (
+from hydra_suite.core.background.optimizer import BgOptimizationResult
+from hydra_suite.trackerkit.gui.workers.bg_optimizer_worker import (
     BgDetectionPreviewWorker,
-    BgOptimizationResult,
     BgSubtractionOptimizer,
 )
 from hydra_suite.widgets.dialogs import BaseDialog

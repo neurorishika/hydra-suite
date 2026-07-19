@@ -1,9 +1,14 @@
 """TrackingPreviewWorker must read the new-format InferenceRunner detection
 cache (via _open_caches / DetectionCacheHandle.read_frame), matching how the
 optimizer (c4e1958) was migrated -- not the legacy DetectionCache API.
+
+TrackingPreviewWorker itself is a thin Qt wrapper (trackerkit) that delegates
+to the pure ``run_tracking_preview`` helper in core; the cache-reading
+internals patched below live in the core module.
 """
 
 import hydra_suite.core.tracking.optimization.optimizer_workers as ow
+import hydra_suite.trackerkit.gui.workers.param_optimizer_worker as worker_mod
 
 
 class _FakeDetectionHandle:
@@ -66,6 +71,9 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
             "TrackingPreviewWorker must not construct the legacy DetectionCache"
         )
 
+    # These are internals of the pure run_tracking_preview loop, which lives
+    # in core/tracking/optimization/optimizer_workers.py -- that's the module
+    # whose globals the loop actually reads from.
     monkeypatch.setattr(ow, "_open_caches", _fake_open_caches, raising=False)
     monkeypatch.setattr(ow, "video_signature", _fake_video_signature, raising=False)
     monkeypatch.setattr(
@@ -91,7 +99,7 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
 
     monkeypatch.setattr(ow.cv2, "VideoCapture", lambda *_a, **_k: _FakeCap())
 
-    worker = ow.TrackingPreviewWorker(
+    worker = worker_mod.TrackingPreviewWorker(
         video_path="v.mp4",
         detection_cache_path=str(tmp_path),
         start_frame=0,
@@ -112,10 +120,13 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
 
 
 def test_preview_worker_no_longer_imports_legacy_DetectionCache_directly():
-    # Guard: the module must not reference DetectionCache in TrackingPreviewWorker.run
+    # Guard: the underlying pure loop must not reference the legacy
+    # DetectionCache API. TrackingPreviewWorker.run is now a thin delegator to
+    # run_tracking_preview (core), so the real cache-read logic -- and this
+    # guard -- lives there.
     import inspect
 
-    src = inspect.getsource(ow.TrackingPreviewWorker.run)
+    src = inspect.getsource(ow.run_tracking_preview)
     assert (
         "DetectionCache(" not in src
-    ), "TrackingPreviewWorker.run must not construct the legacy DetectionCache"
+    ), "run_tracking_preview must not construct the legacy DetectionCache"

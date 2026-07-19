@@ -9,7 +9,6 @@ from typing import Any, Dict
 
 import numpy as np
 import optuna
-from PySide6.QtCore import QThread, Signal
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
@@ -445,15 +444,17 @@ class OptimizationResult:
         self.sub_scores: Dict[str, float] = sub_scores or {}
 
 
-class TrackingOptimizer(QThread):
+class TrackingOptimizerCore:
     """
     Runs Bayesian optimization on a video slice with different parameter sets.
     Requires a pre-populated DetectionCache for speed.
-    """
 
-    progress_signal = Signal(int, str)
-    result_signal = Signal(list)  # List of OptimizationResult
-    finished_signal = Signal()
+    This is a plain (non-Qt) core class. Progress and results are surfaced via
+    optional callbacks (``progress_cb`` / ``result_cb``); the thin Qt wrapper
+    ``TrackingOptimizer`` (trackerkit/gui/workers/param_optimizer_worker.py)
+    forwards these to Qt signals. Cooperative cancellation is via
+    ``request_stop()`` setting ``self._stop_requested``.
+    """
 
     def __init__(
         self,
@@ -467,9 +468,11 @@ class TrackingOptimizer(QThread):
         n_seeds: int = 3,
         on_plateau: str = "restart",
         sampler_type: str = "auto",
-        parent=None,
+        progress_cb=None,
+        result_cb=None,
     ):
-        super().__init__(parent)
+        self._progress_cb = progress_cb
+        self._result_cb = result_cb
         self.video_path = video_path
         self.detection_cache_path = detection_cache_path
         self.start_frame = start_frame
@@ -535,7 +538,7 @@ class TrackingOptimizer(QThread):
             seed=42,
         )
 
-    def stop(self):
+    def request_stop(self):
         self._stop_requested = True
 
     # ------------------------------------------------------------------
@@ -564,10 +567,12 @@ class TrackingOptimizer(QThread):
                 video_signature(self.video_path),
             ).detection
             if self.cache is None or not self.cache.is_valid():
-                self.progress_signal.emit(0, "Error: Incompatible detection cache.")
+                if self._progress_cb is not None:
+                    self._progress_cb(0, "Error: Incompatible detection cache.")
                 return False
         except Exception as e:
-            self.progress_signal.emit(0, f"Error loading cache: {str(e)}")
+            if self._progress_cb is not None:
+                self._progress_cb(0, f"Error loading cache: {str(e)}")
             return False
 
         if not self.cache.covers_frame_range(self.start_frame, self.end_frame):
@@ -576,7 +581,8 @@ class TrackingOptimizer(QThread):
                 f"Error: Cache does not cover frames "
                 f"{self.start_frame}-{self.end_frame}. Missing: {missing}"
             )
-            self.progress_signal.emit(0, msg)
+            if self._progress_cb is not None:
+                self._progress_cb(0, msg)
             return False
         return True
 
@@ -736,9 +742,9 @@ class TrackingOptimizer(QThread):
     # Main entry point
     # ------------------------------------------------------------------
 
-    def run(self):
+    def optimize(self):
         if not self._open_and_validate_cache():
-            return
+            return []
 
         optuna.logging.set_verbosity(optuna.logging.WARNING)
         n_active = sum(1 for v in self.tuning_config.values() if v)
@@ -799,9 +805,11 @@ class TrackingOptimizer(QThread):
                 OptimizationResult(trial_params, score, trial.number, sub_scores)
             )
             pct = int(((trial.number + 1) / self.n_trials) * 100)
-            self.progress_signal.emit(
-                pct, f"Trial {trial.number + 1}/{self.n_trials} (Score: {score:.3f})"
-            )
+            if self._progress_cb is not None:
+                self._progress_cb(
+                    int(pct),
+                    f"Trial {trial.number + 1}/{self.n_trials} (Score: {score:.3f})",
+                )
 
             # Plateau detection
             if score < _best_score_seen:
@@ -831,12 +839,9 @@ class TrackingOptimizer(QThread):
         # which would clobber the on-disk cache with zero frames.
         self.cache = None
         self._pose_frame_cache = None  # free memory after optimization
-        try:
-            self.result_signal.emit(results)
-            self.finished_signal.emit()
-        except RuntimeError as e:
-            # Dialog was closed before the thread finished; ignore orphaned signals.
-            logger.warning("Optimizer signal emission skipped (dialog closed?): %s", e)
+        if self._result_cb is not None:
+            self._result_cb(results)
+        return results
 
     def _run_tracking_loop(self, params: Dict[str, Any], reverse: bool = False):
         """

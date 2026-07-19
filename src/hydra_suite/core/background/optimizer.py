@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import cv2
 import numpy as np
@@ -30,8 +30,6 @@ try:
     import optuna
 except ImportError:  # pragma: no cover
     optuna = None  # type: ignore[assignment]
-
-from PySide6.QtCore import QThread, Signal
 
 logger = logging.getLogger(__name__)
 
@@ -515,458 +513,237 @@ class BgOptimizationResult:
     median_area: float = 0.0  # median detection area in pixels²
 
 
-# ---------------------------------------------------------------------------
-# Optimizer thread
-# ---------------------------------------------------------------------------
+@dataclass
+class BgOptimizationRun:
+    """Result of one full `run_bg_optimization` call.
 
-
-class BgSubtractionOptimizer(QThread):
-    """QThread that runs an Optuna study to tune detection parameters."""
-
-    progress_signal = Signal(int, str)  # (percentage, message)
-    result_signal = Signal(list)  # list[BgOptimizationResult]
-    finished_signal = Signal()
-
-    def __init__(
-        self,
-        video_path: str,
-        base_params: Dict[str, Any],
-        tuning_config: Dict[str, bool],
-        scoring_weights: Dict[str, float] | None = None,
-        n_trials: int = 50,
-        n_sample_frames: int = 30,
-        sampler_type: str = "tpe",
-        parent: Optional[Any] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.video_path = video_path
-        self.base_params = dict(base_params)
-        self.tuning_config = tuning_config
-        self.scoring_weights = scoring_weights or {
-            "SCORE_WEIGHT_COUNT": 0.50,
-            "SCORE_WEIGHT_CONSISTENCY": 0.30,
-            "SCORE_WEIGHT_STABILITY": 0.20,
-        }
-        self.n_trials = n_trials
-        self.n_sample_frames = n_sample_frames
-        self.sampler_type = sampler_type
-        self._stop_requested = False
-
-    # ------------------------------------------------------------------
-    def _build_sampler(self, n_active: int):
-        """Construct the Optuna sampler based on *sampler_type*.
-
-        "auto" — OptunaHub AutoSampler (GP early, TPE later).
-        "gp"   — GPSampler (Matérn-2.5, ARD, log-EI).
-        "tpe"  — Multivariate TPE (robust fallback).
-        """
-        stype = self.sampler_type
-
-        if stype == "auto":
-            try:
-                import optunahub  # type: ignore[import-untyped]
-
-                return optunahub.load_module(
-                    "samplers/auto_sampler",
-                ).AutoSampler()
-            except Exception as e:
-                logger.warning(
-                    "AutoSampler unavailable (%s), falling back to GP.",
-                    e,
-                )
-                stype = "gp"
-
-        if stype == "gp":
-            try:
-                qmc = optuna.samplers.QMCSampler(
-                    qmc_type="sobol",
-                    seed=42,
-                    independent_sampler=optuna.samplers.RandomSampler(seed=42),
-                )
-                return optuna.samplers.GPSampler(
-                    seed=42,
-                    n_startup_trials=max(10, n_active),
-                    deterministic_objective=True,
-                    independent_sampler=qmc,
-                )
-            except Exception as e:
-                logger.warning(
-                    "GPSampler unavailable (%s), falling back to TPE.",
-                    e,
-                )
-
-        # "tpe" (default / fallback)
-        return optuna.samplers.TPESampler(
-            multivariate=True,
-            n_startup_trials=max(20, n_active * 2),
-            seed=42,
-        )
-
-    # ------------------------------------------------------------------
-    def stop(self) -> None:
-        self._stop_requested = True
-
-    # ------------------------------------------------------------------
-    def run(self) -> None:  # noqa: C901  (complex but self-contained)
-        try:
-            self._run_optimization()
-        except Exception as e:
-            logger.exception("BG-subtraction optimization failed")
-            self.progress_signal.emit(0, f"Error: {e}")
-        finally:
-            self.finished_signal.emit()
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _run_optimization(self) -> None:
-        if optuna is None:
-            self.progress_signal.emit(0, "Error: optuna is not installed")
-            return
-
-        params = self.base_params
-
-        # --- 1. open video -------------------------------------------------
-        cap = cv2.VideoCapture(self.video_path)
-        if not cap.isOpened():
-            self.progress_signal.emit(0, "Error: cannot open video")
-            return
-
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        start = params.get("START_FRAME", 0)
-        end = min(params.get("END_FRAME", total_frames - 1), total_frames - 1)
-        max_prime_frames = _prime_frame_search_upper_bound(params, total_frames)
-
-        # --- 2. choose sample frames --------------------------------------
-        base_prime_frames = int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 0)
-        first_valid = start + base_prime_frames
-        if first_valid >= end:
-            first_valid = start
-        n_available = end - first_valid + 1
-        n_sample = min(self.n_sample_frames, max(n_available, 1))
-        sample_indices = np.linspace(first_valid, end, n_sample, dtype=int).tolist()
-        prime_indices = _build_prime_frame_indices(
-            total_frames, max_prime_frames
-        ).tolist()
-
-        resize_f = params.get("RESIZE_FACTOR", 1.0)
-
-        # --- 3. cache raw frames once --------------------------------------
-        self.progress_signal.emit(5, "Caching optimization frames …")
-        prime_frames = _read_gray_frames(
-            cap,
-            prime_indices,
-            resize_f,
-            lambda: self._stop_requested,
-        )
-        if prime_frames is None:
-            return
-        sample_frames = _read_gray_frames(
-            cap,
-            sample_indices,
-            resize_f,
-            lambda: self._stop_requested,
-        )
-        cap.release()
-
-        if not sample_frames:
-            self.progress_signal.emit(0, "Error: no frames could be read")
-            return
-
-        # --- 4. scoring setup -----------------------------------------------
-        max_targets = params.get("MAX_TARGETS", 5)
-
-        # Pre-resize ROI mask
-        roi_mask = _resize_roi_mask(
-            params.get("ROI_MASK"),
-            sample_frames[0].shape if sample_frames else None,
-        )
-        frame_cache = _BgFrameCache(
-            prime_frames=prime_frames,
-            sample_frames=sample_frames,
-            sample_indices=list(sample_indices),
-            roi_mask=roi_mask,
-        )
-
-        # --- 5. run Optuna -------------------------------------------------
-        self.progress_signal.emit(10, "Starting optimisation \u2026")
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-        n_active = sum(1 for v in self.tuning_config.values() if v)
-        n_frames = len(sample_frames)
-
-        # Pruning: report intermediate count scores and let Optuna kill
-        # obviously-bad trials early (e.g. wrong threshold → 0 detections).
-        # Trials report every PRUNE_INTERVAL frames; the pruner kicks in
-        # after n_warmup_steps reports and n_startup_trials completed trials.
-        _PRUNE_INTERVAL = max(1, n_frames // 6)
-        pruner = optuna.pruners.MedianPruner(
-            n_startup_trials=5,
-            n_warmup_steps=1,
-            interval_steps=1,
-        )
-
-        study = optuna.create_study(
-            direction="maximize",
-            sampler=self._build_sampler(n_active),
-            pruner=pruner,
-        )
-        results: List[BgOptimizationResult] = []
-
-        # Normalise scoring weights
-        sw = self.scoring_weights
-        w_cnt_r = sw.get("SCORE_WEIGHT_COUNT", 0.50)
-        w_con_r = sw.get("SCORE_WEIGHT_CONSISTENCY", 0.30)
-        w_stb_r = sw.get("SCORE_WEIGHT_STABILITY", 0.20)
-        w_sum = w_cnt_r + w_con_r + w_stb_r
-        if w_sum < 1e-9:
-            w_cnt, w_con, w_stb = 1 / 3, 1 / 3, 1 / 3
-        else:
-            w_cnt = w_cnt_r / w_sum
-            w_con = w_con_r / w_sum
-            w_stb = w_stb_r / w_sum
-
-        # Filter tuning_config to only enabled params
-        tune = {k: v for k, v in self.tuning_config.items() if v}
-
-        def objective(trial):
-            if self._stop_requested:
-                raise optuna.TrialPruned()
-
-            trial_params = _suggest_trial_params(trial, tune, params, total_frames)
-
-            det_params = dict(params)
-            det_params.update(trial_params)
-            bg_model, detector, intensity_history, lighting_state = (
-                _init_trial_pipeline(
-                    det_params,
-                    frame_cache,
-                )
-            )
-
-            count_scores: List[float] = []
-            consistency_scores: List[float] = []
-            frame_medians: List[float] = []
-            prune_step = 0
-
-            for fi, raw_gray in enumerate(frame_cache.sample_frames):
-                if self._stop_requested:
-                    raise optuna.TrialPruned()
-
-                _gray, _bg_u8, _fg_mask, meas, sizes, _shapes = _run_bg_trial_frame(
-                    raw_gray,
-                    frame_cache.sample_indices[fi],
-                    det_params,
-                    bg_model,
-                    detector,
-                    frame_cache.roi_mask,
-                    intensity_history,
-                    lighting_state,
-                )
-                n_det = len(meas)
-
-                if max_targets > 0:
-                    err = abs(n_det - max_targets) / max_targets
-                    count_scores.append(max(0.0, 1.0 - err))
-
-                if sizes and n_det == max_targets and n_det >= 2:
-                    areas = np.array(sizes, dtype=float)
-                    mean_a = areas.mean()
-                    if mean_a > 1e-6:
-                        cov = areas.std() / mean_a
-                        consistency_scores.append(max(0.0, 1.0 - cov))
-                    else:
-                        consistency_scores.append(0.0)
-                    frame_medians.append(float(np.median(areas)))
-                elif sizes:
-                    frame_medians.append(float(np.median(sizes)))
-
-                if (fi + 1) % _PRUNE_INTERVAL == 0 or fi == n_frames - 1:
-                    running = float(np.mean(count_scores)) if count_scores else 0.0
-                    trial.report(running, step=prune_step)
-                    prune_step += 1
-                    if trial.should_prune():
-                        raise optuna.TrialPruned()
-
-            s_count, s_consistency, s_stability = _aggregate_trial_scores(
-                count_scores,
-                consistency_scores,
-                frame_medians,
-            )
-            score = w_cnt * s_count + w_con * s_consistency + w_stb * s_stability
-
-            trial_median_area = (
-                float(np.median(frame_medians)) if frame_medians else 0.0
-            )
-
-            results.append(
-                BgOptimizationResult(
-                    params=trial_params,
-                    score=score,
-                    trial_number=trial.number,
-                    sub_scores={
-                        "count": s_count,
-                        "consistency": s_consistency,
-                        "stability": s_stability,
-                    },
-                    median_area=trial_median_area,
-                )
-            )
-
-            pct = int(10 + 85 * (trial.number + 1) / self.n_trials)
-            self.progress_signal.emit(
-                pct,
-                f"Trial {trial.number + 1}/{self.n_trials} \u2014 "
-                f"score {score:.3f}  "
-                f"(cnt {s_count:.2f}, con {s_consistency:.2f}, "
-                f"stb {s_stability:.2f})",
-            )
-            return score
-
-        study.optimize(objective, n_trials=self.n_trials)
-
-        # Store cached raw frames so the preview worker can reuse the same sample set.
-        self._cached_prime_frames = list(frame_cache.prime_frames)
-        self._cached_sample_frames = list(frame_cache.sample_frames)
-        self._cached_sample_indices = list(frame_cache.sample_indices)
-        self._cached_roi_mask = (
-            frame_cache.roi_mask.copy() if frame_cache.roi_mask is not None else None
-        )
-
-        results.sort(key=lambda r: -r.score)
-        self.progress_signal.emit(100, "Optimisation complete!")
-        self.result_signal.emit(results)
-
-
-# ---------------------------------------------------------------------------
-# Detection preview worker
-# ---------------------------------------------------------------------------
-
-
-class BgDetectionPreviewWorker(QThread):
-    """Generate annotated preview frames for a given detection parameter set.
-
-    Reads the same sample frames as the optimiser, runs the full BG-sub
-    detection pipeline for the chosen parameters, and emits (index, RGB)
-    pairs so the dialog can display them.
+    Bundles the completed trial results together with the cached raw
+    frames (frame cache) so a preview step can reuse the exact same
+    sample set without re-reading the video.
     """
 
-    # (frame_index_in_sample_list, rgb_numpy_array)
-    frame_signal = Signal(int, object)
-    finished_signal = Signal()
+    results: List[BgOptimizationResult]
+    prime_frames: List[np.ndarray]
+    sample_frames: List[np.ndarray]
+    sample_indices: List[int]
+    roi_mask: Optional[np.ndarray]
 
-    def __init__(
-        self,
-        video_path: str,
-        base_params: Dict[str, Any],
-        trial_params: Dict[str, Any],
-        n_sample_frames: int = 30,
-        cached_prime_frames: Optional[List[np.ndarray]] = None,
-        cached_sample_frames: Optional[List[np.ndarray]] = None,
-        cached_sample_indices: Optional[List[int]] = None,
-        roi_mask: Optional[np.ndarray] = None,
-        parent: Optional[Any] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.video_path = video_path
-        self.base_params = dict(base_params)
-        self.trial_params = dict(trial_params)
-        self.n_sample_frames = n_sample_frames
-        self._cached_prime_frames = (
-            [frame.copy() for frame in cached_prime_frames]
-            if cached_prime_frames
-            else None
-        )
-        self._cached_sample_frames = (
-            [frame.copy() for frame in cached_sample_frames]
-            if cached_sample_frames
-            else None
-        )
-        self._cached_sample_indices = (
-            list(cached_sample_indices) if cached_sample_indices else None
-        )
-        self._cached_roi_mask = roi_mask.copy() if roi_mask is not None else None
-        self._stop_requested = False
 
-    def stop(self) -> None:
-        self._stop_requested = True
+def _build_sampler(sampler_type: str, n_active: int):
+    """Construct the Optuna sampler based on *sampler_type*.
 
-    def run(self) -> None:
+    "auto" — OptunaHub AutoSampler (GP early, TPE later).
+    "gp"   — GPSampler (Matérn-2.5, ARD, log-EI).
+    "tpe"  — Multivariate TPE (robust fallback).
+    """
+    stype = sampler_type
+
+    if stype == "auto":
         try:
-            self._generate_previews()
-        except Exception:
-            logger.exception("BG detection preview failed")
-        finally:
-            self.finished_signal.emit()
+            import optunahub  # type: ignore[import-untyped]
 
-    def _generate_previews(self) -> None:
-        params = self.base_params
+            return optunahub.load_module(
+                "samplers/auto_sampler",
+            ).AutoSampler()
+        except Exception as e:
+            logger.warning(
+                "AutoSampler unavailable (%s), falling back to GP.",
+                e,
+            )
+            stype = "gp"
+
+    if stype == "gp":
+        try:
+            qmc = optuna.samplers.QMCSampler(
+                qmc_type="sobol",
+                seed=42,
+                independent_sampler=optuna.samplers.RandomSampler(seed=42),
+            )
+            return optuna.samplers.GPSampler(
+                seed=42,
+                n_startup_trials=max(10, n_active),
+                deterministic_objective=True,
+                independent_sampler=qmc,
+            )
+        except Exception as e:
+            logger.warning(
+                "GPSampler unavailable (%s), falling back to TPE.",
+                e,
+            )
+
+    # "tpe" (default / fallback)
+    return optuna.samplers.TPESampler(
+        multivariate=True,
+        n_startup_trials=max(20, n_active * 2),
+        seed=42,
+    )
+
+
+def run_bg_optimization(
+    video_path: str,
+    base_params: Dict[str, Any],
+    tuning_config: Dict[str, bool],
+    scoring_weights: Dict[str, float],
+    n_trials: int,
+    n_sample_frames: int,
+    sampler_type: str,
+    *,
+    progress_cb: "Callable[[int, str], None] | None" = None,
+    stop_check: "Callable[[], bool] | None" = None,
+) -> BgOptimizationRun:
+    """Run the Optuna BG-subtraction parameter search (Qt-free, pure core).
+
+    Mirrors what ``BgSubtractionOptimizer._run_optimization`` used to do as a
+    QThread method, but reports progress via ``progress_cb`` and honors
+    ``stop_check`` instead of emitting Qt signals / reading ``self._stop_requested``.
+    """
+
+    def _stopped() -> bool:
+        return stop_check() if stop_check is not None else False
+
+    def _report(pct, msg):
+        if progress_cb is not None:
+            progress_cb(int(pct), msg)
+
+    empty_run = BgOptimizationRun(
+        results=[],
+        prime_frames=[],
+        sample_frames=[],
+        sample_indices=[],
+        roi_mask=None,
+    )
+
+    if optuna is None:
+        _report(0, "Error: optuna is not installed")
+        return empty_run
+
+    params = base_params
+
+    # --- 1. open video -------------------------------------------------
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        _report(0, "Error: cannot open video")
+        return empty_run
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    start = params.get("START_FRAME", 0)
+    end = min(params.get("END_FRAME", total_frames - 1), total_frames - 1)
+    max_prime_frames = _prime_frame_search_upper_bound(params, total_frames)
+
+    # --- 2. choose sample frames --------------------------------------
+    base_prime_frames = int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 0)
+    first_valid = start + base_prime_frames
+    if first_valid >= end:
+        first_valid = start
+    n_available = end - first_valid + 1
+    n_sample = min(n_sample_frames, max(n_available, 1))
+    sample_indices = np.linspace(first_valid, end, n_sample, dtype=int).tolist()
+    prime_indices = _build_prime_frame_indices(total_frames, max_prime_frames).tolist()
+
+    resize_f = params.get("RESIZE_FACTOR", 1.0)
+
+    # --- 3. cache raw frames once --------------------------------------
+    _report(5, "Caching optimization frames …")
+    prime_frames = _read_gray_frames(
+        cap,
+        prime_indices,
+        resize_f,
+        _stopped,
+    )
+    if prime_frames is None:
+        return empty_run
+    sample_frames = _read_gray_frames(
+        cap,
+        sample_indices,
+        resize_f,
+        _stopped,
+    )
+    cap.release()
+
+    if not sample_frames:
+        _report(0, "Error: no frames could be read")
+        return empty_run
+
+    # --- 4. scoring setup -----------------------------------------------
+    max_targets = params.get("MAX_TARGETS", 5)
+
+    # Pre-resize ROI mask
+    roi_mask = _resize_roi_mask(
+        params.get("ROI_MASK"),
+        sample_frames[0].shape if sample_frames else None,
+    )
+    frame_cache = _BgFrameCache(
+        prime_frames=prime_frames,
+        sample_frames=sample_frames,
+        sample_indices=list(sample_indices),
+        roi_mask=roi_mask,
+    )
+
+    # --- 5. run Optuna -------------------------------------------------
+    _report(10, "Starting optimisation …")
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    n_active = sum(1 for v in tuning_config.values() if v)
+    n_frames = len(sample_frames)
+
+    # Pruning: report intermediate count scores and let Optuna kill
+    # obviously-bad trials early (e.g. wrong threshold → 0 detections).
+    # Trials report every PRUNE_INTERVAL frames; the pruner kicks in
+    # after n_warmup_steps reports and n_startup_trials completed trials.
+    _PRUNE_INTERVAL = max(1, n_frames // 6)
+    pruner = optuna.pruners.MedianPruner(
+        n_startup_trials=5,
+        n_warmup_steps=1,
+        interval_steps=1,
+    )
+
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=_build_sampler(sampler_type, n_active),
+        pruner=pruner,
+    )
+    results: List[BgOptimizationResult] = []
+
+    # Normalise scoring weights
+    sw = scoring_weights
+    w_cnt_r = sw.get("SCORE_WEIGHT_COUNT", 0.50)
+    w_con_r = sw.get("SCORE_WEIGHT_CONSISTENCY", 0.30)
+    w_stb_r = sw.get("SCORE_WEIGHT_STABILITY", 0.20)
+    w_sum = w_cnt_r + w_con_r + w_stb_r
+    if w_sum < 1e-9:
+        w_cnt, w_con, w_stb = 1 / 3, 1 / 3, 1 / 3
+    else:
+        w_cnt = w_cnt_r / w_sum
+        w_con = w_con_r / w_sum
+        w_stb = w_stb_r / w_sum
+
+    # Filter tuning_config to only enabled params
+    tune = {k: v for k, v in tuning_config.items() if v}
+
+    def objective(trial):
+        if _stopped():
+            raise optuna.TrialPruned()
+
+        trial_params = _suggest_trial_params(trial, tune, params, total_frames)
+
         det_params = dict(params)
-        det_params.update(self.trial_params)
-
-        sample_frames = self._cached_sample_frames
-        sample_indices = self._cached_sample_indices
-        prime_frames = self._cached_prime_frames
-        roi_mask = self._cached_roi_mask
-
-        if sample_frames is None or sample_indices is None:
-            cap = cv2.VideoCapture(self.video_path)
-            if not cap.isOpened():
-                return
-
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            start = params.get("START_FRAME", 0)
-            end = min(params.get("END_FRAME", total_frames - 1), total_frames - 1)
-            prime_n = int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 0)
-            first_valid = start + prime_n
-            if first_valid >= end:
-                first_valid = start
-            n_available = end - first_valid + 1
-            n_sample = min(self.n_sample_frames, max(n_available, 1))
-            sample_indices = np.linspace(first_valid, end, n_sample, dtype=int).tolist()
-            resize_f = params.get("RESIZE_FACTOR", 1.0)
-            sample_frames = _read_gray_frames(
-                cap,
-                sample_indices,
-                resize_f,
-                lambda: self._stop_requested,
-            )
-            max_prime_frames = _prime_frame_search_upper_bound(params, total_frames)
-            prime_indices = _build_prime_frame_indices(
-                total_frames, max_prime_frames
-            ).tolist()
-            prime_frames = _read_gray_frames(
-                cap,
-                prime_indices,
-                resize_f,
-                lambda: self._stop_requested,
-            )
-            cap.release()
-            if sample_frames is None or not sample_frames:
-                return
-            roi_mask = _resize_roi_mask(
-                params.get("ROI_MASK"),
-                sample_frames[0].shape if sample_frames else None,
-            )
-
-        frame_cache = _BgFrameCache(
-            prime_frames=prime_frames or [],
-            sample_frames=sample_frames,
-            sample_indices=sample_indices,
-            roi_mask=roi_mask,
-        )
+        det_params.update(trial_params)
         bg_model, detector, intensity_history, lighting_state = _init_trial_pipeline(
             det_params,
             frame_cache,
         )
 
-        for fi, idx in enumerate(frame_cache.sample_indices):
-            if self._stop_requested:
-                break
-            raw_gray = frame_cache.sample_frames[fi]
-            gray, _bg_u8, _fg, meas, sizes, shapes = _run_bg_trial_frame(
+        count_scores: List[float] = []
+        consistency_scores: List[float] = []
+        frame_medians: List[float] = []
+        prune_step = 0
+
+        for fi, raw_gray in enumerate(frame_cache.sample_frames):
+            if _stopped():
+                raise optuna.TrialPruned()
+
+            _gray, _bg_u8, _fg_mask, meas, sizes, _shapes = _run_bg_trial_frame(
                 raw_gray,
-                idx,
+                frame_cache.sample_indices[fi],
                 det_params,
                 bg_model,
                 detector,
@@ -974,41 +751,209 @@ class BgDetectionPreviewWorker(QThread):
                 intensity_history,
                 lighting_state,
             )
-            display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-            # draw detections on frame
-            for j, (m, sz) in enumerate(zip(meas, sizes)):
-                cx, cy = int(m[0]), int(m[1])
-                radius = max(int((sz / 3.14159) ** 0.5), 3)
-                cv2.circle(display, (cx, cy), radius, (0, 255, 0), 2)
-                cv2.putText(
-                    display,
-                    str(j + 1),
-                    (cx + radius + 2, cy - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    (0, 255, 0),
-                    1,
-                    cv2.LINE_AA,
-                )
-            # count overlay
-            max_t = params.get("MAX_TARGETS", 5)
             n_det = len(meas)
-            clr = (
-                (0, 255, 0)
-                if n_det == max_t
-                else ((0, 200, 255) if n_det < max_t else (0, 0, 255))
+
+            if max_targets > 0:
+                err = abs(n_det - max_targets) / max_targets
+                count_scores.append(max(0.0, 1.0 - err))
+
+            if sizes and n_det == max_targets and n_det >= 2:
+                areas = np.array(sizes, dtype=float)
+                mean_a = areas.mean()
+                if mean_a > 1e-6:
+                    cov = areas.std() / mean_a
+                    consistency_scores.append(max(0.0, 1.0 - cov))
+                else:
+                    consistency_scores.append(0.0)
+                frame_medians.append(float(np.median(areas)))
+            elif sizes:
+                frame_medians.append(float(np.median(sizes)))
+
+            if (fi + 1) % _PRUNE_INTERVAL == 0 or fi == n_frames - 1:
+                running = float(np.mean(count_scores)) if count_scores else 0.0
+                trial.report(running, step=prune_step)
+                prune_step += 1
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
+
+        s_count, s_consistency, s_stability = _aggregate_trial_scores(
+            count_scores,
+            consistency_scores,
+            frame_medians,
+        )
+        score = w_cnt * s_count + w_con * s_consistency + w_stb * s_stability
+
+        trial_median_area = float(np.median(frame_medians)) if frame_medians else 0.0
+
+        results.append(
+            BgOptimizationResult(
+                params=trial_params,
+                score=score,
+                trial_number=trial.number,
+                sub_scores={
+                    "count": s_count,
+                    "consistency": s_consistency,
+                    "stability": s_stability,
+                },
+                median_area=trial_median_area,
             )
+        )
+
+        pct = int(10 + 85 * (trial.number + 1) / n_trials)
+        _report(
+            pct,
+            f"Trial {trial.number + 1}/{n_trials} — "
+            f"score {score:.3f}  "
+            f"(cnt {s_count:.2f}, con {s_consistency:.2f}, "
+            f"stb {s_stability:.2f})",
+        )
+        return score
+
+    study.optimize(objective, n_trials=n_trials)
+
+    results.sort(key=lambda r: -r.score)
+    _report(100, "Optimisation complete!")
+
+    return BgOptimizationRun(
+        results=results,
+        prime_frames=list(frame_cache.prime_frames),
+        sample_frames=list(frame_cache.sample_frames),
+        sample_indices=list(frame_cache.sample_indices),
+        roi_mask=(
+            frame_cache.roi_mask.copy() if frame_cache.roi_mask is not None else None
+        ),
+    )
+
+
+def generate_bg_previews(
+    video_path: str,
+    base_params: Dict[str, Any],
+    trial_params: Dict[str, Any],
+    n_sample_frames: int,
+    *,
+    prime_frames: Optional[List[np.ndarray]] = None,
+    sample_frames: Optional[List[np.ndarray]] = None,
+    sample_indices: Optional[List[int]] = None,
+    roi_mask: Optional[np.ndarray] = None,
+    frame_cb: "Callable[[int, np.ndarray], None] | None" = None,
+    stop_check: "Callable[[], bool] | None" = None,
+) -> None:
+    """Generate annotated preview frames for a given detection parameter set (Qt-free, pure core).
+
+    Reads the same sample frames as the optimiser (or the ones passed in via
+    ``prime_frames``/``sample_frames``/``sample_indices``/``roi_mask``), runs the
+    full BG-sub detection pipeline for the chosen parameters, and reports
+    (index, RGB) pairs via ``frame_cb`` instead of emitting Qt signals.
+    """
+
+    def _stopped() -> bool:
+        return stop_check() if stop_check is not None else False
+
+    params = base_params
+    det_params = dict(params)
+    det_params.update(trial_params)
+
+    if sample_frames is None or sample_indices is None:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        start = params.get("START_FRAME", 0)
+        end = min(params.get("END_FRAME", total_frames - 1), total_frames - 1)
+        prime_n = int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 0)
+        first_valid = start + prime_n
+        if first_valid >= end:
+            first_valid = start
+        n_available = end - first_valid + 1
+        n_sample = min(n_sample_frames, max(n_available, 1))
+        sample_indices = np.linspace(first_valid, end, n_sample, dtype=int).tolist()
+        resize_f = params.get("RESIZE_FACTOR", 1.0)
+        sample_frames = _read_gray_frames(
+            cap,
+            sample_indices,
+            resize_f,
+            _stopped,
+        )
+        max_prime_frames = _prime_frame_search_upper_bound(params, total_frames)
+        prime_indices = _build_prime_frame_indices(
+            total_frames, max_prime_frames
+        ).tolist()
+        prime_frames = _read_gray_frames(
+            cap,
+            prime_indices,
+            resize_f,
+            _stopped,
+        )
+        cap.release()
+        if sample_frames is None or not sample_frames:
+            return
+        roi_mask = _resize_roi_mask(
+            params.get("ROI_MASK"),
+            sample_frames[0].shape if sample_frames else None,
+        )
+
+    frame_cache = _BgFrameCache(
+        prime_frames=prime_frames or [],
+        sample_frames=sample_frames,
+        sample_indices=sample_indices,
+        roi_mask=roi_mask,
+    )
+    bg_model, detector, intensity_history, lighting_state = _init_trial_pipeline(
+        det_params,
+        frame_cache,
+    )
+
+    for fi, idx in enumerate(frame_cache.sample_indices):
+        if _stopped():
+            break
+        raw_gray = frame_cache.sample_frames[fi]
+        gray, _bg_u8, _fg, meas, sizes, shapes = _run_bg_trial_frame(
+            raw_gray,
+            idx,
+            det_params,
+            bg_model,
+            detector,
+            frame_cache.roi_mask,
+            intensity_history,
+            lighting_state,
+        )
+        display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+        # draw detections on frame
+        for j, (m, sz) in enumerate(zip(meas, sizes)):
+            cx, cy = int(m[0]), int(m[1])
+            radius = max(int((sz / 3.14159) ** 0.5), 3)
+            cv2.circle(display, (cx, cy), radius, (0, 255, 0), 2)
             cv2.putText(
                 display,
-                f"Frame {int(idx)}  |  {n_det}/{max_t} detections",
-                (8, 22),
+                str(j + 1),
+                (cx + radius + 2, cy - 2),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                clr,
+                0.45,
+                (0, 255, 0),
                 1,
                 cv2.LINE_AA,
             )
+        # count overlay
+        max_t = params.get("MAX_TARGETS", 5)
+        n_det = len(meas)
+        clr = (
+            (0, 255, 0)
+            if n_det == max_t
+            else ((0, 200, 255) if n_det < max_t else (0, 0, 255))
+        )
+        cv2.putText(
+            display,
+            f"Frame {int(idx)}  |  {n_det}/{max_t} detections",
+            (8, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            clr,
+            1,
+            cv2.LINE_AA,
+        )
 
-            rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
-            self.frame_signal.emit(fi, rgb)
+        rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+        if frame_cb is not None:
+            frame_cb(int(fi), rgb)

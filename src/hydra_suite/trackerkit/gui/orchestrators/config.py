@@ -3405,7 +3405,7 @@ class ConfigOrchestrator:
         (it holds ``detection.npz`` plus a cache key), not a legacy
         single-file ``DetectionCache``.
         """
-        from hydra_suite.core.tracking.optimization.optimizer_workers import (
+        from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
             DetectionCacheBuildWorker,
         )
 
