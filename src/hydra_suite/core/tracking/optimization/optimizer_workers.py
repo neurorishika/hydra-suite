@@ -1,6 +1,7 @@
 """QThread workers for the parameter optimizer UI.
 
-DetectionCacheBuilderWorker — builds a detection cache for a frame range.
+DetectionCacheBuildWorker — builds an InferenceRunner detection cache for a
+    frame range via ``InferenceRunner.run_batch_pass``.
 TrackingPreviewWorker — emits preview frames using cached detections.
 """
 
@@ -37,12 +38,12 @@ from hydra_suite.core.identity.pose.features import (
 from hydra_suite.core.inference.api import (
     apply_detection_filter as _apply_detection_filter,
 )
-
-# The detection-cache builder writes via the legacy DetectionCache API
-# (mode="w"/add_frame/save) and the scorer reads it via the same legacy API.
-# The new InferenceRunner DetectionCacheHandle is not a drop-in replacement
-# (different lifecycle/constructor), so bind the legacy class directly.
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.inference.config import build_inference_config_from_params
+from hydra_suite.core.inference.runner import (
+    InferenceRunner,
+    _open_caches,
+    video_signature,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,11 @@ logger = logging.getLogger(__name__)
 def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
     """Read a frame from cache and apply detection filtering for preview.
 
-    Supports both new OBBResult API (Correction 21) and legacy 12-tuple.
+    Detection caches are always ``OBBResult`` (InferenceRunner-based
+    builder); filtering is applied via ``apply_detection_filter`` from
+    ``core/inference/api``.
     """
-    frame_data = cache.get_frame(f_idx)
+    frame_data = cache.read_frame(f_idx)
 
     from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
@@ -75,58 +78,11 @@ def _preview_filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         detection_ids = filtered_obb.detection_ids.tolist()
         return meas, shapes, _confs, detection_ids, [], []
 
-    # Legacy 12-tuple path
-    (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confs,
-        raw_obb,
-        raw_det_ids,
-        raw_heading_hints,
-        raw_heading_confidences,
-        raw_directed_mask,
-        _raw_canonical_affines,
-        _raw_canvas_dims,
-        _raw_M_inverse,
-    ) = frame_data
-    if raw_heading_hints:
-        filtered = det_filter.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            roi_mask=roi_mask,
-            detection_ids=raw_det_ids,
-            heading_hints=raw_heading_hints,
-            heading_confidences=raw_heading_confidences,
-            directed_mask=raw_directed_mask,
-        )
-        (
-            meas,
-            _,
-            shapes,
-            _confs,
-            _obb_out,
-            detection_ids,
-            _headtail_hints,
-            _,
-            _headtail_directed,
-        ) = filtered
-    else:
-        filtered = det_filter.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            roi_mask=roi_mask,
-            detection_ids=raw_det_ids,
-        )
-        meas, _, shapes, _confs, _obb_out, detection_ids = filtered
-        _headtail_hints, _, _headtail_directed = [], [], []
-    return meas, shapes, _confs, detection_ids, _headtail_hints, _headtail_directed
+    raise TypeError(
+        "detection cache must contain OBBResult frames "
+        f"(got {type(frame_data).__name__}); rebuild the cache with the "
+        "current InferenceRunner-based builder."
+    )
 
 
 def _preview_compute_pose_features(
@@ -327,23 +283,19 @@ def _preview_render_tracks(
             )
 
 
-class DetectionCacheBuilderWorker(QThread):
-    """
-    Phase-1-only worker: runs YOLO detection on a frame range and writes a
-    DetectionCache.  Does NOT run Kalman tracking, pose precompute, CSV
-    writing, interpolation, or any other production-pipeline stage.
-
-    Used by the Parameter Helper to build a minimal detection cache so the
-    Bayesian optimizer can run without triggering the full tracking pipeline.
+class DetectionCacheBuildWorker(QThread):
+    """Phase-1-only worker: runs InferenceRunner.run_batch_pass over a frame
+    range to populate an InferenceRunner detection cache for the Bayesian
+    optimizer. No Kalman/CSV/pose stages.
     """
 
     progress_signal = Signal(int, str)
-    finished_signal = Signal(bool, str)  # (success, cache_path)
+    finished_signal = Signal(bool, str)  # (success, cache_dir)
 
     def __init__(
         self,
         video_path: str,
-        cache_path: str,
+        cache_dir: str,
         params: Dict[str, Any],
         start_frame: int,
         end_frame: int,
@@ -351,7 +303,7 @@ class DetectionCacheBuilderWorker(QThread):
     ):
         super().__init__(parent)
         self.video_path = video_path
-        self.cache_path = cache_path
+        self.cache_dir = cache_dir
         self.params = params.copy()
         self.start_frame = start_frame
         self.end_frame = end_frame
@@ -361,143 +313,41 @@ class DetectionCacheBuilderWorker(QThread):
         self._stop_requested = True
 
     def run(self):
-        import time
-        from collections import deque
+        from pathlib import Path
 
-        from hydra_suite.core.detectors.yolo_detector import YOLOOBBDetector
-        from hydra_suite.utils.batch_optimizer import BatchOptimizer
-
-        # --- Load detector (YOLO model) ---
         try:
-            detector = YOLOOBBDetector(self.params)
+            cfg = build_inference_config_from_params(self.params)
+            runner = InferenceRunner(
+                cfg, cache_dir=Path(self.cache_dir), video_path=self.video_path
+            )
         except Exception as e:
-            logger.error("DetectionCacheBuilder: could not create detector: %s", e)
+            logger.error("DetectionCacheBuild: could not build runner: %s", e)
             self.finished_signal.emit(False, "")
             return
-
-        cap = cv2.VideoCapture(self.video_path)
-        cache = None
         try:
-            if not cap.isOpened():
-                logger.error(
-                    "DetectionCacheBuilder: could not open video: %s", self.video_path
-                )
-                self.finished_signal.emit(False, "")
-                return
 
-            resize_f = self.params.get("RESIZE_FACTOR", 1.0)
-            fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) * resize_f)
-            fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) * resize_f)
+            def _progress_cb(processed, range_total):
+                pct = int(processed * 100 / range_total) if range_total else 0
+                self.progress_signal.emit(pct, f"Building detection cache: {pct}%")
 
-            advanced = self.params.get("ADVANCED_CONFIG", {}).copy()
-            advanced["enable_tensorrt"] = self.params.get("ENABLE_TENSORRT", False)
-            advanced["tensorrt_max_batch_size"] = self.params.get(
-                "TENSORRT_MAX_BATCH_SIZE", 16
-            )
-            advanced["tracking_realtime_mode"] = self.params.get(
-                "TRACKING_REALTIME_MODE", False
-            )
-            advanced["tracking_workflow_mode"] = self.params.get(
-                "TRACKING_WORKFLOW_MODE", "non_realtime"
-            )
-            batch_size = BatchOptimizer(advanced).estimate_batch_size(
-                fw, fh, self.params.get("YOLO_MODEL_PATH", "")
-            )
-
-            cache = DetectionCache(
-                self.cache_path,
-                mode="w",
+            runner.run_batch_pass(
+                Path(self.video_path),
+                progress_cb=_progress_cb,
                 start_frame=self.start_frame,
                 end_frame=self.end_frame,
+                should_stop=lambda: self._stop_requested,
             )
-            cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
-
-            total_frames = self.end_frame - self.start_frame + 1
-            rel_idx = 0  # 0-based position relative to start_frame
-            batch_times: deque = deque(maxlen=30)
-
-            while rel_idx < total_frames and not self._stop_requested:
-                batch_start = rel_idx
-                batch_frames = []
-                while len(batch_frames) < batch_size and rel_idx < total_frames:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    if resize_f != 1.0:
-                        frame = cv2.resize(
-                            frame,
-                            (0, 0),
-                            fx=resize_f,
-                            fy=resize_f,
-                            interpolation=cv2.INTER_AREA,
-                        )
-                    batch_frames.append(frame)
-                    rel_idx += 1
-
-                if not batch_frames:
-                    break
-
-                bt0 = time.time()
-                results = detector.detect_objects_batched(
-                    batch_frames, batch_start, None, return_raw=True
-                )
-                batch_times.append(time.time() - bt0)
-
-                for local_i, (
-                    raw_meas,
-                    raw_sizes,
-                    raw_shapes,
-                    raw_confs,
-                    raw_obb,
-                    raw_hints,
-                    raw_hint_confidences,
-                    raw_directed,
-                ) in enumerate(results):
-                    actual_f = self.start_frame + batch_start + local_i
-                    det_ids = [actual_f * 10000 + i for i in range(len(raw_meas))]
-                    cache.add_frame(
-                        actual_f,
-                        raw_meas,
-                        raw_sizes,
-                        raw_shapes,
-                        raw_confs,
-                        raw_obb,
-                        det_ids,
-                        raw_hints,
-                        raw_hint_confidences,
-                        raw_directed,
-                    )
-
-                pct = int(rel_idx * 100 / total_frames)
-                avg = sum(batch_times) / len(batch_times) if batch_times else 0
-                fps = (len(batch_frames) / avg) if avg > 0 else 0
-                eta_s = int((total_frames - rel_idx) / fps) if fps > 0 else -1
-                eta_str = f"  ETA {eta_s}s" if eta_s >= 0 else ""
-                self.progress_signal.emit(
-                    pct, f"Building detection cache: {pct}%{eta_str}"
-                )
-
             if self._stop_requested:
                 self.progress_signal.emit(0, "Cancelled.")
                 self.finished_signal.emit(False, "")
                 return
-
-            cache.save()
-            cache.close()
-            cache = None
-            logger.info("DetectionCacheBuilder: cache saved to %s", self.cache_path)
-            self.finished_signal.emit(True, self.cache_path)
-
+            logger.info("DetectionCacheBuild: cache saved to %s", self.cache_dir)
+            self.finished_signal.emit(True, str(self.cache_dir))
         except Exception:
-            logger.exception("DetectionCacheBuilder error")
+            logger.exception("DetectionCacheBuild error")
             self.finished_signal.emit(False, "")
         finally:
-            cap.release()
-            if cache is not None:
-                try:
-                    cache.close()
-                except Exception:
-                    pass
+            runner.close()
 
 
 class TrackingPreviewWorker(QThread):
@@ -529,13 +379,24 @@ class TrackingPreviewWorker(QThread):
         self._stop_requested = True
 
     def run(self):
+        from pathlib import Path
+
         cap = cv2.VideoCapture(self.video_path)
-        cache = DetectionCache(self.detection_cache_path, mode="r")
+        # Open the InferenceRunner detection cache read-only. This handle
+        # must never have close() called on it: DetectionCacheHandle.close()
+        # flushes its (empty, since we never write) buffer and would clobber
+        # the on-disk cache with zero frames (see optimizer._open_and_validate_cache).
+        cfg = build_inference_config_from_params(self.params)
+        cache = _open_caches(
+            cfg,
+            Path(self.detection_cache_path),
+            video_signature(self.video_path),
+        ).detection
         try:
             if not cap.isOpened():
                 logger.error("PreviewWorker: could not open video: %s", self.video_path)
                 return
-            if not cache.is_compatible():
+            if cache is None or not cache.is_valid():
                 logger.error("PreviewWorker: incompatible detection cache.")
                 return
 
@@ -796,7 +657,9 @@ class TrackingPreviewWorker(QThread):
             logger.exception("PreviewWorker encountered an error.")
         finally:
             cap.release()
-            cache.close()
+            # Do NOT call cache.close() here: this is a read-only
+            # DetectionCacheHandle and close() would clobber the on-disk
+            # cache (see the comment where it is opened, above).
             if _pose_cache is not None:
                 try:
                     _pose_cache.close()

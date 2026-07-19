@@ -124,7 +124,7 @@ def _invert_letterbox_on_result(
     float32 tensor, ultralytics treats ``orig_shape == tensor_shape == imgsz``
     and therefore does NOT rescale boxes back to original-frame coordinates.
     This function applies the inverse letterbox so that downstream extract
-    functions (``_extract_raw_tensors``, ``_extract_obb_result``) always see
+    functions (``_extract_raw_tensors``, ``extract_obb_result``) always see
     original-frame coordinates, exactly as they would on the numpy list path.
 
     Inverse formula (all on-device tensor ops, no .cpu() call):
@@ -193,6 +193,11 @@ class _RawOBBTensors(NamedTuple):
     xywhr: torch.Tensor  # (N, 5): cx, cy, w, h, angle_rad on device
     corners: torch.Tensor  # (N, 4, 2): corner coords on device
     conf: torch.Tensor  # (N,): confidence on device
+    # (N,): model class id on device. Optional (defaults to None) so existing
+    # call sites/tests that pre-date the class-id feature keep constructing
+    # this NamedTuple without a `cls=` kwarg; treated as "all class 0"
+    # everywhere it is consumed (materialize_tensors, filter_from_tensors).
+    cls: torch.Tensor | None = None
 
 
 @dataclass
@@ -337,7 +342,7 @@ def load_obb_models(
         batch_size=batch_size,
     )
     # stage2_image_size is always the effective input size (the pipeline
-    # pre-resizes every crop to it in _resize_crops_for_stage2), so the
+    # pre-resizes every crop to it in resize_crops_for_stage2), so the
     # artifact must be built at that size, not the checkpoint's own default.
     # stage2_batch_size, when set, is the number of crops stage-2 is called
     # with per chunk (see _run_sequential's `batch_size = seq.stage2_batch_size
@@ -436,7 +441,7 @@ def _run_direct(
             for idx, r in enumerate(results)
         ]
     return [
-        _apply_raw_detection_cap(_extract_obb_result(r, idx), config.raw_detection_cap)
+        _apply_raw_detection_cap(extract_obb_result(r, idx), config.raw_detection_cap)
         for idx, r in enumerate(results)
     ]
 
@@ -466,7 +471,7 @@ def _run_sequential(
         if boxes is None or len(boxes) == 0:
             results.append(_empty_obb_result(frame_idx))
             continue
-        crops, offsets = _build_crops(frame, boxes, seq, runtime)
+        crops, offsets = build_crops(frame, boxes, seq, runtime)
         if not crops:
             results.append(_empty_obb_result(frame_idx))
             continue
@@ -476,7 +481,7 @@ def _run_sequential(
         # rather than letting Ultralytics' internal letterbox resize it (which
         # can pick a different interpolation/stride-padded shape and shift
         # borderline detections across the confidence threshold).
-        crops = _resize_crops_for_stage2(crops, seq.stage2_image_size)
+        crops = resize_crops_for_stage2(crops, seq.stage2_image_size)
         batch_size = seq.stage2_batch_size or len(crops)
         sub: list[OBBResult] = []
         for i in range(0, len(crops), batch_size):
@@ -497,19 +502,17 @@ def _run_sequential(
                     else (1.0, 1.0)
                 )
                 sub.append(
-                    _extract_obb_result(
-                        r, frame_idx, offset=offsets[i + j], scale=scale
-                    )
+                    extract_obb_result(r, frame_idx, offset=offsets[i + j], scale=scale)
                 )
         results.append(
             _apply_raw_detection_cap(
-                _merge_obb_results(frame_idx, sub), config.raw_detection_cap
+                merge_obb_results(frame_idx, sub), config.raw_detection_cap
             )
         )
     return results
 
 
-def _resize_crops_for_stage2(
+def resize_crops_for_stage2(
     crops: list[np.ndarray], stage2_image_size: int
 ) -> list[np.ndarray]:
     if stage2_image_size <= 0:
@@ -530,7 +533,7 @@ def _resize_crops_for_stage2(
     return out
 
 
-def _build_crops(
+def build_crops(
     frame: np.ndarray | torch.Tensor,
     boxes: Any,
     seq: Any,
@@ -578,16 +581,39 @@ def _extract_raw_tensors(result: Any, frame_idx: int, device: str) -> _RawOBBTen
             xywhr=torch.zeros((0, 5), dtype=torch.float32, device=dev),
             corners=torch.zeros((0, 4, 2), dtype=torch.float32, device=dev),
             conf=torch.zeros(0, dtype=torch.float32, device=dev),
+            cls=torch.zeros(0, dtype=torch.float32, device=dev),
         )
     return _RawOBBTensors(
         frame_idx=frame_idx,
         xywhr=obb.xywhr,
         corners=obb.xyxyxyxy,
         conf=obb.conf,
+        # getattr guard: real ultralytics OBB objects always expose `.cls`,
+        # but test doubles / older exports without a class column should not
+        # hard-crash here -- materialize_tensors already treats cls=None as
+        # "all class 0".
+        cls=getattr(obb, "cls", None),
     )
 
 
-def _extract_obb_result(
+def _extract_class_ids(obb: Any, n: int) -> np.ndarray:
+    """Read per-detection model class ids from an ultralytics OBB result.
+
+    Prefers the ``obb.cls`` property (a view over ``data[:, 6]`` -- see the
+    column-layout comment on ``_invert_letterbox_on_result``); falls back to
+    zeros for models/exports that omit the class column entirely, so callers
+    never see a KeyError/AttributeError for a class-less OBB head.
+    """
+    try:
+        cls = obb.cls
+        if cls is not None and len(cls) == n:
+            return cls.cpu().numpy().astype(np.int64)
+    except Exception:
+        pass
+    return np.zeros(n, dtype=np.int64)
+
+
+def extract_obb_result(
     result: Any,
     frame_idx: int,
     offset: tuple[float, float] = (0.0, 0.0),
@@ -598,6 +624,7 @@ def _extract_obb_result(
         return _empty_obb_result(frame_idx)
     xywhr = obb.xywhr.cpu().numpy().copy()  # (N, 5): cx,cy,w,h,angle
     conf = obb.conf.cpu().numpy()  # (N,)
+    cls = _extract_class_ids(obb, xywhr.shape[0])
     ox, oy = offset
     sx, sy = scale
     # Stage-2 predicts on a crop resized to a fixed square (stage2_image_size);
@@ -629,6 +656,7 @@ def _extract_obb_result(
             )
         xywhr = xywhr[mask]
         conf = conf[mask]
+        cls = cls[mask]
         centroids = centroids[mask]
         angles_fixed = angles_fixed[mask]
         sizes = sizes[mask]
@@ -648,6 +676,7 @@ def _extract_obb_result(
         confidences=conf.astype(np.float32),
         corners=corners.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
+        class_ids=cls,
     )
 
 
@@ -676,6 +705,7 @@ def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
         confidences=np.ascontiguousarray(r.confidences[order]),
         corners=np.ascontiguousarray(r.corners[order]),
         detection_ids=OBBResult.make_detection_ids(r.frame_idx, n),
+        class_ids=np.ascontiguousarray(r.class_ids_or_zeros[order]),
     )
 
 
@@ -689,10 +719,11 @@ def _empty_obb_result(frame_idx: int) -> OBBResult:
         confidences=np.zeros(0, dtype=np.float32),
         corners=np.zeros((0, 4, 2), dtype=np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+        class_ids=np.zeros(0, dtype=np.int64),
     )
 
 
-def _merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
+def merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
     non_empty = [r for r in parts if r.num_detections > 0]
     if not non_empty:
         return _empty_obb_result(frame_idx)
@@ -707,6 +738,7 @@ def _merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
         corners=np.concatenate([r.corners for r in non_empty], axis=0),
         # Regenerate IDs across the merged frame so they remain contiguous
         detection_ids=OBBResult.make_detection_ids(frame_idx, total),
+        class_ids=np.concatenate([r.class_ids_or_zeros for r in non_empty]),
     )
 
 
@@ -799,6 +831,11 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         return _empty_obb_result(raw.frame_idx)
     xywhr_np = raw.xywhr.cpu().numpy()
     conf_np = raw.conf.cpu().numpy()
+    cls_np = (
+        raw.cls.cpu().numpy().astype(np.int64)
+        if raw.cls is not None
+        else np.zeros(xywhr_np.shape[0], dtype=np.int64)
+    )
     angles_fixed, sizes, aspect = _normalize_obb_geometry(
         xywhr_np[:, 2], xywhr_np[:, 3], xywhr_np[:, 4]
     )
@@ -822,6 +859,7 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
             )
         xywhr_np = xywhr_np[mask]
         conf_np = conf_np[mask]
+        cls_np = cls_np[mask]
         angles_fixed = angles_fixed[mask]
         sizes = sizes[mask]
         aspect = aspect[mask]
@@ -839,5 +877,6 @@ def materialize_tensors(raw: _RawOBBTensors, raw_detection_cap: int = 0) -> OBBR
         confidences=conf_np.astype(np.float32),
         corners=corners_np.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(raw.frame_idx, n),
+        class_ids=cls_np,
     )
     return _apply_raw_detection_cap(result, raw_detection_cap)

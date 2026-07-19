@@ -410,20 +410,42 @@ def _make_dataset_dir(output_dir, dataset_name):
     return dataset_dir, images_dir, labels_dir
 
 
-def _init_yolo_detector(params):
-    """Initialize YOLO detector if detection method is yolo_obb."""
-    from ..core.detectors.yolo_detector import YOLOOBBDetector
+def _init_detection_runner(params):
+    """Build a detection-only InferenceRunner for dataset dimension extraction.
 
+    Returns None for non-yolo_obb methods (dimension extraction then falls back
+    to reference-size approximation, as before).
+    """
     detection_method = params.get("DETECTION_METHOD", "background_subtraction")
     if detection_method != "yolo_obb":
         return None
     try:
-        detector = YOLOOBBDetector(params)
-        logger.info("YOLO detector initialized for dimension extraction")
-        return detector
+        from ..core.inference.config import build_obb_only_config
+        from ..core.inference.runner import InferenceRunner
+
+        model_path = str(
+            params.get(
+                "YOLO_OBB_DIRECT_MODEL_PATH",
+                params.get("YOLO_MODEL_PATH", "yolo26s-obb.pt"),
+            )
+            or "yolo26s-obb.pt"
+        )
+        cfg = build_obb_only_config(
+            model_path,
+            compute_runtime=str(params.get("COMPUTE_RUNTIME", "cpu")),
+            confidence_threshold=float(
+                params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
+            ),
+            iou_threshold=float(params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)),
+            max_targets=max(1, int(params.get("MAX_TARGETS", 8))),
+            mode=str(params.get("YOLO_OBB_MODE", "direct")).strip().lower(),
+        )
+        runner = InferenceRunner(cfg)
+        logger.info("Detection runner initialized for dimension extraction")
+        return runner
     except Exception as e:
         logger.warning(
-            f"Could not initialize YOLO detector: {e}. Using reference size approximation."
+            f"Could not initialize detection runner: {e}. Using reference size approximation."
         )
         return None
 
@@ -525,73 +547,23 @@ def _measurements_to_detections(meas, shapes, resize_factor, obb_corners=None):
     return yolo_detections
 
 
-def _run_batched_detection(detector, batch_frames, batch_frame_ids, params):
-    """Run batched YOLO detection and return list of detection dicts."""
-    resize_factor = params.get("RESIZE_FACTOR", 1.0)
-    batch_results = detector.detect_objects_batched(
-        batch_frames,
-        start_frame_idx=(batch_frame_ids[0] if batch_frame_ids else 0),
-    )
-    batch_yolo_detections = []
-    for meas, _sizes, shapes, _confidences, obb_corners in batch_results:
-        batch_yolo_detections.append(
-            _measurements_to_detections(meas, shapes, resize_factor, obb_corners)
-        )
-    return batch_yolo_detections
-
-
-def _run_single_frame_detections(
-    detector, batch_frames, batch_frame_ids, valid_batch_indices, params
-):
-    """Fallback: run detection on each frame individually."""
-    resize_factor = params.get("RESIZE_FACTOR", 1.0)
-    results = [{}] * len(batch_frames)
-    for frame_idx, frame_for_detection in enumerate(batch_frames):
-        fid = batch_frame_ids[valid_batch_indices[frame_idx]]
-        try:
-            meas, _sizes, shapes, _yolo_results, _confidences = detector.detect_objects(
-                frame_for_detection, fid
-            )
-            results[frame_idx] = _measurements_to_detections(
-                meas, shapes, resize_factor
-            )
-        except Exception as inner_e:
-            logger.warning(
-                f"Single-frame detection also failed for frame {fid}: {inner_e}"
-            )
-            results[frame_idx] = {}
-    return results
-
-
-def _detect_batch(detector, batch_frames, batch_frame_ids, valid_batch_indices, params):
-    """Run YOLO detection on a batch, with batched->single-frame fallback."""
-    if detector is None or not batch_frames:
+def _detect_batch(runner, batch_frames, batch_frame_ids, valid_batch_indices, params):
+    """Run OBB detection on a batch via InferenceRunner, returning detection dicts."""
+    if runner is None or not batch_frames:
         return [{}] * len(batch_frames)
-
-    original_conf = params.get("YOLO_CONFIDENCE_THRESHOLD", 0.25)
-    original_iou = params.get("YOLO_IOU_THRESHOLD", 0.7)
-    dataset_conf = params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
-    dataset_iou = params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)
-
-    params["YOLO_CONFIDENCE_THRESHOLD"] = dataset_conf
-    params["YOLO_IOU_THRESHOLD"] = dataset_iou
+    resize_factor = params.get("RESIZE_FACTOR", 1.0)
     try:
-        if hasattr(detector, "detect_objects_batched"):
-            return _run_batched_detection(
-                detector, batch_frames, batch_frame_ids, params
-            )
-        raise AttributeError("Batched detection not available")
-    except (AttributeError, Exception) as e:
-        if not isinstance(e, AttributeError):
-            logger.warning(
-                f"Batched detection failed: {e}, falling back to single-frame processing"
-            )
-        return _run_single_frame_detections(
-            detector, batch_frames, batch_frame_ids, valid_batch_indices, params
+        results = runner.detect_batch(batch_frames, frame_indices=list(batch_frame_ids))
+    except Exception as e:
+        logger.warning(f"Detection failed: {e}")
+        return [{}] * len(batch_frames)
+    out = []
+    for obb in results:
+        meas = np.concatenate([obb.centroids, obb.angles[:, None]], axis=1)
+        out.append(
+            _measurements_to_detections(meas, obb.shapes, resize_factor, obb.corners)
         )
-    finally:
-        params["YOLO_CONFIDENCE_THRESHOLD"] = original_conf
-        params["YOLO_IOU_THRESHOLD"] = original_iou
+    return out
 
 
 def _match_yolo_detection(cx, cy, yolo_detections, frame_id):
@@ -822,7 +794,7 @@ def export_dataset(
     logger.info(f"Starting dataset export for {len(frame_ids)} frames")
 
     dataset_dir, images_dir, labels_dir = _make_dataset_dir(output_dir, dataset_name)
-    detector = _init_yolo_detector(params)
+    runner = _init_detection_runner(params)
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -849,7 +821,7 @@ def export_dataset(
     }
 
     # Determine batch size for YOLO processing
-    batch_size = _get_detector_batch_size(detector)
+    batch_size = _get_detector_batch_size(runner)
 
     # Process frames in batches
     frame_batches = [
@@ -860,54 +832,57 @@ def export_dataset(
     resize_factor = params.get("RESIZE_FACTOR", 1.0)
     scale_back = _csv_scale_back(df, resize_factor, frame_width, frame_height)
 
-    for batch_idx, batch_frame_ids in enumerate(frame_batches):
-        batch_frames, batch_frames_original, valid_batch_indices = _read_batch_frames(
-            cap, batch_frame_ids, params
-        )
-        if not batch_frames:
-            continue
-
-        try:
-            batch_yolo_detections = _detect_batch(
-                detector, batch_frames, batch_frame_ids, valid_batch_indices, params
+    try:
+        for batch_idx, batch_frame_ids in enumerate(frame_batches):
+            batch_frames, batch_frames_original, valid_batch_indices = (
+                _read_batch_frames(cap, batch_frame_ids, params)
             )
-        except Exception as e:
-            logger.error(f"YOLO detection failed for batch {batch_idx}: {e}")
-            batch_yolo_detections = [{}] * len(batch_frames)
+            if not batch_frames:
+                continue
 
-        for frame_idx, (frame_id, frame) in enumerate(batch_frames_original):
-            yolo_detections = batch_yolo_detections[frame_idx]
-            dataset_conf = params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
-            dataset_iou = params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)
-            logger.debug(
-                f"Frame {frame_id}: Found {len(yolo_detections)} YOLO detections "
-                f"(conf={dataset_conf:.2f}, iou={dataset_iou:.2f})"
-            )
+            try:
+                batch_yolo_detections = _detect_batch(
+                    runner, batch_frames, batch_frame_ids, valid_batch_indices, params
+                )
+            except Exception as e:
+                logger.error(f"YOLO detection failed for batch {batch_idx}: {e}")
+                batch_yolo_detections = [{}] * len(batch_frames)
 
-            image_filename, label_filename, annotations = _write_frame_annotations(
-                frame_id,
-                frame,
-                df,
-                yolo_detections,
-                params,
-                images_dir,
-                labels_dir,
-                frame_width,
-                frame_height,
-                scale_back,
-            )
+            for frame_idx, (frame_id, frame) in enumerate(batch_frames_original):
+                yolo_detections = batch_yolo_detections[frame_idx]
+                dataset_conf = params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
+                dataset_iou = params.get("DATASET_YOLO_IOU_THRESHOLD", 0.5)
+                logger.debug(
+                    f"Frame {frame_id}: Found {len(yolo_detections)} YOLO detections "
+                    f"(conf={dataset_conf:.2f}, iou={dataset_iou:.2f})"
+                )
 
-            metadata["frames"].append(
-                {
-                    "frame_id": int(frame_id),
-                    "image_file": image_filename,
-                    "label_file": label_filename,
-                    "annotations": annotations,
-                }
-            )
-            exported_count += 1
+                image_filename, label_filename, annotations = _write_frame_annotations(
+                    frame_id,
+                    frame,
+                    df,
+                    yolo_detections,
+                    params,
+                    images_dir,
+                    labels_dir,
+                    frame_width,
+                    frame_height,
+                    scale_back,
+                )
 
-    cap.release()
+                metadata["frames"].append(
+                    {
+                        "frame_id": int(frame_id),
+                        "image_file": image_filename,
+                        "label_file": label_filename,
+                        "annotations": annotations,
+                    }
+                )
+                exported_count += 1
+    finally:
+        cap.release()
+        if runner is not None:
+            runner.close()
 
     _write_dataset_files(
         dataset_dir, dataset_name, class_name, metadata, exported_count
@@ -919,18 +894,11 @@ def export_dataset(
     return str(dataset_dir)
 
 
-def _get_detector_batch_size(detector):
-    """Return the batch size to use for YOLO processing."""
-    batch_size = 1
-    if (
-        detector is not None
-        and hasattr(detector, "use_tensorrt")
-        and detector.use_tensorrt
-        and hasattr(detector, "tensorrt_batch_size")
-    ):
-        batch_size = detector.tensorrt_batch_size
-        logger.info(f"Using TensorRT batch processing with batch size {batch_size}")
-    return batch_size
+def _get_detector_batch_size(runner):
+    """Return the batch size to use for detection."""
+    if runner is not None and getattr(runner, "config", None) is not None:
+        return max(1, int(getattr(runner.config, "detection_batch_size", 1)))
+    return 1
 
 
 def _read_batch_frames(cap, batch_frame_ids, params):

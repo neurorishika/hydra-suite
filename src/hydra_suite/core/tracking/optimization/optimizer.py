@@ -36,13 +36,14 @@ from hydra_suite.core.inference.api import (
     apply_detection_filter as _apply_detection_filter,
 )
 
-# The parameter optimizer builds and reads its own detection cache end-to-end
-# through the legacy DetectionCache API (mode="w"/add_frame/save when building,
-# mode="r"/is_compatible/covers_frame_range/get_missing_frames/get_frame when
-# scoring). The new InferenceRunner DetectionCacheHandle has a different
-# lifecycle (key-constructed, write_frame/read_frame/close) and is NOT a drop-in
-# replacement here, so bind the legacy class directly.
-from hydra_suite.data.detection_cache import DetectionCache
+# The optimizer reads a detection cache built by DetectionCacheBuildWorker
+# (core/tracking/optimization/optimizer_workers.py), which now writes an
+# InferenceRunner-format cache (key-constructed DetectionCacheHandle) instead
+# of the legacy flat DetectionCache. Building and reading must derive their
+# InferenceConfig from the SAME params so the cache key matches; a mismatch
+# makes the handle read back as empty.
+from hydra_suite.core.inference.config import build_inference_config_from_params
+from hydra_suite.core.inference.runner import _open_caches, video_signature
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +113,11 @@ def _normalise_scoring_weights(params):
 def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
     """Read a frame from detection cache and apply filtering.
 
-    Supports both new OBBResult API (Correction 21) and legacy 12-tuple.
-    When new cache: uses apply_detection_filter from core/inference/api.
-    When legacy cache: uses legacy DetectionFilter.filter_raw_detections.
+    Detection caches are always ``OBBResult`` (InferenceRunner-based
+    builder); filtering is applied via ``apply_detection_filter`` from
+    ``core/inference/api``.
     """
-    frame_data = cache.get_frame(f_idx)
+    frame_data = cache.read_frame(f_idx)
 
     from hydra_suite.core.inference.result import OBBResult as _OBBResult
 
@@ -146,58 +147,11 @@ def _filter_cached_detections(det_filter, cache, f_idx, roi_mask):
         _headtail_directed: list = []
         return meas, shapes, _confs, detection_ids, _headtail_hints, _headtail_directed
 
-    # Legacy 12-tuple path
-    (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confs,
-        raw_obb,
-        raw_det_ids,
-        raw_heading_hints,
-        raw_heading_confidences,
-        raw_directed_mask,
-        _raw_canonical_affines,
-        _raw_canvas_dims,
-        _raw_M_inverse,
-    ) = frame_data
-    if raw_heading_hints:
-        filtered = det_filter.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            roi_mask=roi_mask,
-            detection_ids=raw_det_ids,
-            heading_hints=raw_heading_hints,
-            heading_confidences=raw_heading_confidences,
-            directed_mask=raw_directed_mask,
-        )
-        (
-            meas,
-            _,
-            shapes,
-            _confs,
-            _obb_out,
-            detection_ids,
-            _headtail_hints,
-            _,
-            _headtail_directed,
-        ) = filtered
-    else:
-        filtered = det_filter.filter_raw_detections(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confs,
-            raw_obb,
-            roi_mask=roi_mask,
-            detection_ids=raw_det_ids,
-        )
-        meas, _, shapes, _confs, _obb_out, detection_ids = filtered
-        _headtail_hints, _, _headtail_directed = [], [], []
-    return meas, shapes, _confs, detection_ids, _headtail_hints, _headtail_directed
+    raise TypeError(
+        "detection cache must contain OBBResult frames "
+        f"(got {type(frame_data).__name__}); rebuild the cache with the "
+        "current InferenceRunner-based builder."
+    )
 
 
 def _compute_pose_features_for_frame(
@@ -589,16 +543,28 @@ class TrackingOptimizer(QThread):
     # ------------------------------------------------------------------
 
     def _open_and_validate_cache(self) -> bool:
-        """Open the detection cache and validate compatibility.
+        """Open the InferenceRunner detection cache and validate compatibility.
+
+        ``self.detection_cache_path`` is the cache **directory** written by
+        ``DetectionCacheBuildWorker``. The handle is opened read-only here: it
+        must never have ``close()`` called on it, because
+        ``DetectionCacheHandle.close()`` flushes its (empty, since we never
+        write) buffer and would clobber the on-disk cache with zero frames.
 
         Returns True if the cache is ready for use, False on failure
         (after emitting appropriate error signals).
         """
         try:
-            self.cache = DetectionCache(self.detection_cache_path, mode="r")
-            if not self.cache.is_compatible():
+            from pathlib import Path
+
+            _cfg = build_inference_config_from_params(self.base_params)
+            self.cache = _open_caches(
+                _cfg,
+                Path(self.detection_cache_path),
+                video_signature(self.video_path),
+            ).detection
+            if self.cache is None or not self.cache.is_valid():
                 self.progress_signal.emit(0, "Error: Incompatible detection cache.")
-                self.cache.close()
                 return False
         except Exception as e:
             self.progress_signal.emit(0, f"Error loading cache: {str(e)}")
@@ -611,7 +577,6 @@ class TrackingOptimizer(QThread):
                 f"{self.start_frame}-{self.end_frame}. Missing: {missing}"
             )
             self.progress_signal.emit(0, msg)
-            self.cache.close()
             return False
         return True
 
@@ -861,7 +826,10 @@ class TrackingOptimizer(QThread):
             logger.error(f"Optimization trial failed: {e}")
 
         results.sort(key=lambda x: x.score)
-        self.cache.close()
+        # Do not call self.cache.close(): it was opened read-only and
+        # DetectionCacheHandle.close() flushes its (empty) write buffer,
+        # which would clobber the on-disk cache with zero frames.
+        self.cache = None
         self._pose_frame_cache = None  # free memory after optimization
         try:
             self.result_signal.emit(results)

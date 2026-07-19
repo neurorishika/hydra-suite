@@ -26,10 +26,20 @@ class OBBResult:
     confidences: np.ndarray  # (D,)    raw detection confidence
     corners: np.ndarray  # (D, 4, 2) OBB corners
     detection_ids: np.ndarray  # (D,) int64 primary key for downstream consumers
+    class_ids: np.ndarray | None = (
+        None  # (D,) int64 model class id per detection; None => all class 0
+    )
 
     @property
     def num_detections(self) -> int:
         return int(len(self.confidences))
+
+    @property
+    def class_ids_or_zeros(self) -> np.ndarray:
+        """Safe (D,) int64 class-id array, defaulting to all-zeros when unset."""
+        if self.class_ids is None:
+            return np.zeros(self.num_detections, dtype=np.int64)
+        return self.class_ids
 
     @staticmethod
     def make_detection_ids(frame_idx: int, num_detections: int) -> np.ndarray:

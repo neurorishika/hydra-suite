@@ -144,6 +144,11 @@ def filter_from_tensors(
     xywhr_np = raw.xywhr[indices_t].cpu().numpy()
     corners_np = raw.corners[indices_t].cpu().numpy()
     conf_np = raw.conf[indices_t].cpu().numpy()
+    cls_np = (
+        raw.cls[indices_t].cpu().numpy().astype(np.int64)
+        if raw.cls is not None
+        else np.zeros(int(indices_t.numel()), dtype=np.int64)
+    )
     sizes_np = (xywhr_np[:, 2] * xywhr_np[:, 3]).astype(np.float32)
     safe_h = np.where(xywhr_np[:, 3] > 0, xywhr_np[:, 3], 1.0)
     aspect_np = np.where(xywhr_np[:, 3] > 0, xywhr_np[:, 2] / safe_h, 1.0).astype(
@@ -160,6 +165,7 @@ def filter_from_tensors(
         confidences=conf_np.astype(np.float32),
         corners=corners_np.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(raw.frame_idx, m),
+        class_ids=cls_np,
     )
 
     local_idx = np.arange(m)
@@ -256,6 +262,7 @@ def _select(raw: OBBResult, indices: np.ndarray) -> OBBResult:
         confidences=raw.confidences[indices],
         corners=raw.corners[indices],
         detection_ids=raw.detection_ids[indices],
+        class_ids=raw.class_ids_or_zeros[indices],
     )
 
 
@@ -339,4 +346,5 @@ def _empty_obb_result(frame_idx: int) -> OBBResult:
         confidences=np.zeros(0, dtype=np.float32),
         corners=np.zeros((0, 4, 2), dtype=np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, 0),
+        class_ids=np.zeros(0, dtype=np.int64),
     )

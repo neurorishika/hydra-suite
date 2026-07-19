@@ -3333,6 +3333,29 @@ class ConfigOrchestrator:
             """Return True if *path* is a compatible cache covering the frame range."""
             if not path or not os.path.exists(path):
                 return False
+            if os.path.isdir(path):
+                # InferenceRunner cache dir (built by DetectionCacheBuildWorker):
+                # key-constructed handle, not a legacy single-file DetectionCache.
+                try:
+                    from pathlib import Path as _Path
+
+                    from hydra_suite.core.inference.config import (
+                        build_inference_config_from_params,
+                    )
+                    from hydra_suite.core.inference.runner import (
+                        _open_caches,
+                        video_signature,
+                    )
+
+                    _cfg = build_inference_config_from_params(params)
+                    handle = _open_caches(
+                        _cfg, _Path(path), video_signature(video_path)
+                    ).detection
+                    return handle is not None and handle.covers_frame_range(
+                        start_frame, end_frame
+                    )
+                except Exception:
+                    return False
             try:
                 dc = DetectionCache(path, mode="r")
                 ok = dc.is_compatible() and dc.covers_frame_range(
@@ -3394,12 +3417,17 @@ class ConfigOrchestrator:
     def _build_optimizer_detection_cache(
         self, video_path: str, cache_path: str, params: dict
     ):
-        """Spin up a DetectionCacheBuilderWorker and show progress in the main window."""
+        """Spin up a DetectionCacheBuildWorker and show progress in the main window.
+
+        ``cache_path`` is used as the InferenceRunner cache **directory**
+        (it holds ``detection.npz`` plus a cache key), not a legacy
+        single-file ``DetectionCache``.
+        """
         from hydra_suite.core.tracking.optimization.optimizer_workers import (
-            DetectionCacheBuilderWorker,
+            DetectionCacheBuildWorker,
         )
 
-        self._mw._cache_builder_worker = DetectionCacheBuilderWorker(
+        self._mw._cache_builder_worker = DetectionCacheBuildWorker(
             video_path,
             cache_path,
             params,

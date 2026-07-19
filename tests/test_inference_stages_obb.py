@@ -14,10 +14,10 @@ from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.obb import (
     OBBModels,
     _empty_obb_result,
-    _extract_obb_result,
     _extract_raw_tensors,
-    _merge_obb_results,
     _RawOBBTensors,
+    extract_obb_result,
+    merge_obb_results,
     run_obb,
 )
 
@@ -98,7 +98,7 @@ def test_empty_obb_result_shape():
 
 
 def test_extract_obb_result_n_detections():
-    result = _extract_obb_result(_mock_ul_result_numpy_compat(n=3), frame_idx=0)
+    result = extract_obb_result(_mock_ul_result_numpy_compat(n=3), frame_idx=0)
     assert result.num_detections == 3
     assert result.centroids.shape == (3, 2)
     assert result.angles.shape == (3,)
@@ -107,7 +107,7 @@ def test_extract_obb_result_n_detections():
 
 
 def test_extract_obb_result_offset_shifts_centroids():
-    result = _extract_obb_result(
+    result = extract_obb_result(
         _mock_ul_result_numpy_compat(n=1), frame_idx=0, offset=(50.0, 30.0)
     )
     assert result.centroids[0, 0] == pytest.approx(150.0)
@@ -115,13 +115,13 @@ def test_extract_obb_result_offset_shifts_centroids():
 
 
 def test_extract_obb_result_sizes_computed():
-    result = _extract_obb_result(_mock_ul_result_numpy_compat(n=1), frame_idx=0)
+    result = extract_obb_result(_mock_ul_result_numpy_compat(n=1), frame_idx=0)
     assert result.sizes[0] == pytest.approx(20.0 * 10.0)
 
 
 def test_extract_obb_result_carries_detection_ids():
     """Per Correction 14: every constructed OBBResult must include detection_ids."""
-    result = _extract_obb_result(_mock_ul_result_numpy_compat(n=3), frame_idx=7)
+    result = extract_obb_result(_mock_ul_result_numpy_compat(n=3), frame_idx=7)
     assert result.detection_ids.shape == (3,)
     assert result.detection_ids.dtype == np.int64
     assert result.detection_ids[0] == 7 * 10000  # DETECTION_ID_STRIDE
@@ -176,7 +176,7 @@ def test_merge_obb_results_concatenates():
         # offset by 2 to mimic post-merge IDs from a sequential second pass
         detection_ids=OBBResult.make_detection_ids(0, 3) + 2,
     )
-    merged = _merge_obb_results(0, [r1, r2])
+    merged = merge_obb_results(0, [r1, r2])
     assert merged.num_detections == 5
     assert merged.detection_ids.shape == (5,)
 
@@ -382,7 +382,7 @@ def test_extract_obb_result_drops_zero_height_without_divzero_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
         # Must NOT raise a RuntimeWarning
-        result = _extract_obb_result(r, frame_idx=0)
+        result = extract_obb_result(r, frame_idx=0)
     # The degenerate h=0 detection is dropped; the valid one survives.
     assert result.num_detections == 1
     assert result.confidences[0] == pytest.approx(0.7)

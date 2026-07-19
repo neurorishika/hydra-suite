@@ -93,7 +93,7 @@ class _StubTrackAssigner:
 
 
 class _FakeCache:
-    def get_frame(self, frame_idx):
+    def read_frame(self, frame_idx):
         return (
             [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
             [50.0],
@@ -246,7 +246,7 @@ def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> Non
     mod = _load_optimizer_module()
 
     class _WeakPoseOnlyCache(_FakeCache):
-        def get_frame(self, frame_idx):
+        def read_frame(self, frame_idx):
             return (
                 [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
                 [50.0],
@@ -303,3 +303,125 @@ def test_optimizer_replay_skips_directed_pose_heading_when_pose_is_weak() -> Non
     np.testing.assert_array_equal(_StubTrackAssigner.last_meas_ori_directed, [0])
     _, corrected = _StubKalmanFilterManager.last_instance.corrected_measurements[0]
     assert corrected[2] == np.float32(0.0)
+
+
+class _ParamsFilter:
+    """Minimal det_filter stand-in exposing only `.params` (Correction 21)."""
+
+    def __init__(self, params):
+        self.params = params
+
+
+class _OBBFrameCache:
+    def __init__(self, obb_result):
+        self._obb_result = obb_result
+
+    def read_frame(self, frame_idx):
+        return self._obb_result
+
+
+class _LegacyTupleCache:
+    """Cache stub that still returns the retired legacy 12-tuple frame shape."""
+
+    def read_frame(self, frame_idx):
+        return (
+            [np.array([10.0, 20.0, 0.0], dtype=np.float32)],
+            [50.0],
+            [(50.0, 1.0)],
+            [0.95],
+            [np.array([[0, 0], [4, 0], [4, 2], [0, 2]], dtype=np.float32)],
+            [101],
+            [0.0],
+            [0.0],
+            [0],
+            None,
+            None,
+            None,
+        )
+
+
+def _make_obb_result():
+    from hydra_suite.core.inference.result import OBBResult
+
+    return OBBResult(
+        frame_idx=0,
+        centroids=np.array([[10.0, 20.0]], dtype=np.float32),
+        angles=np.array([0.0], dtype=np.float32),
+        sizes=np.array([50.0], dtype=np.float32),
+        shapes=np.array([[50.0, 1.0]], dtype=np.float32),
+        confidences=np.array([0.95], dtype=np.float32),
+        corners=np.array([[[0, 0], [4, 0], [4, 2], [0, 2]]], dtype=np.float32),
+        detection_ids=np.array([101], dtype=np.int64),
+    )
+
+
+def test_filter_cached_detections_returns_for_obb_result_frame() -> None:
+    from hydra_suite.core.tracking.optimization.optimizer import (
+        _filter_cached_detections,
+    )
+
+    det_filter = _ParamsFilter({"DETECTION_CONFIDENCE": 0.0})
+    cache = _OBBFrameCache(_make_obb_result())
+
+    meas, shapes, confs, detection_ids, headtail_hints, headtail_directed = (
+        _filter_cached_detections(det_filter, cache, 0, roi_mask=None)
+    )
+
+    assert len(meas) == 1
+    assert len(shapes) == 1
+    assert len(confs) == 1
+    assert detection_ids == [101]
+    assert headtail_hints == []
+    assert headtail_directed == []
+
+
+def test_filter_cached_detections_raises_for_legacy_tuple_frame() -> None:
+    from hydra_suite.core.tracking.optimization.optimizer import (
+        _filter_cached_detections,
+    )
+
+    det_filter = _ParamsFilter({"DETECTION_CONFIDENCE": 0.0})
+    cache = _LegacyTupleCache()
+
+    try:
+        _filter_cached_detections(det_filter, cache, 0, roi_mask=None)
+    except TypeError as exc:
+        assert "OBBResult" in str(exc)
+    else:
+        raise AssertionError("expected TypeError for legacy tuple cache frame")
+
+
+def test_preview_filter_cached_detections_returns_for_obb_result_frame() -> None:
+    from hydra_suite.core.tracking.optimization.optimizer_workers import (
+        _preview_filter_cached_detections,
+    )
+
+    det_filter = _ParamsFilter({"DETECTION_CONFIDENCE": 0.0})
+    cache = _OBBFrameCache(_make_obb_result())
+
+    meas, shapes, confs, detection_ids, headtail_hints, headtail_directed = (
+        _preview_filter_cached_detections(det_filter, cache, 0, roi_mask=None)
+    )
+
+    assert len(meas) == 1
+    assert len(shapes) == 1
+    assert len(confs) == 1
+    assert detection_ids == [101]
+    assert headtail_hints == []
+    assert headtail_directed == []
+
+
+def test_preview_filter_cached_detections_raises_for_legacy_tuple_frame() -> None:
+    from hydra_suite.core.tracking.optimization.optimizer_workers import (
+        _preview_filter_cached_detections,
+    )
+
+    det_filter = _ParamsFilter({"DETECTION_CONFIDENCE": 0.0})
+    cache = _LegacyTupleCache()
+
+    try:
+        _preview_filter_cached_detections(det_filter, cache, 0, roi_mask=None)
+    except TypeError as exc:
+        assert "OBBResult" in str(exc)
+    else:
+        raise AssertionError("expected TypeError for legacy tuple cache frame")

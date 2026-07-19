@@ -190,144 +190,42 @@ git commit -m "refactor(data): dataset dimension extraction via InferenceRunner.
 
 ---
 
-### Task 2: Add a shared pose-backend shim and migrate the ×4 duplicates
+### Task 2: Pose-backend consolidation — DEFERRED to a post-retirement pose workstream
 
-The identical runtime-string → backend-family gate + `YoloNativeBackend` / `create_pose_backend_from_config` construction is copy-pasted in `posekit/gui/workers.py:21-109`, `preview_worker.py:1339-1400`, `crops_worker.py:128-235`, and `benchmarking.py:1190-1334`. Centralize it as one shim, then repoint all four.
+**Do NOT execute this task as part of the detector retirement.** Pose-backend construction lives in
+`core/identity/pose` (`YoloNativeBackend`, `create_pose_backend_from_config`) — a *different* package from
+`core/detectors`, so consolidating it is **not** required to retire `core/detectors`. During execution a
+verify-first check found that the original plan (route the GUI onto `stages/pose.load_pose_model`) would
+**silently change SLEAP behavior for CUDA users**, so this task was pulled out.
 
-**Files:**
-- Modify: `src/hydra_suite/core/inference/api.py` (add `load_pose_backend`)
-- Modify: `posekit/gui/workers.py`, `preview_worker.py`, `crops_worker.py`, `trackerkit/benchmarking.py`
-- Test: `tests/test_inference_pose_backend_shim.py`
+**Why it was blocked (2026-07-18):** `stages/pose.py::load_pose_model`'s SLEAP flavor ladder diverges from
+the GUI sites: for `compute_runtime="cuda"` the canonical loader picks `native` (SLEAP service backend on
+CUDA) while the GUI picks `onnx_cuda`; and for a literal `onnx_cuda` input the canonical loader has no
+branch and silently falls through to `onnx_cpu`/CPU (a GPU→CPU downgrade). Migrating the GUI onto the
+current `load_pose_model` would silently alter which SLEAP runtime executes.
 
-**Interfaces:**
-- Consumes: `stages/pose.load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel`.
-- Produces: `load_pose_backend(*, backend_family: str, model_path: str, compute_runtime: str, keypoint_names=None, confidence_threshold: float = 1e-4, batch_size: int = 64, min_valid_confidence: float = 0.2) -> object` returning a backend exposing `predict_batch(images) -> list` (the same object the GUI workers use today).
+**The golden rule to implement in the separate pose workstream** (user directive, 2026-07-18; also saved as
+memory `project-pose-runtime-golden-rule`): **all pose inference must go through the InferenceRunner
+pipeline**, with tier→backend resolution:
+- **GPU tier** (`cuda`) → CUDA via `SleapServiceBackend`.
+- **GPU-Fast tier** (`tensorrt`) → `SleapExportBackend` (`SleapExportedBackend`).
+- **CPU tier** → torch CPU via `SleapServiceBackend`.
+- `SleapServiceBackend` must **never** do a disk round-trip (in-memory / shared-memory transport only;
+  remove the temp-file PNG fallback in `core/identity/pose/backends/sleap.py`).
 
-- [ ] **Step 1: Write the failing test**
+**Gap analysis vs current code** (what the pose workstream must change): the canonical `load_pose_model`
+already matches GPU (`native`/cuda → service) and GPU-Fast (`tensorrt` → exported). It must be changed so
+the **CPU tier** resolves to the service backend on torch-CPU (currently `onnx_cpu`); `SleapServiceBackend`
+must be made disk-roundtrip-free; and then **all** pose consumers — the GUI sites
+`posekit/gui/workers.py::_build_pose_backend` and `trackerkit/gui/workers/crops_worker.py::_init_pose_backend`,
+plus the pose paths in `preview_worker.py` and `trackerkit/benchmarking.py` (the latter two are deleted/replaced
+by Plan 2 Task 5 / Plan 3 respectively, so may need nothing) — must route through the corrected canonical
+path. This resolves the divergence **in favor of the canonical path**, retiring the GUI's legacy `onnx_cuda`
+ladder rather than preserving it.
 
-```python
-# tests/test_inference_pose_backend_shim.py
-import hydra_suite.core.inference.api as api
-
-
-def test_load_pose_backend_yolo_dispatch(monkeypatch):
-    seen = {}
-
-    class _FakeBackend:
-        def predict_batch(self, imgs):
-            return []
-
-    def fake_load_pose_model(config, runtime):
-        seen["backend"] = config.backend
-        seen["yolo_path"] = config.yolo.model_path if config.yolo else None
-        return _FakeBackend()
-
-    monkeypatch.setattr(
-        "hydra_suite.core.inference.stages.pose.load_pose_model", fake_load_pose_model
-    )
-    backend = api.load_pose_backend(
-        backend_family="yolo", model_path="p.pt", compute_runtime="cpu"
-    )
-    assert hasattr(backend, "predict_batch")
-    assert seen["backend"] == "yolo"
-    assert seen["yolo_path"] == "p.pt"
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `python -m pytest tests/test_inference_pose_backend_shim.py -q`
-Expected: FAIL — `AttributeError: module ... has no attribute 'load_pose_backend'`.
-
-- [ ] **Step 3: Add the shim to `api.py`**
-
-```python
-def load_pose_backend(
-    *,
-    backend_family: str,
-    model_path: str,
-    compute_runtime: str,
-    keypoint_names=None,
-    confidence_threshold: float = 1e-4,
-    batch_size: int = 64,
-    min_valid_confidence: float = 0.2,
-):
-    """Build a pose backend (YOLO or SLEAP) via the canonical stages/pose loader.
-
-    Single source of the runtime-string -> backend construction that GUI pose
-    workers previously duplicated. Returns a backend exposing predict_batch().
-    """
-    from .config import PoseConfig, PoseSLEAPConfig, PoseYOLOConfig
-    from .runtime import RuntimeContext
-    from .stages.pose import load_pose_model
-
-    family = (backend_family or "").strip().lower()
-    if family == "yolo":
-        pose_cfg = PoseConfig(
-            backend="yolo",
-            yolo=PoseYOLOConfig(
-                model_path=model_path,
-                compute_runtime=compute_runtime,
-                confidence_threshold=confidence_threshold,
-                batch_size=batch_size,
-            ),
-            min_keypoint_confidence=min_valid_confidence,
-        )
-    else:
-        pose_cfg = PoseConfig(
-            backend="sleap",
-            sleap=PoseSLEAPConfig(
-                model_path=model_path,
-                compute_runtime=compute_runtime,
-                batch_size=batch_size,
-            ),
-            min_keypoint_confidence=min_valid_confidence,
-        )
-    from .config import InferenceConfig, OBBConfig, OBBDirectConfig
-
-    _min_cfg = InferenceConfig(
-        obb=OBBConfig(
-            mode="direct",
-            direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
-        ),
-        pose=pose_cfg,
-    )
-    runtime = RuntimeContext.from_config(_min_cfg)
-    return load_pose_model(pose_cfg, runtime)
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `python -m pytest tests/test_inference_pose_backend_shim.py -q`
-Expected: PASS.
-
-- [ ] **Step 5: Repoint the four duplicate sites**
-
-In each site, replace the inline backend-construction block with a call to `api.load_pose_backend(...)`, threading the site's existing `compute_runtime`, `model_path`, `backend_family`, `keypoint_names`, conf, and batch size. Sites:
-- `posekit/gui/workers.py:21-109` — `_build_pose_backend` becomes a thin wrapper delegating to `api.load_pose_backend`; keep its signature so `PosePredictWorker`/`BulkPosePredictWorker` are unchanged.
-- `preview_worker.py:1339-1400` — inside `_preview_run_pose_overlay`, replace the inline block (leave the surrounding crop/draw code).
-- `crops_worker.py:128-235` — `_init_pose_backend` delegates to the shim.
-- `trackerkit/benchmarking.py:1190-1334` — `bench_pose` backend build delegates to the shim.
-
-Keep each site's legacy fallback (`posekit/gui/workers.py:253/454`) and SLEAP re-raise gate untouched.
-
-- [ ] **Step 6: Verify**
-
-Run:
-```bash
-python -m pytest tests/test_inference_pose_backend_shim.py tests/ -m "not benchmark" -k "pose" -q
-grep -rn "HYDRA_SLEAP_FLAVOR" src/hydra_suite/trackerkit src/hydra_suite/posekit
-```
-Expected: pose tests pass; the `HYDRA_SLEAP_FLAVOR` gate now appears only inside `stages/pose.py` (the shim's loader), not duplicated in GUI workers. (If any GUI site still needs the env override, confirm `load_pose_model` honors it — it does, per the stage's loader.)
-
-- [ ] **Step 7: Commit**
-
-```bash
-make format
-git add -A
-git commit -m "refactor(inference): centralize pose-backend construction in api.load_pose_backend"
-```
-
----
+**Sequencing:** execute this AFTER the rest of the detector retirement (Plans 2–4) lands. It is a behavior
+change to the tracking pipeline's CPU-tier pose path plus `SleapServiceBackend` internals, so it warrants its
+own brainstorm → spec → plan. Meanwhile the two GUI sites are left untouched and pose behavior is unchanged.
 
 ### Task 3: Route `optimizer.py` filtering through `api.apply_detection_filter`
 

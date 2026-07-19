@@ -145,7 +145,7 @@ def build_test_params(
 
 
 class _SeqCropSpec:
-    """Minimal stand-in for ``OBBSequentialConfig`` fields ``_build_crops`` reads."""
+    """Minimal stand-in for ``OBBSequentialConfig`` fields ``build_crops`` reads."""
 
     def __init__(self, crop_pad_ratio, min_crop_size_px, enforce_square_crop):
         self.crop_pad_ratio = crop_pad_ratio
@@ -245,7 +245,7 @@ class _TestWorker(BaseWorker):
     @staticmethod
     def _run_direct(frame: np.ndarray, idx: int, executor) -> list:
         """Direct-mode OBB inference: run the executor and extract quads."""
-        from hydra_suite.core.inference.stages.obb import _extract_obb_result
+        from hydra_suite.core.inference.stages.obb import extract_obb_result
 
         results = executor.predict(
             [frame],
@@ -255,7 +255,7 @@ class _TestWorker(BaseWorker):
         )
         if not results:
             return []
-        result = _extract_obb_result(results[0], idx)
+        result = extract_obb_result(results[0], idx)
         return list(result.corners)
 
     @staticmethod
@@ -290,10 +290,10 @@ class _TestWorker(BaseWorker):
     ) -> list:
         """Sequential detect-then-crop-OBB test: build crops off stage-1 boxes."""
         from hydra_suite.core.inference.stages.obb import (
-            _build_crops,
-            _extract_obb_result,
-            _merge_obb_results,
-            _resize_crops_for_stage2,
+            build_crops,
+            extract_obb_result,
+            merge_obb_results,
+            resize_crops_for_stage2,
         )
 
         detect_results = detect_executor.predict(
@@ -308,14 +308,14 @@ class _TestWorker(BaseWorker):
         if boxes is None or len(boxes) == 0:
             return []
 
-        crops, offsets = _build_crops(frame, boxes, crop_spec, None)
+        crops, offsets = build_crops(frame, boxes, crop_spec, None)
         if not crops:
             return []
 
         orig_sizes = [(c.shape[1], c.shape[0]) for c in crops]
         stage2_size = int(stage2_imgsz) if stage2_imgsz else 0
         crops_for_stage2 = (
-            _resize_crops_for_stage2(crops, stage2_size) if stage2_size > 0 else crops
+            resize_crops_for_stage2(crops, stage2_size) if stage2_size > 0 else crops
         )
 
         obb_results = obb_executor.predict(
@@ -333,9 +333,9 @@ class _TestWorker(BaseWorker):
                 if stage2_size > 0
                 else (1.0, 1.0)
             )
-            sub.append(_extract_obb_result(r, idx, offset=offsets[i], scale=scale))
+            sub.append(extract_obb_result(r, idx, offset=offsets[i], scale=scale))
 
-        merged = _merge_obb_results(idx, sub)
+        merged = merge_obb_results(idx, sub)
         return list(merged.corners)
 
 

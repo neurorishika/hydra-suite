@@ -27,72 +27,136 @@ def test_preview_build_yolo_params_includes_headtail_runtime() -> None:
     assert params["YOLO_HEADTAIL_DETECT_CONF_THRESHOLD"] == 0.67
 
 
-def test_preview_run_yolo_branch_uses_load_obb_executor_not_legacy_detector(
-    monkeypatch,
-) -> None:
-    """Task 2: the YOLO preview branch must call the production
-    ``load_obb_executor`` factory instead of constructing a legacy
-    ``YOLOOBBDetector`` instance."""
+def test_preview_build_inference_params_maps_overlay_and_runtime_keys() -> None:
+    """The preview params assembled for ``build_inference_config_from_params``
+    must carry the CNN / pose / AprilTag / runtime keys the structured config
+    builder reads, mapped off the lowercase preview context."""
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
-    runtime_artifacts = importlib.import_module(
-        "hydra_suite.core.inference.runtime_artifacts"
+
+    params = preview_worker._preview_build_inference_params(
+        {
+            "compute_runtime": "cpu",
+            "runtime_tier": "gpu_fast",
+            "cnn_runtime": "cuda",
+            "cnn_classifiers": [{"model_path": "cls.json", "label": "x"}],
+            "enable_pose_extractor": True,
+            "pose_model_type": "sleap",
+            "pose_model_dir": "/models/sleap",
+            "use_apriltags": True,
+            "apriltag_family": "tag25h9",
+            "individual_crop_padding": 0.2,
+        },
+        1.0,
+        False,
+    )
+
+    assert params["COMPUTE_RUNTIME"] == "cpu"
+    assert params["RUNTIME_TIER"] == "gpu_fast"
+    assert params["CNN_COMPUTE_RUNTIME"] == "cuda"
+    assert len(params["CNN_CLASSIFIERS"]) == 1
+    assert params["ENABLE_POSE_EXTRACTOR"] is True
+    assert params["POSE_MODEL_TYPE"] == "sleap"
+    assert params["USE_APRILTAGS"] is True
+    assert params["APRILTAG_FAMILY"] == "tag25h9"
+    assert params["INDIVIDUAL_CROP_PADDING"] == 0.2
+
+
+class _FakeOBBResult:
+    """Minimal stand-in for ``core.inference.result.OBBResult``."""
+
+    def __init__(self, corners, confidences, class_ids=None) -> None:
+        self.corners = np.asarray(corners, dtype=np.float32)
+        self.confidences = np.asarray(confidences, dtype=np.float32)
+        self.class_ids = (
+            np.asarray(class_ids, dtype=np.int32) if class_ids is not None else None
+        )
+
+    @property
+    def num_detections(self) -> int:
+        return int(self.corners.shape[0])
+
+    @property
+    def class_ids_or_zeros(self) -> np.ndarray:
+        if self.class_ids is None:
+            return np.zeros(self.num_detections, dtype=np.int32)
+        return self.class_ids
+
+
+class _FakeHeadTail:
+    def __init__(self, hints, confs, directed) -> None:
+        self.heading_hints = np.asarray(hints, dtype=np.float32)
+        self.heading_confidences = np.asarray(confs, dtype=np.float32)
+        self.directed_mask = np.asarray(directed, dtype=np.uint8)
+
+
+class _FakeFrameResult:
+    """Minimal ``FrameResult`` exposing exactly the fields the drawing reads."""
+
+    def __init__(
+        self, obb=None, headtail=None, cnn=None, pose=None, apriltag=None
+    ) -> None:
+        self.obb = obb
+        self.headtail = headtail
+        self.cnn = cnn if cnn is not None else []
+        self.pose = pose
+        self.apriltag = apriltag
+
+
+def _install_fake_runner(
+    monkeypatch, preview_worker, frame_result, obb_class_names=None
+):
+    """Replace the module-level ``InferenceRunner`` with a fake returning
+    ``frame_result``; returns the shared capture dict."""
+    built: dict[str, object] = {}
+
+    class _FakeRunner:
+        def __init__(self, cfg, **kwargs) -> None:
+            built["cfg"] = cfg
+
+        @property
+        def obb_class_names(self):
+            return obb_class_names
+
+        def run_realtime(self, frame, frame_idx=0, roi_mask=None):
+            built["ran"] = True
+            built["roi_mask"] = roi_mask
+            return frame_result
+
+        def close(self) -> None:
+            built["closed"] = True
+
+    monkeypatch.setattr(preview_worker, "InferenceRunner", _FakeRunner, raising=False)
+    return built
+
+
+def test_preview_yolo_branch_drives_inference_runner(monkeypatch) -> None:
+    """The YOLO preview branch must drive ``InferenceRunner.run_realtime`` and
+    must never construct a legacy ``YOLOOBBDetector``."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
     detectors_pkg = importlib.import_module("hydra_suite.core.detectors")
-
-    captured: dict[str, object] = {}
 
     def _boom(*args, **kwargs):
         raise AssertionError(
             "preview should not construct a legacy YOLOOBBDetector instance"
         )
 
-    monkeypatch.setattr(detectors_pkg, "YOLOOBBDetector", _boom)
+    monkeypatch.setattr(detectors_pkg, "YOLOOBBDetector", _boom, raising=False)
 
-    class FakeExecutor:
-        names = {0: "ant"}
+    corners = np.array(
+        [[10.0, 10.0], [22.0, 10.0], [22.0, 16.0], [10.0, 16.0]], dtype=np.float32
+    )
+    obb = _FakeOBBResult([corners], [0.91])
+    fr = _FakeFrameResult(obb=obb)
+    built = _install_fake_runner(monkeypatch, preview_worker, fr)
 
-        def predict(self, *args, **kwargs):
-            captured["predict_called"] = True
-            return []
-
-    def _fake_load_obb_executor(model_path, compute_runtime, **kwargs):
-        captured["model_path"] = model_path
-        captured["compute_runtime"] = compute_runtime
-        return FakeExecutor()
-
-    monkeypatch.setattr(runtime_artifacts, "load_obb_executor", _fake_load_obb_executor)
     monkeypatch.setattr(
         preview_worker,
         "_preview_resize_frame",
         lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_load_headtail_model", lambda yolo_params: None
-    )
-    monkeypatch.setattr(
-        preview_worker,
-        "_preview_compute_canonical_crops",
-        lambda filtered_corners, frame_to_process, context: (
-            [],
-            [],
-            0.1,
-            (0, 0, 0),
-            False,
-        ),
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_pose_overlay", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_cnn_overlay", lambda *args, **kwargs: []
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_apriltag_overlay", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_cleanup_backends", lambda *args, **kwargs: None
     )
 
     test_frame = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -111,87 +175,63 @@ def test_preview_run_yolo_branch_uses_load_obb_executor_not_legacy_detector(
         False,
     )
 
-    assert captured["predict_called"] is True
-    assert captured["compute_runtime"] == "cpu"
+    assert built["ran"] is True
+    assert built["closed"] is True
+    assert len(detected_dimensions) == 1
+    assert out_frame.shape == test_frame.shape
+
+
+def test_preview_yolo_branch_empty_frame_result_returns_no_dimensions(
+    monkeypatch,
+) -> None:
+    """A zero-detection ``FrameResult`` yields an empty detected-dimensions list
+    and a frame of unchanged shape."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+
+    obb = _FakeOBBResult(np.zeros((0, 4, 2), dtype=np.float32), np.zeros((0,)))
+    fr = _FakeFrameResult(obb=obb)
+    _install_fake_runner(monkeypatch, preview_worker, fr)
+    monkeypatch.setattr(
+        preview_worker,
+        "_preview_resize_frame",
+        lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
+    )
+
+    test_frame = np.zeros((32, 32, 3), dtype=np.uint8)
+    detected_dimensions, out_frame = preview_worker._preview_run_yolo_branch(
+        test_frame, test_frame.copy(), {"yolo_model_path": "d.pt"}, 1.0, False
+    )
     assert detected_dimensions == []
     assert out_frame.shape == test_frame.shape
 
 
-def test_preview_run_yolo_branch_uses_filtered_headtail_hints(monkeypatch) -> None:
+def test_preview_yolo_branch_forwards_headtail_hints_to_draw(monkeypatch) -> None:
+    """Head-tail hints from ``FrameResult.headtail`` reach the OBB annotation
+    drawing as per-detection ``(heading, conf, directed)`` tuples."""
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
-    runtime_artifacts = importlib.import_module(
-        "hydra_suite.core.inference.runtime_artifacts"
-    )
 
     corners = np.array(
-        [[10.0, 10.0], [22.0, 10.0], [22.0, 16.0], [10.0, 16.0]],
-        dtype=np.float32,
+        [[10.0, 10.0], [22.0, 10.0], [22.0, 16.0], [10.0, 16.0]], dtype=np.float32
     )
-    captured: dict[str, object] = {}
+    obb = _FakeOBBResult([corners], [0.91])
+    ht = _FakeHeadTail([1.25], [0.88], [1])
+    fr = _FakeFrameResult(obb=obb, headtail=ht)
+    _install_fake_runner(monkeypatch, preview_worker, fr)
 
-    class FakeExecutor:
-        names = {0: "ant"}
-
-        def predict(self, *args, **kwargs):
-            return []
-
-    monkeypatch.setattr(
-        runtime_artifacts,
-        "load_obb_executor",
-        lambda model_path, compute_runtime, **kwargs: FakeExecutor(),
-    )
     monkeypatch.setattr(
         preview_worker,
         "_preview_resize_frame",
         lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
     )
     monkeypatch.setattr(
-        preview_worker, "_preview_load_headtail_model", lambda yolo_params: None
-    )
-    monkeypatch.setattr(
-        preview_worker,
-        "_preview_run_yolo_raw_detection",
-        lambda executors, frame_to_process, yolo_params, headtail_state=None, extractor=None: (
-            [np.array([16.0, 13.0, 0.0], dtype=np.float32)],
-            [1.0],
-            [(1.0, 2.0)],
-            [0.91],
-            [corners],
-            [0],
-            [1.25],
-            [0.88],
-            [1],
-            None,
-        ),
-    )
-    monkeypatch.setattr(
-        preview_worker,
-        "_preview_compute_canonical_crops",
-        lambda filtered_corners, frame_to_process, context: (
-            [None] * len(filtered_corners),
-            [None] * len(filtered_corners),
-            0.1,
-            (0, 0, 0),
-            False,
-        ),
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_pose_overlay", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_cnn_overlay", lambda *args, **kwargs: []
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_apriltag_overlay", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_cleanup_backends", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
         preview_worker, "_preview_draw_yolo_footer", lambda *args, **kwargs: None
     )
+
+    captured: dict[str, object] = {}
 
     def _capture_annotations(
         test_frame,
@@ -205,263 +245,46 @@ def test_preview_run_yolo_branch_uses_filtered_headtail_hints(monkeypatch) -> No
         context,
     ):
         captured["filtered_headtail"] = list(filtered_headtail)
+        captured["detection_confidences"] = list(detection_confidences)
 
     monkeypatch.setattr(
         preview_worker, "_preview_draw_obb_annotations", _capture_annotations
     )
 
     test_frame = np.zeros((32, 32, 3), dtype=np.uint8)
-    context = {
-        "yolo_model_path": "detector.pt",
-        "yolo_headtail_model_path": "headtail.onnx",
-        "compute_runtime": "cpu",
-        "headtail_runtime": "onnx_coreml",
-    }
-
     preview_worker._preview_run_yolo_branch(
-        test_frame,
-        test_frame.copy(),
-        context,
-        1.0,
-        False,
+        test_frame, test_frame.copy(), {"yolo_model_path": "d.pt"}, 1.0, False
     )
 
     assert len(captured["filtered_headtail"]) == 1
     heading, conf, directed = captured["filtered_headtail"][0]
-    assert heading == 1.25
+    assert heading == pytest.approx(1.25, abs=1e-4)
     assert conf == pytest.approx(0.88, abs=1e-4)
     assert directed == 1
+    assert captured["detection_confidences"][0] == pytest.approx(0.91, abs=1e-4)
 
 
-class _ArrayWrap:
-    """Minimal ``torch.Tensor``-like wrapper exposing ``.cpu().numpy()``."""
-
-    def __init__(self, arr) -> None:
-        self._arr = np.asarray(arr, dtype=np.float32)
-
-    def cpu(self):
-        return self
-
-    def numpy(self):
-        return self._arr
-
-
-class _FakeStage1Boxes:
-    """Stand-in for ultralytics ``Results.boxes`` (stage-1 plain detector)."""
-
-    def __init__(self, xyxy, conf, cls) -> None:
-        self.xyxy = _ArrayWrap(xyxy)
-        self.conf = _ArrayWrap(conf)
-        self.cls = _ArrayWrap(cls)
-
-    def __len__(self) -> int:
-        return self.xyxy._arr.shape[0]
-
-
-class _FakeOBB:
-    """Stand-in for ultralytics ``Results.obb`` (stage-2 crop-OBB output)."""
-
-    def __init__(self, xywhr, conf, cls) -> None:
-        self.xywhr = _ArrayWrap(xywhr)
-        self.conf = _ArrayWrap(conf)
-        self.cls = _ArrayWrap(cls)
-
-    def __len__(self) -> int:
-        return self.xywhr._arr.shape[0]
-
-
-def _make_sequential_fake_executors():
-    """Build fake stage-1 (detect) / stage-2 (crop-OBB) executors.
-
-    Stage-1 returns four candidate boxes (mirrors a real detector emitting
-    several distinct crops). Stage-2 returns one detection each for three of
-    the four crops, at three different confidences, plus a genuinely empty
-    result for the fourth crop -- this exercises
-    ``_preview_accumulate_crop_detections``'s empty-result skip,
-    ``_preview_sort_merged_detections``'s confidence-descending sort, and its
-    ``max_det`` truncation (when the caller caps below 3), all with
-    non-trivial, order-scrambled input.
-    """
-    import types
-
-    stage1_boxes = _FakeStage1Boxes(
-        xyxy=[
-            [5.0, 5.0, 25.0, 25.0],
-            [60.0, 60.0, 80.0, 80.0],
-            [120.0, 120.0, 140.0, 140.0],
-            [160.0, 160.0, 180.0, 180.0],
-        ],
-        conf=[0.7, 0.7, 0.7, 0.7],
-        cls=[9, 9, 9, 9],
-    )
-    stage1_result = types.SimpleNamespace(boxes=stage1_boxes, names={9: "blob"})
-
-    # Per-crop stage-2 detections, deliberately *not* pre-sorted by
-    # confidence, so a correct implementation must sort them. Box sizes are
-    # chosen to correlate with confidence (higher conf -> larger box) so that
-    # this fixture is unambiguous under either of the two truncation policies
-    # a caller might apply downstream (raw-merge truncates by confidence via
-    # ``_preview_sort_merged_detections``; the GUI's final
-    # ``filter_raw_detections`` separately truncates to ``MAX_TARGETS`` by
-    # detection *size*, largest-first).
-    stage2_results = [
-        types.SimpleNamespace(
-            obb=_FakeOBB(xywhr=[[10.0, 10.0, 6.0, 10.0, 0.3]], conf=[0.4], cls=[1])
-        ),
-        types.SimpleNamespace(
-            obb=_FakeOBB(xywhr=[[15.0, 15.0, 20.0, 20.0, 0.0]], conf=[0.9], cls=[0])
-        ),
-        types.SimpleNamespace(
-            obb=_FakeOBB(xywhr=[[20.0, 20.0, 15.0, 15.0, 0.5]], conf=[0.6], cls=[2])
-        ),
-        types.SimpleNamespace(obb=None),  # 4th crop: no stage-2 detections at all.
-    ]
-
-    class FakeStage1Executor:
-        names = {9: "blob"}
-
-        def predict(self, *args, **kwargs):
-            return [stage1_result]
-
-    class FakeStage2Executor:
-        names = {0: "ant", 1: "ant", 2: "ant"}
-
-        def predict(self, chunk, **kwargs):
-            return stage2_results[: len(chunk)]
-
-    return FakeStage1Executor(), FakeStage2Executor()
-
-
-def test_preview_run_sequential_raw_detection_merges_sorts_and_truncates() -> None:
-    """Task 2 finding: exercise the sequential-mode crop merge/sort/truncate path.
-
-    Directly drives ``_preview_run_sequential_raw_detection`` (bypassing the
-    GUI wiring) with fake stage-1/stage-2 executors returning multiple
-    candidate boxes so ``_preview_accumulate_crop_detections`` and
-    ``_preview_sort_merged_detections`` do genuine, non-trivial merge/sort/
-    truncate work, not just a pass-through.
-    """
+def test_preview_yolo_branch_uses_real_class_labels(monkeypatch) -> None:
+    """When the OBB model exposes class names, the preview must draw the real
+    class label per detection instead of the generic "obj" fallback."""
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
-    from hydra_suite.core.detectors import DetectionFilter
 
-    detect_executor, obb_executor = _make_sequential_fake_executors()
-    executors = {"mode": "sequential", "detect": detect_executor, "obb": obb_executor}
-    yolo_params = {
-        "MAX_TARGETS": 1,  # max_det = 2 * MAX_TARGETS = 2 -> forces truncation
-        "YOLO_SEQ_CROP_PAD_RATIO": 0.15,
-        "YOLO_SEQ_MIN_CROP_SIZE_PX": 64,
-        "YOLO_SEQ_ENFORCE_SQUARE_CROP": True,
-        "YOLO_SEQ_STAGE2_IMGSZ": 0,  # skip stage-2 resize -> merge scale is 1.0
-        "YOLO_SEQ_INDIVIDUAL_BATCH_SIZE": 16,
-        "YOLO_SEQ_DETECT_CONF_THRESHOLD": 0.25,
-    }
-    extractor = DetectionFilter(yolo_params)
-    frame = np.zeros((200, 200, 3), dtype=np.uint8)
-
-    (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        raw_class_ids,
-        stage1_result,
-    ) = preview_worker._preview_run_sequential_raw_detection(
-        extractor,
-        executors,
-        frame,
-        yolo_params,
-        raw_conf_floor=1e-3,
-        target_classes=None,
-        max_det=2,
+    corners = np.array(
+        [[10.0, 10.0], [22.0, 10.0], [22.0, 16.0], [10.0, 16.0]], dtype=np.float32
+    )
+    two_corners = np.stack([corners, corners + 30.0])
+    obb = _FakeOBBResult(two_corners, [0.91, 0.80], class_ids=[1, 0])
+    fr = _FakeFrameResult(obb=obb)
+    _install_fake_runner(
+        monkeypatch, preview_worker, fr, obb_class_names={0: "ant", 1: "queen"}
     )
 
-    # 4 stage-1 boxes -> 4 crops; 1 crop yields no stage-2 detections (skipped
-    # by _preview_accumulate_crop_detections), leaving 3 candidates
-    # (confidences 0.4, 0.9, 0.6); max_det=2 truncates to the top 2.
-    assert len(raw_meas) == 2
-    assert raw_confidences == sorted(raw_confidences, reverse=True)
-    assert raw_confidences[0] == pytest.approx(0.9, abs=1e-4)
-    assert raw_confidences[1] == pytest.approx(0.6, abs=1e-4)
-    # Class ids travel with their detection through the sort/truncate.
-    assert raw_class_ids == [0, 2]
-    # Corners are well-formed (4, 2) oriented-box corner sets.
-    assert len(raw_obb_corners) == 2
-    for corners in raw_obb_corners:
-        assert np.asarray(corners).shape == (4, 2)
-    # The stage-1 Results object is returned (for downstream viz), not lost.
-    assert getattr(stage1_result, "boxes", None) is not None
-
-
-def test_preview_run_yolo_branch_sequential_mode_uses_two_executors(
-    monkeypatch,
-) -> None:
-    """Task 2: end-to-end sequential-mode preview branch, off ``load_obb_executor``.
-
-    Mirrors ``test_preview_run_yolo_branch_uses_load_obb_executor_not_legacy_detector``'s
-    monkeypatching pattern for direct mode, but supplies *two* distinct fake
-    executors (stage-1 detect + stage-2 crop-OBB) keyed off the ``task=``
-    kwarg ``load_obb_executor`` is called with, and asserts the branch reaches
-    the final annotation step with correctly-shaped, correctly-ordered
-    output -- without ever touching the legacy ``YOLOOBBDetector``.
-    """
-    preview_worker = importlib.import_module(
-        "hydra_suite.trackerkit.gui.workers.preview_worker"
-    )
-    runtime_artifacts = importlib.import_module(
-        "hydra_suite.core.inference.runtime_artifacts"
-    )
-    detectors_pkg = importlib.import_module("hydra_suite.core.detectors")
-
-    def _boom(*args, **kwargs):
-        raise AssertionError(
-            "preview should not construct a legacy YOLOOBBDetector instance"
-        )
-
-    monkeypatch.setattr(detectors_pkg, "YOLOOBBDetector", _boom)
-
-    detect_executor, obb_executor = _make_sequential_fake_executors()
-    load_calls: list[dict] = []
-
-    def _fake_load_obb_executor(model_path, compute_runtime, **kwargs):
-        load_calls.append({"model_path": model_path, **kwargs})
-        if kwargs.get("task") == "detect":
-            return detect_executor
-        return obb_executor
-
-    monkeypatch.setattr(runtime_artifacts, "load_obb_executor", _fake_load_obb_executor)
     monkeypatch.setattr(
         preview_worker,
         "_preview_resize_frame",
         lambda frame_bgr, test_frame, resize_f: (frame_bgr, test_frame),
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_load_headtail_model", lambda yolo_params: None
-    )
-    monkeypatch.setattr(
-        preview_worker,
-        "_preview_compute_canonical_crops",
-        lambda filtered_corners, frame_to_process, context: (
-            [None] * len(filtered_corners),
-            [None] * len(filtered_corners),
-            0.1,
-            (0, 0, 0),
-            False,
-        ),
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_pose_overlay", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_cnn_overlay", lambda *args, **kwargs: []
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_run_apriltag_overlay", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        preview_worker, "_preview_cleanup_backends", lambda *args, **kwargs: None
     )
     monkeypatch.setattr(
         preview_worker, "_preview_draw_yolo_footer", lambda *args, **kwargs: None
@@ -480,156 +303,127 @@ def test_preview_run_yolo_branch_sequential_mode_uses_two_executors(
         filtered_headtail,
         context,
     ):
-        captured["filtered_corners"] = list(filtered_corners)
-        captured["detection_confidences"] = list(detection_confidences)
         captured["filtered_class_labels"] = list(filtered_class_labels)
 
     monkeypatch.setattr(
         preview_worker, "_preview_draw_obb_annotations", _capture_annotations
     )
 
-    test_frame = np.zeros((200, 200, 3), dtype=np.uint8)
-    context = {
-        "yolo_obb_mode": "sequential",
-        "yolo_detect_model_path": "detect.pt",
-        "yolo_crop_obb_model_path": "crop_obb.pt",
-        "compute_runtime": "cpu",
-        "obb_compute_runtime": "cpu",
-        "yolo_confidence": 0.1,
-        "yolo_seq_stage2_imgsz": 0,
-        "max_targets": 2,
-    }
-
-    detected_dimensions, out_frame = preview_worker._preview_run_yolo_branch(
-        test_frame,
-        test_frame.copy(),
-        context,
-        1.0,
-        False,
+    test_frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    preview_worker._preview_run_yolo_branch(
+        test_frame, test_frame.copy(), {"yolo_model_path": "d.pt"}, 1.0, False
     )
 
-    detect_calls = [c for c in load_calls if c.get("task") == "detect"]
-    obb_calls = [c for c in load_calls if c.get("task") == "obb"]
-    assert len(detect_calls) == 1
-    assert len(obb_calls) == 1
-    assert detect_calls[0]["model_path"].endswith("detect.pt")
-    assert obb_calls[0]["model_path"].endswith("crop_obb.pt")
-
-    # 3 non-empty crop detections (0.4, 0.9, 0.6) all pass the raw stage
-    # (max_det=2*MAX_TARGETS=4), then the final ``MAX_TARGETS=2`` cap in
-    # ``filter_raw_detections`` keeps only the top-2 by confidence (0.9,
-    # 0.6); both pass the 0.1 confidence-filter threshold and are far enough
-    # apart to survive OBB-IOU NMS untouched.
-    assert len(captured["filtered_corners"]) == 2
-    for corners in captured["filtered_corners"]:
-        assert np.asarray(corners).shape == (4, 2)
-    assert captured["detection_confidences"] == sorted(
-        captured["detection_confidences"], reverse=True
-    )
-    assert captured["detection_confidences"][0] == pytest.approx(0.9, abs=1e-4)
-    assert captured["detection_confidences"][1] == pytest.approx(0.6, abs=1e-4)
-    assert out_frame.shape == test_frame.shape
+    assert captured["filtered_class_labels"] == ["queen", "ant"]
 
 
-def test_preview_raw_detection_prefilters_headtail_candidates(monkeypatch) -> None:
+def test_preview_run_cnn_overlay_formats_multihead_predictions() -> None:
+    """CNN overlay must format multi-head ``FrameResult`` CNN predictions,
+    taking the arg-max class per factor, into the per-detection label stack."""
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
+    from hydra_suite.core.inference.result import (
+        CNNDetectionPrediction,
+        CNNFactorPrediction,
+        CNNResult,
+    )
 
-    captured: dict[str, object] = {}
+    det_pred = CNNDetectionPrediction(
+        det_index=0,
+        factors=[
+            CNNFactorPrediction(
+                factor_name="color",
+                class_names=["blue", "red"],
+                raw_probabilities=np.array([0.07, 0.93], dtype=np.float32),
+            ),
+            CNNFactorPrediction(
+                factor_name="side",
+                class_names=["left", "right"],
+                raw_probabilities=np.array([0.58, 0.42], dtype=np.float32),
+            ),
+        ],
+    )
+    cnn_results = [CNNResult(label="cnn_identity", predictions=[det_pred])]
 
-    corners = [
-        np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]], dtype=np.float32),
-        np.array(
-            [[10.0, 0.0], [14.0, 0.0], [14.0, 2.0], [10.0, 2.0]], dtype=np.float32
-        ),
-        np.array(
-            [[20.0, 0.0], [24.0, 0.0], [24.0, 2.0], [20.0, 2.0]], dtype=np.float32
-        ),
-    ]
+    label_stacks: list[list[str]] = [[]]
+    preview_worker._preview_run_cnn_overlay(cnn_results, label_stacks)
 
-    class FakeExecutor:
-        names = {0: "ant"}
+    assert label_stacks == [["cnn_identity: color=red 0.93 | side=left 0.58"]]
 
-        def predict(self, *args, **kwargs):
-            return []
 
+def test_preview_run_pose_overlay_labels_and_keypoints() -> None:
+    """Pose overlay must add a ``pose <mean> <valid>/<total>`` label line and
+    stash frame-space keypoints for the detection."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.inference.result import PoseResult
+
+    keypoints = np.array(
+        [[[5.0, 5.0, 0.9], [6.0, 6.0, 0.8], [7.0, 7.0, 0.05]]], dtype=np.float32
+    )
+    pose = PoseResult(keypoints=keypoints, valid_mask=np.array([True]))
+
+    label_stacks: list[list[str]] = [[]]
+    pose_keypoints_by_det: dict[int, np.ndarray] = {}
+    preview_worker._preview_run_pose_overlay(
+        pose, {"pose_min_kpt_conf_valid": 0.2}, label_stacks, pose_keypoints_by_det
+    )
+
+    assert label_stacks[0][0].startswith("pose ")
+    assert label_stacks[0][0].endswith("2/3")  # two of three keypoints valid
+    assert 0 in pose_keypoints_by_det
+    assert pose_keypoints_by_det[0].shape == (3, 3)
+
+
+def test_preview_run_apriltag_overlay_offsets_corners_to_frame_space(
+    monkeypatch,
+) -> None:
+    """AprilTag overlay must offset crop-local tag corners back into frame
+    space using the detection's AABB-crop origin and add a per-detection tag
+    label line."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.inference.result import AprilTagResult
+
+    # Detection AABB at x in [100,140], y in [100,140]; padding 0 -> origin (100,100).
+    det_corners = np.array(
+        [[100.0, 100.0], [140.0, 100.0], [140.0, 140.0], [100.0, 140.0]],
+        dtype=np.float32,
+    )
+    obb = _FakeOBBResult([det_corners], [0.9])
+
+    tag_corners = np.array(
+        [[[2.0, 2.0], [10.0, 2.0], [10.0, 10.0], [2.0, 10.0]]], dtype=np.float32
+    )
+    apriltag = AprilTagResult(
+        tag_ids=[7],
+        det_indices=[0],
+        centers=np.array([[6.0, 6.0]], dtype=np.float32),
+        corners=tag_corners,
+    )
+
+    drawn: dict[str, object] = {}
+
+    def _fake_polylines(img, pts, isClosed, color, thickness):
+        drawn["pts"] = np.asarray(pts[0])
+
+    monkeypatch.setattr(preview_worker.cv2, "polylines", _fake_polylines)
     monkeypatch.setattr(
-        preview_worker,
-        "_preview_run_direct_raw_detection",
-        lambda extractor, executor, frame, target_classes, raw_conf_floor, max_det: (
-            [np.array([1.0, 1.0, 0.0], dtype=np.float32)] * 3,
-            [100.0, 80.0, 60.0],
-            [(100.0, 2.0)] * 3,
-            [0.9, 0.3, 0.8],
-            corners,
-            [0, 1, 2],
-            None,
-        ),
+        preview_worker, "_draw_preview_label_stack", lambda *a, **k: None
     )
 
-    def _fake_select_candidates(
-        params,
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        roi_mask=None,
-    ):
-        return [2]
-
-    def _fake_run_headtail(
-        headtail_state,
-        frame_to_process,
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        yolo_params,
-        roi_mask=None,
-    ):
-        candidate_indices = _fake_select_candidates(
-            yolo_params,
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confidences,
-            raw_obb_corners,
-        )
-        captured["candidate_indices"] = list(candidate_indices)
-        captured["corner_count"] = len(raw_obb_corners)
-        hints = [float("nan")] * len(raw_obb_corners)
-        confidences = [0.0] * len(raw_obb_corners)
-        directed = [0] * len(raw_obb_corners)
-        for idx in candidate_indices:
-            hints[idx] = 1.25
-            confidences[idx] = 0.88
-            directed[idx] = 1
-        return hints, confidences, directed
-
-    monkeypatch.setattr(
-        preview_worker,
-        "_preview_select_headtail_candidate_indices",
-        _fake_select_candidates,
-    )
-    monkeypatch.setattr(preview_worker, "_preview_run_headtail", _fake_run_headtail)
-
-    raw = preview_worker._preview_run_yolo_raw_detection(
-        {"mode": "direct", "obb": FakeExecutor()},
-        np.zeros((32, 32, 3), dtype=np.uint8),
-        {"YOLO_OBB_MODE": "direct", "MAX_TARGETS": 2},
-        headtail_state=object(),
+    test_frame = np.zeros((200, 200, 3), dtype=np.uint8)
+    label_stacks: list[list[str]] = [[]]
+    preview_worker._preview_run_apriltag_overlay(
+        apriltag, obb, {"individual_crop_padding": 0.0}, label_stacks, test_frame
     )
 
-    assert captured["candidate_indices"] == [2]
-    assert captured["corner_count"] == 3
-    assert np.isnan(raw[6][0])
-    assert np.isnan(raw[6][1])
-    assert raw[6][2] == 1.25
-    assert raw[7] == [0.0, 0.0, 0.88]
-    assert raw[8] == [0, 0, 1]
+    # crop-local (2,2) + origin (100,100) -> frame-space (102,102)
+    assert drawn["pts"][0].tolist() == [102, 102]
+    assert label_stacks[0] == ["tag 7"]
 
 
 def test_preview_draw_yolo_footer_reports_disabled_headtail(monkeypatch) -> None:
@@ -696,165 +490,10 @@ def test_preview_draw_obb_annotations_labels_headtail_abstain(monkeypatch) -> No
     assert any("head abstain 0.77" in " ".join(lines) for lines in captured_labels)
 
 
-def test_preview_run_cnn_overlay_formats_multihead_predictions(monkeypatch) -> None:
-    preview_worker = importlib.import_module(
-        "hydra_suite.trackerkit.gui.workers.preview_worker"
-    )
-    cnn_mod = importlib.import_module("hydra_suite.core.identity.classification.cnn")
-
-    class FakeBackend:
-        def __init__(self, config, model_path=None, compute_runtime="cpu") -> None:
-            self.config = config
-            self.model_path = model_path
-            self.compute_runtime = compute_runtime
-
-        def predict_batch(self, crops):
-            return [
-                cnn_mod.ClassPrediction(
-                    det_index=0,
-                    factor_names=("color", "side"),
-                    class_names=("red", None),
-                    confidences=(0.93, 0.42),
-                )
-            ]
-
-        def close(self) -> None:
-            return None
-
-    monkeypatch.setattr(cnn_mod, "CNNIdentityBackend", FakeBackend)
-    monkeypatch.setattr(
-        preview_worker, "resolve_model_path", lambda path: "/tmp/multihead.json"
-    )
-    monkeypatch.setattr(preview_worker.os.path, "exists", lambda path: True)
-
-    label_stacks = [[]]
-    backends = preview_worker._preview_run_cnn_overlay(
-        [np.zeros((4, 2), dtype=np.float32)],
-        [np.zeros((16, 16, 3), dtype=np.uint8)],
-        {
-            "cnn_classifiers": [
-                {
-                    "model_path": "classifier.multihead.json",
-                    "label": "cnn_identity",
-                    "confidence": 0.5,
-                    "batch_size": 8,
-                    "scoring_mode": "per_head_average",
-                }
-            ],
-            "cnn_runtime": "cpu",
-        },
-        label_stacks,
-    )
-
-    assert len(backends) == 1
-    assert label_stacks == [["cnn_identity: color=red 0.93 | side=unknown 0.42"]]
-
-
-def test_preview_run_pose_no_build_runtime_config(monkeypatch, caplog) -> None:
-    """Task 3: the pose-preview branch must construct ``PoseRuntimeConfig``
-    directly (mirroring ``core/inference/stages/pose.py::load_pose_model``)
-    instead of calling the legacy ``build_runtime_config`` translation step.
-
-    Task 8: ``build_runtime_config`` itself has since been deleted from
-    ``core/identity/pose/api.py`` (zero real callers remained), so the
-    guard this test used to install by monkeypatching it to raise is no
-    longer possible/needed -- the function simply does not exist anymore."""
-    preview_worker = importlib.import_module(
-        "hydra_suite.trackerkit.gui.workers.preview_worker"
-    )
-    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
-    pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
-    resolver_mod = importlib.import_module("hydra_suite.runtime.resolver")
-
-    assert not hasattr(pose_api, "build_runtime_config")
-
-    captured: dict[str, object] = {}
-
-    class FakeBackend:
-        def predict_batch(self, crops):
-            captured["predict_batch_called"] = True
-            return []
-
-    def _fake_create_pose_backend_from_config(config):
-        captured["pose_config"] = config
-        return FakeBackend()
-
-    monkeypatch.setattr(
-        pose_api,
-        "create_pose_backend_from_config",
-        _fake_create_pose_backend_from_config,
-    )
-
-    # Pin the platform so tier -> compute_runtime resolution is deterministic:
-    # gpu_fast + CUDA available -> "tensorrt" (matches load_pose_model's SLEAP
-    # branch: runtime_flavor="tensorrt", device="cuda").
-    monkeypatch.setattr(
-        resolver_mod,
-        "detect_platform",
-        lambda: resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
-    )
-
-    context = {
-        "enable_pose_extractor": True,
-        "pose_model_type": "sleap",
-        "pose_model_dir": "/models/sleap_model",
-        "pose_skeleton_file": "",
-        "pose_min_kpt_conf_valid": 0.3,
-        "pose_batch_size": 2,
-        "pose_sleap_env": "sleap_env_x",
-        "runtime_tier": "gpu_fast",
-    }
-
-    canonical_crops = [np.zeros((8, 8, 3), dtype=np.uint8)]
-    canonical_inverses = [np.eye(2, 3, dtype=np.float32)]
-    label_stacks = [[]]
-    pose_keypoints_by_det: dict[int, np.ndarray] = {}
-
-    with caplog.at_level("WARNING"):
-        result = preview_worker._preview_run_pose_overlay(
-            [np.zeros((4, 2), dtype=np.float32)],
-            canonical_crops,
-            canonical_inverses,
-            context,
-            label_stacks,
-            pose_keypoints_by_det,
-        )
-
-    assert not any(
-        "Preview pose overlay disabled" in rec.message for rec in caplog.records
-    )
-    assert result is not None
-    assert captured["predict_batch_called"] is True
-
-    expected_runtime = resolver_mod.resolve_compute_runtime(
-        "gpu_fast",
-        resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
-        stage="sleap_pose",
-    )
-    assert expected_runtime == "tensorrt"
-
-    pose_config = captured["pose_config"]
-    assert isinstance(pose_config, pose_types.PoseRuntimeConfig)
-    assert pose_config.backend_family == "sleap"
-    assert pose_config.runtime_flavor == "tensorrt"
-    assert pose_config.device == "cuda"
-    assert pose_config.sleap_device == "cuda"
-    assert pose_config.sleap_env == "sleap_env_x"
-
-
-def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
-    monkeypatch, caplog
-) -> None:
-    """Critical-finding regression test: `_collect_preview_detection_context`
-    (the only place that builds the preview context dict) must populate
-    ``runtime_tier`` so that `_preview_run_pose_overlay`'s tier-based
-    ``resolve_compute_runtime`` branch is actually reached in production,
-    instead of always falling back to the legacy ``compute_runtime`` string.
-
-    This exercises the *full* path: a real ``DetectionPanel`` (via a real
-    ``MainWindow``) builds the context, and that context is fed unmodified
-    into ``_preview_run_pose_overlay``.
-    """
+def test_detection_panel_context_populates_runtime_tier(monkeypatch) -> None:
+    """Regression: ``_collect_preview_detection_context`` must populate
+    ``runtime_tier`` so the preview InferenceConfig is built on the selected
+    pipeline tier (rather than defaulting)."""
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -865,14 +504,7 @@ def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
 
     from hydra_suite.trackerkit.gui.main_window import MainWindow
 
-    preview_worker = importlib.import_module(
-        "hydra_suite.trackerkit.gui.workers.preview_worker"
-    )
-    pose_api = importlib.import_module("hydra_suite.core.identity.pose.api")
-    pose_types = importlib.import_module("hydra_suite.core.identity.pose.types")
     resolver_mod = importlib.import_module("hydra_suite.runtime.resolver")
-
-    # Pin the platform so tier -> compute_runtime resolution is deterministic.
     monkeypatch.setattr(
         resolver_mod,
         "detect_platform",
@@ -881,8 +513,6 @@ def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
 
     mw = MainWindow()
     try:
-        # Force the tier selector to "gpu_fast" regardless of what tiers the
-        # test host's real hardware happens to expose in the combo box.
         monkeypatch.setattr(mw, "_selected_runtime_tier", lambda: "gpu_fast")
         monkeypatch.setattr(
             mw, "_get_resolved_pose_model_dir", lambda backend: "/models/sleap_model"
@@ -893,70 +523,9 @@ def test_detection_panel_context_runtime_tier_drives_pose_preview_resolution(
 
         context = mw._detection_panel._collect_preview_detection_context()
 
-        # The bug: this key was never populated, so preview pose overlay's
-        # resolution always fell back to the legacy `compute_runtime` string.
         assert context["runtime_tier"] == "gpu_fast"
         assert context["pose_model_type"] == "sleap"
         assert context["pose_model_dir"] == "/models/sleap_model"
         assert context["enable_pose_extractor"] is True
-
-        # Task 8: build_runtime_config was deleted from pose/api.py entirely
-        # (zero real callers remained), so it cannot be called here.
-        assert not hasattr(pose_api, "build_runtime_config")
-
-        captured: dict[str, object] = {}
-
-        class FakeBackend:
-            def predict_batch(self, crops):
-                captured["predict_batch_called"] = True
-                return []
-
-        def _fake_create_pose_backend_from_config(config):
-            captured["pose_config"] = config
-            return FakeBackend()
-
-        monkeypatch.setattr(
-            pose_api,
-            "create_pose_backend_from_config",
-            _fake_create_pose_backend_from_config,
-        )
-
-        canonical_crops = [np.zeros((8, 8, 3), dtype=np.uint8)]
-        canonical_inverses = [np.eye(2, 3, dtype=np.float32)]
-        label_stacks = [[]]
-        pose_keypoints_by_det: dict[int, np.ndarray] = {}
-
-        with caplog.at_level("WARNING"):
-            result = preview_worker._preview_run_pose_overlay(
-                [np.zeros((4, 2), dtype=np.float32)],
-                canonical_crops,
-                canonical_inverses,
-                context,
-                label_stacks,
-                pose_keypoints_by_det,
-            )
-
-        assert not any(
-            "Preview pose overlay disabled" in rec.message for rec in caplog.records
-        )
-        assert result is not None
-        assert captured["predict_batch_called"] is True
-
-        # The tier ("gpu_fast") that _collect_preview_detection_context
-        # threaded through must be what drove the resolved runtime — not the
-        # legacy `compute_runtime` fallback string.
-        expected_runtime = resolver_mod.resolve_compute_runtime(
-            "gpu_fast",
-            resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
-            stage="sleap_pose",
-        )
-        assert expected_runtime == "tensorrt"
-
-        pose_config = captured["pose_config"]
-        assert isinstance(pose_config, pose_types.PoseRuntimeConfig)
-        assert pose_config.backend_family == "sleap"
-        assert pose_config.runtime_flavor == "tensorrt"
-        assert pose_config.device == "cuda"
-        assert pose_config.sleap_device == "cuda"
     finally:
         mw.close()
