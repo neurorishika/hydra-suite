@@ -904,6 +904,140 @@ class BgSubtractionOptimizer(QThread):
         self.result_signal.emit(run.results)
 
 
+def generate_bg_previews(
+    video_path: str,
+    base_params: Dict[str, Any],
+    trial_params: Dict[str, Any],
+    n_sample_frames: int,
+    *,
+    prime_frames: Optional[List[np.ndarray]] = None,
+    sample_frames: Optional[List[np.ndarray]] = None,
+    sample_indices: Optional[List[int]] = None,
+    roi_mask: Optional[np.ndarray] = None,
+    frame_cb: "Callable[[int, np.ndarray], None] | None" = None,
+    stop_check: "Callable[[], bool] | None" = None,
+) -> None:
+    """Generate annotated preview frames for a given detection parameter set (Qt-free, pure core).
+
+    Reads the same sample frames as the optimiser (or the ones passed in via
+    ``prime_frames``/``sample_frames``/``sample_indices``/``roi_mask``), runs the
+    full BG-sub detection pipeline for the chosen parameters, and reports
+    (index, RGB) pairs via ``frame_cb`` instead of emitting Qt signals.
+    """
+
+    def _stopped() -> bool:
+        return stop_check() if stop_check is not None else False
+
+    params = base_params
+    det_params = dict(params)
+    det_params.update(trial_params)
+
+    if sample_frames is None or sample_indices is None:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        start = params.get("START_FRAME", 0)
+        end = min(params.get("END_FRAME", total_frames - 1), total_frames - 1)
+        prime_n = int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 0)
+        first_valid = start + prime_n
+        if first_valid >= end:
+            first_valid = start
+        n_available = end - first_valid + 1
+        n_sample = min(n_sample_frames, max(n_available, 1))
+        sample_indices = np.linspace(first_valid, end, n_sample, dtype=int).tolist()
+        resize_f = params.get("RESIZE_FACTOR", 1.0)
+        sample_frames = _read_gray_frames(
+            cap,
+            sample_indices,
+            resize_f,
+            _stopped,
+        )
+        max_prime_frames = _prime_frame_search_upper_bound(params, total_frames)
+        prime_indices = _build_prime_frame_indices(
+            total_frames, max_prime_frames
+        ).tolist()
+        prime_frames = _read_gray_frames(
+            cap,
+            prime_indices,
+            resize_f,
+            _stopped,
+        )
+        cap.release()
+        if sample_frames is None or not sample_frames:
+            return
+        roi_mask = _resize_roi_mask(
+            params.get("ROI_MASK"),
+            sample_frames[0].shape if sample_frames else None,
+        )
+
+    frame_cache = _BgFrameCache(
+        prime_frames=prime_frames or [],
+        sample_frames=sample_frames,
+        sample_indices=sample_indices,
+        roi_mask=roi_mask,
+    )
+    bg_model, detector, intensity_history, lighting_state = _init_trial_pipeline(
+        det_params,
+        frame_cache,
+    )
+
+    for fi, idx in enumerate(frame_cache.sample_indices):
+        if _stopped():
+            break
+        raw_gray = frame_cache.sample_frames[fi]
+        gray, _bg_u8, _fg, meas, sizes, shapes = _run_bg_trial_frame(
+            raw_gray,
+            idx,
+            det_params,
+            bg_model,
+            detector,
+            frame_cache.roi_mask,
+            intensity_history,
+            lighting_state,
+        )
+        display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+        # draw detections on frame
+        for j, (m, sz) in enumerate(zip(meas, sizes)):
+            cx, cy = int(m[0]), int(m[1])
+            radius = max(int((sz / 3.14159) ** 0.5), 3)
+            cv2.circle(display, (cx, cy), radius, (0, 255, 0), 2)
+            cv2.putText(
+                display,
+                str(j + 1),
+                (cx + radius + 2, cy - 2),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA,
+            )
+        # count overlay
+        max_t = params.get("MAX_TARGETS", 5)
+        n_det = len(meas)
+        clr = (
+            (0, 255, 0)
+            if n_det == max_t
+            else ((0, 200, 255) if n_det < max_t else (0, 0, 255))
+        )
+        cv2.putText(
+            display,
+            f"Frame {int(idx)}  |  {n_det}/{max_t} detections",
+            (8, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            clr,
+            1,
+            cv2.LINE_AA,
+        )
+
+        rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+        if frame_cb is not None:
+            frame_cb(int(fi), rgb)
+
+
 # ---------------------------------------------------------------------------
 # Detection preview worker
 # ---------------------------------------------------------------------------
@@ -966,115 +1100,15 @@ class BgDetectionPreviewWorker(QThread):
             self.finished_signal.emit()
 
     def _generate_previews(self) -> None:
-        params = self.base_params
-        det_params = dict(params)
-        det_params.update(self.trial_params)
-
-        sample_frames = self._cached_sample_frames
-        sample_indices = self._cached_sample_indices
-        prime_frames = self._cached_prime_frames
-        roi_mask = self._cached_roi_mask
-
-        if sample_frames is None or sample_indices is None:
-            cap = cv2.VideoCapture(self.video_path)
-            if not cap.isOpened():
-                return
-
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            start = params.get("START_FRAME", 0)
-            end = min(params.get("END_FRAME", total_frames - 1), total_frames - 1)
-            prime_n = int(params.get("BACKGROUND_PRIME_FRAMES", 30) or 0)
-            first_valid = start + prime_n
-            if first_valid >= end:
-                first_valid = start
-            n_available = end - first_valid + 1
-            n_sample = min(self.n_sample_frames, max(n_available, 1))
-            sample_indices = np.linspace(first_valid, end, n_sample, dtype=int).tolist()
-            resize_f = params.get("RESIZE_FACTOR", 1.0)
-            sample_frames = _read_gray_frames(
-                cap,
-                sample_indices,
-                resize_f,
-                lambda: self._stop_requested,
-            )
-            max_prime_frames = _prime_frame_search_upper_bound(params, total_frames)
-            prime_indices = _build_prime_frame_indices(
-                total_frames, max_prime_frames
-            ).tolist()
-            prime_frames = _read_gray_frames(
-                cap,
-                prime_indices,
-                resize_f,
-                lambda: self._stop_requested,
-            )
-            cap.release()
-            if sample_frames is None or not sample_frames:
-                return
-            roi_mask = _resize_roi_mask(
-                params.get("ROI_MASK"),
-                sample_frames[0].shape if sample_frames else None,
-            )
-
-        frame_cache = _BgFrameCache(
-            prime_frames=prime_frames or [],
-            sample_frames=sample_frames,
-            sample_indices=sample_indices,
-            roi_mask=roi_mask,
+        generate_bg_previews(
+            self.video_path,
+            self.base_params,
+            self.trial_params,
+            self.n_sample_frames,
+            prime_frames=self._cached_prime_frames,
+            sample_frames=self._cached_sample_frames,
+            sample_indices=self._cached_sample_indices,
+            roi_mask=self._cached_roi_mask,
+            frame_cb=lambda i, rgb: self.frame_signal.emit(i, rgb),
+            stop_check=lambda: self._stop_requested,
         )
-        bg_model, detector, intensity_history, lighting_state = _init_trial_pipeline(
-            det_params,
-            frame_cache,
-        )
-
-        for fi, idx in enumerate(frame_cache.sample_indices):
-            if self._stop_requested:
-                break
-            raw_gray = frame_cache.sample_frames[fi]
-            gray, _bg_u8, _fg, meas, sizes, shapes = _run_bg_trial_frame(
-                raw_gray,
-                idx,
-                det_params,
-                bg_model,
-                detector,
-                frame_cache.roi_mask,
-                intensity_history,
-                lighting_state,
-            )
-            display = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-            # draw detections on frame
-            for j, (m, sz) in enumerate(zip(meas, sizes)):
-                cx, cy = int(m[0]), int(m[1])
-                radius = max(int((sz / 3.14159) ** 0.5), 3)
-                cv2.circle(display, (cx, cy), radius, (0, 255, 0), 2)
-                cv2.putText(
-                    display,
-                    str(j + 1),
-                    (cx + radius + 2, cy - 2),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    (0, 255, 0),
-                    1,
-                    cv2.LINE_AA,
-                )
-            # count overlay
-            max_t = params.get("MAX_TARGETS", 5)
-            n_det = len(meas)
-            clr = (
-                (0, 255, 0)
-                if n_det == max_t
-                else ((0, 200, 255) if n_det < max_t else (0, 0, 255))
-            )
-            cv2.putText(
-                display,
-                f"Frame {int(idx)}  |  {n_det}/{max_t} detections",
-                (8, 22),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                clr,
-                1,
-                cv2.LINE_AA,
-            )
-
-            rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
-            self.frame_signal.emit(fi, rgb)
