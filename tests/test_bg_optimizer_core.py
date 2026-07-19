@@ -139,3 +139,26 @@ def test_generate_bg_previews_honors_stop_check(monkeypatch):
     )
 
     assert frames == []
+
+
+def test_core_background_imports_no_qt():
+    import ast
+    from pathlib import Path
+
+    import hydra_suite.core.background as bg
+
+    offenders = []
+    for py in Path(bg.__file__).parent.glob("*.py"):
+        for node in ast.walk(ast.parse(py.read_text(), filename=str(py))):
+            mod = (
+                node.module
+                if isinstance(node, ast.ImportFrom)
+                else (
+                    ",".join(a.name for a in node.names)
+                    if isinstance(node, ast.Import)
+                    else None
+                )
+            )
+            if mod and ("PySide6" in mod or "QtCore" in mod):
+                offenders.append(f"{py.name}:{node.lineno}")
+    assert not offenders, "core/background must not import Qt: " + "; ".join(offenders)

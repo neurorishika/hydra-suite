@@ -31,8 +31,6 @@ try:
 except ImportError:  # pragma: no cover
     optuna = None  # type: ignore[assignment]
 
-from PySide6.QtCore import QThread, Signal
-
 logger = logging.getLogger(__name__)
 
 
@@ -827,83 +825,6 @@ def run_bg_optimization(
     )
 
 
-# ---------------------------------------------------------------------------
-# Optimizer thread
-# ---------------------------------------------------------------------------
-
-
-class BgSubtractionOptimizer(QThread):
-    """QThread that runs an Optuna study to tune detection parameters."""
-
-    progress_signal = Signal(int, str)  # (percentage, message)
-    result_signal = Signal(list)  # list[BgOptimizationResult]
-    finished_signal = Signal()
-
-    def __init__(
-        self,
-        video_path: str,
-        base_params: Dict[str, Any],
-        tuning_config: Dict[str, bool],
-        scoring_weights: Dict[str, float] | None = None,
-        n_trials: int = 50,
-        n_sample_frames: int = 30,
-        sampler_type: str = "tpe",
-        parent: Optional[Any] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.video_path = video_path
-        self.base_params = dict(base_params)
-        self.tuning_config = tuning_config
-        self.scoring_weights = scoring_weights or {
-            "SCORE_WEIGHT_COUNT": 0.50,
-            "SCORE_WEIGHT_CONSISTENCY": 0.30,
-            "SCORE_WEIGHT_STABILITY": 0.20,
-        }
-        self.n_trials = n_trials
-        self.n_sample_frames = n_sample_frames
-        self.sampler_type = sampler_type
-        self._stop_requested = False
-
-    # ------------------------------------------------------------------
-    def stop(self) -> None:
-        self._stop_requested = True
-
-    # ------------------------------------------------------------------
-    def run(self) -> None:  # noqa: C901  (complex but self-contained)
-        try:
-            self._run_optimization()
-        except Exception as e:
-            logger.exception("BG-subtraction optimization failed")
-            self.progress_signal.emit(0, f"Error: {e}")
-        finally:
-            self.finished_signal.emit()
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _run_optimization(self) -> None:
-        run = run_bg_optimization(
-            self.video_path,
-            self.base_params,
-            self.tuning_config,
-            self.scoring_weights,
-            self.n_trials,
-            self.n_sample_frames,
-            self.sampler_type,
-            progress_cb=lambda pct, msg: self.progress_signal.emit(pct, msg),
-            stop_check=lambda: self._stop_requested,
-        )
-
-        # Store cached raw frames so the preview worker can reuse the same sample set.
-        self._cached_prime_frames = run.prime_frames
-        self._cached_sample_frames = run.sample_frames
-        self._cached_sample_indices = run.sample_indices
-        self._cached_roi_mask = run.roi_mask
-
-        self.result_signal.emit(run.results)
-
-
 def generate_bg_previews(
     video_path: str,
     base_params: Dict[str, Any],
@@ -1036,79 +957,3 @@ def generate_bg_previews(
         rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         if frame_cb is not None:
             frame_cb(int(fi), rgb)
-
-
-# ---------------------------------------------------------------------------
-# Detection preview worker
-# ---------------------------------------------------------------------------
-
-
-class BgDetectionPreviewWorker(QThread):
-    """Generate annotated preview frames for a given detection parameter set.
-
-    Reads the same sample frames as the optimiser, runs the full BG-sub
-    detection pipeline for the chosen parameters, and emits (index, RGB)
-    pairs so the dialog can display them.
-    """
-
-    # (frame_index_in_sample_list, rgb_numpy_array)
-    frame_signal = Signal(int, object)
-    finished_signal = Signal()
-
-    def __init__(
-        self,
-        video_path: str,
-        base_params: Dict[str, Any],
-        trial_params: Dict[str, Any],
-        n_sample_frames: int = 30,
-        cached_prime_frames: Optional[List[np.ndarray]] = None,
-        cached_sample_frames: Optional[List[np.ndarray]] = None,
-        cached_sample_indices: Optional[List[int]] = None,
-        roi_mask: Optional[np.ndarray] = None,
-        parent: Optional[Any] = None,
-    ) -> None:
-        super().__init__(parent)
-        self.video_path = video_path
-        self.base_params = dict(base_params)
-        self.trial_params = dict(trial_params)
-        self.n_sample_frames = n_sample_frames
-        self._cached_prime_frames = (
-            [frame.copy() for frame in cached_prime_frames]
-            if cached_prime_frames
-            else None
-        )
-        self._cached_sample_frames = (
-            [frame.copy() for frame in cached_sample_frames]
-            if cached_sample_frames
-            else None
-        )
-        self._cached_sample_indices = (
-            list(cached_sample_indices) if cached_sample_indices else None
-        )
-        self._cached_roi_mask = roi_mask.copy() if roi_mask is not None else None
-        self._stop_requested = False
-
-    def stop(self) -> None:
-        self._stop_requested = True
-
-    def run(self) -> None:
-        try:
-            self._generate_previews()
-        except Exception:
-            logger.exception("BG detection preview failed")
-        finally:
-            self.finished_signal.emit()
-
-    def _generate_previews(self) -> None:
-        generate_bg_previews(
-            self.video_path,
-            self.base_params,
-            self.trial_params,
-            self.n_sample_frames,
-            prime_frames=self._cached_prime_frames,
-            sample_frames=self._cached_sample_frames,
-            sample_indices=self._cached_sample_indices,
-            roi_mask=self._cached_roi_mask,
-            frame_cb=lambda i, rgb: self.frame_signal.emit(i, rgb),
-            stop_check=lambda: self._stop_requested,
-        )
