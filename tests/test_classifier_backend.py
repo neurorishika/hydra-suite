@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
+
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 
 def test_error_hierarchy_importable():
@@ -58,7 +58,9 @@ def test_backend_parses_tiny_flat_metadata(tiny_flat_headtail):
     """ClassifierBackend exposes metadata for a v2 tiny flat checkpoint without loading weights."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(tiny_flat_headtail), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.arch == "tinyclassifier"
     assert meta.input_size == (64, 64)
@@ -74,7 +76,9 @@ def test_backend_tiny_flat_predict_batch_shape(tiny_flat_headtail):
     """predict_batch returns per-crop per-factor probability vectors with correct shape."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(tiny_flat_headtail), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     crops = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(3)]
     out = backend.predict_batch(crops)
     assert isinstance(out, list) and len(out) == 3
@@ -98,7 +102,9 @@ def test_backend_tiny_preprocess_matches_training_path(tiny_flat_headtail):
     crop[..., 1] = 125
     crop[..., 2] = 240
 
-    backend = ClassifierBackend(str(tiny_flat_headtail), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     processed = backend._preprocess([crop])[0]
 
     rgb = cv2.resize(crop, (64, 64), interpolation=cv2.INTER_LINEAR)[:, :, ::-1]
@@ -112,7 +118,9 @@ def test_backend_non_square_input_size_roundtrip(tiny_flat_nonsquare):
     """[H, W] serialization in checkpoint is preserved as (H, W) in memory."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(tiny_flat_nonsquare), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(tiny_flat_nonsquare), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     assert backend.metadata.input_size == (256, 192)
     # predict_batch preprocesses to (H=256, W=192). Just smoke-test that it does not raise.
     crops = [np.zeros((100, 100, 3), dtype=np.uint8)]
@@ -126,7 +134,9 @@ def test_backend_parses_yolo_flat_metadata(yolo_flat_headtail):
     pytest.importorskip("ultralytics")
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(yolo_flat_headtail), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(yolo_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.arch == "yolo"
     assert meta.is_multihead is False
@@ -146,7 +156,9 @@ def test_backend_yolo_flat_predict_batch_shape(yolo_flat_headtail):
     pytest.importorskip("ultralytics")
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(yolo_flat_headtail), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(yolo_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     crops = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(2)]
     out = backend.predict_batch(crops)
     assert len(out) == 2
@@ -181,7 +193,9 @@ def test_backend_yolo_flat_sidecar_metadata(tmp_path, yolo_flat_headtail):
         encoding="utf-8",
     )
 
-    backend = ClassifierBackend(str(model_path), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(model_path), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.input_size == (640, 640)
     assert meta.monochrome is True
@@ -193,7 +207,9 @@ def test_backend_torchvision_flat_metadata_and_inference(torchvision_flat_identi
     """ClassifierBackend loads a torchvision flat v2 checkpoint and returns per-factor probs."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(torchvision_flat_identity), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(torchvision_flat_identity), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.arch == "resnet18"
     assert meta.input_size == (64, 64)
@@ -217,14 +233,19 @@ def test_backend_parses_legacy_flat_torchvision_metadata(
     from hydra_suite.core.identity.classification.errors import ClassifierFormatError
 
     with pytest.raises(ClassifierFormatError):
-        ClassifierBackend(str(legacy_torchvision_flat_headtail), compute_runtime="cpu")
+        ClassifierBackend(
+            str(legacy_torchvision_flat_headtail),
+            resolved=ResolvedBackend("torch", "cpu", False),
+        )
 
 
 def test_backend_tiny_multi_metadata_and_inference(tiny_multi_identity):
     """ClassifierBackend parses multi-head metadata and splits logits per factor."""
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(tiny_multi_identity), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(tiny_multi_identity), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.is_multihead is True
     assert meta.factor_names == ["color", "shape"]
@@ -247,7 +268,9 @@ def test_backend_yolo_multihead_bundle(yolo_multihead_bundle):
     pytest.importorskip("ultralytics")
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(yolo_multihead_bundle), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(yolo_multihead_bundle), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.arch == "yolo_multihead"
     assert meta.is_multihead is True
@@ -290,7 +313,9 @@ def test_backend_generic_classifier_multihead_bundle(
         monochrome=False,
     )
 
-    backend = ClassifierBackend(str(manifest), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(manifest), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.arch == "classifier_multihead"
     assert meta.factor_names == ["side", "heading"]
@@ -346,7 +371,9 @@ def test_backend_generic_multihead_bundle_dedupes_duplicate_factor_names(
         encoding="utf-8",
     )
 
-    backend = ClassifierBackend(str(manifest), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(manifest), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.factor_names == ["flat", "flat_1"]
 
@@ -414,11 +441,14 @@ def test_backend_generic_multihead_bundle_preserves_onnx_runtime(
     )
     monkeypatch.setattr(ClassifierBackend, "_load_onnx", _fail_load_onnx)
 
-    backend = ClassifierBackend(str(manifest), compute_runtime="onnx_cpu")
+    # The resolved backend is threaded verbatim to each factor child; TensorRT
+    # is a representable ResolvedBackend (onnx_cpu is not, under Gen-2).
+    resolved = ResolvedBackend("tensorrt", "cuda", False)
+    backend = ClassifierBackend(str(manifest), resolved=resolved)
     out = backend.predict_batch([np.zeros((48, 48, 3), dtype=np.uint8)])
 
     assert observed["path"] == str(manifest)
-    assert observed["runtime"] == "onnx_cpu"
+    assert observed["runtime"] == resolved
     assert len(out) == 1
     assert len(out[0]) == 2
     assert out[0][0].shape == (2,)
@@ -455,42 +485,23 @@ def test_backend_yolo_multihead_bundle_preserves_export_runtime(
         staticmethod(_fake_load),
     )
 
-    backend = ClassifierBackend(
-        str(yolo_multihead_bundle), compute_runtime="onnx_coreml"
-    )
+    resolved = ResolvedBackend("coreml", "mps", False)
+    backend = ClassifierBackend(str(yolo_multihead_bundle), resolved=resolved)
     out = backend.predict_batch([np.zeros((64, 64, 3), dtype=np.uint8)])
 
     assert observed["path"] == str(yolo_multihead_bundle)
-    assert observed["runtime"] == "onnx_coreml"
+    assert observed["runtime"] == resolved
     assert len(out) == 1
     assert len(out[0]) == 2
     backend.close()
 
 
-def test_backend_tiny_onnx_lazy_derive(tiny_flat_headtail):
-    """onnx_cpu runtime derives and caches a .onnx peer next to the source .pth."""
-    pytest.importorskip("onnxruntime")
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
-
-    src = Path(str(tiny_flat_headtail))
-    onnx_peer = src.with_suffix(".onnx")
-    if onnx_peer.exists():
-        onnx_peer.unlink()
-
-    backend = ClassifierBackend(str(src), compute_runtime="onnx_cpu")
-    crops = [np.zeros((32, 32, 3), dtype=np.uint8)]
-    out = backend.predict_batch(crops)
-    assert len(out) == 1 and len(out[0]) == 1
-    assert out[0][0].shape == (5,)
-    assert onnx_peer.exists(), "ONNX peer was not materialised"
-    backend.close()
-
-    # Second construction should reuse the cached peer without re-exporting.
-    mtime = onnx_peer.stat().st_mtime
-    backend2 = ClassifierBackend(str(src), compute_runtime="onnx_cpu")
-    backend2.predict_batch(crops)
-    assert onnx_peer.stat().st_mtime == mtime
-    backend2.close()
+# NOTE: test_backend_tiny_onnx_lazy_derive was deleted in Task 4a. It asserted
+# native-ONNX-on-CPU ("onnx_cpu"): the backend derives a .onnx peer and runs it
+# through ONNX Runtime on CPU. Under ResolvedBackend that behavior is
+# unrepresentable — the resolver never emits onnx_cpu, and (torch, cpu) loads the
+# checkpoint natively without ever creating an ONNX peer — and unreachable in
+# production, so there is no faithful ResolvedBackend translation of the test.
 
 
 def test_backend_falls_back_to_native_torch_when_onnx_accelerator_missing(
@@ -523,12 +534,14 @@ def test_backend_falls_back_to_native_torch_when_onnx_accelerator_missing(
     monkeypatch.setattr(
         backend_module,
         "_native_accelerator_available",
-        lambda runtime: runtime == "tensorrt",
+        lambda resolved: resolved.device == "cuda",
     )
     monkeypatch.setattr(backend_module._TinyLoader, "load", staticmethod(_fake_load))
     monkeypatch.setattr(ClassifierBackend, "_load_onnx", _fail_load_onnx)
 
-    backend = ClassifierBackend(str(tiny_flat_headtail), compute_runtime="tensorrt")
+    backend = ClassifierBackend(
+        str(tiny_flat_headtail), resolved=ResolvedBackend("tensorrt", "cuda", False)
+    )
     out = backend.predict_batch([np.zeros((32, 32, 3), dtype=np.uint8)])
 
     assert observed["path"] == str(tiny_flat_headtail)
@@ -547,7 +560,9 @@ def test_backend_tiny_monochrome_preprocess_matches_training_path(
 
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    backend = ClassifierBackend(str(tiny_flat_monochrome))
+    backend = ClassifierBackend(
+        str(tiny_flat_monochrome), ResolvedBackend("torch", "cpu", False)
+    )
     assert backend.metadata.monochrome is True
 
     crop = np.zeros((28, 20, 3), dtype=np.uint8)

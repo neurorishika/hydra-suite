@@ -9,7 +9,7 @@ import torch
 
 from ..config import PoseConfig
 from ..result import CropBatch, OBBResult, PoseResult
-from ..runtime import RuntimeContext, runtime_to_compute_runtime
+from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
@@ -92,19 +92,21 @@ def load_pose_model(
         skeleton_edges = []
     n_kpts = len(keypoint_names)
 
-    # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
-    # Per-stage compute_runtime fields are deprecated in favor of runtime_tier;
-    # kept in place for serialization only.
-    compute_runtime = runtime_to_compute_runtime(runtime)
+    # Derive the resolved backend from the RuntimeContext (reflects runtime_tier
+    # via the Gen-2 resolver). Per-stage compute_runtime fields are deprecated in
+    # favor of runtime_tier; kept in place for serialization only.
+    resolved = resolved_backend_for(runtime)
 
     if config.backend == "yolo":
         assert config.yolo is not None
         from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
 
+        # The resolver never emits an ONNX-on-CUDA device, so device=="cuda"
+        # covers native torch CUDA and TensorRT alike; coreml resolves to mps.
         device = (
             "cuda:0"
-            if compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
-            else ("mps" if compute_runtime in ("mps", "coreml") else "cpu")
+            if resolved.device == "cuda"
+            else ("mps" if resolved.device == "mps" else "cpu")
         )
         backend = YoloNativeBackend(
             model_path=config.yolo.model_path,
@@ -136,22 +138,24 @@ def load_pose_model(
     if _flavor_override:
         runtime_flavor = _flavor_override
         device = "cpu" if _flavor_override == "onnx_cpu" else "cuda"
-    elif compute_runtime == "cuda":
+    elif resolved.backend == "tensorrt":
+        # gpu_fast CUDA tier: exported TensorRT SLEAP backend.
+        runtime_flavor = "tensorrt"
+        device = "cuda"
+    elif resolved.device == "cuda":
         # gpu tier: native torch CUDA everywhere else in the pipeline, so SLEAP
         # runs its native (non-exported) model on CUDA too, via the service
         # backend, instead of silently using the gpu_fast (onnx) path.
         runtime_flavor = "native"
         device = "cuda"
-    elif compute_runtime in ("mps", "coreml"):
+    elif resolved.device == "mps":
         # On Apple Silicon, ONNX Runtime has no MPS provider and its CoreML
         # provider fails on SLEAP's UNet (dynamic-shape "ios18.max_pool" /
         # "unbounded dimension" errors). Use SLEAP's native TensorFlow runtime
         # instead (Metal-accelerated via the sleap conda env) rather than CoreML.
+        # Covers both the gpu (torch/mps) and gpu_fast (coreml/mps) resolutions.
         runtime_flavor = "native"
         device = "mps"
-    elif compute_runtime == "tensorrt":
-        runtime_flavor = "tensorrt"
-        device = "cuda"
     else:
         # cpu tier: SLEAP runs its native (non-exported) sleap-nn model on
         # torch-CPU via the service backend -- consistent with the cuda/mps

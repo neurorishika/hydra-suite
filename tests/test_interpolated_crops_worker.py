@@ -4,6 +4,7 @@ import importlib
 
 import pandas as pd
 
+from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
 
 
@@ -99,20 +100,27 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     observed: dict[str, object] = {}
 
     class FakeCNNConfig:
-        def __init__(self, model_path: str, confidence: float, batch_size: int) -> None:
+        def __init__(
+            self,
+            model_path: str,
+            confidence: float,
+            batch_size: int,
+            scoring_mode: str = "atomic",
+        ) -> None:
             self.model_path = model_path
             self.confidence = confidence
             self.batch_size = batch_size
+            self.scoring_mode = scoring_mode
 
     class FakeCNNBackend:
         def __init__(
-            self, config, model_path: str | None = None, compute_runtime: str = "cpu"
+            self, config, model_path: str | None = None, resolved=None
         ) -> None:
-            observed["cnn_runtime"] = compute_runtime
+            observed["cnn_resolved"] = resolved
 
     class FakeHeadTailAnalyzer:
-        def __init__(self, model_path: str, device: str = "cpu", **kwargs) -> None:
-            observed["headtail_device"] = device
+        def __init__(self, model_path: str, resolved=None, **kwargs) -> None:
+            observed["headtail_resolved"] = resolved
             self.is_available = True
 
         def close(self) -> None:
@@ -122,6 +130,10 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     monkeypatch.setattr(cnn_module, "CNNIdentityBackend", FakeCNNBackend)
     monkeypatch.setattr(headtail_module, "HeadTailAnalyzer", FakeHeadTailAnalyzer)
 
+    # Gen-2: the worker resolves the single RUNTIME_TIER through RuntimeResolver
+    # and threads a ResolvedBackend to both the CNN and head-tail stages. The
+    # "cpu" tier resolves to native torch/CPU on every host, independent of
+    # platform accelerators.
     worker = InterpolatedCropsWorker(
         "tracks.csv",
         "source.mp4",
@@ -130,18 +142,16 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
             "CNN_CLASSIFIERS": [
                 {"label": "cnn_identity", "model_path": str(cnn_model), "batch_size": 4}
             ],
-            "CNN_COMPUTE_RUNTIME": "onnx_cpu",
-            "COMPUTE_RUNTIME": "mps",
+            "RUNTIME_TIER": "cpu",
             "YOLO_HEADTAIL_MODEL_PATH": str(headtail_model),
-            "HEADTAIL_COMPUTE_RUNTIME": "cuda",
         },
     )
 
     worker._init_cnn_backends()
     worker._init_headtail_analyzer()
 
-    assert observed["cnn_runtime"] == "onnx_cpu"
-    assert observed["headtail_device"] == "cuda"
+    assert observed["cnn_resolved"] == ResolvedBackend("torch", "cpu", False)
+    assert observed["headtail_resolved"] == ResolvedBackend("torch", "cpu", False)
 
 
 def test_init_pose_backend_yolo_delegates_to_load_pose_backend(

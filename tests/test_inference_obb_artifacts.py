@@ -12,8 +12,8 @@ CLEAR error (when ``auto_export=False`` and no artifact exists) — never a sile
 PyTorch fallback.
 
 onnx_* runtimes raise ArtifactExportError immediately — OBB no longer supports
-the ONNX path; the production pipeline (runtime_to_compute_runtime) never emits
-onnx_* for OBB.
+the ONNX path; the production pipeline's tier→compute-runtime-string resolution
+never emits onnx_* for OBB.
 
 Real-export tests (which need ultralytics + a CUDA box) are guarded so they SKIP
 locally.

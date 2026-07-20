@@ -1022,7 +1022,7 @@ class SessionOrchestrator:
         on Apple Silicon (via ``resolve_compute_runtime``), and the OBB stage
         internally upgrades to a CoreML direct executor whenever the exported
         ``.mlpackage`` artifact is available (see
-        ``core/inference/runtime.py:runtime_to_compute_runtime``). CoreML's
+        ``core/inference/runtime.py:resolved_backend_for``). CoreML's
         OBB export cannot use a dynamic batch axis (Spec 1 Phase A/B,
         2026-07-04: ultralytics' CoreML export hard-crashes at compile time
         for OBB models when both the batch and spatial dims are dynamic

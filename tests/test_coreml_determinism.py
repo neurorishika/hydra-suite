@@ -1,7 +1,7 @@
 """CoreML determinism + .mlpackage freshness tests (Task 6, Phase 3).
 
 Tests:
-1. ClassifierBackend with compute_runtime="coreml" produces byte-identical
+1. ClassifierBackend with resolved=ResolvedBackend("coreml", "mps", False) produces byte-identical
    outputs for the same input on two consecutive predict_batch calls.
 2. A .mlpackage artifact is still considered fresh after a simulated
    load-induced Manifest.json touch (i.e., freshness is sidecar-based, not
@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 coremltools = pytest.importorskip("coremltools")
 
@@ -100,7 +102,7 @@ def test_coreml_classifier_is_deterministic_run_to_run():
     """CoreML predict_batch is byte-identical for identical input on two calls.
 
     Constructs a ClassifierBackend on the real orientation .pth with
-    compute_runtime="coreml", runs predict_batch twice on the same 8 fixed
+    resolved=ResolvedBackend("coreml", "mps", False), runs predict_batch twice on the same 8 fixed
     crops, and asserts np.array_equal on all per-factor probability vectors.
     """
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
@@ -108,7 +110,9 @@ def test_coreml_classifier_is_deterministic_run_to_run():
     rng = np.random.default_rng(42)
     crops = [rng.integers(0, 256, (96, 96, 3), dtype=np.uint8) for _ in range(8)]
 
-    backend = ClassifierBackend(str(_MODEL_PATH), compute_runtime="coreml")
+    backend = ClassifierBackend(
+        str(_MODEL_PATH), resolved=ResolvedBackend("coreml", "mps", False)
+    )
     try:
         out1 = backend.predict_batch(crops)
         out2 = backend.predict_batch(crops)

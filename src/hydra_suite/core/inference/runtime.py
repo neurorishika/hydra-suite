@@ -8,6 +8,8 @@ from .config import ComputeRuntime, InferenceConfig
 if TYPE_CHECKING:
     import torch as _torch
 
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
 # Module-level map from a tensor's id() to its recorded CUDA event.
 #
 # IMPORTANT: the key is ``id(tensor)``, NOT the tensor itself. A torch tensor
@@ -51,6 +53,11 @@ class RuntimeContext:
     # `cuda_mode`/`coreml_mode` -- that combination passes the guard silently
     # while still being wrong if `requested_gpu` was meant to be True.
     requested_gpu: bool = False
+    # The ResolvedBackend produced by RuntimeResolver.resolve() during
+    # from_config(). None for hand-built contexts (tests, GUI workers) that
+    # don't go through the resolver. Additive: no existing reader consumes
+    # this yet.
+    resolved: "ResolvedBackend | None" = None
 
     def __post_init__(self) -> None:
         # cuda_mode/coreml_mode are only ever selected on the "gpu"/"gpu_fast"
@@ -147,24 +154,33 @@ class RuntimeContext:
             tensor_on_cuda=tensor_on_cuda,
             coreml_mode=coreml_mode,
             requested_gpu=requested_gpu,
+            resolved=resolved,
         )
 
 
-def runtime_to_compute_runtime(runtime: RuntimeContext) -> "ComputeRuntime":
-    """Translate a RuntimeContext (derived from runtime_tier) to a compute_runtime string.
+def resolved_backend_for(runtime: RuntimeContext) -> "ResolvedBackend":
+    """Return the context's ResolvedBackend, deriving one when it is absent.
 
-    Used by stage loaders to get the single-string runtime expected by existing
-    backend factories, without reading the deprecated per-stage compute_runtime fields.
+    ``from_config`` always attaches ``resolved``. Hand-built contexts (tests,
+    GUI workers, ``api.py``) may leave it ``None``; for those we reconstruct the
+    exact ``(backend, device)`` the resolver would have produced from the
+    tier-derived context flags — the inverse of the legacy tier→compute-runtime-string
+    map, so predicate rewrites keyed off the returned ``ResolvedBackend`` stay
+    faithful for every producible combo.
     """
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
+    if runtime.resolved is not None:
+        return runtime.resolved
     if runtime.cuda_mode:
         if runtime.tensor_on_cuda:
-            return "cuda"  # native torch GPU tier
-        return "tensorrt"  # gpu_fast tier: TensorRT returns CPU numpy
+            return ResolvedBackend("torch", "cuda", False)
+        return ResolvedBackend("tensorrt", "cuda", False)
     if runtime.coreml_mode:
-        return "coreml"  # Apple gpu_fast with CoreML artifact available
+        return ResolvedBackend("coreml", "mps", False)
     if runtime.device == "mps":
-        return "mps"
-    return "cpu"
+        return ResolvedBackend("torch", "mps", False)
+    return ResolvedBackend("torch", "cpu", False)
 
 
 def _cuda_device_available() -> str:

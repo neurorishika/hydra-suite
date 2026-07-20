@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 
 @pytest.mark.slow
 def test_tracking_smoke_headtail_and_cnn_identity(
@@ -20,7 +22,8 @@ def test_tracking_smoke_headtail_and_cnn_identity(
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     headtail = HeadTailAnalyzer(
-        model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+        model_path=str(tiny_flat_headtail),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     cnn_cfg = CNNIdentityConfig(
         model_path=str(tiny_flat_subset),
@@ -28,7 +31,9 @@ def test_tracking_smoke_headtail_and_cnn_identity(
         scoring_mode="atomic",
     )
     cnn_backend = CNNIdentityBackend(
-        cnn_cfg, model_path=str(tiny_flat_subset), compute_runtime="cpu"
+        cnn_cfg,
+        model_path=str(tiny_flat_subset),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
 
     crops = [np.random.randint(0, 255, (48, 48, 3), dtype=np.uint8) for _ in range(5)]

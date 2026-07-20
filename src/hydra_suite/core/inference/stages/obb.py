@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 from ..config import ComputeRuntime, OBBConfig
 from ..result import OBBResult
-from ..runtime import RuntimeContext, runtime_to_compute_runtime
+from ..runtime import RuntimeContext, resolved_backend_for
 from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor
 
 logger = logging.getLogger(__name__)
@@ -289,11 +289,20 @@ def _corners_from_xywhr(
 def load_obb_models(
     config: OBBConfig, runtime: RuntimeContext, *, batch_size: int = 1
 ) -> OBBModels:
-    # Derive backend from the RuntimeContext (which reflects runtime_tier via
-    # from_config). Per-stage compute_runtime fields are deprecated in favor of
-    # runtime_tier; they are kept in place for serialization only.
-    compute_runtime = runtime_to_compute_runtime(runtime)
-    if compute_runtime in ("tensorrt", "coreml"):
+    # Derive the resolved backend from the RuntimeContext (which reflects
+    # runtime_tier via from_config). Per-stage compute_runtime fields are
+    # deprecated in favor of runtime_tier; kept in place for serialization only.
+    resolved = resolved_backend_for(runtime)
+    # TEMPORARY BOUNDARY: load_obb_executor is out of scope for the ResolvedBackend
+    # cutover and still takes a compute-runtime string, so map the resolved
+    # backend/device back to that string locally. Remove this local mapping once
+    # the OBB executor consumes ResolvedBackend directly (documented follow-up).
+    compute_runtime = (
+        "tensorrt"
+        if resolved.backend == "tensorrt"
+        else ("coreml" if resolved.backend == "coreml" else resolved.device)
+    )
+    if resolved.backend in ("tensorrt", "coreml"):
         logger.warning(
             "Runtime fallback may apply for OBB stage: "
             "gpu_fast (%s) requested — artifact availability governs actual backend.",

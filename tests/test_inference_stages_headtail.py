@@ -13,6 +13,7 @@ from hydra_suite.core.inference.stages.headtail import (
     _label_to_heading_offset,
     run_headtail,
 )
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 
 def _cpu_rt():
@@ -22,6 +23,7 @@ def _cpu_rt():
         use_nvdec=False,
         default_runtime="cpu",
         tensor_on_cuda=False,
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
 
 

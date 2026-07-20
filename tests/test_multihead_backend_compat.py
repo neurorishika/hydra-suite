@@ -7,6 +7,8 @@ import os
 import numpy as np
 import pytest
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 
 @pytest.mark.skipif(
     os.environ.get("HYDRA_OFFLINE_TESTS") == "1",
@@ -49,7 +51,9 @@ def test_backend_metadata_and_predict_for_shared_trunk(tmp_path):
         path=ckpt_path,
     )
 
-    backend = ClassifierBackend(str(ckpt_path), compute_runtime="cpu")
+    backend = ClassifierBackend(
+        str(ckpt_path), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     meta = backend.metadata
     assert meta.is_multihead is True
     assert meta.factor_names == ["color1", "color2"]
