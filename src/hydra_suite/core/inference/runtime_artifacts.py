@@ -28,7 +28,7 @@ inference pipeline:
         (Apple Silicon only).
 
 Note: onnx_* runtimes are NOT supported for OBB. The production pipeline
-(runtime_to_compute_runtime) only emits {cpu, mps, cuda, tensorrt, coreml}.
+(tier→compute-runtime-string resolution) only emits {cpu, mps, cuda, tensorrt, coreml}.
 
 Square-letterbox parity: the direct executors (ported in
 ``core/inference/direct_executors.py``) use ``LetterBox(auto=False)`` so the
@@ -430,8 +430,8 @@ def load_obb_executor(
         One of ``cpu``/``mps``/``cuda`` (→ plain PyTorch model) or
         ``tensorrt`` (→ direct TRT executor, auto-exporting from ``.pt`` on
         first load when ``auto_export``) or ``coreml`` (→ CoreML mlpackage).
-        onnx_* runtimes are not supported for OBB — the production pipeline
-        (runtime_to_compute_runtime) never emits them.
+        onnx_* runtimes are not supported for OBB — the production pipeline's
+        tier→compute-runtime-string resolution never emits them.
     auto_export:
         When True (default), missing ``.engine`` artifacts are exported
         from the source ``.pt`` on first load. When False, a missing artifact

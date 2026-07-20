@@ -113,7 +113,7 @@ def load_pose_backend(
 
     # RuntimeContext.from_config derives its tier from cfg.runtime_tier, NOT
     # from the deprecated per-stage OBBDirectConfig.compute_runtime (see
-    # runtime.py's from_config / runtime_to_compute_runtime). Without this,
+    # runtime.py's from_config / resolved_backend_for). Without this,
     # the minimal InferenceConfig keeps the default "gpu" runtime_tier and
     # the requested compute_runtime is silently ignored.
     _min_cfg = InferenceConfig(

@@ -164,9 +164,9 @@ def resolved_backend_for(runtime: RuntimeContext) -> "ResolvedBackend":
     ``from_config`` always attaches ``resolved``. Hand-built contexts (tests,
     GUI workers, ``api.py``) may leave it ``None``; for those we reconstruct the
     exact ``(backend, device)`` the resolver would have produced from the
-    tier-derived context flags — the inverse of the legacy
-    ``runtime_to_compute_runtime`` map, so predicate rewrites keyed off the
-    returned ``ResolvedBackend`` stay faithful for every producible combo.
+    tier-derived context flags — the inverse of the legacy tier→compute-runtime-string
+    map, so predicate rewrites keyed off the returned ``ResolvedBackend`` stay
+    faithful for every producible combo.
     """
     from hydra_suite.runtime.resolver import ResolvedBackend
 
@@ -181,23 +181,6 @@ def resolved_backend_for(runtime: RuntimeContext) -> "ResolvedBackend":
     if runtime.device == "mps":
         return ResolvedBackend("torch", "mps", False)
     return ResolvedBackend("torch", "cpu", False)
-
-
-def runtime_to_compute_runtime(runtime: RuntimeContext) -> "ComputeRuntime":
-    """Translate a RuntimeContext (derived from runtime_tier) to a compute_runtime string.
-
-    Used by stage loaders to get the single-string runtime expected by existing
-    backend factories, without reading the deprecated per-stage compute_runtime fields.
-    """
-    if runtime.cuda_mode:
-        if runtime.tensor_on_cuda:
-            return "cuda"  # native torch GPU tier
-        return "tensorrt"  # gpu_fast tier: TensorRT returns CPU numpy
-    if runtime.coreml_mode:
-        return "coreml"  # Apple gpu_fast with CoreML artifact available
-    if runtime.device == "mps":
-        return "mps"
-    return "cpu"
 
 
 def _cuda_device_available() -> str:
