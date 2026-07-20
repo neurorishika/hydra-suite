@@ -422,6 +422,16 @@ def _select_loader(path: str):
     )
 
 
+def _torch_device_for_resolved(resolved) -> str:
+    """Return the torch device string for a ResolvedBackend.
+
+    The resolver only ever emits (backend, device) pairs drawn from
+    {(torch,cpu),(torch,mps),(torch,cuda),(tensorrt,cuda),(coreml,mps)}, so the
+    torch device a backend should load onto is exactly ``resolved.device``.
+    """
+    return resolved.device
+
+
 def _torch_device(compute_runtime: str) -> str:
     rt = compute_runtime
     if rt in ("cuda", "onnx_cuda", "tensorrt"):
