@@ -777,12 +777,17 @@ def test_setup_panel_single_tier_combo_always_visible(
     window.close()
 
 
-def test_saved_config_reflects_tier_derived_pose_runtime_flavor(
+def test_saved_config_omits_retired_pose_runtime_flavor(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    """Pose runtime is not independently selectable; it tracks Compute tier (spec §2/§5.2)."""
+    """Runtime Gen-2 (FT2): pose runtime is not stored; it is fully tier-derived.
+
+    The legacy ``pose_runtime_flavor`` / ``pose_sleap_device`` stored-config fields
+    are retired -- only ``runtime_tier`` is persisted, and the pose device is
+    resolved from it downstream.
+    """
     window = _make_main_window(monkeypatch)
 
     window._identity_panel.chk_enable_pose_extractor.setChecked(True)
@@ -792,13 +797,12 @@ def test_saved_config_reflects_tier_derived_pose_runtime_flavor(
     assert idx >= 0
     window._setup_panel.combo_runtime_tier.setCurrentIndex(idx)
 
-    expected_flavor = window._selected_pose_runtime_flavor()
-    assert expected_flavor == "cpu"
-
     config_path = tmp_path / "pose_runtime.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved_cfg["pose_runtime_flavor"] == expected_flavor
+    assert "pose_runtime_flavor" not in saved_cfg
+    assert "pose_sleap_device" not in saved_cfg
+    assert saved_cfg["runtime_tier"] == "cpu"
     window.close()
 
 

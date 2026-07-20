@@ -1536,7 +1536,6 @@ class DetectionPanel(QWidget):
 
     def _collect_preview_detection_context(self) -> dict:
         """Capture current UI values for async preview detection."""
-        from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
         from hydra_suite.runtime.resolver import (
             detect_platform,
             resolve_compute_runtime,
@@ -1554,9 +1553,6 @@ class DetectionPanel(QWidget):
             ip.combo_pose_model_type.currentText().strip().lower()
             if ip is not None
             else "yolo"
-        )
-        runtime_pose = derive_pose_runtime_settings(
-            selected_runtime, backend_family=pose_backend_family
         )
         class_text = self.line_yolo_classes.text().strip()
         target_classes = None
@@ -1666,7 +1662,6 @@ class DetectionPanel(QWidget):
             "pose_model_dir": self._main_window._get_resolved_pose_model_dir(
                 pose_backend_family
             ),
-            "pose_runtime_flavor": runtime_pose["pose_runtime_flavor"],
             "pose_min_kpt_conf_valid": (
                 ip.spin_pose_min_kpt_conf_valid.value() if ip is not None else 0.5
             ),
@@ -1678,7 +1673,6 @@ class DetectionPanel(QWidget):
             "pose_direction_posterior_keypoints": self._main_window._parse_pose_direction_posterior_keypoints(),
             "pose_batch_size": ip.spin_pose_batch.value() if ip is not None else 1,
             "pose_sleap_env": self._main_window._selected_pose_sleap_env(),
-            "pose_sleap_device": runtime_pose["pose_sleap_device"],
             "individual_crop_padding": (
                 ip.spin_individual_padding.value() if ip is not None else 0.1
             ),

@@ -27,10 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
-from hydra_suite.runtime.compute_runtime import (
-    derive_pose_runtime_settings,
-    infer_compute_runtime_from_legacy,
-)
+from hydra_suite.runtime.compute_runtime import infer_compute_runtime_from_legacy
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.model_utils import (
     _normalize_usage_role,
@@ -1487,12 +1484,6 @@ class ConfigOrchestrator:
             )
 
         compute_runtime = self._mw._selected_compute_runtime()
-        pose_runtime_derived = derive_pose_runtime_settings(
-            compute_runtime,
-            backend_family=self._panels.identity.combo_pose_model_type.currentText()
-            .strip()
-            .lower(),
-        )
 
         cfg.update(
             {
@@ -1835,7 +1826,6 @@ class ConfigOrchestrator:
                 "pose_sleap_model_dir": make_pose_model_path_relative(
                     self._mw._pose_model_path_for_backend("sleap")
                 ),
-                "pose_runtime_flavor": self._mw._selected_pose_runtime_flavor(),
                 "pose_exported_model_path": "",
                 "pose_min_kpt_conf_valid": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
                 "pose_skeleton_file": self._panels.identity.line_pose_skeleton_file.text().strip(),
@@ -1845,7 +1835,6 @@ class ConfigOrchestrator:
                 "pose_batch_size": self._panels.identity.spin_pose_batch.value(),
                 "pose_yolo_batch": self._panels.identity.spin_pose_batch.value(),
                 "pose_sleap_env": self._mw._selected_pose_sleap_env(),
-                "pose_sleap_device": pose_runtime_derived["pose_sleap_device"],
                 "pose_sleap_batch": self._panels.identity.spin_pose_batch.value(),
                 "pose_sleap_max_instances": 1,
                 "tracking_workflow_mode": self._mw._session_orch._workflow_mode_key(),
@@ -2097,21 +2086,6 @@ class ConfigOrchestrator:
                 trt_build_batch_size = max(1, int(trt_build_batch_size_raw))
             except (TypeError, ValueError):
                 trt_build_batch_size = None
-        pose_backend_family = (
-            self._panels.identity.combo_pose_model_type.currentText().strip().lower()
-        )
-        selected_pose_runtime = self._mw._selected_pose_runtime_flavor()
-        pose_runtime_canonical = {
-            "onnx_mps": "onnx_coreml",
-            "onnx_coreml": "onnx_coreml",
-            "onnx_cpu": "onnx_cpu",
-            "onnx_cuda": "onnx_cuda",
-            "tensorrt_cuda": "tensorrt",
-        }.get(selected_pose_runtime, selected_pose_runtime)
-        runtime_pose = derive_pose_runtime_settings(
-            pose_runtime_canonical, backend_family=pose_backend_family
-        )
-
         p = {
             "ADVANCED_CONFIG": advanced_config,  # Include advanced config for batch optimization
             "DETECTION_METHOD": det_method,
@@ -2396,7 +2370,6 @@ class ConfigOrchestrator:
                 .strip()
                 .lower(),
             ),
-            "POSE_RUNTIME_FLAVOR": self._mw._selected_pose_runtime_flavor(),
             "POSE_EXPORTED_MODEL_PATH": "",
             "POSE_MIN_KPT_CONF_VALID": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
             "POSE_SKELETON_FILE": self._panels.identity.line_pose_skeleton_file.text().strip(),
@@ -2406,7 +2379,6 @@ class ConfigOrchestrator:
             "POSE_YOLO_BATCH": self._panels.identity.spin_pose_batch.value(),
             "POSE_BATCH_SIZE": self._panels.identity.spin_pose_batch.value(),
             "POSE_SLEAP_ENV": self._mw._selected_pose_sleap_env(),
-            "POSE_SLEAP_DEVICE": runtime_pose["pose_sleap_device"],
             "POSE_SLEAP_BATCH": self._panels.identity.spin_pose_batch.value(),
             "POSE_SLEAP_MAX_INSTANCES": 1,
             "INDIVIDUAL_PROPERTIES_CACHE_PATH": str(

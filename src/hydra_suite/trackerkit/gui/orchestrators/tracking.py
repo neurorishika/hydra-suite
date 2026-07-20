@@ -26,7 +26,6 @@ from hydra_suite.core.identity.properties.export import (
     DETECTED_HEADING_COLUMNS,
     build_pose_keypoint_labels,
 )
-from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
@@ -3845,9 +3844,11 @@ class TrackingOrchestrator:
         # CoreML). Backend selection is driven by RUNTIME_TIER (already carried
         # in params); the retired COMPUTE_RUNTIME string family no longer needs
         # sanitizing here (Runtime Gen-2 FT1). We still downgrade the auxiliary
-        # detection / pose-flavor fields (owned by later slices) to their
-        # native-device equivalents, deriving the pre-downgrade runtime from the
-        # selected tier instead of the removed COMPUTE_RUNTIME param.
+        # detection fields (owned by later slices) to their native-device
+        # equivalents, deriving the pre-downgrade runtime from the selected tier
+        # instead of the removed COMPUTE_RUNTIME param. The pose runtime is fully
+        # tier-derived downstream (Runtime Gen-2 FT2), so no pose-flavor param is
+        # threaded here.
         pre_rt = self._mw._selected_compute_runtime()
         safe_rt = self._mw._preview_safe_runtime(pre_rt)
         if safe_rt != pre_rt:
@@ -3856,10 +3857,6 @@ class TrackingOrchestrator:
             params["ENABLE_GPU_BACKGROUND"] = safe_det["enable_gpu_background"]
             params["ENABLE_TENSORRT"] = safe_det["enable_tensorrt"]
             params["ENABLE_ONNX_RUNTIME"] = safe_det["enable_onnx_runtime"]
-            safe_pose = derive_pose_runtime_settings(
-                safe_rt, backend_family=params.get("POSE_MODEL_TYPE", "yolo")
-            )
-            params["POSE_RUNTIME_FLAVOR"] = safe_pose["pose_runtime_flavor"]
 
         # Preview mode runs forward detection live, but reuses a valid,
         # range-covering YOLO-OBB InferenceRunner cache when one already

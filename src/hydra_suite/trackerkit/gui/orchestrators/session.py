@@ -12,8 +12,7 @@ from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
-from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
-from hydra_suite.runtime.resolver import detect_platform, resolve_compute_runtime
+from hydra_suite.runtime.resolver import detect_platform
 from hydra_suite.utils.geometry import fit_circle_to_points
 
 if TYPE_CHECKING:
@@ -1103,55 +1102,6 @@ class SessionOrchestrator:
             self._mw._detection_panel._sync_live_detection_batch_controls()
         if hasattr(self._mw, "_identity_panel"):
             self._mw._identity_panel._sync_realtime_individual_batch_ui()
-
-    def _resolve_pose_runtime(self, backend: str) -> str:
-        """Resolve the canonical runtime for the pose stage from the tier alone.
-
-        Spec §2/§5.2: pose runtime is not independently selectable. GPU-Fast
-        uses the RuntimeResolver's per-stage fallback contract (§5.4) — a fast
-        artifact (TensorRT/CoreML) if this pipeline supports it, else the
-        native GPU.
-        """
-        from hydra_suite.utils.gpu_utils import (
-            ONNXRUNTIME_COREML_AVAILABLE,
-            TENSORRT_AVAILABLE,
-        )
-
-        tier = self._current_runtime_tier()
-        platform = detect_platform()
-        is_sleap = str(backend).strip().lower() == "sleap"
-        pipeline = "sleap_pose" if is_sleap else "yolo_pose"
-
-        def artifact_available() -> bool:
-            if is_sleap:
-                # SLEAP has no CoreML export path; its fast tier only applies
-                # on CUDA (mirrors core/inference/stages/pose.py's SLEAP
-                # tier->flavor gate).
-                return platform.has_cuda
-            if platform.has_cuda:
-                return bool(TENSORRT_AVAILABLE)
-            if platform.has_mps:
-                return bool(ONNXRUNTIME_COREML_AVAILABLE)
-            return True
-
-        # resolve_compute_runtime returns "coreml" for the CoreML backend;
-        # derive_pose_runtime_settings's _normalize_runtime already aliases
-        # "coreml" to "onnx_coreml", so no extra translation is needed here.
-        return resolve_compute_runtime(
-            tier, platform, stage=pipeline, artifact_available=artifact_available
-        )
-
-    def _selected_pose_runtime_flavor(self) -> str:
-        """Return the pose runtime flavor key, fully derived from the compute tier."""
-        backend = (
-            self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
-            if hasattr(self._mw, "_identity_panel")
-            else "yolo"
-        )
-        derived = derive_pose_runtime_settings(
-            self._resolve_pose_runtime(backend), backend_family=backend
-        )
-        return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
 
     def _set_form_row_visible(self, form_layout, field_widget, visible: bool):
         """Show/hide a QFormLayout row by field widget."""

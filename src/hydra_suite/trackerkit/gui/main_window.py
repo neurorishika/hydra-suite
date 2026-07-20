@@ -1401,12 +1401,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_session_orch"):
             self._session_orch._on_runtime_context_changed(*_args)
 
-    def _selected_pose_runtime_flavor(self) -> str:
-        """Return the currently selected pose runtime flavor key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_pose_runtime_flavor()
-        return "cpu"
-
     def _set_form_row_visible(self, form_layout, field_widget, visible: bool):
         """Show/hide a QFormLayout row by field widget."""
         if hasattr(self, "_session_orch"):
