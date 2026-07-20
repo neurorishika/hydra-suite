@@ -158,6 +158,31 @@ class RuntimeContext:
         )
 
 
+def resolved_backend_for(runtime: RuntimeContext) -> "ResolvedBackend":
+    """Return the context's ResolvedBackend, deriving one when it is absent.
+
+    ``from_config`` always attaches ``resolved``. Hand-built contexts (tests,
+    GUI workers, ``api.py``) may leave it ``None``; for those we reconstruct the
+    exact ``(backend, device)`` the resolver would have produced from the
+    tier-derived context flags — the inverse of the legacy
+    ``runtime_to_compute_runtime`` map, so predicate rewrites keyed off the
+    returned ``ResolvedBackend`` stay faithful for every producible combo.
+    """
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
+    if runtime.resolved is not None:
+        return runtime.resolved
+    if runtime.cuda_mode:
+        if runtime.tensor_on_cuda:
+            return ResolvedBackend("torch", "cuda", False)
+        return ResolvedBackend("tensorrt", "cuda", False)
+    if runtime.coreml_mode:
+        return ResolvedBackend("coreml", "mps", False)
+    if runtime.device == "mps":
+        return ResolvedBackend("torch", "mps", False)
+    return ResolvedBackend("torch", "cpu", False)
+
+
 def runtime_to_compute_runtime(runtime: RuntimeContext) -> "ComputeRuntime":
     """Translate a RuntimeContext (derived from runtime_tier) to a compute_runtime string.
 

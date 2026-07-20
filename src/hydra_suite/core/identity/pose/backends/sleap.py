@@ -31,7 +31,8 @@ from hydra_suite.core.identity.pose.utils import (
     empty_pose_result,
     summarize_keypoints,
 )
-from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+from hydra_suite.runtime.compute_runtime import execution_providers_for
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
 
@@ -339,17 +340,42 @@ def _canonical_export_runtime(
     return "onnx_cpu"
 
 
+def _resolved_from_canonical_export(canonical_runtime: str) -> ResolvedBackend:
+    """Map an existing canonical SLEAP export string to a ``ResolvedBackend``.
+
+    ``SleapExportedBackend`` keeps its public string signature; internally we
+    translate the canonical export string (``_canonical_export_runtime``) into
+    the Gen-2 ``ResolvedBackend`` vocabulary so the ONNX session can source its
+    execution providers via ``execution_providers_for``. The mapping reproduces
+    ``derive_onnx_execution_providers(<canonical string>)`` exactly for the
+    producible combos:
+      * ``onnx_coreml`` -> ``(coreml, mps)``  -> [CoreML-EP, CPU]
+      * ``tensorrt``    -> ``(tensorrt, cuda)`` -> [TRT-EP+cache, CUDA-EP, CPU]
+      * else (``onnx_cpu``) -> ``(torch, cpu)`` -> [CPU]
+    ``onnx_cuda`` is not producible through the Gen-2 resolver (it never emits
+    ONNX-on-CUDA; gpu_fast CUDA uses TensorRT) and collapses to the CPU case —
+    a debug-only ``HYDRA_SLEAP_FLAVOR=onnx_cuda`` override loses its CUDA EP,
+    which is intentional under the single-path consolidation.
+    """
+    rt = str(canonical_runtime or "").strip().lower()
+    if rt == "onnx_coreml":
+        return ResolvedBackend("coreml", "mps", False)
+    if rt == "tensorrt":
+        return ResolvedBackend("tensorrt", "cuda", False)
+    return ResolvedBackend("torch", "cpu", False)
+
+
 class _DirectOnnxSession:
     def __init__(
         self,
         model_path: Path,
-        compute_runtime: str,
+        resolved: ResolvedBackend,
     ) -> None:
         import onnxruntime as ort
 
         self._session = ort.InferenceSession(
             str(model_path),
-            providers=derive_onnx_execution_providers(compute_runtime),
+            providers=execution_providers_for(resolved),
         )
         self.input_name = self._session.get_inputs()[0].name
         self.output_names = [output.name for output in self._session.get_outputs()]
@@ -788,7 +814,10 @@ class SleapExportedBackend:
                 self.runtime_flavor,
                 self.device,
             )
-            self._runner = _DirectOnnxSession(self.model_path, canonical_runtime)
+            self._runner = _DirectOnnxSession(
+                self.model_path,
+                _resolved_from_canonical_export(canonical_runtime),
+            )
 
         self._output_names = list(getattr(self._runner, "output_names", []) or [])
         self._input_hw = getattr(self._runner, "input_hw", None) or self._input_hw
@@ -912,7 +941,9 @@ class SleapExportedBackend:
             siblings = sorted(self.model_path.parent.rglob("*.onnx"))
             if siblings:
                 onnx_path = siblings[0]
-        return _DirectOnnxSession(onnx_path, "tensorrt")
+        return _DirectOnnxSession(
+            onnx_path, _resolved_from_canonical_export("tensorrt")
+        )
 
     @property
     def preferred_input_size(self) -> int:
