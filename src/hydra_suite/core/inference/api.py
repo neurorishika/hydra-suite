@@ -87,7 +87,6 @@ def load_pose_backend(
             skeleton_file=skeleton_file or "",
             yolo=PoseYOLOConfig(
                 model_path=model_path,
-                compute_runtime=compute_runtime,
                 confidence_threshold=confidence_threshold,
                 batch_size=batch_size,
             ),
@@ -103,7 +102,6 @@ def load_pose_backend(
             skeleton_file=skeleton_file or "",
             sleap=PoseSLEAPConfig(
                 model_path=model_path,
-                compute_runtime=compute_runtime,
                 conda_env=sleap_env or "sleap",
                 batch_size=max(1, int(sleap_bs)),
                 max_instances=int(sleap_max_instances),
@@ -111,15 +109,12 @@ def load_pose_backend(
             min_keypoint_confidence=min_valid_confidence,
         )
 
-    # RuntimeContext.from_config derives its tier from cfg.runtime_tier, NOT
-    # from the deprecated per-stage OBBDirectConfig.compute_runtime (see
-    # runtime.py's from_config / resolved_backend_for). Without this,
-    # the minimal InferenceConfig keeps the default "gpu" runtime_tier and
-    # the requested compute_runtime is silently ignored.
+    # RuntimeContext.from_config derives its tier from cfg.runtime_tier. The
+    # requested compute_runtime string is mapped to that tier here.
     _min_cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
+            direct=OBBDirectConfig(model_path=""),
         ),
         pose=pose_cfg,
         runtime_tier=migrate_runtime_to_tier({compute_runtime}),
@@ -157,19 +152,14 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     from .stages.pose import load_pose_model, run_pose
 
     compute_runtime = "cpu"
-    if pose_config is not None:
-        if getattr(pose_config, "yolo", None) is not None:
-            compute_runtime = getattr(pose_config.yolo, "compute_runtime", "cpu")
-        elif getattr(pose_config, "sleap", None) is not None:
-            compute_runtime = getattr(pose_config.sleap, "compute_runtime", "cpu")
 
     # See load_pose_backend above: RuntimeContext.from_config reads
-    # cfg.runtime_tier, not the deprecated per-stage compute_runtime fields,
-    # so runtime_tier must be derived from the resolved compute_runtime here.
+    # cfg.runtime_tier, so runtime_tier is derived from the resolved
+    # compute_runtime here (per-stage runtime fields no longer exist).
     _min_cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="", compute_runtime=compute_runtime),
+            direct=OBBDirectConfig(model_path=""),
         ),
         pose=pose_config,
         runtime_tier=migrate_runtime_to_tier({compute_runtime}),
@@ -177,7 +167,6 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
     try:
         runtime = RuntimeContext.from_config(_min_cfg)
     except Exception:
-        _min_cfg.obb.direct.compute_runtime = "cpu"
         runtime = RuntimeContext(
             cuda_mode=False,
             device="cpu",

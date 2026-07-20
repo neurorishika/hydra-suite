@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 from hydra_suite.runtime.resolver import RuntimeTier
-
-ComputeRuntime = Literal[
-    "cpu", "mps", "cuda", "onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt"
-]
 
 
 class InferenceConfigError(ValueError):
@@ -36,54 +31,9 @@ def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
     return "cpu"
 
 
-def _collect_legacy_runtime_strings(d: dict) -> set[str]:
-    """Extract compute_runtime strings from a raw config dict (before sub-objects exist)."""
-    runtimes: set[str] = set()
-    obb_d = d.get("obb", {})
-    direct_d = obb_d.get("direct")
-    if direct_d and isinstance(direct_d, dict):
-        rt = direct_d.get("compute_runtime")
-        if rt:
-            runtimes.add(rt)
-    seq_d = obb_d.get("sequential")
-    if seq_d and isinstance(seq_d, dict):
-        rt = seq_d.get("detect_compute_runtime")
-        if rt:
-            runtimes.add(rt)
-        rt = seq_d.get("obb_compute_runtime")
-        if rt:
-            runtimes.add(rt)
-    ht_d = d.get("headtail")
-    if ht_d and isinstance(ht_d, dict):
-        rt = ht_d.get("compute_runtime")
-        if rt:
-            runtimes.add(rt)
-    for phase_d in d.get("cnn_phases", []):
-        if isinstance(phase_d, dict):
-            rt = phase_d.get("compute_runtime")
-            if rt:
-                runtimes.add(rt)
-    pose_d = d.get("pose")
-    if pose_d and isinstance(pose_d, dict):
-        yolo_d = pose_d.get("yolo")
-        if yolo_d and isinstance(yolo_d, dict):
-            rt = yolo_d.get("compute_runtime")
-            if rt:
-                runtimes.add(rt)
-        sleap_d = pose_d.get("sleap")
-        if sleap_d and isinstance(sleap_d, dict):
-            rt = sleap_d.get("compute_runtime")
-            if rt:
-                runtimes.add(rt)
-    return runtimes
-
-
 @dataclass
 class OBBDirectConfig:
     model_path: str
-    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
-    # Kept for serialization round-trip; no longer read by stage loaders.
-    compute_runtime: ComputeRuntime = "cpu"
     confidence_floor: float = 1e-3
     confidence_threshold: float = 0.25
     # Auto-export the .engine (TensorRT) / .mlpackage (CoreML) artifact from a
@@ -97,10 +47,6 @@ class OBBDirectConfig:
 class OBBSequentialConfig:
     detect_model_path: str
     obb_model_path: str
-    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
-    # Kept for serialization round-trip; no longer read by stage loaders.
-    detect_compute_runtime: ComputeRuntime = "cpu"
-    obb_compute_runtime: ComputeRuntime = "cpu"
     # See OBBDirectConfig.auto_export.
     auto_export: bool = True
     detect_confidence_threshold: float = 1e-3
@@ -209,9 +155,6 @@ class BgSubConfig:
 @dataclass
 class HeadTailConfig:
     model_path: str
-    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
-    # Kept for serialization round-trip; no longer read by stage loaders.
-    compute_runtime: ComputeRuntime = "cpu"
     confidence_threshold: float = 0.5
     candidate_confidence_threshold: float | None = None
     batch_size: int = 64
@@ -223,9 +166,6 @@ class HeadTailConfig:
 class CNNConfig:
     label: str
     model_path: str
-    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
-    # Kept for serialization round-trip; no longer read by stage loaders.
-    compute_runtime: ComputeRuntime = "cpu"
     confidence_threshold: float = 0.5
     batch_size: int = 64
     scoring_mode: Literal["atomic", "per_head_average"] = "atomic"
@@ -237,9 +177,6 @@ class CNNConfig:
 @dataclass
 class PoseYOLOConfig:
     model_path: str
-    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
-    # Kept for serialization round-trip; no longer read by stage loaders.
-    compute_runtime: ComputeRuntime = "cpu"
     confidence_threshold: float = 1e-4
     iou_threshold: float = 0.7
     max_detections_per_crop: int = 1
@@ -249,9 +186,6 @@ class PoseYOLOConfig:
 @dataclass
 class PoseSLEAPConfig:
     model_path: str
-    # Deprecated: runtime decisions now use InferenceConfig.runtime_tier.
-    # Kept for serialization round-trip; no longer read by stage loaders.
-    compute_runtime: ComputeRuntime = "cpu"
     conda_env: str = "sleap"
     batch_size: int = 4
     max_instances: int = 1
@@ -403,14 +337,11 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
 
     raw_tier = d.get("runtime_tier")
     if raw_tier is None:
-        legacy = _collect_legacy_runtime_strings(d)
-        raw_tier = migrate_runtime_to_tier(legacy)
-        if legacy:
-            logging.getLogger(__name__).warning(
-                "Migrated legacy per-stage runtimes %s -> runtime_tier=%r",
-                legacy,
-                raw_tier,
-            )
+        raise ValueError(
+            "Config has no 'runtime_tier'. Runtime Gen-2 requires an explicit tier "
+            "(cpu/gpu/gpu_fast). Migrate legacy configs with "
+            "`python scripts/migrate_runtime_config.py <file>` (added in a later task)."
+        )
 
     pose_d = d.get("pose")
     pose = None
@@ -455,17 +386,11 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     params are absent/disabled stay unset, so an OBB-only params dict yields
     an OBB-only config (headtail=None, cnn_phases=[], pose=None).
     """
-    compute_runtime = str(params.get("COMPUTE_RUNTIME", "cpu"))
     # Pipeline-wide compute tier drives backend/device selection in the
-    # redesign (per-stage compute_runtime fields are inert). Prefer an
-    # explicit RUNTIME_TIER param; otherwise derive it from the legacy
-    # per-stage runtime so old params still take effect.
+    # redesign. Runtime Gen-2 uses runtime_tier as the sole source of truth;
+    # an absent or invalid RUNTIME_TIER defaults to "cpu".
     _raw_tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
-    runtime_tier = (
-        _raw_tier
-        if _raw_tier in {"cpu", "gpu", "gpu_fast"}
-        else migrate_runtime_to_tier({compute_runtime})
-    )
+    runtime_tier = _raw_tier if _raw_tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
     obb_mode = str(params.get("YOLO_OBB_MODE", "direct")).strip().lower()
     if obb_mode not in {"direct", "sequential"}:
         obb_mode = "direct"
@@ -524,8 +449,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             sequential=OBBSequentialConfig(
                 detect_model_path=detect_path,
                 obb_model_path=crop_path,
-                detect_compute_runtime=compute_runtime,
-                obb_compute_runtime=compute_runtime,
                 detect_confidence_threshold=float(
                     params.get("YOLO_SEQ_DETECT_CONF_THRESHOLD", 0.25)
                 ),
@@ -558,7 +481,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             mode="direct",
             direct=OBBDirectConfig(
                 model_path=direct_model_path,
-                compute_runtime=compute_runtime,
                 confidence_floor=1e-3,
                 confidence_threshold=yolo_conf,
             ),
@@ -577,12 +499,8 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip()
     headtail_cfg = None
     if headtail_model_path and os.path.exists(headtail_model_path):
-        ht_runtime = str(
-            params.get("HEADTAIL_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-        )
         headtail_cfg = HeadTailConfig(
             model_path=headtail_model_path,
-            compute_runtime=ht_runtime,
             confidence_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
             # Mirrors legacy's separate, stricter head-tail candidate gate
             # (_select_headtail_candidate_indices): detections below this
@@ -607,9 +525,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
 
     # CNN phases
     cnn_phases: list[CNNConfig] = []
-    cnn_runtime = str(
-        params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-    )
     for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
         cnn_model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
         if not cnn_model_path or not os.path.exists(cnn_model_path):
@@ -619,7 +534,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             CNNConfig(
                 label=cnn_label,
                 model_path=cnn_model_path,
-                compute_runtime=cnn_runtime,
                 confidence_threshold=float(cnn_cfg_dict.get("confidence", 0.5)),
                 batch_size=int(cnn_cfg_dict.get("batch_size", 64)),
                 scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
@@ -637,9 +551,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     pose_cfg = None
     if bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
         pose_model_type = str(params.get("POSE_MODEL_TYPE", "")).strip().lower()
-        pose_runtime = str(
-            params.get("POSE_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-        )
         common_pose_kwargs = dict(
             skeleton_file=str(params.get("POSE_SKELETON_FILE", "") or "").strip(),
             crop_padding=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
@@ -674,7 +585,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 backend="sleap",
                 sleap=PoseSLEAPConfig(
                     model_path=sleap_model_path,
-                    compute_runtime=pose_runtime,
                     batch_size=int(params.get("POSE_BATCH_SIZE", 4)),
                 ),
                 **common_pose_kwargs,
@@ -684,7 +594,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 backend="yolo",
                 yolo=PoseYOLOConfig(
                     model_path=yolo_model_path,
-                    compute_runtime=pose_runtime,
                     confidence_threshold=float(
                         params.get("POSE_CONFIDENCE_THRESHOLD", 1e-4)
                     ),

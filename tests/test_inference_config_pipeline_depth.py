@@ -55,11 +55,11 @@ def test_pipeline_depth_from_json_validates():
                         "mode": "direct",
                         "direct": {
                             "model_path": "/m.pt",
-                            "compute_runtime": "cpu",
                             "confidence_floor": 0.001,
                             "confidence_threshold": 0.25,
                         },
                     },
+                    "runtime_tier": "cpu",
                     "pipeline_depth": 0,
                 }
             )

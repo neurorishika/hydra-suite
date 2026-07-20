@@ -16,7 +16,7 @@ def _cfg() -> InferenceConfig:
     return InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cpu"),
+            direct=OBBDirectConfig(model_path="/m.pt"),
         ),
         detection_batch_size=2,
     )

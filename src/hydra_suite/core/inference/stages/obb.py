@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from ..config import ComputeRuntime, OBBConfig
+from ..config import OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
 from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor
@@ -753,7 +753,7 @@ def merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
 
 def _load_yolo(
     model_path: str,
-    compute_runtime: ComputeRuntime,
+    compute_runtime: str,
     *,
     auto_export: bool = True,
     max_det: int = 20,

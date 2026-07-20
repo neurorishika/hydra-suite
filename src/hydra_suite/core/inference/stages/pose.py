@@ -93,8 +93,8 @@ def load_pose_model(
     n_kpts = len(keypoint_names)
 
     # Derive the resolved backend from the RuntimeContext (reflects runtime_tier
-    # via the Gen-2 resolver). Per-stage compute_runtime fields are deprecated in
-    # favor of runtime_tier; kept in place for serialization only.
+    # via the Gen-2 resolver). Per-stage compute_runtime fields no longer exist;
+    # runtime_tier is the sole source of truth.
     resolved = resolved_backend_for(runtime)
 
     if config.backend == "yolo":

@@ -1,35 +1,31 @@
+import pytest
+
 from hydra_suite.core.inference.config import _dict_to_config, migrate_runtime_to_tier
 
 _MINIMAL_OBB = {
     "mode": "direct",
-    "direct": {"model_path": "/tmp/obb.pt", "compute_runtime": "cpu"},
+    "direct": {"model_path": "/tmp/obb.pt"},
 }
 
 
-def test_pose_yolo_tensorrt_migrates_to_gpu_fast():
-    d = {
-        "obb": _MINIMAL_OBB,
-        "pose": {
-            "yolo": {"model_path": "/tmp/pose.pt", "compute_runtime": "tensorrt"},
-        },
-    }
-    config = _dict_to_config(d)
-    assert (
-        config.runtime_tier == "gpu_fast"
-    ), f"Expected 'gpu_fast', got {config.runtime_tier!r}"
+def test_missing_runtime_tier_raises():
+    """Runtime Gen-2: a config dict with no runtime_tier is a loud error."""
+    d = {"obb": _MINIMAL_OBB}
+    with pytest.raises(ValueError) as excinfo:
+        _dict_to_config(d)
+    msg = str(excinfo.value)
+    assert "runtime_tier" in msg
+    assert "migrate_runtime_config" in msg
 
 
-def test_pose_sleap_onnx_cuda_migrates_to_gpu_fast():
-    d = {
-        "obb": _MINIMAL_OBB,
-        "pose": {
-            "sleap": {"model_path": "/tmp/sleap.pt", "compute_runtime": "onnx_cuda"},
-        },
-    }
+def test_explicit_runtime_tier_is_preserved():
+    d = {"obb": _MINIMAL_OBB, "runtime_tier": "gpu_fast"}
     config = _dict_to_config(d)
-    assert (
-        config.runtime_tier == "gpu_fast"
-    ), f"Expected 'gpu_fast', got {config.runtime_tier!r}"
+    assert config.runtime_tier == "gpu_fast"
+
+
+# ── migrate_runtime_to_tier is retained for other callers (public api.py entry
+#    points, worker fallbacks, cli_config, schemas); its unit contract stays. ──
 
 
 def test_cpu_maps_to_cpu():
