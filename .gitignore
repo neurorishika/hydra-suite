@@ -418,4 +418,5 @@ test_classkit.db
 
 .VSCodeCounter/
 .worktrees/
+.worktree/
 headtail_batch25_bench.json
