@@ -10,7 +10,7 @@ import torch
 
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
-from ..runtime import RuntimeContext
+from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,9 @@ def load_headtail_model(
 
     # The RuntimeContext carries the single resolved backend/device (from
     # runtime_tier); config.compute_runtime is deprecated (kept for serialization).
-    resolved = runtime.resolved
+    # Use resolved_backend_for so a hand-built context (resolved=None) degrades
+    # gracefully instead of raising AttributeError, matching obb/pose stages.
+    resolved = resolved_backend_for(runtime)
     if resolved.backend in ("tensorrt", "coreml"):
         logger.warning(
             "HeadTail stage: gpu_fast (%s) requested — "
