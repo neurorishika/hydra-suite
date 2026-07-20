@@ -131,38 +131,36 @@ def load_pose_backend(
     return model.backend  # PoseModel.backend is the predict_batch-capable object
 
 
-def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
+def predict_pose_for_image(
+    image, pose_config, runtime_tier: str = "gpu"
+) -> "PoseResult":  # noqa: F821
     """One-shot pose prediction on a single image, used by PoseKit labeling UI.
 
     Loads a pose model, builds a whole-image canonical crop, runs pose once,
     and discards the model. NOT for batch use — call InferenceRunner.run_realtime
     if you need persistent state.
+
+    ``runtime_tier`` (cpu/gpu/gpu_fast) selects the backend; it degrades
+    gracefully (e.g. gpu -> cpu on a host with no accelerator) via the resolver.
     """
     import numpy as np
 
-    from .config import (
-        InferenceConfig,
-        OBBConfig,
-        OBBDirectConfig,
-        migrate_runtime_to_tier,
-    )
+    from .config import InferenceConfig, OBBConfig, OBBDirectConfig
     from .result import OBBResult
     from .runtime import RuntimeContext
     from .stages.crops import extract_canonical_crops
     from .stages.pose import load_pose_model, run_pose
 
-    compute_runtime = "cpu"
-
-    # See load_pose_backend above: RuntimeContext.from_config reads
-    # cfg.runtime_tier, so runtime_tier is derived from the resolved
-    # compute_runtime here (per-stage runtime fields no longer exist).
+    # RuntimeContext.from_config reads cfg.runtime_tier as the sole runtime knob
+    # (Runtime Gen-2; per-stage compute_runtime fields no longer exist).
+    _tier = runtime_tier if runtime_tier in {"cpu", "gpu", "gpu_fast"} else "gpu"
     _min_cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(model_path=""),
         ),
         pose=pose_config,
-        runtime_tier=migrate_runtime_to_tier({compute_runtime}),
+        runtime_tier=_tier,
     )
     try:
         runtime = RuntimeContext.from_config(_min_cfg)
