@@ -4276,15 +4276,14 @@ class TrackingWorker(QThread):
                 from hydra_suite.core.identity.classification.backend import (
                     ClassifierBackend,
                 )
+                from hydra_suite.runtime.resolver import ResolvedBackend
 
+                # Metadata-only read (class_names_per_factor); parsing the
+                # artifact header never loads weights, so CPU/torch is sufficient
+                # and device-independent here.
                 _backend = ClassifierBackend(
                     model_path,
-                    str(
-                        cnn_cfg_dict.get(
-                            "compute_runtime",
-                            params.get("CNN_COMPUTE_RUNTIME", "cpu"),
-                        )
-                    ),
+                    ResolvedBackend("torch", "cpu", False),
                 )
                 _meta = getattr(_backend, "metadata", None)
                 if _meta is not None and hasattr(_meta, "class_names_per_factor"):

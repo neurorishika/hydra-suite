@@ -15,9 +15,10 @@ def test_classifier_gpu_fast_falls_back_to_native_when_onnx_load_fails(
 ):
     """Classifier falls back to native when ONNX/TRT peer load raises."""
     from hydra_suite.core.identity.classification import backend as bmod
+    from hydra_suite.runtime.resolver import ResolvedBackend
 
     be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
-    be._compute_runtime = "tensorrt"
+    be._resolved = ResolvedBackend("tensorrt", "cuda", False)
     be._model_path = "/fake/model.pth"
     be._loaded = False
     be._active_execution_backend = "unloaded"

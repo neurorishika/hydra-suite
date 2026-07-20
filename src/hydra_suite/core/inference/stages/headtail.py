@@ -10,11 +10,9 @@ import torch
 
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
-from ..runtime import RuntimeContext, runtime_to_compute_runtime
+from ..runtime import RuntimeContext
 
 logger = logging.getLogger(__name__)
-
-_GPU_FAST_RUNTIMES = frozenset({"tensorrt", "coreml"})
 
 _DIRECTION_OFFSET: dict[str, float] = {
     "right": 0.0,
@@ -53,16 +51,17 @@ def load_headtail_model(
         validate_headtail_labels,
     )
 
-    # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
-    # config.compute_runtime is deprecated in favor of runtime_tier; kept for serialization.
-    compute_runtime = runtime_to_compute_runtime(runtime)
-    if compute_runtime in _GPU_FAST_RUNTIMES:
+    # The RuntimeContext carries the single resolved backend/device (from
+    # runtime_tier); config.compute_runtime is deprecated (kept for serialization).
+    resolved = runtime.resolved
+    if resolved.backend in ("tensorrt", "coreml"):
         logger.warning(
             "HeadTail stage: gpu_fast (%s) requested — "
-            "best-effort native-CUDA fallback applies if TRT artifact is unavailable.",
-            compute_runtime,
+            "best-effort native fallback applies if the accelerated artifact "
+            "is unavailable.",
+            resolved.backend,
         )
-    backend = ClassifierBackend(config.model_path, compute_runtime)
+    backend = ClassifierBackend(config.model_path, resolved)
     meta = backend.metadata
     if meta.is_multihead:
         backend.close()

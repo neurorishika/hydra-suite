@@ -15,6 +15,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 logger = logging.getLogger(__name__)
 
 HEADTAIL_CANONICAL_LABELS: frozenset[str] = frozenset(
@@ -129,20 +131,18 @@ class HeadTailAnalyzer:
     def __init__(
         self,
         model_path: str = "",
-        device: str = "cpu",
+        *,
+        resolved: Optional[ResolvedBackend] = None,
         conf_threshold: float = 0.5,
         batch_size: int = 64,
         reference_aspect_ratio: float = 2.0,
         canonical_margin: float = 1.3,
         predict_device: Optional[str] = None,
-        *,
-        compute_runtime: Optional[str] = None,
     ) -> None:
         """Construct a HeadTailAnalyzer from a classifier artifact path.
 
-        Accepts both the legacy ``device=`` parameter (maps to torch device)
-        and the new ``compute_runtime=`` parameter (ClassifierBackend runtime).
-        When ``compute_runtime`` is provided it takes precedence.
+        Takes a :class:`ResolvedBackend` (the single Gen-2 runtime vocabulary);
+        when omitted, defaults to native torch on CPU.
 
         Raises:
             HeadTailFormatError: model is multi-head or labels are not a subset
@@ -154,14 +154,9 @@ class HeadTailAnalyzer:
         self._padding_fraction = max(0.0, canonical_margin - 1.0)
         self._canonical_margin = float(canonical_margin)
         self._predict_device = predict_device
-
-        # Resolve device string from compute_runtime or legacy device arg
-        if compute_runtime is not None:
-            self._compute_runtime = str(compute_runtime)
-            self._device = _runtime_to_device(self._compute_runtime)
-        else:
-            self._device = str(device) if device else "cpu"
-            self._compute_runtime = self._device
+        self._resolved: ResolvedBackend = (
+            resolved if resolved is not None else ResolvedBackend("torch", "cpu", False)
+        )
 
         self._backend: str = "none"
         self._model = None
@@ -246,7 +241,7 @@ class HeadTailAnalyzer:
         try:
             backend_obj = ClassifierBackend(
                 path,
-                compute_runtime=self._compute_runtime,
+                self._resolved,
                 trt_profile_max_batch=self._batch_size,
             )
             meta = backend_obj.metadata
@@ -361,7 +356,7 @@ class HeadTailAnalyzer:
         # that crop extraction (batched GPU warp) and inference (GPU forward
         # pass) both stay on-device, avoiding N sequential cv2 warp+resize
         # calls on the CPU.  Any failure falls through to the CPU path below.
-        if self._compute_runtime in ("cuda", "onnx_cuda", "tensorrt"):
+        if self._resolved.device == "cuda":
             try:
                 import torch
 
@@ -644,7 +639,9 @@ class HeadTailAnalyzer:
         maximum to prevent runtime shape errors.
         """
         chunk = max(1, int(self._batch_size))
-        if self._compute_runtime == "tensorrt":
+        if getattr(self, "_resolved", None) is not None and (
+            self._resolved.backend == "tensorrt"
+        ):
             from hydra_suite.core.identity.classification.backend import (
                 ClassifierBackend,
             )
@@ -718,8 +715,8 @@ class HeadTailAnalyzer:
             return []
         # GPU runtimes use the user-configured fixed chunk size, clamped for
         # TensorRT profile safety.
-        compute_rt = getattr(self, "_compute_runtime", "cpu")
-        if compute_rt in ("cuda", "onnx_cuda", "tensorrt"):
+        resolved = getattr(self, "_resolved", None)
+        if resolved is not None and resolved.device == "cuda":
             chunk = self._effective_infer_batch_size()
             if len(source_crops) <= chunk:
                 return self._backend_obj.predict_batch(source_crops)
@@ -835,20 +832,3 @@ class HeadTailAnalyzer:
                 )
 
         return normalized
-
-
-# ---------------------------------------------------------------------------
-# Module-level helper: map compute_runtime to torch device string
-# ---------------------------------------------------------------------------
-
-
-def _runtime_to_device(compute_runtime: str) -> str:
-    """Map a canonical compute_runtime string to a torch device string."""
-    rt = str(compute_runtime or "cpu")
-    if rt in ("cuda", "onnx_cuda", "tensorrt"):
-        return "cuda"
-    if rt in ("mps", "onnx_coreml"):
-        return "mps"
-    if rt in ("rocm", "onnx_rocm"):
-        return "cuda"  # kept for legacy configs; ROCm is no longer supported
-    return "cpu"

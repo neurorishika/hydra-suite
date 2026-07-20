@@ -190,6 +190,20 @@ class InterpolatedCropsWorker(BaseWorker):
             )
             return None, [], []
 
+    def _resolve_backend(self, stage: str):
+        """Resolve the runtime tier in ``params`` to a concrete ResolvedBackend.
+
+        The single Gen-2 authority (``RuntimeResolver``) owns the tier -> backend
+        decision; this worker no longer threads per-stage compute_runtime strings.
+        Falls back to the CPU tier when no valid ``RUNTIME_TIER`` is present.
+        """
+        from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+        tier = str(self.params.get("RUNTIME_TIER", "cpu") or "cpu").strip().lower()
+        if tier not in {"cpu", "gpu", "gpu_fast"}:
+            tier = "cpu"
+        return RuntimeResolver(tier, detect_platform()).resolve(stage)
+
     def _init_apriltag_detector(self):
         """Initialize AprilTag detector if configured. Returns detector or None."""
         apriltag_enabled = (
@@ -222,11 +236,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 CNNIdentityConfig,
             )
 
-            compute_rt = str(
-                self.params.get(
-                    "CNN_COMPUTE_RUNTIME", self.params.get("COMPUTE_RUNTIME", "cpu")
-                )
-            )
+            cnn_resolved = self._resolve_backend("cnn")
             for cnn_cfg_dict in cnn_classifiers_cfg:
                 model_path = str(cnn_cfg_dict.get("model_path", ""))
                 if not model_path or not os.path.exists(model_path):
@@ -242,7 +252,7 @@ class InterpolatedCropsWorker(BaseWorker):
                     backend = CNNIdentityBackend(
                         cnn_cfg,
                         model_path=model_path,
-                        compute_runtime=compute_rt,
+                        resolved=cnn_resolved,
                     )
                     cnn_backends.append(backend)
                     cnn_labels.append(label)
@@ -269,15 +279,9 @@ class InterpolatedCropsWorker(BaseWorker):
             return None
         from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-        _ht_runtime = str(
-            self.params.get(
-                "HEADTAIL_COMPUTE_RUNTIME",
-                self.params.get("COMPUTE_RUNTIME", "cpu"),
-            )
-        )
         analyzer = HeadTailAnalyzer(
             model_path=headtail_model_path,
-            compute_runtime=_ht_runtime,
+            resolved=self._resolve_backend("head_tail"),
             conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
             batch_size=max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64))),
             reference_aspect_ratio=float(

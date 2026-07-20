@@ -9,11 +9,9 @@ import torch
 
 from ..config import CNNConfig
 from ..result import CNNDetectionPrediction, CNNFactorPrediction, CNNResult, OBBResult
-from ..runtime import RuntimeContext, runtime_to_compute_runtime
+from ..runtime import RuntimeContext
 
 logger = logging.getLogger(__name__)
-
-_GPU_FAST_RUNTIMES = frozenset({"tensorrt", "coreml"})
 
 
 @dataclass
@@ -30,16 +28,17 @@ class CNNModel:
 def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
     from hydra_suite.core.identity.classification.backend import ClassifierBackend
 
-    # Derive compute_runtime from RuntimeContext (reflects runtime_tier).
-    # config.compute_runtime is deprecated in favor of runtime_tier; kept for serialization.
-    compute_runtime = runtime_to_compute_runtime(runtime)
-    if compute_runtime in _GPU_FAST_RUNTIMES:
+    # The RuntimeContext carries the single resolved backend/device (from
+    # runtime_tier); config.compute_runtime is deprecated (kept for serialization).
+    resolved = runtime.resolved
+    if resolved.backend in ("tensorrt", "coreml"):
         logger.warning(
             "CNN stage: gpu_fast (%s) requested — "
-            "best-effort native-CUDA fallback applies if TRT artifact is unavailable.",
-            compute_runtime,
+            "best-effort native fallback applies if the accelerated artifact "
+            "is unavailable.",
+            resolved.backend,
         )
-    backend = ClassifierBackend(config.model_path, compute_runtime)
+    backend = ClassifierBackend(config.model_path, resolved)
     meta = backend.metadata
     return CNNModel(
         backend=backend,

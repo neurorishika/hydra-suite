@@ -21,6 +21,7 @@ from hydra_suite.core.identity.classification.errors import (
     ClassifierFormatError,
     ClassifierRuntimeError,
 )
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 __all__ = ["ClassifierMetadata", "ClassifierBackend"]
 
@@ -361,7 +362,7 @@ class _ClassifierMultiheadBundleLoader:
         )
 
     @staticmethod
-    def load(path: str, device: str):
+    def load(path: str, resolved: ResolvedBackend):
         """Load each referenced factor model as a flat ClassifierBackend."""
         import json
 
@@ -375,7 +376,7 @@ class _ClassifierMultiheadBundleLoader:
         models = []
         for entry in data["factor_models"]:
             factor_path = (base / entry["path"]).resolve()
-            factor_backend = ClassifierBackend(str(factor_path), compute_runtime=device)
+            factor_backend = ClassifierBackend(str(factor_path), resolved)
             if factor_backend.metadata.is_multihead:
                 factor_backend.close()
                 raise ClassifierFormatError(
@@ -432,28 +433,17 @@ def _torch_device_for_resolved(resolved) -> str:
     return resolved.device
 
 
-def _torch_device(compute_runtime: str) -> str:
-    rt = compute_runtime
-    if rt in ("cuda", "onnx_cuda", "tensorrt"):
-        return "cuda"
-    if rt in ("mps", "onnx_coreml"):
-        return "mps"
-    if rt in ("rocm", "onnx_rocm"):
-        return "cuda"  # kept for legacy configs; ROCm is no longer supported
-    return "cpu"
-
-
 def _provider_key(provider: object) -> str:
     if isinstance(provider, tuple) and provider:
         return str(provider[0])
     return str(provider)
 
 
-def _requested_onnx_accelerator_providers(compute_runtime: str) -> list[str]:
-    from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+def _requested_onnx_accelerator_providers(resolved: ResolvedBackend) -> list[str]:
+    from hydra_suite.runtime.compute_runtime import execution_providers_for
 
-    providers = derive_onnx_execution_providers(
-        compute_runtime,
+    providers = execution_providers_for(
+        resolved,
         include_cpu_fallback=False,
     )
     return [_provider_key(provider) for provider in providers]
@@ -486,8 +476,8 @@ def _looks_like_cuda_alloc_failure(exc: BaseException) -> bool:
     )
 
 
-def _native_accelerator_available(compute_runtime: str) -> bool:
-    device = _torch_device(compute_runtime)
+def _native_accelerator_available(resolved: ResolvedBackend) -> bool:
+    device = resolved.device
     if device == "cuda":
         try:
             import torch
@@ -520,7 +510,7 @@ class ClassifierBackend:
     def __init__(
         self,
         model_path: str,
-        compute_runtime: str = "cpu",
+        resolved: ResolvedBackend,
         trt_profile_max_batch: int | None = None,
     ) -> None:
         if not model_path:
@@ -529,7 +519,7 @@ class ClassifierBackend:
         if not os.path.exists(path):
             raise ClassifierFormatError(f"{path!r}: file does not exist")
         self._model_path = path
-        self._compute_runtime = str(compute_runtime or "cpu")
+        self._resolved = resolved
         self._loader = _select_loader(path)
         self._metadata = self._loader.parse_metadata(path)
         self._model = None
@@ -546,11 +536,12 @@ class ClassifierBackend:
         return self._metadata
 
     def _uses_onnx(self) -> bool:
-        rt = self._compute_runtime
-        return rt.startswith("onnx_") or rt == "tensorrt"
+        # The resolver never emits onnx_* runtimes; TensorRT is the only backend
+        # that loads through ONNX Runtime (CoreML has its own load path).
+        return self._resolved.backend == "tensorrt"
 
     def _uses_coreml(self) -> bool:
-        return self._compute_runtime == "coreml"
+        return self._resolved.backend == "coreml"
 
     def _uses_factor_backends(self) -> bool:
         return self._metadata.arch in ("yolo_multihead", "classifier_multihead")
@@ -561,7 +552,7 @@ class ClassifierBackend:
         if Path(self._model_path).suffix.lower() != ".pth":
             return False
 
-        requested = _requested_onnx_accelerator_providers(self._compute_runtime)
+        requested = _requested_onnx_accelerator_providers(self._resolved)
         if not requested:
             return False
 
@@ -569,7 +560,7 @@ class ClassifierBackend:
         if any(provider in available for provider in requested):
             return False
 
-        return _native_accelerator_available(self._compute_runtime)
+        return _native_accelerator_available(self._resolved)
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
@@ -579,10 +570,10 @@ class ClassifierBackend:
                 self._load_coreml()
             elif self._uses_onnx() and not self._uses_factor_backends():
                 if self._should_fallback_to_native_runtime():
-                    native_device = _torch_device(self._compute_runtime)
+                    native_device = self._resolved.device
                     logger.warning(
-                        "ClassifierBackend: requested ONNX runtime %s for %s but matching ONNX providers are unavailable; falling back to native %s execution",
-                        self._compute_runtime,
+                        "ClassifierBackend: requested %s backend for %s but matching ONNX providers are unavailable; falling back to native %s execution",
+                        self._resolved.backend,
                         self._model_path,
                         native_device,
                     )
@@ -595,9 +586,9 @@ class ClassifierBackend:
                     self._active_execution_backend = "onnx"
             else:
                 loader_target = (
-                    self._compute_runtime
+                    self._resolved
                     if self._uses_factor_backends()
-                    else _torch_device(self._compute_runtime)
+                    else self._resolved.device
                 )
                 self._model = self._loader.load(self._model_path, loader_target)
                 self._active_execution_backend = "native"
@@ -605,7 +596,7 @@ class ClassifierBackend:
                 # kernel JIT compilation now rather than stalling Phase-1 batch 1
                 # for ~45 s on Ada/Hopper GPUs (e.g. EfficientNet-B0 head-tail).
                 if not self._uses_factor_backends():
-                    device_str = _torch_device(self._compute_runtime)
+                    device_str = self._resolved.device
                     if device_str.startswith("cuda"):
                         self._warmup_native_cuda_model()
         except ClassifierError:
@@ -631,7 +622,7 @@ class ClassifierBackend:
             import torch
 
             h, w = self._metadata.input_size
-            device_str = _torch_device(self._compute_runtime)
+            device_str = self._resolved.device
             dummy = torch.zeros(1, 3, h, w, dtype=torch.float32, device=device_str)
             with torch.no_grad():
                 self._model(dummy)
@@ -673,10 +664,10 @@ class ClassifierBackend:
     def _load_onnx(self) -> None:
         import onnxruntime as ort
 
-        from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+        from hydra_suite.runtime.compute_runtime import execution_providers_for
 
         peer = self._derive_onnx_peer()
-        providers = derive_onnx_execution_providers(self._compute_runtime)
+        providers = execution_providers_for(self._resolved)
 
         is_trt = any(
             "tensorrt" in (p if isinstance(p, str) else p[0]).lower() for p in providers
@@ -945,7 +936,7 @@ class ClassifierBackend:
     def _forward_torch(self, batch_np: np.ndarray) -> np.ndarray:
         import torch
 
-        device = _torch_device(self._compute_runtime)
+        device = self._resolved.device
         t = torch.from_numpy(batch_np)
         if device.startswith("cuda") and torch.cuda.is_available():
             # Pinned staging enables async DMA to the CUDA device.
@@ -1224,7 +1215,7 @@ class ClassifierBackend:
         try:
             self._ensure_loaded()
         except Exception as exc:  # noqa: BLE001
-            native_device = _torch_device(self._compute_runtime)
+            native_device = self._resolved.device
             if not native_device or native_device == "cpu":
                 # coreml only makes sense on Apple Silicon; fall back to mps
                 native_device = "mps"

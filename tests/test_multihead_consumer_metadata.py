@@ -10,6 +10,8 @@ import os
 
 import pytest
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 
 @pytest.mark.skipif(
     os.environ.get("HYDRA_OFFLINE_TESTS") == "1",
@@ -52,7 +54,7 @@ def test_import_dialog_metadata_payload_shape(tmp_path):
         path=p,
     )
 
-    backend = ClassifierBackend(str(p), compute_runtime="cpu")
+    backend = ClassifierBackend(str(p), resolved=ResolvedBackend("torch", "cpu", False))
     meta = backend.metadata
     summary = {
         "is_multihead": meta.is_multihead,
@@ -115,7 +117,9 @@ def test_headtail_rejects_shared_trunk_classifier(tmp_path):
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     try:
-        HeadTailAnalyzer(model_path=str(p), compute_runtime="cpu")
+        HeadTailAnalyzer(
+            model_path=str(p), resolved=ResolvedBackend("torch", "cpu", False)
+        )
         raise AssertionError("HeadTailAnalyzer accepted a multi-head classifier")
     except AssertionError:
         raise

@@ -19,6 +19,7 @@ from hydra_suite.core.identity.classification import backend as bmod  # noqa: E4
 from hydra_suite.core.identity.classification.backend import (  # noqa: E402
     ClassifierBackend,
 )
+from hydra_suite.runtime.resolver import ResolvedBackend  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Real model path (efficientnet_b0 / torchvision family, input 96x96)
@@ -38,18 +39,23 @@ _REAL_MODEL_AVAILABLE = _REAL_MODEL.exists()
 
 
 def test_backend_reports_coreml_uses():
-    """_uses_coreml() returns True when compute_runtime is 'coreml'."""
+    """_uses_coreml() returns True when the resolved backend is 'coreml'."""
     be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
-    be._compute_runtime = "coreml"
+    be._resolved = ResolvedBackend("coreml", "mps", False)
     assert be._uses_coreml() is True
 
 
-def test_backend_does_not_report_coreml_for_onnx():
-    """_uses_coreml() returns False for ONNX runtimes."""
+def test_backend_does_not_report_coreml_for_non_coreml_backends():
+    """_uses_coreml() returns False for every non-coreml ResolvedBackend."""
     be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
-    for rt in ("onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt", "mps", "cpu"):
-        be._compute_runtime = rt
-        assert be._uses_coreml() is False, f"Expected False for runtime={rt!r}"
+    for resolved in (
+        ResolvedBackend("torch", "cpu", False),
+        ResolvedBackend("torch", "mps", False),
+        ResolvedBackend("torch", "cuda", False),
+        ResolvedBackend("tensorrt", "cuda", False),
+    ):
+        be._resolved = resolved
+        assert be._uses_coreml() is False, f"Expected False for {resolved!r}"
 
 
 def test_forward_coreml_calls_predict_once_for_whole_batch():
@@ -116,7 +122,9 @@ def test_coreml_backend_loads_and_sets_active_backend():
 
         shutil.rmtree(str(peer))
 
-    backend = ClassifierBackend(str(_REAL_MODEL), compute_runtime="coreml")
+    backend = ClassifierBackend(
+        str(_REAL_MODEL), resolved=ResolvedBackend("coreml", "mps", False)
+    )
     crops = [np.zeros((96, 96, 3), dtype=np.uint8) for _ in range(2)]
     backend.predict_batch(crops)
 
@@ -133,7 +141,9 @@ def test_coreml_backend_loads_and_sets_active_backend():
 )
 def test_coreml_predict_batch_shape_and_probabilities():
     """predict_batch via CoreML returns correct shape and valid probabilities."""
-    backend = ClassifierBackend(str(_REAL_MODEL), compute_runtime="coreml")
+    backend = ClassifierBackend(
+        str(_REAL_MODEL), resolved=ResolvedBackend("coreml", "mps", False)
+    )
     n_crops = 5
     rng = np.random.default_rng(42)
     crops = [
@@ -179,12 +189,16 @@ def test_coreml_output_agrees_with_native_torch():
     ]
 
     # CoreML backend
-    coreml_backend = ClassifierBackend(str(_REAL_MODEL), compute_runtime="coreml")
+    coreml_backend = ClassifierBackend(
+        str(_REAL_MODEL), resolved=ResolvedBackend("coreml", "mps", False)
+    )
     coreml_out = coreml_backend.predict_batch(crops)
     coreml_backend.close()
 
     # Native torch backend (cpu — deterministic on all platforms)
-    native_backend = ClassifierBackend(str(_REAL_MODEL), compute_runtime="cpu")
+    native_backend = ClassifierBackend(
+        str(_REAL_MODEL), resolved=ResolvedBackend("torch", "cpu", False)
+    )
     native_out = native_backend.predict_batch(crops)
     native_backend.close()
 
@@ -230,7 +244,9 @@ def test_coreml_peer_cached_on_second_load(monkeypatch):
     peer = _REAL_MODEL.with_suffix(".mlpackage")
 
     # Ensure the peer exists from a prior test run (or create it)
-    backend1 = ClassifierBackend(str(_REAL_MODEL), compute_runtime="coreml")
+    backend1 = ClassifierBackend(
+        str(_REAL_MODEL), resolved=ResolvedBackend("coreml", "mps", False)
+    )
     backend1.predict_batch([np.zeros((96, 96, 3), dtype=np.uint8)])
     backend1.close()
 
@@ -246,7 +262,9 @@ def test_coreml_peer_cached_on_second_load(monkeypatch):
 
     monkeypatch.setattr(tv_mod, "export_torchvision_to_coreml", counting_export)
 
-    backend2 = ClassifierBackend(str(_REAL_MODEL), compute_runtime="coreml")
+    backend2 = ClassifierBackend(
+        str(_REAL_MODEL), resolved=ResolvedBackend("coreml", "mps", False)
+    )
     backend2.predict_batch([np.zeros((96, 96, 3), dtype=np.uint8)])
     backend2.close()
 
