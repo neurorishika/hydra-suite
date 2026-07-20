@@ -12,9 +12,6 @@ ComputeRuntime = Literal[
     "cpu", "mps", "cuda", "onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt"
 ]
 
-CUDA_RUNTIMES: frozenset[str] = frozenset({"cuda", "onnx_cuda", "tensorrt"})
-CPU_RUNTIMES: frozenset[str] = frozenset({"cpu", "mps", "onnx_cpu", "onnx_coreml"})
-
 
 class InferenceConfigError(ValueError):
     pass
@@ -317,7 +314,6 @@ class InferenceConfig:
         with open(path) as f:
             data = json.load(f)
         config = _dict_to_config(data)
-        config._validate_runtime_consistency()
         return config
 
     def to_json(self, path: str) -> None:
@@ -344,35 +340,6 @@ class InferenceConfig:
     @property
     def detection_source(self) -> Literal["obb", "bgsub"]:
         return "obb" if self.obb is not None else "bgsub"
-
-    def _collect_all_runtimes(self) -> set[str]:
-        runtimes: set[str] = set()
-        if self.obb is not None and self.obb.direct:
-            runtimes.add(self.obb.direct.compute_runtime)
-        if self.obb is not None and self.obb.sequential:
-            runtimes.add(self.obb.sequential.detect_compute_runtime)
-            runtimes.add(self.obb.sequential.obb_compute_runtime)
-        if self.headtail:
-            runtimes.add(self.headtail.compute_runtime)
-        for phase in self.cnn_phases:
-            runtimes.add(phase.compute_runtime)
-        if self.pose:
-            if self.pose.yolo:
-                runtimes.add(self.pose.yolo.compute_runtime)
-            if self.pose.sleap:
-                runtimes.add(self.pose.sleap.compute_runtime)
-        return runtimes
-
-    def _validate_runtime_consistency(self) -> None:
-        runtimes = self._collect_all_runtimes()
-        uses_cuda = bool(runtimes & CUDA_RUNTIMES)
-        uses_cpu = bool(runtimes & CPU_RUNTIMES)
-        if uses_cuda and uses_cpu:
-            raise InferenceConfigError(
-                f"Cannot mix CUDA-group and CPU-group runtimes. "
-                f"CUDA-group found: {runtimes & CUDA_RUNTIMES}, "
-                f"CPU-group found: {runtimes & CPU_RUNTIMES}"
-            )
 
 
 # ── serialization helpers ─────────────────────────────────────────────────────

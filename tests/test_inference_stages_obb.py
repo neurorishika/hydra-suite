@@ -27,7 +27,6 @@ def _cpu_rt() -> RuntimeContext:
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
 
@@ -38,7 +37,6 @@ def _cuda_rt() -> RuntimeContext:
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="cuda",
         tensor_on_cuda=True,
         requested_gpu=True,
     )
@@ -50,7 +48,6 @@ def _onnx_cuda_rt() -> RuntimeContext:
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="cuda",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -290,7 +287,6 @@ def test_load_obb_models_direct_mode_uses_detection_batch_size(monkeypatch):
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -320,7 +316,6 @@ def test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model(
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -379,7 +374,6 @@ def test_load_obb_models_sequential_uses_stage2_imgsz_not_checkpoint(monkeypatch
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -474,7 +468,6 @@ def test_run_direct_forwards_target_classes_to_predict():
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
     captured = {}
@@ -520,7 +513,6 @@ def test_load_obb_models_sequential_dynamic_batching_warning(monkeypatch, caplog
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )

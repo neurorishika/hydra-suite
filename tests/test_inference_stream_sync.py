@@ -16,7 +16,6 @@ _CPU_RT = RuntimeContext(
     device="cpu",
     use_nvdec=False,
     tensor_on_cuda=False,
-    default_runtime="cpu",
 )
 
 
@@ -62,7 +61,6 @@ def test_handoff_keying_survives_multielement_tensor(monkeypatch):
         device="cuda:0",
         use_nvdec=False,
         tensor_on_cuda=True,
-        default_runtime="cuda",
         requested_gpu=True,
     )
     t = torch.arange(12).reshape(3, 4)  # multi-element — the exact trap

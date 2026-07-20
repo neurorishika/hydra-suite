@@ -182,7 +182,6 @@ def predict_pose_for_image(image, pose_config) -> "PoseResult":  # noqa: F821
             cuda_mode=False,
             device="cpu",
             use_nvdec=False,
-            default_runtime="cpu",
             tensor_on_cuda=False,
             requested_gpu=False,
         )

@@ -16,7 +16,6 @@ def _cpu_rt():
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
 
@@ -26,7 +25,6 @@ def _cuda_gpu_rt():
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=True,
-        default_runtime="cuda",
         tensor_on_cuda=True,
         requested_gpu=True,
     )

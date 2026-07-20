@@ -111,11 +111,10 @@ def test_legacy_pose_yolo_tensorrt_migrates_to_gpu_fast(tmp_path):
             "yolo": {"model_path": "pose.pt", "compute_runtime": "tensorrt"},
         },
     }
-    # NOTE: this config mixes 'tensorrt' (CUDA-group) with 'cpu' (CPU-group)
-    # on obb.direct.  The migration reads raw strings before validation fires,
-    # so the tier is set correctly.  However, _validate_runtime_consistency
-    # will raise because tensorrt + cpu cannot coexist.  We therefore test
-    # only the tier derivation path via _dict_to_config directly here.
+    # NOTE: this config mixes 'tensorrt' with 'cpu' on obb.direct, a legacy
+    # per-stage combination that is no longer validated (Gen-2 collapses all
+    # stages to one runtime_tier). We test only the tier derivation path via
+    # _dict_to_config directly here.
     from hydra_suite.core.inference.config import _dict_to_config
 
     cfg = _dict_to_config(payload)

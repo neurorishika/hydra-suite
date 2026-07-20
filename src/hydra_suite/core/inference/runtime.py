@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .config import ComputeRuntime, InferenceConfig
+from .config import InferenceConfig
 
 if TYPE_CHECKING:
     import torch as _torch
@@ -29,7 +29,6 @@ class RuntimeContext:
     cuda_mode: bool
     device: str  # "cuda:0", "mps", or "cpu"
     use_nvdec: bool  # cuda_mode AND NVDEC available
-    default_runtime: ComputeRuntime
     # True ONLY for native PyTorch "cuda" runtime; onnx_cuda and tensorrt use
     # GPU compute but return CPU numpy arrays from inference calls.
     tensor_on_cuda: bool = False
@@ -144,13 +143,11 @@ class RuntimeContext:
         else:
             device = _cpu_or_mps_device()
             nvdec = False
-        default: ComputeRuntime = "cuda" if cuda_mode else "cpu"
         requested_gpu = config.runtime_tier in ("gpu", "gpu_fast")
         return RuntimeContext(
             cuda_mode=cuda_mode,
             device=device,
             use_nvdec=nvdec,
-            default_runtime=default,
             tensor_on_cuda=tensor_on_cuda,
             coreml_mode=coreml_mode,
             requested_gpu=requested_gpu,

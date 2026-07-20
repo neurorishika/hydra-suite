@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
@@ -35,7 +34,6 @@ def test_foreign_mask_blacks_out_neighbor_pixels():
         device="cpu",
         use_nvdec=False,
         tensor_on_cuda=False,
-        default_runtime="cpu",
     )
     masked = extract_canonical_crops_batch(
         [frame],
