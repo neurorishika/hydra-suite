@@ -64,7 +64,6 @@
   "yolo_headtail_model_added_at": "2026-03-13T12:16:51",
   "yolo_headtail_task_family": "classify",
   "yolo_headtail_usage_role": "headtail",
-  "compute_runtime": "mps",
   "enable_tensorrt": false,
   "tensorrt_max_batch_size": 16,
   "max_targets": 25,
@@ -187,7 +186,6 @@
   "pose_model_dir": "pose/SLEAP/20260214-224154_unet_ant_single_instance",
   "pose_yolo_model_dir": "YOLO-pose/20260214-210707_26x_ant_train0.pt",
   "pose_sleap_model_dir": "pose/SLEAP/20260214-224154_unet_ant_single_instance",
-  "pose_runtime_flavor": "mps",
   "pose_exported_model_path": "",
   "pose_min_kpt_conf_valid": 0.2,
   "pose_skeleton_file": "/Users/neurorishika/Projects/MBL/Module 4/multi-animal-tracker/configs/skeletons/ooceraea_biroi.json",
@@ -206,7 +204,6 @@
   "pose_batch_size": 64,
   "pose_yolo_batch": 64,
   "pose_sleap_env": "sleap",
-  "pose_sleap_device": "mps",
   "pose_sleap_batch": 64,
   "pose_sleap_max_instances": 1,
   "enable_individual_dataset": false,
@@ -223,5 +220,6 @@
   ],
   "suppress_foreign_obb_regions": true,
   "suppress_foreign_obb_individual_dataset": false,
-  "suppress_foreign_obb_oriented_videos": false
+  "suppress_foreign_obb_oriented_videos": false,
+  "runtime_tier": "gpu"
 }
