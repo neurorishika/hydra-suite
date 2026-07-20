@@ -184,6 +184,23 @@ def derive_onnx_execution_providers(
     return providers
 
 
+def execution_providers_for(
+    resolved, include_cpu_fallback: bool = True
+) -> List[object]:
+    """ONNX EP list keyed off a ResolvedBackend (the Gen-2 vocabulary).
+
+    torch backends never run ONNX; tensorrt -> TRT-EP+CUDA-EP+cache,
+    coreml -> CoreML-EP. CPU fallback appended per include_cpu_fallback.
+    """
+    if resolved.backend == "tensorrt":
+        _compute_runtime = "tensorrt"
+    elif resolved.backend == "coreml":
+        _compute_runtime = "coreml"
+    else:
+        _compute_runtime = resolved.device  # cpu / cuda / mps -> no accel EP
+    return derive_onnx_execution_providers(_compute_runtime, include_cpu_fallback)
+
+
 def _pipeline_supports_runtime(pipeline: str, runtime: str) -> bool:
     p = str(pipeline or "").strip().lower()
     rt = _normalize_runtime(runtime)
