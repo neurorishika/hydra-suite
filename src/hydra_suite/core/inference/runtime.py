@@ -8,6 +8,8 @@ from .config import ComputeRuntime, InferenceConfig
 if TYPE_CHECKING:
     import torch as _torch
 
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
 # Module-level map from a tensor's id() to its recorded CUDA event.
 #
 # IMPORTANT: the key is ``id(tensor)``, NOT the tensor itself. A torch tensor
@@ -51,6 +53,11 @@ class RuntimeContext:
     # `cuda_mode`/`coreml_mode` -- that combination passes the guard silently
     # while still being wrong if `requested_gpu` was meant to be True.
     requested_gpu: bool = False
+    # The ResolvedBackend produced by RuntimeResolver.resolve() during
+    # from_config(). None for hand-built contexts (tests, GUI workers) that
+    # don't go through the resolver. Additive: no existing reader consumes
+    # this yet.
+    resolved: "ResolvedBackend | None" = None
 
     def __post_init__(self) -> None:
         # cuda_mode/coreml_mode are only ever selected on the "gpu"/"gpu_fast"
@@ -147,6 +154,7 @@ class RuntimeContext:
             tensor_on_cuda=tensor_on_cuda,
             coreml_mode=coreml_mode,
             requested_gpu=requested_gpu,
+            resolved=resolved,
         )
 
 
