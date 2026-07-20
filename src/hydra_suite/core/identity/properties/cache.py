@@ -192,8 +192,8 @@ def _sleap_device_from_resolved(resolved) -> str:
     """Reproduce the legacy ``POSE_SLEAP_DEVICE`` string from a resolved backend.
 
     The old GUI mapped the resolved SLEAP pose runtime to a SLEAP device string
-    via ``derive_pose_runtime_settings`` (cpu->"cpu", mps->"mps", cuda->"cuda:0",
-    tensorrt->"cuda:0"). That is exactly ``"cuda:0"`` on CUDA, else the device.
+    (cpu->"cpu", mps->"mps", cuda->"cuda:0", tensorrt->"cuda:0"). That is exactly
+    ``"cuda:0"`` on CUDA, else the device.
     """
     return "cuda:0" if resolved.device == "cuda" else resolved.device
 

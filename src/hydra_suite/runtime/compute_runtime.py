@@ -37,16 +37,6 @@ COREML_PROVIDER_OPTIONS = {
 }
 
 
-def _best_explicit_onnx_runtime() -> str:  # legacy-config migration only
-    if ONNXRUNTIME_CUDA_AVAILABLE and _cuda_like_available():
-        return "onnx_cuda"
-    if ONNXRUNTIME_COREML_AVAILABLE and MPS_AVAILABLE:
-        return "onnx_coreml"
-    if ONNXRUNTIME_CPU_AVAILABLE or ONNXRUNTIME_AVAILABLE:
-        return "onnx_cpu"
-    return "onnx_cpu"
-
-
 def _normalize_runtime(
     runtime: str,
 ) -> str:  # onnx_* aliases kept for legacy-config migration
@@ -55,12 +45,15 @@ def _normalize_runtime(
         # Canonical runtime set intentionally excludes auto.
         # Default to CPU for deterministic fallback.
         return "cpu"
-    if rt == "onnxruntime":
-        return _best_explicit_onnx_runtime()
+    if rt in {"onnxruntime", "onnx"}:
+        # Best available explicit ONNX runtime (legacy-config migration only).
+        if ONNXRUNTIME_CUDA_AVAILABLE and _cuda_like_available():
+            return "onnx_cuda"
+        if ONNXRUNTIME_COREML_AVAILABLE and MPS_AVAILABLE:
+            return "onnx_coreml"
+        return "onnx_cpu"
     if rt in {"trt", "tensor_rt"}:
         return "tensorrt"
-    if rt == "onnx":
-        return _best_explicit_onnx_runtime()
     if rt == "onnx_gpu":
         return "onnx_cuda"
     if rt in {"onnx_cpu", "onnx_cuda", "onnx_coreml", "onnx_mps"}:
@@ -266,95 +259,3 @@ def allowed_runtimes_for_pipelines(pipelines: Iterable[str]) -> List[str]:
         if all(_pipeline_supports_runtime(p, rt) for p in pls):
             allowed.append(rt)
     return allowed
-
-
-def _best_auto_runtime() -> str:
-    """Pick the best available canonical runtime for auto-detection."""
-    if _tensorrt_available():
-        return "tensorrt"
-    if MPS_AVAILABLE:
-        return "mps"
-    if _cuda_like_available():
-        return "cuda"
-    if ONNXRUNTIME_CUDA_AVAILABLE and _cuda_like_available():
-        return "onnx_cuda"
-    if ONNXRUNTIME_COREML_AVAILABLE and MPS_AVAILABLE:
-        return "onnx_coreml"
-    if ONNXRUNTIME_CPU_AVAILABLE or ONNXRUNTIME_AVAILABLE:
-        return "onnx_cpu"
-    return "cpu"
-
-
-def _runtime_from_pose_flavor(pose_runtime_flavor: str) -> str | None:
-    """Map legacy pose_runtime_flavor to canonical runtime, or None."""
-    pr = str(pose_runtime_flavor or "").strip().lower()
-    if pr.startswith("tensorrt"):
-        return "tensorrt"
-    if pr.startswith("onnx_mps") or pr.startswith("onnx_coreml"):
-        return "onnx_coreml"
-    if pr.startswith("onnx_cuda"):
-        return "onnx_cuda"
-    if pr.startswith("onnx"):
-        return "onnx_cpu"
-    return None
-
-
-_DEVICE_MAP = {
-    "mps": "mps",
-    "cpu": "cpu",
-}
-_CUDA_DEVICES = {"cuda", "cuda:0", "gpu"}
-
-
-def infer_compute_runtime_from_legacy(
-    yolo_device: str,
-    enable_tensorrt: bool,
-    pose_runtime_flavor: str,
-) -> str:
-    """Infer canonical runtime from legacy config fields."""
-    if bool(enable_tensorrt):
-        return "tensorrt"
-
-    from_pose = _runtime_from_pose_flavor(pose_runtime_flavor)
-    if from_pose is not None:
-        return from_pose
-
-    dev = str(yolo_device or "auto").strip().lower()
-    if dev in _DEVICE_MAP:
-        return _DEVICE_MAP[dev]
-    if dev in _CUDA_DEVICES:
-        return "cuda"
-
-    return _best_auto_runtime()
-
-
-def derive_pose_runtime_settings(compute_runtime: str, backend_family: str) -> dict:
-    """Map canonical runtime to pose runtime legacy settings consumed by runtime_api."""
-    rt = _normalize_runtime(compute_runtime)
-
-    if rt == "cpu":
-        return {"pose_runtime_flavor": "cpu", "pose_sleap_device": "cpu"}
-    if rt == "mps":
-        return {"pose_runtime_flavor": "mps", "pose_sleap_device": "mps"}
-    if rt == "cuda":
-        return {"pose_runtime_flavor": "cuda", "pose_sleap_device": "cuda:0"}
-    if rt == "tensorrt":
-        return {
-            "pose_runtime_flavor": "tensorrt_cuda",
-            "pose_sleap_device": "cuda:0",
-        }
-
-    if rt == "onnx_coreml":
-        return {"pose_runtime_flavor": "onnx_mps", "pose_sleap_device": "mps"}
-    if rt == "onnx_cpu":
-        return {"pose_runtime_flavor": "onnx_cpu", "pose_sleap_device": "cpu"}
-    if rt == "onnx_cuda":
-        return {"pose_runtime_flavor": rt, "pose_sleap_device": "cuda:0"}
-
-    # Legacy alias fallback (e.g. compute_runtime="onnx").
-    resolved = _best_explicit_onnx_runtime()
-    if resolved == "onnx_coreml":
-        return {"pose_runtime_flavor": "onnx_mps", "pose_sleap_device": "mps"}
-    if resolved == "onnx_cpu":
-        return {"pose_runtime_flavor": "onnx_cpu", "pose_sleap_device": "cpu"}
-    return {"pose_runtime_flavor": resolved, "pose_sleap_device": "cuda:0"}

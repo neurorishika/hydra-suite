@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
-from hydra_suite.runtime.compute_runtime import infer_compute_runtime_from_legacy
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.model_utils import (
     _normalize_usage_role,
@@ -491,28 +490,16 @@ class ConfigOrchestrator:
         else:
             self._panels.detection.line_yolo_classes.clear()
 
-        # Load runtime_tier: prefer new key, fall back to migrating legacy compute_runtime.
+        # Load runtime_tier: prefer the new key; if absent, migrate an explicit
+        # legacy compute_runtime string, else default to the pipeline tier "gpu".
+        # (Legacy runtime inference is retired; old configs are migrated by FT6.)
         raw_tier = get_cfg("runtime_tier", default=None)
         if raw_tier is None:
-            legacy_runtime = (
-                str(
-                    get_cfg(
-                        "compute_runtime",
-                        default=infer_compute_runtime_from_legacy(
-                            yolo_device=str(get_cfg("yolo_device", default="auto")),
-                            enable_tensorrt=bool(
-                                get_cfg("enable_tensorrt", default=False)
-                            ),
-                            pose_runtime_flavor=str(
-                                get_cfg("pose_runtime_flavor", default="auto")
-                            ),
-                        ),
-                    )
-                )
-                .strip()
-                .lower()
-            )
-            raw_tier = migrate_runtime_to_tier({legacy_runtime})
+            legacy_runtime = str(get_cfg("compute_runtime", default="")).strip().lower()
+            if legacy_runtime:
+                raw_tier = migrate_runtime_to_tier({legacy_runtime})
+            else:
+                raw_tier = "gpu"
         tier = str(raw_tier).strip()
         if hasattr(self._panels.setup, "combo_runtime_tier"):
             combo = self._panels.setup.combo_runtime_tier

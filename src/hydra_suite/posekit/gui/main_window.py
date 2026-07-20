@@ -76,10 +76,7 @@ from .project import (
 from .runtimes import (
     CANONICAL_RUNTIMES,
     available_tiers,
-    canonical_runtime_to_tier,
-    derive_pose_runtime_settings,
     detect_platform,
-    infer_compute_runtime_from_legacy,
     tier_label,
     tier_to_canonical_runtime,
 )
@@ -1444,20 +1441,15 @@ class MainWindow(QMainWindow):
         ).strip()
         if not runtime_setting:
             return
-        # If a tier id is stored directly, use it; otherwise migrate a legacy runtime.
+        # If a stored tier id is valid for this platform, use it; otherwise
+        # default to a sensible tier (legacy runtime strings are migrated by
+        # the one-shot config-migration script, not inferred here).
         platform = detect_platform()
-        if runtime_setting in available_tiers(platform):
+        tiers = available_tiers(platform)
+        if runtime_setting in tiers:
             preferred_tier = runtime_setting
         else:
-            # Legacy path: canonicalise the runtime string then map to tier.
-            canonical_runtime = runtime_setting
-            if canonical_runtime not in CANONICAL_RUNTIMES:
-                canonical_runtime = infer_compute_runtime_from_legacy(
-                    yolo_device="auto",
-                    enable_tensorrt=False,
-                    pose_runtime_flavor=runtime_setting,
-                )
-            preferred_tier = canonical_runtime_to_tier(canonical_runtime)
+            preferred_tier = "gpu" if "gpu" in tiers else "cpu"
         self._populate_pred_runtime_options(preferred_tier=preferred_tier)
 
     def _apply_pred_batch_setting(self, settings):
@@ -4682,22 +4674,23 @@ class MainWindow(QMainWindow):
         return self._get_pred_weights_silent()
 
     def _pred_runtime_flavor(self) -> str:
-        backend = self._pred_backend()
+        # Derive the live pose-inference flavor directly from the tier-resolved
+        # compute runtime. ``_selected_compute_runtime`` resolves the selected
+        # tier via RuntimeResolver, so only the five resolver-producible strings
+        # reach here (see runtime/resolver.py::resolve_compute_runtime). The map
+        # below reproduces the retired ``derive_pose_runtime_settings`` byte-for-
+        # byte for those strings (its flavor never varied by backend family):
+        # tensorrt -> "tensorrt_cuda", everything else is identity. Native
+        # CoreML ("coreml", Apple GPU-Fast) stays native and is NOT routed
+        # through the ONNX-CoreML-EP flavor ("onnx_mps").
         compute_runtime = self._selected_compute_runtime()
-        # "coreml" (native Apple GPU-Fast) has no representation in
-        # derive_pose_runtime_settings — that helper's `_normalize_runtime`
-        # collapses "coreml" to the legacy "onnx_coreml" canonical runtime and
-        # returns the ONNX-CoreML-EP flavor ("onnx_mps"), silently reintroducing
-        # the exact bug this module exists to fix (see
-        # docs/superpowers/specs/2026-04-04-codebase-simplification-design.md
-        # Task 6). "coreml" uniquely identifies the native-backend case and
-        # needs no further translation for either backend family, so short-
-        # circuit here rather than routing it through that shared, cross-app
-        # helper (out of scope to modify — used by trackerkit too).
-        if compute_runtime == "coreml":
-            return "coreml"
-        derived = derive_pose_runtime_settings(compute_runtime, backend_family=backend)
-        return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
+        return {
+            "cpu": "cpu",
+            "mps": "mps",
+            "cuda": "cuda",
+            "tensorrt": "tensorrt_cuda",
+            "coreml": "coreml",
+        }.get(compute_runtime, "cpu")
 
     def _browse_pred_exported_model(self):
         backend = self._pred_backend()

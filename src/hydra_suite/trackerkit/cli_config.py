@@ -14,10 +14,7 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from hydra_suite.runtime.compute_runtime import (
-    _normalize_runtime,
-    infer_compute_runtime_from_legacy,
-)
+from hydra_suite.runtime.compute_runtime import _normalize_runtime
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
@@ -442,33 +439,22 @@ def build_tracking_parameters(
         min_frames=0,
     )
 
-    compute_runtime = str(
-        _cfg_get(
-            cfg,
-            "compute_runtime",
-            default=infer_compute_runtime_from_legacy(
-                str(_cfg_get(cfg, "yolo_device", default="auto")),
-                bool(_cfg_get(cfg, "enable_tensorrt", default=False)),
-                str(_cfg_get(cfg, "pose_runtime_flavor", default="")),
-            ),
-        )
-    )
+    # Legacy detection fields still derive from a ``compute_runtime`` string;
+    # default it deterministically (host-independent) now that legacy runtime
+    # inference is retired. Old compute_runtime strings are migrated by FT6.
+    compute_runtime = str(_cfg_get(cfg, "compute_runtime", default="cpu"))
     detection_runtime = legacy_detection_runtime_fields(compute_runtime)
     # RUNTIME_TIER is the sole runtime knob (Runtime Gen-2 FT1). Prefer the
-    # config's explicit tier; otherwise migrate the legacy compute_runtime.
+    # config's explicit tier; if a legacy config carries an explicit
+    # compute_runtime, migrate it; otherwise default to the pipeline tier "gpu".
     from hydra_suite.core.inference.config import migrate_runtime_to_tier
 
-    runtime_tier = (
-        str(
-            _cfg_get(
-                cfg, "runtime_tier", default=migrate_runtime_to_tier({compute_runtime})
-            )
-        )
-        .strip()
-        .lower()
-    )
+    runtime_tier = str(_cfg_get(cfg, "runtime_tier", default="")).strip().lower()
     if runtime_tier not in {"cpu", "gpu", "gpu_fast"}:
-        runtime_tier = migrate_runtime_to_tier({compute_runtime})
+        if _cfg_get(cfg, "compute_runtime", default=None):
+            runtime_tier = migrate_runtime_to_tier({compute_runtime})
+        else:
+            runtime_tier = "gpu"
     yolo_mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
     yolo_direct_path = resolve_model_path(
         _cfg_get(cfg, "yolo_obb_direct_model_path", "yolo_model_path", default="")

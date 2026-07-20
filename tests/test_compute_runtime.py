@@ -102,53 +102,6 @@ def test_allowed_runtimes_includes_onnx_coreml_on_mps(monkeypatch):
     assert "onnx_coreml" in allowed
 
 
-def test_derive_pose_runtime_settings_onnx_cuda():
-    mod = _load_mod()
-    out = mod.derive_pose_runtime_settings("onnx_cuda", backend_family="yolo")
-    assert out["pose_runtime_flavor"] == "onnx_cuda"
-    assert out["pose_sleap_device"] == "cuda:0"
-
-
-def test_derive_pose_runtime_settings_onnx_coreml():
-    mod = _load_mod()
-    out = mod.derive_pose_runtime_settings("onnx_coreml", backend_family="yolo")
-    assert out["pose_runtime_flavor"] == "onnx_mps"
-    assert out["pose_sleap_device"] == "mps"
-
-
-def test_derive_pose_runtime_settings_legacy_onnx_alias(monkeypatch):
-    mod = _load_mod()
-    monkeypatch.setattr(mod, "ONNXRUNTIME_COREML_AVAILABLE", False)
-    monkeypatch.setattr(mod, "ONNXRUNTIME_CUDA_AVAILABLE", False)
-    monkeypatch.setattr(mod, "ONNXRUNTIME_CPU_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ONNXRUNTIME_AVAILABLE", True)
-    monkeypatch.setattr(mod, "CUDA_AVAILABLE", False)
-    monkeypatch.setattr(mod, "TORCH_CUDA_AVAILABLE", False)
-
-    out = mod.derive_pose_runtime_settings("onnx", backend_family="sleap")
-    assert out["pose_runtime_flavor"] == "onnx_cpu"
-
-
-def test_infer_compute_runtime_from_legacy_prefers_pose_runtime_hint():
-    mod = _load_mod()
-    rt = mod.infer_compute_runtime_from_legacy(
-        yolo_device="auto",
-        enable_tensorrt=False,
-        pose_runtime_flavor="onnx_cpu",
-    )
-    assert rt == "onnx_cpu"
-
-
-def test_infer_compute_runtime_from_legacy_maps_onnx_mps_to_onnx_coreml():
-    mod = _load_mod()
-    rt = mod.infer_compute_runtime_from_legacy(
-        yolo_device="auto",
-        enable_tensorrt=False,
-        pose_runtime_flavor="onnx_mps",
-    )
-    assert rt == "onnx_coreml"
-
-
 def test_normalize_runtime_maps_coreml_aliases_to_canonical():
     mod = _load_mod()
     assert mod._normalize_runtime("onnx_core_ml") == "onnx_coreml"
