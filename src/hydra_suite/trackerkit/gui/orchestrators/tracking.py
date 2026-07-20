@@ -30,7 +30,10 @@ from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
-from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
+from hydra_suite.trackerkit.tracking_cache import (
+    plan_tracking_cache,
+    resolve_detection_cache_runtime,
+)
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
@@ -3838,11 +3841,17 @@ class TrackingOrchestrator:
 
         # Preview should always render frames regardless of visualization-free toggle
         params["VISUALIZATION_FREE_MODE"] = False
-        # Preview must not use ONNX/TensorRT — downgrade to the native device runtime.
-        safe_rt = self._mw._preview_safe_runtime(params.get("COMPUTE_RUNTIME", "cpu"))
-        if safe_rt != params.get("COMPUTE_RUNTIME"):
+        # Preview must not build exported accelerator engines (ONNX/TensorRT/
+        # CoreML). Backend selection is driven by RUNTIME_TIER (already carried
+        # in params); the retired COMPUTE_RUNTIME string family no longer needs
+        # sanitizing here (Runtime Gen-2 FT1). We still downgrade the auxiliary
+        # detection / pose-flavor fields (owned by later slices) to their
+        # native-device equivalents, deriving the pre-downgrade runtime from the
+        # selected tier instead of the removed COMPUTE_RUNTIME param.
+        pre_rt = self._mw._selected_compute_runtime()
+        safe_rt = self._mw._preview_safe_runtime(pre_rt)
+        if safe_rt != pre_rt:
             safe_det = legacy_detection_runtime_fields(safe_rt)
-            params["COMPUTE_RUNTIME"] = safe_rt
             params["YOLO_DEVICE"] = safe_det["yolo_device"]
             params["ENABLE_GPU_BACKGROUND"] = safe_det["enable_gpu_background"]
             params["ENABLE_TENSORRT"] = safe_det["enable_tensorrt"]
@@ -3851,12 +3860,6 @@ class TrackingOrchestrator:
                 safe_rt, backend_family=params.get("POSE_MODEL_TYPE", "yolo")
             )
             params["POSE_RUNTIME_FLAVOR"] = safe_pose["pose_runtime_flavor"]
-        params["HEADTAIL_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
-            params.get("HEADTAIL_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-        )
-        params["CNN_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
-            params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-        )
 
         # Preview mode runs forward detection live, but reuses a valid,
         # range-covering YOLO-OBB InferenceRunner cache when one already
@@ -3951,9 +3954,15 @@ class TrackingOrchestrator:
         """Generate raw-detection and TensorRT-engine cache identity keys."""
         resize_factor = params.get("RESIZE_FACTOR", 1.0)
         resize_str = f"r{int(resize_factor * 100)}"
+        _compute_runtime = resolve_detection_cache_runtime(params)
 
         def _extract(keys):
-            return {k: self._normalize_for_hash(params.get(k)) for k in keys}
+            return {
+                k: self._normalize_for_hash(
+                    _compute_runtime if k == "COMPUTE_RUNTIME" else params.get(k)
+                )
+                for k in keys
+            }
 
         def _build_id(prefix, cache_params, model_stem=""):
             digest = hashlib.md5(

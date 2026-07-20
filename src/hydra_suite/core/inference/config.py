@@ -758,6 +758,7 @@ def build_obb_only_config(
     model_path: str,
     *,
     compute_runtime: str = "cpu",
+    runtime_tier: str | None = None,
     confidence_threshold: float = 0.25,
     iou_threshold: float = 0.7,
     max_targets: int = 8,
@@ -767,16 +768,18 @@ def build_obb_only_config(
 
     Thin wrapper over build_inference_config_from_params with every non-OBB
     stage left disabled. Used by callers that have a model path + runtime but
-    no full tracking params dict.
+    no full tracking params dict. ``runtime_tier`` is the live runtime knob
+    (Runtime Gen-2); when omitted, the tier is migrated from ``compute_runtime``.
     """
-    return build_inference_config_from_params(
-        {
-            "DETECTION_METHOD": "yolo_obb",
-            "YOLO_OBB_MODE": mode,
-            "YOLO_OBB_DIRECT_MODEL_PATH": model_path,
-            "COMPUTE_RUNTIME": compute_runtime,
-            "YOLO_CONFIDENCE_THRESHOLD": confidence_threshold,
-            "YOLO_IOU_THRESHOLD": iou_threshold,
-            "MAX_TARGETS": max_targets,
-        }
-    )
+    params: dict = {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_OBB_MODE": mode,
+        "YOLO_OBB_DIRECT_MODEL_PATH": model_path,
+        "COMPUTE_RUNTIME": compute_runtime,
+        "YOLO_CONFIDENCE_THRESHOLD": confidence_threshold,
+        "YOLO_IOU_THRESHOLD": iou_threshold,
+        "MAX_TARGETS": max_targets,
+    }
+    if runtime_tier:
+        params["RUNTIME_TIER"] = runtime_tier
+    return build_inference_config_from_params(params)

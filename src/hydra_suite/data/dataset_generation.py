@@ -432,7 +432,7 @@ def _init_detection_runner(params):
         )
         cfg = build_obb_only_config(
             model_path,
-            compute_runtime=str(params.get("COMPUTE_RUNTIME", "cpu")),
+            runtime_tier=str(params.get("RUNTIME_TIER", "") or "") or None,
             confidence_threshold=float(
                 params.get("DATASET_YOLO_CONFIDENCE_THRESHOLD", 0.05)
             ),

@@ -2082,8 +2082,6 @@ class ConfigOrchestrator:
             self._mw._selected_identity_method()
         )  # kept for backward compat
         compute_runtime = self._mw._selected_compute_runtime()
-        headtail_runtime = self._mw._selected_headtail_runtime()
-        cnn_runtime = self._mw._selected_cnn_runtime()
         runtime_detection = legacy_detection_runtime_fields(compute_runtime)
         trt_batch_size = resolve_tensorrt_max_batch_size(
             detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
@@ -2140,7 +2138,6 @@ class ConfigOrchestrator:
             "YOLO_HEADTAIL_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_conf.value(),
             "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
             "HEADTAIL_BATCH_SIZE": self._panels.identity.spin_headtail_batch.value(),
-            "HEADTAIL_COMPUTE_RUNTIME": headtail_runtime,
             "YOLO_CONFIDENCE_THRESHOLD": self._panels.detection.spin_yolo_confidence.value(),
             "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
             "USE_CUSTOM_OBB_IOU_FILTERING": True,
@@ -2148,9 +2145,7 @@ class ConfigOrchestrator:
             # Live Detection Batching: feeds InferenceConfig.detection_batch_size
             # via config.build_inference_config_from_params.
             "YOLO_BATCH_SIZE": self._panels.detection.spin_detection_batch_size.value(),
-            "COMPUTE_RUNTIME": compute_runtime,
             "RUNTIME_TIER": self._mw._selected_runtime_tier(),
-            "CNN_COMPUTE_RUNTIME": cnn_runtime,
             "YOLO_DEVICE": runtime_detection["yolo_device"],
             "ENABLE_GPU_BACKGROUND": runtime_detection["enable_gpu_background"],
             "ENABLE_TENSORRT": runtime_detection["enable_tensorrt"],

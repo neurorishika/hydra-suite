@@ -103,6 +103,32 @@ def should_build_bgsub_detection_cache(
     return not preview_mode
 
 
+def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
+    """Derive the classify cache-key runtime string from ``RUNTIME_TIER``.
+
+    STABLE cache-key derivation (Runtime Gen-2 / FT1): the classify cache-key
+    must stay byte-identical to the legacy ``CNN_COMPUTE_RUNTIME`` string so
+    existing identity caches remain valid. The legacy GUI set that string via
+    ``resolve_compute_runtime(tier, platform, stage)``; this reproduces the SAME
+    mapping directly from the live ``RUNTIME_TIER`` param (the resolver only
+    branches on ``stage`` for ``bgsub``, so ``stage="cnn"`` and the legacy
+    ``stage="obb"`` used by ``_selected_cnn_runtime`` yield identical strings).
+    Does NOT read the removed ``COMPUTE_RUNTIME`` family, and does NOT call
+    ``resolve_compute_runtime`` (deleted in a later slice).
+    """
+    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+    tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+    if tier not in {"cpu", "gpu", "gpu_fast"}:
+        tier = "cpu"
+    resolved = RuntimeResolver(tier, detect_platform()).resolve(stage)
+    if resolved.backend == "tensorrt":
+        return "tensorrt"
+    if resolved.backend == "coreml":
+        return "coreml"
+    return resolved.device  # cpu / cuda / mps
+
+
 class TrackingWorker(QThread):
     """
     Core tracking engine. Orchestrates tracking components to be functionally
@@ -946,7 +972,7 @@ class TrackingWorker(QThread):
             detection_method=detection_method,
             n_targets=N,
             resize_factor=float(p.get("RESIZE_FACTOR", 1.0)),
-            compute_runtime=str(p.get("COMPUTE_RUNTIME", "cpu")),
+            compute_runtime=str(p.get("RUNTIME_TIER", "cpu")),
             start_frame=start_frame,
             end_frame=end_frame,
             backward_mode=self.backward_mode,
@@ -1545,9 +1571,7 @@ class TrackingWorker(QThread):
 
                 classify_id = compute_classify_cache_id(
                     model_path=model_path,
-                    compute_runtime=str(
-                        p.get("CNN_COMPUTE_RUNTIME", p.get("COMPUTE_RUNTIME", "cpu"))
-                    ),
+                    compute_runtime=_classify_cache_runtime_string(p),
                     inference_model_id=str(p.get("INFERENCE_MODEL_ID", "")),
                     calibration_signature=_calibration_signature,
                 )
@@ -2471,7 +2495,7 @@ class TrackingWorker(QThread):
                         ),
                         detection_ids=detection_ids,
                         input_is_bgr=True,
-                        runtime_family=str(p.get("COMPUTE_RUNTIME", "cpu")),
+                        runtime_family=str(p.get("RUNTIME_TIER", "cpu")),
                     )
                     profiler.tock("streaming_payload_build")
                 except Exception as _spay_err:
@@ -4320,11 +4344,7 @@ class TrackingWorker(QThread):
         try:
             classify_id = compute_classify_cache_id(
                 model_path=model_path,
-                compute_runtime=str(
-                    params.get(
-                        "CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu")
-                    )
-                ),
+                compute_runtime=_classify_cache_runtime_string(params),
                 inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
                 calibration_signature=_calibration_signature,
             )
@@ -4344,7 +4364,7 @@ class TrackingWorker(QThread):
                 cache_path=ev_path,
                 source_name=label,
                 class_labels_per_factor=factor_labels,
-                runtime_signature=str(params.get("COMPUTE_RUNTIME", "cpu")),
+                runtime_signature=str(params.get("RUNTIME_TIER", "cpu")),
                 calibration_signature=_calibration_signature,
                 calibration=_calibration_model,
             )

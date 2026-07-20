@@ -41,6 +41,29 @@ class TrackingCachePlan:
     detection_cache_path: str
 
 
+def resolve_detection_cache_runtime(params: dict) -> str:
+    """Stable detection-cache runtime string derived from ``RUNTIME_TIER``.
+
+    The detection-cache identity historically hashed the ``COMPUTE_RUNTIME``
+    param, which the GUI set to ``resolve_compute_runtime(tier, platform, "obb")``.
+    After the COMPUTE_RUNTIME param family was retired (Runtime Gen-2 FT1) this
+    reproduces the SAME string directly from the live ``RUNTIME_TIER`` param so
+    existing detection caches stay valid. Does not call ``resolve_compute_runtime``
+    (deleted in a later slice).
+    """
+    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+    tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+    if tier not in {"cpu", "gpu", "gpu_fast"}:
+        tier = "cpu"
+    resolved = RuntimeResolver(tier, detect_platform()).resolve("obb")
+    if resolved.backend == "tensorrt":
+        return "tensorrt"
+    if resolved.backend == "coreml":
+        return "coreml"
+    return resolved.device  # cpu / cuda / mps
+
+
 def normalize_tracking_cache_value(value: object):
     """Convert values to deterministic, JSON-safe forms for cache hashing."""
     if isinstance(value, np.ndarray):
@@ -96,9 +119,15 @@ def get_tracking_cache_model_ids(
     """Generate raw-detection and TensorRT-engine cache identity keys."""
     resize_factor = params.get("RESIZE_FACTOR", 1.0)
     resize_str = f"r{int(resize_factor * 100)}"
+    _compute_runtime = resolve_detection_cache_runtime(params)
 
     def _extract(keys):
-        return {key: normalize_tracking_cache_value(params.get(key)) for key in keys}
+        return {
+            key: normalize_tracking_cache_value(
+                _compute_runtime if key == "COMPUTE_RUNTIME" else params.get(key)
+            )
+            for key in keys
+        }
 
     def _build_id(prefix, cache_params, model_stem=""):
         digest = hashlib.md5(

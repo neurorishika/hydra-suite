@@ -454,6 +454,21 @@ def build_tracking_parameters(
         )
     )
     detection_runtime = legacy_detection_runtime_fields(compute_runtime)
+    # RUNTIME_TIER is the sole runtime knob (Runtime Gen-2 FT1). Prefer the
+    # config's explicit tier; otherwise migrate the legacy compute_runtime.
+    from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+    runtime_tier = (
+        str(
+            _cfg_get(
+                cfg, "runtime_tier", default=migrate_runtime_to_tier({compute_runtime})
+            )
+        )
+        .strip()
+        .lower()
+    )
+    if runtime_tier not in {"cpu", "gpu", "gpu_fast"}:
+        runtime_tier = migrate_runtime_to_tier({compute_runtime})
     yolo_mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
     yolo_direct_path = resolve_model_path(
         _cfg_get(cfg, "yolo_obb_direct_model_path", "yolo_model_path", default="")
@@ -576,9 +591,6 @@ def build_tracking_parameters(
                 default=advanced.get("headtail_batch_size", 64),
             )
         ),
-        "HEADTAIL_COMPUTE_RUNTIME": str(
-            _cfg_get(cfg, "headtail_runtime", default=compute_runtime)
-        ),
         "YOLO_CONFIDENCE_THRESHOLD": float(
             _cfg_get(cfg, "yolo_confidence_threshold", default=0.25)
         ),
@@ -589,10 +601,7 @@ def build_tracking_parameters(
         "YOLO_TARGET_CLASSES": _coerce_int_list(
             _cfg_get(cfg, "yolo_target_classes", default=None)
         ),
-        "COMPUTE_RUNTIME": compute_runtime,
-        "CNN_COMPUTE_RUNTIME": str(
-            _cfg_get(cfg, "cnn_compute_runtime", "cnn_runtime", default=compute_runtime)
-        ),
+        "RUNTIME_TIER": runtime_tier,
         "YOLO_DEVICE": detection_runtime["yolo_device"],
         "ENABLE_GPU_BACKGROUND": detection_runtime["enable_gpu_background"],
         "ENABLE_TENSORRT": detection_runtime["enable_tensorrt"],
