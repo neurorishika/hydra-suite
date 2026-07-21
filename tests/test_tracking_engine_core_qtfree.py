@@ -80,3 +80,26 @@ def test_wrapper_delegates_and_exposes_signals(qtbot=None):
     assert w.get_current_params() == {"X": 1}
     w.stop()
     assert w._stop_requested is True
+
+
+def test_entire_core_tree_imports_no_qt():
+    """The whole core/ tree must be Qt-free — locks in the dependency-direction
+    invariant (App layers → Core, never the reverse). This is the final offender
+    fixed by relocating TrackingWorker's QThread wrapper to trackerkit."""
+    import hydra_suite.core as core_pkg
+
+    root = Path(core_pkg.__file__).parent
+    offenders = []
+    for py in root.rglob("*.py"):
+        tree = ast.parse(py.read_text(), filename=str(py))
+        for node in ast.walk(tree):
+            mod = None
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module
+            elif isinstance(node, ast.Import):
+                mod = ",".join(a.name for a in node.names)
+            if mod and any(
+                q in mod for q in ("PySide6", "QtCore", "QtGui", "QtWidgets")
+            ):
+                offenders.append(f"{py.relative_to(root)}:{node.lineno}")
+    assert not offenders, "core/ must be Qt-free: " + "; ".join(offenders)
