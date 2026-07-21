@@ -1470,7 +1470,7 @@ class ConfigOrchestrator:
                 }
             )
 
-        compute_runtime = self._mw._selected_compute_runtime()
+        resolved_obb = self._mw._resolved_obb_backend()
 
         cfg.update(
             {
@@ -1541,7 +1541,6 @@ class ConfigOrchestrator:
                 "yolo_headtail_conf_threshold": self._panels.identity.spin_yolo_headtail_conf.value(),
                 "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
                 "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
-                "headtail_runtime": self._mw._selected_headtail_runtime(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
                 "min_aspect_ratio_multiplier": self._panels.detection.spin_min_ar_multiplier.value(),
@@ -1579,8 +1578,7 @@ class ConfigOrchestrator:
             cfg[f"{role_key}_usage_role"] = role_meta.get("usage_role", "")
 
         # === COMPUTE RUNTIME ===
-        runtime_detection = legacy_detection_runtime_fields(compute_runtime)
-        cfg["compute_runtime"] = compute_runtime
+        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
         cfg["runtime_tier"] = self._mw._selected_runtime_tier()
         # Keep legacy fields writable for backward compatibility.
         if not preset_mode:
@@ -1596,7 +1594,7 @@ class ConfigOrchestrator:
                 "tensorrt_max_batch_size": resolve_tensorrt_max_batch_size(
                     detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
                     fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(
-                        compute_runtime
+                        resolved_obb
                     ),
                 ),
                 # === CORE TRACKING ===
@@ -1788,7 +1786,6 @@ class ConfigOrchestrator:
                 "enable_identity_swap_correction": self._panels.tracking.chk_enable_identity_swap_correction.isChecked(),
                 "identity_swap_min_frames": self._panels.tracking.spin_identity_swap_min_frames.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
-                "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
         )
 
@@ -2057,11 +2054,11 @@ class ConfigOrchestrator:
         identity_method = (
             self._mw._selected_identity_method()
         )  # kept for backward compat
-        compute_runtime = self._mw._selected_compute_runtime()
-        runtime_detection = legacy_detection_runtime_fields(compute_runtime)
+        resolved_obb = self._mw._resolved_obb_backend()
+        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
         trt_batch_size = resolve_tensorrt_max_batch_size(
             detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
-            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(compute_runtime),
+            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(resolved_obb),
         )
         trt_build_batch_size_raw = advanced_config.get(
             "tensorrt_build_batch_size", None

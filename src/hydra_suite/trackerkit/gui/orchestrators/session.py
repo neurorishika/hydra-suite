@@ -780,19 +780,21 @@ class SessionOrchestrator:
         """Show a performance hint when device/mode is a suboptimal combination."""
         if not hasattr(self._mw, "_detection_panel"):
             return
-        runtime = (
-            self._mw._selected_compute_runtime()
+        resolved = (
+            self._mw._resolved_obb_backend()
             if hasattr(self._mw, "_setup_panel")
-            else ""
+            else None
         )
         sequential = (
             hasattr(self._mw, "_detection_panel")
             and self._mw._detection_panel.combo_yolo_obb_mode.currentIndex() == 1
         )
-        # "coreml" is Apple GPU-Fast's concrete backend (resolve_compute_runtime),
-        # and is just as Apple-Silicon-bound as native "mps" for this warning.
-        is_apple_silicon = "mps" in runtime.lower() or "coreml" in runtime.lower()
-        is_cuda = "cuda" in runtime.lower()
+        # "coreml" is Apple GPU-Fast's concrete backend, and is just as
+        # Apple-Silicon-bound as native "mps" for this warning.
+        is_apple_silicon = resolved is not None and (
+            resolved.device == "mps" or resolved.backend == "coreml"
+        )
+        is_cuda = resolved is not None and resolved.device == "cuda"
         if is_apple_silicon and sequential:
             msg = (
                 "⚠ Sequential mode is significantly slower on Apple Silicon (MPS). "
@@ -990,12 +992,12 @@ class SessionOrchestrator:
         data = self._mw._setup_panel.combo_runtime_tier.currentData()
         return str(data).strip() if data else "gpu"
 
-    def _selected_compute_runtime(self) -> str:
-        """Derive the concrete compute_runtime string from the selected tier combo."""
-        from hydra_suite.runtime.resolver import resolve_compute_runtime
+    def _resolved_obb_backend(self):
+        """Resolve the OBB-stage backend for the selected tier and host platform."""
+        from hydra_suite.runtime.resolver import RuntimeResolver
 
-        return resolve_compute_runtime(
-            self._current_runtime_tier(), detect_platform(), stage="obb"
+        return RuntimeResolver(self._current_runtime_tier(), detect_platform()).resolve(
+            "obb"
         )
 
     def _has_cnn_identity_enabled(self) -> bool:
@@ -1007,18 +1009,18 @@ class SessionOrchestrator:
             return False
         return bool(self._mw._identity_config().get("cnn_classifiers", []))
 
-    def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
+    def _runtime_requires_fixed_yolo_batch(self, resolved=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
-        rt = str(runtime or self._selected_compute_runtime() or "").strip().lower()
-        if rt == "tensorrt":
+        resolved = resolved if resolved is not None else self._resolved_obb_backend()
+        if resolved.backend == "tensorrt":
             return True
         return self._gpu_fast_obb_is_coreml_only()
 
     def _gpu_fast_obb_is_coreml_only(self) -> bool:
         """Return True when gpu_fast OBB detection will run on CoreML.
 
-        ``_selected_compute_runtime()`` reports "coreml" directly for gpu_fast
-        on Apple Silicon (via ``resolve_compute_runtime``), and the OBB stage
+        ``_resolved_obb_backend()`` reports the "coreml" backend directly for
+        gpu_fast on Apple Silicon, and the OBB stage
         internally upgrades to a CoreML direct executor whenever the exported
         ``.mlpackage`` artifact is available (see
         ``core/inference/runtime.py:resolved_backend_for``). CoreML's
@@ -1033,26 +1035,6 @@ class SessionOrchestrator:
             return False
         platform = detect_platform()
         return bool(platform.has_mps and not platform.has_cuda)
-
-    @staticmethod
-    def _preview_safe_runtime(runtime: str) -> str:
-        """Downgrade ONNX/TensorRT/CoreML runtimes to their native equivalents for preview.
-
-        NOTE: still has live callers (``tracking.py::start_preview_on_video``,
-        ``detection_panel.py::_collect_preview_detection_context``) that must
-        not run preview through an exported accelerator backend, so this is
-        NOT dead despite `_selected_compute_runtime()` no longer emitting the
-        legacy ``onnx_*`` vocabulary. It now also downgrades the new
-        ``"coreml"`` value `_selected_compute_runtime()` can report directly.
-        """
-        rt = str(runtime or "cpu").strip().lower()
-        if rt == "onnx_cpu":
-            return "cpu"
-        if rt in ("onnx_coreml", "coreml"):
-            return "mps"
-        if rt in ("onnx_cuda", "tensorrt"):
-            return "cuda"
-        return rt
 
     def _on_runtime_tier_changed(self) -> None:
         """Handle tier combo change: store tier to config and refresh dependent controls."""

@@ -15,38 +15,62 @@ import cv2
 import numpy as np
 
 from hydra_suite.runtime.compute_runtime import _normalize_runtime
+from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
 
 
-def legacy_detection_runtime_fields(compute_runtime: str) -> dict:
-    """Map a ``compute_runtime`` string to legacy detection config fields.
+def legacy_detection_runtime_fields(runtime: ResolvedBackend | str) -> dict:
+    """Map a runtime to legacy detection config fields.
 
-    These fields (``yolo_device``/``enable_tensorrt``/``enable_onnx_runtime``/
-    ``enable_gpu_background``) no longer drive any live detector construction:
-    the ``"yolo_obb"`` detection method runs entirely through
-    ``InferenceRunner``/``load_obb_executor``, keyed off ``RUNTIME_TIER`` /
-    ``COMPUTE_RUNTIME``, which never reads these fields back. They are kept
-    only for (a) legacy config-file field backward-compatibility (display /
-    round-tripping old preset files) and (b) contributing to the
-    detection/engine cache-invalidation hash key (see
-    ``trackerkit/gui/orchestrators/tracking.py``'s cache-id builder).
+    Accepts either a resolved backend (the live GUI path, Runtime Gen-2) or a
+    legacy ``compute_runtime`` string (the CLI / old-on-disk-config path). Both
+    produce the same ``{yolo_device, enable_tensorrt, enable_onnx_runtime,
+    enable_gpu_background}`` dict for the runtimes the resolver can emit; see
+    ``tests/test_trackerkit_cli_config.py`` for the byte-for-byte equivalence
+    proof across the 5 producible backends.
 
-    Unlike the deleted ``derive_detection_runtime_settings``, ``"coreml"``
-    (native Apple GPU-Fast backend, resolved via ``RuntimeResolver``) is kept
-    distinct from ``"onnx_coreml"`` (ONNX Runtime with the CoreML execution
-    provider) rather than collapsed into it, since collapsing the two was the
-    vocabulary bug this refactor plan has otherwise been fixing.
+    These fields no longer drive any live detector construction: the
+    ``"yolo_obb"`` detection method runs entirely through
+    ``InferenceRunner``/``load_obb_executor``, keyed off ``RUNTIME_TIER``,
+    which never reads these fields back. They are kept only for (a) legacy
+    config-file field backward-compatibility (display / round-tripping old
+    preset files) and (b) contributing to the detection/engine
+    cache-invalidation hash key (see
+    ``trackerkit/gui/orchestrators/tracking.py``'s cache-id builder), so the
+    derived values MUST stay stable to preserve existing tracking caches.
 
-    Legacy on-disk configs may still carry non-canonical aliases (``"trt"``,
-    ``"onnx"``, ``"onnx_gpu"``, ``"onnx_mps"``, etc.) predating this
-    refactor. Those are normalized via ``_normalize_runtime`` before dispatch,
-    exactly as the deleted ``derive_detection_runtime_settings`` did. The one
-    exception is the literal ``"coreml"`` alias: ``_normalize_runtime``
-    collapses it into ``"onnx_coreml"``, which would reintroduce the
-    coreml/onnx_coreml conflation this refactor fixed, so it is special-cased
-    to bypass normalization and dispatch as ``"coreml"`` directly.
+    When given a ``ResolvedBackend``: ``yolo_device`` is the resolved device
+    (``"cuda"`` -> ``"cuda:0"``), ``enable_tensorrt`` is ``backend ==
+    "tensorrt"``, ``enable_gpu_background`` is ``device != "cpu"``, and
+    ``enable_onnx_runtime`` is always ``False`` (the resolver never emits an
+    ONNX-Runtime backend). ``"coreml"`` (native Apple GPU-Fast) is kept
+    distinct from the legacy ``"onnx_coreml"`` string.
+    """
+    if isinstance(runtime, ResolvedBackend):
+        device_map = {"cpu": "cpu", "cuda": "cuda:0", "mps": "mps"}
+        yolo_device = device_map.get(runtime.device, "cpu")
+        return {
+            "yolo_device": yolo_device,
+            "enable_tensorrt": runtime.backend == "tensorrt",
+            "enable_onnx_runtime": False,
+            "enable_gpu_background": runtime.device != "cpu",
+        }
+    return _legacy_detection_runtime_fields_from_string(runtime)
+
+
+def _legacy_detection_runtime_fields_from_string(compute_runtime: str) -> dict:
+    """Map a legacy ``compute_runtime`` string to legacy detection fields.
+
+    Used by the CLI / old-on-disk-config path, which may still carry
+    non-canonical aliases (``"trt"``, ``"onnx"``, ``"onnx_gpu"``,
+    ``"onnx_mps"``, etc.) predating the Runtime Gen-2 refactor. Those are
+    normalized via ``_normalize_runtime`` before dispatch. The one exception is
+    the literal ``"coreml"`` alias: ``_normalize_runtime`` collapses it into
+    ``"onnx_coreml"``, which would reintroduce the coreml/onnx_coreml
+    conflation this refactor fixed, so it is special-cased to bypass
+    normalization and dispatch as ``"coreml"`` directly.
     """
     raw = str(compute_runtime or "cpu").strip().lower().replace("-", "_")
     rt = "coreml" if raw == "coreml" else _normalize_runtime(compute_runtime)

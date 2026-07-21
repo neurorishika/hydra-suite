@@ -260,3 +260,61 @@ def test_legacy_detection_runtime_fields_coreml_still_not_collapsed_after_normal
         "enable_onnx_runtime": False,
         "enable_gpu_background": True,
     }
+
+
+# --- Cache-key stability (FT7a) -------------------------------------------
+# The GUI now passes a ``ResolvedBackend`` (not a compute_runtime string) into
+# ``legacy_detection_runtime_fields``. Those fields feed
+# ``YOLO_DEVICE``/``ENABLE_TENSORRT``/``ENABLE_GPU_BACKGROUND``, which
+# ``tracking_cache.py`` hashes into the detection cache id. The ResolvedBackend
+# path MUST reproduce the legacy string-path dict byte-for-byte for every
+# backend the resolver can emit, or existing tracking caches silently
+# invalidate.
+
+# The 5 producible backends and the legacy compute_runtime string the old GUI
+# derived for each (via ``resolve_compute_runtime``).
+_PRODUCIBLE_BACKENDS = [
+    (("torch", "cpu"), "cpu"),
+    (("torch", "mps"), "mps"),
+    (("torch", "cuda"), "cuda"),
+    (("tensorrt", "cuda"), "tensorrt"),
+    (("coreml", "mps"), "coreml"),
+]
+
+
+def test_resolved_backend_fields_match_legacy_string_fields_for_all_backends():
+    """Derived-from-ResolvedBackend fields == legacy string-derived fields for
+    every producible backend (cache-key stability guarantee)."""
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
+    for (backend, device), legacy_string in _PRODUCIBLE_BACKENDS:
+        resolved = ResolvedBackend(backend=backend, device=device, used_fallback=False)
+        derived = legacy_detection_runtime_fields(resolved)
+        legacy = legacy_detection_runtime_fields(legacy_string)
+        assert derived == legacy, (backend, device, legacy_string)
+
+
+def test_resolved_backend_string_pairs_are_the_actual_resolver_outputs():
+    """Sanity-check that the (ResolvedBackend, legacy_string) pairs above are
+    exactly what RuntimeResolver / resolve_compute_runtime produce, so the
+    stability proof covers the real producible set."""
+    from hydra_suite.runtime.resolver import (
+        PlatformInfo,
+        RuntimeResolver,
+        resolve_compute_runtime,
+    )
+
+    cases = [
+        ("cpu", PlatformInfo(has_cuda=False, has_mps=False), ("torch", "cpu")),
+        ("gpu", PlatformInfo(has_cuda=True, has_mps=False), ("torch", "cuda")),
+        ("gpu", PlatformInfo(has_cuda=False, has_mps=True), ("torch", "mps")),
+        ("gpu_fast", PlatformInfo(has_cuda=True, has_mps=False), ("tensorrt", "cuda")),
+        ("gpu_fast", PlatformInfo(has_cuda=False, has_mps=True), ("coreml", "mps")),
+    ]
+    seen_strings = set()
+    for tier, platform, expected in cases:
+        resolved = RuntimeResolver(tier, platform).resolve("obb")
+        assert (resolved.backend, resolved.device) == expected
+        seen_strings.add(resolve_compute_runtime(tier, platform, "obb"))
+    # The legacy strings used in the stability test are exactly this set.
+    assert seen_strings == {s for _, s in _PRODUCIBLE_BACKENDS}

@@ -830,15 +830,18 @@ def test_headtail_runtime_derives_from_tier_combo(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    """_selected_headtail_runtime() returns the same value as the tier-derived compute runtime."""
+    """The retired per-stage runtime combos are gone; the OBB backend is
+    resolved from the selected tier (Runtime Gen-2)."""
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
 
     # headtail and cnn combos no longer exist on setup panel.
     assert not hasattr(window._setup_panel, "combo_headtail_runtime")
     assert not hasattr(window._setup_panel, "combo_cnn_runtime")
-    # _selected_headtail_runtime delegates to _selected_compute_runtime (tier-derived).
-    assert window._selected_headtail_runtime() == window._selected_compute_runtime()
+    # There is a single tier-derived resolved OBB backend for all stages.
+    assert isinstance(window._resolved_obb_backend(), ResolvedBackend)
     window.close()
 
 

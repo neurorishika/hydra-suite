@@ -1536,17 +1536,7 @@ class DetectionPanel(QWidget):
 
     def _collect_preview_detection_context(self) -> dict:
         """Capture current UI values for async preview detection."""
-        from hydra_suite.runtime.resolver import (
-            detect_platform,
-            resolve_compute_runtime,
-        )
-
-        selected_runtime = self._main_window._preview_safe_runtime(
-            self._main_window._selected_compute_runtime()
-        )
         tier = self._main_window._selected_runtime_tier()
-        platform = detect_platform()
-        obb_compute_runtime = resolve_compute_runtime(tier, platform, stage="obb")
         identity_cfg = self._preview_identity_config()
         ip = getattr(self._main_window, "_identity_panel", None)
         pose_backend_family = (
@@ -1591,19 +1581,7 @@ class DetectionPanel(QWidget):
             "max_aspect_ratio_multiplier": self.spin_max_ar_multiplier.value(),
             "min_object_size": self.spin_min_object_size.value(),
             "max_object_size": self.spin_max_object_size.value(),
-            "compute_runtime": selected_runtime,
             "runtime_tier": tier,
-            "obb_compute_runtime": obb_compute_runtime,
-            "headtail_runtime": (
-                self._main_window._selected_headtail_runtime()
-                if hasattr(self._main_window, "_selected_headtail_runtime")
-                else selected_runtime
-            ),
-            "cnn_runtime": (
-                self._main_window._selected_cnn_runtime()
-                if hasattr(self._main_window, "_selected_cnn_runtime")
-                else selected_runtime
-            ),
             "yolo_obb_mode": (
                 "sequential"
                 if self.combo_yolo_obb_mode.currentIndex() == 1

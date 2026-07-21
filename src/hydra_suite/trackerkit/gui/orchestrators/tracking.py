@@ -3849,10 +3849,12 @@ class TrackingOrchestrator:
         # instead of the removed COMPUTE_RUNTIME param. The pose runtime is fully
         # tier-derived downstream (Runtime Gen-2 FT2), so no pose-flavor param is
         # threaded here.
-        pre_rt = self._mw._selected_compute_runtime()
-        safe_rt = self._mw._preview_safe_runtime(pre_rt)
-        if safe_rt != pre_rt:
-            safe_det = legacy_detection_runtime_fields(safe_rt)
+        resolved_obb = self._mw._resolved_obb_backend()
+        if resolved_obb.backend in ("tensorrt", "coreml"):
+            import dataclasses
+
+            safe = dataclasses.replace(resolved_obb, backend="torch")
+            safe_det = legacy_detection_runtime_fields(safe)
             params["YOLO_DEVICE"] = safe_det["yolo_device"]
             params["ENABLE_GPU_BACKGROUND"] = safe_det["enable_gpu_background"]
             params["ENABLE_TENSORRT"] = safe_det["enable_tensorrt"]
