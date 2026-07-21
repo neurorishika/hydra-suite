@@ -7,13 +7,13 @@ import gc
 import logging
 import math
 import os
+import threading
 import time
 from collections import deque
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QMutex, QThread, Signal, Slot
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
@@ -129,18 +129,11 @@ def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
     return resolved.device  # cpu / cuda / mps
 
 
-class TrackingWorker(QThread):
+class TrackingEngineCore:
     """
     Core tracking engine. Orchestrates tracking components to be functionally
     identical to the original monolithic implementation.
     """
-
-    frame_signal = Signal(np.ndarray)
-    finished_signal = Signal(bool, list, list)
-    progress_signal = Signal(int, str)
-    stats_signal = Signal(dict)  # Real-time FPS/ETA stats
-    warning_signal = Signal(str, str)  # (title, message) for UI warnings
-    pose_exported_model_resolved_signal = Signal(str)
 
     def __init__(
         self,
@@ -151,9 +144,20 @@ class TrackingWorker(QThread):
         detection_cache_path=None,
         preview_mode=False,
         use_cached_detections=False,
-        parent=None,
+        *,
+        on_frame=None,
+        on_finished=None,
+        on_progress=None,
+        on_stats=None,
+        on_warning=None,
+        on_pose_model_resolved=None,
     ):
-        super().__init__(parent)
+        self._on_frame = on_frame
+        self._on_finished = on_finished
+        self._on_progress = on_progress
+        self._on_stats = on_stats
+        self._on_warning = on_warning
+        self._on_pose_model_resolved = on_pose_model_resolved
         self.video_path = video_path
         self.csv_writer_thread = csv_writer_thread
         self.video_output_path = video_output_path
@@ -162,7 +166,7 @@ class TrackingWorker(QThread):
         self.preview_mode = preview_mode
         self.use_cached_detections = use_cached_detections
         self.video_writer = None
-        self.params_mutex = QMutex()
+        self._params_lock = threading.Lock()
         self.parameters = {}
         self.individual_properties_cache_path = None
         self.detected_properties_cache_path = None
@@ -183,25 +187,45 @@ class TrackingWorker(QThread):
         self.frame_prefetcher = None
         self.frame_prefetcher = None
 
+    def _emit_frame(self, rgb):
+        if self._on_frame is not None:
+            self._on_frame(rgb)
+
+    def _emit_finished(self, success, fps_list, full_traj):
+        if self._on_finished is not None:
+            self._on_finished(success, fps_list, full_traj)
+
+    def _emit_progress(self, pct, msg):
+        if self._on_progress is not None:
+            self._on_progress(pct, msg)
+
+    def _emit_stats(self, stats):
+        if self._on_stats is not None:
+            self._on_stats(stats)
+
+    def _emit_warning(self, title, msg):
+        if self._on_warning is not None:
+            self._on_warning(title, msg)
+
+    def _emit_pose_model_resolved(self, path):
+        if self._on_pose_model_resolved is not None:
+            self._on_pose_model_resolved(path)
+
     def set_parameters(self: object, p: dict) -> object:
         """Set full tracking parameter dictionary in a thread-safe way."""
-        self.params_mutex.lock()
-        self.parameters = p
-        self.params_mutex.unlock()
+        with self._params_lock:
+            self.parameters = p
 
-    @Slot(dict)
     def update_parameters(self: object, new_params: dict) -> object:
-        """Slot to safely update parameters from the GUI thread."""
-        self.params_mutex.lock()
-        self.parameters = new_params
-        self.params_mutex.unlock()
+        """Safely update parameters from the GUI thread."""
+        with self._params_lock:
+            self.parameters = new_params
         logger.info("Tracking worker parameters updated.")
 
     def get_current_params(self: object) -> object:
         """Return a shallow copy of current tracking parameters."""
-        self.params_mutex.lock()
-        p = dict(self.parameters)
-        self.params_mutex.unlock()
+        with self._params_lock:
+            p = dict(self.parameters)
         return p
 
     def _confidence_density_enabled(self, params=None) -> bool:
@@ -484,7 +508,7 @@ class TrackingWorker(QThread):
     def emit_frame(self: object, bgr: object) -> object:
         """Emit current frame to GUI in RGB format."""
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        self.frame_signal.emit(rgb)
+        self._emit_frame(rgb)
 
     def _build_individual_properties_cache_path(
         self, properties_id: str, start_frame: int, end_frame: int
@@ -661,16 +685,16 @@ class TrackingWorker(QThread):
         if collapse is not None:
             return collapse(theta_axis, reference_theta)
 
-        theta0 = TrackingWorker._normalize_theta(theta_axis)
-        theta1 = TrackingWorker._normalize_theta(theta0 + math.pi)
+        theta0 = TrackingEngineCore._normalize_theta(theta_axis)
+        theta1 = TrackingEngineCore._normalize_theta(theta0 + math.pi)
         if reference_theta is None:
             return theta0
         try:
-            ref = TrackingWorker._normalize_theta(float(reference_theta))
+            ref = TrackingEngineCore._normalize_theta(float(reference_theta))
         except Exception:
             return theta0
-        d0 = TrackingWorker._circular_abs_diff_rad(theta0, ref)
-        d1 = TrackingWorker._circular_abs_diff_rad(theta1, ref)
+        d0 = TrackingEngineCore._circular_abs_diff_rad(theta0, ref)
+        d1 = TrackingEngineCore._circular_abs_diff_rad(theta1, ref)
         return theta0 if d0 <= d1 else theta1
 
     def _build_cnn_identity_cache_path(
@@ -695,33 +719,7 @@ class TrackingWorker(QThread):
             )
         )
 
-    def run(self: object) -> object:
-        """QThread entry point: delegate to ``_run_impl``, guaranteeing ``finished_signal``.
-
-        ``_run_impl`` is a large, deeply nested pipeline (video decode,
-        detection, tracking, post-processing) with many early-return error
-        paths, but no blanket exception handler. PySide6 silently swallows
-        any exception that escapes a QThread's ``run()`` override (it prints
-        "Error calling Python override of QThread::run()" and returns), so
-        without this wrapper an unexpected exception anywhere in
-        ``_run_impl`` — e.g. an NVDec hardware-decode failure raised lazily
-        on the first frame read for a clip whose resolution exceeds the
-        GPU's macroblock limit — leaves ``finished_signal`` never emitted.
-        Callers that block on it (e.g. headless_tracking.py's
-        ``QEventLoop.exec()``) then hang forever instead of surfacing a
-        clean error.
-        """
-        try:
-            self._run_impl()
-        except Exception:
-            logger.exception(
-                "Unhandled exception in TrackingWorker.run(); emitting "
-                "finished_signal(False, ...) so callers waiting on it "
-                "(e.g. the headless CLI's QEventLoop) don't hang forever."
-            )
-            self.finished_signal.emit(False, [], [])
-
-    def _run_impl(self: object) -> object:  # noqa: C901
+    def run_tracking(self: object) -> object:  # noqa: C901
         """Execute tracking pipeline for the configured video and parameters."""
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
@@ -741,7 +739,7 @@ class TrackingWorker(QThread):
         cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             logger.error(f"Failed to open video: {self.video_path}")
-            self.finished_signal.emit(True, [], [])
+            self._emit_finished(True, [], [])
             return
 
         total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -833,7 +831,7 @@ class TrackingWorker(QThread):
                 "Background subtraction mode runs tracking without individual-analysis outputs."
             )
             logger.info(msg)
-            self.warning_signal.emit("Individual Analysis Disabled", msg)
+            self._emit_warning("Individual Analysis Disabled", msg)
             individual_pipeline_enabled = False
 
         # Whether any precompute phase will be needed (pose, AprilTag, CNN identity).
@@ -896,7 +894,7 @@ class TrackingWorker(QThread):
                 "Individual precompute requires detection caching, but no detection cache path is configured."
             )
             cap.release()
-            self.finished_signal.emit(False, [], [])
+            self._emit_finished(False, [], [])
             return
 
         # Replay/precompute fallback needs full raw detections before tracking
@@ -1007,7 +1005,7 @@ class TrackingWorker(QThread):
                     "Please run forward tracking first."
                 )
                 cap.release()
-                self.finished_signal.emit(False, [], [])
+                self._emit_finished(False, [], [])
                 return
 
             try:
@@ -1017,7 +1015,7 @@ class TrackingWorker(QThread):
                     "Failed to build InferenceConfig from params: %s", _cfg_err
                 )
                 cap.release()
-                self.finished_signal.emit(False, [], [])
+                self._emit_finished(False, [], [])
                 return
 
             _cache_dir = self._resolve_cache_dir()
@@ -1041,7 +1039,7 @@ class TrackingWorker(QThread):
                     )
                     inference_runner.close()
                     cap.release()
-                    self.finished_signal.emit(False, [], [])
+                    self._emit_finished(False, [], [])
                     return
                 if not inference_runner.detection_cache_covers_range(
                     start_frame, end_frame
@@ -1059,7 +1057,7 @@ class TrackingWorker(QThread):
                     )
                     inference_runner.close()
                     cap.release()
-                    self.finished_signal.emit(False, [], [])
+                    self._emit_finished(False, [], [])
                     return
                 use_cached_detections = True
                 logger.info(
@@ -1150,7 +1148,7 @@ class TrackingWorker(QThread):
                         self._resolve_cache_dir() / "bgsub_detection.npz",
                     )
                     cap.release()
-                    self.finished_signal.emit(False, [], [])
+                    self._emit_finished(False, [], [])
                     return
                 use_cached_detections = True
                 logger.info(
@@ -1227,7 +1225,7 @@ class TrackingWorker(QThread):
                 logger.exception(
                     "InferenceRunner batch pass failed (fatal): %s", _bp_err
                 )
-                self.warning_signal.emit(
+                self._emit_warning(
                     "Inference Failed",
                     f"Batch detection pass failed:\n{_bp_err}",
                 )
@@ -1235,7 +1233,7 @@ class TrackingWorker(QThread):
                 cap.release()
                 if self.video_writer:
                     self.video_writer.release()
-                self.finished_signal.emit(False, [], [])
+                self._emit_finished(False, [], [])
                 return
             profiler.phase_end("batched_detection")
             use_cached_detections = True
@@ -1307,10 +1305,10 @@ class TrackingWorker(QThread):
 
                     def _density_progress(pct, msg):
                         logger.info(msg)
-                        self.progress_signal.emit(pct, msg)
+                        self._emit_progress(pct, msg)
 
                     logger.info("Computing confidence density map...")
-                    self.progress_signal.emit(0, "Computing confidence density map...")
+                    self._emit_progress(0, "Computing confidence density map...")
 
                     # Compute min_area_px in grid-pixel units from body-size fraction.
                     _density_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
@@ -1364,9 +1362,7 @@ class TrackingWorker(QThread):
 
                     if self._confidence_density_video_export_enabled(p):
                         logger.info("Exporting confidence density diagnostic video...")
-                        self.progress_signal.emit(
-                            50, "Exporting confidence density video..."
-                        )
+                        self._emit_progress(50, "Exporting confidence density video...")
 
                         # Output at reduced resolution for speed.
                         _diag_ds = 4  # 4× downsample for diagnostic video (independent of density grid ds)
@@ -1391,7 +1387,7 @@ class TrackingWorker(QThread):
                         logger.info(
                             "Skipping confidence density diagnostic video export by configuration."
                         )
-                    self.progress_signal.emit(100, "Density map complete")
+                    self._emit_progress(100, "Density map complete")
 
                     # Reopen video capture for subsequent phases.
                     # CAP_PROP_POS_FRAMES seek is unreliable with some
@@ -3889,7 +3885,7 @@ class TrackingWorker(QThread):
                             f"(abs {actual_frame_index})"
                         )
 
-                    self.progress_signal.emit(percentage, status_text)
+                    self._emit_progress(percentage, status_text)
 
             # --- Visualization, Output & Loop Maintenance ---
             viz_free_mode = params.get("VISUALIZATION_FREE_MODE", False)
@@ -4007,9 +4003,7 @@ class TrackingWorker(QThread):
 
             # Emit stats every 10 frames to avoid overwhelming the UI
             if self.frame_count % 10 == 0:
-                self.stats_signal.emit(
-                    {"fps": current_fps, "elapsed": elapsed, "eta": eta}
-                )
+                self._emit_stats({"fps": current_fps, "elapsed": elapsed, "eta": eta})
 
             # Finalize profiling for this frame and log periodically
             profiler.end_frame()
@@ -4048,7 +4042,7 @@ class TrackingWorker(QThread):
         if live_feature_precompute is not None and not stop_requested:
             try:
                 live_results = live_feature_precompute.finalize_live(
-                    warning_cb=lambda title, msg: self.warning_signal.emit(title, msg)
+                    warning_cb=lambda title, msg: self._emit_warning(title, msg)
                 )
                 props_path = props_path or live_results.get("pose")
                 tag_observation_cache_path = (
@@ -4056,7 +4050,7 @@ class TrackingWorker(QThread):
                 )
             except Exception as exc:
                 logger.exception("Realtime feature finalization failed")
-                self.warning_signal.emit(
+                self._emit_warning(
                     "Realtime Analysis Finalization Failed",
                     f"Tracking finished, but finalizing realtime analysis artifacts failed:\n{exc}",
                 )
@@ -4196,9 +4190,7 @@ class TrackingWorker(QThread):
 
         logger.info("Tracking worker finished. Emitting raw trajectory data.")
 
-        self.finished_signal.emit(
-            not self._stop_requested, fps_list, self.trajectories_full
-        )
+        self._emit_finished(not self._stop_requested, fps_list, self.trajectories_full)
 
     def _smooth_orientation(
         self,
@@ -4388,4 +4380,4 @@ class TrackingWorker(QThread):
         """Translate batch-pass progress to the existing progress_signal."""
         if total > 0:
             pct = int(done * 100 / total)
-            self.progress_signal.emit(pct, f"Inference pass: {done}/{total} frames")
+            self._emit_progress(pct, f"Inference pass: {done}/{total} frames")
