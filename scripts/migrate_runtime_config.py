@@ -76,7 +76,14 @@ def _normalize_runtime(raw: Any) -> str | None:
 
 
 def _tier_from_runtimes(runtimes: set[str]) -> str:
-    """Compute a Gen-2 runtime_tier from a set of normalized legacy runtimes."""
+    """Compute a Gen-2 runtime_tier from a set of normalized legacy runtimes.
+
+    An empty set (a config carrying no runtime string at all) maps to "gpu" to
+    match the legacy load path (``migrate_runtime_to_tier`` defaulted an empty
+    set to "gpu"), so migrating a runtime-less config preserves its old tier.
+    """
+    if not runtimes:
+        return "gpu"
     if runtimes & _FAST_RUNTIMES:
         return "gpu_fast"
     if runtimes & _GPU_RUNTIMES:

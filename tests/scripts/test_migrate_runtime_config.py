@@ -75,8 +75,11 @@ def test_existing_valid_tier_is_idempotent():
     assert result["runtime_tier"] == "gpu_fast"
 
 
-def test_empty_dict_defaults_to_cpu():
-    assert migrate_config_dict({})["runtime_tier"] == "cpu"
+def test_empty_dict_defaults_to_gpu():
+    # A config with no runtime string at all maps to "gpu", matching the legacy
+    # load path (migrate_runtime_to_tier defaulted an empty set to "gpu"), so a
+    # runtime-less config keeps its old effective tier after migration.
+    assert migrate_config_dict({})["runtime_tier"] == "gpu"
 
 
 def test_onnx_and_alias_normalization_maps_to_gpu_fast():
