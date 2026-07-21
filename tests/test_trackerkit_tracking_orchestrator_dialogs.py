@@ -653,7 +653,7 @@ def test_start_tracking_on_video_restores_csv_and_worker_imports(
         FakeCSVWriterThread,
     )
     monkeypatch.setattr(
-        "hydra_suite.core.tracking.TrackingWorker",
+        "hydra_suite.trackerkit.gui.workers.tracking_worker.TrackingWorker",
         FakeTrackingWorker,
     )
     monkeypatch.setattr(
@@ -770,7 +770,7 @@ def test_start_preview_on_video_uses_tracking_worker_when_cache_is_valid(
         lambda params, mode_label="": True,
     )
     monkeypatch.setattr(
-        "hydra_suite.core.tracking.TrackingWorker",
+        "hydra_suite.trackerkit.gui.workers.tracking_worker.TrackingWorker",
         FakeTrackingWorker,
     )
 
@@ -876,7 +876,7 @@ def test_start_preview_on_video_downgrades_auxiliary_runtimes(
         lambda params, mode_label="": True,
     )
     monkeypatch.setattr(
-        "hydra_suite.core.tracking.TrackingWorker",
+        "hydra_suite.trackerkit.gui.workers.tracking_worker.TrackingWorker",
         FakeTrackingWorker,
     )
 

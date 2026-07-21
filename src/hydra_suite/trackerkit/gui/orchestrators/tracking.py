@@ -3799,7 +3799,7 @@ class TrackingOrchestrator:
 
     def start_preview_on_video(self, video_path):
         """start_preview_on_video method documentation."""
-        from hydra_suite.core.tracking import TrackingWorker
+        from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker
 
         if self._mw.tracking_worker and self._mw.tracking_worker.isRunning():
             return
@@ -4265,7 +4265,7 @@ class TrackingOrchestrator:
         # Do NOT delete old detection caches; keep all for reuse
         self._mw.current_detection_cache_path = detection_cache_path
 
-        from hydra_suite.core.tracking import TrackingWorker
+        from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker
 
         self._mw.tracking_worker = TrackingWorker(
             video_path,

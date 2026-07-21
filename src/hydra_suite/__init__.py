@@ -60,7 +60,9 @@ def setup_logging(*args, **kwargs):
 def __getattr__(name: str):
     """Lazy-load heavyweight symbols for backwards compatibility."""
     if name == "TrackingWorker":
-        return import_module("hydra_suite.core.tracking.worker").TrackingWorker
+        return import_module(
+            "hydra_suite.trackerkit.gui.workers.tracking_worker"
+        ).TrackingWorker
     if name == "MainWindow":
         return import_module("hydra_suite.trackerkit.gui.main_window").MainWindow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

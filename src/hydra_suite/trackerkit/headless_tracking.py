@@ -9,11 +9,11 @@ import pandas as pd
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 
 from hydra_suite.core.post.processing import interpolate_trajectories
-from hydra_suite.core.tracking import TrackingWorker
 from hydra_suite.data.csv_writer import CSVWriterThread
 from hydra_suite.trackerkit.cli_config import TrackerCliSession
 from hydra_suite.trackerkit.gui.workers.merge_worker import MergeWorker
 from hydra_suite.trackerkit.gui.workers.postprocess_worker import PostProcessWorker
+from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker
 from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
 
 
