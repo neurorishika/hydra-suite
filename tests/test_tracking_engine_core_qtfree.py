@@ -103,3 +103,42 @@ def test_entire_core_tree_imports_no_qt():
             ):
                 offenders.append(f"{py.relative_to(root)}:{node.lineno}")
     assert not offenders, "core/ must be Qt-free: " + "; ".join(offenders)
+
+
+def test_assigner_large_n_warning_routes_through_engine_core_callback():
+    """Regression: TrackAssigner surfaces its large-N perf warning through the
+    worker's Qt-free ``_emit_warning`` hook. The worker is now a TrackingEngineCore
+    with no ``warning_signal`` — reaching for one would raise AttributeError and
+    fail the entire run (>25 targets, spatial optimization disabled)."""
+    import numpy as np
+
+    from hydra_suite.core.assigners.hungarian import TrackAssigner
+    from hydra_suite.core.tracking.worker import TrackingEngineCore
+
+    captured = []
+    core = TrackingEngineCore(
+        "dummy.mp4", on_warning=lambda title, msg: captured.append((title, msg))
+    )
+    assert not hasattr(core, "warning_signal")  # Qt lives only in the wrapper now
+
+    assigner = TrackAssigner({"ENABLE_SPATIAL_OPTIMIZATION": False}, worker=core)
+
+    class _StopAfterWarning(Exception):
+        pass
+
+    class _KFStub:
+        def get_mahalanobis_matrices(self):
+            raise _StopAfterWarning  # halt right after the warning block
+
+    N = 26  # > 25 triggers the large-N warning
+    measurements = [np.array([0.0, 0.0, 0.0], dtype=np.float32)]
+    predictions = np.zeros((N, 3), dtype=np.float32)
+    try:
+        assigner.compute_cost_matrix(
+            N, measurements, predictions, [(1.0, 1.0)], _KFStub(), [None]
+        )
+    except _StopAfterWarning:
+        pass
+
+    assert len(captured) == 1
+    assert captured[0][0] == "Performance Optimization Available"

@@ -4377,7 +4377,8 @@ class TrackingEngineCore:
         return emitter
 
     def _emit_inference_progress(self, done: int, total: int) -> None:
-        """Translate batch-pass progress to the existing progress_signal."""
+        """Translate batch-pass progress to the progress callback (surfaced as
+        the wrapper's ``progress_signal``)."""
         if total > 0:
             pct = int(done * 100 / total)
             self._emit_progress(pct, f"Inference pass: {done}/{total} frames")
