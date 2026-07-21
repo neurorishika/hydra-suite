@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from hydra_suite.runtime.resolver import ResolvedBackend
 
 _LEGACY_TINY_ARCH_VERSION = 1
 _DEFAULT_TINY_ARCH_VERSION = 2
@@ -558,17 +561,17 @@ def export_tiny_to_coreml(
     return mlpackage_path
 
 
-def load_tiny_onnx(onnx_path: str | Path, compute_runtime: str = "onnx_cpu"):
+def load_tiny_onnx(onnx_path: str | Path, resolved: "ResolvedBackend"):
     """Load a TinyClassifier ONNX model as an ``onnxruntime.InferenceSession``.
 
-    *compute_runtime* must be one of the canonical runtimes:
-    ``onnx_coreml``, ``onnx_cpu``, ``onnx_cuda``, or ``tensorrt``.
+    *resolved* is a ``ResolvedBackend`` (Runtime Gen-2 vocabulary); the ONNX
+    Runtime provider list is derived from it via ``execution_providers_for``.
     """
     import onnxruntime as ort
 
-    from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+    from hydra_suite.runtime.compute_runtime import execution_providers_for
 
-    providers = derive_onnx_execution_providers(compute_runtime)
+    providers = execution_providers_for(resolved)
     return ort.InferenceSession(str(onnx_path), providers=providers)
 
 

@@ -216,24 +216,32 @@ def test_bulk_pose_predict_worker_does_not_double_warmup(monkeypatch, tmp_path) 
     assert fake_backend.closed is True
 
 
-def test_pred_runtime_flavor_returns_coreml_not_onnx_mps() -> None:
+def test_pred_runtime_flavor_returns_coreml_not_onnx_mps(monkeypatch) -> None:
     """Critical-finding regression test: ``MainWindow._pred_runtime_flavor``
-    must not route ``"coreml"`` through ``derive_pose_runtime_settings``
-    (whose ``_normalize_runtime`` collapses "coreml" -> "onnx_coreml" ->
-    "onnx_mps" flavor), or the exact ONNX-CoreML-EP bug reappears one function
-    away for cache-key construction and exported-model-path browsing.
+    must map the native Apple GPU-Fast backend to ``"coreml"`` (not the
+    ONNX-CoreML-EP ``"onnx_mps"`` flavor), or the exact ONNX-CoreML-EP bug
+    reappears one function away for cache-key construction and exported-model-
+    path browsing.
 
-    Exercises the unbound method against a minimal fake ``self`` (mirroring
-    ``tests/test_posekit_main_window.py``'s ``SimpleNamespace`` pattern)
-    rather than constructing a full ``MainWindow``, which requires a live
-    project/image-path context this test doesn't need.
+    ``_pred_runtime_flavor`` resolves the selected tier via ``RuntimeResolver``
+    (Runtime Gen-2, FT7b): on an MPS host the ``gpu_fast`` tier resolves to the
+    ``coreml`` backend. Exercises the unbound method against a minimal fake
+    ``self`` (mirroring ``tests/test_posekit_main_window.py``'s
+    ``SimpleNamespace`` pattern) rather than constructing a full ``MainWindow``.
     """
     from types import SimpleNamespace
 
+    from hydra_suite.posekit.gui import main_window as mw
     from hydra_suite.posekit.gui.main_window import MainWindow
+    from hydra_suite.runtime.resolver import PlatformInfo
+
+    # Force an Apple-Silicon platform so gpu_fast -> coreml regardless of host.
+    monkeypatch.setattr(
+        mw, "detect_platform", lambda: PlatformInfo(has_cuda=False, has_mps=True)
+    )
 
     fake_self = SimpleNamespace(
-        _selected_compute_runtime=lambda *a, **k: "coreml",
+        _selected_tier=lambda *a, **k: "gpu_fast",
         _pred_backend=lambda: "yolo",
     )
     assert MainWindow._pred_runtime_flavor(fake_self) == "coreml"

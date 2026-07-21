@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.trackerkit.cli_config import (
     TrackerCliVideoProbe,
     legacy_detection_runtime_fields,
@@ -170,91 +171,63 @@ def test_cli_session_yolo_batch_size_defaults_to_one_when_not_configured(tmp_pat
     assert session.params["YOLO_BATCH_SIZE"] == 1
 
 
-def test_legacy_detection_runtime_fields_tensorrt():
-    out = legacy_detection_runtime_fields("tensorrt")
-    assert out == {
-        "yolo_device": "cuda:0",
-        "enable_tensorrt": True,
-        "enable_onnx_runtime": False,
-        "enable_gpu_background": True,
-    }
+# --- Cache-key stability -------------------------------------------------
+# Both the live GUI path and the CLI path resolve a ``RUNTIME_TIER`` to a
+# ``ResolvedBackend`` (Runtime Gen-2, FT7b) and pass it to
+# ``legacy_detection_runtime_fields``. Those fields feed
+# ``YOLO_DEVICE``/``ENABLE_TENSORRT``/``ENABLE_GPU_BACKGROUND``, which
+# ``tracking_cache.py`` hashes into the detection cache id. The derived values
+# MUST stay stable for every backend the resolver can emit, or existing
+# tracking caches silently invalidate.
 
-
-def test_legacy_detection_runtime_fields_onnx_coreml():
-    out = legacy_detection_runtime_fields("onnx_coreml")
-    assert out == {
-        "yolo_device": "mps",
-        "enable_tensorrt": False,
-        "enable_onnx_runtime": True,
-        "enable_gpu_background": True,
-    }
-
-
-def test_legacy_detection_runtime_fields_onnx_cuda():
-    out = legacy_detection_runtime_fields("onnx_cuda")
-    assert out == {
-        "yolo_device": "cuda:0",
-        "enable_tensorrt": False,
-        "enable_onnx_runtime": True,
-        "enable_gpu_background": True,
-    }
-
-
-def test_legacy_detection_runtime_fields_coreml_is_not_collapsed_into_onnx_coreml():
-    """Task 8: unlike the deleted derive_detection_runtime_settings, the native
-    "coreml" tier-resolved backend must not be collapsed into "onnx_coreml" —
-    it should behave like the plain "mps" device with no ONNX flag set."""
-    out = legacy_detection_runtime_fields("coreml")
-    assert out == {
-        "yolo_device": "mps",
-        "enable_tensorrt": False,
-        "enable_onnx_runtime": False,
-        "enable_gpu_background": True,
-    }
-
-
-def test_legacy_detection_runtime_fields_cpu_default():
-    out = legacy_detection_runtime_fields("cpu")
-    assert out == {
+# The expected cache-keyed fields for every producible backend.
+_EXPECTED_FIELDS = {
+    ("torch", "cpu"): {
         "yolo_device": "cpu",
         "enable_tensorrt": False,
         "enable_onnx_runtime": False,
         "enable_gpu_background": False,
-    }
+    },
+    ("torch", "mps"): {
+        "yolo_device": "mps",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    },
+    ("torch", "cuda"): {
+        "yolo_device": "cuda:0",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    },
+    ("tensorrt", "cuda"): {
+        "yolo_device": "cuda:0",
+        "enable_tensorrt": True,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    },
+    ("coreml", "mps"): {
+        "yolo_device": "mps",
+        "enable_tensorrt": False,
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": True,
+    },
+}
 
 
-def test_legacy_detection_runtime_fields_normalizes_trt_alias():
-    """Legacy on-disk configs may say "trt"; it must resolve identically to
-    "tensorrt", matching the aliasing _normalize_runtime used to apply before
-    this helper's dispatch (previously done inside the deleted
-    derive_detection_runtime_settings)."""
-    assert legacy_detection_runtime_fields("trt") == legacy_detection_runtime_fields(
-        "tensorrt"
-    )
+def test_legacy_detection_runtime_fields_for_all_producible_backends():
+    """Derived-from-ResolvedBackend fields are byte-for-byte stable for every
+    producible backend (cache-key stability guarantee)."""
+    for (backend, device), fields in _EXPECTED_FIELDS.items():
+        resolved = ResolvedBackend(backend=backend, device=device, used_fallback=False)
+        assert legacy_detection_runtime_fields(resolved) == fields, (backend, device)
 
 
-def test_legacy_detection_runtime_fields_normalizes_onnx_gpu_alias():
-    assert legacy_detection_runtime_fields(
-        "onnx_gpu"
-    ) == legacy_detection_runtime_fields("onnx_cuda")
-
-
-def test_legacy_detection_runtime_fields_normalizes_onnx_mps_alias():
-    assert legacy_detection_runtime_fields(
-        "onnx_mps"
-    ) == legacy_detection_runtime_fields("onnx_coreml")
-
-
-def test_legacy_detection_runtime_fields_coreml_still_not_collapsed_after_normalization_fix():
-    """Guard against reintroducing the original Task 8 bug: even though the
-    alias-normalization fix now routes most legacy strings through
-    _normalize_runtime (which collapses "coreml" -> "onnx_coreml"), the
-    literal "coreml" alias must remain special-cased and must NOT produce the
-    same result as "onnx_coreml"."""
-    coreml_out = legacy_detection_runtime_fields("coreml")
-    onnx_coreml_out = legacy_detection_runtime_fields("onnx_coreml")
-    assert coreml_out != onnx_coreml_out
-    assert coreml_out == {
+def test_legacy_detection_runtime_fields_coreml_is_not_collapsed_into_onnx_coreml():
+    """Native "coreml" (Apple GPU-Fast) must behave like the plain "mps" device
+    with no ONNX flag set — never collapsed into an ONNX-CoreML path."""
+    out = legacy_detection_runtime_fields(ResolvedBackend("coreml", "mps", False))
+    assert out == {
         "yolo_device": "mps",
         "enable_tensorrt": False,
         "enable_onnx_runtime": False,
@@ -262,17 +235,9 @@ def test_legacy_detection_runtime_fields_coreml_still_not_collapsed_after_normal
     }
 
 
-# --- Cache-key stability (FT7a) -------------------------------------------
-# The GUI now passes a ``ResolvedBackend`` (not a compute_runtime string) into
-# ``legacy_detection_runtime_fields``. Those fields feed
-# ``YOLO_DEVICE``/``ENABLE_TENSORRT``/``ENABLE_GPU_BACKGROUND``, which
-# ``tracking_cache.py`` hashes into the detection cache id. The ResolvedBackend
-# path MUST reproduce the legacy string-path dict byte-for-byte for every
-# backend the resolver can emit, or existing tracking caches silently
-# invalidate.
-
-# The 5 producible backends and the legacy compute_runtime string the old GUI
-# derived for each (via ``resolve_compute_runtime``).
+# The 5 producible backends and the legacy compute_runtime string the resolver
+# derives for each (via ``resolve_compute_runtime``); used to pin the resolver
+# output set.
 _PRODUCIBLE_BACKENDS = [
     (("torch", "cpu"), "cpu"),
     (("torch", "mps"), "mps"),
@@ -280,18 +245,6 @@ _PRODUCIBLE_BACKENDS = [
     (("tensorrt", "cuda"), "tensorrt"),
     (("coreml", "mps"), "coreml"),
 ]
-
-
-def test_resolved_backend_fields_match_legacy_string_fields_for_all_backends():
-    """Derived-from-ResolvedBackend fields == legacy string-derived fields for
-    every producible backend (cache-key stability guarantee)."""
-    from hydra_suite.runtime.resolver import ResolvedBackend
-
-    for (backend, device), legacy_string in _PRODUCIBLE_BACKENDS:
-        resolved = ResolvedBackend(backend=backend, device=device, used_fallback=False)
-        derived = legacy_detection_runtime_fields(resolved)
-        legacy = legacy_detection_runtime_fields(legacy_string)
-        assert derived == legacy, (backend, device, legacy_string)
 
 
 def test_resolved_backend_string_pairs_are_the_actual_resolver_outputs():

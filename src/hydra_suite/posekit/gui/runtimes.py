@@ -5,7 +5,6 @@ independent capability table; it resolves tiers exactly like the main
 tracking pipeline (native TensorRT/CoreML on gpu_fast, never ONNX).
 """
 
-from hydra_suite.runtime.compute_runtime import CANONICAL_RUNTIMES
 from hydra_suite.runtime.resolver import (
     PlatformInfo,
     available_tiers,
@@ -15,7 +14,6 @@ from hydra_suite.runtime.resolver import (
 )
 
 __all__ = [
-    "CANONICAL_RUNTIMES",
     "PlatformInfo",
     "available_tiers",
     "canonical_runtime_to_tier",

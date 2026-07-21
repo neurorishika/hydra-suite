@@ -14,22 +14,23 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from hydra_suite.runtime.compute_runtime import _normalize_runtime
-from hydra_suite.runtime.resolver import ResolvedBackend
+from hydra_suite.runtime.resolver import (
+    ResolvedBackend,
+    RuntimeResolver,
+    detect_platform,
+)
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
 
 
-def legacy_detection_runtime_fields(runtime: ResolvedBackend | str) -> dict:
-    """Map a runtime to legacy detection config fields.
+def legacy_detection_runtime_fields(runtime: ResolvedBackend) -> dict:
+    """Map a resolved backend to legacy detection config fields.
 
-    Accepts either a resolved backend (the live GUI path, Runtime Gen-2) or a
-    legacy ``compute_runtime`` string (the CLI / old-on-disk-config path). Both
-    produce the same ``{yolo_device, enable_tensorrt, enable_onnx_runtime,
-    enable_gpu_background}`` dict for the runtimes the resolver can emit; see
-    ``tests/test_trackerkit_cli_config.py`` for the byte-for-byte equivalence
-    proof across the 5 producible backends.
+    Takes a ``ResolvedBackend`` (Runtime Gen-2 vocabulary) — the sole input
+    since the legacy ``compute_runtime`` string path was retired (FT7b). Both
+    the live GUI path and the CLI path resolve a ``RUNTIME_TIER`` to a
+    ``ResolvedBackend`` and pass it here.
 
     These fields no longer drive any live detector construction: the
     ``"yolo_obb"`` detection method runs entirely through
@@ -41,66 +42,20 @@ def legacy_detection_runtime_fields(runtime: ResolvedBackend | str) -> dict:
     ``trackerkit/gui/orchestrators/tracking.py``'s cache-id builder), so the
     derived values MUST stay stable to preserve existing tracking caches.
 
-    When given a ``ResolvedBackend``: ``yolo_device`` is the resolved device
-    (``"cuda"`` -> ``"cuda:0"``), ``enable_tensorrt`` is ``backend ==
-    "tensorrt"``, ``enable_gpu_background`` is ``device != "cpu"``, and
-    ``enable_onnx_runtime`` is always ``False`` (the resolver never emits an
-    ONNX-Runtime backend). ``"coreml"`` (native Apple GPU-Fast) is kept
+    ``yolo_device`` is the resolved device (``"cuda"`` -> ``"cuda:0"``),
+    ``enable_tensorrt`` is ``backend == "tensorrt"``, ``enable_gpu_background``
+    is ``device != "cpu"``, and ``enable_onnx_runtime`` is always ``False``
+    (the resolver never emits an ONNX-Runtime backend). ``"coreml"`` (native
+    Apple GPU-Fast) maps to the plain ``"mps"`` device with no ONNX flag set,
     distinct from the legacy ``"onnx_coreml"`` string.
     """
-    if isinstance(runtime, ResolvedBackend):
-        device_map = {"cpu": "cpu", "cuda": "cuda:0", "mps": "mps"}
-        yolo_device = device_map.get(runtime.device, "cpu")
-        return {
-            "yolo_device": yolo_device,
-            "enable_tensorrt": runtime.backend == "tensorrt",
-            "enable_onnx_runtime": False,
-            "enable_gpu_background": runtime.device != "cpu",
-        }
-    return _legacy_detection_runtime_fields_from_string(runtime)
-
-
-def _legacy_detection_runtime_fields_from_string(compute_runtime: str) -> dict:
-    """Map a legacy ``compute_runtime`` string to legacy detection fields.
-
-    Used by the CLI / old-on-disk-config path, which may still carry
-    non-canonical aliases (``"trt"``, ``"onnx"``, ``"onnx_gpu"``,
-    ``"onnx_mps"``, etc.) predating the Runtime Gen-2 refactor. Those are
-    normalized via ``_normalize_runtime`` before dispatch. The one exception is
-    the literal ``"coreml"`` alias: ``_normalize_runtime`` collapses it into
-    ``"onnx_coreml"``, which would reintroduce the coreml/onnx_coreml
-    conflation this refactor fixed, so it is special-cased to bypass
-    normalization and dispatch as ``"coreml"`` directly.
-    """
-    raw = str(compute_runtime or "cpu").strip().lower().replace("-", "_")
-    rt = "coreml" if raw == "coreml" else _normalize_runtime(compute_runtime)
-
-    yolo_device = "cpu"
-    enable_tensorrt = False
-    enable_onnx_runtime = False
-
-    if rt in ("mps", "coreml"):
-        yolo_device = "mps"
-    elif rt == "cuda":
-        yolo_device = "cuda:0"
-    elif rt == "tensorrt":
-        yolo_device = "cuda:0"
-        enable_tensorrt = True
-    elif rt == "onnx_coreml":
-        yolo_device = "mps"
-        enable_onnx_runtime = True
-    elif rt == "onnx_cpu":
-        yolo_device = "cpu"
-        enable_onnx_runtime = True
-    elif rt == "onnx_cuda":
-        yolo_device = "cuda:0"
-        enable_onnx_runtime = True
-
+    device_map = {"cpu": "cpu", "cuda": "cuda:0", "mps": "mps"}
+    yolo_device = device_map.get(runtime.device, "cpu")
     return {
         "yolo_device": yolo_device,
-        "enable_tensorrt": bool(enable_tensorrt),
-        "enable_onnx_runtime": bool(enable_onnx_runtime),
-        "enable_gpu_background": yolo_device != "cpu",
+        "enable_tensorrt": runtime.backend == "tensorrt",
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": runtime.device != "cpu",
     }
 
 
@@ -463,11 +418,6 @@ def build_tracking_parameters(
         min_frames=0,
     )
 
-    # Legacy detection fields still derive from a ``compute_runtime`` string;
-    # default it deterministically (host-independent) now that legacy runtime
-    # inference is retired. Old compute_runtime strings are migrated by FT6.
-    compute_runtime = str(_cfg_get(cfg, "compute_runtime", default="cpu"))
-    detection_runtime = legacy_detection_runtime_fields(compute_runtime)
     # RUNTIME_TIER is the sole runtime knob (Runtime Gen-2 FT1). Prefer the
     # config's explicit tier; if a legacy config carries an explicit
     # compute_runtime, migrate it; otherwise default to the pipeline tier "gpu".
@@ -475,10 +425,18 @@ def build_tracking_parameters(
 
     runtime_tier = str(_cfg_get(cfg, "runtime_tier", default="")).strip().lower()
     if runtime_tier not in {"cpu", "gpu", "gpu_fast"}:
-        if _cfg_get(cfg, "compute_runtime", default=None):
-            runtime_tier = migrate_runtime_to_tier({compute_runtime})
+        legacy_runtime = _cfg_get(cfg, "compute_runtime", default=None)
+        if legacy_runtime:
+            runtime_tier = migrate_runtime_to_tier({str(legacy_runtime)})
         else:
             runtime_tier = "gpu"
+    # Legacy detection fields derive from the resolved backend for the tier
+    # (Runtime Gen-2). The resolver is host-dependent (matching the live GUI
+    # path), and the ResolvedBackend branch of ``legacy_detection_runtime_fields``
+    # reproduces the historical cache-keyed values byte-for-byte, so existing
+    # tracking caches stay valid. Detection resolves against the "obb" stage.
+    resolved_backend = RuntimeResolver(runtime_tier, detect_platform()).resolve("obb")
+    detection_runtime = legacy_detection_runtime_fields(resolved_backend)
     yolo_mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
     yolo_direct_path = resolve_model_path(
         _cfg_get(cfg, "yolo_obb_direct_model_path", "yolo_model_path", default="")

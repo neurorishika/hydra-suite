@@ -43,10 +43,10 @@ def _build_pose_backend(
     here. ``load_pose_model`` still honors the SLEAP-flavor debug override
     internally.
 
-    ``compute_runtime`` is the tier-resolved canonical runtime string (e.g.
-    ``"cpu"``, ``"mps"``, ``"cuda"``, ``"tensorrt"``/``"tensorrt_cuda"``,
-    ``"coreml"``) as produced by ``runtimes.tier_to_canonical_runtime`` via
-    ``MainWindow._pred_runtime_flavor``.
+    ``compute_runtime`` is the tier-resolved pose runtime flavor string (e.g.
+    ``"cpu"``, ``"mps"``, ``"cuda"``, ``"tensorrt_cuda"``, ``"coreml"``) as
+    produced by ``MainWindow._pred_runtime_flavor`` (tier -> RuntimeResolver ->
+    flavor).
     """
     return load_pose_backend(
         backend_family=backend_family,

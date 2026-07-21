@@ -94,18 +94,16 @@ def test_posekit_config_runtime_tier_round_trip():
     assert restored.runtime_tier == "gpu_fast"
 
 
-def test_posekit_config_runtime_tier_migration_from_legacy():
-    """Legacy ``compute_runtime`` strings are migrated to the tier field."""
+def test_posekit_config_ignores_legacy_runtime_strings_clean_break():
+    """Clean break (Runtime Gen-2, FT7b): ``PoseKitConfig.from_dict`` no longer
+    migrates legacy ``compute_runtime`` / ``pred_runtime`` strings in-schema —
+    those old files are migrated by scripts/migrate_runtime_config.py. A dict
+    that carries only legacy string keys (no ``runtime_tier``) defaults to
+    ``"gpu"``."""
     from hydra_suite.posekit.config.schemas import PoseKitConfig
 
-    # mps → gpu
-    cfg = PoseKitConfig.from_dict({"compute_runtime": "mps"})
-    assert cfg.runtime_tier == "gpu"
-
-    # tensorrt → gpu_fast
-    cfg = PoseKitConfig.from_dict({"pred_runtime": "tensorrt"})
-    assert cfg.runtime_tier == "gpu_fast"
-
-    # cpu → cpu
-    cfg = PoseKitConfig.from_dict({"compute_runtime": "cpu"})
-    assert cfg.runtime_tier == "cpu"
+    assert PoseKitConfig.from_dict({"compute_runtime": "mps"}).runtime_tier == "gpu"
+    assert PoseKitConfig.from_dict({"pred_runtime": "tensorrt"}).runtime_tier == "gpu"
+    assert PoseKitConfig.from_dict({"compute_runtime": "cpu"}).runtime_tier == "gpu"
+    # An explicit runtime_tier is always honored.
+    assert PoseKitConfig.from_dict({"runtime_tier": "cpu"}).runtime_tier == "cpu"
