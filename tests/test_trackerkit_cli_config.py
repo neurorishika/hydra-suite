@@ -236,8 +236,8 @@ def test_legacy_detection_runtime_fields_coreml_is_not_collapsed_into_onnx_corem
 
 
 # The 5 producible backends and the legacy compute_runtime string the resolver
-# derives for each (via ``resolve_compute_runtime``); used to pin the resolver
-# output set.
+# derives for each (tensorrt/coreml -> backend name, else the torch device);
+# used to pin the resolver output set.
 _PRODUCIBLE_BACKENDS = [
     (("torch", "cpu"), "cpu"),
     (("torch", "mps"), "mps"),
@@ -249,13 +249,16 @@ _PRODUCIBLE_BACKENDS = [
 
 def test_resolved_backend_string_pairs_are_the_actual_resolver_outputs():
     """Sanity-check that the (ResolvedBackend, legacy_string) pairs above are
-    exactly what RuntimeResolver / resolve_compute_runtime produce, so the
-    stability proof covers the real producible set."""
-    from hydra_suite.runtime.resolver import (
-        PlatformInfo,
-        RuntimeResolver,
-        resolve_compute_runtime,
-    )
+    exactly what RuntimeResolver produces, so the stability proof covers the
+    real producible set."""
+    from hydra_suite.runtime.resolver import PlatformInfo, RuntimeResolver
+
+    def _legacy_string(resolved) -> str:
+        if resolved.backend == "tensorrt":
+            return "tensorrt"
+        if resolved.backend == "coreml":
+            return "coreml"
+        return resolved.device  # "cuda", "mps", or "cpu"
 
     cases = [
         ("cpu", PlatformInfo(has_cuda=False, has_mps=False), ("torch", "cpu")),
@@ -268,6 +271,6 @@ def test_resolved_backend_string_pairs_are_the_actual_resolver_outputs():
     for tier, platform, expected in cases:
         resolved = RuntimeResolver(tier, platform).resolve("obb")
         assert (resolved.backend, resolved.device) == expected
-        seen_strings.add(resolve_compute_runtime(tier, platform, "obb"))
+        seen_strings.add(_legacy_string(resolved))
     # The legacy strings used in the stability test are exactly this set.
     assert seen_strings == {s for _, s in _PRODUCIBLE_BACKENDS}

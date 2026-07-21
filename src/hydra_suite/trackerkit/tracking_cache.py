@@ -45,11 +45,11 @@ def resolve_detection_cache_runtime(params: dict) -> str:
     """Stable detection-cache runtime string derived from ``RUNTIME_TIER``.
 
     The detection-cache identity historically hashed the ``COMPUTE_RUNTIME``
-    param, which the GUI set to ``resolve_compute_runtime(tier, platform, "obb")``.
+    param, which the GUI derived from the tier resolver for the ``"obb"`` stage.
     After the COMPUTE_RUNTIME param family was retired (Runtime Gen-2 FT1) this
     reproduces the SAME string directly from the live ``RUNTIME_TIER`` param so
-    existing detection caches stay valid. Does not call ``resolve_compute_runtime``
-    (deleted in a later slice).
+    existing detection caches stay valid. Does not depend on the retired legacy
+    runtime-string surface.
     """
     from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
 

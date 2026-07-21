@@ -1,4 +1,4 @@
-from hydra_suite.runtime.compute_runtime import execution_providers_for
+from hydra_suite.runtime.onnx_providers import execution_providers_for
 from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.utils.gpu_utils import MPS_AVAILABLE, ONNXRUNTIME_COREML_AVAILABLE
 

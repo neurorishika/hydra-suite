@@ -7,7 +7,7 @@ options enable a stable engine + timing cache, and must NOT enable fp16 (to
 keep precision ~identical to native CUDA).
 """
 
-from hydra_suite.runtime.compute_runtime import execution_providers_for
+from hydra_suite.runtime.onnx_providers import execution_providers_for
 from hydra_suite.runtime.resolver import ResolvedBackend
 
 _TENSORRT = ResolvedBackend("tensorrt", "cuda", False)

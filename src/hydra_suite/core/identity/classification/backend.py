@@ -440,7 +440,7 @@ def _provider_key(provider: object) -> str:
 
 
 def _requested_onnx_accelerator_providers(resolved: ResolvedBackend) -> list[str]:
-    from hydra_suite.runtime.compute_runtime import execution_providers_for
+    from hydra_suite.runtime.onnx_providers import execution_providers_for
 
     providers = execution_providers_for(
         resolved,
@@ -664,7 +664,7 @@ class ClassifierBackend:
     def _load_onnx(self) -> None:
         import onnxruntime as ort
 
-        from hydra_suite.runtime.compute_runtime import execution_providers_for
+        from hydra_suite.runtime.onnx_providers import execution_providers_for
 
         peer = self._derive_onnx_peer()
         providers = execution_providers_for(self._resolved)

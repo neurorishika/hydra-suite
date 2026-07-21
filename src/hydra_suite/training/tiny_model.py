@@ -569,7 +569,7 @@ def load_tiny_onnx(onnx_path: str | Path, resolved: "ResolvedBackend"):
     """
     import onnxruntime as ort
 
-    from hydra_suite.runtime.compute_runtime import execution_providers_for
+    from hydra_suite.runtime.onnx_providers import execution_providers_for
 
     providers = execution_providers_for(resolved)
     return ort.InferenceSession(str(onnx_path), providers=providers)

@@ -109,12 +109,12 @@ def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
     STABLE cache-key derivation (Runtime Gen-2 / FT1): the classify cache-key
     must stay byte-identical to the legacy ``CNN_COMPUTE_RUNTIME`` string so
     existing identity caches remain valid. The legacy GUI set that string via
-    ``resolve_compute_runtime(tier, platform, stage)``; this reproduces the SAME
-    mapping directly from the live ``RUNTIME_TIER`` param (the resolver only
-    branches on ``stage`` for ``bgsub``, so ``stage="cnn"`` and the legacy
-    ``stage="obb"`` used by ``_selected_cnn_runtime`` yield identical strings).
-    Does NOT read the removed ``COMPUTE_RUNTIME`` family, and does NOT call
-    ``resolve_compute_runtime`` (deleted in a later slice).
+    the tier resolver; this reproduces the SAME mapping directly from the live
+    ``RUNTIME_TIER`` param (the resolver only branches on ``stage`` for
+    ``bgsub``, so ``stage="cnn"`` and the legacy ``stage="obb"`` used by
+    ``_selected_cnn_runtime`` yield identical strings). Does NOT read the removed
+    ``COMPUTE_RUNTIME`` family, and does NOT depend on the retired legacy
+    runtime-string surface.
     """
     from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
 

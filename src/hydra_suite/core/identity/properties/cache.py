@@ -166,9 +166,9 @@ def _resolve_tier_backend(params: Dict[str, Any], stage: str = "obb"):
     Core stays pure -- imports only from ``hydra_suite.runtime.resolver``, never
     an app layer. The resolver is stage-inert except for ``bgsub``, so ``"obb"``
     reproduces the string the legacy GUI wrote into ``COMPUTE_RUNTIME`` /
-    ``POSE_SLEAP_DEVICE`` (both derived, pre-Gen-2, from
-    ``resolve_compute_runtime(tier, platform, "obb")`` / the SLEAP pose stage,
-    which resolve identically). Uses the default ``artifact_available=True`` to
+    ``POSE_SLEAP_DEVICE`` (both derived, pre-Gen-2, from the tier resolver for
+    the OBB / SLEAP pose stage, which resolve identically). Uses the default
+    ``artifact_available=True`` to
     match the FT1 classify cache-key helper (``worker._classify_cache_runtime_string``).
     """
     from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
