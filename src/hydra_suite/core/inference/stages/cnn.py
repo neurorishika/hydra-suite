@@ -135,12 +135,17 @@ def run_cnn_batch(
     )
 
     n_total = batch.crops.shape[0]
-    np_crops: list[np.ndarray] = []
-    for i in range(n_total):
-        hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
-        np_crops.append((hwc * 255.0).clip(0, 255).astype(np.uint8))
-
-    all_probs = model.backend.predict_batch(np_crops) if np_crops else []
+    if n_total:
+        # Single batched host transfer + vectorized uint8 quantization. This is
+        # byte-identical to the former per-crop `.cpu().numpy()` loop (same
+        # values) but performs ONE device->host copy instead of N, cutting the
+        # per-crop sync overhead on dense frames.
+        hwc_all = np.ascontiguousarray(batch.crops.permute(0, 2, 3, 1).cpu().numpy())
+        stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
+        np_crops: list[np.ndarray] = list(stacked)
+        all_probs = model.backend.predict_batch(np_crops)
+    else:
+        all_probs = []
 
     results: dict[int, CNNResult] = {}
     prob_offset = 0

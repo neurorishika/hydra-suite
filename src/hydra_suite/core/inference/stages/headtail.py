@@ -252,14 +252,18 @@ def run_headtail_batch(
         frames, obb_results, model.input_size, aspect_ratio, margin
     )
 
-    # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for predict_batch
+    # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for predict_batch.
+    # Single batched host transfer + vectorized uint8 quantization -- byte-identical
+    # to the former per-crop `.cpu().numpy()` loop (same values), one D->H copy
+    # instead of N.
     n_total = batch.crops.shape[0]
-    np_crops: list[np.ndarray] = []
-    for i in range(n_total):
-        hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
-        np_crops.append((hwc * 255.0).clip(0, 255).astype(np.uint8))
-
-    all_probs = model.backend.predict_batch(np_crops) if np_crops else []
+    if n_total:
+        hwc_all = np.ascontiguousarray(batch.crops.permute(0, 2, 3, 1).cpu().numpy())
+        stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
+        np_crops: list[np.ndarray] = list(stacked)
+        all_probs = model.backend.predict_batch(np_crops)
+    else:
+        all_probs = []
 
     results: dict[int, HeadTailResult] = {}
     prob_offset = 0
