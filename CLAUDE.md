@@ -55,6 +55,79 @@ make test-cov-html         # Tests + HTML coverage (htmlcov/index.html)
 
 pytest is configured in `pyproject.toml`. Test files are in `tests/`. Benchmarks are excluded by default (`-m "not benchmark"`).
 
+## Equivalence & Benchmark Verification (byte-identical tracking + perf, MPS + CUDA)
+
+The `tools/equivalence/` harness proves the pipeline produces **byte-identical tracking
+output** (and no perf regression) vs a baseline, across devices. Use it to attribute any
+behavior change to a specific slice. **Method:** the pipeline that runs is decided purely
+by which `hydra_suite` is importable, so "baseline vs current" = "`MAIN_SRC` src vs
+`WT_SRC` src", same env/models/config. `run_matrix.sh` runs baseline ×1 + current ×2 per
+clip and prints DETERMINISM (noise floor), EQUIVALENCE (baseline vs current), and
+PERFORMANCE per clip. Full guide: `tools/equivalence/README.md`.
+
+### The fast path (copy-paste)
+
+Baseline = the `legacy/main` tag (the pre-migration pipeline); current = `HEAD`. Two
+git worktrees provide the two `src/` trees; the CURRENT tree provides the harness scripts
++ fixtures.
+
+```bash
+# 0. Fixtures (once per machine): short clips + models from the GitHub Release.
+#    (already present if tools/equivalence/fixtures/clips/*.mp4 exist)
+conda activate hydra-mps       # or hydra-cuda on the NVIDIA box (mehek)
+bash tools/equivalence/fixtures/fetch_fixtures.sh
+
+# 1. Baseline worktree from the legacy tag (detached).
+git fetch origin --tags
+git worktree add --detach .worktrees/equiv-legacy legacy/main
+
+# 2. Run the matrix: MAIN_SRC=legacy, WT_SRC=current. RUNTIME=mps (here) / cuda (mehek).
+#    conda MUST be active — the SLEAP service spawns `conda run -n sleap`; a bare shell
+#    yields EMPTY CSVs that FALSELY compare "EQUIVALENT". Always verify row counts > 0.
+REPO=$PWD WT=$PWD \
+  MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
+  OUT=/tmp/equiv_gen2 RUNTIME=mps \
+  bash tools/equivalence/run_matrix.sh
+#   subset while iterating:  ... RUNTIME=mps bash tools/equivalence/run_matrix.sh fly_obb worm_bgsub
+
+# 3. Cleanup
+git worktree remove --force .worktrees/equiv-legacy && git worktree prune
+```
+
+### Acceptance
+- **Equivalence:** every clip's EQUIVALENCE (legacy vs new_a) at/near its DETERMINISM
+  floor — positions p99 ≈ 0, θ max ≈ 0, identical row counts, 0 unmatched, for BOTH the
+  `_forward.csv` and `_tracking_final.csv`. Known baseline noise: **bistable head/tail
+  π-flips** on head/tail clips (θ can flip by π on some rows) — that's the migration's
+  documented noise floor, not a regression (see memory `project-migration-verification`).
+- **Performance:** `new/legacy` wall-clock ratio ≤ `PERF_TOLERANCE` (default 1.25).
+- **Both platforms:** MPS (Apple, `hydra-mps`, this box) **and** CUDA (mehek, `hydra-cuda`).
+
+### CUDA box (mehek)
+```bash
+ssh rutalab@mehek.taild08eb9.ts.net
+cd ~/hydra-suite && git fetch origin --tags && git checkout <current-sha>
+source ~/mambaforge/etc/profile.d/conda.sh && conda activate hydra-cuda   # find conda: `which conda`/`ls ~/*forge*`
+bash tools/equivalence/fixtures/fetch_fixtures.sh          # once
+git worktree add --detach .worktrees/equiv-legacy legacy/main
+REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
+  OUT=/tmp/equiv_gen2 RUNTIME=cuda nohup bash tools/equivalence/run_matrix.sh > /tmp/equiv_cuda.log 2>&1 &
+# pose/SLEAP clips REQUIRE the `sleap` conda env on the box + conda on PATH.
+```
+
+### Gotchas (why "future testing is faster")
+- **conda MUST be active** for any pose/SLEAP clip, else empty CSVs falsely pass — verify
+  `wc -l` on the CSVs > 1 before trusting an `EQUIVALENT`.
+- **`export KMP_DUPLICATE_LIB_OK=TRUE`** (run_matrix.sh sets it) — double-linked libomp
+  aborts torch otherwise ("OMP Error #15").
+- **`RUNTIME`** accepts the Gen-2 tier names `gpu`/`gpu_fast` (runner.py maps them) as well
+  as `cpu`/`mps`/`cuda`/`tensorrt`.
+- Clips: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
+  `worm_bgsub`, `ant_cnn_identity`, `fly_obb`. `fly_obb`/`worm_bgsub` are the fastest
+  smoke clips (no pose/SLEAP).
+- **Sequence for a refactor:** run this BEFORE and AFTER a risky slice with the same
+  baseline, so each slice's effect is isolated (attribution), not conflated.
+
 ## Launching the Applications
 
 ```bash
