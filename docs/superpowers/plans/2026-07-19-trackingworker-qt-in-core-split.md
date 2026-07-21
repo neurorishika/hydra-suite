@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove the last `core`→PySide6 dependency-direction violation by splitting `src/hydra_suite/core/tracking/worker.py::TrackingWorker(QThread)` (the ~4372-line main tracking orchestrator) into a Qt-free plain `TrackingEngineCore` in core plus a thin `TrackingWorker(QThread)` wrapper in `trackerkit/gui/workers/`, leaving the **entire `core/` tree Qt-free**.
+**Goal:** Remove the last `core`→PySide6 dependency-direction violation by splitting `src/hydra_suite/core/tracking/worker.py::TrackingWorker(QThread)` (the ~4391-line main tracking orchestrator) into a Qt-free plain `TrackingEngineCore` in core plus a thin `TrackingWorker(QThread)` wrapper in `trackerkit/gui/workers/`, leaving the **entire `core/` tree Qt-free**.
+
+> **⚠️ Plan re-synced 2026-07-20 to `main` @ `4e70d2c` (after the Runtime Gen-2 retirement).** The runtime retirement edited `worker.py` (added a **module-level, Qt-free** helper `_classify_cache_runtime_string` @106 + a few local `hydra_suite.runtime.resolver` / `core.inference.runtime` imports and a `migrate_runtime_to_tier` bgsub fallback @~1200). **None of this is Qt** — the Qt surface is structurally identical — but every line number below shifted by ~+26. The inventory + substitution steps here are re-derived against current `worker.py` (4391 lines). The equivalence-gate base (`git merge-base main HEAD`) is now `4e70d2c`, which already contains the runtime retirement, so Task 5 correctly isolates *this split's* effect. When you begin, re-run the `grep -nE` commands in the inventory to confirm the numbers haven't drifted again from other merges.
 
 **Architecture:** `TrackingWorker` is a method-coupled QThread (dozens of methods sharing `self` state: `frame_count`, `trajectories_full`, `_density_regions`, caches, `frame_prefetcher`, `parameters`). It is too coupled for module-function extraction (the bg-optimizer approach); instead we follow the **`TrackingOptimizerCore` precedent** (Part C of the completed `done/2026-07-19-qt-in-core-bg-optimizer-split.md`): rename the class to a plain `TrackingEngineCore`, keep every method in place, replace the 6 Qt `Signal.emit(...)` calls with 6 constructor-injected callbacks, swap `QMutex`→`threading.Lock`, drop `@Slot`, and rename the QThread entry `run()`→`run_tracking()`. A thin `TrackingWorker(QThread)` wrapper owns the 6 `Signal`s + the `@Slot`, constructs a `TrackingEngineCore` wired to `self.*_signal.emit`, and delegates `set_parameters`/`update_parameters`/`stop`/`run`. The transform is **behavior-preserving by construction** — signals are UI observation, not tracking logic, so the CSV trajectory output is provably unaffected. This is gated by the same byte-identical equivalence harness used to verify the whole migration.
 
@@ -35,21 +37,23 @@
 - `src/hydra_suite/trackerkit/gui/orchestrators/tracking.py` — **modify**: repoint the two `from hydra_suite.core.tracking import TrackingWorker` imports (lines ~3800, ~4260) to the wrapper module.
 - Tests — **modify**: `tests/test_tracking_worker_helpers.py`, `tests/test_tracking_worker_realtime_live_features.py`, `tests/test_worker_real_inference_integration.py`, `tests/test_trackerkit_workers_smoke.py` (repoint to `TrackingEngineCore`); `tests/test_trackerkit_tracking_orchestrator_dialogs.py` (repoint the 3 monkeypatch targets to the wrapper path). **Create**: `tests/test_tracking_engine_core_qtfree.py` (guard + wrapper smoke).
 
-### Qt surface inventory (from the current file — use these exact sites)
+### Qt surface inventory (re-derived against current `worker.py` @ `4e70d2c` — 4391 lines; use these exact sites)
 
-- **Class decl:** `class TrackingWorker(QThread):` @106. **Import:** `from PySide6.QtCore import QMutex, QThread, Signal, Slot` @16.
-- **6 Signals:** `frame_signal` @112, `finished_signal` @113, `progress_signal` @114, `stats_signal` @115, `warning_signal` @116, `pose_exported_model_resolved_signal` @117.
-- **QMutex:** `self.params_mutex = QMutex()` @139; lock/unlock in `set_parameters` @162-164, `update_parameters` @169-171, `get_current_params` @176-178.
-- **`@Slot(dict)`:** on `update_parameters` @166.
+- **Class decl:** `class TrackingWorker(QThread):` @132. **Import:** `from PySide6.QtCore import QMutex, QThread, Signal, Slot` @16.
+- **6 Signals:** `frame_signal` @138, `finished_signal` @139, `progress_signal` @140, `stats_signal` @141, `warning_signal` @142, `pose_exported_model_resolved_signal` @143.
+- **QMutex:** `self.params_mutex = QMutex()` @165; lock/unlock in `set_parameters` @188/@190, `update_parameters` @195/@197, `get_current_params` @202/@204.
+- **`@Slot(dict)`:** on `update_parameters` @192.
+- **methods:** `set_parameters` @186, `update_parameters` @193, `get_current_params` @200, `stop` @414.
 - **emit sites (map each to `self._emit_<name>(...)`):**
-  - `frame_signal.emit`: @461
-  - `finished_signal.emit`: @696, @718, @873, @984, @994, @1018, @1036, @1127, @1212, @4175
-  - `progress_signal.emit`: @1284, @1287, @1341, @1368, @3868, @4372
-  - `stats_signal.emit`: @3986
-  - `warning_signal.emit`: @810, @1204, @4035, and the lambda `warning_cb=lambda title, msg: self.warning_signal.emit(title, msg)` @4027
-  - `pose_exported_model_resolved_signal.emit`: **none** (declared + connected by orchestrator @3882/@4278, never emitted — preserve as a no-op wire).
-- **`_stop_requested` (plain bool — STAYS a plain attr, no change):** init @147, set in `stop()` @390, read @412/@423/@448/@454/@702/@4018/@4176, and `should_stop=lambda: self._stop_requested` @1197.
-- **`run()`/`_run_impl()` seam:** `run()` @~672 (try/except → `finished_signal.emit(False,[],[])` fallback) delegates to `_run_impl()` @~700. The core makes **zero** QThread-instance calls on `self` (verified: only `self.start_time` matches, no `msleep`/`isInterruptionRequested`/`wait`/`currentThread`), so the plain-class rename is safe.
+  - `frame_signal.emit`: @487
+  - `finished_signal.emit`: @722, @744, @899, @1010, @1020, @1044, @1062, @1153, @1238, @4199 (10 sites)
+  - `progress_signal.emit`: @1310, @1313, @1367, @1394, @3892, @4391 (6 sites)
+  - `stats_signal.emit`: @4010
+  - `warning_signal.emit`: @836, @1230, @4059, and the lambda `warning_cb=lambda title, msg: self.warning_signal.emit(title, msg)` @4051
+  - `pose_exported_model_resolved_signal.emit`: **none** (declared + connected by orchestrator @3884/@4286, never emitted — preserve as a no-op wire).
+- **`_stop_requested` (plain bool — STAYS a plain attr, no change):** init @173, set in `stop()` @416, read @438/@449/@474/@480/@728/@4042/@4200, and `should_stop=lambda: self._stop_requested` @1223.
+- **`run()`/`_run_impl()` seam:** `run()` @698 (try/except → `finished_signal.emit(False,[],[])` fallback @722) delegates to `_run_impl()` @724 (`self._stop_requested = False` reset @728). The core makes **zero** QThread-instance calls on `self` (verified: only `self.start_time` matches, no `msleep`/`isInterruptionRequested`/`wait`/`currentThread`), so the plain-class rename is safe.
+- **Runtime-retirement additions (Qt-FREE, do NOT touch — context only):** module-level `_classify_cache_runtime_string(params, stage)` @106 (used at @1574/@4347 for cache keys); local runtime imports `from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform` @119 and `from hydra_suite.core.inference.runtime import ResolvedBackend` @4303; `migrate_runtime_to_tier` bgsub tier fallback @~1200. These stay exactly as-is through the split (module functions + local imports are unaffected by the class rename).
 - **Duck-typed collaborators (no Qt, keep as-is):** `csv_writer_thread.enqueue(...)` @3482/@3522/@3679; `frame_prefetcher` (`FramePrefetcher` from utils) `.start()/.read()/.stop()` @409-420, @4020-4022.
 
 ---
@@ -159,9 +163,9 @@ Expected: FAIL — `TrackingEngineCore` doesn't exist yet / module still imports
 Using the Qt surface inventory above, apply ONLY these substitutions — do not touch any tracking logic, math, loop, or helper body:
 
 1. Line 16: delete `from PySide6.QtCore import QMutex, QThread, Signal, Slot`. Add `import threading` near the other stdlib imports.
-2. Line 106: `class TrackingWorker(QThread):` → `class TrackingEngineCore:`.
-3. Lines 112-117: delete the 6 `Signal(...)` class attributes.
-4. `__init__` (119-158): drop the `parent=None` param and `super().__init__(parent)`; add the 6 keyword-only callback params (`on_frame=None, ... on_pose_model_resolved=None`) and store them as `self._on_frame = on_frame`, etc. Change `self.params_mutex = QMutex()` (139) → `self._params_lock = threading.Lock()`.
+2. Line 132: `class TrackingWorker(QThread):` → `class TrackingEngineCore:`.
+3. Lines 138-143: delete the 6 `Signal(...)` class attributes.
+4. `__init__` (starts ~@145, body through ~@184): drop the `parent=None` param and `super().__init__(parent)`; add the 6 keyword-only callback params (`on_frame=None, ... on_pose_model_resolved=None`) and store them as `self._on_frame = on_frame`, etc. Change `self.params_mutex = QMutex()` (@165) → `self._params_lock = threading.Lock()`.
 5. Add 6 guarded emit helpers (place right after `__init__`):
    ```python
    def _emit_frame(self, rgb):
@@ -183,9 +187,9 @@ Using the Qt surface inventory above, apply ONLY these substitutions — do not 
        if self._on_pose_model_resolved is not None:
            self._on_pose_model_resolved(path)
    ```
-6. `set_parameters` (160-164), `update_parameters` (166-172), `get_current_params` (174-179): remove the `@Slot(dict)` decorator (166); replace `self.params_mutex.lock()` / `self.params_mutex.unlock()` pairs with `with self._params_lock:` blocks (guard the same statements). Keep the `logger.info` in `update_parameters`.
-7. Replace every emit call site (exact lines in the inventory) `self.<name>_signal.emit(<args>)` → `self._emit_<name>(<args>)`. Including the lambda @4027: `warning_cb=lambda title, msg: self._emit_warning(title, msg)`.
-8. `run()`/`_run_impl()` seam: **delete the old `run()` method** (the try/except fallback wrapper @~672 — it moves to the Qt wrapper in Task 2) and **rename `_run_impl` → `run_tracking`** (keep `# noqa: C901`). The internal `self._stop_requested = False` reset at the top of the old `_run_impl` stays. Do NOT wrap `run_tracking` in a try/except here — an exception propagates to the wrapper, which owns the QThread exception-safety guard.
+6. `set_parameters` (@186), `update_parameters` (@193), `get_current_params` (@200): remove the `@Slot(dict)` decorator (@192); replace `self.params_mutex.lock()` / `self.params_mutex.unlock()` pairs (@188/@190, @195/@197, @202/@204) with `with self._params_lock:` blocks (guard the same statements). Keep the `logger.info` in `update_parameters`.
+7. Replace every emit call site (exact lines in the inventory) `self.<name>_signal.emit(<args>)` → `self._emit_<name>(<args>)`. Including the lambda @4051: `warning_cb=lambda title, msg: self._emit_warning(title, msg)`.
+8. `run()`/`_run_impl()` seam: **delete the old `run()` method** (the try/except fallback wrapper @698 — it moves to the Qt wrapper in Task 2) and **rename `_run_impl` → `run_tracking`** (@724, keep `# noqa: C901`). The internal `self._stop_requested = False` reset at the top of the old `_run_impl` (@728) stays. Do NOT wrap `run_tracking` in a try/except here — an exception propagates to the wrapper, which owns the QThread exception-safety guard.
 9. Leave `_stop_requested`, `stop()`, `csv_writer_thread`, `frame_prefetcher`, and every other method unchanged.
 
 - [ ] **Step 4: Repoint the two existing tests that instantiate the class directly**
