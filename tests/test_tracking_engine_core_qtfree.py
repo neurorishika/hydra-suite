@@ -55,3 +55,28 @@ def test_engine_core_param_lock_roundtrip():
     core.set_parameters({"A": 1})
     core.update_parameters({"A": 2, "B": 3})
     assert core.get_current_params() == {"A": 2, "B": 3}
+
+
+def test_wrapper_delegates_and_exposes_signals(qtbot=None):
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker
+
+    w = TrackingWorker("dummy.mp4", preview_mode=True)
+    # QThread + all 6 signals present.
+    assert hasattr(w, "start") and hasattr(w, "wait") and hasattr(w, "isRunning")
+    for sig in (
+        "frame_signal",
+        "finished_signal",
+        "progress_signal",
+        "stats_signal",
+        "warning_signal",
+        "pose_exported_model_resolved_signal",
+    ):
+        assert hasattr(w, sig)
+    # Delegation reaches the core.
+    w.set_parameters({"X": 1})
+    assert w.get_current_params() == {"X": 1}
+    w.stop()
+    assert w._stop_requested is True
