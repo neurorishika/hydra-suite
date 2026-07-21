@@ -69,78 +69,37 @@ def test_runtime_requires_fixed_yolo_batch_true_for_apple_silicon_gpu_fast(
         "detect_platform",
         lambda: types.SimpleNamespace(has_mps=True, has_cuda=False),
     )
-    orch._selected_compute_runtime = lambda: "mps"  # type: ignore[method-assign]
     assert orch._runtime_requires_fixed_yolo_batch() is True
 
 
-def test_selected_compute_runtime_reports_native_coreml_on_apple_gpu_fast(
+def test_resolved_obb_backend_reports_native_coreml_on_apple_gpu_fast(
     monkeypatch,
 ):
-    """_selected_compute_runtime must report the concrete "coreml" backend
-    (not the legacy-detector-vocabulary "mps") on Apple-Silicon gpu_fast, now
-    that it derives from resolve_compute_runtime() instead of the deleted
-    duplicate _tier_to_compute_runtime() tier->runtime mapping."""
+    """_resolved_obb_backend() must report the concrete "coreml" backend on
+    Apple-Silicon gpu_fast (Runtime Gen-2 ResolvedBackend surface, replacing
+    the retired _selected_compute_runtime() string)."""
     orch = _make_orchestrator("gpu_fast")
     monkeypatch.setattr(
         session_mod,
         "detect_platform",
         lambda: types.SimpleNamespace(has_mps=True, has_cuda=False),
     )
-    assert orch._selected_compute_runtime() == "coreml"
+    resolved = orch._resolved_obb_backend()
+    assert resolved.backend == "coreml"
+    assert resolved.device == "mps"
 
 
-def test_selected_compute_runtime_reports_cuda_tensorrt_on_cuda_gpu_fast(
+def test_resolved_obb_backend_reports_cuda_tensorrt_on_cuda_gpu_fast(
     monkeypatch,
 ):
-    """Sanity check the CUDA side of the same derivation still reports
-    "tensorrt" for gpu_fast, matching the old _tier_to_compute_runtime
-    behavior (which was correct for CUDA, only wrong for Apple Silicon)."""
+    """Sanity check the CUDA side of the same resolution reports the
+    "tensorrt" backend on cuda:0 for gpu_fast."""
     orch = _make_orchestrator("gpu_fast")
     monkeypatch.setattr(
         session_mod,
         "detect_platform",
         lambda: types.SimpleNamespace(has_mps=False, has_cuda=True),
     )
-    assert orch._selected_compute_runtime() == "tensorrt"
-
-
-def test_main_window_preview_safe_runtime_downgrades_coreml():
-    """Regression test for the LIVE call path: ``MainWindow._preview_safe_runtime``
-    (called from ``detection_panel.py::_collect_preview_detection_context`` and
-    ``tracking.py`` preview helpers) must downgrade the new "coreml" value that
-    ``_selected_compute_runtime()`` can now report on Apple-Silicon gpu_fast to
-    "mps", exactly like ``SessionOrchestrator._preview_safe_runtime`` already
-    does. Before this fix, ``MainWindow``'s independent copy of this mapping
-    had no "coreml" branch and returned "coreml" unchanged, which would have
-    sent preview/Test-Detection/head-tail/CNN-preview through the exported
-    CoreML backend instead of falling back to native MPS."""
-    from hydra_suite.trackerkit.gui.main_window import MainWindow
-
-    assert MainWindow._preview_safe_runtime("coreml") == "mps"
-    # Existing mappings must be unaffected by the fix.
-    assert MainWindow._preview_safe_runtime("onnx_cpu") == "cpu"
-    assert MainWindow._preview_safe_runtime("onnx_coreml") == "mps"
-    assert MainWindow._preview_safe_runtime("onnx_cuda") == "cuda"
-    assert MainWindow._preview_safe_runtime("tensorrt") == "cuda"
-    assert MainWindow._preview_safe_runtime("mps") == "mps"
-    assert MainWindow._preview_safe_runtime("cpu") == "cpu"
-
-
-def test_main_window_preview_safe_runtime_delegates_to_session_orchestrator():
-    """``MainWindow._preview_safe_runtime`` should delegate to
-    ``SessionOrchestrator._preview_safe_runtime`` (single source of truth) so
-    the two copies cannot drift out of sync again."""
-    from hydra_suite.trackerkit.gui.main_window import MainWindow
-
-    for value in (
-        "coreml",
-        "onnx_coreml",
-        "onnx_cpu",
-        "onnx_cuda",
-        "tensorrt",
-        "mps",
-        "cpu",
-    ):
-        assert MainWindow._preview_safe_runtime(
-            value
-        ) == session_mod.SessionOrchestrator._preview_safe_runtime(value)
+    resolved = orch._resolved_obb_backend()
+    assert resolved.backend == "tensorrt"
+    assert resolved.device == "cuda"

@@ -964,7 +964,6 @@ def test_gpu_tier_selects_cuda_when_available(monkeypatch):
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="cuda",
         tensor_on_cuda=True,
         requested_gpu=True,
     )

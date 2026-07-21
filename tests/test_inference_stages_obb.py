@@ -27,7 +27,6 @@ def _cpu_rt() -> RuntimeContext:
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
 
@@ -38,7 +37,6 @@ def _cuda_rt() -> RuntimeContext:
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="cuda",
         tensor_on_cuda=True,
         requested_gpu=True,
     )
@@ -50,7 +48,6 @@ def _onnx_cuda_rt() -> RuntimeContext:
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="cuda",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -184,7 +181,7 @@ def test_merge_obb_results_concatenates():
 def test_run_obb_cpu_returns_obb_result():
     config = OBBConfig(
         mode="direct",
-        direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cpu"),
+        direct=OBBDirectConfig(model_path="/m.pt"),
     )
     mock_model = MagicMock()
     mock_model.predict.return_value = [_mock_ul_result_numpy_compat(n=2)]
@@ -200,7 +197,7 @@ def test_run_obb_native_cuda_returns_raw_tensors():
     """Native PyTorch CUDA → _RawOBBTensors (no .cpu() pull)."""
     config = OBBConfig(
         mode="direct",
-        direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cuda"),
+        direct=OBBDirectConfig(model_path="/m.pt"),
     )
     mock_model = MagicMock()
     mock_model.predict.return_value = [_mock_ul_result_tensors(n=2)]
@@ -216,7 +213,7 @@ def test_run_obb_onnx_cuda_returns_obb_result():
     onnx_cuda returns CPU numpy from predict(), so we extract OBBResult."""
     config = OBBConfig(
         mode="direct",
-        direct=OBBDirectConfig(model_path="/m.onnx", compute_runtime="onnx_cuda"),
+        direct=OBBDirectConfig(model_path="/m.onnx"),
     )
     mock_model = MagicMock()
     mock_model.predict.return_value = [_mock_ul_result_numpy_compat(n=2)]
@@ -290,7 +287,6 @@ def test_load_obb_models_direct_mode_uses_detection_batch_size(monkeypatch):
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -320,7 +316,6 @@ def test_load_obb_models_sequential_mode_uses_stage2_batch_size_for_obb_model(
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -379,7 +374,6 @@ def test_load_obb_models_sequential_uses_stage2_imgsz_not_checkpoint(monkeypatch
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )
@@ -474,7 +468,6 @@ def test_run_direct_forwards_target_classes_to_predict():
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
     captured = {}
@@ -520,7 +513,6 @@ def test_load_obb_models_sequential_dynamic_batching_warning(monkeypatch, caplog
         cuda_mode=True,
         device="cuda:0",
         use_nvdec=False,
-        default_runtime="tensorrt",
         tensor_on_cuda=False,
         requested_gpu=True,
     )

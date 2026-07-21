@@ -1357,24 +1357,18 @@ class MainWindow(QMainWindow):
             return str(cfg_tier)
         return "gpu"
 
-    def _selected_compute_runtime(self) -> str:
-        """Derive a concrete compute_runtime string from the selected tier."""
+    def _resolved_obb_backend(self):
+        """Resolve the OBB-stage backend for the selected tier and host platform."""
         if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_compute_runtime()
-        return "cpu"
+            return self._session_orch._resolved_obb_backend()
+        from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
 
-    def _selected_headtail_runtime(self) -> str:
-        """Return the runtime key for head-tail (same as detection tier runtime)."""
-        return self._selected_compute_runtime()
+        return RuntimeResolver("cpu", detect_platform()).resolve("obb")
 
-    def _selected_cnn_runtime(self) -> str:
-        """Return the runtime key for CNN identity (same as detection tier runtime)."""
-        return self._selected_compute_runtime()
-
-    def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
+    def _runtime_requires_fixed_yolo_batch(self, resolved=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
         if hasattr(self, "_session_orch"):
-            return self._session_orch._runtime_requires_fixed_yolo_batch(runtime)
+            return self._session_orch._runtime_requires_fixed_yolo_batch(resolved)
         return False
 
     def _gpu_fast_obb_is_coreml_only(self) -> bool:
@@ -1383,29 +1377,10 @@ class MainWindow(QMainWindow):
             return self._session_orch._gpu_fast_obb_is_coreml_only()
         return False
 
-    @staticmethod
-    def _preview_safe_runtime(runtime: str) -> str:
-        """Downgrade ONNX/TensorRT/CoreML runtimes to their native equivalents.
-
-        Delegates to ``SessionOrchestrator._preview_safe_runtime`` (the single
-        source of truth for this mapping) so both copies stay in sync; this
-        static method is the one with live callers (``detection_panel.py``
-        and ``tracking.py``).
-        """
-        from hydra_suite.trackerkit.gui.orchestrators.session import SessionOrchestrator
-
-        return SessionOrchestrator._preview_safe_runtime(runtime)
-
     def _on_runtime_context_changed(self, *_args):
         """Update runtime combo and sync dependent controls."""
         if hasattr(self, "_session_orch"):
             self._session_orch._on_runtime_context_changed(*_args)
-
-    def _selected_pose_runtime_flavor(self) -> str:
-        """Return the currently selected pose runtime flavor key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_pose_runtime_flavor()
-        return "cpu"
 
     def _set_form_row_visible(self, form_layout, field_widget, visible: bool):
         """Show/hide a QFormLayout row by field widget."""

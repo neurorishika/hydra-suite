@@ -1536,27 +1536,13 @@ class DetectionPanel(QWidget):
 
     def _collect_preview_detection_context(self) -> dict:
         """Capture current UI values for async preview detection."""
-        from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
-        from hydra_suite.runtime.resolver import (
-            detect_platform,
-            resolve_compute_runtime,
-        )
-
-        selected_runtime = self._main_window._preview_safe_runtime(
-            self._main_window._selected_compute_runtime()
-        )
         tier = self._main_window._selected_runtime_tier()
-        platform = detect_platform()
-        obb_compute_runtime = resolve_compute_runtime(tier, platform, stage="obb")
         identity_cfg = self._preview_identity_config()
         ip = getattr(self._main_window, "_identity_panel", None)
         pose_backend_family = (
             ip.combo_pose_model_type.currentText().strip().lower()
             if ip is not None
             else "yolo"
-        )
-        runtime_pose = derive_pose_runtime_settings(
-            selected_runtime, backend_family=pose_backend_family
         )
         class_text = self.line_yolo_classes.text().strip()
         target_classes = None
@@ -1595,19 +1581,7 @@ class DetectionPanel(QWidget):
             "max_aspect_ratio_multiplier": self.spin_max_ar_multiplier.value(),
             "min_object_size": self.spin_min_object_size.value(),
             "max_object_size": self.spin_max_object_size.value(),
-            "compute_runtime": selected_runtime,
             "runtime_tier": tier,
-            "obb_compute_runtime": obb_compute_runtime,
-            "headtail_runtime": (
-                self._main_window._selected_headtail_runtime()
-                if hasattr(self._main_window, "_selected_headtail_runtime")
-                else selected_runtime
-            ),
-            "cnn_runtime": (
-                self._main_window._selected_cnn_runtime()
-                if hasattr(self._main_window, "_selected_cnn_runtime")
-                else selected_runtime
-            ),
             "yolo_obb_mode": (
                 "sequential"
                 if self.combo_yolo_obb_mode.currentIndex() == 1
@@ -1666,7 +1640,6 @@ class DetectionPanel(QWidget):
             "pose_model_dir": self._main_window._get_resolved_pose_model_dir(
                 pose_backend_family
             ),
-            "pose_runtime_flavor": runtime_pose["pose_runtime_flavor"],
             "pose_min_kpt_conf_valid": (
                 ip.spin_pose_min_kpt_conf_valid.value() if ip is not None else 0.5
             ),
@@ -1678,7 +1651,6 @@ class DetectionPanel(QWidget):
             "pose_direction_posterior_keypoints": self._main_window._parse_pose_direction_posterior_keypoints(),
             "pose_batch_size": ip.spin_pose_batch.value() if ip is not None else 1,
             "pose_sleap_env": self._main_window._selected_pose_sleap_env(),
-            "pose_sleap_device": runtime_pose["pose_sleap_device"],
             "individual_crop_padding": (
                 ip.spin_individual_padding.value() if ip is not None else 0.1
             ),

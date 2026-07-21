@@ -434,9 +434,7 @@ class TestInferenceRunnerCacheOnly:
         return InferenceConfig(
             obb=OBBConfig(
                 mode="direct",
-                direct=OBBDirectConfig(
-                    model_path="/fake/model.pt", compute_runtime="cpu"
-                ),
+                direct=OBBDirectConfig(model_path="/fake/model.pt"),
             ),
         )
 
@@ -534,9 +532,7 @@ class TestInferenceRunnerCacheOnly:
         cfg = InferenceConfig(
             obb=OBBConfig(
                 mode="direct",
-                direct=OBBDirectConfig(
-                    model_path="/fake/model.pt", compute_runtime="cpu"
-                ),
+                direct=OBBDirectConfig(model_path="/fake/model.pt"),
             ),
             pose=pose_cfg,
         )
@@ -583,9 +579,7 @@ class TestInferenceRunnerCacheOnly:
         cfg = InferenceConfig(
             obb=OBBConfig(
                 mode="direct",
-                direct=OBBDirectConfig(
-                    model_path="/fake/model.pt", compute_runtime="cpu"
-                ),
+                direct=OBBDirectConfig(model_path="/fake/model.pt"),
             ),
             pose=pose_cfg,
         )

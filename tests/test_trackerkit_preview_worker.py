@@ -6,15 +6,13 @@ import numpy as np
 import pytest
 
 
-def test_preview_build_yolo_params_includes_headtail_runtime() -> None:
+def test_preview_build_yolo_params_includes_headtail_fields() -> None:
     preview_worker = importlib.import_module(
         "hydra_suite.trackerkit.gui.workers.preview_worker"
     )
 
     params = preview_worker._preview_build_yolo_params(
         {
-            "compute_runtime": "cpu",
-            "headtail_runtime": "onnx_coreml",
             "headtail_batch_size": 24,
             "yolo_headtail_detect_conf_threshold": 0.67,
         },
@@ -22,7 +20,9 @@ def test_preview_build_yolo_params_includes_headtail_runtime() -> None:
         False,
     )
 
-    assert params["HEADTAIL_COMPUTE_RUNTIME"] == "onnx_coreml"
+    # The COMPUTE_RUNTIME string family was retired (Runtime Gen-2 FT1); the
+    # preview YOLO params no longer carry HEADTAIL_COMPUTE_RUNTIME.
+    assert "HEADTAIL_COMPUTE_RUNTIME" not in params
     assert params["HEADTAIL_BATCH_SIZE"] == 24
     assert params["YOLO_HEADTAIL_DETECT_CONF_THRESHOLD"] == 0.67
 
@@ -52,9 +52,11 @@ def test_preview_build_inference_params_maps_overlay_and_runtime_keys() -> None:
         False,
     )
 
-    assert params["COMPUTE_RUNTIME"] == "cpu"
+    # RUNTIME_TIER is the sole runtime knob; the COMPUTE_RUNTIME string family
+    # (COMPUTE_RUNTIME / CNN_COMPUTE_RUNTIME) was retired (Runtime Gen-2 FT1).
     assert params["RUNTIME_TIER"] == "gpu_fast"
-    assert params["CNN_COMPUTE_RUNTIME"] == "cuda"
+    assert "COMPUTE_RUNTIME" not in params
+    assert "CNN_COMPUTE_RUNTIME" not in params
     assert len(params["CNN_CLASSIFIERS"]) == 1
     assert params["ENABLE_POSE_EXTRACTOR"] is True
     assert params["POSE_MODEL_TYPE"] == "sleap"

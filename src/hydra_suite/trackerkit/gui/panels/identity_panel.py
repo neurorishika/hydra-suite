@@ -597,7 +597,7 @@ class IdentityPanel(QWidget):
         vl_pose.addWidget(self.pose_runtime_content)
         form.addWidget(self.g_pose_runtime)
 
-        # Note: pose_sleap_envs and pose_runtime_flavor will be populated post-construction
+        # Note: pose_sleap_envs will be populated post-construction
         self._sync_headtail_model_remove_button()
         self._sync_pose_model_remove_button()
 

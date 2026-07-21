@@ -1,9 +1,4 @@
-from hydra_suite.runtime.resolver import (
-    PlatformInfo,
-    ResolvedBackend,
-    RuntimeResolver,
-    resolve_compute_runtime,
-)
+from hydra_suite.runtime.resolver import PlatformInfo, ResolvedBackend, RuntimeResolver
 
 CUDA = PlatformInfo(has_cuda=True, has_mps=False)
 MAC = PlatformInfo(has_cuda=False, has_mps=True)
@@ -87,37 +82,3 @@ def test_tier_label_mps_platform():
 
     assert tier_label("gpu", platform) == "GPU (Metal)"
     assert tier_label("gpu_fast", platform) == "GPU-Fast (CoreML)"
-
-
-def test_resolve_compute_runtime_cpu_tier():
-    platform = PlatformInfo(has_cuda=True, has_mps=False)
-    assert resolve_compute_runtime("cpu", platform) == "cpu"
-
-
-def test_resolve_compute_runtime_gpu_tier_cuda():
-    platform = PlatformInfo(has_cuda=True, has_mps=False)
-    assert resolve_compute_runtime("gpu", platform) == "cuda"
-
-
-def test_resolve_compute_runtime_gpu_fast_tensorrt_available():
-    platform = PlatformInfo(has_cuda=True, has_mps=False)
-    assert (
-        resolve_compute_runtime("gpu_fast", platform, artifact_available=lambda: True)
-        == "tensorrt"
-    )
-
-
-def test_resolve_compute_runtime_gpu_fast_falls_back_without_artifact():
-    platform = PlatformInfo(has_cuda=True, has_mps=False)
-    assert (
-        resolve_compute_runtime("gpu_fast", platform, artifact_available=lambda: False)
-        == "cuda"
-    )
-
-
-def test_resolve_compute_runtime_gpu_fast_coreml_on_apple():
-    platform = PlatformInfo(has_cuda=False, has_mps=True)
-    assert (
-        resolve_compute_runtime("gpu_fast", platform, artifact_available=lambda: True)
-        == "coreml"
-    )

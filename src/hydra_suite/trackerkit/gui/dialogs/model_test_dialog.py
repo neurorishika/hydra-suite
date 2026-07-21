@@ -54,7 +54,7 @@ def training_device_to_compute_runtime(device: str) -> str:
     device selector (fed straight into YOLO's own ``device=`` training
     parameter) -- a genuinely different, simpler concept than the app's tiered
     ``compute_runtime`` system (``cpu``/``gpu``/``gpu_fast`` resolved via
-    ``resolve_compute_runtime``). Quick Test runs a freshly trained model that
+    the runtime-tier resolver). Quick Test runs a freshly trained model that
     has no exported TensorRT/CoreML artifact yet, so gpu_fast-style tier
     resolution doesn't apply here -- this is a literal device sanity check,
     not a tier selection. Map the literal device string directly onto the

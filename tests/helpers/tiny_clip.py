@@ -186,7 +186,6 @@ def _fake_run_headtail_batch(frames, obb_results, model, config, runtime, ar, mg
 
 def _make_stub_cnn(frame_idx: int, detection_ids: np.ndarray, label: str) -> CNNResult:
     """Deterministic CNNResult seeded by frame_idx."""
-    n = len(detection_ids)
     rng = np.random.default_rng(int(frame_idx) * 100 + 13)
     preds: list[CNNDetectionPrediction] = []
     for i, det_id in enumerate(detection_ids):
@@ -318,32 +317,30 @@ def _run_pass(video_path: Path, cache_dir: Path, depth: int) -> dict[str, str]:
     cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/stub.pt", compute_runtime="cpu"),
+            direct=OBBDirectConfig(model_path="/stub.pt"),
             # Set confidence_threshold low enough that the stub detections pass
             confidence_threshold=0.1,
             iou_threshold=1.0,
         ),
         headtail=HeadTailConfig(
             model_path="/stub_ht.pt",
-            compute_runtime="cpu",
         ),
         cnn_phases=[
             CNNConfig(
                 label=_CNN_LABEL,
                 model_path="/stub_cnn.pt",
-                compute_runtime="cpu",
             )
         ],
         pose=PoseConfig(
             backend="yolo",
             yolo=PoseYOLOConfig(
                 model_path="/stub_pose.pt",
-                compute_runtime="cpu",
             ),
             skeleton_file="",
         ),
         detection_batch_size=2,  # small batch → multiple windows over 6 frames
         pipeline_depth=depth,
+        runtime_tier="cpu",
     )
 
     # Stub HeadTailModel: backend is a MagicMock (never called due to patch).

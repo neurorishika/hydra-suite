@@ -14,7 +14,7 @@ def _cfg() -> InferenceConfig:
     return InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cpu"),
+            direct=OBBDirectConfig(model_path="/m.pt"),
             confidence_threshold=0.5,
         ),
     )
@@ -121,7 +121,7 @@ def test_run_realtime_persists_detection_cache_for_backward(tmp_path):
     cfg = InferenceConfig(
         obb=OBBConfig(
             mode="direct",
-            direct=OBBDirectConfig(model_path="/m.pt", compute_runtime="cpu"),
+            direct=OBBDirectConfig(model_path="/m.pt"),
             confidence_threshold=0.5,
             iou_threshold=1.0,  # disable NMS for a deterministic count
         ),

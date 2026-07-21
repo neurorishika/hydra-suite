@@ -73,16 +73,7 @@ from .project import (
     remove_source_from_project,
     save_project_state,
 )
-from .runtimes import (
-    CANONICAL_RUNTIMES,
-    available_tiers,
-    canonical_runtime_to_tier,
-    derive_pose_runtime_settings,
-    detect_platform,
-    infer_compute_runtime_from_legacy,
-    tier_label,
-    tier_to_canonical_runtime,
-)
+from .runtimes import available_tiers, detect_platform, tier_label
 from .utils import (
     enhance_for_pose,
     get_default_skeleton_dir,
@@ -1400,8 +1391,6 @@ class MainWindow(QMainWindow):
             "pred_weights": self.pred_weights_edit.text().strip(),
             "pred_backend": self.combo_pred_backend.currentText().strip(),
             "runtime_tier": self._selected_tier(),
-            "compute_runtime": self._selected_compute_runtime(),
-            "pred_runtime": self._selected_compute_runtime(),
             "pred_exported_model": "",
             "pred_batch": int(self.spin_pred_batch.value()),
             "sleap_env": self.combo_sleap_env.currentText().strip(),
@@ -1436,28 +1425,22 @@ class MainWindow(QMainWindow):
             self.sp_autosave_delay.setValue(self.autosave_delay_ms / 1000.0)
 
     def _apply_pred_runtime_setting(self, settings):
-        runtime_setting = str(
-            settings.get(
-                "runtime_tier",
-                settings.get("compute_runtime", settings.get("pred_runtime", "")),
-            )
-        ).strip()
+        # ``runtime_tier`` is the sole runtime knob (Runtime Gen-2). Legacy
+        # ``compute_runtime``/``pred_runtime`` strings from old saved settings
+        # are migrated by the one-shot config-migration script, not inferred
+        # here.
+        runtime_setting = str(settings.get("runtime_tier", "")).strip()
         if not runtime_setting:
             return
-        # If a tier id is stored directly, use it; otherwise migrate a legacy runtime.
+        # If a stored tier id is valid for this platform, use it; otherwise
+        # default to a sensible tier (legacy runtime strings are migrated by
+        # the one-shot config-migration script, not inferred here).
         platform = detect_platform()
-        if runtime_setting in available_tiers(platform):
+        tiers = available_tiers(platform)
+        if runtime_setting in tiers:
             preferred_tier = runtime_setting
         else:
-            # Legacy path: canonicalise the runtime string then map to tier.
-            canonical_runtime = runtime_setting
-            if canonical_runtime not in CANONICAL_RUNTIMES:
-                canonical_runtime = infer_compute_runtime_from_legacy(
-                    yolo_device="auto",
-                    enable_tensorrt=False,
-                    pose_runtime_flavor=runtime_setting,
-                )
-            preferred_tier = canonical_runtime_to_tier(canonical_runtime)
+            preferred_tier = "gpu" if "gpu" in tiers else "cpu"
         self._populate_pred_runtime_options(preferred_tier=preferred_tier)
 
     def _apply_pred_batch_setting(self, settings):
@@ -4234,32 +4217,6 @@ class MainWindow(QMainWindow):
                 return str(data).strip().lower()
         return "cpu"
 
-    def _selected_compute_runtime(self, stage: Optional[str] = None) -> str:
-        """Return the canonical compute runtime for the currently selected tier.
-
-        ``stage`` selects the resolver's capability profile ("yolo_pose" /
-        "sleap_pose"); defaults to the currently selected prediction backend
-        so YOLO and SLEAP resolve against their own profile, mirroring
-        ``core/inference/stages/pose.py``.
-        """
-        if hasattr(self, "combo_pred_runtime"):
-            data = self.combo_pred_runtime.currentData()
-            tier = str(data).strip().lower() if data else ""
-            if not tier:
-                # Fall back to text if itemData is absent (legacy combo entries).
-                txt = self.combo_pred_runtime.currentText().strip().lower()
-                # If the text is already a canonical runtime, return it directly.
-                if txt in CANONICAL_RUNTIMES:
-                    return txt
-                tier = txt
-            # Map tier → canonical runtime using detected platform.
-            platform = detect_platform()
-            resolved_stage = stage or (
-                "sleap_pose" if self._pred_backend() == "sleap" else "yolo_pose"
-            )
-            return tier_to_canonical_runtime(tier, platform, stage=resolved_stage)
-        return "cpu"
-
     def _populate_pred_runtime_options(
         self, backend: str = "", preferred_tier: Optional[str] = None
     ):
@@ -4682,22 +4639,25 @@ class MainWindow(QMainWindow):
         return self._get_pred_weights_silent()
 
     def _pred_runtime_flavor(self) -> str:
-        backend = self._pred_backend()
-        compute_runtime = self._selected_compute_runtime()
-        # "coreml" (native Apple GPU-Fast) has no representation in
-        # derive_pose_runtime_settings — that helper's `_normalize_runtime`
-        # collapses "coreml" to the legacy "onnx_coreml" canonical runtime and
-        # returns the ONNX-CoreML-EP flavor ("onnx_mps"), silently reintroducing
-        # the exact bug this module exists to fix (see
-        # docs/superpowers/specs/2026-04-04-codebase-simplification-design.md
-        # Task 6). "coreml" uniquely identifies the native-backend case and
-        # needs no further translation for either backend family, so short-
-        # circuit here rather than routing it through that shared, cross-app
-        # helper (out of scope to modify — used by trackerkit too).
-        if compute_runtime == "coreml":
+        # Derive the live pose-inference flavor directly from the tier-resolved
+        # backend (Runtime Gen-2). The selected tier resolves via
+        # RuntimeResolver against the active pose backend's stage profile
+        # ("sleap_pose" for SLEAP, "yolo_pose" otherwise), so only the five
+        # resolver-producible backends reach here. This reproduces the retired
+        # ``derive_pose_runtime_settings`` byte-for-byte: tensorrt ->
+        # "tensorrt_cuda", coreml (native Apple GPU-Fast) -> "coreml", and every
+        # torch backend is its plain device (cpu / mps / cuda). Native CoreML is
+        # NOT routed through the ONNX-CoreML-EP flavor ("onnx_mps").
+        from hydra_suite.runtime.resolver import RuntimeResolver
+
+        tier = self._selected_tier()
+        stage = "sleap_pose" if self._pred_backend() == "sleap" else "yolo_pose"
+        resolved = RuntimeResolver(tier, detect_platform()).resolve(stage)
+        if resolved.backend == "tensorrt":
+            return "tensorrt_cuda"
+        if resolved.backend == "coreml":
             return "coreml"
-        derived = derive_pose_runtime_settings(compute_runtime, backend_family=backend)
-        return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
+        return resolved.device  # "cpu", "mps", or "cuda"
 
     def _browse_pred_exported_model(self):
         backend = self._pred_backend()

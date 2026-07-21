@@ -116,7 +116,6 @@ def test_depth2_stage_exception_propagates_and_cleans_up():
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
     writer = CacheWriter({}, [], async_mode=True)
@@ -167,7 +166,6 @@ def test_depth2_producer_exception_propagates_without_hang():
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
     writer = CacheWriter({}, [], async_mode=True)

@@ -61,9 +61,12 @@ def test_hashes_change_when_expected(tmp_path: Path) -> None:
     ext_hash_2 = mod.compute_extractor_hash(params_model_changed)
     assert ext_hash_1 != ext_hash_2
 
+    # Runtime Gen-2 (FT2): the extractor hash is keyed off RUNTIME_TIER, not the
+    # retired COMPUTE_RUNTIME string. Setting COMPUTE_RUNTIME must NOT change it
+    # (dedicated tier-derivation coverage lives in test_cache_runtime_payload.py).
     params_runtime_changed = dict(params)
     params_runtime_changed["COMPUTE_RUNTIME"] = "onnx_cpu"
-    assert mod.compute_extractor_hash(params_runtime_changed) != ext_hash_1
+    assert mod.compute_extractor_hash(params_runtime_changed) == ext_hash_1
 
     params_ignore_changed = dict(params)
     params_ignore_changed["POSE_IGNORE_KEYPOINTS"] = ["head"]

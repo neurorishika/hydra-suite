@@ -37,12 +37,11 @@ def _raw(n: int = 2) -> _RawOBBTensors:
     )
 
 
-def _obb_direct(path="/m.pt", runtime="cpu", threshold=0.5) -> OBBConfig:
+def _obb_direct(path="/m.pt", threshold=0.5) -> OBBConfig:
     return OBBConfig(
         mode="direct",
         direct=OBBDirectConfig(
             model_path=path,
-            compute_runtime=runtime,
             confidence_threshold=threshold,
         ),
     )
@@ -51,7 +50,6 @@ def _obb_direct(path="/m.pt", runtime="cpu", threshold=0.5) -> OBBConfig:
 def _ht_config(path="/ht.pt", aspect=1.5, margin=0.1, threshold=0.4) -> HeadTailConfig:
     return HeadTailConfig(
         model_path=path,
-        compute_runtime="cpu",
         confidence_threshold=threshold,
         canonical_aspect_ratio=aspect,
         canonical_margin=margin,
@@ -62,7 +60,6 @@ def _cnn_config(path="/cnn.pt", label="id", temperature=1.0) -> CNNConfig:
     return CNNConfig(
         label=label,
         model_path=path,
-        compute_runtime="cpu",
         calibration_temperature=temperature,
     )
 
@@ -70,7 +67,7 @@ def _cnn_config(path="/cnn.pt", label="id", temperature=1.0) -> CNNConfig:
 def _pose_config(path="/pose.pt", padding=0.1) -> PoseConfig:
     return PoseConfig(
         backend="yolo",
-        yolo=PoseYOLOConfig(model_path=path, compute_runtime="cpu"),
+        yolo=PoseYOLOConfig(model_path=path),
         crop_padding=padding,
     )
 

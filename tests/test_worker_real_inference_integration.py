@@ -95,19 +95,30 @@ def test_build_inference_config_returns_inference_config(tmp_path):
     assert cfg.obb.confidence_threshold == pytest.approx(0.5)
 
 
-def test_build_inference_config_sets_compute_runtime(tmp_path):
-    """Compute runtime from params propagates into the OBBDirectConfig sub-object."""
+def test_build_inference_config_sets_runtime_tier(tmp_path):
+    """RUNTIME_TIER propagates into cfg.runtime_tier (the sole runtime knob)."""
     from hydra_suite.core.inference.config import build_inference_config_from_params
 
     params = {
         "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "model.pt"),
-        "COMPUTE_RUNTIME": "mps",
+        "RUNTIME_TIER": "gpu",
         "YOLO_OBB_MODE": "direct",
     }
     cfg = build_inference_config_from_params(params)
-    # compute_runtime lives on OBBDirectConfig, not OBBConfig itself
     assert cfg.obb.direct is not None
-    assert cfg.obb.direct.compute_runtime == "mps"
+    assert cfg.runtime_tier == "gpu"
+
+
+def test_build_inference_config_defaults_missing_tier_to_cpu(tmp_path):
+    """Runtime Gen-2: an absent RUNTIME_TIER defaults to 'cpu' (no legacy migration)."""
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    params = {
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "model.pt"),
+        "YOLO_OBB_MODE": "direct",
+    }
+    cfg = build_inference_config_from_params(params)
+    assert cfg.runtime_tier == "cpu"
 
 
 # ---------------------------------------------------------------------------

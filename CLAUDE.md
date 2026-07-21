@@ -247,16 +247,27 @@ measurement = [x, y, theta]
 
 Process noise is anisotropic (longitudinal vs. lateral). Young tracks have attenuated velocity (`KALMAN_MATURITY_AGE`, `KALMAN_INITIAL_VELOCITY_RETENTION`).
 
-### Identity / Runtime System
+### Identity / Runtime System (Runtime Gen-2)
 
-All compute-heavy methods use a single `compute_runtime` setting. Runtime support logic is centralized in:
+All compute-heavy methods select a backend from a single **runtime tier**. There is one stored knob and one value that flows:
 
-- `src/hydra_suite/runtime/compute_runtime.py`
-- `src/hydra_suite/utils/gpu_utils.py`
+```
+config.runtime_tier ∈ {cpu, gpu, gpu_fast}
+  → RuntimeResolver(tier, platform).resolve(stage)
+  → ResolvedBackend(backend ∈ {torch, tensorrt, coreml}, device ∈ {cpu, cuda, mps}, used_fallback)
+```
 
-Canonical runtimes: `cpu`, `mps`, `cuda`, `onnx_cpu`, `onnx_cuda`, `tensorrt`.
+Runtime support logic is centralized in:
 
-When adding a new model/method: define a pipeline key, add capability rules in `_pipeline_supports_runtime()`, add runtime translation, wire UI intersection gating. See `docs/developer-guide/runtime-integration.md` for the full checklist.
+- `src/hydra_suite/runtime/resolver.py` — the single authority mapping tier + platform + stage → `ResolvedBackend` (pure; availability injected). Also `available_tiers`/`tier_label` for UI.
+- `src/hydra_suite/runtime/onnx_providers.py` — `execution_providers_for(resolved)`: the ONNX Runtime execution-provider list for a `ResolvedBackend` (TensorRT/CoreML/CPU), plus the TensorRT engine-cache options.
+- `src/hydra_suite/utils/gpu_utils.py` — host accelerator availability flags.
+
+Backends (`core/identity/classification/*`, `core/identity/pose/backends/sleap.py`) and every inference stage consume a `ResolvedBackend` directly — there is no `compute_runtime` string vocabulary anymore. `RuntimeContext.resolved` carries the backend on the live path; `resolved_backend_for(ctx)` derives one for hand-built contexts.
+
+Legacy config files (pre-tier, with per-stage `compute_runtime`/`pose_runtime_flavor` strings) are migrated once via `scripts/migrate_runtime_config.py`; loading a config with no `runtime_tier` raises a loud error pointing at that script.
+
+When adding a new model/method: choose the stage's backend from `resolved.backend`/`resolved.device`; if it runs ONNX, get providers from `execution_providers_for(resolved)`. See `docs/developer-guide/runtime-integration.md`.
 
 ### Extension Points
 
@@ -273,7 +284,8 @@ When adding a new model/method: define a pipeline key, add capability rules in `
 - `src/hydra_suite/core/identity/runtime_api.py`
 - `src/hydra_suite/core/identity/classification/backend.py` — shared classifier loader
 - `src/hydra_suite/core/identity/classification/errors.py` — classifier error hierarchy
-- `src/hydra_suite/runtime/compute_runtime.py`
+- `src/hydra_suite/runtime/resolver.py` — tier + platform + stage → `ResolvedBackend` (runtime single authority)
+- `src/hydra_suite/runtime/onnx_providers.py` — ONNX execution-provider list for a `ResolvedBackend`
 - `src/hydra_suite/paths.py` — central path resolution (all asset/data paths)
 - `src/hydra_suite/widgets/workers.py` — BaseWorker base class (in-progress)
 - `src/hydra_suite/widgets/dialogs.py` — BaseDialog base class (in-progress)

@@ -27,10 +27,6 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
-from hydra_suite.runtime.compute_runtime import (
-    derive_pose_runtime_settings,
-    infer_compute_runtime_from_legacy,
-)
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.model_utils import (
     _normalize_usage_role,
@@ -494,28 +490,16 @@ class ConfigOrchestrator:
         else:
             self._panels.detection.line_yolo_classes.clear()
 
-        # Load runtime_tier: prefer new key, fall back to migrating legacy compute_runtime.
+        # Load runtime_tier: prefer the new key; if absent, migrate an explicit
+        # legacy compute_runtime string, else default to the pipeline tier "gpu".
+        # (Legacy runtime inference is retired; old configs are migrated by FT6.)
         raw_tier = get_cfg("runtime_tier", default=None)
         if raw_tier is None:
-            legacy_runtime = (
-                str(
-                    get_cfg(
-                        "compute_runtime",
-                        default=infer_compute_runtime_from_legacy(
-                            yolo_device=str(get_cfg("yolo_device", default="auto")),
-                            enable_tensorrt=bool(
-                                get_cfg("enable_tensorrt", default=False)
-                            ),
-                            pose_runtime_flavor=str(
-                                get_cfg("pose_runtime_flavor", default="auto")
-                            ),
-                        ),
-                    )
-                )
-                .strip()
-                .lower()
-            )
-            raw_tier = migrate_runtime_to_tier({legacy_runtime})
+            legacy_runtime = str(get_cfg("compute_runtime", default="")).strip().lower()
+            if legacy_runtime:
+                raw_tier = migrate_runtime_to_tier({legacy_runtime})
+            else:
+                raw_tier = "gpu"
         tier = str(raw_tier).strip()
         if hasattr(self._panels.setup, "combo_runtime_tier"):
             combo = self._panels.setup.combo_runtime_tier
@@ -1486,13 +1470,7 @@ class ConfigOrchestrator:
                 }
             )
 
-        compute_runtime = self._mw._selected_compute_runtime()
-        pose_runtime_derived = derive_pose_runtime_settings(
-            compute_runtime,
-            backend_family=self._panels.identity.combo_pose_model_type.currentText()
-            .strip()
-            .lower(),
-        )
+        resolved_obb = self._mw._resolved_obb_backend()
 
         cfg.update(
             {
@@ -1563,7 +1541,6 @@ class ConfigOrchestrator:
                 "yolo_headtail_conf_threshold": self._panels.identity.spin_yolo_headtail_conf.value(),
                 "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
                 "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
-                "headtail_runtime": self._mw._selected_headtail_runtime(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
                 "min_aspect_ratio_multiplier": self._panels.detection.spin_min_ar_multiplier.value(),
@@ -1601,8 +1578,7 @@ class ConfigOrchestrator:
             cfg[f"{role_key}_usage_role"] = role_meta.get("usage_role", "")
 
         # === COMPUTE RUNTIME ===
-        runtime_detection = legacy_detection_runtime_fields(compute_runtime)
-        cfg["compute_runtime"] = compute_runtime
+        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
         cfg["runtime_tier"] = self._mw._selected_runtime_tier()
         # Keep legacy fields writable for backward compatibility.
         if not preset_mode:
@@ -1618,7 +1594,7 @@ class ConfigOrchestrator:
                 "tensorrt_max_batch_size": resolve_tensorrt_max_batch_size(
                     detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
                     fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(
-                        compute_runtime
+                        resolved_obb
                     ),
                 ),
                 # === CORE TRACKING ===
@@ -1810,7 +1786,6 @@ class ConfigOrchestrator:
                 "enable_identity_swap_correction": self._panels.tracking.chk_enable_identity_swap_correction.isChecked(),
                 "identity_swap_min_frames": self._panels.tracking.spin_identity_swap_min_frames.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
-                "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
         )
 
@@ -1835,7 +1810,6 @@ class ConfigOrchestrator:
                 "pose_sleap_model_dir": make_pose_model_path_relative(
                     self._mw._pose_model_path_for_backend("sleap")
                 ),
-                "pose_runtime_flavor": self._mw._selected_pose_runtime_flavor(),
                 "pose_exported_model_path": "",
                 "pose_min_kpt_conf_valid": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
                 "pose_skeleton_file": self._panels.identity.line_pose_skeleton_file.text().strip(),
@@ -1845,7 +1819,6 @@ class ConfigOrchestrator:
                 "pose_batch_size": self._panels.identity.spin_pose_batch.value(),
                 "pose_yolo_batch": self._panels.identity.spin_pose_batch.value(),
                 "pose_sleap_env": self._mw._selected_pose_sleap_env(),
-                "pose_sleap_device": pose_runtime_derived["pose_sleap_device"],
                 "pose_sleap_batch": self._panels.identity.spin_pose_batch.value(),
                 "pose_sleap_max_instances": 1,
                 "tracking_workflow_mode": self._mw._session_orch._workflow_mode_key(),
@@ -2081,13 +2054,11 @@ class ConfigOrchestrator:
         identity_method = (
             self._mw._selected_identity_method()
         )  # kept for backward compat
-        compute_runtime = self._mw._selected_compute_runtime()
-        headtail_runtime = self._mw._selected_headtail_runtime()
-        cnn_runtime = self._mw._selected_cnn_runtime()
-        runtime_detection = legacy_detection_runtime_fields(compute_runtime)
+        resolved_obb = self._mw._resolved_obb_backend()
+        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
         trt_batch_size = resolve_tensorrt_max_batch_size(
             detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
-            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(compute_runtime),
+            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(resolved_obb),
         )
         trt_build_batch_size_raw = advanced_config.get(
             "tensorrt_build_batch_size", None
@@ -2099,21 +2070,6 @@ class ConfigOrchestrator:
                 trt_build_batch_size = max(1, int(trt_build_batch_size_raw))
             except (TypeError, ValueError):
                 trt_build_batch_size = None
-        pose_backend_family = (
-            self._panels.identity.combo_pose_model_type.currentText().strip().lower()
-        )
-        selected_pose_runtime = self._mw._selected_pose_runtime_flavor()
-        pose_runtime_canonical = {
-            "onnx_mps": "onnx_coreml",
-            "onnx_coreml": "onnx_coreml",
-            "onnx_cpu": "onnx_cpu",
-            "onnx_cuda": "onnx_cuda",
-            "tensorrt_cuda": "tensorrt",
-        }.get(selected_pose_runtime, selected_pose_runtime)
-        runtime_pose = derive_pose_runtime_settings(
-            pose_runtime_canonical, backend_family=pose_backend_family
-        )
-
         p = {
             "ADVANCED_CONFIG": advanced_config,  # Include advanced config for batch optimization
             "DETECTION_METHOD": det_method,
@@ -2140,7 +2096,6 @@ class ConfigOrchestrator:
             "YOLO_HEADTAIL_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_conf.value(),
             "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
             "HEADTAIL_BATCH_SIZE": self._panels.identity.spin_headtail_batch.value(),
-            "HEADTAIL_COMPUTE_RUNTIME": headtail_runtime,
             "YOLO_CONFIDENCE_THRESHOLD": self._panels.detection.spin_yolo_confidence.value(),
             "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
             "USE_CUSTOM_OBB_IOU_FILTERING": True,
@@ -2148,9 +2103,7 @@ class ConfigOrchestrator:
             # Live Detection Batching: feeds InferenceConfig.detection_batch_size
             # via config.build_inference_config_from_params.
             "YOLO_BATCH_SIZE": self._panels.detection.spin_detection_batch_size.value(),
-            "COMPUTE_RUNTIME": compute_runtime,
             "RUNTIME_TIER": self._mw._selected_runtime_tier(),
-            "CNN_COMPUTE_RUNTIME": cnn_runtime,
             "YOLO_DEVICE": runtime_detection["yolo_device"],
             "ENABLE_GPU_BACKGROUND": runtime_detection["enable_gpu_background"],
             "ENABLE_TENSORRT": runtime_detection["enable_tensorrt"],
@@ -2401,7 +2354,6 @@ class ConfigOrchestrator:
                 .strip()
                 .lower(),
             ),
-            "POSE_RUNTIME_FLAVOR": self._mw._selected_pose_runtime_flavor(),
             "POSE_EXPORTED_MODEL_PATH": "",
             "POSE_MIN_KPT_CONF_VALID": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
             "POSE_SKELETON_FILE": self._panels.identity.line_pose_skeleton_file.text().strip(),
@@ -2411,7 +2363,6 @@ class ConfigOrchestrator:
             "POSE_YOLO_BATCH": self._panels.identity.spin_pose_batch.value(),
             "POSE_BATCH_SIZE": self._panels.identity.spin_pose_batch.value(),
             "POSE_SLEAP_ENV": self._mw._selected_pose_sleap_env(),
-            "POSE_SLEAP_DEVICE": runtime_pose["pose_sleap_device"],
             "POSE_SLEAP_BATCH": self._panels.identity.spin_pose_batch.value(),
             "POSE_SLEAP_MAX_INSTANCES": 1,
             "INDIVIDUAL_PROPERTIES_CACHE_PATH": str(

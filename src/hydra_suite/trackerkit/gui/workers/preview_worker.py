@@ -486,9 +486,6 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
         min_size_px2 = 0
         max_size_px2 = float("inf")
     return {
-        "OBB_COMPUTE_RUNTIME": str(
-            context.get("obb_compute_runtime", context.get("compute_runtime", "cpu"))
-        ),
         "YOLO_MODEL_PATH": resolve_model_path(context.get("yolo_model_path", "")),
         "YOLO_OBB_MODE": str(context.get("yolo_obb_mode", "direct")).strip().lower(),
         "ADVANCED_CONFIG": {
@@ -519,9 +516,6 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
             context.get("yolo_headtail_model_path", "")
         ),
         "POSE_OVERRIDES_HEADTAIL": bool(context.get("pose_overrides_headtail", True)),
-        "HEADTAIL_COMPUTE_RUNTIME": str(
-            context.get("headtail_runtime", context.get("compute_runtime", "cpu"))
-        ),
         "HEADTAIL_BATCH_SIZE": int(context.get("headtail_batch_size", 64)),
         "YOLO_SEQ_CROP_PAD_RATIO": float(context.get("yolo_seq_crop_pad_ratio", 0.15)),
         "YOLO_SEQ_MIN_CROP_SIZE_PX": int(context.get("yolo_seq_min_crop_size_px", 64)),
@@ -568,12 +562,11 @@ def _preview_build_inference_params(context, resize_f, use_detection_filters):
     """
     params = _preview_build_yolo_params(context, resize_f, use_detection_filters)
 
-    # Runtime: RUNTIME_TIER drives backend/device selection in the redesign;
-    # COMPUTE_RUNTIME is kept for the legacy tier-migration fallback.
-    params["COMPUTE_RUNTIME"] = str(context.get("compute_runtime", "cpu"))
+    # Runtime: RUNTIME_TIER is the sole runtime knob (drives backend/device
+    # selection in the redesign). The COMPUTE_RUNTIME string family was retired
+    # (Runtime Gen-2 FT1); build_inference_config_from_params reads RUNTIME_TIER.
     _tier = str(context.get("runtime_tier", "") or "").strip().lower()
-    if _tier in {"cpu", "gpu", "gpu_fast"}:
-        params["RUNTIME_TIER"] = _tier
+    params["RUNTIME_TIER"] = _tier if _tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
 
     # CNN classifiers (model paths resolved; existence-gated inside the builder).
     cnn_cfgs = []
@@ -582,14 +575,10 @@ def _preview_build_inference_params(context, resize_f, use_detection_filters):
         cfg["model_path"] = str(resolve_model_path(cfg.get("model_path", "")))
         cnn_cfgs.append(cfg)
     params["CNN_CLASSIFIERS"] = cnn_cfgs
-    params["CNN_COMPUTE_RUNTIME"] = str(
-        context.get("cnn_runtime", context.get("compute_runtime", "cpu"))
-    )
 
     # Pose stage.
     params["ENABLE_POSE_EXTRACTOR"] = bool(context.get("enable_pose_extractor", False))
     params["POSE_MODEL_TYPE"] = str(context.get("pose_model_type", "yolo"))
-    params["POSE_COMPUTE_RUNTIME"] = str(context.get("compute_runtime", "cpu"))
     _pose_model = str(resolve_model_path(context.get("pose_model_dir", "")))
     params["POSE_MODEL_DIR"] = _pose_model
     params["POSE_SLEAP_MODEL_DIR"] = _pose_model

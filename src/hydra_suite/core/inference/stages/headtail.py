@@ -52,7 +52,7 @@ def load_headtail_model(
     )
 
     # The RuntimeContext carries the single resolved backend/device (from
-    # runtime_tier); config.compute_runtime is deprecated (kept for serialization).
+    # runtime_tier); per-stage compute_runtime fields no longer exist.
     # Use resolved_backend_for so a hand-built context (resolved=None) degrades
     # gracefully instead of raising AttributeError, matching obb/pose stages.
     resolved = resolved_backend_for(runtime)

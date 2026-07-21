@@ -65,7 +65,6 @@ def test_cpu_config_produces_cpu_mode():
     # device is "mps" on Apple Silicon, "cpu" elsewhere — both are non-CUDA
     assert ctx.device in ("mps", "cpu")
     assert ctx.use_nvdec is False
-    assert ctx.default_runtime == "cpu"
 
 
 def test_mps_config_produces_cpu_mode():
@@ -90,7 +89,6 @@ def test_cuda_config_produces_cuda_mode():
     assert ctx.cuda_mode is True
     assert ctx.device == "cuda:0"
     assert ctx.use_nvdec is True
-    assert ctx.default_runtime == "cuda"
 
 
 def test_cuda_without_nvdec():
@@ -110,9 +108,7 @@ def test_cuda_without_nvdec():
 
 
 def test_frozen_dataclass():
-    ctx = RuntimeContext(
-        cuda_mode=False, device="cpu", use_nvdec=False, default_runtime="cpu"
-    )
+    ctx = RuntimeContext(cuda_mode=False, device="cpu", use_nvdec=False)
     with pytest.raises(dataclasses.FrozenInstanceError):
         ctx.cuda_mode = True  # type: ignore
 
@@ -163,7 +159,6 @@ def test_runtime_context_rejects_gpu_backend_without_requested_gpu():
             cuda_mode=True,
             device="cuda:0",
             use_nvdec=False,
-            default_runtime="cuda",
             tensor_on_cuda=True,
             coreml_mode=False,
         )

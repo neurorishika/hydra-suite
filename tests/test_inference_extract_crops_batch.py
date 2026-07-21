@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
@@ -11,7 +10,6 @@ def _runtime_cpu():
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
 

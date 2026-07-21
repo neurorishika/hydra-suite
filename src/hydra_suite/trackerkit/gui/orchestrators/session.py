@@ -12,8 +12,7 @@ from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMessageBox
 
-from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
-from hydra_suite.runtime.resolver import detect_platform, resolve_compute_runtime
+from hydra_suite.runtime.resolver import detect_platform
 from hydra_suite.utils.geometry import fit_circle_to_points
 
 if TYPE_CHECKING:
@@ -781,19 +780,21 @@ class SessionOrchestrator:
         """Show a performance hint when device/mode is a suboptimal combination."""
         if not hasattr(self._mw, "_detection_panel"):
             return
-        runtime = (
-            self._mw._selected_compute_runtime()
+        resolved = (
+            self._mw._resolved_obb_backend()
             if hasattr(self._mw, "_setup_panel")
-            else ""
+            else None
         )
         sequential = (
             hasattr(self._mw, "_detection_panel")
             and self._mw._detection_panel.combo_yolo_obb_mode.currentIndex() == 1
         )
-        # "coreml" is Apple GPU-Fast's concrete backend (resolve_compute_runtime),
-        # and is just as Apple-Silicon-bound as native "mps" for this warning.
-        is_apple_silicon = "mps" in runtime.lower() or "coreml" in runtime.lower()
-        is_cuda = "cuda" in runtime.lower()
+        # "coreml" is Apple GPU-Fast's concrete backend, and is just as
+        # Apple-Silicon-bound as native "mps" for this warning.
+        is_apple_silicon = resolved is not None and (
+            resolved.device == "mps" or resolved.backend == "coreml"
+        )
+        is_cuda = resolved is not None and resolved.device == "cuda"
         if is_apple_silicon and sequential:
             msg = (
                 "⚠ Sequential mode is significantly slower on Apple Silicon (MPS). "
@@ -991,12 +992,12 @@ class SessionOrchestrator:
         data = self._mw._setup_panel.combo_runtime_tier.currentData()
         return str(data).strip() if data else "gpu"
 
-    def _selected_compute_runtime(self) -> str:
-        """Derive the concrete compute_runtime string from the selected tier combo."""
-        from hydra_suite.runtime.resolver import resolve_compute_runtime
+    def _resolved_obb_backend(self):
+        """Resolve the OBB-stage backend for the selected tier and host platform."""
+        from hydra_suite.runtime.resolver import RuntimeResolver
 
-        return resolve_compute_runtime(
-            self._current_runtime_tier(), detect_platform(), stage="obb"
+        return RuntimeResolver(self._current_runtime_tier(), detect_platform()).resolve(
+            "obb"
         )
 
     def _has_cnn_identity_enabled(self) -> bool:
@@ -1008,18 +1009,18 @@ class SessionOrchestrator:
             return False
         return bool(self._mw._identity_config().get("cnn_classifiers", []))
 
-    def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
+    def _runtime_requires_fixed_yolo_batch(self, resolved=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
-        rt = str(runtime or self._selected_compute_runtime() or "").strip().lower()
-        if rt == "tensorrt":
+        resolved = resolved if resolved is not None else self._resolved_obb_backend()
+        if resolved.backend == "tensorrt":
             return True
         return self._gpu_fast_obb_is_coreml_only()
 
     def _gpu_fast_obb_is_coreml_only(self) -> bool:
         """Return True when gpu_fast OBB detection will run on CoreML.
 
-        ``_selected_compute_runtime()`` reports "coreml" directly for gpu_fast
-        on Apple Silicon (via ``resolve_compute_runtime``), and the OBB stage
+        ``_resolved_obb_backend()`` reports the "coreml" backend directly for
+        gpu_fast on Apple Silicon, and the OBB stage
         internally upgrades to a CoreML direct executor whenever the exported
         ``.mlpackage`` artifact is available (see
         ``core/inference/runtime.py:resolved_backend_for``). CoreML's
@@ -1034,26 +1035,6 @@ class SessionOrchestrator:
             return False
         platform = detect_platform()
         return bool(platform.has_mps and not platform.has_cuda)
-
-    @staticmethod
-    def _preview_safe_runtime(runtime: str) -> str:
-        """Downgrade ONNX/TensorRT/CoreML runtimes to their native equivalents for preview.
-
-        NOTE: still has live callers (``tracking.py::start_preview_on_video``,
-        ``detection_panel.py::_collect_preview_detection_context``) that must
-        not run preview through an exported accelerator backend, so this is
-        NOT dead despite `_selected_compute_runtime()` no longer emitting the
-        legacy ``onnx_*`` vocabulary. It now also downgrades the new
-        ``"coreml"`` value `_selected_compute_runtime()` can report directly.
-        """
-        rt = str(runtime or "cpu").strip().lower()
-        if rt == "onnx_cpu":
-            return "cpu"
-        if rt in ("onnx_coreml", "coreml"):
-            return "mps"
-        if rt in ("onnx_cuda", "tensorrt"):
-            return "cuda"
-        return rt
 
     def _on_runtime_tier_changed(self) -> None:
         """Handle tier combo change: store tier to config and refresh dependent controls."""
@@ -1103,55 +1084,6 @@ class SessionOrchestrator:
             self._mw._detection_panel._sync_live_detection_batch_controls()
         if hasattr(self._mw, "_identity_panel"):
             self._mw._identity_panel._sync_realtime_individual_batch_ui()
-
-    def _resolve_pose_runtime(self, backend: str) -> str:
-        """Resolve the canonical runtime for the pose stage from the tier alone.
-
-        Spec §2/§5.2: pose runtime is not independently selectable. GPU-Fast
-        uses the RuntimeResolver's per-stage fallback contract (§5.4) — a fast
-        artifact (TensorRT/CoreML) if this pipeline supports it, else the
-        native GPU.
-        """
-        from hydra_suite.utils.gpu_utils import (
-            ONNXRUNTIME_COREML_AVAILABLE,
-            TENSORRT_AVAILABLE,
-        )
-
-        tier = self._current_runtime_tier()
-        platform = detect_platform()
-        is_sleap = str(backend).strip().lower() == "sleap"
-        pipeline = "sleap_pose" if is_sleap else "yolo_pose"
-
-        def artifact_available() -> bool:
-            if is_sleap:
-                # SLEAP has no CoreML export path; its fast tier only applies
-                # on CUDA (mirrors core/inference/stages/pose.py's SLEAP
-                # tier->flavor gate).
-                return platform.has_cuda
-            if platform.has_cuda:
-                return bool(TENSORRT_AVAILABLE)
-            if platform.has_mps:
-                return bool(ONNXRUNTIME_COREML_AVAILABLE)
-            return True
-
-        # resolve_compute_runtime returns "coreml" for the CoreML backend;
-        # derive_pose_runtime_settings's _normalize_runtime already aliases
-        # "coreml" to "onnx_coreml", so no extra translation is needed here.
-        return resolve_compute_runtime(
-            tier, platform, stage=pipeline, artifact_available=artifact_available
-        )
-
-    def _selected_pose_runtime_flavor(self) -> str:
-        """Return the pose runtime flavor key, fully derived from the compute tier."""
-        backend = (
-            self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
-            if hasattr(self._mw, "_identity_panel")
-            else "yolo"
-        )
-        derived = derive_pose_runtime_settings(
-            self._resolve_pose_runtime(backend), backend_family=backend
-        )
-        return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
 
     def _set_form_row_visible(self, form_layout, field_widget, visible: bool):
         """Show/hide a QFormLayout row by field widget."""

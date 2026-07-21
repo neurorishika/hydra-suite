@@ -18,7 +18,6 @@ def _runtime_cpu() -> RuntimeContext:
         cuda_mode=False,
         device="cpu",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
     )
 

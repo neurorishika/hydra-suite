@@ -15,18 +15,13 @@ import math
 
 import numpy as np
 import pytest
-import torch
 
 from hydra_suite.core.inference.config import CNNConfig, HeadTailConfig
-from hydra_suite.core.inference.result import CropBatch, FrameResult, OBBResult
+from hydra_suite.core.inference.result import FrameResult, OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.assemble import scatter
 from hydra_suite.core.inference.stages.cnn import CNNModel, run_cnn, run_cnn_batch
-from hydra_suite.core.inference.stages.headtail import (
-    HeadTailModel,
-    run_headtail,
-    run_headtail_batch,
-)
+from hydra_suite.core.inference.stages.headtail import run_headtail, run_headtail_batch
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +34,6 @@ def _cpu_rt():
         device="cpu",
         use_nvdec=False,
         tensor_on_cuda=False,
-        default_runtime="cpu",
     )
 
 

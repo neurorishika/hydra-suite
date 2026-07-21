@@ -39,7 +39,7 @@ from .result import (
     PoseResult,
     assemble_resolved_headings,
 )
-from .runtime import RuntimeContext
+from .runtime import RuntimeContext, resolved_backend_for
 from .stages.apriltag import AprilTagModel, run_apriltag
 from .stages.bgsub import BgSubModel, run_bgsub
 from .stages.cnn import CNNModel, run_cnn
@@ -686,9 +686,16 @@ class InferenceRunner:
                 StreamingAnalysisPayload,
             )
 
+            resolved = resolved_backend_for(self.runtime)
+            if resolved.backend == "tensorrt":
+                runtime_family = "tensorrt"
+            elif resolved.backend == "coreml":
+                runtime_family = "coreml"
+            else:
+                runtime_family = resolved.device
             frame_result.streaming_payload = StreamingAnalysisPayload.from_frame_result(
                 frame_result,
-                runtime_family=str(self.runtime.default_runtime),
+                runtime_family=runtime_family,
                 input_is_bgr=True,
             )
         except Exception:

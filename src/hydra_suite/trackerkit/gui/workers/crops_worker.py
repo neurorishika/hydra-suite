@@ -149,13 +149,12 @@ class InterpolatedCropsWorker(BaseWorker):
             skeleton_file = str(self.params.get("POSE_SKELETON_FILE", "") or "")
             keypoint_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
 
-            # This worker's params dict only ever carries an already-resolved
-            # compute_runtime string, never a runtime tier.
-            compute_runtime = str(
-                self.params.get(
-                    "POSE_COMPUTE_RUNTIME", self.params.get("COMPUTE_RUNTIME", "cpu")
-                )
-            )
+            # Runtime comes solely from RUNTIME_TIER (Runtime Gen-2 FT1): the
+            # COMPUTE_RUNTIME param family was retired. load_pose_backend only
+            # needs the tier bucket (it re-derives the tier via
+            # migrate_runtime_to_tier), so a resolved runtime string is passed.
+            pose_stage = "sleap_pose" if backend_family == "sleap" else "yolo_pose"
+            compute_runtime = self._resolved_runtime_string(pose_stage)
 
             backend = load_pose_backend(
                 backend_family=backend_family,
@@ -203,6 +202,20 @@ class InterpolatedCropsWorker(BaseWorker):
         if tier not in {"cpu", "gpu", "gpu_fast"}:
             tier = "cpu"
         return RuntimeResolver(tier, detect_platform()).resolve(stage)
+
+    def _resolved_runtime_string(self, stage: str) -> str:
+        """Resolve ``RUNTIME_TIER`` to a compute-runtime string for ``stage``.
+
+        Used only where a downstream shim (``load_pose_backend``) still takes a
+        runtime string rather than a ``ResolvedBackend``; the string maps back to
+        the correct tier via ``migrate_runtime_to_tier``.
+        """
+        resolved = self._resolve_backend(stage)
+        if resolved.backend == "tensorrt":
+            return "tensorrt"
+        if resolved.backend == "coreml":
+            return "coreml"
+        return resolved.device  # cpu / cuda / mps
 
     def _init_apriltag_detector(self):
         """Initialize AprilTag detector if configured. Returns detector or None."""

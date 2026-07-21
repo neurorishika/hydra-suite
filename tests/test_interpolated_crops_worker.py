@@ -199,7 +199,7 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
             "POSE_MODEL_DIR": "/models/yolo_pose.pt",
             "POSE_MIN_KPT_CONF_VALID": 0.3,
             "POSE_BATCH_SIZE": 8,
-            "COMPUTE_RUNTIME": "cuda",
+            "RUNTIME_TIER": "cpu",
         },
     )
 
@@ -208,7 +208,9 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
     assert backend is fake_backend
     assert captured["backend_family"] == "yolo"
     assert captured["model_path"] == "/models/yolo_pose.pt"
-    assert captured["compute_runtime"] == "cuda"
+    # Runtime is derived from RUNTIME_TIER (Gen-2 FT1); the "cpu" tier resolves
+    # to native torch/CPU on every host, so the threaded string is host-stable.
+    assert captured["compute_runtime"] == "cpu"
     # Regression guard: load_pose_backend (-> load_pose_model) already warms
     # the backend it returns; a second GUI-side warmup() call is redundant
     # and, for the SLEAP service backend, breaks _service_started_here
@@ -267,7 +269,7 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
             "POSE_BATCH_SIZE": 4,
             "POSE_SLEAP_ENV": "sleap_env_x",
             "POSE_SLEAP_MAX_INSTANCES": 2,
-            "COMPUTE_RUNTIME": "cuda",
+            "RUNTIME_TIER": "cpu",
         },
     )
 
@@ -284,7 +286,7 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
     assert kpt_source_names == ["kpt0"]
 
     assert captured["backend_family"] == "sleap"
-    assert captured["compute_runtime"] == "cuda"
+    assert captured["compute_runtime"] == "cpu"
     assert captured["sleap_env"] == "sleap_env_x"
     assert captured["sleap_max_instances"] == 2
     assert captured["model_path"] == "/models/sleap_model"

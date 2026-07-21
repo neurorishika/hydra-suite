@@ -31,7 +31,7 @@ from hydra_suite.core.identity.pose.utils import (
     empty_pose_result,
     summarize_keypoints,
 )
-from hydra_suite.runtime.compute_runtime import execution_providers_for
+from hydra_suite.runtime.onnx_providers import execution_providers_for
 from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
@@ -347,7 +347,7 @@ def _resolved_from_canonical_export(canonical_runtime: str) -> ResolvedBackend:
     translate the canonical export string (``_canonical_export_runtime``) into
     the Gen-2 ``ResolvedBackend`` vocabulary so the ONNX session can source its
     execution providers via ``execution_providers_for``. The mapping reproduces
-    ``derive_onnx_execution_providers(<canonical string>)`` exactly for the
+    the legacy canonical-string provider derivation exactly for the
     producible combos:
       * ``onnx_coreml`` -> ``(coreml, mps)``  -> [CoreML-EP, CPU]
       * ``tensorrt``    -> ``(tensorrt, cuda)`` -> [TRT-EP+cache, CUDA-EP, CPU]
