@@ -192,11 +192,20 @@ class PoseSLEAPConfig:
 
 
 @dataclass
+class PoseViTPoseConfig:
+    model_path: str
+    variant: str = "auto"
+    num_keypoints: int = 0
+    batch_size: int = 4
+
+
+@dataclass
 class PoseConfig:
-    backend: Literal["yolo", "sleap"] = "yolo"
+    backend: Literal["yolo", "sleap", "vitpose"] = "yolo"
     skeleton_file: str = ""
     yolo: PoseYOLOConfig | None = None
     sleap: PoseSLEAPConfig | None = None
+    vitpose: PoseViTPoseConfig | None = None
     crop_padding: float = 0.1
     suppress_foreign_regions: bool = True
     background_color: tuple[int, int, int] = (0, 0, 0)
@@ -348,6 +357,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     if pose_d:
         yolo_d = pose_d.pop("yolo", None)
         sleap_d = pose_d.pop("sleap", None)
+        vitpose_d = pose_d.pop("vitpose", None)
         bg = pose_d.get("background_color")
         if isinstance(bg, list):
             pose_d["background_color"] = tuple(bg)
@@ -355,6 +365,7 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
             **pose_d,
             yolo=PoseYOLOConfig(**yolo_d) if yolo_d else None,
             sleap=PoseSLEAPConfig(**sleap_d) if sleap_d else None,
+            vitpose=PoseViTPoseConfig(**vitpose_d) if vitpose_d else None,
         )
 
     at_d = d.get("apriltag", {})
@@ -580,11 +591,27 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             )
             or ""
         ).strip()
+        vitpose_model_path = str(
+            params.get(
+                "POSE_VITPOSE_MODEL_PATH",
+                params.get("POSE_MODEL_PATH", params.get("POSE_MODEL_DIR", "")),
+            )
+            or ""
+        ).strip()
         if pose_model_type == "sleap" and sleap_model_path:
             pose_cfg = PoseConfig(
                 backend="sleap",
                 sleap=PoseSLEAPConfig(
                     model_path=sleap_model_path,
+                    batch_size=int(params.get("POSE_BATCH_SIZE", 4)),
+                ),
+                **common_pose_kwargs,
+            )
+        elif pose_model_type == "vitpose" and vitpose_model_path:
+            pose_cfg = PoseConfig(
+                backend="vitpose",
+                vitpose=PoseViTPoseConfig(
+                    model_path=vitpose_model_path,
                     batch_size=int(params.get("POSE_BATCH_SIZE", 4)),
                 ),
                 **common_pose_kwargs,

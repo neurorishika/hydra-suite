@@ -123,6 +123,34 @@ def load_pose_model(
             backend=backend, n_keypoints=n_kpts, keypoint_names=keypoint_names
         )
 
+    if config.backend == "vitpose":
+        assert config.vitpose is not None
+        from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
+        from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+
+        if resolved.backend == "tensorrt":
+            vp_flavor, vp_device = "tensorrt", "cuda"
+        elif resolved.backend == "coreml":
+            vp_flavor, vp_device = "coreml", "mps"
+        else:  # torch
+            vp_flavor, vp_device = "native", resolved.device
+        runtime_cfg = PoseRuntimeConfig(
+            backend_family="vitpose",
+            runtime_flavor=vp_flavor,
+            device=vp_device,
+            model_path=str(config.vitpose.model_path),
+            min_valid_conf=float(config.min_keypoint_confidence),
+            keypoint_names=list(keypoint_names),
+            vitpose_batch=int(config.vitpose.batch_size),
+            vitpose_variant=str(config.vitpose.variant),
+            vitpose_num_keypoints=int(config.vitpose.num_keypoints),
+        )
+        backend = create_pose_backend_from_config(runtime_cfg)
+        _warmup_backend(backend)
+        return PoseModel(
+            backend=backend, n_keypoints=n_kpts, keypoint_names=keypoint_names
+        )
+
     assert config.sleap is not None
     from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
     from hydra_suite.core.identity.pose.types import PoseRuntimeConfig

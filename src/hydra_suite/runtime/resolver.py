@@ -12,7 +12,7 @@ from typing import Callable, Literal
 
 RuntimeTier = Literal["cpu", "gpu", "gpu_fast"]
 
-STAGES = ("obb", "head_tail", "cnn", "yolo_pose", "sleap_pose", "bgsub")
+STAGES = ("obb", "head_tail", "cnn", "yolo_pose", "sleap_pose", "vitpose_pose", "bgsub")
 
 
 @dataclass(frozen=True)

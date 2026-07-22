@@ -167,6 +167,9 @@ def pose_cache_key(config: PoseConfig) -> CacheKey:
     if config.backend == "yolo":
         assert config.yolo is not None
         path = config.yolo.model_path
+    elif config.backend == "vitpose":
+        assert config.vitpose is not None
+        path = config.vitpose.model_path
     else:
         assert config.sleap is not None
         path = config.sleap.model_path
