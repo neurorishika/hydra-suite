@@ -153,10 +153,13 @@ def run_cnn_batch(
         )
         n_total = batch.crops.shape[0]
         if n_total:
+            # NVDEC frames (the only source of CUDA frames) are RGB, so
+            # input_is_bgr=False: the model sees RGB, matching the CPU path where
+            # _preprocess flips its BGR crop to RGB.
             cuda_crops = [
                 (batch.crops[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
             ]
-            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=True)
+            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=False)
         else:
             all_probs = []
     else:

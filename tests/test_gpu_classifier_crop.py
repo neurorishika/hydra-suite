@@ -300,3 +300,16 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
     assert used["cpu"] and used["numpy_fwd"]
     assert not used["gpu"] and not used["cuda_fwd"]
+
+
+def test_gpu_classifier_crop_hwc_nvdec_layout():
+    """NvdecFrameReader yields (H, W, 3) HWC uint8 (RGB); the extractor must
+    permute to CHW and produce 3-channel crops (regression for the shape bug
+    that crashed the first real NVDEC run: 'tensor a (4512) must match b (3)')."""
+    from hydra_suite.core.inference.stages.crops import extract_classifier_crops_gpu
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    hwc = torch.randint(0, 256, (200, 300, 3), dtype=torch.uint8).to(dev)  # (H, W, 3)
+    crops = extract_classifier_crops_gpu(hwc, _toy_obb(3), (128, 128), 2.0, 1.3, dev)
+    assert crops.shape == (3, 3, 128, 128)  # 3 crops, 3 channels
+    assert crops.dtype == torch.float32

@@ -374,12 +374,17 @@ def extract_classifier_crops_gpu(
     """
     out_w, out_h = int(target_size[0]), int(target_size[1])
     if isinstance(frame, np.ndarray):
-        frame = torch.from_numpy(frame.transpose(2, 0, 1)).float().div(255.0)
+        frame = torch.from_numpy(frame.transpose(2, 0, 1))
     frame = frame.to(device)
+    if frame.ndim == 4:
+        frame = frame.squeeze(0)
+    # NvdecFrameReader yields (H, W, 3) HWC tensors; gpu_canonical_crop_batch wants
+    # (C, H, W). Detect channels-last and permute (mirrors obb.py's frame handling).
+    if frame.ndim == 3 and frame.shape[-1] == 3 and frame.shape[0] != 3:
+        frame = frame.permute(2, 0, 1)
     if frame.dtype == torch.uint8:
         frame = frame.float().div(255.0)
-    if frame.ndim == 4:
-        frame = frame.squeeze(0)  # (C, H, W)
+    frame = frame.contiguous()
 
     n = obb_result.num_detections
     n_ch = int(frame.shape[0])
