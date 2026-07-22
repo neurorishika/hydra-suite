@@ -1220,7 +1220,7 @@ class ClassifierBackend:
                 c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
                 for c in crops_chw
             ]
-            return self.predict_batch(numpy_crops)
+            return self.predict_batch(numpy_crops, input_is_bgr=input_is_bgr)
 
         try:
             # Preprocess on GPU in all cases — this is cheaper than 400 individual
@@ -1240,7 +1240,7 @@ class ClassifierBackend:
                     c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
                     for c in crops_chw
                 ]
-                return self.predict_batch(numpy_crops)
+                return self.predict_batch(numpy_crops, input_is_bgr=input_is_bgr)
         except ClassifierError:
             raise
         except Exception as exc:

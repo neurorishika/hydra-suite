@@ -181,7 +181,7 @@ def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
         "resolved_backend_for",
         lambda rt: type("R", (), {"backend": "torch", "device": "cuda"})(),
     )
-    rt = type("RT", (), {"tensor_on_cuda": True})()
+    rt = type("RT", (), {"cuda_mode": True})()
     cfg = type(
         "C", (), {"model_path": str(tmp_path / "m.multihead.json"), "label": "x"}
     )()
@@ -189,8 +189,8 @@ def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
         cnn_stage.load_cnn_model(cfg, rt)
 
 
-def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
-    # On MPS/CPU (tensor_on_cuda False), a non-CUDA classifier loads fine.
+def test_load_cnn_no_raise_when_not_cuda_mode(monkeypatch, tmp_path):
+    # On MPS/CPU (cuda_mode False), a non-CUDA classifier loads fine.
     from hydra_suite.core.identity.classification import backend as bk
     from hydra_suite.core.inference.stages import cnn as cnn_stage
 
@@ -217,7 +217,7 @@ def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
         "resolved_backend_for",
         lambda rt: type("R", (), {"backend": "torch", "device": "mps"})(),
     )
-    rt = type("RT", (), {"tensor_on_cuda": False})()
+    rt = type("RT", (), {"cuda_mode": False})()
     cfg = type("C", (), {"model_path": str(tmp_path / "m.json"), "label": "x"})()
     model = cnn_stage.load_cnn_model(cfg, rt)  # must NOT raise
     assert model.input_size == (128, 128)
@@ -316,3 +316,26 @@ def test_gpu_classifier_crop_hwc_nvdec_layout():
     crops = extract_classifier_crops_gpu(hwc, _toy_obb(3), (128, 128), 2.0, 1.3, dev)
     assert crops.shape == (3, 3, 128, 128)  # 3 crops, 3 channels
     assert crops.dtype == torch.float32
+
+
+def test_predict_batch_cuda_fallback_forwards_input_is_bgr(monkeypatch):
+    """When a factor lacks CUDA forward, the numpy fallback must NOT re-flip RGB."""
+    from hydra_suite.core.identity.classification import backend as bk
+
+    be = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
+    be._model_path = "x.multihead.json"
+    seen = {}
+
+    monkeypatch.setattr(be, "_ensure_loaded", lambda: None)
+    monkeypatch.setattr(be, "_uses_factor_backends", lambda: True)
+    monkeypatch.setattr(be, "supports_cuda_forward", lambda: False)  # force fallback
+
+    def _fake_predict_batch(crops, input_is_bgr=True):
+        seen["input_is_bgr"] = input_is_bgr
+        return [[np.array([1.0], np.float32)]]
+
+    monkeypatch.setattr(be, "predict_batch", _fake_predict_batch)
+
+    crop = torch.zeros((3, 4, 4))
+    be.predict_batch_cuda([crop], input_is_bgr=False)
+    assert seen["input_is_bgr"] is False  # RGB stays RGB through the fallback
