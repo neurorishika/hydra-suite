@@ -6,6 +6,7 @@ determinism/agreement/perf gate needs mehek (see the implementation plan Task 6)
 """
 
 import numpy as np
+import pytest
 import torch
 
 from hydra_suite.core.inference.result import OBBResult
@@ -157,3 +158,65 @@ def test_predict_batch_cuda_uses_gpu_forward_for_capable_bundle(monkeypatch):
     out = b.predict_batch_cuda([object(), object()], input_is_bgr=True)
     assert called["multi_cuda"] and not called["numpy_fallback"]
     assert len(out) == 2 and len(out[0]) == 2  # 2 crops, 2 factors
+
+
+# ---- Task 4: strict gpu-tier capability check -------------------------------
+
+
+def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
+    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.inference.stages import cnn as cnn_stage
+
+    class _NoCudaBackend:
+        def supports_cuda_forward(self):
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(bk, "ClassifierBackend", lambda *a, **k: _NoCudaBackend())
+    monkeypatch.setattr(
+        cnn_stage,
+        "resolved_backend_for",
+        lambda rt: type("R", (), {"backend": "torch", "device": "cuda"})(),
+    )
+    rt = type("RT", (), {"tensor_on_cuda": True})()
+    cfg = type(
+        "C", (), {"model_path": str(tmp_path / "m.multihead.json"), "label": "x"}
+    )()
+    with pytest.raises(RuntimeError, match="CUDA-native"):
+        cnn_stage.load_cnn_model(cfg, rt)
+
+
+def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
+    # On MPS/CPU (tensor_on_cuda False), a non-CUDA classifier loads fine.
+    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.inference.stages import cnn as cnn_stage
+
+    class _Backend:
+        metadata = type(
+            "M",
+            (),
+            {
+                "input_size": (128, 128),
+                "factor_names": ["f"],
+                "class_names_per_factor": [["a", "b"]],
+            },
+        )()
+
+        def supports_cuda_forward(self):
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(bk, "ClassifierBackend", lambda *a, **k: _Backend())
+    monkeypatch.setattr(
+        cnn_stage,
+        "resolved_backend_for",
+        lambda rt: type("R", (), {"backend": "torch", "device": "mps"})(),
+    )
+    rt = type("RT", (), {"tensor_on_cuda": False})()
+    cfg = type("C", (), {"model_path": str(tmp_path / "m.json"), "label": "x"})()
+    model = cnn_stage.load_cnn_model(cfg, rt)  # must NOT raise
+    assert model.input_size == (128, 128)

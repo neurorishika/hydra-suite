@@ -73,6 +73,16 @@ def load_headtail_model(
         )
     # Raises HeadTailFormatError if labels are not a subset of the canonical set.
     normalized = validate_headtail_labels(list(meta.class_names_per_factor[0]))
+    if (
+        getattr(runtime, "tensor_on_cuda", False)
+        and not backend.supports_cuda_forward()
+    ):
+        backend.close()
+        raise RuntimeError(
+            f"Head-tail classifier {config.model_path!r} lacks a CUDA-native "
+            "forward, but the gpu tier with NVDEC requires it (no silent CPU "
+            "fallback). Use a native-torch / ONNX classifier, or run on the cpu tier."
+        )
     input_size = (meta.input_size[0], meta.input_size[1])
     return HeadTailModel(
         backend=backend,
