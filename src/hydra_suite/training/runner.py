@@ -292,16 +292,18 @@ def _compute_class_weights(
 def _build_tiny_dataset_class(input_w, input_h):
     """Build and return a TinyDataset class closed over the input dimensions."""
     import cv2
+    import numpy as np
     import torch
     from torch.utils.data import Dataset
 
     class TinyDataset(Dataset):
         """Image dataset that loads crops, applies optional augmentation, and normalizes for TinyClassifier training."""
 
-        def __init__(self, items, augment=False, profile=None):
+        def __init__(self, items, augment=False, profile=None, seed: int = 42):
             self.items = items
             self.augment = augment
             self.profile = profile
+            self._rng = np.random.default_rng(seed)
 
         def __len__(self):
             return len(self.items)
@@ -312,7 +314,9 @@ def _build_tiny_dataset_class(input_w, input_h):
             if img is None:
                 raise RuntimeError(f"Could not read image: {path}")
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img = _apply_tiny_augmentation(img, self.augment, self.profile)
+            img = _apply_tiny_augmentation(
+                img, self.augment, self.profile, rng=getattr(self, "_rng", None)
+            )
             if img.shape[1] != input_w or img.shape[0] != input_h:
                 img = cv2.resize(
                     img, (input_w, input_h), interpolation=cv2.INTER_LINEAR
@@ -324,7 +328,7 @@ def _build_tiny_dataset_class(input_w, input_h):
     return TinyDataset
 
 
-def _apply_tiny_augmentation(img, augment, profile):
+def _apply_tiny_augmentation(img, augment, profile, rng=None):
     """Apply optional canonical-pose-safe augmentations to an image."""
     import cv2
     import numpy as np
@@ -362,6 +366,20 @@ def _apply_tiny_augmentation(img, augment, profile):
     if getattr(profile, "monochrome", False):
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+    decode = float(getattr(profile, "decode_color_sim", 0.0) or 0.0)
+    resample = float(getattr(profile, "resample_sim", 0.0) or 0.0)
+    if decode > 0.0 or resample > 0.0:
+        from hydra_suite.training.augmentation import (
+            simulate_decode_color,
+            simulate_resample,
+        )
+
+        if rng is None:
+            rng = np.random.default_rng()
+        if decode > 0.0:
+            img = simulate_decode_color(img, decode, rng)
+        if resample > 0.0:
+            img = simulate_resample(img, resample, rng)
     return img
 
 
@@ -381,7 +399,12 @@ def _create_tiny_data_loaders(
             replacement=True,
         )
     train_loader = DataLoader(
-        TinyDataset(train_samples, augment=True, profile=spec.augmentation_profile),
+        TinyDataset(
+            train_samples,
+            augment=True,
+            profile=spec.augmentation_profile,
+            seed=spec.seed,
+        ),
         batch_size=max(1, int(spec.tiny_params.batch)),
         shuffle=(train_sampler is None),
         sampler=train_sampler,
@@ -1292,6 +1315,16 @@ def _train_custom_classify(
         )
     if getattr(profile, "monochrome", False):
         train_transforms.append(transforms.Grayscale(num_output_channels=3))
+
+    import numpy as np
+
+    from hydra_suite.training.augmentation import make_decode_resample_pil_transform
+
+    _decode_tf = make_decode_resample_pil_transform(
+        profile, np.random.default_rng(getattr(spec, "seed", 42))
+    )
+    if _decode_tf is not None:
+        train_transforms.append(_decode_tf)
     train_transforms.extend(
         [
             transforms.ToTensor(),
@@ -1615,6 +1648,16 @@ def _train_multihead_shared_classify(
         )
     if profile.monochrome:
         train_tf_steps.append(transforms.Grayscale(num_output_channels=3))
+
+    import numpy as np
+
+    from hydra_suite.training.augmentation import make_decode_resample_pil_transform
+
+    _decode_tf = make_decode_resample_pil_transform(
+        profile, np.random.default_rng(getattr(spec, "seed", 42))
+    )
+    if _decode_tf is not None:
+        train_tf_steps.append(_decode_tf)
     train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
     train_tf = transforms.Compose(train_tf_steps)
     val_tf = transforms.Compose(
