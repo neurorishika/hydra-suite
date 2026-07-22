@@ -181,7 +181,7 @@ def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
         "resolved_backend_for",
         lambda rt: type("R", (), {"backend": "torch", "device": "cuda"})(),
     )
-    rt = type("RT", (), {"tensor_on_cuda": True})()
+    rt = type("RT", (), {"cuda_mode": True})()
     cfg = type(
         "C", (), {"model_path": str(tmp_path / "m.multihead.json"), "label": "x"}
     )()
@@ -189,8 +189,8 @@ def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
         cnn_stage.load_cnn_model(cfg, rt)
 
 
-def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
-    # On MPS/CPU (tensor_on_cuda False), a non-CUDA classifier loads fine.
+def test_load_cnn_no_raise_when_not_cuda_mode(monkeypatch, tmp_path):
+    # On MPS/CPU (cuda_mode False), a non-CUDA classifier loads fine.
     from hydra_suite.core.identity.classification import backend as bk
     from hydra_suite.core.inference.stages import cnn as cnn_stage
 
@@ -217,7 +217,7 @@ def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
         "resolved_backend_for",
         lambda rt: type("R", (), {"backend": "torch", "device": "mps"})(),
     )
-    rt = type("RT", (), {"tensor_on_cuda": False})()
+    rt = type("RT", (), {"cuda_mode": False})()
     cfg = type("C", (), {"model_path": str(tmp_path / "m.json"), "label": "x"})()
     model = cnn_stage.load_cnn_model(cfg, rt)  # must NOT raise
     assert model.input_size == (128, 128)
@@ -229,8 +229,11 @@ def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
 def test_frames_on_cuda_gate():
     from hydra_suite.core.inference.stages.crops import frames_on_cuda
 
-    rt_gpu = type("RT", (), {"tensor_on_cuda": True})()
-    rt_cpu = type("RT", (), {"tensor_on_cuda": False})()
+    # requested_gpu gates the path (True on gpu AND gpu_fast); tensor_on_cuda is
+    # irrelevant here (it is False on gpu_fast, where NVDEC frames still belong
+    # on the GPU crop path).
+    rt_gpu = type("RT", (), {"requested_gpu": True})()
+    rt_cpu = type("RT", (), {"requested_gpu": False})()
     cpu_tensor = torch.zeros((3, 8, 8))
     np_frame = np.zeros((8, 8, 3), np.uint8)
 
@@ -300,3 +303,39 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
     assert used["cpu"] and used["numpy_fwd"]
     assert not used["gpu"] and not used["cuda_fwd"]
+
+
+def test_gpu_classifier_crop_hwc_nvdec_layout():
+    """NvdecFrameReader yields (H, W, 3) HWC uint8 (RGB); the extractor must
+    permute to CHW and produce 3-channel crops (regression for the shape bug
+    that crashed the first real NVDEC run: 'tensor a (4512) must match b (3)')."""
+    from hydra_suite.core.inference.stages.crops import extract_classifier_crops_gpu
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    hwc = torch.randint(0, 256, (200, 300, 3), dtype=torch.uint8).to(dev)  # (H, W, 3)
+    crops = extract_classifier_crops_gpu(hwc, _toy_obb(3), (128, 128), 2.0, 1.3, dev)
+    assert crops.shape == (3, 3, 128, 128)  # 3 crops, 3 channels
+    assert crops.dtype == torch.float32
+
+
+def test_predict_batch_cuda_fallback_forwards_input_is_bgr(monkeypatch):
+    """When a factor lacks CUDA forward, the numpy fallback must NOT re-flip RGB."""
+    from hydra_suite.core.identity.classification import backend as bk
+
+    be = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
+    be._model_path = "x.multihead.json"
+    seen = {}
+
+    monkeypatch.setattr(be, "_ensure_loaded", lambda: None)
+    monkeypatch.setattr(be, "_uses_factor_backends", lambda: True)
+    monkeypatch.setattr(be, "supports_cuda_forward", lambda: False)  # force fallback
+
+    def _fake_predict_batch(crops, input_is_bgr=True):
+        seen["input_is_bgr"] = input_is_bgr
+        return [[np.array([1.0], np.float32)]]
+
+    monkeypatch.setattr(be, "predict_batch", _fake_predict_batch)
+
+    crop = torch.zeros((3, 4, 4))
+    be.predict_batch_cuda([crop], input_is_bgr=False)
+    assert seen["input_is_bgr"] is False  # RGB stays RGB through the fallback

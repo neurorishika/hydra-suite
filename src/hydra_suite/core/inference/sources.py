@@ -236,11 +236,18 @@ class NvdecFrameReader(FrameSource):
         self._cp = cp
 
         # TODO: multi-GPU — parse device index from runtime.device instead of gpuid=0
+        # Decode to NATIVE (NV12) rather than the decoder's built-in RGB: its
+        # hardware YUV->RGB uses a color matrix/range (BT.709 / full range for a
+        # large untagged frame) that differs from cv2's hardcoded BT.601 limited
+        # range by up to 16/255 per channel -- fatal for a colortag identity
+        # classifier. We do the YUV->RGB ourselves (``_nv12_to_rgb_bt601``) with
+        # cv2-matching BT.601 limited-range coefficients so NVDEC frames match the
+        # CPU-decode path the classifier was trained on.
         dec = nvc.CreateSimpleDecoder(
             encSource=str(self._video_path),
             gpuid=0,
             useDeviceMemory=True,
-            outputColorType=nvc.OutputColorType.RGB,
+            outputColorType=nvc.OutputColorType.NATIVE,
         )
 
         try:
@@ -342,27 +349,64 @@ class NvdecFrameReader(FrameSource):
     def end_frame(self) -> int:
         return self._end_frame
 
-    def _nvdec_frame_to_cuda_tensor(self, frame):
-        """Convert a PyNvVideoCodec DecodedFrame to a CUDA torch.Tensor (zero-copy).
-
-        The frame must have been decoded with ``useDeviceMemory=True`` and
-        ``outputColorType=RGB``.  The returned tensor shares decoder memory and
-        *must* be cloned before the next ``get_batch_frames()`` call.
-        """
+    def _plane_to_tensor(self, plane, frame):
+        """Wrap one NVDEC CUDA plane as a torch.Tensor (zero-copy)."""
         import torch
 
         cp = self._cp
-        planes = frame.cuda()
-        if not planes:
-            raise ValueError("NVDec frame has no CUDA planes")
-        cai = planes[0].__cuda_array_interface__
+        cai = plane.__cuda_array_interface__
         shape = cai["shape"]
-        byte_size = shape[0] * shape[1] * shape[2]
+        byte_size = 1
+        for d in shape:
+            byte_size *= int(d)
         mem = cp.cuda.UnownedMemory(cai["data"][0], byte_size, frame)
         ptr = cp.cuda.MemoryPointer(mem, 0)
-        strides = cai.get("strides") or None
-        cp_arr = cp.ndarray(shape=shape, dtype=cp.uint8, memptr=ptr, strides=strides)
+        cp_arr = cp.ndarray(
+            shape=shape, dtype=cp.uint8, memptr=ptr, strides=cai.get("strides") or None
+        )
         return torch.as_tensor(cp_arr, device="cuda")
+
+    def _nv12_to_rgb_bt601(self, y, uv):
+        """Convert an NV12 (Y + interleaved UV) frame to ``(H, W, 3)`` uint8 RGB
+        on-GPU with cv2-matching BT.601 limited-range coefficients.
+
+        Mirrors OpenCV ``COLOR_YUV2RGB_NV12`` (ITU-R BT.601, limited/studio range,
+        nearest 2x2 chroma upsampling), so a hardware-decoded frame matches the
+        cv2 CPU-decode path the identity/pose models were trained on.
+        """
+        import torch
+
+        y = y.reshape(y.shape[0], y.shape[1]).float()  # (H, W)
+        H, W = y.shape
+        u = uv[..., 0].float()
+        v = uv[..., 1].float()
+        # nearest chroma upsampling: duplicate each 2x2 block (matches cv2 NV12).
+        u = u.repeat_interleave(2, 0).repeat_interleave(2, 1)[:H, :W]
+        v = v.repeat_interleave(2, 0).repeat_interleave(2, 1)[:H, :W]
+        yf = (y - 16.0) * 1.164
+        uf = u - 128.0
+        vf = v - 128.0
+        r = yf + 1.596 * vf
+        g = yf - 0.813 * vf - 0.391 * uf
+        b = yf + 2.018 * uf
+        return torch.stack([r, g, b], dim=-1).clamp_(0.0, 255.0).to(torch.uint8)
+
+    def _nvdec_frame_to_cuda_tensor(self, frame):
+        """Convert a PyNvVideoCodec NATIVE (NV12) DecodedFrame to a ``(H, W, 3)``
+        uint8 RGB CUDA torch.Tensor with cv2-matching BT.601 conversion.
+
+        The returned tensor is a fresh allocation (the conversion allocates), so
+        it does not alias the decoder buffer -- but the caller still clones for
+        parity with the historical contract.
+        """
+        planes = frame.cuda()
+        if not planes or len(planes) < 2:
+            raise ValueError(
+                f"NVDec NATIVE frame expected Y+UV planes, got {len(planes) if planes else 0}"
+            )
+        y = self._plane_to_tensor(planes[0], frame)  # (H, W, 1)
+        uv = self._plane_to_tensor(planes[1], frame)  # (H/2, W/2, 2)
+        return self._nv12_to_rgb_bt601(y, uv)
 
     def __iter__(self) -> Iterator[tuple[int, "np.ndarray"]]:
         """Yield ``(frame_index, cuda_tensor)`` pairs from ``start_frame`` to ``end_frame``.
@@ -436,7 +480,7 @@ def make_frame_source(
                 start_frame=start_frame,
                 end_frame=end_frame,
             )
-            logger.debug("make_frame_source: using NvdecFrameReader for %s", video_path)
+            logger.info("make_frame_source: using NvdecFrameReader for %s", video_path)
             return reader
         except Exception as exc:
             logger.warning(
@@ -445,4 +489,5 @@ def make_frame_source(
                 exc,
             )
 
+    logger.info("make_frame_source: using CpuFrameReader for %s", video_path)
     return CpuFrameReader(video_path, start_frame=start_frame, end_frame=end_frame)

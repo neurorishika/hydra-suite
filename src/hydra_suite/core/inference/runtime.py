@@ -28,7 +28,7 @@ _HANDOFF_EVENTS: "dict[int, object]" = {}
 class RuntimeContext:
     cuda_mode: bool
     device: str  # "cuda:0", "mps", or "cpu"
-    use_nvdec: bool  # cuda_mode AND NVDEC available
+    use_nvdec: bool  # True only on the gpu_fast tier with NVDEC available
     # True ONLY for native PyTorch "cuda" runtime; onnx_cuda and tensorrt use
     # GPU compute but return CPU numpy arrays from inference calls.
     tensor_on_cuda: bool = False
@@ -139,7 +139,7 @@ class RuntimeContext:
         tensor_on_cuda = cuda_mode and gpu_native
         if cuda_mode:
             device = _cuda_device_available()
-            nvdec = _nvdec_available()
+            nvdec = _should_use_nvdec(config.runtime_tier)
         else:
             device = _cpu_or_mps_device()
             nvdec = False
@@ -225,3 +225,14 @@ def _nvdec_available() -> bool:
         return True
     except Exception:
         return False
+
+
+def _should_use_nvdec(runtime_tier: str) -> bool:
+    """NVDEC is confined to the gpu_fast tier.
+
+    The gpu tier is contracted to be byte-identical to CPU/MPS, so it must always
+    CPU-decode; only gpu_fast (the "fastest path, accepts small numerical
+    differences" tier) may use NVDEC. See
+    docs/superpowers/specs/2026-07-22-nvdec-gpu-fast-tier-design.md.
+    """
+    return runtime_tier == "gpu_fast" and _nvdec_available()

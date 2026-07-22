@@ -41,15 +41,13 @@ def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
             resolved.backend,
         )
     backend = ClassifierBackend(config.model_path, resolved)
-    if (
-        getattr(runtime, "tensor_on_cuda", False)
-        and not backend.supports_cuda_forward()
-    ):
+    if getattr(runtime, "cuda_mode", False) and not backend.supports_cuda_forward():
         backend.close()
         raise RuntimeError(
             f"CNN classifier {config.model_path!r} lacks a CUDA-native forward, "
-            "but the gpu tier with NVDEC requires it (no silent CPU fallback). "
-            "Use a native-torch / ONNX classifier, or run on the cpu tier."
+            "but a GPU tier (gpu/gpu_fast) on CUDA routes NVDEC/GPU crops through "
+            "predict_batch_cuda (no silent CPU fallback). Use a native-torch / "
+            "ONNX classifier, or run on the cpu tier."
         )
     meta = backend.metadata
     return CNNModel(
@@ -153,10 +151,13 @@ def run_cnn_batch(
         )
         n_total = batch.crops.shape[0]
         if n_total:
+            # NVDEC frames (the only source of CUDA frames) are RGB, so
+            # input_is_bgr=False: the model sees RGB, matching the CPU path where
+            # _preprocess flips its BGR crop to RGB.
             cuda_crops = [
                 (batch.crops[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
             ]
-            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=True)
+            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=False)
         else:
             all_probs = []
     else:
