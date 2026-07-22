@@ -162,13 +162,38 @@ def create_pose_backend_from_config(config: PoseRuntimeConfig) -> PoseInferenceB
         model_path = str(config.model_path).strip()
         if not model_path:
             raise RuntimeError("ViTPose backend requires a model_path (checkpoint)")
+        # requested_runtime preserves the concrete flavor the pose stage set
+        # (native/tensorrt/coreml); the normalized `runtime_flavor` local
+        # collapses coreml->native (parse/normalize only know native/onnx/
+        # tensorrt), so derive the ViTPose flavor from requested_runtime.
+        vitpose_flavor = (
+            requested_runtime
+            if requested_runtime in ("native", "tensorrt", "coreml")
+            else "native"
+        )
+        exported = ""
+        if vitpose_flavor in ("tensorrt", "coreml"):
+            from .backends.vitpose import auto_export_vitpose_model
+
+            try:
+                exported = auto_export_vitpose_model(
+                    config, vitpose_flavor, runtime_device=effective_device
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "ViTPose %s export failed (%s); using native runtime.",
+                    vitpose_flavor,
+                    exc,
+                )
+                vitpose_flavor = "native"
         return ViTPoseBackend(
             model_path=model_path,
             device=effective_device,
-            runtime_flavor=runtime_flavor,
+            runtime_flavor=vitpose_flavor,
             min_valid_conf=config.min_valid_conf,
             keypoint_names=list(config.keypoint_names) or None,
             batch_size=config.vitpose_batch,
+            exported_model_path=exported,
         )
 
     raise RuntimeError(f"Unsupported pose backend family: {backend_family}")

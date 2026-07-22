@@ -43,6 +43,7 @@ class ViTPoseBackend:
         min_valid_conf: float = 0.2,
         keypoint_names: Optional[Sequence[str]] = None,
         batch_size: int = 4,
+        exported_model_path: str = "",
     ) -> None:
         self._device = _resolve_device(device)
         self._runtime_flavor = runtime_flavor
@@ -61,6 +62,20 @@ class ViTPoseBackend:
             )
         self._model = model.to(self._device).eval()
 
+        self._runner = None
+        if runtime_flavor == "coreml" and exported_model_path:
+            from ..runtime.coreml_runner import CoreMLRunner
+
+            self._runner = CoreMLRunner(Path(exported_model_path))
+        elif runtime_flavor == "tensorrt" and exported_model_path:
+            from hydra_suite.runtime.resolver import ResolvedBackend
+
+            from ..runtime.accelerated import build_accelerated_runner
+
+            self._runner = build_accelerated_runner(
+                Path(exported_model_path), ResolvedBackend("tensorrt", "cuda", False)
+            )
+
     @property
     def preferred_input_size(self) -> int:
         return IMAGE_SIZE_WH[1]  # 256 (H); the long side
@@ -77,6 +92,27 @@ class ViTPoseBackend:
         with torch.no_grad():
             return self._model(t)  # (B, K, 64, 48) on device
 
+    def _forward(self, batch_chw: np.ndarray) -> torch.Tensor:
+        if self._runner is not None:
+            out = self._runner.run(batch_chw.astype(np.float32))
+            arr = next(iter(out.values())) if isinstance(out, dict) else out
+            return torch.from_numpy(np.asarray(arr, dtype=np.float32))
+        return self._forward_torch(batch_chw)
+
+    def predict_batch_cuda(self, crops):
+        # Convert any device tensors back to uint8 HWC numpy and reuse the
+        # correct numpy path. This is the shippable, correct implementation
+        # for every runner. Zero-copy TRT is a documented perf follow-up.
+        np_crops = [
+            (
+                (c.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+                if hasattr(c, "permute")
+                else np.asarray(c)
+            )
+            for c in crops
+        ]
+        return self.predict_batch(np_crops)
+
     def predict_batch(self, crops: Sequence[np.ndarray]) -> List[PoseResult]:
         if not crops:
             return []
@@ -90,7 +126,7 @@ class ViTPoseBackend:
                 centers.append(c)
                 scales.append(s)
             batch = np.stack(chws, axis=0).astype(np.float32)
-            heatmaps = self._forward_torch(batch)
+            heatmaps = self._forward(batch)
             coords, maxvals = decode_and_project(
                 heatmaps, np.stack(centers), np.stack(scales)
             )
