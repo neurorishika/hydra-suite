@@ -15,6 +15,35 @@ from ..result import CropBatch, OBBResult
 from ..runtime import RuntimeContext
 
 
+def _frame_to_chw_float(
+    frame: "torch.Tensor | np.ndarray", device: str
+) -> "torch.Tensor":
+    """Normalize any frame to a contiguous ``(C, H, W)`` float32 [0,1] tensor.
+
+    Handles all three frame sources the GPU crop paths can receive:
+    - numpy ``(H, W, 3)`` uint8 (cv2 CPU decode) -> transpose + /255,
+    - torch ``(3, H, W)`` (already CHW),
+    - torch ``(H, W, 3)`` uint8 (``NvdecFrameReader``, RGB) -> permute + /255.
+
+    ``gpu_canonical_crop_batch``'s ``F.grid_sample`` requires float, so a raw
+    NVDEC uint8 HWC frame must be converted here -- otherwise grid_sample raises
+    ``"grid_sampler_2d_cuda" not implemented for 'Byte'`` (the bug that surfaced
+    the first time NVDEC actually decoded to the GPU).
+    """
+    if isinstance(frame, np.ndarray):
+        frame = torch.from_numpy(frame.transpose(2, 0, 1))
+    frame = frame.to(device)
+    if frame.ndim == 4:
+        frame = frame.squeeze(0)
+    if frame.ndim == 3 and frame.shape[-1] == 3 and frame.shape[0] != 3:
+        frame = frame.permute(2, 0, 1)  # HWC -> CHW (NVDEC)
+    if frame.dtype == torch.uint8:
+        frame = frame.float().div(255.0)
+    elif frame.dtype != torch.float32:
+        frame = frame.float()
+    return frame.contiguous()
+
+
 def extract_canonical_crops(
     frame: np.ndarray | torch.Tensor,
     obb_result: OBBResult,
@@ -243,13 +272,7 @@ def _extract_canonical_gpu(
     ``F.affine_grid`` + ``F.grid_sample`` warp produces all crops at a uniform
     canvas size = max(native_dims) so smaller OBBs are border-replicated.
     """
-    if isinstance(frame, np.ndarray):
-        if frame.ndim == 3:
-            frame = torch.from_numpy(frame.transpose(2, 0, 1)).float() / 255.0
-        frame = frame.to(device)
-
-    if frame.ndim == 4:
-        frame = frame.squeeze(0)  # (C, H, W) — gpu_canonical_crop_batch expects CHW
+    frame = _frame_to_chw_float(frame, device)
 
     n = obb.num_detections
     padding_fraction = max(0.0, float(margin) - 1.0)
@@ -373,18 +396,7 @@ def extract_classifier_crops_gpu(
     acceptance gate is identity agreement, not byte-identity (see the design spec).
     """
     out_w, out_h = int(target_size[0]), int(target_size[1])
-    if isinstance(frame, np.ndarray):
-        frame = torch.from_numpy(frame.transpose(2, 0, 1))
-    frame = frame.to(device)
-    if frame.ndim == 4:
-        frame = frame.squeeze(0)
-    # NvdecFrameReader yields (H, W, 3) HWC tensors; gpu_canonical_crop_batch wants
-    # (C, H, W). Detect channels-last and permute (mirrors obb.py's frame handling).
-    if frame.ndim == 3 and frame.shape[-1] == 3 and frame.shape[0] != 3:
-        frame = frame.permute(2, 0, 1)
-    if frame.dtype == torch.uint8:
-        frame = frame.float().div(255.0)
-    frame = frame.contiguous()
+    frame = _frame_to_chw_float(frame, device)
 
     n = obb_result.num_detections
     n_ch = int(frame.shape[0])
