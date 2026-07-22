@@ -1315,6 +1315,16 @@ def _train_custom_classify(
         )
     if getattr(profile, "monochrome", False):
         train_transforms.append(transforms.Grayscale(num_output_channels=3))
+
+    import numpy as np
+
+    from hydra_suite.training.augmentation import make_decode_resample_pil_transform
+
+    _decode_tf = make_decode_resample_pil_transform(
+        profile, np.random.default_rng(getattr(spec, "seed", 42))
+    )
+    if _decode_tf is not None:
+        train_transforms.append(_decode_tf)
     train_transforms.extend(
         [
             transforms.ToTensor(),
@@ -1638,6 +1648,16 @@ def _train_multihead_shared_classify(
         )
     if profile.monochrome:
         train_tf_steps.append(transforms.Grayscale(num_output_channels=3))
+
+    import numpy as np
+
+    from hydra_suite.training.augmentation import make_decode_resample_pil_transform
+
+    _decode_tf = make_decode_resample_pil_transform(
+        profile, np.random.default_rng(getattr(spec, "seed", 42))
+    )
+    if _decode_tf is not None:
+        train_tf_steps.append(_decode_tf)
     train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
     train_tf = transforms.Compose(train_tf_steps)
     val_tf = transforms.Compose(

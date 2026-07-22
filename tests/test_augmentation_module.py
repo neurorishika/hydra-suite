@@ -84,3 +84,18 @@ def test_pil_transform_roundtrips_pil_image():
     img = Image.fromarray(_img())
     out = tf(img)
     assert isinstance(out, Image.Image) and out.size == img.size
+
+
+def test_pil_transform_inserts_before_totensor_shape_ok():
+    """The PIL transform must accept the post-Resize PIL image and return a PIL
+    image ToTensor can consume."""
+    from PIL import Image
+    from torchvision import transforms
+
+    prof = type("P", (), {"decode_color_sim": 1.0, "resample_sim": 1.0})()
+    tf = make_decode_resample_pil_transform(prof, np.random.default_rng(0))
+    pipeline = transforms.Compose(
+        [transforms.Resize((16, 16)), tf, transforms.ToTensor()]
+    )
+    out = pipeline(Image.fromarray(np.zeros((20, 20, 3), np.uint8)))
+    assert tuple(out.shape) == (3, 16, 16)
