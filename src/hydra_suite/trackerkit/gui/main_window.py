@@ -53,10 +53,6 @@ from .model_utils import (
 )
 from .widgets.collapsible import CollapsibleGroupBox
 from .widgets.help_label import CompactHelpLabel
-from .workers.preview_worker import (  # noqa: F401 (re-export for tests)
-    _build_preview_background_model,
-    _clear_preview_background_cache,
-)
 
 try:
     from hydra_suite.posekit.gui.dialogs.utils import get_available_devices

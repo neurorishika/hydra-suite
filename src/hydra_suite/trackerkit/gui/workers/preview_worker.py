@@ -1,11 +1,9 @@
 """PreviewDetectionWorker — non-blocking single-frame detection preview."""
 
-import hashlib
 import logging
 import math
 import os
-import threading
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -21,15 +19,6 @@ from hydra_suite.utils.pose_visualization import is_renderable_pose_keypoint
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Module-level background cache
-# ---------------------------------------------------------------------------
-
-_PREVIEW_BACKGROUND_CACHE_MAX_ENTRIES = 4
-_PREVIEW_BACKGROUND_CACHE = OrderedDict()
-_PREVIEW_BACKGROUND_CACHE_LOCK = threading.Lock()
-
 
 # ---------------------------------------------------------------------------
 # Local path helper (avoids circular import from main_window)
@@ -80,41 +69,8 @@ def resolve_model_path(model_path: object) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Region 1: preview background cache helpers
+# Region 1: preview background params
 # ---------------------------------------------------------------------------
-
-
-def _clear_preview_background_cache() -> None:
-    """Clear preview-only cached background models."""
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        _PREVIEW_BACKGROUND_CACHE.clear()
-
-
-def _hash_preview_roi_mask(roi_mask) -> str | None:
-    """Build a stable hash for the preview ROI mask."""
-    if roi_mask is None:
-        return None
-
-    mask = np.ascontiguousarray(roi_mask)
-    digest = hashlib.sha1()
-    digest.update(str(mask.shape).encode("ascii"))
-    digest.update(str(mask.dtype).encode("ascii"))
-    digest.update(memoryview(mask))
-    return digest.hexdigest()
-
-
-def _preview_background_cache_key(context: dict) -> tuple:
-    """Return the cache key for preview background priming inputs."""
-    return (
-        "preview-background-v1",
-        os.path.abspath(os.path.expanduser(str(context.get("video_path", "")))),
-        int(context.get("bg_prime_frames", 30)),
-        int(context.get("brightness", 0)),
-        round(float(context.get("contrast", 1.0)), 6),
-        round(float(context.get("gamma", 1.0)), 6),
-        round(float(context.get("resize_factor", 1.0)), 6),
-        _hash_preview_roi_mask(context.get("roi_mask")),
-    )
 
 
 def _preview_object_size_pixels(context: dict, key: str, default: float) -> int:
@@ -181,72 +137,6 @@ def _preview_build_bgsub_params(context: dict, use_detection_filters: bool) -> d
     _tier = str(context.get("runtime_tier", "") or "").strip().lower()
     params["RUNTIME_TIER"] = _tier if _tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
     return params
-
-
-def _get_cached_preview_background_state(context: dict) -> dict | None:
-    """Return a copy of cached preview background state if available."""
-    cache_key = _preview_background_cache_key(context)
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        cached_state = _PREVIEW_BACKGROUND_CACHE.get(cache_key)
-        if cached_state is None:
-            return None
-        _PREVIEW_BACKGROUND_CACHE.move_to_end(cache_key)
-        return {
-            "lightest_background": cached_state["lightest_background"].copy(),
-            "adaptive_background": cached_state["adaptive_background"].copy(),
-            "reference_intensity": cached_state["reference_intensity"],
-        }
-
-
-def _store_preview_background_state(context: dict, bg_model) -> None:
-    """Store a copy of preview background state for reuse across previews."""
-    if bg_model.lightest_background is None or bg_model.adaptive_background is None:
-        return
-
-    cache_key = _preview_background_cache_key(context)
-    cache_entry = {
-        "lightest_background": bg_model.lightest_background.copy(),
-        "adaptive_background": bg_model.adaptive_background.copy(),
-        "reference_intensity": bg_model.reference_intensity,
-    }
-
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        _PREVIEW_BACKGROUND_CACHE[cache_key] = cache_entry
-        _PREVIEW_BACKGROUND_CACHE.move_to_end(cache_key)
-        while len(_PREVIEW_BACKGROUND_CACHE) > _PREVIEW_BACKGROUND_CACHE_MAX_ENTRIES:
-            _PREVIEW_BACKGROUND_CACHE.popitem(last=False)
-
-
-def _build_preview_background_model(context: dict):
-    """Build or restore a preview-only primed background model."""
-    from hydra_suite.core.background.model import BackgroundModel
-
-    bg_params = _build_preview_background_params(context)
-    bg_model = BackgroundModel(bg_params)
-
-    cached_state = _get_cached_preview_background_state(context)
-    if cached_state is not None:
-        bg_model.lightest_background = cached_state["lightest_background"]
-        bg_model.adaptive_background = cached_state["adaptive_background"]
-        bg_model.reference_intensity = cached_state["reference_intensity"]
-        logger.info("Reusing cached background model for test detection")
-        return bg_model, bg_params
-
-    logger.info("Building background model for test detection...")
-    cap = cv2.VideoCapture(str(context.get("video_path", "")))
-    if not cap.isOpened():
-        raise RuntimeError("Cannot open video for background priming")
-
-    try:
-        bg_model.prime_background(cap)
-    finally:
-        cap.release()
-
-    if bg_model.lightest_background is None:
-        raise RuntimeError("Failed to build background model")
-
-    _store_preview_background_state(context, bg_model)
-    return bg_model, bg_params
 
 
 # ---------------------------------------------------------------------------
@@ -380,25 +270,6 @@ def _preview_resize_frame(frame_bgr, test_frame, resize_f):
             test_frame, (0, 0), fx=resize_f, fy=resize_f, interpolation=cv2.INTER_AREA
         )
     return frame_bgr, test_frame
-
-
-def _preview_bg_size_thresholds(context, resize_f, use_detection_filters):
-    reference_body_size = float(context.get("reference_body_size", 50.0))
-    reference_body_area = math.pi * (reference_body_size / 2.0) ** 2
-    scaled_body_area = reference_body_area * (resize_f**2)
-    apply_ar = bool(
-        use_detection_filters and context.get("enable_aspect_ratio_filtering", False)
-    )
-    if use_detection_filters:
-        min_size_px2 = float(context.get("min_object_size", 0.0)) * scaled_body_area
-        max_size_px2 = float(context.get("max_object_size", 999.0)) * scaled_body_area
-    else:
-        min_size_px2 = 0.0
-        max_size_px2 = float("inf")
-    ref_ar = float(context.get("reference_aspect_ratio", 2.0))
-    min_ar = ref_ar * float(context.get("min_aspect_ratio_multiplier", 0.5))
-    max_ar = ref_ar * float(context.get("max_aspect_ratio_multiplier", 2.0))
-    return min_size_px2, max_size_px2, apply_ar, min_ar, max_ar
 
 
 def _preview_run_bg_subtraction(
