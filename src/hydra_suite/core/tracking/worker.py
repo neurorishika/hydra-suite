@@ -1124,6 +1124,27 @@ class TrackingEngineCore:
             # batch pass), and cached via the refactor-native DetectionCacheHandle
             # so the backward pass can replay them — parity with the OBB path,
             # which caches through InferenceRunner.
+            #
+            # Build the InferenceConfig + resolve the cache dir ONCE, above the
+            # backward/forward split, so both branches share the identical
+            # config (Tasks 5-6 consume this for the unified cache path).
+            from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+            _compute_runtime = str(p.get("COMPUTE_RUNTIME", "cpu"))
+            _raw_tier = str(p.get("RUNTIME_TIER", "") or "").strip().lower()
+            _runtime_tier = (
+                _raw_tier
+                if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+                else migrate_runtime_to_tier({_compute_runtime})
+            )
+            bgsub_inference_config = InferenceConfig(
+                obb=None,
+                bgsub=BgSubConfig.from_params(p),
+                runtime_tier=_runtime_tier,
+                detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
+            )
+            _cache_dir = self._resolve_cache_dir()
+
             if should_build_bgsub_detection_cache(
                 preview_mode=self.preview_mode, backward_mode=self.backward_mode
             ):
@@ -1164,21 +1185,8 @@ class TrackingEngineCore:
                 # for the backward replay, so the runner must NOT also open a
                 # detection cache. bg-sub is sequential, so run_realtime is driven
                 # in frame order below — never run_batch_pass.
-                from hydra_suite.core.inference.config import migrate_runtime_to_tier
-
-                _compute_runtime = str(p.get("COMPUTE_RUNTIME", "cpu"))
-                _raw_tier = str(p.get("RUNTIME_TIER", "") or "").strip().lower()
-                _runtime_tier = (
-                    _raw_tier
-                    if _raw_tier in {"cpu", "gpu", "gpu_fast"}
-                    else migrate_runtime_to_tier({_compute_runtime})
-                )
-                bgsub_inference_config = InferenceConfig(
-                    obb=None,
-                    bgsub=BgSubConfig.from_params(p),
-                    runtime_tier=_runtime_tier,
-                    detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
-                )
+                # (bgsub_inference_config was built once above the backward/
+                # forward split; reused here unchanged.)
                 bgsub_runner = InferenceRunner(
                     bgsub_inference_config,
                     cache_dir=None,
