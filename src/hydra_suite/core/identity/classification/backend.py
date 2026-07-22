@@ -967,6 +967,40 @@ class ClassifierBackend:
             per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
         return np.concatenate(per_factor_logits, axis=-1)
 
+    def _forward_multi_cuda(self, crops_chw: list, input_is_bgr: bool) -> np.ndarray:
+        """GPU-native counterpart of :meth:`_forward_yolo_multi`.
+
+        Identical shape/semantics — concatenated per-factor log-probs — but each
+        factor's probabilities come from its ``predict_batch_cuda`` (crops stay on
+        device) instead of the numpy ``predict_batch``. Used for factor bundles
+        whose every factor is CUDA-capable (see :meth:`supports_cuda_forward`).
+        """
+        per_factor_logits: list[np.ndarray] = []
+        for factor_backend in self._model:
+            factor_probs = factor_backend.predict_batch_cuda(crops_chw, input_is_bgr)
+            probs = np.array(
+                [per_crop[0] for per_crop in factor_probs], dtype=np.float32
+            )
+            per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
+        return np.concatenate(per_factor_logits, axis=-1)
+
+    def supports_cuda_forward(self) -> bool:
+        """True iff this backend has a CUDA-native forward.
+
+        For a flat backend: its active execution backend is ``native`` (torch) or
+        ``onnx`` (IOBinding). For a factor bundle: EVERY factor must qualify (and
+        expose ``predict_batch_cuda``). Consumed by the strict gpu-tier capability
+        check so an unsupported classifier fails at load rather than silently
+        round-tripping through CPU.
+        """
+        if self._uses_factor_backends():
+            return all(
+                getattr(f, "_active_execution_backend", None) in ("native", "onnx")
+                and hasattr(f, "predict_batch_cuda")
+                for f in self._model
+            )
+        return getattr(self, "_active_execution_backend", None) in ("native", "onnx")
+
     def _forward_onnx(self, batch_np: np.ndarray) -> np.ndarray:
         input_name = self._model.get_inputs()[0].name
         return self._model.run(None, {input_name: batch_np.astype(np.float32)})[0]
@@ -1149,7 +1183,28 @@ class ClassifierBackend:
         self._ensure_loaded()
 
         if self._uses_factor_backends():
-            # Factor-backend models require individual HWC numpy crops.
+            if self.supports_cuda_forward():
+                # Every factor is CUDA-capable: run the bundle on-GPU (crops stay
+                # on device) instead of the numpy round-trip.
+                logits = self._forward_multi_cuda(crops_chw, input_is_bgr)
+                cardinalities = self._cardinalities()
+                expected_total = sum(cardinalities)
+                if logits.shape[-1] != expected_total:
+                    raise ClassifierRuntimeError(
+                        f"{self._model_path!r}: multi output width "
+                        f"{logits.shape[-1]} does not match expected total "
+                        f"{expected_total}"
+                    )
+                results: list[list[np.ndarray]] = []
+                for row in logits:
+                    per_factor: list[np.ndarray] = []
+                    offset = 0
+                    for width in cardinalities:
+                        per_factor.append(self._softmax(row[offset : offset + width]))
+                        offset += width
+                    results.append(per_factor)
+                return results
+            # A factor lacks a CUDA forward: fall back to individual HWC numpy crops.
             numpy_crops = [
                 c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
                 for c in crops_chw

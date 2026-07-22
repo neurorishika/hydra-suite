@@ -78,3 +78,82 @@ def test_gpu_vs_cpu_classifier_crop_close():
     gpu_hwc = gpu.permute(0, 2, 3, 1).numpy()
     assert gpu_hwc.shape == cpu_t.shape
     assert float(np.abs(gpu_hwc - cpu_t).mean()) < 0.03  # < ~8/255 mean abs
+
+
+# ---- Task 2/3: GPU factor-bundle forward ------------------------------------
+
+
+def _fake_bundle(monkeypatch, active_backend="native"):
+    from hydra_suite.core.identity.classification import backend as bk
+
+    class _FakeFactor:
+        _active_execution_backend = active_backend
+
+        def predict_batch(self, crops):
+            return [[np.array([0.2, 0.8], np.float32)] for _ in crops]
+
+        def predict_batch_cuda(self, crops, input_is_bgr=True):
+            return [[np.array([0.2, 0.8], np.float32)] for _ in crops]
+
+    b = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
+    b._model = [_FakeFactor(), _FakeFactor()]
+    monkeypatch.setattr(b, "_uses_factor_backends", lambda: True, raising=False)
+    return b
+
+
+def test_forward_multi_cuda_shape_matches_numpy(monkeypatch):
+    b = _fake_bundle(monkeypatch)
+    crops = [object(), object()]  # 2 crops
+    numpy_out = b._forward_yolo_multi(crops)
+    cuda_out = b._forward_multi_cuda(crops, True)
+    assert cuda_out.shape == numpy_out.shape  # (2 crops, 4 = 2 factors x 2)
+    np.testing.assert_allclose(cuda_out, numpy_out, rtol=0, atol=1e-6)
+
+
+def test_supports_cuda_forward_bundle():
+    b_native = _supports_helper("native")
+    b_coreml = _supports_helper("coreml")
+    assert b_native.supports_cuda_forward() is True
+    assert b_coreml.supports_cuda_forward() is False
+
+
+def _supports_helper(active_backend):
+    from hydra_suite.core.identity.classification import backend as bk
+
+    class _F:
+        _active_execution_backend = active_backend
+
+        def predict_batch_cuda(self, crops, input_is_bgr=True):
+            return []
+
+    b = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
+    b._model = [_F(), _F()]
+    b._uses_factor_backends = lambda: True  # type: ignore[method-assign]
+    return b
+
+
+def test_predict_batch_cuda_uses_gpu_forward_for_capable_bundle(monkeypatch):
+
+    b = _fake_bundle(monkeypatch)
+    called = {"numpy_fallback": False, "multi_cuda": False}
+    monkeypatch.setattr(b, "supports_cuda_forward", lambda: True, raising=False)
+    monkeypatch.setattr(b, "_ensure_loaded", lambda: None, raising=False)
+    monkeypatch.setattr(b, "_cardinalities", lambda: [2, 2], raising=False)
+    monkeypatch.setattr(b, "_softmax", lambda row: np.asarray(row), raising=False)
+    orig = b._forward_multi_cuda
+
+    def _spy(c, bgr):
+        called["multi_cuda"] = True
+        return orig(c, bgr)
+
+    monkeypatch.setattr(b, "_forward_multi_cuda", _spy, raising=False)
+
+    def _no_numpy(crops):
+        called["numpy_fallback"] = True
+        return []
+
+    monkeypatch.setattr(b, "predict_batch", _no_numpy, raising=False)
+
+    out = b.predict_batch_cuda([object(), object()], input_is_bgr=True)
+    assert called["multi_cuda"] and not called["numpy_fallback"]
+    assert len(out) == 2 and len(out[0]) == 2  # 2 crops, 2 factors
