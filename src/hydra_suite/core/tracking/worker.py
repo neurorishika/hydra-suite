@@ -66,13 +66,6 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
-from hydra_suite.core.inference.cache.keys import (  # noqa: E402
-    bgsub_detection_cache_key,
-    video_signature,
-    with_video_signature,
-)
-from hydra_suite.core.inference.cache.store import DetectionCacheHandle  # noqa: E402
-
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
 from hydra_suite.core.inference.config import (  # noqa: E402
@@ -88,19 +81,6 @@ from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     populate_live_pose_store,
     populate_live_tag_store,
 )
-
-
-def should_build_bgsub_detection_cache(
-    *, preview_mode: bool, backward_mode: bool
-) -> bool:
-    """Return True if a forward bg-sub run should read/write the shared detection cache.
-
-    Preview Mode must not touch it: the cache file is a single fixed path per
-    video (not qualified by frame range), and closing a handle always
-    overwrites it with only the current run's frames — so a short preview
-    range would silently truncate a full-range cache used by backward mode.
-    """
-    return not preview_mode
 
 
 def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
@@ -991,9 +971,6 @@ class TrackingEngineCore:
         inference_runner = None  # InferenceRunner for yolo_obb mode
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
         detection_cache = None  # Legacy cache — only used for background subtraction
-        # Refactor-native detection cache for background subtraction: forward writes
-        # per-frame detections, backward replays them (parity with the OBB path).
-        bgsub_detection_cache = None
         use_cached_detections = False
         cached_frame_indices = set()
 
@@ -1121,9 +1098,8 @@ class TrackingEngineCore:
             # ── Background subtraction ───────────────────────────────────────
             # Detections are produced live in the forward loop (the adaptive
             # background model needs sequential frames, so there is no separate
-            # batch pass), and cached via the refactor-native DetectionCacheHandle
-            # so the backward pass can replay them — parity with the OBB path,
-            # which caches through InferenceRunner.
+            # batch pass), and cached via InferenceRunner so the backward pass
+            # can replay them — parity with the OBB path.
             #
             # Build the InferenceConfig + resolve the cache dir ONCE, above the
             # backward/forward split, so both branches share the identical
@@ -1145,36 +1121,34 @@ class TrackingEngineCore:
             )
             _cache_dir = self._resolve_cache_dir()
 
-            if should_build_bgsub_detection_cache(
-                preview_mode=self.preview_mode, backward_mode=self.backward_mode
-            ):
-                _cache_dir = self._resolve_cache_dir()
-                _cache_dir.mkdir(parents=True, exist_ok=True)
-                _bgsub_cache_path = _cache_dir / "bgsub_detection.npz"
-                _bgsub_key = with_video_signature(
-                    bgsub_detection_cache_key(BgSubConfig.from_params(p)),
-                    video_signature(self.video_path),
-                )
-                bgsub_detection_cache = DetectionCacheHandle(
-                    path=_bgsub_cache_path, key=_bgsub_key
-                )
             if self.backward_mode:
-                if (
-                    bgsub_detection_cache is None
-                    or not bgsub_detection_cache.is_valid()
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                bgsub_runner = InferenceRunner(
+                    bgsub_inference_config,
+                    cache_dir=_cache_dir,
+                    video_path=self.video_path,
+                    cache_only=True,
+                )
+                if not bgsub_runner.caches_all_valid() or not (
+                    bgsub_runner.detection_cache_covers_range(start_frame, end_frame)
                 ):
                     logger.error(
-                        "Backward tracking requires valid forward bg-sub detections "
-                        "at %s. Please run forward tracking first.",
-                        self._resolve_cache_dir() / "bgsub_detection.npz",
+                        "Backward tracking requires a valid forward bg-sub "
+                        "detection cache covering frames %d-%d at %s. Please run "
+                        "forward tracking over the full range first.",
+                        start_frame,
+                        end_frame,
+                        _cache_dir / "detection.npz",
                     )
+                    bgsub_runner.close()
                     cap.release()
                     self._emit_finished(False, [], [])
                     return
                 use_cached_detections = True
                 logger.info(
-                    "Backward pass: replaying cached bg-sub detections from %s",
-                    _bgsub_cache_path,
+                    "Backward pass: replaying cached bg-sub detections via "
+                    "InferenceRunner from %s",
+                    _cache_dir / "detection.npz",
                 )
             else:
                 # Forward pass. The runner owns the detection cache exactly like
@@ -2271,10 +2245,11 @@ class TrackingEngineCore:
             elif (
                 use_cached_detections
                 and detection_method == "background_subtraction"
-                and bgsub_detection_cache is not None
+                and bgsub_runner is not None
             ):
                 # Backward pass: replay cached bg-sub detections (no live frame).
-                _obb = bgsub_detection_cache.read_frame(actual_frame_index)
+                _fr = bgsub_runner.load_frame(actual_frame_index)
+                _obb = _fr.obb if _fr is not None else None
                 if _obb is not None and _obb.num_detections > 0:
                     meas = frame_result_to_meas(_obb.centroids, _obb.angles)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
