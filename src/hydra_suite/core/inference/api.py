@@ -54,6 +54,7 @@ def load_pose_backend(
     sleap_env="sleap",
     sleap_batch=None,
     sleap_max_instances=1,
+    vitpose_batch=None,
 ):
     """Build a pose backend (with predict_batch) via the canonical stages/pose loader.
 
@@ -74,6 +75,7 @@ def load_pose_backend(
         OBBDirectConfig,
         PoseConfig,
         PoseSLEAPConfig,
+        PoseViTPoseConfig,
         PoseYOLOConfig,
         migrate_runtime_to_tier,
     )
@@ -89,6 +91,19 @@ def load_pose_backend(
                 model_path=model_path,
                 confidence_threshold=confidence_threshold,
                 batch_size=batch_size,
+            ),
+            min_keypoint_confidence=min_valid_confidence,
+        )
+    elif family == "vitpose":
+        vp_bs = vitpose_batch if vitpose_batch is not None else batch_size
+        pose_cfg = PoseConfig(
+            backend="vitpose",
+            skeleton_file=skeleton_file or "",
+            vitpose=PoseViTPoseConfig(
+                model_path=model_path,
+                variant="auto",
+                num_keypoints=0,
+                batch_size=max(1, int(vp_bs)),
             ),
             min_keypoint_confidence=min_valid_confidence,
         )
