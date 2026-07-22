@@ -30,7 +30,7 @@ In scope:
 
 1. Move calibrated evidence generation into the inference pass.
 2. Persist the identity catalog and calibration as config artifacts known before inference.
-3. A real calibration-fitting workflow (temperature scaling on the CNN held-out validation split), with a mandatory-calibration gate and runtime robustness knobs.
+3. A real calibration-fitting workflow **integrated into ClassKit training** (temperature scaling on the CNN held-out validation split, stored in the model artifact), with a mandatory-calibration gate and runtime robustness knobs.
 4. Extract a shared substrate consumed by both decoders; make the offline path read the evidence cache instead of reconstructing from CSV.
 5. Add true offline forward-backward smoothing feeding the changepoint/fragment/global-assignment solver.
 6. Provenance-explicit output columns.
@@ -144,10 +144,36 @@ class IdentityConfig:
 
 Fixes: single ownership of the domain; **structured factor keys** replace `"_"`-joins — a composite label is a tuple of `(factor, class)` pairs, so class names may contain any character; per-model namespacing prevents two classifiers' identical class strings from collapsing.
 
-**Calibration.** A new workflow fits a temperature per CNN model (optionally per factor) on the model's **held-out validation split**, minimizing NLL (report ECE before/after). The fitted temperature + content-hash signature are stored with the model and referenced from `IdentityModelConfig.calibration`.
+**Calibration.** Temperature is a **fit-once, per-model property baked into the model artifact** — the user never enters a T value, never provides a validation set at tracking time, and never labels anything new for calibration. Every tracking run that uses a model simply reads its stored temperature; if a model is uncalibrated it is flagged in the UI with a one-click fix. See "Calibration Lifecycle (ClassKit integration)" below for the concrete wiring.
 
-- New: `core/identity/calibration_fit.py` — `fit_temperature(logits, labels) -> CalibrationModel`; CLI/GUI entry to fit and store.
-- Gate: if `calibration_required` and any `unique_identifier` model lacks a matching-signature calibration, the Bayesian decoders refuse to run (loud error naming the fit step). A user override downgrades to a warning.
+- Fit on the model's **held-out validation split**, minimizing NLL; report ECE before/after.
+- The fitted temperature + a content-hash signature (of the model weights) are stored in the model artifact metadata and surfaced through `ClassifierMetadata`, consumed at tracking time.
+- Gate: if `calibration_required` and any `unique_identifier` model lacks a matching-signature calibration, the Bayesian decoders refuse to run (loud error naming the recalibrate action). A user override downgrades to a warning.
+
+### Calibration Lifecycle (ClassKit integration)
+
+Calibration lives where the labeled data and the model lifecycle already are: **ClassKit training + the model artifact**. Every required primitive already exists in the codebase and is merely disconnected; this overhaul connects them.
+
+**What already exists (verified):**
+
+- A labeled validation set is materialized on disk after every ClassKit CNN training run: `<derived_dataset>/val/<class>/…` (default 20% stratified holdout, `classkit/core/export/splits.py`), retained after training and already loaded by the runner for `best_val_acc` (`training/runner.py:452-514`).
+- A working temperature-scaling fitter, `TemperatureScaling.fit` (`classkit/core/train/calibrate.py:34`) — currently wired only into the *embedding-head* trainer (`classkit/core/train/trainer.py:71/235`), whose checkpoint is **not** the artifact TrackerKit consumes.
+- An artifact metadata pattern for an optional artifact-level scalar: `recommended_confidence_threshold` on `ClassifierMetadata` (`core/identity/classification/backend.py:35-71`), parsed identically from `.pth` checkpoint / YOLO `.v2meta.json` sidecar / `.multihead.json` manifest.
+- A consumption seam: `CNNConfig.calibration_temperature` (`core/inference/config.py:174`) already defaults to `1.0` from the params dict and is applied downstream (`core/tracking/identity/evidence.py:144`, `cnn.py:491`). CNN caches store **raw** probabilities and exclude temperature from the cache key (`core/inference/cache/keys.py:162`), so temperature can be (re)fit without invalidating the CNN cache.
+
+**What this overhaul wires (three connections):**
+
+1. **Fit at the tail end of CNN training.** In `training/runner.py`, after the training loop (both tiny and torchvision paths), call the existing `TemperatureScaling.fit` on the retained `<dataset>/val` split — for multi-factor models, per factor. This is automatic; no extra user step for newly trained models.
+2. **Store T + signature in the artifact.** Write `calibration_temperature` (per factor) + weight-hash `signature` into the v2 checkpoint dict at save (`torchvision_model.py:389`, `runner.py:570`), the YOLO `.v2meta.json` sidecar, and the `.multihead.json` manifest (`model_publish.py:146`) — following the `recommended_confidence_threshold` pattern. Surface it on `ClassifierMetadata`.
+3. **Consume automatically.** `CNNConfig.calibration_temperature` falls back to the artifact metadata temperature instead of the hardcoded `1.0`; tracking asks the user nothing.
+
+**ClassKit UX additions:**
+
+- **Recalibrate action** (for models trained before this feature, or after a re-train): a ClassKit action that re-fits temperature from the retained `<dataset>/val` ImageFolder and rewrites the artifact metadata. Because the val split persists on disk, no new labeling is needed. If the val split is missing (older datasets), the action prompts to point at a labeled ClassKit project/dataset to fit from.
+- **Calibration status in the CNN import dialog** (`trackerkit/gui/dialogs/cnn_identity_import_dialog.py`): show "calibrated (T=…) / not calibrated / stale (signature mismatch)" at model-selection time, read from `ClassifierMetadata` alongside the metadata it already reads.
+- **Training report** surfaces ECE before/after so the user sees the calibration actually improved honesty.
+
+Note: no new `core/identity/calibration_fit.py` module is required — the fitter already exists in `classkit/core/train/calibrate.py`; the work is wiring it into the `run_training` CNN path and the artifact metadata.
 
 ### Layer 2 — Evidence layer (inference-time)
 
@@ -223,7 +249,7 @@ Safety net: the equivalence harness (positions byte-identical when identity infl
 Each phase is independently shippable and gated.
 
 - **Phase 0 — Typed config + persisted catalog.** Introduce `IdentityConfig`, `IdentityCatalogSpec`, structured factor keys; migrate `get_parameters_dict()` to derive from it. No behavior change. Catalog resolved once, persisted.
-- **Phase 1 — Calibration workflow.** `calibration_fit.py`, validation-split fitting, storage, signature, mandatory-calibration gate, robustness knobs. Report ECE.
+- **Phase 1 — Calibration workflow (ClassKit integration).** Wire `TemperatureScaling.fit` into the `run_training` CNN path (fit on the retained `<dataset>/val` split, per factor); store T + weight-hash signature in the artifact metadata (checkpoint / `.v2meta.json` / `.multihead.json`) and surface via `ClassifierMetadata`; make `CNNConfig.calibration_temperature` fall back to artifact metadata. Add the ClassKit **Recalibrate** action and the CNN-import-dialog calibration status. Mandatory-calibration gate + runtime robustness knobs. Report ECE before/after.
 - **Phase 2 — Evidence as inference artifact.** `IdentityEvidenceStage` in `InferenceRunner` (batch + realtime); single factor→catalog mapping using true per-factor softmax; remove tracking-time emitter. Evidence cache written before tracking (non-realtime).
 - **Phase 3 — Shared substrate + realtime read-through.** Extract `substrate.py`; refactor `online.py` to read evidence and use substrate fusion/uniqueness.
 - **Phase 4 — Post-hoc self-sufficiency + smoothing.** Offline reads the evidence cache; add forward-backward smoothing; fragment solver uses substrate uniqueness. Post-hoc runs with realtime off. **This closes the honesty bug end-to-end.**
@@ -257,6 +283,8 @@ Gates:
 
 - Moving evidence into inference requires the catalog + calibration to be resolved before the inference pass; a run configured with identity but no fitted calibration must fail clearly (mandatory gate) rather than silently use raw softmax.
 - Validation-split calibration reflects training distribution, not necessarily deployment conditions; the runtime robustness knobs (cap/floor/source-weight) are the mitigation. Revisit tag-as-free-label calibration later if drift is observed.
+- The `<dataset>/val` split persists on disk today, so legacy models can be recalibrated without new labeling; but very old datasets may lack a retained val split — the Recalibrate action must handle that by prompting for a labeled ClassKit dataset to fit from.
+- Multi-factor calibration: fitting one temperature per factor assumes factor logits are separable; if factors are entangled, per-factor temperature may under/over-correct the joint. Start per-factor; revisit joint calibration only if ECE on composite labels stays high.
 - Clean-break retirement means no fallback if a subtle regression slips the gates; the equivalence gate must be run before/after Phase 6 on both platforms.
 - Forward-backward smoothing cost on long trajectories with a large catalog must stay bounded.
 
@@ -265,6 +293,7 @@ Gates:
 - Identity evidence is written during the inference pass (before tracking in non-realtime), and both realtime and post-hoc consume the same cache.
 - Post-hoc identity assignment runs correctly with realtime identity influence off (non-empty `Identity_Final_*`).
 - Only calibrated posteriors enter the decoders; uncalibrated `unique_identifier` models are gated with a clear error.
+- Calibration is fit during ClassKit CNN training on the retained validation split and stored in the model artifact; tracking reads the stored temperature with no user input. Legacy models can be recalibrated via a ClassKit action from the retained val data.
 - One catalog and one factor→catalog mapping are used everywhere; class names may contain any character.
 - Realtime and post-hoc are independent toggles over one `IdentityConfig`; the UI states this honestly and no tooltip is misleading.
 - Output columns are provenance-explicit; no stage overwrites another's decision.
