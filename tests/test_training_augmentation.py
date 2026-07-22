@@ -72,6 +72,37 @@ def test_tiny_augmentation_monochrome_enforces_equal_channels():
     assert np.array_equal(out[..., 1], out[..., 2])
 
 
+def test_tiny_augmentation_decode_color_changes_image_when_on():
+    rng_img = np.random.default_rng(0)
+    img = rng_img.integers(0, 256, size=(24, 24, 3), dtype=np.uint8)
+    prof = AugmentationProfile(enabled=True, decode_color_sim=1.0)
+    changed = any(
+        not np.array_equal(
+            _apply_tiny_augmentation(img, True, prof, rng=np.random.default_rng(s)), img
+        )
+        for s in range(8)
+    )
+    assert changed
+
+
+def test_tiny_augmentation_off_by_default_leaves_decode_untouched():
+    img = np.full((16, 16, 3), 120, np.uint8)
+    prof = AugmentationProfile(
+        enabled=True
+    )  # decode_color_sim/resample_sim default 0.0
+    # No flips/jitter either -> fully identity.
+    out = _apply_tiny_augmentation(img, True, prof, rng=np.random.default_rng(0))
+    assert np.array_equal(out, img)
+
+
+def test_tiny_augmentation_deterministic_under_fixed_rng():
+    img = np.random.default_rng(1).integers(0, 256, (20, 20, 3), dtype=np.uint8)
+    prof = AugmentationProfile(enabled=True, decode_color_sim=1.0, resample_sim=1.0)
+    a = _apply_tiny_augmentation(img, True, prof, rng=np.random.default_rng(5))
+    b = _apply_tiny_augmentation(img, True, prof, rng=np.random.default_rng(5))
+    assert np.array_equal(a, b)
+
+
 def test_augmentation_profile_new_decode_fields_default_off_and_serialize():
     from dataclasses import asdict
 
