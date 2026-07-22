@@ -283,7 +283,7 @@ def test_backward_mode_refuses_without_valid_caches(tmp_path):
     We patch InferenceRunner to report invalid caches and verify run_batch_pass
     is never called (backward pass must NOT re-run inference).
     """
-    from hydra_suite.core.tracking.worker import TrackingWorker
+    from hydra_suite.core.tracking.worker import TrackingEngineCore
 
     mock_runner = MagicMock()
     mock_runner.caches_all_valid.return_value = False
@@ -291,7 +291,7 @@ def test_backward_mode_refuses_without_valid_caches(tmp_path):
     with patch(
         "hydra_suite.core.tracking.worker.InferenceRunner", return_value=mock_runner
     ):
-        worker_obj = TrackingWorker.__new__(TrackingWorker)
+        worker_obj = TrackingEngineCore.__new__(TrackingEngineCore)
         worker_obj._identity_builders = []
 
         # Minimal attributes needed to reach the guard

@@ -16,10 +16,10 @@ from .post.processing import (
     process_trajectories_from_csv,
     resolve_trajectories,
 )
-from .tracking.worker import TrackingWorker
+from .tracking.worker import TrackingEngineCore
 
 __all__ = [
-    "TrackingWorker",
+    "TrackingEngineCore",
     "KalmanFilterManager",
     "BackgroundModel",
     "TrackAssigner",

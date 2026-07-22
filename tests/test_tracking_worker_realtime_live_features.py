@@ -305,11 +305,12 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
 
     results = {}
 
-    def _capture_finished(success, trajectories, metrics):
+    def _capture_finished(success, fps_list, full_traj):
         results["success"] = success
 
-    worker = worker_mod.TrackingWorker(str(tmp_path / "video.mp4"))
-    worker.finished_signal.connect(_capture_finished)
+    worker = worker_mod.TrackingEngineCore(
+        str(tmp_path / "video.mp4"), on_finished=_capture_finished
+    )
     worker.set_parameters(
         {
             "MAX_TARGETS": 1,
@@ -335,6 +336,6 @@ def test_tracking_worker_realtime_yolo_obb_handles_zero_detection_frame(
         }
     )
 
-    worker._run_impl()
+    worker.run_tracking()
 
     assert results.get("success") is True
