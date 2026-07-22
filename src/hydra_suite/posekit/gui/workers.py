@@ -33,6 +33,7 @@ def _build_pose_backend(
     sleap_env: Optional[str],
     sleap_batch: Optional[int] = None,
     sleap_max_instances: int = 1,
+    vitpose_batch: Optional[int] = None,
 ) -> Any:
     """Construct a pose backend via the canonical ``load_pose_backend`` shim.
 
@@ -62,6 +63,7 @@ def _build_pose_backend(
         sleap_env=sleap_env,
         sleap_batch=sleap_batch,
         sleap_max_instances=sleap_max_instances,
+        vitpose_batch=vitpose_batch,
     )
 
 
@@ -91,6 +93,7 @@ class PosePredictWorker(QObject):
         sleap_batch: int = 4,
         sleap_max_instances: int = 1,
         cache_backend: Optional[str] = None,
+        vitpose_batch: Optional[int] = None,
     ):
         super().__init__()
         self.model_path = Path(model_path)
@@ -114,6 +117,7 @@ class PosePredictWorker(QObject):
         # Enforce single-instance predictions for PoseKit.
         self.sleap_max_instances = 1
         self.cache_backend = str(cache_backend or self.backend).strip().lower()
+        self.vitpose_batch = vitpose_batch
 
     def _resolved_runtime_artifact_path(self, backend_obj: Any) -> str:
         # Only SLEAP flavors that actually export an artifact (onnx/tensorrt)
@@ -168,6 +172,7 @@ class PosePredictWorker(QObject):
                     sleap_env=self.sleap_env,
                     sleap_batch=int(max(1, self.sleap_batch)),
                     sleap_max_instances=1,
+                    vitpose_batch=self.vitpose_batch,
                 )
                 resolved_path = self._resolved_runtime_artifact_path(backend)
                 if resolved_path:
@@ -198,9 +203,9 @@ class PosePredictWorker(QObject):
                     except Exception:
                         pass
             except Exception as exc:
-                if self.backend == "sleap":
+                if self.backend in ("sleap", "vitpose"):
                     raise RuntimeError(
-                        "SLEAP shared runtime path failed in PoseKit. "
+                        f"{self.backend} shared runtime path failed in PoseKit. "
                         "Legacy fallback is disabled for parity with MAT. "
                         f"Original error: {exc}"
                     ) from exc
@@ -272,6 +277,7 @@ class BulkPosePredictWorker(QObject):
         sleap_batch: int = 4,
         sleap_max_instances: int = 1,
         cache_backend: Optional[str] = None,
+        vitpose_batch: Optional[int] = None,
     ):
         super().__init__()
         self.model_path = Path(model_path)
@@ -294,6 +300,7 @@ class BulkPosePredictWorker(QObject):
         # Enforce single-instance predictions for PoseKit.
         self.sleap_max_instances = 1
         self.cache_backend = str(cache_backend or self.backend).strip().lower()
+        self.vitpose_batch = vitpose_batch
         self._cancel = False
 
     def _resolved_runtime_artifact_path(self, backend_obj: Any) -> str:
@@ -347,6 +354,7 @@ class BulkPosePredictWorker(QObject):
                     sleap_env=self.sleap_env,
                     sleap_batch=int(max(1, self.sleap_batch)),
                     sleap_max_instances=1,
+                    vitpose_batch=self.vitpose_batch,
                 )
                 resolved_path = self._resolved_runtime_artifact_path(backend)
                 if resolved_path:
@@ -404,9 +412,9 @@ class BulkPosePredictWorker(QObject):
                     except Exception:
                         pass
             except Exception as exc:
-                if self.backend == "sleap":
+                if self.backend in ("sleap", "vitpose"):
                     raise RuntimeError(
-                        "SLEAP shared runtime bulk path failed in PoseKit. "
+                        f"{self.backend} shared runtime bulk path failed in PoseKit. "
                         "Legacy fallback is disabled for parity with MAT. "
                         f"Original error: {exc}"
                     ) from exc
