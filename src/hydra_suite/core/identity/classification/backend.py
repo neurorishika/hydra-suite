@@ -992,8 +992,19 @@ class ClassifierBackend:
         expose ``predict_batch_cuda``). Consumed by the strict gpu-tier capability
         check so an unsupported classifier fails at load rather than silently
         round-tripping through CPU.
+
+        ``_active_execution_backend`` is ``"unloaded"`` until the (lazy)
+        ``_ensure_loaded`` runs, so we force-load first — otherwise a
+        perfectly CUDA-capable native model reads as unsupported. This mirrors
+        ``predict_batch_cuda``, which also ``_ensure_loaded``s before branching on
+        ``_active_execution_backend``.
         """
+        self._ensure_loaded()
         if self._uses_factor_backends():
+            for factor in self._model:
+                ensure = getattr(factor, "_ensure_loaded", None)
+                if callable(ensure):
+                    ensure()
             return all(
                 getattr(f, "_active_execution_backend", None) in ("native", "onnx")
                 and hasattr(f, "predict_batch_cuda")

@@ -130,6 +130,7 @@ def _supports_helper(active_backend):
     b = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
     b._model = [_F(), _F()]
     b._uses_factor_backends = lambda: True  # type: ignore[method-assign]
+    b._ensure_loaded = lambda: None  # type: ignore[method-assign]
     return b
 
 
