@@ -1,10 +1,28 @@
 # ViTPose Native Backend — Roadmap
 
-**Date:** 2026-07-16
-**Status:** Roadmap agreed. Spec 1 in design.
+**Date:** 2026-07-16 (updated 2026-07-19)
+**Status:** Spec 1 ✅ done · Spec 4 ✅ done · Specs 2+3 reshaped and consolidated
+into `2026-07-19-vitpose-full-integration-design.md`, gated behind Gen-2
+(`2026-07-19-runtime-resolver-gen2-consolidation-design.md`).
 **Purpose:** Durable context anchor across sessions. This document holds the *why*
 and the *ordering*. Each spec below gets its own design doc, plan, and
 implementation cycle.
+
+## Status update (2026-07-19)
+
+- **Spec 1** (native port + parity + export) — ✅ merged (`#19`). Leaf at
+  `core/identity/pose/vitpose/`, incl. `export_onnx`/`build_tensorrt_engine`/
+  `export_coreml` and the on-device `decode_udp_torch`.
+- **Spec 4** (fine-tuning) — ✅ merged (`0b5b4b3`). Training payload +
+  PoseKit orchestration + GUI.
+- **Gen-2 runtime consolidation** — spec+plan committed, implementation pending.
+  It collapses the five runtime representations to `runtime_tier` →
+  `ResolvedBackend`, which **dissolves most of Spec 3's runtime-plumbing surface**
+  and gives Specs 2/3 a uniform interface. **Prerequisite** for the integration.
+- **Specs 2 + 3** — reshaped after a 2026-07-19 code audit and merged into
+  `2026-07-19-vitpose-full-integration-design.md`. Key scope changes: pose-only
+  runtime (not pose+detector), drop the tensor-first Protocol reshape, and a slim
+  post-Gen-2 family-registry integration. See that doc's *Deviations* section.
 
 ## Goal
 
@@ -83,7 +101,7 @@ Record each checkpoint's SHA256 when first downloaded.
 Ordering is deliberate and argued below. Each links to its own design doc when written.
 
 ### Spec 1 — Standalone ViTPose port + numerical parity
-**Status:** in design (`2026-07-16-vitpose-native-port-design.md`)
+**Status:** ✅ done — merged (`#19`), `2026-07-16-vitpose-native-port-design.md`
 
 Backbone (classic + MoE), both heads (classic deconv + simple), weight loader,
 pre/post-processing, and (added 2026-07-16) the **export recipe** (`vitpose/export.py`:
@@ -100,7 +118,17 @@ and COCO val AP reproduces published numbers (75.8 classic / 75.5 simple for B)
 within ~0.2. Requires downloading COCO val2017 + standard person detections.
 
 ### Spec 2 — Native runtime layer + tensor-first Protocol
-**Status:** deferred
+**Status:** ⟳ reshaped → consolidated into `2026-07-19-vitpose-full-integration-design.md`
+(Phase A). **Changed after 2026-07-19 audit:** scope is a *pose-only* runtime
+(`core/identity/pose/runtime/`) extracted from `sleap.py` and shared with
+ViTPose — **not** a pose+detector runtime (the detector overlap is only
+TRT-lifecycle-deep; everything else diverges). The **tensor-first Protocol
+reshape is dropped** (the win is TensorRT-input-side only; every backend already
+returns a numpy `PoseResult`); the `predict_batch_cuda` + `hasattr` idiom is
+retained. The one cross-world win (detector hardcodes ONNX providers) is folded
+into Gen-2's `execution_providers_for`.
+
+_Original text below, retained for rationale._
 
 Extract a shared native-torch runtime: device resolution, warmup, AMP,
 `torch.compile`, batching, ONNX session, TensorRT engine, artifact auto-export.
@@ -130,7 +158,19 @@ behavior there **before** touching `sleap.py`; migrate only once parity is
 provable. See also `tools/equivalence/PARITY_AUDIT.md`.
 
 ### Spec 3 — Config reshape, registry, and runtime integration
-**Status:** deferred
+**Status:** ⟳ reshaped → consolidated into `2026-07-19-vitpose-full-integration-design.md`
+(Phase C). **Changed after 2026-07-19 audit:** Gen-2 deletes/rewrites most of the
+runtime-plumbing sites listed below (`_pipeline_supports_runtime`,
+`derive_pose_runtime_settings`, `get_pose_runtime_options`, the `properties/cache.py`
+param-bag boundary), so widening them for ViTPose first would be wasted churn.
+Post-Gen-2 this shrinks to the **pure family axis**: registry factory,
+`PoseRuntimeConfig` → per-backend sub-dicts, one `vitpose_pose` resolver stage,
+cache-key + GUI pickers. The site inventory below was also partly **stale/under-scoped**
+(e.g. `tracking/worker.py:4605` no longer exists; trackerkit orchestrators + posekit
+dialogs were missed) — the consolidated spec supersedes it.
+
+_Original text below, retained for the hardcoded-site inventory (verify against
+current code — several line numbers have drifted)._
 
 `PoseRuntimeConfig` (`pose/types.py:22-44`) is structurally non-generic — flat
 `yolo_*` / `sleap_*` fields and `backend_family: str  # yolo | sleap`. Reshape to
@@ -152,7 +192,11 @@ Known hardcoded `"yolo" | "sleap"` sites to widen: `pose/types.py:26`;
 Follow the 9-step checklist in `docs/developer-guide/runtime-integration.md`.
 
 ### Spec 4 — Fine-tuning
-**Status:** deferred
+**Status:** ✅ done — merged (`0b5b4b3`), `2026-07-17-vitpose-finetune-design.md`.
+Note for integration: training saves `best.pt` as
+`{"model_state", "variant", "num_keypoints", ...}` — the backend needs an adapter
+(the leaf `load_checkpoint` expects a `"state_dict"` key), and the checkpoint
+should also record `head`. Tracked in the consolidated integration spec (Phase B).
 
 **Decided 2026-07-16:** native torch training script **launched as a subprocess
 from PoseKit**. This preserves the repo convention that training shells out (cf.
