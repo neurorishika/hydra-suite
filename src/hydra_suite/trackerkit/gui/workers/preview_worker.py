@@ -156,6 +156,29 @@ def _build_preview_background_params(context: dict) -> dict:
     }
 
 
+def _preview_build_bgsub_params(context: dict, use_detection_filters: bool) -> dict:
+    """Assemble an UPPER_SNAKE bg-sub param dict for ``BgSubConfig.from_params``.
+
+    Reuses the existing preview bg-sub param mapping and layers on the two
+    knobs the InferenceRunner bg-sub stage reads that the raw mapping omits:
+
+    * ``ENABLE_SIZE_FILTERING`` — the ``BackgroundMeasurer`` only applies the
+      MIN/MAX_OBJECT_SIZE window when this is set (measure.py:231). Toggling it
+      off is how ``use_detection_filters=False`` yields the unfiltered set;
+      MIN_CONTOUR_AREA still applies in both modes (measure.py:210), matching
+      the old preview loop and production. Aspect-ratio filtering the old
+      preview loop did is intentionally dropped — the production measurer has
+      no such filter.
+    * ``RUNTIME_TIER`` — the sole runtime knob; bg-sub only uses it to pick the
+      grayscale/adjustment device, but the config carries it for parity.
+    """
+    params = _build_preview_background_params(context)
+    params["ENABLE_SIZE_FILTERING"] = bool(use_detection_filters)
+    _tier = str(context.get("runtime_tier", "") or "").strip().lower()
+    params["RUNTIME_TIER"] = _tier if _tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
+    return params
+
+
 def _get_cached_preview_background_state(context: dict) -> dict | None:
     """Return a copy of cached preview background state if available."""
     cache_key = _preview_background_cache_key(context)
