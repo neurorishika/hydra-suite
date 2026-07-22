@@ -229,8 +229,11 @@ def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
 def test_frames_on_cuda_gate():
     from hydra_suite.core.inference.stages.crops import frames_on_cuda
 
-    rt_gpu = type("RT", (), {"tensor_on_cuda": True})()
-    rt_cpu = type("RT", (), {"tensor_on_cuda": False})()
+    # requested_gpu gates the path (True on gpu AND gpu_fast); tensor_on_cuda is
+    # irrelevant here (it is False on gpu_fast, where NVDEC frames still belong
+    # on the GPU crop path).
+    rt_gpu = type("RT", (), {"requested_gpu": True})()
+    rt_cpu = type("RT", (), {"requested_gpu": False})()
     cpu_tensor = torch.zeros((3, 8, 8))
     np_frame = np.zeros((8, 8, 3), np.uint8)
 

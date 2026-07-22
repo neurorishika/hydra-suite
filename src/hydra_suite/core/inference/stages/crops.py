@@ -359,15 +359,16 @@ def extract_classifier_crops_batch(
 def frames_on_cuda(runtime, frames) -> bool:
     """Whether the GPU classifier crop path should run for this window.
 
-    Requires BOTH a gpu tier (``runtime.tensor_on_cuda``) AND frames that are
-    genuinely CUDA tensors. ``tensor_on_cuda`` only reflects NVDEC *availability*
-    -- NVDEC can fall back to ``CpuFrameReader`` per clip (e.g. the MBCount limit
-    on high-resolution video), in which case the frames are CPU numpy/tensors and
-    uploading a whole frame to the GPU just to crop it is SLOWER than a CPU cv2
-    warp. Gate on the real device so the GPU path only runs when it saves an
-    actual device->host round-trip.
+    Requires BOTH a GPU tier (``runtime.requested_gpu`` — True on ``gpu`` and
+    ``gpu_fast``) AND frames that are genuinely CUDA tensors. It deliberately does
+    NOT key off ``tensor_on_cuda``: on ``gpu_fast`` the OBB backend is ``tensorrt``
+    so ``tensor_on_cuda`` is False, yet NVDEC frames are real CUDA tensors that
+    belong on the on-GPU crop path. NVDEC can also fall back to ``CpuFrameReader``
+    per clip (e.g. the H.264 4096 / MBCount limit), in which case the frames are
+    CPU numpy/tensors and uploading a whole frame to the GPU just to crop it is
+    SLOWER than a CPU cv2 warp -- so we gate on the real frame device too.
     """
-    if not getattr(runtime, "tensor_on_cuda", False):
+    if not getattr(runtime, "requested_gpu", False):
         return False
     for frame in frames:
         if frame is not None:
