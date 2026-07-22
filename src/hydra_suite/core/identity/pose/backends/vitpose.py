@@ -95,7 +95,12 @@ class ViTPoseBackend:
     def _forward(self, batch_chw: np.ndarray) -> torch.Tensor:
         if self._runner is not None:
             out = self._runner.run(batch_chw.astype(np.float32))
-            arr = next(iter(out.values())) if isinstance(out, dict) else out
+            if isinstance(out, dict):
+                arr = next(iter(out.values()))
+            elif isinstance(out, (list, tuple)):
+                arr = out[0]
+            else:
+                arr = out
             return torch.from_numpy(np.asarray(arr, dtype=np.float32))
         return self._forward_torch(batch_chw)
 
