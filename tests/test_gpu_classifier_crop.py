@@ -223,10 +223,29 @@ def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
     assert model.input_size == (128, 128)
 
 
-# ---- Task 5: stage routing (GPU path when tensor_on_cuda) --------------------
+# ---- Task 5: stage routing (GPU path only when frames are actually on CUDA) --
 
 
-def test_run_cnn_batch_routes_by_tensor_on_cuda(monkeypatch):
+def test_frames_on_cuda_gate():
+    from hydra_suite.core.inference.stages.crops import frames_on_cuda
+
+    rt_gpu = type("RT", (), {"tensor_on_cuda": True})()
+    rt_cpu = type("RT", (), {"tensor_on_cuda": False})()
+    cpu_tensor = torch.zeros((3, 8, 8))
+    np_frame = np.zeros((8, 8, 3), np.uint8)
+
+    # Not a gpu tier -> never.
+    assert frames_on_cuda(rt_cpu, [cpu_tensor]) is False
+    # gpu tier but the frame is CPU (NVDEC fell back to CpuFrameReader) -> False:
+    # uploading a CPU frame to GPU just to crop is slower than cv2.
+    assert frames_on_cuda(rt_gpu, [cpu_tensor]) is False
+    assert frames_on_cuda(rt_gpu, [np_frame]) is False
+    assert frames_on_cuda(rt_gpu, []) is False
+    if torch.cuda.is_available():
+        assert frames_on_cuda(rt_gpu, [cpu_tensor.cuda()]) is True
+
+
+def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     from hydra_suite.core.inference.stages import cnn as cnn_stage
     from hydra_suite.core.inference.stages import crops as crops_mod
 
@@ -266,15 +285,18 @@ def test_run_cnn_batch_routes_by_tensor_on_cuda(monkeypatch):
         factor_class_names=[["a", "b"]],
     )
     cfg = type("C", (), {"label": "x"})()
+    rt = type("RT", (), {"tensor_on_cuda": True, "device": "cpu"})()
 
-    rt_gpu = type("RT", (), {"tensor_on_cuda": True, "device": "cpu"})()
-    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt_gpu)
+    # Gate True -> GPU path.
+    monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: True)
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
     assert used["gpu"] and used["cuda_fwd"]
     assert not used["cpu"] and not used["numpy_fwd"]
 
+    # Gate False (e.g. NVDEC fell back to CPU frames) -> CPU path.
     for k in used:
         used[k] = False
-    rt_cpu = type("RT", (), {"tensor_on_cuda": False, "device": "cpu"})()
-    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt_cpu)
+    monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: False)
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
     assert used["cpu"] and used["numpy_fwd"]
     assert not used["gpu"] and not used["cuda_fwd"]

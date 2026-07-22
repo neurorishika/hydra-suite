@@ -138,7 +138,9 @@ def run_cnn_batch(
     then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_cnn_result (DRY with run_cnn).
     """
-    if getattr(runtime, "tensor_on_cuda", False):
+    from .crops import frames_on_cuda
+
+    if frames_on_cuda(runtime, frames):
         # Pure-GPU path (NVDEC): warp crops on-device and forward on-device, no
         # frame device->host copy. predict_batch_cuda expects [0,255] CHW cuda
         # tensors; floor-quantize to 8 bits so the input stays in the same regime

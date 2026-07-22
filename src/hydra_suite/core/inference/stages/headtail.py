@@ -256,7 +256,9 @@ def run_headtail_batch(
     then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_headtail_result (DRY with run_headtail).
     """
-    if getattr(runtime, "tensor_on_cuda", False):
+    from .crops import frames_on_cuda
+
+    if frames_on_cuda(runtime, frames):
         # Pure-GPU path (NVDEC): warp + forward on-device, no frame D->H copy.
         # floor-quantize to [0,255] 8-bit to match the cv2/uint8 reference regime
         # (grid_sample != cv2 -> identity-agreement gate, not byte-identity).
