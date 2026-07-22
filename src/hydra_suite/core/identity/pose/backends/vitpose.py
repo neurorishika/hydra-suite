@@ -11,10 +11,16 @@ from typing import List, Optional, Sequence
 import numpy as np
 import torch
 
+from ..artifacts import (
+    artifact_meta_matches,
+    path_fingerprint_token,
+    write_artifact_meta,
+)
 from ..types import PoseResult
 from ..utils import summarize_keypoints
 from ..vitpose.adapter import load_finetuned_checkpoint
 from ..vitpose.config import IMAGE_SIZE_WH
+from ..vitpose.export import build_tensorrt_engine, export_coreml, export_onnx
 from ..vitpose.infer import decode_and_project, preprocess_crop
 
 
@@ -95,3 +101,46 @@ class ViTPoseBackend:
 
     def close(self) -> None:
         self._model = None
+
+
+_VITPOSE_RECIPE_TAG = "vitpose-v1"
+
+
+def _vitpose_artifact_signature(model_path: str, flavor: str) -> str:
+    return f"{_VITPOSE_RECIPE_TAG}|{flavor}|opset17|fp32|{path_fingerprint_token(model_path)}"
+
+
+def _artifact_path_for(model_path: Path, flavor: str) -> Path:
+    if flavor == "tensorrt":
+        return model_path.with_suffix(".engine")
+    if flavor == "coreml":
+        return model_path.with_suffix(".mlpackage")
+    raise ValueError(f"no ViTPose artifact for flavor {flavor!r}")
+
+
+def auto_export_vitpose_model(
+    config, runtime_flavor: str, runtime_device: Optional[str] = None
+) -> str:
+    """Lazily export + cache a ViTPose artifact next to its checkpoint.
+
+    Mirrors auto_export_yolo_model / auto_export_sleap_model: co-located
+    artifact, signature-gated .runtime_meta.json sidecar, recipe-version tag.
+    """
+    model_path = Path(str(config.model_path))
+    artifact = _artifact_path_for(model_path, runtime_flavor)
+    signature = _vitpose_artifact_signature(str(model_path), runtime_flavor)
+    if artifact.exists() and artifact_meta_matches(artifact, signature):
+        return str(artifact.resolve())
+
+    model, _meta = load_finetuned_checkpoint(model_path)
+    model.eval()
+    if runtime_flavor == "coreml":
+        export_coreml(model, artifact)
+    elif runtime_flavor == "tensorrt":
+        onnx_path = model_path.with_suffix(".onnx")
+        export_onnx(model, onnx_path)
+        build_tensorrt_engine(onnx_path, artifact, fp16=False)
+    else:
+        raise ValueError(f"auto_export_vitpose_model: bad flavor {runtime_flavor!r}")
+    write_artifact_meta(artifact, signature)
+    return str(artifact.resolve())
