@@ -80,6 +80,48 @@ Out of scope:
 - **One typed source of truth.** `IdentityConfig` drives both UI and core; no scattered flat keys, no widget-attribute state.
 - **Clean break.** Legacy decision paths are deleted, not shimmed (the equivalence + identity gates are the safety net).
 
+## Directory Reorganization (prep, pure move)
+
+`core/identity/` has become a grab-bag: genuine identity-resolution code sits next to pose backends, individual-properties export, dataset generation, geometry, and classification model backends (some of which — head-tail — are orientation, not identity). Before any logic changes, the tree is reorganized under a `core/individual/` umbrella, with `identity/` narrowed to identity *resolution* only.
+
+**Target layout:**
+
+```
+core/individual/                      # umbrella: everything about one tracked individual
+├── identity/                         # identity RESOLUTION only
+│   ├── catalog.py  evidence.py  cache.py  calibration.py
+│   ├── substrate.py                  # NEW (Layer 3)
+│   ├── online.py                     # realtime causal filter
+│   └── offline.py                    # forward-backward smoothing + fragment solver
+│                                     #   (current fragment_solver.py folded in)
+├── classification/                   # model backends: cnn, apriltag, headtail, backend, errors
+├── pose/                             # pose backends + vitpose
+├── properties/                       # individual-properties cache/export
+├── dataset/                          # dataset generation: generator, oriented_video, naming
+└── geometry.py                       # shared individual geometry
+```
+
+**Old → new mapping:**
+
+| Current | New |
+|---|---|
+| `core/identity/{catalog,evidence,cache,calibration,online}.py` | `core/individual/identity/…` (same names) |
+| `core/identity/fragment_solver.py` | `core/individual/identity/offline.py` (+ smoothing) |
+| `core/identity/geometry.py` | `core/individual/geometry.py` |
+| `core/identity/classification/` | `core/individual/classification/` |
+| `core/identity/pose/` | `core/individual/pose/` |
+| `core/identity/properties/` | `core/individual/properties/` |
+| `core/identity/dataset/` | `core/individual/dataset/` |
+
+Rules:
+
+- **Behavior-preserving.** The move rewrites imports and paths only — no logic changes in the same commit. Run the full test suite; it must be green before and after.
+- The top-level `core/identity` → `core/individual` rename is being prepared by the maintainer; this plan coordinates the subfolder slotting and the import rewrites across `src/` and `tests/`.
+- Dependency-direction rules (CLAUDE.md) are unchanged: `core/individual/*` must not import from any app layer.
+- Path artifacts (cache filename signatures, model registry) must be checked so the rename does not silently invalidate on-disk caches.
+
+**All `core/identity/...` paths in the sections below refer to their post-move `core/individual/...` locations per this mapping.** The "Current State (verified at HEAD)" section above intentionally keeps the pre-move paths, since that is where the code lives today.
+
 ## Target Architecture
 
 ### Layer 0 — Config (persisted, typed, known before inference)
@@ -248,13 +290,14 @@ Safety net: the equivalence harness (positions byte-identical when identity infl
 
 Each phase is independently shippable and gated.
 
-- **Phase 0 — Typed config + persisted catalog.** Introduce `IdentityConfig`, `IdentityCatalogSpec`, structured factor keys; migrate `get_parameters_dict()` to derive from it. No behavior change. Catalog resolved once, persisted.
-- **Phase 1 — Calibration workflow (ClassKit integration).** Wire `TemperatureScaling.fit` into the `run_training` CNN path (fit on the retained `<dataset>/val` split, per factor); store T + weight-hash signature in the artifact metadata (checkpoint / `.v2meta.json` / `.multihead.json`) and surface via `ClassifierMetadata`; make `CNNConfig.calibration_temperature` fall back to artifact metadata. Add the ClassKit **Recalibrate** action and the CNN-import-dialog calibration status. Mandatory-calibration gate + runtime robustness knobs. Report ECE before/after.
-- **Phase 2 — Evidence as inference artifact.** `IdentityEvidenceStage` in `InferenceRunner` (batch + realtime); single factor→catalog mapping using true per-factor softmax; remove tracking-time emitter. Evidence cache written before tracking (non-realtime).
-- **Phase 3 — Shared substrate + realtime read-through.** Extract `substrate.py`; refactor `online.py` to read evidence and use substrate fusion/uniqueness.
-- **Phase 4 — Post-hoc self-sufficiency + smoothing.** Offline reads the evidence cache; add forward-backward smoothing; fragment solver uses substrate uniqueness. Post-hoc runs with realtime off. **This closes the honesty bug end-to-end.**
-- **Phase 5 — Provenance columns + UI reorg.** Split output columns; reorganize the three panels; correct tooltips.
-- **Phase 6 — Clean-break retirement.** Delete legacy paths once the identity + equivalence gates pass on MPS and CUDA.
+- **Phase 0 — Directory reorganization (pure move).** Slot subfolders under `core/individual/` per the mapping above; rewrite imports across `src/` and `tests/`; fold `fragment_solver.py` location into `identity/offline.py` (rename only, no logic change yet). Behavior-preserving; full test suite green before and after. Its own commit for clean bisect.
+- **Phase 1 — Typed config + persisted catalog.** Introduce `IdentityConfig`, `IdentityCatalogSpec`, structured factor keys; migrate `get_parameters_dict()` to derive from it. No behavior change. Catalog resolved once, persisted.
+- **Phase 2 — Calibration workflow (ClassKit integration).** Wire `TemperatureScaling.fit` into the `run_training` CNN path (fit on the retained `<dataset>/val` split, per factor); store T + weight-hash signature in the artifact metadata (checkpoint / `.v2meta.json` / `.multihead.json`) and surface via `ClassifierMetadata`; make `CNNConfig.calibration_temperature` fall back to artifact metadata. Add the ClassKit **Recalibrate** action and the CNN-import-dialog calibration status. Mandatory-calibration gate + runtime robustness knobs. Report ECE before/after.
+- **Phase 3 — Evidence as inference artifact.** `IdentityEvidenceStage` in `InferenceRunner` (batch + realtime); single factor→catalog mapping using true per-factor softmax; remove tracking-time emitter. Evidence cache written before tracking (non-realtime).
+- **Phase 4 — Shared substrate + realtime read-through.** Extract `substrate.py`; refactor `online.py` to read evidence and use substrate fusion/uniqueness.
+- **Phase 5 — Post-hoc self-sufficiency + smoothing.** Offline reads the evidence cache; add forward-backward smoothing; fragment solver uses substrate uniqueness. Post-hoc runs with realtime off. **This closes the honesty bug end-to-end.**
+- **Phase 6 — Provenance columns + UI reorg.** Split output columns; reorganize the three panels; correct tooltips.
+- **Phase 7 — Clean-break retirement.** Delete legacy paths once the identity + equivalence gates pass on MPS and CUDA.
 
 ## Testing & Verification
 
