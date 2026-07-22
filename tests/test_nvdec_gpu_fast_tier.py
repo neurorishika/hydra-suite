@@ -24,6 +24,32 @@ def test_should_use_nvdec_gpu_fast_only(monkeypatch):
     assert rt_mod._should_use_nvdec("gpu") is False
 
 
+def test_make_frame_source_cpu_reader_when_nvdec_off(monkeypatch, tmp_path, caplog):
+    """use_nvdec False -> CpuFrameReader, no NVDEC construction attempted."""
+    import logging
+
+    from hydra_suite.core.inference import sources as src
+
+    monkeypatch.setattr(
+        src,
+        "NvdecFrameReader",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not construct NVDEC")
+        ),
+    )
+    # Mock CpuFrameReader to not actually open a video file.
+    cpu_reader_mock = MagicMock(spec=src.CpuFrameReader)
+    monkeypatch.setattr(src, "CpuFrameReader", lambda *a, **k: cpu_reader_mock)
+
+    rt = type("RT", (), {"use_nvdec": False})()
+    fake_video = str(tmp_path / "clip.mp4")
+
+    with caplog.at_level(logging.INFO):
+        reader = src.make_frame_source(fake_video, rt, start_frame=0, end_frame=1)
+    assert reader is cpu_reader_mock
+    assert any("CpuFrameReader" in r.message for r in caplog.records)
+
+
 def test_run_direct_gpu_fast_tensorrt_takes_frames_list_path(monkeypatch):
     """gpu_fast: a DirectExecutorAdapter (TensorRT) must receive the raw CUDA
     frame list (its predict does its own letterbox); the manual GPU-letterbox

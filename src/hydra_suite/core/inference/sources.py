@@ -480,7 +480,7 @@ def make_frame_source(
                 start_frame=start_frame,
                 end_frame=end_frame,
             )
-            logger.debug("make_frame_source: using NvdecFrameReader for %s", video_path)
+            logger.info("make_frame_source: using NvdecFrameReader for %s", video_path)
             return reader
         except Exception as exc:
             logger.warning(
@@ -489,4 +489,5 @@ def make_frame_source(
                 exc,
             )
 
+    logger.info("make_frame_source: using CpuFrameReader for %s", video_path)
     return CpuFrameReader(video_path, start_frame=start_frame, end_frame=end_frame)
