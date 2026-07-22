@@ -133,6 +133,10 @@ class AugmentationProfile:
     saturation: float = 0.0
     brightness: float = 0.0
     contrast: float = 0.0
+    decode_color_sim: float = (
+        0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
+    )
+    resample_sim: float = 0.0  # 0=off; ~0.3 recommended. P(apply) alternate resampler.
     monochrome: bool = False
     args: dict[str, Any] = field(default_factory=dict)
     # Label-switching expansion rules.

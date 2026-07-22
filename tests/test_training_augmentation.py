@@ -70,3 +70,19 @@ def test_tiny_augmentation_monochrome_enforces_equal_channels():
     assert out.shape == img.shape
     assert np.array_equal(out[..., 0], out[..., 1])
     assert np.array_equal(out[..., 1], out[..., 2])
+
+
+def test_augmentation_profile_new_decode_fields_default_off_and_serialize():
+    from dataclasses import asdict
+
+    from hydra_suite.training.contracts import AugmentationProfile
+
+    p = AugmentationProfile()
+    assert p.decode_color_sim == 0.0
+    assert p.resample_sim == 0.0
+    d = asdict(p)
+    assert d["decode_color_sim"] == 0.0 and d["resample_sim"] == 0.0
+
+    p2 = AugmentationProfile(decode_color_sim=0.5, resample_sim=0.3)
+    assert asdict(p2)["decode_color_sim"] == 0.5
+    assert asdict(p2)["resample_sim"] == 0.3
