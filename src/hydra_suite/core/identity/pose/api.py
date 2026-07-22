@@ -156,4 +156,19 @@ def create_pose_backend_from_config(config: PoseRuntimeConfig) -> PoseInferenceB
         )
         return service_backend
 
+    if backend_family == "vitpose":
+        from .backends.vitpose import ViTPoseBackend
+
+        model_path = str(config.model_path).strip()
+        if not model_path:
+            raise RuntimeError("ViTPose backend requires a model_path (checkpoint)")
+        return ViTPoseBackend(
+            model_path=model_path,
+            device=effective_device,
+            runtime_flavor=runtime_flavor,
+            min_valid_conf=config.min_valid_conf,
+            keypoint_names=list(config.keypoint_names) or None,
+            batch_size=config.vitpose_batch,
+        )
+
     raise RuntimeError(f"Unsupported pose backend family: {backend_family}")

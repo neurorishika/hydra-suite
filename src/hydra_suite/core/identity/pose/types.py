@@ -40,6 +40,10 @@ class PoseRuntimeConfig:
     sleap_batch: int = 4
     sleap_max_instances: int = 1
     sleap_export_input_hw: Optional[Tuple[int, int]] = None
+    # --- vitpose-specific (flat, mirrors yolo_/sleap_) ---
+    vitpose_batch: int = 4
+    vitpose_variant: str = "auto"  # "auto" = infer from checkpoint
+    vitpose_num_keypoints: int = 0  # 0 = infer from checkpoint
     keypoint_names: List[str] = field(default_factory=list)
     skeleton_edges: List[Tuple[int, int]] = field(default_factory=list)
 
