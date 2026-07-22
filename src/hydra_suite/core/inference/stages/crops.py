@@ -333,6 +333,110 @@ def extract_classifier_crops_batch(
     )
 
 
+def extract_classifier_crops_gpu(
+    frame: "torch.Tensor | np.ndarray",
+    obb_result: OBBResult,
+    target_size: tuple[int, int],
+    aspect_ratio: float,
+    margin: float,
+    device: str,
+) -> "torch.Tensor":
+    """GPU-native analogue of :func:`extract_classifier_crops`.
+
+    Warps each OBB directly to the classifier input size ``(out_w, out_h)`` with a
+    single batched ``grid_sample`` on-device, using the SAME alignment affine the
+    CPU path feeds to ``cv2.warpAffine`` (``compute_alignment_affine(corners,
+    out_w, out_h, pad)`` — note ``aspect_ratio`` is unused here, matching the CPU
+    entry point). Returns ``(N, C, out_h, out_w)`` float32 on ``device`` in the
+    same BGR, ``[0, 1]`` convention as ``extract_classifier_crops_batch``'s tensor
+    (``crops.py`` ``/255`` path). Used only when the frame is a CUDA tensor (NVDEC
+    path); ``grid_sample`` != ``cv2`` bit-for-bit, so the CUDA pipeline's
+    acceptance gate is identity agreement, not byte-identity (see the design spec).
+    """
+    out_w, out_h = int(target_size[0]), int(target_size[1])
+    if isinstance(frame, np.ndarray):
+        frame = torch.from_numpy(frame.transpose(2, 0, 1)).float().div(255.0)
+    frame = frame.to(device)
+    if frame.dtype == torch.uint8:
+        frame = frame.float().div(255.0)
+    if frame.ndim == 4:
+        frame = frame.squeeze(0)  # (C, H, W)
+
+    n = obb_result.num_detections
+    n_ch = int(frame.shape[0])
+    if n == 0:
+        return torch.zeros((0, n_ch, out_h, out_w), dtype=torch.float32, device=device)
+
+    pad = max(0.0, float(margin) - 1.0)
+    m_aligns: list[np.ndarray] = []
+    for i in range(n):
+        try:
+            m_align, _ = compute_alignment_affine(
+                obb_result.corners[i], out_w, out_h, pad
+            )
+        except ValueError:
+            m_align = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
+        m_aligns.append(m_align)
+
+    return gpu_canonical_crop_batch(frame, m_aligns, out_w, out_h)
+
+
+def extract_classifier_crops_batch_gpu(
+    frames: list,
+    obb_results: list[OBBResult],
+    target_size: tuple[int, int],
+    aspect_ratio: float,
+    margin: float,
+    device: str,
+) -> CropBatch:
+    """GPU-native analogue of :func:`extract_classifier_crops_batch`.
+
+    Per-frame :func:`extract_classifier_crops_gpu`, concatenated into a
+    :class:`CropBatch` whose ``crops`` tensor stays on ``device`` (no host
+    round-trip). Field layout is identical to the CPU batch builder so downstream
+    ``select_frame`` / assembly is unchanged. ``target_size`` is ``(out_w, out_h)``.
+    """
+    out_w, out_h = int(target_size[0]), int(target_size[1])
+    crops_list: list[torch.Tensor] = []
+    det_ids: list[np.ndarray] = []
+    frame_idx_list: list[np.ndarray] = []
+    native_sizes_list: list[np.ndarray] = []
+
+    for frame, obb in zip(frames, obb_results):
+        if obb.detection_ids.shape[0] == 0:
+            continue
+        crops_list.append(
+            extract_classifier_crops_gpu(
+                frame, obb, target_size, aspect_ratio, margin, device
+            )
+        )
+        det_ids.append(obb.detection_ids)
+        frame_idx_list.append(
+            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
+        )
+        native_sizes_list.append(
+            np.full((obb.detection_ids.shape[0], 2), [out_h, out_w], np.int64)
+        )
+
+    if not crops_list:
+        empty = torch.zeros((0, 3, out_h, out_w), device=device)
+        return CropBatch(
+            empty,
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            {o.frame_idx: o for o in obb_results},
+            np.zeros((0, 2), np.int64),
+        )
+
+    return CropBatch(
+        crops=torch.cat(crops_list, dim=0),
+        detection_ids=np.concatenate(det_ids),
+        frame_index=np.concatenate(frame_idx_list),
+        obb_by_frame={o.frame_idx: o for o in obb_results},
+        native_sizes=np.concatenate(native_sizes_list),
+    )
+
+
 def _apply_foreign_mask_canonical_batch(
     crops: torch.Tensor,
     obb: OBBResult,
