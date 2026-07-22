@@ -220,3 +220,60 @@ def test_load_cnn_no_raise_when_not_tensor_on_cuda(monkeypatch, tmp_path):
     cfg = type("C", (), {"model_path": str(tmp_path / "m.json"), "label": "x"})()
     model = cnn_stage.load_cnn_model(cfg, rt)  # must NOT raise
     assert model.input_size == (128, 128)
+
+
+# ---- Task 5: stage routing (GPU path when tensor_on_cuda) --------------------
+
+
+def test_run_cnn_batch_routes_by_tensor_on_cuda(monkeypatch):
+    from hydra_suite.core.inference.stages import cnn as cnn_stage
+    from hydra_suite.core.inference.stages import crops as crops_mod
+
+    used = {"gpu": False, "cpu": False, "cuda_fwd": False, "numpy_fwd": False}
+
+    class _FakeBatch:
+        crops = torch.zeros((1, 3, 8, 8))
+        obb_by_frame = {0: _toy_obb(1)}
+
+        def select_frame(self, f):
+            return np.array([0])
+
+    monkeypatch.setattr(
+        crops_mod,
+        "extract_classifier_crops_batch_gpu",
+        lambda *a, **k: (used.__setitem__("gpu", True) or _FakeBatch()),
+    )
+    monkeypatch.setattr(
+        crops_mod,
+        "extract_classifier_crops_batch",
+        lambda *a, **k: (used.__setitem__("cpu", True) or _FakeBatch()),
+    )
+
+    class _Backend:
+        def predict_batch_cuda(self, crops, input_is_bgr=True):
+            used["cuda_fwd"] = True
+            return [[np.array([0.5, 0.5], np.float32)]]
+
+        def predict_batch(self, crops):
+            used["numpy_fwd"] = True
+            return [[np.array([0.5, 0.5], np.float32)]]
+
+    model = cnn_stage.CNNModel(
+        backend=_Backend(),
+        input_size=(8, 8),
+        factor_names=["f"],
+        factor_class_names=[["a", "b"]],
+    )
+    cfg = type("C", (), {"label": "x"})()
+
+    rt_gpu = type("RT", (), {"tensor_on_cuda": True, "device": "cpu"})()
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt_gpu)
+    assert used["gpu"] and used["cuda_fwd"]
+    assert not used["cpu"] and not used["numpy_fwd"]
+
+    for k in used:
+        used[k] = False
+    rt_cpu = type("RT", (), {"tensor_on_cuda": False, "device": "cpu"})()
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt_cpu)
+    assert used["cpu"] and used["numpy_fwd"]
+    assert not used["gpu"] and not used["cuda_fwd"]

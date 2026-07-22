@@ -256,24 +256,43 @@ def run_headtail_batch(
     then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_headtail_result (DRY with run_headtail).
     """
-    from .crops import extract_classifier_crops_batch
+    if getattr(runtime, "tensor_on_cuda", False):
+        # Pure-GPU path (NVDEC): warp + forward on-device, no frame D->H copy.
+        # floor-quantize to [0,255] 8-bit to match the cv2/uint8 reference regime
+        # (grid_sample != cv2 -> identity-agreement gate, not byte-identity).
+        from .crops import extract_classifier_crops_batch_gpu
 
-    batch = extract_classifier_crops_batch(
-        frames, obb_results, model.input_size, aspect_ratio, margin
-    )
-
-    # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for predict_batch.
-    # Single batched host transfer + vectorized uint8 quantization -- byte-identical
-    # to the former per-crop `.cpu().numpy()` loop (same values), one D->H copy
-    # instead of N.
-    n_total = batch.crops.shape[0]
-    if n_total:
-        hwc_all = np.ascontiguousarray(batch.crops.permute(0, 2, 3, 1).cpu().numpy())
-        stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-        np_crops: list[np.ndarray] = list(stacked)
-        all_probs = model.backend.predict_batch(np_crops)
+        batch = extract_classifier_crops_batch_gpu(
+            frames, obb_results, model.input_size, aspect_ratio, margin, runtime.device
+        )
+        n_total = batch.crops.shape[0]
+        if n_total:
+            cuda_crops = [
+                (batch.crops[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
+            ]
+            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=True)
+        else:
+            all_probs = []
     else:
-        all_probs = []
+        from .crops import extract_classifier_crops_batch
+
+        batch = extract_classifier_crops_batch(
+            frames, obb_results, model.input_size, aspect_ratio, margin
+        )
+        # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for
+        # predict_batch. Single batched host transfer + vectorized uint8
+        # quantization -- byte-identical to the former per-crop `.cpu().numpy()`
+        # loop (same values), one D->H copy instead of N.
+        n_total = batch.crops.shape[0]
+        if n_total:
+            hwc_all = np.ascontiguousarray(
+                batch.crops.permute(0, 2, 3, 1).cpu().numpy()
+            )
+            stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
+            np_crops: list[np.ndarray] = list(stacked)
+            all_probs = model.backend.predict_batch(np_crops)
+        else:
+            all_probs = []
 
     results: dict[int, HeadTailResult] = {}
     prob_offset = 0

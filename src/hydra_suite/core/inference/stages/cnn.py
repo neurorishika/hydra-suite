@@ -138,24 +138,45 @@ def run_cnn_batch(
     then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_cnn_result (DRY with run_cnn).
     """
-    from .crops import extract_classifier_crops_batch
+    if getattr(runtime, "tensor_on_cuda", False):
+        # Pure-GPU path (NVDEC): warp crops on-device and forward on-device, no
+        # frame device->host copy. predict_batch_cuda expects [0,255] CHW cuda
+        # tensors; floor-quantize to 8 bits so the input stays in the same regime
+        # as the cv2/uint8 reference (grid_sample != cv2, so the acceptance gate
+        # is identity agreement, not byte-identity -- see the design spec).
+        from .crops import extract_classifier_crops_batch_gpu
 
-    batch = extract_classifier_crops_batch(
-        frames, obb_results, model.input_size, aspect_ratio, margin
-    )
-
-    n_total = batch.crops.shape[0]
-    if n_total:
-        # Single batched host transfer + vectorized uint8 quantization. This is
-        # byte-identical to the former per-crop `.cpu().numpy()` loop (same
-        # values) but performs ONE device->host copy instead of N, cutting the
-        # per-crop sync overhead on dense frames.
-        hwc_all = np.ascontiguousarray(batch.crops.permute(0, 2, 3, 1).cpu().numpy())
-        stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-        np_crops: list[np.ndarray] = list(stacked)
-        all_probs = model.backend.predict_batch(np_crops)
+        batch = extract_classifier_crops_batch_gpu(
+            frames, obb_results, model.input_size, aspect_ratio, margin, runtime.device
+        )
+        n_total = batch.crops.shape[0]
+        if n_total:
+            cuda_crops = [
+                (batch.crops[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
+            ]
+            all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=True)
+        else:
+            all_probs = []
     else:
-        all_probs = []
+        from .crops import extract_classifier_crops_batch
+
+        batch = extract_classifier_crops_batch(
+            frames, obb_results, model.input_size, aspect_ratio, margin
+        )
+        n_total = batch.crops.shape[0]
+        if n_total:
+            # Single batched host transfer + vectorized uint8 quantization. This
+            # is byte-identical to the former per-crop `.cpu().numpy()` loop (same
+            # values) but performs ONE device->host copy instead of N, cutting the
+            # per-crop sync overhead on dense frames.
+            hwc_all = np.ascontiguousarray(
+                batch.crops.permute(0, 2, 3, 1).cpu().numpy()
+            )
+            stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
+            np_crops: list[np.ndarray] = list(stacked)
+            all_probs = model.backend.predict_batch(np_crops)
+        else:
+            all_probs = []
 
     results: dict[int, CNNResult] = {}
     prob_offset = 0
