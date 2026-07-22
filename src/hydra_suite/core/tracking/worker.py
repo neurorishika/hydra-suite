@@ -66,13 +66,6 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
-from hydra_suite.core.inference.cache.keys import (  # noqa: E402
-    bgsub_detection_cache_key,
-    video_signature,
-    with_video_signature,
-)
-from hydra_suite.core.inference.cache.store import DetectionCacheHandle  # noqa: E402
-
 # Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
 # pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
 from hydra_suite.core.inference.config import (  # noqa: E402
@@ -88,19 +81,6 @@ from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
     populate_live_pose_store,
     populate_live_tag_store,
 )
-
-
-def should_build_bgsub_detection_cache(
-    *, preview_mode: bool, backward_mode: bool
-) -> bool:
-    """Return True if a forward bg-sub run should read/write the shared detection cache.
-
-    Preview Mode must not touch it: the cache file is a single fixed path per
-    video (not qualified by frame range), and closing a handle always
-    overwrites it with only the current run's frames — so a short preview
-    range would silently truncate a full-range cache used by backward mode.
-    """
-    return not preview_mode
 
 
 def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
@@ -991,9 +971,6 @@ class TrackingEngineCore:
         inference_runner = None  # InferenceRunner for yolo_obb mode
         bgsub_runner = None  # InferenceRunner for background-subtraction mode
         detection_cache = None  # Legacy cache — only used for background subtraction
-        # Refactor-native detection cache for background subtraction: forward writes
-        # per-frame detections, backward replays them (parity with the OBB path).
-        bgsub_detection_cache = None
         use_cached_detections = False
         cached_frame_indices = set()
 
@@ -1121,79 +1098,90 @@ class TrackingEngineCore:
             # ── Background subtraction ───────────────────────────────────────
             # Detections are produced live in the forward loop (the adaptive
             # background model needs sequential frames, so there is no separate
-            # batch pass), and cached via the refactor-native DetectionCacheHandle
-            # so the backward pass can replay them — parity with the OBB path,
-            # which caches through InferenceRunner.
-            if should_build_bgsub_detection_cache(
-                preview_mode=self.preview_mode, backward_mode=self.backward_mode
-            ):
-                _cache_dir = self._resolve_cache_dir()
-                _cache_dir.mkdir(parents=True, exist_ok=True)
-                _bgsub_cache_path = _cache_dir / "bgsub_detection.npz"
-                _bgsub_key = with_video_signature(
-                    bgsub_detection_cache_key(BgSubConfig.from_params(p)),
-                    video_signature(self.video_path),
-                )
-                bgsub_detection_cache = DetectionCacheHandle(
-                    path=_bgsub_cache_path, key=_bgsub_key
-                )
+            # batch pass), and cached via InferenceRunner so the backward pass
+            # can replay them — parity with the OBB path.
+            #
+            # Build the InferenceConfig + resolve the cache dir ONCE, above the
+            # backward/forward split, so both branches share the identical
+            # config (Tasks 5-6 consume this for the unified cache path).
+            from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+            _compute_runtime = str(p.get("COMPUTE_RUNTIME", "cpu"))
+            _raw_tier = str(p.get("RUNTIME_TIER", "") or "").strip().lower()
+            _runtime_tier = (
+                _raw_tier
+                if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+                else migrate_runtime_to_tier({_compute_runtime})
+            )
+            bgsub_inference_config = InferenceConfig(
+                obb=None,
+                bgsub=BgSubConfig.from_params(p),
+                runtime_tier=_runtime_tier,
+                detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
+            )
+            _cache_dir = self._resolve_cache_dir()
+
             if self.backward_mode:
-                if (
-                    bgsub_detection_cache is None
-                    or not bgsub_detection_cache.is_valid()
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                bgsub_runner = InferenceRunner(
+                    bgsub_inference_config,
+                    cache_dir=_cache_dir,
+                    video_path=self.video_path,
+                    cache_only=True,
+                )
+                if not bgsub_runner.caches_all_valid() or not (
+                    bgsub_runner.detection_cache_covers_range(start_frame, end_frame)
                 ):
                     logger.error(
-                        "Backward tracking requires valid forward bg-sub detections "
-                        "at %s. Please run forward tracking first.",
-                        self._resolve_cache_dir() / "bgsub_detection.npz",
+                        "Backward tracking requires a valid forward bg-sub "
+                        "detection cache covering frames %d-%d at %s. Please run "
+                        "forward tracking over the full range first.",
+                        start_frame,
+                        end_frame,
+                        _cache_dir / "detection.npz",
                     )
+                    bgsub_runner.close()
                     cap.release()
                     self._emit_finished(False, [], [])
                     return
                 use_cached_detections = True
                 logger.info(
-                    "Backward pass: replaying cached bg-sub detections from %s",
-                    _bgsub_cache_path,
+                    "Backward pass: replaying cached bg-sub detections via "
+                    "InferenceRunner from %s",
+                    _cache_dir / "detection.npz",
                 )
             else:
-                # Forward bg-sub detection now runs through InferenceRunner's
-                # bgsub stage (owns lighting stabilization + background update +
-                # foreground mask + measure). Mirrors the yolo_obb branch's
-                # construction/tier resolution, but with cache_dir=None: the
-                # worker keeps its own DetectionCacheHandle (bgsub_detection_cache)
-                # for the backward replay, so the runner must NOT also open a
-                # detection cache. bg-sub is sequential, so run_realtime is driven
-                # in frame order below — never run_batch_pass.
-                from hydra_suite.core.inference.config import migrate_runtime_to_tier
-
-                _compute_runtime = str(p.get("COMPUTE_RUNTIME", "cpu"))
-                _raw_tier = str(p.get("RUNTIME_TIER", "") or "").strip().lower()
-                _runtime_tier = (
-                    _raw_tier
-                    if _raw_tier in {"cpu", "gpu", "gpu_fast"}
-                    else migrate_runtime_to_tier({_compute_runtime})
-                )
-                bgsub_inference_config = InferenceConfig(
-                    obb=None,
-                    bgsub=BgSubConfig.from_params(p),
-                    runtime_tier=_runtime_tier,
-                    detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
-                )
+                # Forward pass. The runner owns the detection cache exactly like
+                # the yolo_obb path. Preview mode uses cache_dir=None: the cache
+                # file is one fixed path per video (not qualified by frame range),
+                # so a short preview range must not write/truncate it.
+                _fwd_cache_dir = None if self.preview_mode else _cache_dir
+                if _fwd_cache_dir is not None:
+                    _fwd_cache_dir.mkdir(parents=True, exist_ok=True)
+                    # Best-effort remove the pre-unification hand-rolled cache so
+                    # it does not linger as a confusing orphan. Never fatal.
+                    try:
+                        (_fwd_cache_dir / "bgsub_detection.npz").unlink(missing_ok=True)
+                    except Exception:
+                        logger.debug(
+                            "Could not remove stale bgsub_detection.npz (non-fatal)",
+                            exc_info=True,
+                        )
                 bgsub_runner = InferenceRunner(
                     bgsub_inference_config,
-                    cache_dir=None,
+                    cache_dir=_fwd_cache_dir,
                     video_path=self.video_path,
                     cache_only=False,
                 )
-                if bgsub_detection_cache is not None:
+                if _fwd_cache_dir is not None:
                     logger.info(
-                        "Forward pass caching bg-sub detections to %s",
-                        _bgsub_cache_path,
+                        "Forward pass caching bg-sub detections via InferenceRunner "
+                        "to %s",
+                        _fwd_cache_dir / "detection.npz",
                     )
                 else:
                     logger.info(
-                        "Preview mode: skipping bg-sub detection cache to avoid "
-                        "truncating the full-range cache."
+                        "Preview mode: bg-sub runner has no cache (cache_dir=None)."
                     )
 
         # === RUN BATCHED INFERENCE PHASE (if applicable) ===
@@ -2257,10 +2245,11 @@ class TrackingEngineCore:
             elif (
                 use_cached_detections
                 and detection_method == "background_subtraction"
-                and bgsub_detection_cache is not None
+                and bgsub_runner is not None
             ):
                 # Backward pass: replay cached bg-sub detections (no live frame).
-                _obb = bgsub_detection_cache.read_frame(actual_frame_index)
+                _fr = bgsub_runner.load_frame(actual_frame_index)
+                _obb = _fr.obb if _fr is not None else None
                 if _obb is not None and _obb.num_detections > 0:
                     meas = frame_result_to_meas(_obb.centroids, _obb.angles)
                     sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
@@ -2346,17 +2335,6 @@ class TrackingEngineCore:
                 raw_heading_confidences = []
                 raw_directed_mask = []
                 raw_canonical_affines = None
-
-                # Cache this frame's detections so the backward pass can replay
-                # them. Every frame is written (even empty) so the cache covers the
-                # full range. The stage's OBBResult is written directly; its
-                # ellipse corners are unused by the replay path (which reads only
-                # meas/sizes/shapes/confidences/detection_ids).
-                if bgsub_detection_cache is not None:
-                    bgsub_detection_cache.write_frame(
-                        actual_frame_index,
-                        result=_obb,
-                    )
 
             elif (
                 detection_method == "yolo_obb" and frame is not None
@@ -4133,23 +4111,16 @@ class TrackingEngineCore:
                 # Backward pass or Phase 2: just close cache (read-only mode)
                 detection_cache.close()
 
-        # Flush the refactor-native bg-sub detection cache on the forward pass:
-        # close() writes the buffered per-frame detections to disk. We deliberately
-        # do NOT close on the backward pass — that handle was read-only, and close()
-        # would flush its empty buffer and overwrite the cache the forward pass wrote.
-        if bgsub_detection_cache is not None and not self.backward_mode:
-            bgsub_detection_cache.close()
-            logger.info("Background-subtraction detection cache saved")
-
         # Flush the InferenceRunner. On a realtime forward pass this writes the
         # per-frame detection/headtail/cnn/pose caches to disk so the backward pass
         # can replay them; close() is a no-op flush for read-only (backward) handles.
         if inference_runner is not None:
             inference_runner.close()
 
-        # Release the bg-sub runner's background model (numpy/CuPy arrays). It has
-        # no cache of its own (cache_dir=None), so close() is a resource release,
-        # not a flush — the worker's bgsub_detection_cache above owns persistence.
+        # Flush/close the bg-sub runner. On a forward pass with a cache_dir this
+        # writes the per-frame detection cache to disk (parity with yolo_obb); on
+        # preview (cache_dir=None) and backward (cache_only) it is a resource
+        # release / no-op flush.
         if bgsub_runner is not None:
             bgsub_runner.close()
 

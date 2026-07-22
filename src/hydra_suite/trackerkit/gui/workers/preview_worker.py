@@ -1,31 +1,24 @@
 """PreviewDetectionWorker — non-blocking single-frame detection preview."""
 
-import hashlib
 import logging
 import math
 import os
-import threading
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 
 import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
-from hydra_suite.core.inference.config import build_inference_config_from_params
+from hydra_suite.core.inference.config import (
+    BgSubConfig,
+    InferenceConfig,
+    build_inference_config_from_params,
+)
 from hydra_suite.core.inference.runner import InferenceRunner
 from hydra_suite.utils.pose_visualization import is_renderable_pose_keypoint
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Module-level background cache
-# ---------------------------------------------------------------------------
-
-_PREVIEW_BACKGROUND_CACHE_MAX_ENTRIES = 4
-_PREVIEW_BACKGROUND_CACHE = OrderedDict()
-_PREVIEW_BACKGROUND_CACHE_LOCK = threading.Lock()
-
 
 # ---------------------------------------------------------------------------
 # Local path helper (avoids circular import from main_window)
@@ -76,41 +69,8 @@ def resolve_model_path(model_path: object) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Region 1: preview background cache helpers
+# Region 1: preview background params
 # ---------------------------------------------------------------------------
-
-
-def _clear_preview_background_cache() -> None:
-    """Clear preview-only cached background models."""
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        _PREVIEW_BACKGROUND_CACHE.clear()
-
-
-def _hash_preview_roi_mask(roi_mask) -> str | None:
-    """Build a stable hash for the preview ROI mask."""
-    if roi_mask is None:
-        return None
-
-    mask = np.ascontiguousarray(roi_mask)
-    digest = hashlib.sha1()
-    digest.update(str(mask.shape).encode("ascii"))
-    digest.update(str(mask.dtype).encode("ascii"))
-    digest.update(memoryview(mask))
-    return digest.hexdigest()
-
-
-def _preview_background_cache_key(context: dict) -> tuple:
-    """Return the cache key for preview background priming inputs."""
-    return (
-        "preview-background-v1",
-        os.path.abspath(os.path.expanduser(str(context.get("video_path", "")))),
-        int(context.get("bg_prime_frames", 30)),
-        int(context.get("brightness", 0)),
-        round(float(context.get("contrast", 1.0)), 6),
-        round(float(context.get("gamma", 1.0)), 6),
-        round(float(context.get("resize_factor", 1.0)), 6),
-        _hash_preview_roi_mask(context.get("roi_mask")),
-    )
 
 
 def _preview_object_size_pixels(context: dict, key: str, default: float) -> int:
@@ -156,70 +116,27 @@ def _build_preview_background_params(context: dict) -> dict:
     }
 
 
-def _get_cached_preview_background_state(context: dict) -> dict | None:
-    """Return a copy of cached preview background state if available."""
-    cache_key = _preview_background_cache_key(context)
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        cached_state = _PREVIEW_BACKGROUND_CACHE.get(cache_key)
-        if cached_state is None:
-            return None
-        _PREVIEW_BACKGROUND_CACHE.move_to_end(cache_key)
-        return {
-            "lightest_background": cached_state["lightest_background"].copy(),
-            "adaptive_background": cached_state["adaptive_background"].copy(),
-            "reference_intensity": cached_state["reference_intensity"],
-        }
+def _preview_build_bgsub_params(context: dict, use_detection_filters: bool) -> dict:
+    """Assemble an UPPER_SNAKE bg-sub param dict for ``BgSubConfig.from_params``.
 
+    Reuses the existing preview bg-sub param mapping and layers on the two
+    knobs the InferenceRunner bg-sub stage reads that the raw mapping omits:
 
-def _store_preview_background_state(context: dict, bg_model) -> None:
-    """Store a copy of preview background state for reuse across previews."""
-    if bg_model.lightest_background is None or bg_model.adaptive_background is None:
-        return
-
-    cache_key = _preview_background_cache_key(context)
-    cache_entry = {
-        "lightest_background": bg_model.lightest_background.copy(),
-        "adaptive_background": bg_model.adaptive_background.copy(),
-        "reference_intensity": bg_model.reference_intensity,
-    }
-
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        _PREVIEW_BACKGROUND_CACHE[cache_key] = cache_entry
-        _PREVIEW_BACKGROUND_CACHE.move_to_end(cache_key)
-        while len(_PREVIEW_BACKGROUND_CACHE) > _PREVIEW_BACKGROUND_CACHE_MAX_ENTRIES:
-            _PREVIEW_BACKGROUND_CACHE.popitem(last=False)
-
-
-def _build_preview_background_model(context: dict):
-    """Build or restore a preview-only primed background model."""
-    from hydra_suite.core.background.model import BackgroundModel
-
-    bg_params = _build_preview_background_params(context)
-    bg_model = BackgroundModel(bg_params)
-
-    cached_state = _get_cached_preview_background_state(context)
-    if cached_state is not None:
-        bg_model.lightest_background = cached_state["lightest_background"]
-        bg_model.adaptive_background = cached_state["adaptive_background"]
-        bg_model.reference_intensity = cached_state["reference_intensity"]
-        logger.info("Reusing cached background model for test detection")
-        return bg_model, bg_params
-
-    logger.info("Building background model for test detection...")
-    cap = cv2.VideoCapture(str(context.get("video_path", "")))
-    if not cap.isOpened():
-        raise RuntimeError("Cannot open video for background priming")
-
-    try:
-        bg_model.prime_background(cap)
-    finally:
-        cap.release()
-
-    if bg_model.lightest_background is None:
-        raise RuntimeError("Failed to build background model")
-
-    _store_preview_background_state(context, bg_model)
-    return bg_model, bg_params
+    * ``ENABLE_SIZE_FILTERING`` — the ``BackgroundMeasurer`` only applies the
+      MIN/MAX_OBJECT_SIZE window when this is set (measure.py:231). Toggling it
+      off is how ``use_detection_filters=False`` yields the unfiltered set;
+      MIN_CONTOUR_AREA still applies in both modes (measure.py:210), matching
+      the old preview loop and production. Aspect-ratio filtering the old
+      preview loop did is intentionally dropped — the production measurer has
+      no such filter.
+    * ``RUNTIME_TIER`` — the sole runtime knob; bg-sub only uses it to pick the
+      grayscale/adjustment device, but the config carries it for parity.
+    """
+    params = _build_preview_background_params(context)
+    params["ENABLE_SIZE_FILTERING"] = bool(use_detection_filters)
+    _tier = str(context.get("runtime_tier", "") or "").strip().lower()
+    params["RUNTIME_TIER"] = _tier if _tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
+    return params
 
 
 # ---------------------------------------------------------------------------
@@ -355,120 +272,99 @@ def _preview_resize_frame(frame_bgr, test_frame, resize_f):
     return frame_bgr, test_frame
 
 
-def _preview_bg_size_thresholds(context, resize_f, use_detection_filters):
-    reference_body_size = float(context.get("reference_body_size", 50.0))
-    reference_body_area = math.pi * (reference_body_size / 2.0) ** 2
-    scaled_body_area = reference_body_area * (resize_f**2)
-    apply_ar = bool(
-        use_detection_filters and context.get("enable_aspect_ratio_filtering", False)
-    )
-    if use_detection_filters:
-        min_size_px2 = float(context.get("min_object_size", 0.0)) * scaled_body_area
-        max_size_px2 = float(context.get("max_object_size", 999.0)) * scaled_body_area
-    else:
-        min_size_px2 = 0.0
-        max_size_px2 = float("inf")
-    ref_ar = float(context.get("reference_aspect_ratio", 2.0))
-    min_ar = ref_ar * float(context.get("min_aspect_ratio_multiplier", 0.5))
-    max_ar = ref_ar * float(context.get("max_aspect_ratio_multiplier", 2.0))
-    return min_size_px2, max_size_px2, apply_ar, min_ar, max_ar
-
-
 def _preview_run_bg_subtraction(
     frame_bgr, test_frame, context, resize_f, use_detection_filters
 ):
-    from hydra_suite.core.background.measure import BackgroundMeasurer
-    from hydra_suite.utils.image_processing import apply_image_adjustments
+    """Run bg-sub preview detection through the shared InferenceRunner stage.
 
-    bg_model, bg_params = _build_preview_background_model(context)
+    Behaviour matches PRODUCTION bg-sub (worker.py), not the old hand-rolled
+    preview loop: the runner primes the background from the video on each call
+    (there is no cross-preview background cache anymore), applies lighting
+    stabilization, and filters via BackgroundMeasurer. See the plan's Slice 1
+    acceptance note.
+    """
     frame_to_process, test_frame = _preview_resize_frame(
         frame_bgr, test_frame, resize_f
     )
 
-    gray = cv2.cvtColor(frame_to_process, cv2.COLOR_BGR2GRAY)
-    gray = apply_image_adjustments(
-        gray,
-        bg_params["BRIGHTNESS"],
-        bg_params["CONTRAST"],
-        bg_params["GAMMA"],
-        use_gpu=False,
+    params = _preview_build_bgsub_params(context, use_detection_filters)
+    cfg = InferenceConfig(
+        obb=None,
+        bgsub=BgSubConfig.from_params(params),
+        runtime_tier=params["RUNTIME_TIER"],
     )
 
-    roi_for_test = bg_params["ROI_MASK"]
-    if roi_for_test is not None and resize_f < 1.0:
-        roi_for_test = cv2.resize(
-            roi_for_test,
-            (gray.shape[1], gray.shape[0]),
+    roi_for_bgsub = context.get("roi_mask")
+    if roi_for_bgsub is not None and resize_f < 1.0:
+        roi_for_bgsub = cv2.resize(
+            roi_for_bgsub,
+            (frame_to_process.shape[1], frame_to_process.shape[0]),
             interpolation=cv2.INTER_NEAREST,
         )
 
-    # Background selection is now internal to BackgroundModel via its
-    # convergence latch; the preview shows whatever the model would use.
-    bg_u8 = bg_model.update_and_get_background(gray, roi_mask=None)
-    if bg_u8 is None:
-        bg_u8 = cv2.convertScaleAbs(bg_model.lightest_background)
-    fg_mask = bg_model.generate_foreground_mask(gray, bg_u8)
+    logger.info("Running bg-sub preview via InferenceRunner.run_realtime")
 
-    # Apply ROI mask to foreground mask (not to gray) to match the
-    # production tracking pipeline in worker.py.
-    if roi_for_test is not None:
-        fg_mask = cv2.bitwise_and(fg_mask, fg_mask, mask=roi_for_test)
-
-    # Apply conservative split to separate merged blobs, matching the
-    # production pipeline in worker.py.
-    if bg_params.get("ENABLE_CONSERVATIVE_SPLIT", True):
-        det = BackgroundMeasurer(bg_params)
-        fg_mask = det.apply_conservative_split(fg_mask, gray, bg_u8)
-
-    cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    min_contour = float(context.get("min_contour", 50.0))
-    min_size_px2, max_size_px2, apply_ar, min_ar, max_ar = _preview_bg_size_thresholds(
-        context, resize_f, use_detection_filters
+    runner = InferenceRunner(
+        cfg, cache_dir=None, video_path=str(context.get("video_path", "")) or None
     )
+    try:
+        fr = runner.run_realtime(frame_to_process, roi_mask=roi_for_bgsub)
 
-    detections = []
-    detected_dimensions = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        if area < min_contour or len(c) < 5:
-            continue
-        (cx, cy), (ax1, ax2), ang = cv2.fitEllipse(c)
-        major_axis = max(ax1, ax2)
-        minor_axis = min(ax1, ax2)
-        aspect_ratio = (
-            float(major_axis) / float(minor_axis)
-            if minor_axis and float(minor_axis) > 0.0
-            else float("inf")
+        obb = getattr(fr, "obb", None)
+        keep = list(getattr(fr, "filtered_indices", []) or [])
+        if obb is None:
+            keep = []
+
+        detections = []
+        detected_dimensions = []
+        for i in keep:
+            cx, cy = float(obb.centroids[i, 0]), float(obb.centroids[i, 1])
+            corners = np.asarray(obb.corners[i], dtype=np.float32)
+            major_axis = float(np.linalg.norm(corners[1] - corners[0]))
+            minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
+            if major_axis < minor_axis:
+                major_axis, minor_axis = minor_axis, major_axis
+            ang = float(np.degrees(obb.angles[i]))
+            area = float(obb.sizes[i])
+            detections.append(((cx, cy), (major_axis, minor_axis), ang, area))
+            detected_dimensions.append((major_axis, minor_axis))
+            cv2.ellipse(
+                test_frame,
+                ((int(cx), int(cy)), (int(major_axis), int(minor_axis)), ang),
+                (0, 255, 0),
+                2,
+            )
+            cv2.circle(test_frame, (int(cx), int(cy)), 3, (0, 0, 255), -1)
+
+        # FG / BG thumbnails come straight from what the stage detected on.
+        fg_mask = getattr(fr, "fg_mask", None)
+        bg_u8 = getattr(fr, "bg_u8", None)
+        if fg_mask is not None:
+            small_fg = cv2.resize(fg_mask, (0, 0), fx=0.3, fy=0.3)
+            test_frame[0 : small_fg.shape[0], 0 : small_fg.shape[1]] = cv2.cvtColor(
+                small_fg, cv2.COLOR_GRAY2BGR
+            )
+        if bg_u8 is not None:
+            small_bg = cv2.resize(bg_u8, (0, 0), fx=0.3, fy=0.3)
+            bg_bgr = cv2.cvtColor(small_bg, cv2.COLOR_GRAY2BGR)
+            test_frame[0 : bg_bgr.shape[0], -bg_bgr.shape[1] :] = bg_bgr
+
+        prime_frames = params.get("BACKGROUND_PRIME_FRAMES", 0)
+        cv2.putText(
+            test_frame,
+            f"Detections: {len(detections)} (BG from {prime_frames} frames)",
+            (10, test_frame.shape[0] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2,
         )
-        if use_detection_filters and not (min_size_px2 <= area <= max_size_px2):
-            continue
-        if apply_ar and not (min_ar <= aspect_ratio <= max_ar):
-            continue
-        detections.append(((cx, cy), (ax1, ax2), ang, area))
-        detected_dimensions.append((major_axis, minor_axis))
-        cv2.ellipse(
-            test_frame, ((int(cx), int(cy)), (int(ax1), int(ax2)), ang), (0, 255, 0), 2
-        )
-        cv2.circle(test_frame, (int(cx), int(cy)), 3, (0, 0, 255), -1)
-
-    small_fg = cv2.resize(fg_mask, (0, 0), fx=0.3, fy=0.3)
-    test_frame[0 : small_fg.shape[0], 0 : small_fg.shape[1]] = cv2.cvtColor(
-        small_fg, cv2.COLOR_GRAY2BGR
-    )
-    small_bg = cv2.resize(bg_u8, (0, 0), fx=0.3, fy=0.3)
-    bg_bgr = cv2.cvtColor(small_bg, cv2.COLOR_GRAY2BGR)
-    test_frame[0 : bg_bgr.shape[0], -bg_bgr.shape[1] :] = bg_bgr
-
-    cv2.putText(
-        test_frame,
-        f"Detections: {len(detections)} (BG from {bg_params['BACKGROUND_PRIME_FRAMES']} frames)",
-        (10, test_frame.shape[0] - 10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 255),
-        2,
-    )
-    return detections, detected_dimensions, test_frame
+        return detections, detected_dimensions, test_frame
+    finally:
+        try:
+            runner.close()
+        except Exception:
+            pass
 
 
 def _preview_build_yolo_params(context, resize_f, use_detection_filters):
