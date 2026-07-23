@@ -594,7 +594,30 @@ def _load_direct_executor(
                 f"Provide a valid {_artifact_suffix(runtime)} file or use a .pt "
                 f"source with auto_export=True."
             )
-        imgsz = _DEFAULT_IMGSZ
+        # Resolve the input size for a prebuilt artifact: explicit override wins,
+        # else the JSON freshness sidecar written at export time, else fail loudly
+        # rather than silently letterboxing at the wrong size (H4).
+        if imgsz_override and int(imgsz_override) > 0:
+            imgsz = int(imgsz_override)
+        else:
+            meta = _meta_path(resolved)
+            recorded = None
+            if meta.exists():
+                try:
+                    recorded = int(
+                        json.loads(meta.read_text(encoding="utf-8")).get("imgsz", 0)
+                    )
+                except Exception:
+                    recorded = None
+            if recorded and recorded > 0:
+                imgsz = recorded
+            else:
+                raise ArtifactExportError(
+                    f"Cannot determine input imgsz for prebuilt artifact {resolved.name}: "
+                    f"no freshness sidecar recording it and no imgsz_override given. "
+                    f"Pass imgsz_override (the size the engine was built at) or supply "
+                    f"the .pt source with auto_export=True."
+                )
         executor = _create_direct_executor(
             runtime=runtime,
             artifact_path=resolved,

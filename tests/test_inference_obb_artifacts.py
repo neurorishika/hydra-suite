@@ -178,11 +178,35 @@ def test_explicit_engine_path_used_directly(fake_loader, tmp_path):
     """A user-supplied .engine path is used as-is (no export, no .pt loading)."""
     engine = tmp_path / "prebuilt.engine"
     engine.write_bytes(b"prebuilt")
-    adapter = load_obb_executor(str(engine), "tensorrt", auto_export=False)
+    adapter = load_obb_executor(
+        str(engine), "tensorrt", auto_export=False, imgsz_override=1024
+    )
     assert isinstance(adapter._executor, _FakeExecutor)
     assert fake_loader["export"] == 0
     assert fake_loader["torch_load"] == 0
     assert adapter._executor.runtime == "tensorrt"
+    assert adapter._executor.imgsz == 1024
+
+
+def test_explicit_engine_without_imgsz_or_meta_raises(fake_loader, tmp_path):
+    """No imgsz_override + no freshness sidecar must fail loudly, never silently 640."""
+    engine = tmp_path / "prebuilt.engine"
+    engine.write_bytes(b"prebuilt")
+    with pytest.raises(ArtifactExportError) as exc:
+        load_obb_executor(str(engine), "tensorrt", auto_export=False)
+    assert "imgsz" in str(exc.value).lower()
+    assert fake_loader["executor"] == 0
+
+
+def test_explicit_engine_reads_imgsz_from_meta_sidecar(fake_loader, tmp_path):
+    """Falls back to the JSON freshness sidecar recorded at export time."""
+    engine = tmp_path / "prebuilt.engine"
+    engine.write_bytes(b"prebuilt")
+    ra._meta_path(engine).write_text(
+        '{"source_mtime_ns": 0, "imgsz": 1024}', encoding="utf-8"
+    )
+    adapter = load_obb_executor(str(engine), "tensorrt", auto_export=False)
+    assert adapter._executor.imgsz == 1024
 
 
 def test_explicit_onnx_path_with_onnx_cpu_raises_unsupported(fake_loader, tmp_path):
