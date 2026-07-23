@@ -270,7 +270,17 @@ def _create_direct_executor(
 
 
 def _direct_runtime_name(compute_runtime: str) -> str:
-    """Map a compute-runtime to the direct-executor runtime name."""
+    """Map a compute-runtime to the direct-executor runtime name.
+
+    The inference-stage pipeline only ever reaches a direct executor on the
+    gpu_fast tier, so this deliberately emits ``"tensorrt"`` exclusively (the
+    runtime-tier contract is cpu->cpu torch, gpu->cuda/mps native torch,
+    gpu_fast->tensorrt/coreml). The ``"onnx"`` branches of
+    ``create_direct_{obb,detect}_executor`` in ``direct_executors`` are NOT
+    reachable through this path — they exist only for the diagnostic tools
+    (``tools/diag_*``, ``tools/compare_runtimes.py``). Anything other than a
+    TensorRT runtime here is a programming error, hence the raise.
+    """
     if compute_runtime in _TENSORRT_RUNTIMES:
         return "tensorrt"
     raise ArtifactExportError(
