@@ -38,8 +38,8 @@ run_obb(frames, models, config, runtime)
       1. plan = plan_slices(frame_hw, slice_cfg, imgsz, roi_mask)   # memoized per video
       2. flatten: [(frame_idx, slice_idx, tile)] across the whole frame window
       3. chunk at the TILE-chunk size → existing predict + per-task extract path, UNCHANGED
-      4. offset-remap each tile's OBBResult into frame coordinates (+= tile x0,y0)
-      5. group by frame_idx → concatenate → merge policy → one OBBResult per frame
+      4. offset-remap each tile's detections into frame coordinates (+= tile x0,y0)
+      5. group by frame_idx → concatenate → merge (policy × backend) → one result per frame
       6. existing _apply_raw_detection_cap; downstream filtering UNCHANGED
 ```
 
@@ -49,11 +49,10 @@ untouched. `DirectExecutorAdapter` (TRT/CoreML) also works unchanged — it stil
 plain list of images. **Segment gains recall**: the rotated-rect kernel sees mask crops at
 tile resolution instead of a downscaled full-frame mask.
 
-**Deliberate tradeoff — sliced path returns `OBBResult`, never `_RawOBBTensors`.** Offsets
-and concatenation stay on-device where possible, but the merge needs cv2 polygons, so each
-frame materializes to CPU once. `filter_raw` already dispatches on result type, so
-downstream is unaffected (it takes the numpy filter path). Since slicing already costs N×
-forward passes, one CPU sync per frame is negligible.
+**Return type is conditional, not always `OBBResult`.** `filter_raw` already dispatches on
+result type (`_RawOBBTensors` → on-device gates; `OBBResult` → numpy), so the sliced path
+returns whichever preserves the most on-device work for the active runtime — see §5e. The
+sync is minimized (band-only) rather than materializing every raw tile detection.
 
 **Invariant:** `enabled=False` ⇒ `run_obb` behaves exactly as pre-feature `main`
 (the feature is dead code behind the dispatch check), producing byte-identical output.
@@ -79,27 +78,51 @@ each axis is shifted back to sit flush with the frame edge (no runt tile). Then:
 - **Optional full-frame pass** (`perform_standard_pred`, default off): append one
   full-frame entry per frame to catch objects larger than a tile.
 
-## 4. Merge policies
+## 4. Merge — policy × metric × backend
 
-`merge_policy ∈ {nms, nmm, greedy_nmm}` × `merge_metric ∈ {iou, ios}` × `merge_threshold`.
+Three orthogonal knobs:
+- `merge_policy ∈ {nms, nmm, greedy_nmm}`
+- `merge_metric ∈ {iou, ios}` — `iou = inter/union`; `ios = inter/min(area₁,area₂)`
+- `merge_backend ∈ {cv2, gpu}` — *where* the geometry runs (see below)
 
-Reuses the existing `_obb_iou_corners` / convex-hull machinery, generalized over a metric:
-- `iou` = `inter / union` (existing).
-- `ios` = `inter / min(area₁, area₂)` (one-line sibling).
+Merge semantics (backend-independent):
+- **`nms`**: greedy suppression, preserves raw model geometry.
+- **`nmm` / `greedy_nmm`**: non-maximum *merging* — union overlapping members into one OBB.
+  Confidence = max, class = top scorer.
 
-Merge semantics:
-- **`nms`**: greedy suppression (existing behavior), preserves raw model geometry.
-- **`nmm` / `greedy_nmm`**: non-maximum *merging* — union overlapping members. OBB analogue
-  of SAHI's box-union: stack member corner sets → `cv2.minAreaRect` → renormalize through
-  existing `_normalize_obb_geometry` + `_corners_from_xywhr`; confidence = max, class = top
-  scorer.
+**Default: `greedy_nmm` + `ios` + `0.5`** (SAHI's detection default). Rationale: an animal
+straddling a tile boundary yields two *truncated* OBBs whose IoU is low (NMS keeps both as
+duplicates) but whose IoS is high — merging unions them into one correct box. `nms` remains
+available for users who want untouched model geometry. `overlap == 0` skips merge entirely.
 
-**Default: `greedy_nmm` + `ios` + `0.5`** (SAHI's detection default). Rationale for this
-codebase: an animal straddling a tile boundary yields two *truncated* OBBs whose IoU is low
-(NMS keeps both as duplicates) but whose IoS is high — merging unions them into one correct
-box. `nms` remains available for users who want untouched model geometry.
+### 4a. Pluggable merge backend
 
-`overlap == 0` skips the merge stage entirely.
+The merge is a dispatch seam (`merge(policy, metric, corners, conf, cls) → OBBResult`) with
+two interchangeable implementations validated against each other:
+
+- **`cv2`** (default, all six paths, correctness oracle): reuses the existing
+  `_obb_iou_corners` / convex-hull machinery generalized over the metric; union =
+  `cv2.minAreaRect` of stacked member corners, renormalized through existing
+  `_normalize_obb_geometry` + `_corners_from_xywhr`. Geometry is consistent with the
+  downstream tracking-time cv2 NMS.
+- **`gpu`** (opt-in; auto-selected only on the native-cuda `_RawOBBTensors` path): torch-only,
+  no cv2. Three parts:
+  1. **Pairwise overlap matrix** (IoU/IoS) over band members — *new* vectorized rotated-box
+     intersection-area (batched Sutherland–Hodgman polygon clipping), N×N on device.
+  2. **Greedy grouping** — compute the N×N matrix on GPU, sync only that small float matrix,
+     run the sequential absorption loop on CPU (pure index bookkeeping, no geometry crosses),
+     then unions back on GPU.
+  3. **Union** — reuse the branch's GPU angle-search kernel
+     (`utils/obb_from_mask.py:rotated_rect_from_masks` core: project a point set onto
+     `num_angles` axes → tightest rotated rect, sub-grid refined), fed member *corners*
+     instead of mask pixels. Runs on CUDA and MPS.
+
+**Scope honesty:** the `gpu` backend benefits only the native-cuda path (the other five are
+already CPU-numpy), and the band pre-filter (§5d) already caps the merge to a small subset
+while forward passes dominate ~20× — so its win is real but bounded. It is included in v1
+because the branch already provides the union primitive; `cv2` stays the default and the
+test oracle. Since sliced inference is a *new* feature with no legacy byte-parity contract,
+the `gpu` backend need only match `cv2` within tolerance, not bit-for-bit.
 
 ## 5. Efficiency across all six paths (tier × device)
 
@@ -147,6 +170,29 @@ everything else passes through untouched. Exact, not approximate. At 0.2 overlap
 <20% of detections enter the quadratic stage. The existing AABB pre-check inside `_obb_nms`
 still applies on top. `overlap == 0` ⇒ merge skipped.
 
+### 5e. Conditional return type & minimal sync (native-cuda path)
+
+`_RawOBBTensors` exists **only** on the native-cuda (`gpu` tier, torch backend) path —
+`tensor_on_cuda = cuda_mode and gpu_native` (`runtime.py:139`). TensorRT/CoreML (`gpu_fast`)
+and cpu/mps already return CPU numpy, so there is no roundtrip to preserve on those five
+paths: the sliced path returns `OBBResult` for them at no extra cost.
+
+On the native-cuda path the sliced path preserves `_RawOBBTensors` as far as possible:
+- **`overlap == 0` (or `merge_policy == nms` with no cross-tile union):** no merge is needed.
+  Remap (`+= x0,y0`) and concat are pure on-device ops → return a concatenated
+  `_RawOBBTensors`; the existing `filter_from_tensors` still gates on-device and syncs only
+  survivors, exactly as the non-sliced path does today. Zero regression.
+- **`overlap > 0` with merging:** keep remap + concat + the cheap gates (conf-floor,
+  geometry-validity, ROI) + overlap-band classification **on device**. Detections in a
+  tile's *exclusive* region cannot have a cross-tile duplicate, so they flow straight into
+  `filter_from_tensors` untouched. Only the overlap-band members round-trip for the merge —
+  and with `merge_backend == gpu` even those stay on device (only the small N×N matrix syncs,
+  §4a). The merged band results are concatenated back with the on-device exclusive-region
+  survivors. This is the minimal possible sync, not a full materialization.
+
+The merge (whichever backend) runs **before caching** — its threshold is in the cache key
+(§7) — so it is part of raw-detection production, not the re-tunable filtering stage.
+
 ## 6. Config schema
 
 New dataclass in `core/inference/config.py`, nested on `OBBDirectConfig`:
@@ -167,6 +213,7 @@ class SliceConfig:
     merge_policy: Literal["nms", "nmm", "greedy_nmm"] = "greedy_nmm"
     merge_metric: Literal["iou", "ios"] = "ios"
     merge_threshold: float = 0.5
+    merge_backend: Literal["cv2", "gpu"] = "cv2"   # gpu auto-used only on native-cuda
     # cost
     perform_standard_pred: bool = False   # extra full-frame pass
 ```
@@ -191,9 +238,10 @@ Mirrors how `feature/obb-direct-detect-segment` wired `combo_yolo_direct_task`:
   enabled only in direct mode. Persisted through `ConfigOrchestrator` (`get_cfg` load, save
   dict, and the `UPPER_SNAKE` runtime dict).
 - **Advanced config (`advanced_config.json`):** `slice_overlap`, `slice_merge_policy`,
-  `slice_merge_metric`, `slice_merge_threshold`, `slice_object_tile_fraction`,
-  `slice_perform_standard_pred`, `slice_height`, `slice_width` — threaded via `worker.py`'s
-  param dict exactly like the branch's `obb_seg_*` kernel knobs.
+  `slice_merge_metric`, `slice_merge_threshold`, `slice_merge_backend`,
+  `slice_object_tile_fraction`, `slice_perform_standard_pred`, `slice_height`,
+  `slice_width` — threaded via `worker.py`'s param dict exactly like the branch's
+  `obb_seg_*` kernel knobs.
 - **Preview worker:** "Test Detection" already routes through `_run_direct`; because slicing
   lives inside `run_obb`, the preview shows sliced results with no extra wiring.
 
@@ -204,6 +252,9 @@ Mirrors how `feature/obb-direct-detect-segment` wired `combo_yolo_direct_task`:
 - **Remap / merge:** straddling detection → correct frame coords; `nms` vs `nmm` vs
   `greedy_nmm`; `iou` vs `ios` on a truncated-overlap pair; overlap-band pre-filter selects
   the right subset; union box == `minAreaRect` of members.
+- **Merge backend equivalence:** `gpu` backend matches `cv2` (the oracle) within tolerance on
+  the pairwise matrix, grouping, and union geometry, across randomized OBB sets; degenerate
+  cases (single member, collinear corners, zero-area).
 - **Task coverage:** `obb` / `detect`(fixed-angle) / `segment`(mask) each through the sliced
   path (segment via the CoreML/TRT smoke-test doubles the branch already ships).
 - **Path coverage:** cpu numpy; a fake CUDA-tensor frame source; a `DirectExecutorAdapter`
@@ -218,7 +269,10 @@ Mirrors how `feature/obb-direct-detect-segment` wired `combo_yolo_direct_task`:
    platforms) and its detection cache key is unchanged.
 2. Slicing works on all three tasks (`obb`/`detect`/`segment`) and all six tier×device
    paths, with the exact-tile fast path verified resample-free.
-3. Merge policy / metric / threshold, geometry mode, overlap, and full-frame toggle are all
-   user-configurable (panel toggle + advanced config), defaulting to
-   `greedy_nmm` / `ios` / `0.5` / `auto_model` / `0.2` / off.
+3. Merge policy / metric / threshold / backend, geometry mode, overlap, and full-frame
+   toggle are all user-configurable (panel toggle + advanced config), defaulting to
+   `greedy_nmm` / `ios` / `0.5` / `cv2` / `auto_model` / `0.2` / off.
 4. TensorRT engine batch profile is sized from the tile-chunk size, not window depth.
+5. Native-cuda path preserves `_RawOBBTensors` when `overlap == 0`; when merging, only the
+   overlap band syncs (or, with `merge_backend == gpu`, only the N×N matrix). The `gpu`
+   merge backend matches the `cv2` oracle within tolerance.
