@@ -108,9 +108,9 @@ def test_coreml_segment_obb_smoke(tmp_path):
         cuda_mode=False,
         device="mps",
         use_nvdec=False,
-        default_runtime="cpu",
         tensor_on_cuda=False,
         coreml_mode=True,
+        requested_gpu=True,
     )
     # runtime_to_compute_runtime(runtime) == "coreml" for this RuntimeContext
     # -> load_obb_models routes to load_obb_executor(..., "coreml", ...) ->
@@ -122,22 +122,20 @@ def test_coreml_segment_obb_smoke(tmp_path):
             models = load_obb_models(config, runtime, batch_size=1)
         except ArtifactExportError as exc:
             pytest.skip(f"CoreML export unavailable in this environment: {exc}")
-        except Exception as exc:
-            # Environment-specific export failures (missing Xcode CLT protobuf
-            # toolchain, coremltools/torch version mismatch, etc.) are a skip;
-            # anything from OUR extraction code below is not caught here.
+        except (ImportError, ModuleNotFoundError) as exc:
+            # Missing coremltools (or a dependency it pulls in, e.g. protobuf)
+            # is a genuinely environmental condition -- skip.
+            pytest.skip(f"CoreML export dependency unavailable: {exc}")
+        except RuntimeError as exc:
+            # coremltools/xcoreml raise RuntimeError for a missing Xcode
+            # command-line-tools toolchain (the actual export/compile step
+            # shells out to `xcrun`). Narrowly matched on that specific,
+            # well-known environmental failure mode; anything else re-raises
+            # so a real export regression in OUR code is not silently
+            # swallowed.
             msg = str(exc).lower()
-            if any(
-                token in msg
-                for token in (
-                    "protobuf",
-                    "xcode",
-                    "coremltools",
-                    "not supported",
-                    "unsupported",
-                )
-            ):
-                pytest.skip(f"CoreML export failed for an environment reason: {exc}")
+            if "xcrun" in msg or "xcode" in msg:
+                pytest.skip(f"CoreML export requires Xcode command-line tools: {exc}")
             raise
 
         assert models.mode == "direct"
@@ -177,6 +175,23 @@ def test_coreml_segment_obb_smoke(tmp_path):
         assert np.all(result.angles < np.pi + 1e-4)
         assert np.all(result.sizes > 0.0)
         assert np.all((result.confidences >= 0.0) & (result.confidences <= 1.0))
-    # n == 0 on random noise input is expected and is itself a pass: the point
-    # is that the CoreML-loaded segment model + mask-to-OBB extraction ran to
-    # completion and produced a well-formed (possibly empty) result.
+    else:
+        # n == 0 on random noise input is expected: the point is that the
+        # CoreML-loaded segment model + mask-to-OBB extraction ran to
+        # completion and produced a *well-formed* empty result, not that it
+        # is unconditionally acceptable -- assert the empty-case field
+        # shapes/dtypes explicitly rather than skipping all assertions.
+        assert result.centroids.shape == (0, 2)
+        assert result.centroids.dtype == np.float32
+        assert result.angles.shape == (0,)
+        assert result.angles.dtype == np.float32
+        assert result.sizes.shape == (0,)
+        assert result.sizes.dtype == np.float32
+        assert result.shapes.shape == (0, 2)
+        assert result.shapes.dtype == np.float32
+        assert result.confidences.shape == (0,)
+        assert result.confidences.dtype == np.float32
+        assert result.corners.shape == (0, 4, 2)
+        assert result.corners.dtype == np.float32
+        assert result.detection_ids.shape == (0,)
+        assert result.detection_ids.dtype == np.int64
