@@ -121,6 +121,98 @@ def test_build_inference_config_defaults_missing_tier_to_cpu(tmp_path):
     assert cfg.runtime_tier == "cpu"
 
 
+def test_build_inference_config_from_params_threads_model_task_and_angle(tmp_path):
+    """YOLO_OBB_DIRECT_TASK/YOLO_OBB_FIXED_ANGLE_DEG populate OBBDirectConfig."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "yolo26s-seg.pt"),
+        "YOLO_OBB_DIRECT_TASK": "segment",
+        "YOLO_OBB_FIXED_ANGLE_DEG": 12.5,
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.model_task == "segment"
+    assert cfg.obb.direct.fixed_angle_deg == pytest.approx(12.5)
+
+
+def test_build_inference_config_from_params_defaults_model_task_to_obb(tmp_path):
+    """Unknown/absent YOLO_OBB_DIRECT_TASK falls back to 'obb'."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "model.pt"),
+        "YOLO_OBB_DIRECT_TASK": "not_a_real_task",
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.model_task == "obb"
+    assert cfg.obb.direct.fixed_angle_deg == pytest.approx(0.0)
+
+
+def test_build_inference_config_from_params_threads_seg_kernel_params(tmp_path):
+    """YOLO_OBB_SEG_* keys populate OBBDirectConfig's segment kernel knobs."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "yolo26s-seg.pt"),
+        "YOLO_OBB_DIRECT_TASK": "segment",
+        "YOLO_OBB_SEG_NUM_ANGLES": 48,
+        "YOLO_OBB_SEG_CROP_SIZE": 128,
+        "YOLO_OBB_SEG_PAD_RATIO": 0.25,
+        "YOLO_OBB_SEG_MASK_THRESHOLD": 0.35,
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.seg_num_angles == 48
+    assert cfg.obb.direct.seg_crop_size == 128
+    assert cfg.obb.direct.seg_pad_ratio == pytest.approx(0.25)
+    assert cfg.obb.direct.seg_mask_threshold == pytest.approx(0.35)
+
+
+def test_build_inference_config_from_params_seg_kernel_params_default_when_missing(
+    tmp_path,
+):
+    """Absent YOLO_OBB_SEG_* keys fall back to the kernel's own defaults."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "yolo26s-seg.pt"),
+        "YOLO_OBB_DIRECT_TASK": "segment",
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.seg_num_angles == 24
+    assert cfg.obb.direct.seg_crop_size == 64
+    assert cfg.obb.direct.seg_pad_ratio == pytest.approx(0.15)
+    assert cfg.obb.direct.seg_mask_threshold == pytest.approx(0.5)
+
+
+def test_build_inference_config_from_params_seg_kernel_params_clamp_garbage(tmp_path):
+    """Out-of-range/non-numeric YOLO_OBB_SEG_* values fall back to defaults."""
+    from hydra_suite.core.tracking.worker import TrackingWorker
+
+    worker_obj = TrackingWorker.__new__(TrackingWorker)
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": str(tmp_path / "yolo26s-seg.pt"),
+        "YOLO_OBB_DIRECT_TASK": "segment",
+        "YOLO_OBB_SEG_NUM_ANGLES": "not_a_number",
+        "YOLO_OBB_SEG_CROP_SIZE": 99999,  # above the 256 ceiling
+        "YOLO_OBB_SEG_PAD_RATIO": -0.5,  # below the 0.0 floor
+        "YOLO_OBB_SEG_MASK_THRESHOLD": float("nan"),
+    }
+    cfg = worker_obj._build_inference_config_from_params(params)
+    assert cfg.obb.direct.seg_num_angles == 24
+    assert cfg.obb.direct.seg_crop_size == 64
+    assert cfg.obb.direct.seg_pad_ratio == pytest.approx(0.15)
+    assert cfg.obb.direct.seg_mask_threshold == pytest.approx(0.5)
+
+
 # ---------------------------------------------------------------------------
 # frame_result_to_meas integration
 # ---------------------------------------------------------------------------

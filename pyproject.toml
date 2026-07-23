@@ -78,6 +78,11 @@ mps = [
     "torchaudio",
     "av>=12.0",
     "coremltools>=8.0",
+    # torchvision 0.16.0 (Oct 2023) added the native MPS kernel for roi_align
+    # (and roi_pool/ps_roi_align/ps_roi_pool); older installs raise
+    # NotImplementedError from rotated_rect_from_masks's roi_align call on the
+    # segment-as-OBB path. See torchvision v0.16.0 release notes.
+    "torchvision>=0.16.0",
 ]
 av = [
     "av>=12.0",

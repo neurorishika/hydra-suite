@@ -1211,6 +1211,64 @@ def test_sequential_crop_batch_roundtrip_persists(
     reloaded_window.close()
 
 
+def test_yolo_direct_task_and_fixed_angle_roundtrip_persists(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.combo_yolo_direct_task.setCurrentIndex(1)  # "Detect"
+    window._detection_panel.spin_yolo_fixed_angle.setValue(42.5)
+
+    # The fixed-angle row should only be visible while "Detect" is selected.
+    # (isHidden() reflects the widget's own explicit visibility flag, unlike
+    # isVisible()/isVisibleTo(), which are also gated by ancestor tab/stack
+    # visibility and would be False here regardless of our own wiring.)
+    assert window._detection_panel.spin_yolo_fixed_angle.isHidden() is False
+
+    params = window.get_parameters_dict()
+    assert params["YOLO_OBB_DIRECT_TASK"] == "detect"
+    assert params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(42.5)
+
+    config_path = tmp_path / "yolo_direct_task_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_cfg["yolo_obb_direct_task"] == "detect"
+    assert saved_cfg["yolo_fixed_angle_deg"] == pytest.approx(42.5)
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert reloaded_window._detection_panel.combo_yolo_direct_task.currentIndex() == 1
+    assert (
+        reloaded_window._detection_panel.spin_yolo_fixed_angle.value()
+        == pytest.approx(42.5)
+    )
+    assert reloaded_window._detection_panel.spin_yolo_fixed_angle.isHidden() is False
+    reloaded_params = reloaded_window.get_parameters_dict()
+    assert reloaded_params["YOLO_OBB_DIRECT_TASK"] == "detect"
+    assert reloaded_params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(42.5)
+    reloaded_window.close()
+
+
+def test_yolo_direct_task_default_is_obb_and_hides_fixed_angle_row(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(monkeypatch)
+
+    assert window._detection_panel.combo_yolo_direct_task.currentIndex() == 0
+    assert window._detection_panel.spin_yolo_fixed_angle.isHidden() is True
+
+    params = window.get_parameters_dict()
+    assert params["YOLO_OBB_DIRECT_TASK"] == "obb"
+    assert params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(0.0)
+    window.close()
+
+
 def test_legacy_shared_suppress_setting_populates_both_export_toggles(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
@@ -1356,6 +1414,68 @@ def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
     assert params["IDENTITY_RESPAWN_PRIOR_DECAY"] == pytest.approx(0.93)
     assert params["IDENTITY_RESPAWN_PRIOR_MAX_GAP"] == 44
     assert params["ADVANCED_CONFIG"]["identity_respawn_prior_max_gap"] == 44
+    window.close()
+
+
+def test_advanced_config_defaults_include_obb_seg_kernel_params(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    advanced_path = tmp_path / "advanced_config.json"
+
+    monkeypatch.setattr(
+        "hydra_suite.paths.get_advanced_config_path",
+        lambda: advanced_path,
+    )
+
+    advanced = ConfigOrchestrator._load_advanced_config(object())
+
+    assert advanced["obb_seg_num_angles"] == 24
+    assert advanced["obb_seg_crop_size"] == 64
+    assert advanced["obb_seg_pad_ratio"] == pytest.approx(0.15)
+    assert advanced["obb_seg_mask_threshold"] == pytest.approx(0.5)
+
+    saved = json.loads(advanced_path.read_text(encoding="utf-8"))
+    assert saved["obb_seg_num_angles"] == 24
+    assert saved["obb_seg_mask_threshold"] == pytest.approx(0.5)
+
+
+def test_get_parameters_dict_exposes_obb_seg_kernel_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "obb_seg_num_angles": 48,
+            "obb_seg_crop_size": 128,
+            "obb_seg_pad_ratio": 0.25,
+            "obb_seg_mask_threshold": 0.35,
+        },
+    )
+
+    params = window.get_parameters_dict()
+
+    assert params["YOLO_OBB_SEG_NUM_ANGLES"] == 48
+    assert params["YOLO_OBB_SEG_CROP_SIZE"] == 128
+    assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.25)
+    assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.35)
+    assert params["ADVANCED_CONFIG"]["obb_seg_num_angles"] == 48
+    window.close()
+
+
+def test_get_parameters_dict_obb_seg_kernel_overrides_default_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(monkeypatch, advanced_config={})
+
+    params = window.get_parameters_dict()
+
+    assert params["YOLO_OBB_SEG_NUM_ANGLES"] == 24
+    assert params["YOLO_OBB_SEG_CROP_SIZE"] == 64
+    assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.15)
+    assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.5)
     window.close()
 
 

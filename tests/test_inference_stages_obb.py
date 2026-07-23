@@ -448,6 +448,81 @@ def test_extract_raw_tensors_uses_runtime_device_for_empty_path():
     assert str(raw.conf.device) == "cpu"
 
 
+def test_extract_obb_from_boxes_applies_fixed_angle():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_boxes
+
+    # One box: x1,y1,x2,y2 = 10,20,30,60 -> cx=20,cy=40,w=20,h=40
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[10.0, 20.0, 30.0, 60.0]]),
+            conf=torch.tensor([0.9]),
+        )
+    )
+
+    out = _extract_obb_from_boxes(result, frame_idx=3, fixed_angle_rad=0.0)
+
+    assert out.num_detections == 1
+    assert out.frame_idx == 3
+    np.testing.assert_allclose(out.centroids[0], [20.0, 40.0], atol=1e-4)
+    # w=20 < h=40, so _normalize_obb_geometry swaps to major=h=40, minor=w=20
+    # and adds 90deg to the (here, 0deg) fixed angle.
+    np.testing.assert_allclose(out.angles[0], np.pi / 2, atol=1e-4)
+    np.testing.assert_allclose(out.sizes[0], 800.0, atol=1e-3)  # 20*40
+    np.testing.assert_allclose(out.confidences[0], 0.9, atol=1e-4)
+
+
+def test_extract_obb_from_boxes_empty_boxes_returns_empty_result():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_boxes
+
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(xyxy=torch.zeros((0, 4)), conf=torch.zeros(0))
+    )
+    out = _extract_obb_from_boxes(result, frame_idx=0, fixed_angle_rad=0.0)
+    assert out.num_detections == 0
+
+
+def test_extract_raw_tensors_from_boxes_keeps_everything_on_device():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_boxes
+
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[10.0, 20.0, 30.0, 60.0]]),
+            conf=torch.tensor([0.9]),
+        )
+    )
+
+    raw = _extract_raw_tensors_from_boxes(
+        result, frame_idx=3, fixed_angle_rad=0.5, device="cpu"
+    )
+
+    assert raw.frame_idx == 3
+    assert isinstance(raw.xywhr, torch.Tensor)
+    assert raw.xywhr.shape == (1, 5)
+    torch.testing.assert_close(raw.xywhr[0, :4], torch.tensor([20.0, 40.0, 20.0, 40.0]))
+    torch.testing.assert_close(raw.xywhr[0, 4], torch.tensor(0.5))
+    torch.testing.assert_close(raw.conf, torch.tensor([0.9]))
+
+
+def test_extract_raw_tensors_from_boxes_empty_boxes():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_boxes
+
+    result = SimpleNamespace(
+        boxes=SimpleNamespace(xyxy=torch.zeros((0, 4)), conf=torch.zeros(0))
+    )
+    raw = _extract_raw_tensors_from_boxes(
+        result, frame_idx=0, fixed_angle_rad=0.0, device="cpu"
+    )
+    assert raw.xywhr.shape == (0, 5)
+
+
 def test_obb_models_has_callable_close():
     """Regression: OBBModels.close() must be a real method (it was once defined
     after a return inside _normalize_obb_geometry, so the class lacked it and
@@ -553,3 +628,704 @@ def test_load_obb_models_sequential_dynamic_batching_warning(monkeypatch, caplog
         "Sequential-mode OBB" in record.message and "dynamic-batch" in record.message
         for record in caplog.records
     ), "Should NOT warn for direct mode"
+
+
+def test_extract_obb_from_masks_computes_rotated_rect():
+    import math
+    from types import SimpleNamespace
+
+    import numpy as np
+    import torch
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    # A 40x20 axis-aligned rectangle mask at (50, 30) in a 100x60 "mask-space"
+    # canvas that is ALSO treated as the original frame (gain=1, no padding)
+    # for this test -- Task 3 already covers the gain/pad math independently.
+    mh = mw = 100
+    ys, xs = torch.meshgrid(
+        torch.arange(mh, dtype=torch.float32),
+        torch.arange(mw, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = (
+        ((xs >= 30) & (xs <= 70) & (ys >= 20) & (ys <= 40)).float().unsqueeze(0)
+    )  # (1, 100, 100)
+
+    result = SimpleNamespace(
+        masks=SimpleNamespace(data=mask),
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[30.0, 20.0, 70.0, 40.0]]),
+            conf=torch.tensor([0.8]),
+        ),
+        orig_shape=(100, 100),
+    )
+
+    out = _extract_obb_from_masks(result, frame_idx=5)
+
+    assert out.num_detections == 1
+    assert out.frame_idx == 5
+    np.testing.assert_allclose(out.centroids[0], [50.0, 30.0], atol=1.5)
+    np.testing.assert_allclose(out.sizes[0], 800.0, atol=60.0)  # ~40*20
+    assert out.angles[0] < math.radians(8) or out.angles[0] > math.radians(172)
+    np.testing.assert_allclose(out.confidences[0], 0.8, atol=1e-4)
+
+
+def test_extract_obb_from_masks_no_masks_returns_empty_result():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    result = SimpleNamespace(
+        masks=None, boxes=SimpleNamespace(conf=None), orig_shape=(10, 10)
+    )
+    out = _extract_obb_from_masks(result, frame_idx=1)
+    assert out.num_detections == 0
+
+
+def test_extract_raw_tensors_from_masks_keeps_everything_on_device():
+    from types import SimpleNamespace
+
+    import torch
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks
+
+    mh = mw = 100
+    ys, xs = torch.meshgrid(
+        torch.arange(mh, dtype=torch.float32),
+        torch.arange(mw, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = ((xs >= 30) & (xs <= 70) & (ys >= 20) & (ys <= 40)).float().unsqueeze(0)
+
+    result = SimpleNamespace(
+        masks=SimpleNamespace(data=mask),
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor([[30.0, 20.0, 70.0, 40.0]]),
+            conf=torch.tensor([0.8]),
+        ),
+        orig_shape=(100, 100),
+    )
+
+    raw = _extract_raw_tensors_from_masks(result, frame_idx=5, device="cpu")
+
+    assert raw.frame_idx == 5
+    assert isinstance(raw.xywhr, torch.Tensor)
+    assert raw.xywhr.shape == (1, 5)
+    assert raw.xywhr.device.type == "cpu"  # sanity: still a tensor, no numpy conversion
+    torch.testing.assert_close(raw.conf, torch.tensor([0.8]))
+
+
+def test_extract_raw_tensors_from_masks_no_masks_returns_empty():
+    from types import SimpleNamespace
+
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks
+
+    result = SimpleNamespace(
+        masks=None, boxes=SimpleNamespace(conf=None), orig_shape=(10, 10)
+    )
+    raw = _extract_raw_tensors_from_masks(result, frame_idx=1, device="cpu")
+    assert raw.xywhr.shape == (0, 5)
+
+
+def test_run_direct_dispatches_to_detect_extraction(monkeypatch):
+    from types import SimpleNamespace
+
+    import numpy as np
+    import torch
+
+    from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+    from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
+
+    class _FakeDetectModel:
+        def predict(self, frames, **kwargs):
+            return [
+                SimpleNamespace(
+                    boxes=SimpleNamespace(
+                        xyxy=torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
+                        conf=torch.tensor([0.7]),
+                    )
+                )
+                for _ in frames
+            ]
+
+    config = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="fake.pt", model_task="detect", fixed_angle_deg=45.0
+        ),
+    )
+    models = OBBModels(mode="direct", direct_model=_FakeDetectModel())
+    runtime = SimpleNamespace(tensor_on_cuda=False, device="cpu")
+
+    results = run_obb([np.zeros((20, 20, 3), dtype=np.uint8)], models, config, runtime)
+
+    assert len(results) == 1
+    assert results[0].num_detections == 1
+
+
+def test_run_direct_detect_uses_raw_tensor_fast_path_when_tensor_on_cuda():
+    from types import SimpleNamespace
+
+    import numpy as np
+    import torch
+
+    from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
+    from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
+
+    class _FakeDetectModel:
+        def predict(self, frames, **kwargs):
+            return [
+                SimpleNamespace(
+                    boxes=SimpleNamespace(
+                        xyxy=torch.tensor([[0.0, 0.0, 10.0, 10.0]]),
+                        conf=torch.tensor([0.7]),
+                    )
+                )
+                for _ in frames
+            ]
+
+    config = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="fake.pt", model_task="detect"),
+    )
+    models = OBBModels(mode="direct", direct_model=_FakeDetectModel())
+    runtime = SimpleNamespace(tensor_on_cuda=True, device="cpu")
+
+    results = run_obb([np.zeros((20, 20, 3), dtype=np.uint8)], models, config, runtime)
+
+    # tensor_on_cuda=True must return _RawOBBTensors (a torch-tensor
+    # namedtuple), NOT an already-materialized OBBResult.
+    assert hasattr(results[0], "xywhr")
+    assert not hasattr(results[0], "corners") or isinstance(
+        results[0].xywhr, torch.Tensor
+    )
+
+
+# ---------------------------------------------------------------------------
+# Final-review CRITICAL 1: letterbox inversion on the native-CUDA/NVDEC path
+# must also apply to detect (boxes) and segment (masks) results, not just OBB.
+# ---------------------------------------------------------------------------
+
+
+class _FakeBoxes:
+    """Duck-type of ultralytics Boxes: `.data` is the single source of truth."""
+
+    def __init__(self, data: torch.Tensor):
+        self.data = data
+
+    def __len__(self) -> int:
+        return int(self.data.shape[0])
+
+    @property
+    def xyxy(self) -> torch.Tensor:
+        return self.data[:, :4]
+
+    @property
+    def conf(self) -> torch.Tensor:
+        return self.data[:, 4]
+
+
+def _letterbox_params(h: int, w: int, imgsz: int):
+    r = min(imgsz / h, imgsz / w)
+    new_h, new_w = int(h * r), int(w * r)
+    return r, (imgsz - new_w) // 2, (imgsz - new_h) // 2
+
+
+def _force_cuda_frames(monkeypatch):
+    """Fake the 'frames are CUDA tensors' branch so it runs on CPU tensors."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    monkeypatch.setattr(obb_mod, "_frames_are_cuda_tensors", lambda frames: True)
+    return obb_mod
+
+
+def test_run_direct_detect_cuda_frames_returns_original_frame_coords(monkeypatch):
+    """CRITICAL 1: detect results must be un-letterboxed back to frame coords."""
+    from types import SimpleNamespace
+
+    obb_mod = _force_cuda_frames(monkeypatch)
+
+    H, W, IMGSZ = 40, 80, 64
+    r, pad_left, pad_top = _letterbox_params(H, W, IMGSZ)
+    # True original-frame box, and its letterbox-space image.
+    x1, y1, x2, y2 = 10.0, 10.0, 30.0, 20.0
+    lb = torch.tensor(
+        [
+            [
+                x1 * r + pad_left,
+                y1 * r + pad_top,
+                x2 * r + pad_left,
+                y2 * r + pad_top,
+                0.9,
+                0.0,
+            ]
+        ]
+    )
+
+    class _FakeModel:
+        imgsz = IMGSZ
+
+        def predict(self, batched, **kwargs):
+            assert batched.shape[-2:] == (IMGSZ, IMGSZ)
+            return [
+                SimpleNamespace(
+                    obb=None,
+                    masks=None,
+                    boxes=_FakeBoxes(lb.clone()),
+                    orig_shape=(IMGSZ, IMGSZ),
+                )
+            ]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/m.pt", model_task="detect"),
+    )
+    frames = [torch.zeros((H, W, 3), dtype=torch.uint8)]
+    out = obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+
+    assert out[0].num_detections == 1
+    np.testing.assert_allclose(out[0].centroids[0], [20.0, 15.0], atol=0.6)
+    # w=20, h=10 -> size = 200 in ORIGINAL-frame pixels (not r**2-scaled).
+    np.testing.assert_allclose(out[0].sizes[0], 200.0, rtol=0.06)
+
+
+def test_run_direct_segment_cuda_frames_returns_original_frame_coords(monkeypatch):
+    """CRITICAL 1: segment masks must map back to original-frame coordinates."""
+    from types import SimpleNamespace
+
+    obb_mod = _force_cuda_frames(monkeypatch)
+
+    H, W, IMGSZ = 40, 80, 64
+    r, pad_left, pad_top = _letterbox_params(H, W, IMGSZ)
+    x1, y1, x2, y2 = 10.0, 12.0, 30.0, 22.0  # original-frame box (w=20, h=10)
+    lx1, ly1 = x1 * r + pad_left, y1 * r + pad_top
+    lx2, ly2 = x2 * r + pad_left, y2 * r + pad_top
+    lb = torch.tensor([[lx1, ly1, lx2, ly2, 0.9, 0.0]])
+
+    # Mask in letterbox space, at letterbox resolution.
+    ys, xs = torch.meshgrid(
+        torch.arange(IMGSZ, dtype=torch.float32),
+        torch.arange(IMGSZ, dtype=torch.float32),
+        indexing="ij",
+    )
+    mask = ((xs >= lx1) & (xs <= lx2) & (ys >= ly1) & (ys <= ly2)).float().unsqueeze(0)
+
+    class _FakeModel:
+        imgsz = IMGSZ
+
+        def predict(self, batched, **kwargs):
+            return [
+                SimpleNamespace(
+                    obb=None,
+                    boxes=_FakeBoxes(lb.clone()),
+                    masks=SimpleNamespace(data=mask.clone()),
+                    orig_shape=(IMGSZ, IMGSZ),
+                )
+            ]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/m.pt", model_task="segment"),
+    )
+    frames = [torch.zeros((H, W, 3), dtype=torch.uint8)]
+    out = obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+
+    assert out[0].num_detections == 1
+    np.testing.assert_allclose(out[0].centroids[0], [20.0, 17.0], atol=2.0)
+    # Original-frame extent ~20 x 10 -> size ~200 px^2 (letterbox space would
+    # report ~200 * r**2 == 128).
+    np.testing.assert_allclose(out[0].sizes[0], 200.0, rtol=0.25)
+
+
+# ---------------------------------------------------------------------------
+# Final-review IMPORTANT 4: a mismatched checkpoint task must fail loudly.
+# ---------------------------------------------------------------------------
+
+
+def test_load_obb_models_rejects_checkpoint_task_mismatch(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    class _SegCheckpoint:
+        task = "segment"
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", lambda *a, **k: _SegCheckpoint())
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/seg.pt", model_task="obb"),
+    )
+    with pytest.raises(ValueError, match="segment"):
+        obb_mod.load_obb_models(cfg, runtime)
+
+
+def test_load_obb_models_accepts_matching_checkpoint_task(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    class _SegCheckpoint:
+        task = "segment"
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", lambda *a, **k: _SegCheckpoint())
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/seg.pt", model_task="segment"),
+    )
+    models = obb_mod.load_obb_models(cfg, runtime)
+    assert models.mode == "direct"
+
+
+# ---------------------------------------------------------------------------
+# Segment pre-cap optimization: cap detections by confidence BEFORE the
+# expensive rotated_rect_from_masks kernel runs. Pure optimization -- the final
+# OBBResult must be byte-identical to the old post-cap path.
+# ---------------------------------------------------------------------------
+
+
+def _make_segment_result(confs, frame_idx=0, canvas=120):
+    """Build a fake ultralytics segment result with len(confs) valid detections.
+
+    Each detection is a distinct axis-aligned filled rectangle so that every
+    row produces finite geometry (no valid-mask drops) and centroids differ,
+    letting equivalence assertions catch any mis-ordering. orig_shape == mask
+    shape (gain=1, no pad).
+    """
+    from types import SimpleNamespace
+
+    n = len(confs)
+    ys, xs = torch.meshgrid(
+        torch.arange(canvas, dtype=torch.float32),
+        torch.arange(canvas, dtype=torch.float32),
+        indexing="ij",
+    )
+    masks = []
+    boxes = []
+    for i in range(n):
+        cx = 20.0 + i * 8.0
+        cy = 60.0
+        x0, x1, y0, y1 = cx - 10, cx + 10, cy - 15, cy + 15
+        m = ((xs >= x0) & (xs <= x1) & (ys >= y0) & (ys <= y1)).float()
+        masks.append(m)
+        boxes.append([x0, y0, x1, y1])
+    return SimpleNamespace(
+        masks=SimpleNamespace(data=torch.stack(masks)),
+        boxes=SimpleNamespace(
+            xyxy=torch.tensor(boxes, dtype=torch.float32),
+            conf=torch.tensor(confs, dtype=torch.float32),
+        ),
+        orig_shape=(canvas, canvas),
+    )
+
+
+def _spy_kernel(monkeypatch):
+    """Wrap rotated_rect_from_masks to record the N it is invoked with."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    real = obb_mod.rotated_rect_from_masks
+    calls = []
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        calls.append(int(mask_tensor.shape[0]))
+        # sanity: inputs must still be device tensors, never numpy-converted
+        assert isinstance(mask_tensor, torch.Tensor)
+        assert isinstance(boxes_mask_space, torch.Tensor)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+    return calls
+
+
+def _assert_obb_equal(a, b):
+    assert a.frame_idx == b.frame_idx
+    assert a.num_detections == b.num_detections
+    np.testing.assert_allclose(a.centroids, b.centroids, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(a.angles, b.angles, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(a.sizes, b.sizes, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(a.confidences, b.confidences, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(a.detection_ids, b.detection_ids)
+
+
+def test_extract_obb_from_masks_precaps_before_kernel(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import (
+        _apply_raw_detection_cap,
+        _extract_obb_from_masks,
+    )
+
+    confs = [0.1, 0.9, 0.3, 0.7, 0.5, 0.8, 0.2, 0.6]
+    cap = 3
+
+    # OLD behaviour: kernel on all N, then post-cap.
+    expected = _apply_raw_detection_cap(
+        _extract_obb_from_masks(_make_segment_result(confs), frame_idx=5), cap
+    )
+
+    # NEW behaviour: pre-cap to top-`cap`, kernel sees only `cap`, then the
+    # caller's post-cap (a no-op re-sort) is applied.
+    calls = _spy_kernel(monkeypatch)
+    new_final = _apply_raw_detection_cap(
+        _extract_obb_from_masks(
+            _make_segment_result(confs), frame_idx=5, raw_detection_cap=cap
+        ),
+        cap,
+    )
+
+    assert calls == [cap]  # optimization fired: kernel processed only `cap`
+    _assert_obb_equal(new_final, expected)
+
+
+def test_extract_obb_from_masks_cap_disabled_processes_all(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    confs = [0.1, 0.9, 0.3, 0.7, 0.5]
+    calls = _spy_kernel(monkeypatch)
+    out = _extract_obb_from_masks(
+        _make_segment_result(confs), frame_idx=0, raw_detection_cap=0
+    )
+    assert calls == [len(confs)]  # cap<=0 disables pre-cap; kernel sees all N
+    assert out.num_detections == len(confs)
+
+
+def test_extract_raw_tensors_from_masks_precaps_before_kernel(monkeypatch):
+    from hydra_suite.core.inference.stages.obb import (
+        _apply_raw_detection_cap,
+        _extract_raw_tensors_from_masks,
+        materialize_tensors,
+    )
+
+    confs = [0.1, 0.9, 0.3, 0.7, 0.5, 0.8, 0.2, 0.6]
+    cap = 3
+
+    # OLD: raw tensors for all N, materialize (which applies its own cap).
+    raw_all = _extract_raw_tensors_from_masks(
+        _make_segment_result(confs, frame_idx=7), frame_idx=7, device="cpu"
+    )
+    expected = materialize_tensors(raw_all, raw_detection_cap=cap)
+
+    # NEW: pre-cap so the kernel sees only `cap` detections.
+    calls = _spy_kernel(monkeypatch)
+    raw_new = _extract_raw_tensors_from_masks(
+        _make_segment_result(confs, frame_idx=7),
+        frame_idx=7,
+        device="cpu",
+        raw_detection_cap=cap,
+    )
+    new_final = materialize_tensors(raw_new, raw_detection_cap=cap)
+
+    assert calls == [cap]
+    # The raw pre-cap must keep tensors on-device (no numpy/host conversion).
+    assert isinstance(raw_new.conf, torch.Tensor)
+    assert raw_new.conf.shape[0] == cap
+    _assert_obb_equal(new_final, expected)
+
+    # Sanity: also matches a direct post-cap of the CPU-materializing path.
+    from hydra_suite.core.inference.stages.obb import _extract_obb_from_masks
+
+    cpu_expected = _apply_raw_detection_cap(
+        _extract_obb_from_masks(_make_segment_result(confs), frame_idx=7), cap
+    )
+    _assert_obb_equal(new_final, cpu_expected)
+
+
+def test_extract_raw_tensors_from_masks_precap_is_cpu_free(monkeypatch):
+    """The raw path (pre-cap + kernel) must not sync: no .cpu/.item/.numpy/.tolist."""
+    from hydra_suite.core.inference.stages.obb import _extract_raw_tensors_from_masks
+
+    for name in ("cpu", "item", "numpy", "tolist"):
+
+        def _raise(self, *a, _n=name, **k):
+            raise AssertionError(f"raw path invoked Tensor.{_n}() -- host sync!")
+
+        monkeypatch.setattr(torch.Tensor, name, _raise, raising=True)
+
+    result = _make_segment_result([0.1, 0.9, 0.3, 0.7, 0.5], frame_idx=2)
+    raw = _extract_raw_tensors_from_masks(
+        result, frame_idx=2, device="cpu", raw_detection_cap=3
+    )
+    assert raw.conf.shape[0] == 3
+
+
+# ---------------------------------------------------------------------------
+# Segment-as-OBB kernel knobs: seg_num_angles/seg_crop_size/seg_pad_ratio/
+# seg_mask_threshold must be forwarded from OBBDirectConfig all the way to
+# rotated_rect_from_masks, not silently dropped in favor of its own defaults.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_obb_from_masks_forwards_configured_kernel_params(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+    obb_mod._extract_obb_from_masks(
+        result,
+        frame_idx=0,
+        num_angles=48,
+        crop_size=128,
+        pad_ratio=0.25,
+        mask_threshold=0.35,
+    )
+
+    assert recorded == {
+        "num_angles": 48,
+        "crop_size": 128,
+        "pad_ratio": 0.25,
+        "mask_threshold": 0.35,
+        # CPU-materializing path opts into foreground-only projection.
+        "foreground_only": True,
+    }
+
+
+def test_extract_raw_tensors_from_masks_forwards_configured_kernel_params(
+    monkeypatch,
+):
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+    obb_mod._extract_raw_tensors_from_masks(
+        result,
+        frame_idx=0,
+        device="cpu",
+        num_angles=48,
+        crop_size=128,
+        pad_ratio=0.25,
+        mask_threshold=0.35,
+    )
+
+    assert recorded == {
+        "num_angles": 48,
+        "crop_size": 128,
+        "pad_ratio": 0.25,
+        "mask_threshold": 0.35,
+    }
+
+
+def test_extract_obb_from_masks_enables_foreground_only(monkeypatch):
+    """CPU-materializing path must opt into foreground_only=True."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+    obb_mod._extract_obb_from_masks(_make_segment_result([0.9]), frame_idx=0)
+    assert recorded.get("foreground_only") is True
+
+
+def test_extract_raw_tensors_from_masks_keeps_full_pixel_projection(monkeypatch):
+    """The zero-CPU-sync raw path must NOT opt into foreground_only (default
+    False / omitted), keeping its full-pixel, host-sync-free projection."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+    obb_mod._extract_raw_tensors_from_masks(
+        _make_segment_result([0.9]), frame_idx=0, device="cpu"
+    )
+    # Either omitted entirely or explicitly False -- never True.
+    assert recorded.get("foreground_only", False) is False
+
+
+def test_extract_obb_from_masks_defaults_match_kernel_defaults(monkeypatch):
+    """Omitting the kwargs must reproduce the kernel's own defaults exactly."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+    obb_mod._extract_obb_from_masks(result, frame_idx=0)
+
+    assert recorded == {
+        "num_angles": 24,
+        "crop_size": 64,
+        "pad_ratio": 0.15,
+        "mask_threshold": 0.5,
+        "foreground_only": True,
+    }
+
+
+def test_run_direct_segment_threads_configured_kernel_params(monkeypatch):
+    """_run_direct's segment branch must pull the four knobs from config.direct."""
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    recorded = {}
+    real = obb_mod.rotated_rect_from_masks
+
+    def spy(mask_tensor, boxes_mask_space, **kwargs):
+        recorded.update(kwargs)
+        return real(mask_tensor, boxes_mask_space, **kwargs)
+
+    monkeypatch.setattr(obb_mod, "rotated_rect_from_masks", spy)
+
+    result = _make_segment_result([0.9])
+
+    class _FakeModel:
+        def predict(self, frames, **kwargs):
+            return [result]
+
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="/m.pt",
+            model_task="segment",
+            seg_num_angles=48,
+            seg_crop_size=128,
+            seg_pad_ratio=0.25,
+            seg_mask_threshold=0.35,
+        ),
+    )
+    frames = [np.zeros((120, 120, 3), dtype=np.uint8)]
+    obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+
+    assert recorded == {
+        "num_angles": 48,
+        "crop_size": 128,
+        "pad_ratio": 0.25,
+        "mask_threshold": 0.35,
+        # _run_direct's segment branch under a CPU (materializing) runtime
+        # routes through _extract_obb_from_masks, which opts into foreground-only.
+        "foreground_only": True,
+    }
