@@ -346,16 +346,22 @@ def test_create_direct_executor_segment_task_routes_to_segment_factory(
 def test_executor_adapter_translates_predict_kwargs():
     """The adapter wrapping a direct executor must translate the YOLO-style
     predict(conf=, iou=, classes=, verbose=, device=) call into the direct
-    executor's predict(conf_thres=, classes=, max_det=) call."""
+    executor's predict(conf_thres=, classes=, max_det=) call.
+
+    The adapter must NOT forward the caller's ``iou`` (obb.py always passes
+    ``iou=1.0`` because filtering.py applies config.iou_threshold's NMS
+    later) into the executor's own NMS knob — the direct executor owns its
+    protective iou_thres default (0.5 for raw-CBC, 1.0 for end2end) and
+    must not have it overridden by the caller.
+    """
     captured = {}
 
     class _DirectExec:
-        def predict(self, frames, *, conf_thres, classes, max_det, iou_thres=None):
+        def predict(self, frames, *, conf_thres, classes, max_det):
             captured["conf_thres"] = conf_thres
             captured["classes"] = classes
             captured["max_det"] = max_det
             captured["n_frames"] = len(frames)
-            captured["iou_thres"] = iou_thres
             return ["result"]
 
     adapter = ra.DirectExecutorAdapter(_DirectExec(), max_det=20)
@@ -367,7 +373,6 @@ def test_executor_adapter_translates_predict_kwargs():
     assert captured["classes"] == [2]
     assert captured["max_det"] == 20
     assert captured["n_frames"] == 1
-    assert captured["iou_thres"] == 1.0
 
 
 # ---------------------------------------------------------------------------
