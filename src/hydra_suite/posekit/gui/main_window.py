@@ -400,7 +400,7 @@ class MainWindow(QMainWindow):
             QLabel("Which inference backend should generate predictions?")
         )
         self.combo_pred_backend = QComboBox()
-        self.combo_pred_backend.addItems(["YOLO", "SLEAP"])
+        self.combo_pred_backend.addItems(["YOLO", "SLEAP", "ViTPose"])
         backend_row.addWidget(self.combo_pred_backend, 1)
         model_layout.addLayout(backend_row)
 
@@ -470,6 +470,20 @@ class MainWindow(QMainWindow):
         pred_weights_row.addWidget(self.btn_pred_weights_latest)
         yolo_layout.addLayout(pred_weights_row)
         model_layout.addWidget(self.yolo_pred_widget)
+
+        # ViTPose settings (fine-tuned checkpoint .pt)
+        self.vitpose_pred_widget = QWidget()
+        vitpose_layout = QVBoxLayout(self.vitpose_pred_widget)
+        vitpose_layout.setContentsMargins(0, 0, 0, 0)
+        vitpose_layout.addWidget(QLabel("ViTPose checkpoint (.pt)"))
+        pred_vitpose_row = QHBoxLayout()
+        self.pred_vitpose_edit = QLineEdit("")
+        self.pred_vitpose_edit.setPlaceholderText("Select fine-tuned checkpoint (.pt)")
+        self.btn_pred_vitpose = QPushButton("Browse…")
+        pred_vitpose_row.addWidget(self.pred_vitpose_edit, 1)
+        pred_vitpose_row.addWidget(self.btn_pred_vitpose)
+        vitpose_layout.addLayout(pred_vitpose_row)
+        model_layout.addWidget(self.vitpose_pred_widget)
 
         # SLEAP settings
         self.sleap_pred_widget = QWidget()
@@ -660,6 +674,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_pred_cache.clicked.connect(self._clear_prediction_cache)
         self.btn_pred_weights.clicked.connect(self._browse_pred_weights)
         self.btn_pred_weights_latest.clicked.connect(self._use_latest_pred_weights)
+        self.btn_pred_vitpose.clicked.connect(self._browse_pred_vitpose)
         self.btn_pred_exported.clicked.connect(self._browse_pred_exported_model)
         self.combo_pred_backend.currentTextChanged.connect(self._update_pred_backend_ui)
         self.combo_pred_runtime.currentTextChanged.connect(self._update_pred_backend_ui)
@@ -1389,6 +1404,7 @@ class MainWindow(QMainWindow):
             "autosave_delay_ms": int(self.autosave_delay_ms),
             "pred_conf": float(self.sp_pred_conf.value()),
             "pred_weights": self.pred_weights_edit.text().strip(),
+            "pred_vitpose": self.pred_vitpose_edit.text().strip(),
             "pred_backend": self.combo_pred_backend.currentText().strip(),
             "runtime_tier": self._selected_tier(),
             "pred_exported_model": "",
@@ -1459,6 +1475,8 @@ class MainWindow(QMainWindow):
             self.sp_pred_conf.setValue(float(settings["pred_conf"]))
         if "pred_weights" in settings:
             self.pred_weights_edit.setText(str(settings["pred_weights"]))
+        if "pred_vitpose" in settings:
+            self.pred_vitpose_edit.setText(str(settings["pred_vitpose"]))
         if "pred_backend" in settings:
             backend = str(settings["pred_backend"])
             if backend:
@@ -4205,7 +4223,11 @@ class MainWindow(QMainWindow):
     def _pred_backend(self) -> str:
         try:
             txt = self.combo_pred_backend.currentText().strip().lower()
-            return "sleap" if txt.startswith("sleap") else "yolo"
+            if txt.startswith("sleap"):
+                return "sleap"
+            if txt.startswith("vitpose"):
+                return "vitpose"
+            return "yolo"
         except Exception:
             return "yolo"
 
@@ -4284,6 +4306,8 @@ class MainWindow(QMainWindow):
             "pred_weights_edit",
             "btn_pred_weights",
             "btn_pred_weights_latest",
+            "pred_vitpose_edit",
+            "btn_pred_vitpose",
             "combo_sleap_env",
             "btn_sleap_refresh",
             "sleap_model_edit",
@@ -4314,8 +4338,11 @@ class MainWindow(QMainWindow):
             return
         backend = self._pred_backend()
         is_sleap = backend == "sleap"
+        is_vitpose = backend == "vitpose"
         if hasattr(self, "yolo_pred_widget"):
-            self.yolo_pred_widget.setVisible(not is_sleap)
+            self.yolo_pred_widget.setVisible(backend == "yolo")
+        if hasattr(self, "vitpose_pred_widget"):
+            self.vitpose_pred_widget.setVisible(is_vitpose)
         if hasattr(self, "sleap_pred_widget"):
             self.sleap_pred_widget.setVisible(is_sleap)
         if hasattr(self, "lbl_pred_exported"):
@@ -4630,12 +4657,16 @@ class MainWindow(QMainWindow):
         backend = self._pred_backend()
         if backend == "sleap":
             return self._get_sleap_model_or_prompt()
+        if backend == "vitpose":
+            return self._get_pred_vitpose_or_prompt()
         return self._get_pred_weights_or_prompt()
 
     def _get_pred_model_silent(self) -> Optional[Path]:
         backend = self._pred_backend()
         if backend == "sleap":
             return self._get_sleap_model_silent()
+        if backend == "vitpose":
+            return self._get_pred_vitpose_silent()
         return self._get_pred_weights_silent()
 
     def _pred_runtime_flavor(self) -> str:
@@ -4651,7 +4682,13 @@ class MainWindow(QMainWindow):
         from hydra_suite.runtime.resolver import RuntimeResolver
 
         tier = self._selected_tier()
-        stage = "sleap_pose" if self._pred_backend() == "sleap" else "yolo_pose"
+        _b = self._pred_backend()
+        if _b == "sleap":
+            stage = "sleap_pose"
+        elif _b == "vitpose":
+            stage = "vitpose_pose"
+        else:
+            stage = "yolo_pose"
         resolved = RuntimeResolver(tier, detect_platform()).resolve(stage)
         if resolved.backend == "tensorrt":
             return "tensorrt_cuda"
@@ -4768,6 +4805,34 @@ class MainWindow(QMainWindow):
             return None
         if self.project.latest_pose_weights:
             p = Path(self.project.latest_pose_weights)
+            if p.exists() and p.is_file() and p.suffix == ".pt":
+                return p
+        return None
+
+    def _browse_pred_vitpose(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select ViTPose checkpoint", "", "*.pt"
+        )
+        if path:
+            self.pred_vitpose_edit.setText(path)
+
+    def _get_pred_vitpose_or_prompt(self) -> Optional[Path]:
+        txt = self.pred_vitpose_edit.text().strip()
+        if txt:
+            p = Path(txt).expanduser().resolve()
+            if p.exists() and p.is_file() and p.suffix == ".pt":
+                return p
+            QMessageBox.warning(
+                self, "Invalid checkpoint", "ViTPose checkpoint not found."
+            )
+            return None
+        QMessageBox.warning(self, "No checkpoint", "Select a ViTPose checkpoint (.pt).")
+        return None
+
+    def _get_pred_vitpose_silent(self) -> Optional[Path]:
+        txt = self.pred_vitpose_edit.text().strip()
+        if txt:
+            p = Path(txt).expanduser().resolve()
             if p.exists() and p.is_file() and p.suffix == ".pt":
                 return p
         return None
@@ -4942,6 +5007,7 @@ class MainWindow(QMainWindow):
             sleap_device="auto",
             sleap_batch=int(self.spin_pred_batch.value()),
             sleap_max_instances=1,
+            vitpose_batch=int(self.spin_pred_batch.value()),
             cache_backend=cache_backend,
         )
         self._pred_worker.moveToThread(self._pred_thread)
@@ -5253,6 +5319,7 @@ class MainWindow(QMainWindow):
                 sleap_device="auto",
                 sleap_batch=int(pred_batch),
                 sleap_max_instances=1,
+                vitpose_batch=int(pred_batch),
                 cache_backend=cache_backend,
             )
             self._bulk_pred_worker.moveToThread(self._bulk_pred_thread)

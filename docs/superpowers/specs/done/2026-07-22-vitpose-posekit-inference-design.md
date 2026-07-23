@@ -73,8 +73,19 @@ Gen-2 and already flowing through `stages/pose.py`) and **family**
 (`yolo|sleap|vitpose`, this spec adds the PoseKit-side `vitpose` path). PoseKit
 inference is **runtime-agnostic**: it forwards the tier picker through
 `stages/pose.load_pose_model`. So the **native** path (cpu/gpu/mps) works the
-moment this lands; **accelerated** (TensorRT/CoreML) already exists in the
-backend and comes for free at `gpu_fast` — no accelerated-specific PoseKit code.
+moment this lands, and needs no accelerated-specific PoseKit code. The
+**accelerated** runtimes (TensorRT/CoreML) already exist in the `ViTPoseBackend`
+and are reached through the same shared shim as YOLO/SLEAP — but note a
+**pre-existing, backend-agnostic limitation**: PoseKit's workers pass a
+runtime-*flavor* string (`"tensorrt_cuda"`/`"coreml"`) into
+`load_pose_backend(compute_runtime=…)`, which re-derives a tier via
+`migrate_runtime_to_tier`; that mapping does not recognize those two flavor
+strings and collapses them to the `cpu` tier. As a result, selecting `gpu_fast`
+in PoseKit currently runs ViTPose (and YOLO and SLEAP) on torch-CPU rather than
+the native engine. This is **not** introduced by this slice — ViTPose inherits
+the exact YOLO/SLEAP behavior — and fixing it (normalize the flavors in
+`migrate_runtime_to_tier`, or thread `runtime_tier` through the shim directly) is
+a shared follow-up tracked separately. Verified paths: **native cpu/gpu**.
 
 ### Components
 
