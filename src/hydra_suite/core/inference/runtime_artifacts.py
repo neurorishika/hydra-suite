@@ -397,7 +397,7 @@ class DirectExecutorAdapter:
         frames: Any,
         *,
         conf: float = 1e-3,
-        iou: float = 1.0,  # noqa: ARG002 - direct executor handles NMS internally
+        iou: float = 1.0,
         classes: Any = None,
         verbose: bool = False,  # noqa: ARG002 - accepted for YOLO-call parity
         device: Any = None,  # noqa: ARG002 - executor is bound to its own device
@@ -409,6 +409,7 @@ class DirectExecutorAdapter:
             conf_thres=conf,
             classes=classes,
             max_det=self._max_det,
+            iou_thres=iou,
         )
 
 

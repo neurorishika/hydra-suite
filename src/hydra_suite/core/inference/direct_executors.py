@@ -246,6 +246,7 @@ class _BaseDirectOBBExecutor:
         conf_thres: float,
         classes,
         max_det: int,
+        iou_thres: float | None = None,
     ):
         import torch
         from ultralytics.engine.results import Results
@@ -262,7 +263,7 @@ class _BaseDirectOBBExecutor:
         # anchors for each object.  Applying NMS before the max_det cap ensures
         # that the top-N slots are filled by *distinct* objects rather than by
         # multiple high-confidence duplicate boxes for the same object.
-        iou_thres = 1.0 if is_end2end else 0.5
+        iou_thres = 1.0 if is_end2end else (iou_thres if iou_thres is not None else 0.5)
         filtered = nms.non_max_suppression(
             preds,
             conf_thres=conf_thres,
@@ -296,6 +297,7 @@ class _BaseDirectOBBExecutor:
         conf_thres: float,
         classes,
         max_det: int,
+        iou_thres: float | None = None,
     ):
         """Run inference on a list of frames.
 
@@ -340,6 +342,7 @@ class _BaseDirectOBBExecutor:
                         conf_thres=conf_thres,
                         classes=classes,
                         max_det=max_det,
+                        iou_thres=iou_thres,
                     )[:actual]
                 )
             return all_results
@@ -350,6 +353,7 @@ class _BaseDirectOBBExecutor:
             conf_thres=conf_thres,
             classes=classes,
             max_det=max_det,
+            iou_thres=iou_thres,
         )
 
     def _predict_chunk(
@@ -360,6 +364,7 @@ class _BaseDirectOBBExecutor:
         conf_thres: float,
         classes,
         max_det: int,
+        iou_thres: float | None = None,
     ):
         """Run inference on a single chunk already sized to the model batch."""
         if cuda_input:
@@ -381,6 +386,7 @@ class _BaseDirectOBBExecutor:
             conf_thres=conf_thres,
             classes=classes,
             max_det=max_det,
+            iou_thres=iou_thres,
         )
 
     def _run_inference(self, img_tensor):
@@ -858,6 +864,7 @@ class DirectONNXDetectExecutor(DirectONNXOBBExecutor):
         conf_thres: float,
         classes,
         max_det: int,
+        iou_thres: float | None = None,
     ):
         import torch
         from ultralytics.engine.results import Results
@@ -873,7 +880,7 @@ class DirectONNXDetectExecutor(DirectONNXOBBExecutor):
         # because the model outputs many overlapping anchors per object.
         # End-to-end models already have NMS baked in, so iou_thres=1.0
         # is used to pass all slots through without further suppression.
-        iou_thres = 1.0 if is_end2end else 0.5
+        iou_thres = 1.0 if is_end2end else (iou_thres if iou_thres is not None else 0.5)
 
         # rotated=False → standard NMS for YOLO detect.
         # Output per image: [N, 6] = [x1, y1, x2, y2, conf, cls] in letterbox space.
@@ -919,6 +926,7 @@ class DirectTensorRTDetectExecutor(DirectTensorRTOBBExecutor):
         conf_thres: float,
         classes,
         max_det: int,
+        iou_thres: float | None = None,
     ):
         import torch
         from ultralytics.engine.results import Results
@@ -929,7 +937,7 @@ class DirectTensorRTDetectExecutor(DirectTensorRTOBBExecutor):
             preds = torch.as_tensor(preds, device=img_tensor.device)
 
         is_end2end = getattr(self, "_end2end", False)
-        iou_thres = 1.0 if is_end2end else 0.5
+        iou_thres = 1.0 if is_end2end else (iou_thres if iou_thres is not None else 0.5)
 
         filtered = nms.non_max_suppression(
             preds,
@@ -1012,6 +1020,7 @@ def _decode_segment_predictions(
     classes,
     max_det: int,
     nc: int,
+    iou_thres: float = 0.5,
 ):
     """Decode a raw YOLO-segment head output into duck-typed detections.
 
@@ -1053,7 +1062,7 @@ def _decode_segment_predictions(
     filtered = nms.non_max_suppression(
         preds,
         conf_thres=conf_thres,
-        iou_thres=0.5,
+        iou_thres=iou_thres,
         classes=classes,
         max_det=max_det,
         nc=nc,
@@ -1219,7 +1228,14 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
         return det_out, proto_out
 
     def _postprocess(
-        self, raw_preds, img_tensor, orig_frames, conf_thres, classes, max_det
+        self,
+        raw_preds,
+        img_tensor,
+        orig_frames,
+        conf_thres,
+        classes,
+        max_det,
+        iou_thres: float | None = None,
     ):
         det_out, proto_out = raw_preds
         orig_shape = orig_frames[0].shape[:2]
@@ -1232,6 +1248,7 @@ class DirectTensorRTSegmentExecutor(_BaseDirectOBBExecutor):
             classes=classes,
             max_det=max_det,
             nc=self.nc,
+            iou_thres=(iou_thres if iou_thres is not None else 0.5),
         )
 
 

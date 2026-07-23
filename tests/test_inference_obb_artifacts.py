@@ -326,11 +326,12 @@ def test_executor_adapter_translates_predict_kwargs():
     captured = {}
 
     class _DirectExec:
-        def predict(self, frames, *, conf_thres, classes, max_det):
+        def predict(self, frames, *, conf_thres, classes, max_det, iou_thres=None):
             captured["conf_thres"] = conf_thres
             captured["classes"] = classes
             captured["max_det"] = max_det
             captured["n_frames"] = len(frames)
+            captured["iou_thres"] = iou_thres
             return ["result"]
 
     adapter = ra.DirectExecutorAdapter(_DirectExec(), max_det=20)
@@ -342,6 +343,7 @@ def test_executor_adapter_translates_predict_kwargs():
     assert captured["classes"] == [2]
     assert captured["max_det"] == 20
     assert captured["n_frames"] == 1
+    assert captured["iou_thres"] == 1.0
 
 
 # ---------------------------------------------------------------------------
