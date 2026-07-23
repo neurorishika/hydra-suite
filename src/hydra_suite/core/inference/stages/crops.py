@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
 import cv2
 import numpy as np
 import torch
@@ -133,6 +137,47 @@ def _frame_as_hwc_numpy(frame: np.ndarray | torch.Tensor) -> np.ndarray:
     return frame
 
 
+# Canonical pose-crop warping is an embarrassingly parallel batch of independent
+# cv2.warpAffine calls: each reads the shared frame read-only and writes its own
+# output buffer, and cv2 releases the GIL during warpAffine. Running the batch
+# across a thread pool is therefore BYTE-IDENTICAL to the serial loop (order is
+# preserved by ``pool.map``) but scales with cores. For a dense colony (~16
+# crops/frame x hundreds of frames) this pose crop-warp was ~10s of otherwise
+# serial CPU work whenever the frame stays on CPU (e.g. NVDEC-undecodable 4512^2
+# H.264, so the on-GPU grid_sample crop path never engages). Env-tunable via
+# ``HYDRA_CROP_WARP_THREADS``; set it to 1 to force the serial path.
+_WARP_MIN_PARALLEL = 4  # below this, the serial loop beats pool-submit overhead
+_warp_pool_lock = threading.Lock()
+_warp_pool: ThreadPoolExecutor | None = None
+_warp_pool_size = 0
+
+
+def _crop_warp_threads() -> int:
+    try:
+        v = os.environ.get("HYDRA_CROP_WARP_THREADS")
+        if v is not None:
+            return max(1, int(v))
+    except Exception:
+        pass
+    return max(1, min(8, os.cpu_count() or 1))
+
+
+def _get_warp_pool(n_workers: int) -> ThreadPoolExecutor | None:
+    """Lazily create (and cache) a shared warp thread pool; None when serial."""
+    global _warp_pool, _warp_pool_size
+    if n_workers <= 1:
+        return None
+    with _warp_pool_lock:
+        if _warp_pool is None or _warp_pool_size != n_workers:
+            if _warp_pool is not None:
+                _warp_pool.shutdown(wait=False)
+            _warp_pool = ThreadPoolExecutor(
+                max_workers=n_workers, thread_name_prefix="cropwarp"
+            )
+            _warp_pool_size = n_workers
+        return _warp_pool
+
+
 def _warp_crops_for_obb(
     arr: np.ndarray,
     obb: OBBResult,
@@ -142,13 +187,19 @@ def _warp_crops_for_obb(
     """Warp each detection in *obb* to its native canonical extent.
 
     Returns a list of HWC numpy arrays, one per detection, at the native
-    (un-resized) crop size produced by :func:`_warp_canonical_crop`.
+    (un-resized) crop size produced by :func:`_warp_canonical_crop`. When the
+    detection count is large enough to amortise pool overhead, the independent
+    warps run across a shared thread pool (byte-identical; see module note above).
     """
-    crops: list[np.ndarray] = []
-    for i in range(obb.num_detections):
-        crop = _warp_canonical_crop(arr, obb.corners[i], aspect_ratio, padding_fraction)
-        crops.append(crop)
-    return crops
+    n = obb.num_detections
+
+    def _one(i: int) -> np.ndarray:
+        return _warp_canonical_crop(arr, obb.corners[i], aspect_ratio, padding_fraction)
+
+    pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
+    if pool is not None:
+        return list(pool.map(_one, range(n)))
+    return [_one(i) for i in range(n)]
 
 
 def _extract_canonical_cpu(
