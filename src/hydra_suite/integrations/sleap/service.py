@@ -537,7 +537,7 @@ def _run_pose_predict_subprocess(
 
 
 _SLEAP_SERVICE_CODE = textwrap.dedent(r"""
-import base64,json,sys,threading,traceback,shutil,inspect,gc,subprocess,tempfile,time,uuid
+import base64,json,os,sys,threading,traceback,shutil,inspect,gc,subprocess,tempfile,time,uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from multiprocessing import shared_memory
 from pathlib import Path
@@ -572,6 +572,26 @@ _state = {
     'preprocess_config': None,
 }
 _log_path = None
+
+# Per-request gc.collect() on the (large, torch-backed) heap is expensive and the
+# HTTPServer is single-threaded, so every /infer call blocks on the previous
+# call's full-heap collection. Under per-frame streaming pose (~1 call/frame)
+# this dominated the gpu-tier pose cost (~46 ms/call, ~24 s over a 500-frame
+# clip -- 4x the actual inference). Non-cyclic torch garbage is reclaimed by
+# refcounting immediately; gc.collect() only reclaims reference cycles, so a
+# periodic sweep bounds any cyclic growth without paying the cost every call.
+# Cadence is env-tunable; set HYDRA_SLEAP_GC_EVERY=1 to restore per-request GC.
+try:
+    _GC_EVERY = max(1, int(os.environ.get('HYDRA_SLEAP_GC_EVERY', '50')))
+except Exception:
+    _GC_EVERY = 50
+_req_count = 0
+
+def _maybe_gc():
+    global _req_count
+    _req_count += 1
+    if _req_count % _GC_EVERY == 0:
+        gc.collect()
 
 def _log(msg):
     try:
@@ -2199,7 +2219,7 @@ class Handler(BaseHTTPRequestHandler):
                     shutil.rmtree(request_tmp_dir, ignore_errors=True)
             except Exception:
                 pass
-            gc.collect()
+            _maybe_gc()
     def log_message(self, format, *args):
         return
 
