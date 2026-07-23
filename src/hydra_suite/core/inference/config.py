@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
@@ -519,12 +520,50 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             raw_detection_cap=raw_cap,
         )
     else:
+        model_task = str(params.get("YOLO_OBB_DIRECT_TASK", "obb")).strip().lower()
+        if model_task not in {"obb", "detect", "segment"}:
+            model_task = "obb"
+        fixed_angle_deg = float(params.get("YOLO_OBB_FIXED_ANGLE_DEG", 0.0) or 0.0)
+
+        def _clamped_int(raw, default, lo, hi):
+            try:
+                v = int(raw)
+            except (TypeError, ValueError):
+                return default
+            return v if lo <= v <= hi else default
+
+        def _clamped_float(raw, default, lo, hi):
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                return default
+            return v if math.isfinite(v) and lo <= v <= hi else default
+
+        seg_num_angles = _clamped_int(
+            params.get("YOLO_OBB_SEG_NUM_ANGLES", 24), 24, 4, 180
+        )
+        seg_crop_size = _clamped_int(
+            params.get("YOLO_OBB_SEG_CROP_SIZE", 64), 64, 16, 256
+        )
+        seg_pad_ratio = _clamped_float(
+            params.get("YOLO_OBB_SEG_PAD_RATIO", 0.15), 0.15, 0.0, 1.0
+        )
+        seg_mask_threshold = _clamped_float(
+            params.get("YOLO_OBB_SEG_MASK_THRESHOLD", 0.5), 0.5, 0.05, 0.95
+        )
+
         obb_cfg = OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(
                 model_path=direct_model_path,
                 confidence_floor=1e-3,
                 confidence_threshold=yolo_conf,
+                model_task=model_task,
+                fixed_angle_deg=fixed_angle_deg,
+                seg_num_angles=seg_num_angles,
+                seg_crop_size=seg_crop_size,
+                seg_pad_ratio=seg_pad_ratio,
+                seg_mask_threshold=seg_mask_threshold,
             ),
             target_classes=target_classes,
             confidence_threshold=yolo_conf,
