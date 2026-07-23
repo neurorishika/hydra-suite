@@ -338,10 +338,26 @@ def _assert_direct_task_matches_checkpoint(
     ``result.boxes`` None) on EVERY frame -- the user just sees zero detections
     for the whole video with no error. The direct executors (tensorrt/coreml)
     expose no ``.task``; they are built for the requested task explicitly, so
-    they are skipped here.
+    the match cannot be verified here -- a WARNING is logged instead of a
+    silent skip.
     """
     ckpt_task = getattr(model, "task", None)
-    if not isinstance(ckpt_task, str) or ckpt_task == model_task:
+    if not isinstance(ckpt_task, str):
+        # Direct executors (prebuilt tensorrt/coreml artifacts) expose no
+        # `.task`, so we cannot verify the artifact matches the configured
+        # task. Warn rather than silently skip -- a mismatched engine yields
+        # zero detections on every frame with no other signal.
+        logger.warning(
+            "Direct-mode OBB artifact '%s' exposes no task metadata; cannot "
+            "verify it matches the configured model_task=%r. If detection "
+            "returns zero results on every frame, the artifact's task likely "
+            "differs from %r.",
+            model_path,
+            model_task,
+            model_task,
+        )
+        return
+    if ckpt_task == model_task:
         return
     raise ValueError(
         f"Direct-mode OBB model task mismatch: the checkpoint "

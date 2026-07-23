@@ -985,6 +985,35 @@ def test_load_obb_models_accepts_matching_checkpoint_task(monkeypatch):
     assert models.mode == "direct"
 
 
+def test_load_obb_models_warns_when_direct_artifact_task_unverifiable(
+    monkeypatch, caplog
+):
+    import logging
+
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    class _TasklessExecutor:  # a direct executor / adapter: no `.task`
+        pass
+
+    monkeypatch.setattr(obb_mod, "_load_yolo", lambda *a, **k: _TasklessExecutor())
+    runtime = RuntimeContext(
+        cuda_mode=False,
+        device="cpu",
+        use_nvdec=False,
+        tensor_on_cuda=False,
+    )
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="/eng.engine", model_task="segment"),
+    )
+    with caplog.at_level(logging.WARNING):
+        obb_mod.load_obb_models(cfg, runtime)
+    assert any(
+        "no task metadata" in r.message.lower() or "cannot" in r.message.lower()
+        for r in caplog.records
+    ), "expected an unverifiable-task warning"
+
+
 # ---------------------------------------------------------------------------
 # Segment pre-cap optimization: cap detections by confidence BEFORE the
 # expensive rotated_rect_from_masks kernel runs. Pure optimization -- the final
