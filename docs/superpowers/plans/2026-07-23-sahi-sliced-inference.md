@@ -8,6 +8,25 @@
 
 **Tech Stack:** Python, PyTorch (CUDA/MPS), OpenCV (`cv2`), NumPy, ultralytics YOLO, PyQt (TrackerKit GUI), pytest.
 
+## Environment (VERIFIED — prefix every test command with this)
+
+Work happens in the worktree `.worktrees/sahi-sliced-inference` (branch
+`feature/sahi-sliced-inference`). Tests FAIL TO COLLECT without the conda env and
+the libomp flag (torch double-init: `RpcBackendOptions ... already defined` /
+`OMP: Error #15`). Exact preamble:
+
+```bash
+source ~/miniforge3/etc/profile.d/conda.sh && conda activate hydra-mps
+export KMP_DUPLICATE_LIB_OK=TRUE
+cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker/.worktrees/sahi-sliced-inference
+export PYTHONPATH=$PWD/src
+```
+
+**Verified baseline (2026-07-24), use as the delta gate:**
+- `test_inference_stages_obb.py`, `test_inference_config.py`, `test_inference_obb_artifacts.py`, `test_utils_obb_from_mask.py`: **88 passed, 1 skipped — clean.** Any failure here is YOURS.
+- `test_main_window_config_persistence.py`: **7 pre-existing failures, 34 passed.** Pre-existing (do NOT try to fix): `test_video_autoload_restores_pose_keypoint_groups_and_headtail_model`, `test_preview_detection_restores_analyze_individual_controls`, `test_realtime_direct_mode_exposes_micro_batch_controls`, `test_realtime_micro_batch_roundtrip_persists`, `test_advanced_config_defaults_include_identity_decoder_tuning`, `test_get_parameters_dict_exposes_identity_decoder_advanced_overrides`, `test_identity_decoder_tuning_controls_roundtrip_through_tracker_config`. This suite takes ~105s.
+- `window.get_parameters_dict()` is CONFIRMED to exist and is how existing tests read the UPPER_SNAKE params dict (see lines 274/285/303).
+
 ## Global Constraints
 
 - **Layer boundary:** `core/inference` may NOT import from any app layer or from `core/detectors`. Geometry kernels live in `utils/` (mirrors `utils/obb_from_mask.py`). `utils/` imports nothing from app layers.
