@@ -651,6 +651,159 @@ class _FakeYOLOCudaGlobalPoint:
         return results
 
 
+class _FakeOBBDataView:
+    """OBB fake whose ``.data`` is a REAL backing tensor: ``.xywhr`` is a VIEW
+    of ``data[:, :5]`` (not a copy), and ``.xyxyxyxy`` is recomputed from
+    ``data`` on every access -- matching the real ultralytics ``OBB`` contract
+    that ``_invert_letterbox_on_result`` depends on (it mutates ``result.obb
+    .data`` in place under ``torch.inference_mode()``, and downstream extract
+    functions must see that mutation through both properties)."""
+
+    def __init__(self, cx, cy, w, h, angle=0.0, conf=0.9, cls=0.0):
+        self.data = torch.tensor(
+            [[cx, cy, w, h, angle, conf, cls]], dtype=torch.float32
+        )
+
+    def __len__(self):
+        return self.data.shape[0]
+
+    @property
+    def xywhr(self):
+        return self.data[:, :5]
+
+    @property
+    def conf(self):
+        return self.data[:, 5]
+
+    @property
+    def cls(self):
+        return self.data[:, 6]
+
+    @property
+    def xyxyxyxy(self):
+        cx, cy, w, h = (
+            self.data[:, 0],
+            self.data[:, 1],
+            self.data[:, 2],
+            self.data[:, 3],
+        )
+        hw, hh = w / 2.0, h / 2.0
+        return torch.stack(
+            [
+                torch.stack([cx - hw, cy - hh], dim=1),
+                torch.stack([cx + hw, cy - hh], dim=1),
+                torch.stack([cx + hw, cy + hh], dim=1),
+                torch.stack([cx - hw, cy + hh], dim=1),
+            ],
+            dim=1,
+        )
+
+
+class _FakeYOLOCudaLetterboxPoint:
+    """Predict emits ONE obb detection expressed in LETTERBOXED-tile
+    coordinates (not tile-local pixel coordinates) -- the coordinate space
+    ``_invert_letterbox_on_result`` must transform back to tile-local pixels
+    BEFORE ``_remap_raw`` adds the tile origin. Every other cuda-path fake in
+    this file uses tiles exactly == imgsz (r=1, pad=0), so this is the only
+    fake that can exercise the letterbox-invert guard in
+    ``run_direct_sliced_cuda``."""
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def __init__(self, cx_lb, cy_lb, w_lb, h_lb):
+        self.cx_lb, self.cy_lb, self.w_lb, self.h_lb = cx_lb, cy_lb, w_lb, h_lb
+
+    def predict(self, source, **kw):
+        b = source.shape[0] if hasattr(source, "shape") else len(source)
+        results = []
+        for _ in range(b):
+            r = types.SimpleNamespace()
+            r.obb = _FakeOBBDataView(self.cx_lb, self.cy_lb, self.w_lb, self.h_lb)
+            results.append(r)
+        return results
+
+
+def test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad():
+    """Task 7 coverage gap: both existing cuda-path tests use tiles exactly
+    == imgsz (256), so the letterbox-invert guard
+    ``if r != 1.0 or pad_left != 0.0 or pad_top != 0.0:`` in
+    ``slicing_cuda.py`` never executes -- r==1.0, pad==0.0 always. A
+    non-square 100(h) x 200(w) tile against imgsz=256 forces
+    ``_gpu_letterbox_batch`` to compute a REAL scale (min(256/100, 256/200))
+    and a REAL vertical pad, covering BOTH halves of the guard.
+
+    Per the task brief: derive (r, pad_left, pad_top) from the real function,
+    do not hand-compute them.
+    """
+    from hydra_suite.core.inference.stages.obb import _gpu_letterbox_batch
+
+    frame = torch.zeros((100, 200, 3), dtype=torch.uint8)  # H=100, W=200
+    cfg = OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="m.pt",
+            model_task="obb",
+            slice=SliceConfig(
+                enabled=True,
+                geometry_mode="custom",
+                slice_height=100,
+                slice_width=200,
+                overlap_height_ratio=0.0,
+                overlap_width_ratio=0.0,
+            ),
+        ),
+        confidence_threshold=0.0,
+        raw_detection_cap=0,
+        max_detections=100,
+    )
+
+    # Ground truth #1: the real tile plan. Frame size == tile size -> exactly
+    # one tile, flush at the origin (no offset to worry about here -- the
+    # tile-origin remap is already covered by the other cuda-path tests).
+    plan = plan_slices(
+        (100, 200),
+        cfg.direct.slice,
+        imgsz=256,
+        roi_mask=None,
+        ref_object_px=cfg.direct.slice.reference_body_px,
+    )
+    assert plan.tiles == [(0, 0, 200, 100)]
+    x0, y0, x1, y1 = plan.tiles[0]
+
+    # Ground truth #2: the REAL letterbox params for this exact tile, from
+    # the real function that production code calls -- not hand arithmetic.
+    tile = frame[y0:y1, x0:x1]
+    _, lb_params = _gpu_letterbox_batch([tile], imgsz=256)
+    r, pad_left, pad_top = lb_params[0]
+
+    # Prove the fixture actually reaches the guarded branch (non-vacuity of
+    # the geometry, independent of the disable/re-enable proof below).
+    assert r != 1.0
+    assert pad_top != 0.0
+
+    # Pick an arbitrary detection point in LETTERBOXED-tile space, then
+    # derive the expected inverted + remapped point from the REAL (r,
+    # pad_left, pad_top) via the documented inverse formula:
+    #   x_orig = (x_lb - pad_left) / r ;  y_orig = (y_lb - pad_top) / r
+    cx_lb, cy_lb, w_lb, h_lb = 130.0, 100.0, 51.2, 25.6
+    expected_x = (cx_lb - pad_left) / r + x0
+    expected_y = (cy_lb - pad_top) / r + y0
+    expected_w = w_lb / r
+    expected_h = h_lb / r
+
+    model = _FakeYOLOCudaLetterboxPoint(cx_lb, cy_lb, w_lb, h_lb)
+    out = run_direct_sliced([frame], model, cfg, _FakeCudaRuntime())
+
+    assert len(out) == 1
+    raw = out[0]
+    assert raw.xywhr.shape[0] == 1
+    assert raw.xywhr[0, 0].item() == pytest.approx(expected_x, abs=1e-3)
+    assert raw.xywhr[0, 1].item() == pytest.approx(expected_y, abs=1e-3)
+    assert raw.xywhr[0, 2].item() == pytest.approx(expected_w, abs=1e-3)
+    assert raw.xywhr[0, 3].item() == pytest.approx(expected_h, abs=1e-3)
+
+
 def test_cuda_no_tile_overlap_preserves_raw_tensors():
     from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 
