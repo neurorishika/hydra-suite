@@ -23,6 +23,7 @@ from hydra_suite.core.inference.config import (
     OBBSequentialConfig,
     PoseConfig,
     PoseYOLOConfig,
+    SliceConfig,
 )
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages.obb import _RawOBBTensors, materialize_tensors
@@ -176,6 +177,98 @@ def test_detection_key_sequential_encodes_both_models():
     )
     k = detection_cache_key(cfg)
     assert "/det.pt" in k.model_path and "/obb.pt" in k.model_path
+
+
+# ---- detection_cache_key: SliceConfig folding (Task 9) ----
+
+
+def _obb_direct_slice(slice_cfg: SliceConfig) -> OBBConfig:
+    return OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(model_path="m.pt", slice=slice_cfg),
+    )
+
+
+def test_disabled_slice_key_equals_no_slice_baseline():
+    # Baseline: default (disabled) slice.
+    base = detection_cache_key(_obb_direct_slice(SliceConfig()))
+    # A config whose slice is disabled but has non-default *other* fields must
+    # still hash identically (disabled => inert).
+    other = detection_cache_key(
+        _obb_direct_slice(
+            SliceConfig(enabled=False, merge_threshold=0.9, slice_height=999)
+        )
+    )
+    assert base.config_hash == other.config_hash
+
+
+def test_disabled_slice_key_matches_pre_change_baseline():
+    """The exact byte-parity requirement: disabled slice => config_hash == ''."""
+    k = detection_cache_key(_obb_direct_slice(SliceConfig()))
+    assert k.config_hash == ""
+
+
+def test_enabling_slice_changes_key():
+    off = detection_cache_key(_obb_direct_slice(SliceConfig(enabled=False)))
+    on = detection_cache_key(_obb_direct_slice(SliceConfig(enabled=True)))
+    assert off.config_hash != on.config_hash
+
+
+def test_slice_param_change_changes_key_when_enabled():
+    a = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=True, merge_threshold=0.5))
+    )
+    b = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=True, merge_threshold=0.6))
+    )
+    assert a.config_hash != b.config_hash
+
+
+def test_sequential_mode_slice_contribution_stays_empty():
+    """Slicing is direct-mode only; sequential mode's key is unaffected."""
+    cfg = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt",
+            obb_model_path="/obb.pt",
+        ),
+    )
+    assert detection_cache_key(cfg).config_hash == ""
+
+
+@pytest.mark.parametrize(
+    "field_name,off_value,on_value",
+    [
+        ("geometry_mode", "auto_model", "auto_object"),
+        ("slice_height", 0, 640),
+        ("slice_width", 0, 640),
+        ("overlap_height_ratio", 0.2, 0.3),
+        ("overlap_width_ratio", 0.2, 0.3),
+        ("object_tile_fraction", 0.15, 0.25),
+        ("reference_body_px", 0.0, 42.0),
+        ("merge_policy", "greedy_nmm", "nms"),
+        ("merge_metric", "ios", "iou"),
+        ("merge_threshold", 0.5, 0.7),
+        ("merge_backend", "cv2", "gpu"),
+        ("perform_standard_pred", False, True),
+    ],
+)
+def test_every_output_affecting_slice_field_is_in_the_hash(
+    field_name, off_value, on_value
+):
+    """Every SliceConfig field that alters detection output must participate
+    in the hash -- a silently omitted field means a user changes it, the
+    cache is NOT invalidated, and they get stale detections."""
+    a = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=True, **{field_name: off_value}))
+    )
+    b = detection_cache_key(
+        _obb_direct_slice(SliceConfig(enabled=True, **{field_name: on_value}))
+    )
+    assert a.config_hash != b.config_hash, (
+        f"SliceConfig.{field_name} does not affect detection_cache_key -- "
+        "a change to it silently would NOT invalidate the detection cache"
+    )
 
 
 # ---- bgsub_detection_cache_key ----
