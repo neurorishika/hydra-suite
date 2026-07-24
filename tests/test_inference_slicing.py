@@ -145,24 +145,31 @@ def test_auto_object_with_negative_ref_object_px_falls_back():
 
 
 def test_overlap_approaching_one():
-    """Very high overlap (0.85) still produces finite tile count."""
+    """Extreme overlap (0.99) drives step toward zero; max(1, step) floor engages.
+
+    For slice=64, overlap=0.99: int(64 * (1 - 0.99)) = int(0.64) = 0.
+    Without the max(1, ...) guard, range(0, N, 0) would raise ValueError.
+    With the guard, step=max(1, 0)=1, yielding (512-64+1)^2 ≈ 201,601 tiles.
+    """
     cfg = SliceConfig(
         enabled=True,
         geometry_mode="custom",
-        slice_height=512,
-        slice_width=512,
-        overlap_height_ratio=0.85,
-        overlap_width_ratio=0.85,
+        slice_height=64,
+        slice_width=64,
+        overlap_height_ratio=0.99,
+        overlap_width_ratio=0.99,
     )
-    plan = plan_slices((1280, 1280), cfg, imgsz=512, roi_mask=None)
+    plan = plan_slices((512, 512), cfg, imgsz=64, roi_mask=None)
 
-    # Should not crash and tile count should be finite and sane.
+    # Should not crash (max(1, ...) prevents ValueError from range(0, N, 0)).
     assert len(plan.tiles) > 0
-    assert len(plan.tiles) < 500
+    # With step=1 (floor engaged), tile count = (512-64+1)^2 ≈ 201,601.
+    # Upper bound accounts for the math: (frame - slice + 1)^2.
+    assert len(plan.tiles) <= (512 - 64 + 1) ** 2
 
     # Every tile should be full size (not shrunk).
     for x0, y0, x1, y1 in plan.tiles:
-        assert (x1 - x0) == 512 and (y1 - y0) == 512
+        assert (x1 - x0) == 64 and (y1 - y0) == 64
 
 
 def test_asymmetric_frame_and_overlap():
