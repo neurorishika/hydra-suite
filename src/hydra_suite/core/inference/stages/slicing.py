@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 from ..config import SliceConfig
+from ..result import OBBResult
 
 
 @dataclass
@@ -112,3 +114,146 @@ def plan_slices(
         slice_wh=(slice_w, slice_h),
         frame_wh=(frame_w, frame_h),
     )
+
+
+def _extract_tile(result: Any, model_task: str, config, tile_local_idx: int):
+    """Run the correct per-task extractor on one tile's ultralytics result.
+
+    Returns an OBBResult in the TILE's local coordinate space (frame_idx is a
+    throwaway tile index; re-stamped after remap).
+    """
+    import math as _math
+
+    from .obb import (
+        _extract_obb_from_boxes,
+        _extract_obb_from_masks,
+        extract_obb_result,
+    )
+
+    if model_task == "detect":
+        return _extract_obb_from_boxes(
+            result, tile_local_idx, _math.radians(config.direct.fixed_angle_deg)
+        )
+    if model_task == "segment":
+        return _extract_obb_from_masks(
+            result,
+            tile_local_idx,
+            config.raw_detection_cap,
+            num_angles=config.direct.seg_num_angles,
+            crop_size=config.direct.seg_crop_size,
+            pad_ratio=config.direct.seg_pad_ratio,
+            mask_threshold=config.direct.seg_mask_threshold,
+        )
+    return extract_obb_result(result, tile_local_idx)
+
+
+def _offset_result(res, x0: int, y0: int, frame_idx: int):
+    """Return a copy of ``res`` with all coordinates shifted by (x0, y0)."""
+    from .obb import _empty_obb_result
+
+    if res.num_detections == 0:
+        return _empty_obb_result(frame_idx)
+    centroids = res.centroids.copy()
+    centroids[:, 0] += x0
+    centroids[:, 1] += y0
+    corners = res.corners.copy()
+    corners[..., 0] += x0
+    corners[..., 1] += y0
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=centroids,
+        angles=res.angles,
+        sizes=res.sizes,
+        shapes=res.shapes,
+        confidences=res.confidences,
+        corners=corners,
+        detection_ids=OBBResult.make_detection_ids(frame_idx, res.num_detections),
+        class_ids=res.class_ids_or_zeros,
+    )
+
+
+def run_direct_sliced(frames, model, config, runtime):
+    """Sliced-inference wrapper around the direct predict+extract path.
+
+    Same return contract as ``_run_direct``. This module-level function is
+    dispatched from ``run_obb`` when ``config.obb.direct.slice.enabled`` is True.
+    CPU/MPS/gpu_fast return ``OBBResult`` per frame; the native-cuda tensor path
+    is handled in Task 7.
+    """
+    from .merge import band_membership, merge_obb_detections
+    from .obb import _apply_raw_detection_cap, _resolve_imgsz, merge_obb_results
+
+    slice_cfg = config.direct.slice
+    model_task = config.direct.model_task
+    imgsz = _resolve_imgsz(model)
+
+    # Native-cuda tensor path: delegated to Task 7 helper.
+    if getattr(runtime, "tensor_on_cuda", False):
+        from .slicing_cuda import run_direct_sliced_cuda
+
+        return run_direct_sliced_cuda(frames, model, config, runtime, imgsz)
+
+    # Plan is identical for every frame in the window (same size). Memoize on
+    # the first frame's shape.
+    first = frames[0]
+    frame_hw = (int(first.shape[0]), int(first.shape[1]))
+    plan = plan_slices(
+        frame_hw,
+        slice_cfg,
+        imgsz,
+        None,
+        ref_object_px=slice_cfg.reference_body_px,
+    )
+
+    # Build the flattened tile job list across all frames.
+    jobs = []  # (frame_idx, x0, y0, x1, y1) ; x1==-1 marks a full-frame job
+    for fi, frame in enumerate(frames):
+        for x0, y0, x1, y1 in plan.tiles:
+            jobs.append((fi, x0, y0, x1, y1))
+        if plan.full_frame:
+            jobs.append((fi, 0, 0, -1, -1))
+
+    # Crop every tile (numpy views; contiguous copy for the predict call).
+    tile_imgs = []
+    for fi, x0, y0, x1, y1 in jobs:
+        if x1 < 0:
+            tile_imgs.append(frames[fi])
+        else:
+            tile_imgs.append(np.ascontiguousarray(frames[fi][y0:y1, x0:x1]))
+
+    conf_floor = config.direct.confidence_floor
+    results = model.predict(
+        tile_imgs,
+        conf=conf_floor,
+        iou=1.0,
+        classes=config.target_classes or None,
+        verbose=False,
+        device=runtime.device,
+    )
+
+    # Extract + offset-remap, grouped by source frame.
+    per_frame: dict[int, list] = {fi: [] for fi in range(len(frames))}
+    for job, res in zip(jobs, results):
+        fi, x0, y0, x1, y1 = job
+        local = _extract_tile(res, model_task, config, fi)
+        per_frame[fi].append(_offset_result(local, max(0, x0), max(0, y0), fi))
+
+    out = []
+    overlap = max(slice_cfg.overlap_height_ratio, slice_cfg.overlap_width_ratio)
+    for fi in range(len(frames)):
+        concat = merge_obb_results(fi, per_frame[fi])
+        if concat.num_detections <= 1 or overlap <= 0.0:
+            merged = concat
+        else:
+            bands = band_membership(concat.corners, plan.tiles)
+            merged = merge_obb_detections(
+                concat,
+                policy=slice_cfg.merge_policy,
+                metric=slice_cfg.merge_metric,
+                threshold=slice_cfg.merge_threshold,
+                backend="cv2",  # non-cuda paths always cv2
+                overlap_bands=bands,
+                runtime=runtime,
+            )
+        out.append(_apply_raw_detection_cap(merged, config.raw_detection_cap))
+    return out

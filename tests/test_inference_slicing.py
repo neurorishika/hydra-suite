@@ -1,7 +1,14 @@
+import types
+
 import numpy as np
 
-from hydra_suite.core.inference.config import SliceConfig
-from hydra_suite.core.inference.stages.slicing import get_slice_bboxes, plan_slices
+from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceConfig
+from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
+from hydra_suite.core.inference.stages.slicing import (
+    get_slice_bboxes,
+    plan_slices,
+    run_direct_sliced,
+)
 
 
 def test_grid_covers_frame_and_flushes_to_edge():
@@ -195,3 +202,106 @@ def test_asymmetric_frame_and_overlap():
     # Every tile should be full configured size (not shrunk).
     for x0, y0, x1, y1 in plan.tiles:
         assert (x1 - x0) == 384 and (y1 - y0) == 256
+
+
+class _FakeRuntime:
+    device = "cpu"
+    tensor_on_cuda = False
+
+
+class _FakeOBB:
+    def __init__(self, cx, cy, w, h):
+        self._xywhr = np.array([[cx, cy, w, h, 0.0]], np.float32)
+        self._conf = np.array([0.9], np.float32)
+
+    def __len__(self):
+        return 1
+
+    @property
+    def xywhr(self):
+        import torch
+
+        return torch.from_numpy(self._xywhr)
+
+    @property
+    def conf(self):
+        import torch
+
+        return torch.from_numpy(self._conf)
+
+    @property
+    def cls(self):
+        import torch
+
+        return torch.zeros(1)
+
+
+class _FakeYOLO:
+    """Stub: returns one obb detection at a fixed frame-space point per tile that
+    covers (200,200). imgsz reported = 256 so slice_size==imgsz exact path."""
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def predict(self, source, **kw):
+        # `source` is a list of tile images; emit a detection only when the tile
+        # is the one containing (200,200) -- detect straddle via image content.
+        results = []
+        for img in source:
+            r = types.SimpleNamespace()
+            # tile is 256x256; put a detection at local (60,60) always.
+            r.obb = _FakeOBB(cx=60, cy=60, w=30, h=30)
+            results.append(r)
+        return results
+
+
+def _direct_cfg(enabled, **slice_kw):
+    return OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="m.pt",
+            model_task="obb",
+            slice=SliceConfig(enabled=enabled, geometry_mode="auto_model", **slice_kw),
+        ),
+        confidence_threshold=0.0,
+        raw_detection_cap=0,
+        max_detections=100,
+    )
+
+
+def test_sliced_cpu_obb_remaps_into_frame_space():
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    out = run_direct_sliced([frame], _FakeYOLO(), cfg, _FakeRuntime())
+    assert len(out) == 1
+    res = out[0]
+    # detections remapped: each tile contributes one det at tile_x0+60, tile_y0+60.
+    assert res.num_detections >= 1
+    # at least one detection lands beyond a single tile's local coords (proves offset).
+    assert res.centroids[:, 0].max() > 60
+
+
+def test_enabled_false_dispatch_uses_plain_run_direct(monkeypatch):
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(False)
+    models = OBBModels(mode="direct", direct_model=_FakeYOLO())
+    called = {"sliced": False}
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.stages.slicing.run_direct_sliced",
+        lambda *a, **k: called.__setitem__("sliced", True) or [],
+    )
+    run_obb([frame], models, cfg, _FakeRuntime())
+    assert called["sliced"] is False  # disabled -> never dispatched
+
+
+def test_enabled_true_dispatches_to_sliced(monkeypatch):
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True)
+    models = OBBModels(mode="direct", direct_model=_FakeYOLO())
+    marker = object()
+    monkeypatch.setattr(
+        "hydra_suite.core.inference.stages.slicing.run_direct_sliced",
+        lambda *a, **k: [marker],
+    )
+    out = run_obb([frame], models, cfg, _FakeRuntime())
+    assert out == [marker]
