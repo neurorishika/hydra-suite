@@ -9,6 +9,8 @@ from hydra_suite.core.inference.config import (
     OBBConfig,
     OBBDirectConfig,
     OBBSequentialConfig,
+    SliceConfig,
+    build_inference_config_from_params,
 )
 
 
@@ -152,3 +154,89 @@ def test_obb_direct_config_seg_kernel_params_default_to_kernel_defaults():
     assert direct.seg_crop_size == 64
     assert direct.seg_pad_ratio == pytest.approx(0.15)
     assert direct.seg_mask_threshold == pytest.approx(0.5)
+
+
+def test_slice_config_defaults_off():
+    s = SliceConfig()
+    assert s.enabled is False
+    assert s.geometry_mode == "auto_model"
+    assert s.overlap_height_ratio == 0.2 and s.overlap_width_ratio == 0.2
+    assert s.merge_policy == "greedy_nmm"
+    assert s.merge_metric == "ios"
+    assert s.merge_threshold == 0.5
+    assert s.merge_backend == "cv2"
+    assert s.perform_standard_pred is False
+
+
+def test_obb_direct_config_has_slice_default():
+    d = OBBDirectConfig(model_path="m.pt")
+    assert isinstance(d.slice, SliceConfig)
+    assert d.slice.enabled is False
+
+
+def test_obb_direct_from_dict_parses_nested_slice():
+    obb = OBBConfig.from_dict(
+        {
+            "mode": "direct",
+            "direct": {
+                "model_path": "m.pt",
+                "slice": {
+                    "enabled": True,
+                    "geometry_mode": "custom",
+                    "slice_height": 640,
+                    "slice_width": 640,
+                },
+            },
+        }
+    )
+    assert obb.direct.slice.enabled is True
+    assert obb.direct.slice.geometry_mode == "custom"
+    assert obb.direct.slice.slice_height == 640
+
+
+def test_build_config_reads_slice_params():
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt",
+        "SLICE_ENABLED": True,
+        "SLICE_GEOMETRY_MODE": "custom",
+        "SLICE_HEIGHT": 512,
+        "SLICE_WIDTH": 512,
+        "SLICE_OVERLAP": 0.25,
+        "SLICE_MERGE_POLICY": "nms",
+        "SLICE_MERGE_METRIC": "iou",
+        "SLICE_MERGE_THRESHOLD": 0.4,
+        "SLICE_MERGE_BACKEND": "gpu",
+        "SLICE_OBJECT_TILE_FRACTION": 0.2,
+        "SLICE_PERFORM_STANDARD_PRED": True,
+    }
+    cfg = build_inference_config_from_params(params)
+    s = cfg.obb.direct.slice
+    assert s.enabled is True
+    assert s.geometry_mode == "custom"
+    assert s.slice_height == 512 and s.slice_width == 512
+    assert s.overlap_height_ratio == 0.25 and s.overlap_width_ratio == 0.25
+    assert s.merge_policy == "nms" and s.merge_metric == "iou"
+    assert s.merge_threshold == 0.4 and s.merge_backend == "gpu"
+    assert s.object_tile_fraction == 0.2
+    assert s.perform_standard_pred is True
+
+
+def test_build_config_slice_defaults_when_absent():
+    params = {"YOLO_OBB_MODE": "direct", "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt"}
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.enabled is False
+
+
+def test_reference_body_px_sourced_and_resize_scaled():
+    """auto_object needs a real object scale; it comes from REFERENCE_BODY_SIZE
+    * RESIZE_FACTOR, the same source/scaling worker.py uses (worker.py:921)."""
+    params = {
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt",
+        "SLICE_ENABLED": True,
+        "REFERENCE_BODY_SIZE": 30.0,
+        "RESIZE_FACTOR": 2.0,
+    }
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.reference_body_px == 60.0

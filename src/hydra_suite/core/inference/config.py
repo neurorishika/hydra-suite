@@ -33,6 +33,39 @@ def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
 
 
 @dataclass
+class SliceConfig:
+    """SAHI-style sliced inference for direct-mode OBB detection.
+
+    All fields are inert when ``enabled`` is False — ``run_obb`` dispatches to
+    the sliced path only when it is True, so the entire feature is dead code
+    otherwise and output is byte-identical to the non-sliced pipeline.
+    """
+
+    enabled: bool = False
+    geometry_mode: Literal["auto_model", "auto_object", "custom"] = "auto_model"
+    # custom mode: explicit tile size in original-frame pixels.
+    slice_height: int = 0
+    slice_width: int = 0
+    overlap_height_ratio: float = 0.2
+    overlap_width_ratio: float = 0.2
+    # auto_object mode: tile sized so a reference object spans this linear
+    # fraction of the tile.
+    object_tile_fraction: float = 0.15
+    # Reference object size in ORIGINAL-FRAME pixels, sourced from
+    # REFERENCE_BODY_SIZE * RESIZE_FACTOR. Only read in auto_object mode; 0
+    # means "unknown", which falls back to auto_model sizing.
+    reference_body_px: float = 0.0
+    # merge across tile boundaries.
+    merge_policy: Literal["nms", "nmm", "greedy_nmm"] = "greedy_nmm"
+    merge_metric: Literal["iou", "ios"] = "ios"
+    merge_threshold: float = 0.5
+    # cv2 = default correctness oracle (all paths); gpu = native-cuda only.
+    merge_backend: Literal["cv2", "gpu"] = "cv2"
+    # extra full-frame pass in addition to tiles (catches > tile-size objects).
+    perform_standard_pred: bool = False
+
+
+@dataclass
 class OBBDirectConfig:
     model_path: str
     confidence_floor: float = 1e-3
@@ -73,6 +106,7 @@ class OBBDirectConfig:
     # Foreground cutoff applied to the resampled soft mask before the
     # rotated-rect search treats a pixel as "inside" the object.
     seg_mask_threshold: float = 0.5
+    slice: SliceConfig = field(default_factory=SliceConfig)
 
 
 @dataclass
@@ -111,6 +145,43 @@ class OBBConfig:
     max_aspect_ratio: float = float("inf")
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.7  # legacy YOLO_IOU_THRESHOLD default
+
+    @staticmethod
+    def from_dict(d: dict[str, Any]) -> "OBBConfig":
+        """Construct OBBConfig from a dict, handling nested slice config."""
+        obb_d = d
+        if obb_d.get("max_object_size") is None:
+            obb_d["max_object_size"] = float("inf")
+        if obb_d.get("max_aspect_ratio") is None:
+            obb_d["max_aspect_ratio"] = float("inf")
+
+        direct = None
+        if obb_d.get("direct"):
+            direct_d = dict(obb_d["direct"])
+            slice_d = direct_d.pop("slice", None)
+            direct = OBBDirectConfig(**direct_d)
+            if isinstance(slice_d, dict):
+                direct.slice = SliceConfig(**slice_d)
+
+        sequential = (
+            OBBSequentialConfig(**obb_d["sequential"])
+            if obb_d.get("sequential")
+            else None
+        )
+        return OBBConfig(
+            mode=obb_d.get("mode", "direct"),
+            direct=direct,
+            sequential=sequential,
+            target_classes=obb_d.get("target_classes", []),
+            max_detections=obb_d.get("max_detections", 20),
+            raw_detection_cap=obb_d.get("raw_detection_cap", 0),
+            min_object_size=obb_d.get("min_object_size", 0.0),
+            max_object_size=obb_d.get("max_object_size", float("inf")),
+            min_aspect_ratio=obb_d.get("min_aspect_ratio", 0.0),
+            max_aspect_ratio=obb_d.get("max_aspect_ratio", float("inf")),
+            confidence_threshold=obb_d.get("confidence_threshold", 0.25),
+            iou_threshold=obb_d.get("iou_threshold", 0.7),
+        )
 
 
 @dataclass
@@ -343,7 +414,14 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         if obb_d.get("max_aspect_ratio") is None:
             obb_d["max_aspect_ratio"] = float("inf")
 
-        direct = OBBDirectConfig(**obb_d["direct"]) if obb_d.get("direct") else None
+        direct = None
+        if obb_d.get("direct"):
+            direct_d = dict(obb_d["direct"])
+            slice_d = direct_d.pop("slice", None)
+            direct = OBBDirectConfig(**direct_d)
+            if isinstance(slice_d, dict):
+                direct.slice = SliceConfig(**slice_d)
+
         sequential = (
             OBBSequentialConfig(**obb_d["sequential"])
             if obb_d.get("sequential")
@@ -552,6 +630,57 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             params.get("YOLO_OBB_SEG_MASK_THRESHOLD", 0.5), 0.5, 0.05, 0.95
         )
 
+        overlap = _clamped_float(params.get("SLICE_OVERLAP", 0.2), 0.2, 0.0, 0.9)
+        slice_cfg = SliceConfig(
+            enabled=bool(params.get("SLICE_ENABLED", False)),
+            geometry_mode=(
+                str(params.get("SLICE_GEOMETRY_MODE", "auto_model")).strip().lower()
+                if str(params.get("SLICE_GEOMETRY_MODE", "auto_model")).strip().lower()
+                in {"auto_model", "auto_object", "custom"}
+                else "auto_model"
+            ),
+            slice_height=_clamped_int(params.get("SLICE_HEIGHT", 0), 0, 0, 8192),
+            slice_width=_clamped_int(params.get("SLICE_WIDTH", 0), 0, 0, 8192),
+            overlap_height_ratio=overlap,
+            overlap_width_ratio=overlap,
+            object_tile_fraction=_clamped_float(
+                params.get("SLICE_OBJECT_TILE_FRACTION", 0.15), 0.15, 0.01, 0.9
+            ),
+            # auto_object needs a real object scale or it silently degrades to
+            # auto_model. Same source/scaling worker.py uses (worker.py:921).
+            reference_body_px=_clamped_float(
+                float(params.get("REFERENCE_BODY_SIZE", 20.0) or 20.0)
+                * float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
+                0.0,
+                0.0,
+                8192.0,
+            ),
+            merge_policy=(
+                str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
+                if str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
+                in {"nms", "nmm", "greedy_nmm"}
+                else "greedy_nmm"
+            ),
+            merge_metric=(
+                str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
+                if str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
+                in {"iou", "ios"}
+                else "ios"
+            ),
+            merge_threshold=_clamped_float(
+                params.get("SLICE_MERGE_THRESHOLD", 0.5), 0.5, 0.0, 1.0
+            ),
+            merge_backend=(
+                str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
+                if str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
+                in {"cv2", "gpu"}
+                else "cv2"
+            ),
+            perform_standard_pred=bool(
+                params.get("SLICE_PERFORM_STANDARD_PRED", False)
+            ),
+        )
+
         obb_cfg = OBBConfig(
             mode="direct",
             direct=OBBDirectConfig(
@@ -564,6 +693,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 seg_crop_size=seg_crop_size,
                 seg_pad_ratio=seg_pad_ratio,
                 seg_mask_threshold=seg_mask_threshold,
+                slice=slice_cfg,
             ),
             target_classes=target_classes,
             confidence_threshold=yolo_conf,
