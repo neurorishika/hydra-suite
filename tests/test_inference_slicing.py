@@ -1207,3 +1207,119 @@ def test_pathological_tile_count_raises_instead_of_hanging():
         roi_mask=None,
     )
     assert 0 < len(ok.tiles) <= MAX_TILES_PER_FRAME
+
+
+# ---- ROI tile-gating wired end-to-end through run_direct_sliced ----
+
+
+class _CountingBlobYOLO:
+    """CPU fake that (a) counts every tile image handed to ``predict`` and (b)
+    emits a detection at the centroid of any non-zero ("white blob") pixels in
+    each tile crop.
+
+    Content-based detection (not tile-index-based) makes it robust to ROI
+    gating: a gated-out tile is simply never passed to ``predict``, and a tile
+    that IS passed produces the same detection whether or not other tiles were
+    dropped. ``n_tiles_predicted`` is the observable that proves gating dropped
+    real forward passes.
+    """
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def __init__(self):
+        self.n_tiles_predicted = 0
+
+    def predict(self, source, **kw):
+        results = []
+        for img in source:
+            self.n_tiles_predicted += 1
+            r = types.SimpleNamespace()
+            ys, xs = np.where(np.asarray(img)[..., 0] > 0)
+            if xs.size > 0:
+                cx, cy = float(xs.mean()), float(ys.mean())
+                w = float(xs.max() - xs.min() + 1)
+                h = float(ys.max() - ys.min() + 1)
+                r.obb = _FakeOBBN([(cx, cy, w, h)])
+            else:
+                r.obb = _FakeOBBN([])
+            results.append(r)
+        return results
+
+
+def _gating_cfg():
+    # auto_model + imgsz 256 => 256px tiles; zero overlap keeps the grid simple.
+    return _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+
+
+def test_roi_gating_drops_predict_tiles_end_to_end():
+    """Test 1: with a real ROI mask that empties a corner region big enough to
+    contain whole tiles, the sliced run issues FEWER model.predict tiles than
+    the ungated run -- proving tiles are actually dropped, not merely 'ran'."""
+    frame = np.zeros((1000, 1000, 3), np.uint8)
+    cfg = _gating_cfg()
+
+    # Independently confirm the ungated grid is 4x4 = 16 tiles (256px, step 256,
+    # edge-flush last tile): xs=ys=[0,256,512,744].
+    full_plan = plan_slices((1000, 1000), cfg.direct.slice, imgsz=256, roi_mask=None)
+    assert len(full_plan.tiles) == 16
+
+    # Zero the entire top-left 512x512 corner -> the 4 tiles fully inside it
+    # ((0,0),(256,0),(0,256),(256,256)) contain no live ROI pixel and must drop.
+    mask = np.ones((1000, 1000), np.uint8)
+    mask[:512, :512] = 0
+    gated_plan = plan_slices((1000, 1000), cfg.direct.slice, imgsz=256, roi_mask=mask)
+    assert len(gated_plan.tiles) == 12  # 16 - 4 corner tiles
+
+    ungated_model = _CountingBlobYOLO()
+    run_direct_sliced([frame], ungated_model, cfg, _FakeRuntime(), roi_mask=None)
+
+    gated_model = _CountingBlobYOLO()
+    run_direct_sliced([frame], gated_model, cfg, _FakeRuntime(), roi_mask=mask)
+
+    assert ungated_model.n_tiles_predicted == 16
+    assert gated_model.n_tiles_predicted == 12
+    assert gated_model.n_tiles_predicted < ungated_model.n_tiles_predicted
+
+
+def test_roi_gating_leaves_final_detections_unchanged():
+    """Test 2: 'results identical, only compute saved'. A detection placed well
+    inside the ROI (and inside a KEPT tile) survives identically whether or not
+    the empty corner tiles are gated away."""
+    frame = np.zeros((1000, 1000, 3), np.uint8)
+    # White blob at ~(600, 600): lands in tile (512,512)-(768,768), which is NOT
+    # in the zeroed corner, so gating never removes its tile.
+    frame[595:606, 595:606, :] = 255
+    cfg = _gating_cfg()
+
+    mask = np.ones((1000, 1000), np.uint8)
+    mask[:512, :512] = 0  # gated corner contains no blob -> no in-ROI detection
+
+    ungated = run_direct_sliced(
+        [frame], _CountingBlobYOLO(), cfg, _FakeRuntime(), roi_mask=None
+    )[0]
+    gated = run_direct_sliced(
+        [frame], _CountingBlobYOLO(), cfg, _FakeRuntime(), roi_mask=mask
+    )[0]
+
+    assert ungated.num_detections == gated.num_detections
+    assert ungated.num_detections >= 1
+    ung = sorted(map(tuple, np.round(ungated.centroids, 3).tolist()))
+    gat = sorted(map(tuple, np.round(gated.centroids, 3).tolist()))
+    assert ung == gat
+
+
+def test_plan_slices_coordinate_space_guard_treats_wrong_shape_as_none(caplog):
+    """Test 4: a mask whose shape != frame_hw must NOT mis-gate; it degrades to
+    the full grid (== roi_mask None) and logs a warning."""
+    cfg = SliceConfig(
+        enabled=True, geometry_mode="custom", slice_height=256, slice_width=256
+    )
+    full = plan_slices((1000, 1000), cfg, imgsz=256, roi_mask=None)
+    # Mask sized for a DIFFERENT frame (e.g. a resized-space mask) -- wrong space.
+    wrong = np.ones((500, 500), np.uint8)
+    wrong[:250, :250] = 0
+    with caplog.at_level("WARNING"):
+        guarded = plan_slices((1000, 1000), cfg, imgsz=256, roi_mask=wrong)
+    assert guarded.tiles == full.tiles  # no gating applied
+    assert any("does not match frame" in rec.message for rec in caplog.records)

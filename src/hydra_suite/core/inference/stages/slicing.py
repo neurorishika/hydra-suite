@@ -193,9 +193,11 @@ def plan_slices(
     full grid to prevent silent detection failure, degrading gracefully to "no compute
     savings" while still producing correct ROI-filtered detections.
 
-    NOTE (finding I4): no production call site passes ``roi_mask`` today -- every
-    caller passes ``None`` -- so ROI tile gating is implemented and tested but
-    not yet wired into the production path. Wiring it is a follow-up.
+    COORDINATE-SPACE CONTRACT: ``roi_mask`` MUST be in the SAME pixel space as
+    ``frame_hw`` (the frame the tiles are cut from). A mask whose ``shape[:2]``
+    differs from ``frame_hw`` would gate the WRONG tiles (dropping real
+    detections), so it is defensively treated as ``None`` (no gating, full grid)
+    with a warning rather than silently mis-gating.
 
     Raises ``ValueError`` when the configured geometry would produce more than
     ``MAX_TILES_PER_FRAME`` tiles (finding I5).
@@ -224,6 +226,18 @@ def plan_slices(
             f"lower SLICE_OVERLAP."
         )
     tiles = [(x, y, x + eff_w, y + eff_h) for y in ys for x in xs]
+    if roi_mask is not None and roi_mask.shape[:2] != (frame_h, frame_w):
+        # Wrong coordinate space: gating here would drop the wrong tiles. Degrade
+        # to no gating (full grid) rather than mis-gate; downstream per-detection
+        # ROI filtering still produces correct results, only compute is unsaved.
+        logger.warning(
+            "ROI mask shape %s does not match frame (%d, %d); skipping ROI tile "
+            "gating for this frame to avoid mis-gating.",
+            tuple(roi_mask.shape[:2]),
+            frame_h,
+            frame_w,
+        )
+        roi_mask = None
     if roi_mask is not None:
         h, w = roi_mask.shape[:2]
         kept = []
@@ -425,11 +439,16 @@ def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
     return _apply_raw_detection_cap(merged, config.raw_detection_cap)
 
 
-def run_direct_sliced(frames, model, config, runtime):
+def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
     """Sliced-inference wrapper around the direct predict+extract path.
 
     Same return contract as ``_run_direct``. This module-level function is
     dispatched from ``run_obb`` when ``config.obb.direct.slice.enabled`` is True.
+
+    ``roi_mask`` (frame-space, same H x W as the frames) enables ROI tile gating
+    in ``plan_slices``: tiles with no live ROI pixel are dropped, saving forward
+    passes without changing the final ROI-filtered detection set. ``None``
+    (the default) keeps the full tile grid.
 
     TWO ORTHOGONAL DISPATCH DECISIONS (finding C1 -- conflating them crashed
     both CUDA tiers):
@@ -476,7 +495,7 @@ def run_direct_sliced(frames, model, config, runtime):
         frame_hw,
         slice_cfg,
         imgsz,
-        None,
+        roi_mask,
         ref_object_px=slice_cfg.reference_body_px,
     )
 
