@@ -1552,7 +1552,33 @@ git commit -m "feat(inference): run_direct_sliced orchestration + run_obb dispat
 - Consumes: `run_direct_sliced` cuda delegation (Task 6); `_gpu_letterbox_batch`, `_extract_raw_tensors*`, `_RawOBBTensors`, `materialize_tensors` (`obb.py`); `merge_obb_detections` (Task 3).
 - Produces: `def run_direct_sliced_cuda(frames, model, config, runtime, imgsz) -> list[_RawOBBTensors | OBBResult]`.
 
-**Design note:** `overlap == 0` → concatenate `_RawOBBTensors` on-device (no merge, no sync). `overlap > 0` → materialize only band members for the merge; concatenate merged band with exclusive-region detections. Since `_RawOBBTensors` carries no frame-space offset, remap adds `(x0,y0)` to `xywhr[:, :2]` and `corners` on-device.
+**Design note:** when no two planned tiles actually intersect → concatenate `_RawOBBTensors` on-device (no merge, no sync). Otherwise → materialize only band members for the merge; concatenate merged band with exclusive-region detections. Since `_RawOBBTensors` carries no frame-space offset, remap adds `(x0,y0)` to `xywhr[:, :2]` and `corners` on-device.
+
+**First add this helper to `stages/slicing.py`** (next to `get_slice_bboxes`, where the tiling geometry lives). It does not exist yet:
+
+```python
+def tiles_overlap(tiles: list[tuple[int, int, int, int]]) -> bool:
+    """True when ANY two planned tiles actually intersect.
+
+    Pure predicate over tile boxes -- no detection data, no device sync, and
+    cheap enough to call once per window (tile counts are small).
+
+    Callers must use THIS, not ``SliceConfig.overlap_*_ratio``, to decide
+    whether cross-tile dedup is needed: ``get_slice_bboxes`` flushes the last
+    tile in each axis to the frame edge, so tiles genuinely overlap even at a
+    configured ratio of 0.0 (a 300px frame with 256px tiles yields [0,256) and
+    [44,300) -- 212px of real overlap).
+    """
+    for i in range(len(tiles)):
+        ax0, ay0, ax1, ay1 = tiles[i]
+        for j in range(i + 1, len(tiles)):
+            bx0, by0, bx1, by1 = tiles[j]
+            if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
+                return True
+    return False
+```
+
+Add a unit test for it in `tests/test_inference_slicing.py`: assert it returns `True` for the edge-flush case above (configured ratio 0.0 but real overlap) and `False` for a grid that genuinely tiles without overlap (e.g. a 512px frame with 256px tiles at ratio 0.0, which divides evenly).
 
 - [ ] **Step 1: Write the failing test (append)**
 
@@ -1614,7 +1640,7 @@ import numpy as np
 import torch
 
 from ..result import OBBResult
-from .slicing import plan_slices
+from .slicing import plan_slices, tiles_overlap
 
 
 def _remap_raw(raw, x0: int, y0: int):
@@ -1711,10 +1737,21 @@ def run_direct_sliced_cuda(frames, model, config, runtime, imgsz):
             raw = _extract_raw_tensors(res, fi, runtime.device)
         per_frame[fi].append(_remap_raw(raw, x0, y0))
 
+    # Whether ANY two planned tiles actually intersect. This is a pure predicate
+    # over the tile boxes -- no detection data, no device sync, computed once.
+    #
+    # It MUST NOT be derived from slice_cfg.overlap_*_ratio. get_slice_bboxes
+    # flushes the last tile in each axis to the frame edge, so tiles genuinely
+    # overlap even at a configured ratio of 0.0 (a 300px frame with 256px tiles
+    # yields [0,256) and [44,300) -- 212px of real overlap). Gating on the config
+    # ratio skips dedup while tiles overlap, silently double-counting detections.
+    # This is the exact bug Task 6 shipped and had to fix; do not reintroduce it.
+    any_overlap = tiles_overlap(plan.tiles)
+
     out = []
     for fi in range(len(frames)):
         concat = _concat_raw(per_frame[fi], fi)
-        if overlap <= 0.0 or concat.xywhr.shape[0] <= 1:
+        if not any_overlap or concat.xywhr.shape[0] <= 1:
             out.append(concat)  # preserve _RawOBBTensors end-to-end
             continue
         # overlap > 0: materialize for the cross-tile merge (band-only sync in
