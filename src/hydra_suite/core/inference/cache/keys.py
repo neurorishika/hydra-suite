@@ -13,6 +13,7 @@ from ..config import (
     HeadTailConfig,
     OBBConfig,
     PoseConfig,
+    SliceConfig,
 )
 from .base import CACHE_SCHEMA_VERSION, CacheKey
 
@@ -49,18 +50,56 @@ def detection_cache_key(config: OBBConfig) -> CacheKey:
     if config.mode == "direct":
         assert config.direct is not None
         path = config.direct.model_path
+        slice_hash = _slice_config_hash(config.direct.slice)
     else:
         assert config.sequential is not None
         path = (
             f"{config.sequential.detect_model_path}|"
             f"{config.sequential.obb_model_path}"
         )
+        slice_hash = ""  # slicing is direct-mode only
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,
         model_path=path,
         model_mtime=_mtime(path.split("|")[0]),
-        config_hash="",  # confidence_threshold/iou excluded — re-applied at tracking time
+        # confidence_threshold/iou excluded — re-applied at tracking time.
+        # Slicing changes which raw detections exist, so it IS folded in (but
+        # only when enabled, so existing non-sliced caches stay valid).
+        config_hash=slice_hash,
     )
+
+
+def _slice_config_hash(slice_cfg: SliceConfig | None) -> str:
+    """Empty string when disabled (baseline-identical key); param hash when on.
+
+    Every field that can change which raw detections come out of the sliced
+    path must be included here -- an omitted field means a user changes it,
+    the cache is not invalidated, and they silently get stale detections.
+    ``reference_body_px`` affects tile sizing in ``auto_object`` geometry mode
+    and ``merge_backend`` selects cv2 vs gpu merge (tolerance-equivalent, not
+    bit-identical), so both are included.
+    """
+    if slice_cfg is None or not slice_cfg.enabled:
+        return ""
+    payload = "|".join(
+        str(x)
+        for x in (
+            "slice",
+            slice_cfg.geometry_mode,
+            slice_cfg.slice_height,
+            slice_cfg.slice_width,
+            slice_cfg.overlap_height_ratio,
+            slice_cfg.overlap_width_ratio,
+            slice_cfg.object_tile_fraction,
+            slice_cfg.reference_body_px,
+            slice_cfg.merge_policy,
+            slice_cfg.merge_metric,
+            slice_cfg.merge_threshold,
+            slice_cfg.merge_backend,
+            slice_cfg.perform_standard_pred,
+        )
+    )
+    return _sha(payload)
 
 
 # Params that affect background-subtraction detection output. The bg-sub cache is

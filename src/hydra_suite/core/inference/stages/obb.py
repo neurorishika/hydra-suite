@@ -467,6 +467,11 @@ def run_obb(
     iou=1.0 disables YOLO's internal NMS — filtering stage handles it.
     """
     if models.mode == "direct":
+        slice_cfg = getattr(config.direct, "slice", None) if config.direct else None
+        if slice_cfg is not None and slice_cfg.enabled:
+            from .slicing import run_direct_sliced  # lazy: avoids import cycle
+
+            return run_direct_sliced(frames, models.direct_model, config, runtime)
         return _run_direct(frames, models.direct_model, config, runtime)
     return _run_sequential(frames, models, config, runtime)
 

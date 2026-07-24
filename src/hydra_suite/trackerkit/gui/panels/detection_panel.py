@@ -611,6 +611,23 @@ class DetectionPanel(QWidget):
         )
         f_yolo.addRow("Fixed angle", self.spin_yolo_fixed_angle)
 
+        self.chk_slice_enabled = QCheckBox("Enable sliced inference (SAHI)")
+        self.chk_slice_enabled.setToolTip(
+            "Tile each frame and detect per tile to recover small-object recall "
+            "and reduce crowding. Off by default; direct mode only."
+        )
+        f_yolo.addRow("Sliced inference", self.chk_slice_enabled)
+
+        self.combo_slice_geometry = QComboBox()
+        self.combo_slice_geometry.addItems(["auto_model", "auto_object", "custom"])
+        self.combo_slice_geometry.setFixedHeight(30)
+        self.combo_slice_geometry.setToolTip(
+            "auto_model: tile = model input size (fastest, no resample). "
+            "auto_object: size tiles from expected object size. "
+            "custom: explicit tile size (advanced config)."
+        )
+        f_yolo.addRow("Slice geometry", self.combo_slice_geometry)
+
         self.combo_yolo_model = QComboBox()
         self.combo_yolo_model.activated.connect(self.on_yolo_model_changed)
         self.combo_yolo_model.currentIndexChanged.connect(
@@ -1861,6 +1878,8 @@ class DetectionPanel(QWidget):
         # always shown, and _on_yolo_direct_task_changed governs the fixed-angle
         # row's visibility (Detect task only).
         _set_row_visible(getattr(self, "combo_yolo_direct_task", None), not sequential)
+        _set_row_visible(getattr(self, "chk_slice_enabled", None), not sequential)
+        _set_row_visible(getattr(self, "combo_slice_geometry", None), not sequential)
         if sequential:
             _set_row_visible(getattr(self, "spin_yolo_fixed_angle", None), False)
         else:

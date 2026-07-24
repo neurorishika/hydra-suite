@@ -396,3 +396,87 @@ def test_real_tensorrt_export_roundtrip(tmp_path):  # pragma: no cover - CUDA on
     # A real .pt model + CUDA device would be required here. This test exists to
     # document the real-export path; it skips on non-CUDA machines.
     pytest.skip("requires a real .pt OBB model + CUDA device")
+
+
+# ---------------------------------------------------------------------------
+# Task 8: TRT engine batch sized from the REAL tile count when slicing is on.
+# ---------------------------------------------------------------------------
+
+from hydra_suite.core.inference.config import (  # noqa: E402
+    InferenceConfig,
+    OBBConfig,
+    OBBDirectConfig,
+    SliceConfig,
+)
+
+
+def test_load_obb_models_receives_tile_batch_when_sliced(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obbmod
+
+    captured = {}
+
+    def _fake_load(config, runtime, *, batch_size=1):
+        captured["batch_size"] = batch_size
+        from hydra_suite.core.inference.stages.obb import OBBModels
+
+        return OBBModels(mode="direct", direct_model=object())
+
+    monkeypatch.setattr(obbmod, "load_obb_models", _fake_load)
+
+    import hydra_suite.core.inference.runner as runnermod
+    from hydra_suite.core.inference.runner import _load_obb_for_config
+
+    # 2160x3840 (4K) frame at imgsz 640, overlap 0.2 -> real tile grid is well
+    # above any small hardcoded guess (verified against plan_slices directly).
+    monkeypatch.setattr(runnermod, "_probe_frame_hw", lambda p: (2160, 3840))
+    monkeypatch.setattr(runnermod, "_probe_model_imgsz", lambda p: 640)
+
+    cfg = InferenceConfig(
+        detection_batch_size=2,
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(
+                model_path="m.pt",
+                slice=SliceConfig(enabled=True, geometry_mode="auto_model"),
+            ),
+        ),
+    )
+
+    class _RT:
+        device = "cpu"
+        tensor_on_cuda = False
+
+    _load_obb_for_config(cfg, _RT(), video_path="v.mp4")
+
+    from hydra_suite.core.inference.runner import _sliced_tile_batch
+
+    expected = _sliced_tile_batch(cfg, (2160, 3840), 640)
+    assert expected > 16, f"test must exercise a >16-tile case, got {expected}"
+    assert captured["batch_size"] == expected
+
+
+def test_load_obb_models_unchanged_when_slicing_disabled(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obbmod
+
+    captured = {}
+
+    def _fake_load(config, runtime, *, batch_size=1):
+        captured["batch_size"] = batch_size
+        from hydra_suite.core.inference.stages.obb import OBBModels
+
+        return OBBModels(mode="direct", direct_model=object())
+
+    monkeypatch.setattr(obbmod, "load_obb_models", _fake_load)
+    from hydra_suite.core.inference.runner import _load_obb_for_config
+
+    cfg = InferenceConfig(
+        detection_batch_size=2,
+        obb=OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="m.pt")),
+    )
+
+    class _RT:
+        device = "cpu"
+        tensor_on_cuda = False
+
+    _load_obb_for_config(cfg, _RT(), video_path="v.mp4")
+    assert captured["batch_size"] == 2  # window depth, exactly as before
