@@ -145,6 +145,17 @@ def test_build_config_slice_defaults_when_absent():
     params = {"YOLO_OBB_MODE": "direct", "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt"}
     cfg = build_inference_config_from_params(params)
     assert cfg.obb.direct.slice.enabled is False
+
+
+def test_reference_body_px_sourced_and_resize_scaled():
+    """auto_object needs a real object scale; it comes from REFERENCE_BODY_SIZE
+    * RESIZE_FACTOR, the same source/scaling worker.py uses (worker.py:921)."""
+    params = {
+        "YOLO_OBB_MODE": "direct", "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt",
+        "SLICE_ENABLED": True, "REFERENCE_BODY_SIZE": 30.0, "RESIZE_FACTOR": 2.0,
+    }
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.reference_body_px == 60.0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -176,6 +187,10 @@ class SliceConfig:
     # auto_object mode: tile sized so a reference object spans this linear
     # fraction of the tile.
     object_tile_fraction: float = 0.15
+    # Reference object size in ORIGINAL-FRAME pixels, sourced from
+    # REFERENCE_BODY_SIZE * RESIZE_FACTOR. Only read in auto_object mode; 0
+    # means "unknown", which falls back to auto_model sizing.
+    reference_body_px: float = 0.0
     # merge across tile boundaries.
     merge_policy: Literal["nms", "nmm", "greedy_nmm"] = "greedy_nmm"
     merge_metric: Literal["iou", "ios"] = "ios"
@@ -227,6 +242,13 @@ In the `else:` (direct-mode) branch of `build_inference_config_from_params` (aft
             overlap_width_ratio=overlap,
             object_tile_fraction=_clamped_float(
                 params.get("SLICE_OBJECT_TILE_FRACTION", 0.15), 0.15, 0.01, 0.9
+            ),
+            # auto_object needs a real object scale or it silently degrades to
+            # auto_model. Same source/scaling worker.py uses (worker.py:921).
+            reference_body_px=_clamped_float(
+                float(params.get("REFERENCE_BODY_SIZE", 20.0) or 20.0)
+                * float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
+                0.0, 0.0, 8192.0,
             ),
             merge_policy=(
                 str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
@@ -806,6 +828,22 @@ git commit -m "feat(inference): cv2 merge backend (nms/nmm/greedy_nmm x iou/ios)
 **Interfaces:**
 - Produces: `def pairwise_obb_overlap(corners: torch.Tensor, metric: str = "iou") -> torch.Tensor` — `corners` (N,4,2) on any device; returns (N,N) overlap matrix (metric ∈ {iou, ios}), diagonal = 1.
 
+> **HARD REQUIREMENT — genuinely vectorized, and it must beat cv2 or it does not ship.**
+> This kernel exists ONLY to be faster than the cv2 merge on the native-cuda path.
+> A Python `for i: for j:` loop over pairs (or over polygon vertices) issuing scalar
+> tensor ops is **NOT acceptable**: at ~200 band members that is ~400k kernel
+> launches and would be *slower* than cv2, inverting the entire rationale.
+>
+> Implement the clipping as **batched tensor ops over all N² pairs at once**:
+> broadcast subject polygons to `(N, N, K, 2)` and clip against all 4 edges of
+> every other box simultaneously (Sutherland–Hodgman is 4 sequential edge passes,
+> each fully vectorized across pairs and vertices — a fixed 4-iteration Python
+> loop over *edges* is fine; loops over pairs or vertices are not). Convex
+> quad∩quad yields ≤ 8 vertices, so pad to a fixed K=8 and mask.
+> Shoelace area is then one batched reduction.
+>
+> **Perf gate (Step 4a below) is part of this task's definition of done.**
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -868,105 +906,86 @@ def test_diagonal_is_one_and_empty_ok():
 Run: `python -m pytest tests/test_utils_rotated_iou.py -v`
 Expected: FAIL with `ModuleNotFoundError: ...utils.rotated_iou`.
 
-- [ ] **Step 3: Implement `rotated_iou.py`**
+- [ ] **Step 3: Implement `rotated_iou.py` — fully vectorized**
 
-```python
-# src/hydra_suite/utils/rotated_iou.py
-from __future__ import annotations
+Write `src/hydra_suite/utils/rotated_iou.py` exposing
+`pairwise_obb_overlap(corners: torch.Tensor, metric: str = "iou") -> torch.Tensor`.
+Torch-only (no cv2, no numpy round-trip), device-preserving, runs on CPU/CUDA/MPS.
 
-import torch
+Algorithm — **every step batched across all N² pairs; no Python loop over pairs
+or vertices** (a fixed 4-iteration loop over clip *edges* is the only Python loop
+allowed):
 
+1. **Orient**: make every quad counter-clockwise via batched signed area
+   (shoelace over `(N,4,2)`); flip the ones with negative area using
+   `torch.where`, not a Python branch.
+2. **Broadcast**: build subject `(N, N, K, 2)` (K padded to 8) and clip-box
+   `(N, N, 4, 2)` so pair `(i, j)` is subject `i` against clip `j`.
+3. **Clip**: 4 sequential Sutherland–Hodgman edge passes. Each pass computes,
+   for all pairs and all vertices at once: the inside-test cross product,
+   the edge-intersection point, and a validity mask. Carry results in fixed-size
+   `(N, N, 8, 2)` tensors with a companion `(N, N, 8)` bool mask instead of
+   variable-length vertex lists. Guard the intersection denominator with
+   `torch.where(|denom| < 1e-9, ...)` — never a Python `if`.
+4. **Area**: masked shoelace reduction over the clipped polygons → `(N, N)`
+   intersection areas. Zero out entries with < 3 valid vertices.
+5. **Metric**: `iou = inter / (a_i + a_j - inter)`; `ios = inter / min(a_i, a_j)`.
+   Guard zero denominators with `torch.where`. Set the diagonal to 1.
+6. `N == 0` returns a `(0, 0)` tensor.
 
-def _poly_area(poly: torch.Tensor) -> torch.Tensor:
-    """Shoelace area of (..., K, 2) polygons -> (...)."""
-    x = poly[..., 0]
-    y = poly[..., 1]
-    return 0.5 * torch.abs(
-        (x * torch.roll(y, -1, dims=-1) - torch.roll(x, -1, dims=-1) * y).sum(dim=-1)
-    )
+Numerical note: use the input dtype (float32); an inside-test epsilon of `-1e-6`
+matches the tolerance the tests assert against cv2.
 
-
-def _clip_polygon(subject: torch.Tensor, clip: torch.Tensor) -> torch.Tensor:
-    """Sutherland–Hodgman: clip convex ``subject`` poly by convex ``clip`` poly.
-
-    subject/clip: (K,2) tensors, CCW. Returns (M,2) clipped polygon (M may be 0).
-    Scalar-loop over the (at most 4) clip edges — cheap; the batching is at the
-    pair level in ``pairwise_obb_overlap``.
-    """
-    def inside(p, a, b):
-        return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) >= -1e-6
-
-    def intersect(p1, p2, a, b):
-        r = p2 - p1
-        s = b - a
-        denom = r[0] * s[1] - r[1] * s[0]
-        if torch.abs(denom) < 1e-9:
-            return p2
-        t = ((a[0] - p1[0]) * s[1] - (a[1] - p1[1]) * s[0]) / denom
-        return p1 + t * r
-
-    output = [subject[i] for i in range(subject.shape[0])]
-    k = clip.shape[0]
-    for i in range(k):
-        a = clip[i]
-        b = clip[(i + 1) % k]
-        if not output:
-            break
-        inp = output
-        output = []
-        for j in range(len(inp)):
-            cur = inp[j]
-            prv = inp[j - 1]
-            if inside(cur, a, b):
-                if not inside(prv, a, b):
-                    output.append(intersect(prv, cur, a, b))
-                output.append(cur)
-            elif inside(prv, a, b):
-                output.append(intersect(prv, cur, a, b))
-    if not output:
-        return subject.new_zeros((0, 2))
-    return torch.stack(output, dim=0)
-
-
-def _ensure_ccw(quad: torch.Tensor) -> torch.Tensor:
-    """Order a (4,2) quad counter-clockwise (signed area > 0)."""
-    x = quad[:, 0]
-    y = quad[:, 1]
-    signed = (x * torch.roll(y, -1) - torch.roll(x, -1) * y).sum()
-    return quad if signed >= 0 else torch.flip(quad, dims=[0])
-
-
-def pairwise_obb_overlap(corners: torch.Tensor, metric: str = "iou") -> torch.Tensor:
-    """(N,4,2) OBB corners -> (N,N) IoU or IoS matrix on the input device.
-
-    Torch-only (no cv2); runs on CUDA/MPS/CPU. Diagonal = 1. This is the
-    ``gpu`` merge backend's pairwise primitive; validated against cv2 as oracle.
-    """
-    n = corners.shape[0]
-    if n == 0:
-        return corners.new_zeros((0, 0))
-    quads = [_ensure_ccw(corners[i]) for i in range(n)]
-    areas = torch.stack([_poly_area(q) for q in quads])
-    out = corners.new_zeros((n, n))
-    for i in range(n):
-        out[i, i] = 1.0
-        for j in range(i + 1, n):
-            clipped = _clip_polygon(quads[i], quads[j])
-            inter = _poly_area(clipped) if clipped.shape[0] >= 3 else corners.new_tensor(0.0)
-            if metric == "ios":
-                denom = torch.minimum(areas[i], areas[j])
-            else:
-                denom = areas[i] + areas[j] - inter
-            val = inter / denom if float(denom) > 1e-9 else corners.new_tensor(0.0)
-            out[i, j] = val
-            out[j, i] = val
-    return out
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run correctness tests**
 
 Run: `python -m pytest tests/test_utils_rotated_iou.py -v`
 Expected: PASS (3 tests).
+
+- [ ] **Step 4a: Perf gate — MUST be faster than cv2, or report BLOCKED**
+
+This kernel's only justification is beating cv2 on the native-cuda path. Verify
+it, and put the numbers in your report. Write `/tmp/sahi_perf_check.py`:
+
+```python
+import time, numpy as np, torch, cv2
+from hydra_suite.utils.rotated_iou import pairwise_obb_overlap
+
+rng = np.random.default_rng(0)
+N = 200
+corners = np.stack([
+    cv2.boxPoints(((float(rng.uniform(0, 2000)), float(rng.uniform(0, 2000))),
+                   (float(rng.uniform(20, 80)), float(rng.uniform(20, 80))),
+                   float(rng.uniform(0, 180)))).astype(np.float32)
+    for _ in range(N)
+])
+
+def cv2_matrix(c):
+    hulls = [cv2.convexHull(x).reshape(-1, 2) for x in c]
+    areas = [abs(cv2.contourArea(h)) for h in hulls]
+    m = np.zeros((len(c), len(c)), np.float32)
+    for i in range(len(c)):
+        for j in range(i + 1, len(c)):
+            inter, _ = cv2.intersectConvexConvex(hulls[i], hulls[j])
+            inter = max(0.0, inter)
+            d = areas[i] + areas[j] - inter
+            m[i, j] = m[j, i] = inter / d if d > 1e-9 else 0.0
+    return m
+
+t = torch.from_numpy(corners)
+pairwise_obb_overlap(t)                      # warm up
+t0 = time.perf_counter(); pairwise_obb_overlap(t); gpu_s = time.perf_counter() - t0
+t0 = time.perf_counter(); cv2_matrix(corners); cv2_s = time.perf_counter() - t0
+print(f"N={N}  vectorized={gpu_s*1000:.1f}ms  cv2={cv2_s*1000:.1f}ms  speedup={cv2_s/gpu_s:.2f}x")
+assert gpu_s < cv2_s, f"NOT FASTER: {gpu_s*1000:.1f}ms vs cv2 {cv2_s*1000:.1f}ms"
+```
+
+Run: `python /tmp/sahi_perf_check.py`
+Expected: prints a speedup > 1.0 and the assert passes.
+
+**If it is NOT faster on this CPU/MPS box**, do not silently continue: note the
+measured numbers and report `DONE_WITH_CONCERNS`, stating that the kernel is
+CPU/MPS-measured only and its real target is CUDA. Do NOT loosen the assert to
+make it pass.
 
 - [ ] **Step 5: Format and commit**
 
@@ -1126,34 +1145,38 @@ def _min_rect(box: np.ndarray) -> tuple:
     return (cx, cy), (e0, e1)
 
 
-def _union_via_kernel(pts: torch.Tensor, device) -> tuple:
-    """Tightest rotated rect over member corner points, via the branch's kernel.
+def _union_via_kernel(pts: torch.Tensor, device, num_angles: int = 64) -> tuple:
+    """Tightest rotated rect over member corner points — exact, no rasterization.
 
-    Wraps the pooled point set as a 1-instance dense mask fed to
-    ``rotated_rect_from_masks`` (its angle-search core is corner-agnostic).
+    Same angle-projection idea as ``utils/obb_from_mask.rotated_rect_from_masks``,
+    but applied DIRECTLY to the corner point set instead of a rasterized mask, so
+    there is no grid-quantization error (rasterizing to a 64px grid would cost
+    ~1-3px of accuracy for no benefit — we already have exact points).
+
+    Projects all points onto ``num_angles`` candidate axes at once, takes the
+    axis whose bounding extent has minimum area, and reconstructs the rect
+    centered on that extent's midpoint. Fully vectorized: one (num_angles, P)
+    matmul, no Python loop over angles or points.
     """
-    from hydra_suite.utils.obb_from_mask import rotated_rect_from_masks
-
-    x0 = float(pts[:, 0].min()); y0 = float(pts[:, 1].min())
-    x1 = float(pts[:, 0].max()); y1 = float(pts[:, 1].max())
-    # Rasterize the convex hull of pts into a small dense mask in [x0,x1]x[y0,y1].
-    crop = 64
-    mask = torch.zeros((1, crop, crop), dtype=torch.float32, device=device)
-    sx = (crop - 1) / max(1e-6, (x1 - x0))
-    sy = (crop - 1) / max(1e-6, (y1 - y0))
-    px = ((pts[:, 0] - x0) * sx).round().long().clamp(0, crop - 1)
-    py = ((pts[:, 1] - y0) * sy).round().long().clamp(0, crop - 1)
-    mask[0, py, px] = 1.0
-    # Dilate the sparse corner set so the rect search sees a filled region.
-    mask = torch.nn.functional.max_pool2d(mask.unsqueeze(0), 3, 1, 1).squeeze(0)
-    boxes = torch.tensor([[0, 0, crop, crop]], dtype=torch.float32, device=device)
-    rect = rotated_rect_from_masks(mask, boxes, num_angles=36, crop_size=crop)[0].cpu()
-    # rect = (cx, cy, w, h, angle) in the crop's own space -> back to frame space.
-    ucx = float(rect[0]) / sx + x0
-    ucy = float(rect[1]) / sy + y0
-    uw = float(rect[2]) / sx
-    uh = float(rect[3]) / sy
-    return ucx, ucy, uw, uh, float(rect[4])
+    angles = torch.linspace(
+        0.0, float(torch.pi), num_angles + 1, device=device, dtype=torch.float32
+    )[:num_angles]                                        # (A,)
+    cos_a, sin_a = torch.cos(angles), torch.sin(angles)
+    # Project every point onto every candidate axis and its perpendicular.
+    u = pts[:, 0][None, :] * cos_a[:, None] + pts[:, 1][None, :] * sin_a[:, None]
+    v = -pts[:, 0][None, :] * sin_a[:, None] + pts[:, 1][None, :] * cos_a[:, None]
+    umin, umax = u.min(dim=1).values, u.max(dim=1).values   # (A,)
+    vmin, vmax = v.min(dim=1).values, v.max(dim=1).values
+    w_all, h_all = umax - umin, vmax - vmin
+    best = int(torch.argmin(w_all * h_all))
+    ang = float(angles[best])
+    uw, uh = float(w_all[best]), float(h_all[best])
+    # Centre in rotated frame -> back to frame coords.
+    uc = (umin[best] + umax[best]) * 0.5
+    vc = (vmin[best] + vmax[best]) * 0.5
+    ucx = float(uc * torch.cos(angles[best]) - vc * torch.sin(angles[best]))
+    ucy = float(uc * torch.sin(angles[best]) + vc * torch.cos(angles[best]))
+    return ucx, ucy, uw, uh, ang
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -1379,7 +1402,10 @@ def run_direct_sliced(frames, model, config, runtime):
     # the first frame's shape.
     first = frames[0]
     frame_hw = (int(first.shape[0]), int(first.shape[1]))
-    plan = plan_slices(frame_hw, slice_cfg, imgsz, None)
+    plan = plan_slices(
+        frame_hw, slice_cfg, imgsz, None,
+        ref_object_px=slice_cfg.reference_body_px,
+    )
 
     # Build the flattened tile job list across all frames.
     jobs = []  # (frame_idx, x0, y0, x1, y1) ; x1==-1 marks a full-frame job
@@ -1595,7 +1621,10 @@ def run_direct_sliced_cuda(frames, model, config, runtime, imgsz):
     model_task = config.direct.model_task
     overlap = max(slice_cfg.overlap_height_ratio, slice_cfg.overlap_width_ratio)
     frame_hw = (int(frames[0].shape[0]), int(frames[0].shape[1]))
-    plan = plan_slices(frame_hw, slice_cfg, imgsz, None)
+    plan = plan_slices(
+        frame_hw, slice_cfg, imgsz, None,
+        ref_object_px=slice_cfg.reference_body_px,
+    )
 
     # Tile every frame on-device (zero-copy views), collect tiles + provenance.
     jobs, tiles = [], []
@@ -1673,7 +1702,11 @@ git commit -m "feat(inference): native-cuda sliced path preserves _RawOBBTensors
 - Consumes: `SlicePlan`/`plan_slices` (Task 2); `config.detection_batch_size`.
 - Produces: TRT engine batch profile sized to `tiles-per-chunk` when slicing enabled (else window depth, unchanged).
 
-**Design note:** When slicing is on, the model is fed tile batches, not frame batches. The TRT dynamic-batch profile must cover the tile-chunk size. The tile-chunk size = `min(detection_batch_size × tiles_per_frame, TILE_BATCH_CAP)`. Since the exact tile count needs a frame size we don't have at load time, use a conservative bound: `detection_batch_size` frames is the window; a safe engine profile is `max(detection_batch_size, tiles_per_frame_estimate)`. For `auto_model`, tile size = imgsz; estimate tiles from a nominal 4K frame OR simply pass `detection_batch_size` unchanged and let the dynamic engine cover it (ultralytics dynamic engines handle variable batch ≤ profile-max). **Minimal-risk choice:** pass a `slice_tile_batch` hint so the TRT export profile max ≥ the largest chunk actually fed.
+**Design note:** When slicing is on, the model is fed **tile** batches, not frame batches, so the TRT dynamic-batch profile must cover the tile-chunk size or `setInputShape` fails (spec §5c). Compute the **real** tile count — do NOT guess a constant. Both inputs are available at load time: the video's frame size and the resolved `imgsz`. Reuse `plan_slices` + `get_slice_bboxes` (Task 2) to count tiles exactly, then the profile size is `len(plan.tiles) (+1 if perform_standard_pred)`, clamped to a sane ceiling.
+
+A hardcoded hint is wrong: a 4K frame at `imgsz=640` yields ~35 tiles/frame, which would exceed any small guess and reintroduce the exact silent failure §5c warns about.
+
+`_load_obb_for_config` needs the frame size. `runner.py` already receives `video_path` in this area (used by `load_bgsub_model`); read the frame size from it with the same probe the pipeline uses. **If the frame size genuinely cannot be resolved at load time, do not invent a constant — report BLOCKED and say so**, so we can decide between plumbing it through or deferring gpu_fast support.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1695,7 +1728,13 @@ def test_load_obb_models_receives_tile_batch_when_sliced(monkeypatch):
 
     monkeypatch.setattr(obbmod, "load_obb_models", _fake_load)
 
+    import hydra_suite.core.inference.runner as runnermod
     from hydra_suite.core.inference.runner import _load_obb_for_config
+    # 2160x3840 frame at imgsz 640, overlap 0.2 -> step 512 ->
+    # ceil-ish grid of 8 cols x 5 rows = 40 tiles (well above any small guess).
+    monkeypatch.setattr(runnermod, "_probe_frame_hw", lambda p: (2160, 3840))
+    monkeypatch.setattr(runnermod, "_probe_model_imgsz", lambda p: 640)
+
     cfg = InferenceConfig(
         detection_source="obb", detection_batch_size=2,
         obb=OBBConfig(mode="direct", direct=OBBDirectConfig(
@@ -1704,9 +1743,33 @@ def test_load_obb_models_receives_tile_batch_when_sliced(monkeypatch):
     )
 
     class _RT: device = "cpu"; tensor_on_cuda = False
-    _load_obb_for_config(cfg, _RT())
-    # sliced => batch hint is >= detection_batch_size (tiles per chunk, not 2 frames).
-    assert captured["batch_size"] >= 2
+    _load_obb_for_config(cfg, _RT(), video_path="v.mp4")
+    # Must be the REAL tile count, not the 2-frame window and not a small constant.
+    from hydra_suite.core.inference.runner import _sliced_tile_batch
+    expected = _sliced_tile_batch(cfg, (2160, 3840), 640)
+    assert expected > 16, f"test must exercise a >16-tile case, got {expected}"
+    assert captured["batch_size"] == expected
+
+
+def test_load_obb_models_unchanged_when_slicing_disabled(monkeypatch):
+    import hydra_suite.core.inference.stages.obb as obbmod
+    captured = {}
+
+    def _fake_load(config, runtime, *, batch_size=1):
+        captured["batch_size"] = batch_size
+        from hydra_suite.core.inference.stages.obb import OBBModels
+        return OBBModels(mode="direct", direct_model=object())
+
+    monkeypatch.setattr(obbmod, "load_obb_models", _fake_load)
+    from hydra_suite.core.inference.runner import _load_obb_for_config
+    cfg = InferenceConfig(
+        detection_source="obb", detection_batch_size=2,
+        obb=OBBConfig(mode="direct", direct=OBBDirectConfig(model_path="m.pt")),
+    )
+
+    class _RT: device = "cpu"; tensor_on_cuda = False
+    _load_obb_for_config(cfg, _RT(), video_path="v.mp4")
+    assert captured["batch_size"] == 2  # window depth, exactly as before
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1719,22 +1782,54 @@ Expected: FAIL with `ImportError: cannot import name '_load_obb_for_config'` (or
 In `runner.py`, replace the inline `load_obb_models(...)` call (lines 145-148) with a helper:
 
 ```python
-def _load_obb_for_config(config, runtime):
-    """Load OBB models, sizing the TRT engine batch for tiles when slicing is on."""
+# Upper bound on the TRT tile-batch profile. Not a guess at tile count (that is
+# computed exactly below) — purely a guard so a pathological frame/imgsz ratio
+# cannot request an unbuildable engine.
+_MAX_TILE_BATCH = 128
+
+
+def _sliced_tile_batch(config, frame_hw, imgsz):
+    """Exact tiles-per-frame for the configured slice plan (+1 for full-frame pass)."""
+    from .stages.slicing import plan_slices
+
+    slice_cfg = config.obb.direct.slice
+    plan = plan_slices(
+        frame_hw, slice_cfg, imgsz, None,
+        ref_object_px=slice_cfg.reference_body_px,
+    )
+    n = len(plan.tiles) + (1 if plan.full_frame else 0)
+    return max(1, min(n, _MAX_TILE_BATCH))
+
+
+def _load_obb_for_config(config, runtime, video_path=None):
+    """Load OBB models, sizing the TRT engine batch from the real tile count.
+
+    With slicing on, the model is fed TILE batches, not frame batches, so the
+    engine's dynamic profile must cover tiles-per-chunk (spec 5c) — otherwise
+    TensorRT fails setInputShape at runtime.
+    """
     from .stages.obb import load_obb_models
 
     batch_size = config.detection_batch_size
     direct = config.obb.direct if config.obb else None
     slice_cfg = getattr(direct, "slice", None) if direct else None
     if slice_cfg is not None and slice_cfg.enabled:
-        # Tiles-per-chunk governs the engine profile, not the frame window.
-        # Conservative bound: a 4K frame at imgsz tiles yields ~<= 16 tiles; use
-        # the larger of (window depth, TILE_BATCH_HINT) so the dynamic engine's
-        # max-batch covers the largest chunk actually fed.
-        TILE_BATCH_HINT = 16
-        batch_size = max(config.detection_batch_size, TILE_BATCH_HINT)
+        frame_hw = _probe_frame_hw(video_path)
+        imgsz = _probe_model_imgsz(direct.model_path)
+        if frame_hw is not None and imgsz:
+            batch_size = max(batch_size, _sliced_tile_batch(config, frame_hw, imgsz))
     return load_obb_models(config.obb, runtime, batch_size=batch_size)
 ```
+
+Implement `_probe_frame_hw(video_path)` (returns `(h, w)` or `None` — use the
+same video-open path the pipeline already uses; `cv2.VideoCapture` reading
+`CAP_PROP_FRAME_HEIGHT`/`WIDTH` is acceptable, close it immediately) and
+`_probe_model_imgsz(model_path)` (reuse
+`runtime_artifacts._resolve_imgsz(Path(model_path))`, which already exists at
+`runtime_artifacts.py:88`). If either probe fails, fall back to
+`config.detection_batch_size` and log a WARNING naming the consequence
+(gpu_fast + slicing may need a manually sized engine) — a silent fallback here
+is the failure mode §5c is about.
 
 Then at the original call site:
 
@@ -2178,6 +2273,33 @@ the result in the PR description; do NOT claim parity without CSV row counts > 1
 
 ## Self-Review Notes
 
-- **Spec §3 auto_object** needs `ref_object_px`; `plan_slices` accepts it. The wiring of a real reference-object size from `REFERENCE_BODY_SIZE` into `run_direct_sliced` is left as `ref_object_px=0.0` (falls back to `auto_model` sizing) in Task 6 — a documented v1 limitation: `auto_object` sizing activates only when a caller passes a positive `ref_object_px`. If full `auto_object` wiring is required for v1, thread `config`'s reference body size into the `plan_slices` call in `run_direct_sliced`/`run_direct_sliced_cuda`. Flagged here so the reviewer decides.
-- **Spec §5b nvdec fused op / upload-once:** Tasks 7 uses `_gpu_letterbox_batch` (existing per-frame path) for correctness first. The fused `stack→permute→float→÷255` and upload-once optimizations are performance refinements that can land as a follow-up without changing the interface — noted so they aren't silently assumed done.
-- All types/method names cross-checked: `SliceConfig` fields, `plan_slices` signature, `merge_obb_detections` kwargs, `run_direct_sliced(_cuda)` signatures, `_RawOBBTensors` construction, `OBBResult.make_detection_ids` are consistent across tasks.
+**Pre-flight amendments (2026-07-24, decided with the human before execution):**
+
+1. **`auto_object` is now genuinely wired** — `SliceConfig.reference_body_px` is
+   sourced from `REFERENCE_BODY_SIZE * RESIZE_FACTOR` (Task 1) and threaded into
+   every `plan_slices` call (Tasks 6/7/8). It is no longer inert config.
+2. **The `gpu` merge kernel MUST be truly vectorized and MUST beat cv2** (Task 4,
+   Step 3 + the Step 4a perf gate). The original plan's Python N² pair loop was
+   rejected: it would have been slower than the cv2 default it exists to beat.
+3. **Task 5's union no longer rasterizes** to a 64px mask. It projects the corner
+   point set directly onto candidate axes (exact, vectorized, no quantization),
+   which also removes the accuracy loss behind the old 3px test tolerance.
+4. **Task 8 computes the real tile count** from frame size + imgsz via
+   `plan_slices`, replacing the magic `TILE_BATCH_HINT = 16`, which would not have
+   covered a 4K/imgsz-640 case (~40 tiles) and so would have left the exact
+   TensorRT failure §5c warns about in place. `_MAX_TILE_BATCH` is a build-safety
+   ceiling, not a tile-count estimate.
+
+**Remaining known limitation (accepted for v1):**
+
+- **Spec §5b nvdec fused op / upload-once:** Task 7 uses the existing
+  `_gpu_letterbox_batch`. Its internal guards (`if new_h != H ...`, `if pad_top ...`)
+  already no-op the resample under the exact-tile case, so §5a's *resample-free*
+  property holds; what is deferred is the fused `stack→permute→float→÷255` batch op
+  and the upload-once-then-tile optimization. Both are pure performance refinements
+  behind an unchanged interface, so they can land later without rework.
+
+**Consistency:** `SliceConfig` fields, `plan_slices` signature (incl.
+`ref_object_px`), `merge_obb_detections` kwargs, `run_direct_sliced(_cuda)`
+signatures, `_RawOBBTensors` construction, and `OBBResult.make_detection_ids` are
+consistent across all tasks.
