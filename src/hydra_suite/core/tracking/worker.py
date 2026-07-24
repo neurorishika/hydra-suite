@@ -1006,6 +1006,13 @@ class TrackingEngineCore:
                 cache_dir=_cache_dir,
                 video_path=self.video_path,
                 cache_only=self.backward_mode,
+                # Arena ROI mask (native video resolution). Folded into the
+                # detection cache key ONLY when sliced inference is enabled, and
+                # used to ROI-gate slice tiles in the batch pass. Passing it at
+                # construction (both forward and backward runs) is what lets a
+                # backward/replay run reproduce the same cache key and read the
+                # forward cache. None / non-sliced runs => key unchanged.
+                roi_mask=p.get("ROI_MASK"),
             )
 
             if self.backward_mode:
