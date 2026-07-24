@@ -789,18 +789,17 @@ def _assemble(
     merged_rows: list[tuple],
 ) -> OBBResult:
     """Concatenate nms/lone survivors + passthrough + unioned rows into one OBBResult."""
+    # CRITICAL: kept-single and passthrough detections were NEVER modified, so
+    # they must be copied through by plain array indexing with NO geometry
+    # recomputation. Do NOT round-trip them through cv2.minAreaRect: that
+    # returns its own (w, h, angle) parametrization, and pairing its (w, h)
+    # with the stored canonical major-axis angle rotates non-square boxes by
+    # 90 degrees. (A 60x20 box at angle 0 comes back 20x60 at angle 0, which
+    # re-normalizes to a vertical box. Area is preserved, so any test that
+    # asserts only `sizes` will pass while the geometry is silently wrong.)
+    # Only `merged_rows` needs synthesis — _union_obb pairs (w, h) with the
+    # angle from the SAME minAreaRect call, which is self-consistent.
     keep = sorted(keep_single + passthrough)
-    cxs, cys, ws, hs, angs, confs, clss = [], [], [], [], [], [], []
-    for i in keep:
-        cxs.append(src.centroids[i, 0]); cys.append(src.centroids[i, 1])
-        # recover w,h from sizes/shapes is lossy; reuse stored corners' minAreaRect.
-        (mcx, mcy), (mw, mh), mdeg = cv2.minAreaRect(
-            src.corners[i].astype(np.float32)
-        )
-        ws.append(mw); hs.append(mh)
-        angs.append(src.angles[i]); confs.append(src.confidences[i])
-        clss.append(int(src.class_ids_or_zeros[i]))
-    for (cx, cy, w, h, ang, conf, cls) in merged_rows:
         cxs.append(cx); cys.append(cy); ws.append(w); hs.append(h)
         angs.append(ang); confs.append(conf); clss.append(cls)
     if not cxs:
@@ -823,7 +822,14 @@ def _assemble(
     )
 ```
 
-Note: `_assemble` re-derives (w,h) for kept singles via `minAreaRect` of their stored corners because `OBBResult` stores `sizes`/`aspect`, not raw (w,h); this reconstruction is exact for rectangles.
+**Correctness note (learned the hard way):** do NOT reconstruct geometry for
+detections that were not merged. `cv2.minAreaRect` returns its own `(w, h, angle)`
+parametrization; pairing its `(w, h)` with `OBBResult`'s stored canonical
+major-axis angle silently rotates non-square boxes by 90 degrees, and `sizes`
+(area) is invariant under that swap so area-only assertions will NOT catch it.
+Copy untouched detections through by array indexing. Only unioned rows need
+synthesis, and only because `_union_obb` pairs `(w, h)` with the angle from the
+same `minAreaRect` call.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
