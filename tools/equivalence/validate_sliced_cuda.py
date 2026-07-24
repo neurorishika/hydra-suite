@@ -34,9 +34,19 @@ Usage (from a checkout on the CUDA host):
     export KMP_DUPLICATE_LIB_OK=TRUE PYTHONPATH=$PWD/src
     python tools/equivalence/validate_sliced_cuda.py
 
-Last verified against the PRE-C1-fix code: 2026-07-24, NVIDIA RTX 6000 Ada,
-torch 2.11.0+cu130 (it then validated the impossible combination). NOT yet
-re-run since the C1 fix -- no CUDA host was available.
+Last verified: 2026-07-24 on NVIDIA RTX 6000 Ada, torch 2.11.0+cu130, AFTER the
+C1 dispatch fix -- all checks passed, including the gpu_fast (CUDA-tensor frames
+-> OBBResult) case that previously raised TypeError. The adjacent suites
+(test_inference_slicing / test_inference_merge / test_utils_rotated_iou) also
+pass on that host: 59 passed.
+
+History worth keeping: an earlier revision of this script set
+``tensor_on_cuda=True`` *and* passed CUDA-tensor frames -- a combination
+``RuntimeContext.from_config`` can never emit (``tensor_on_cuda`` requires the
+torch backend, while CUDA-tensor frames require NVDEC, which is gpu_fast-only).
+It therefore passed on real hardware while the feature crashed on BOTH CUDA
+tiers. Keep the tier shapes below aligned with what the resolver actually
+produces; ``tests/test_inference_slicing.py`` pins that invariant.
 """
 
 import types
