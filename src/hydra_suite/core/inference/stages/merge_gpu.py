@@ -110,7 +110,14 @@ def _union_via_kernel(
 
 
 def merge_obb_detections_gpu(
-    result: OBBResult, *, policy: str, metric: str, threshold: float, runtime
+    result: OBBResult,
+    *,
+    policy: str,
+    metric: str,
+    threshold: float,
+    runtime,
+    band_idx: "np.ndarray | None" = None,
+    passthrough_idx: "np.ndarray | None" = None,
 ) -> OBBResult:
     """GPU-native merge: pairwise matrix on device, greedy grouping on CPU,
     union via the shared angle-search kernel. Matches cv2 within tolerance.
@@ -121,16 +128,39 @@ def merge_obb_detections_gpu(
     ``_union_via_kernel`` and renormalizes through the same shared geometry
     pipeline ``merge.py``'s cv2 path uses, so the output contract (corner
     ordering, angle convention, sizes/aspect) is identical either way.
+
+    ``band_idx`` / ``passthrough_idx`` are the overlap-band split computed by
+    ``merge.merge_obb_detections`` (the SAME split the cv2 oracle uses): only
+    band members enter the N x N matrix and the grouping, and the complement is
+    handed to ``_assemble`` as untouched passthrough rows. ``None`` means "all
+    detections are candidates" (the standalone-call default).
     """
     n = result.num_detections
     if n <= 1:
         return result
 
+    if band_idx is None:
+        band_idx = np.arange(n)
+    band_idx = np.asarray(band_idx, dtype=np.int64)
+    passthrough = (
+        [] if passthrough_idx is None else np.asarray(passthrough_idx).tolist()
+    )
+    if band_idx.size <= 1:
+        return result
+
     device = getattr(runtime, "device", "cpu") if runtime is not None else "cpu"
-    corners_t = torch.as_tensor(result.corners, dtype=torch.float32, device=device)
+    corners_t = torch.as_tensor(
+        result.corners[band_idx], dtype=torch.float32, device=device
+    )
     matrix = pairwise_obb_overlap(corners_t, metric=metric).detach().cpu().numpy()
-    order = np.argsort(result.confidences)[::-1]
-    groups = _greedy_groups(matrix, order, threshold)
+    band_conf = result.confidences[band_idx]
+    # Grouping runs in BAND-LOCAL index space (the matrix is band x band), then
+    # every emitted index is mapped back to the caller's global detection index.
+    local_order = np.argsort(band_conf)[::-1]
+    groups = [
+        [int(band_idx[i]) for i in g]
+        for g in _greedy_groups(matrix, local_order, threshold)
+    ]
 
     keep_single: list[int] = []
     merged_rows: list[tuple] = []
@@ -148,4 +178,4 @@ def merge_obb_detections_gpu(
         cls = int(result.class_ids_or_zeros[top])
         merged_rows.append((ucx, ucy, uw, uh, uang, conf, cls))
 
-    return _assemble(result, keep_single, [], merged_rows)
+    return _assemble(result, keep_single, passthrough, merged_rows)

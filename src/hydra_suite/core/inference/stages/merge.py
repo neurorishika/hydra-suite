@@ -113,13 +113,15 @@ def merge_obb_detections(
     n = result.num_detections
     if n <= 1:
         return result
-    if backend == "gpu":
-        from .merge_gpu import merge_obb_detections_gpu  # lazy; Task 5
 
-        return merge_obb_detections_gpu(
-            result, policy=policy, metric=metric, threshold=threshold, runtime=runtime
-        )
-
+    # The band split is backend-INDEPENDENT and therefore happens before
+    # dispatch: both backends must consider the same candidate set, or they
+    # stop being oracle/implementation of one another. (Finding I1: the gpu
+    # backend used to be dispatched before this split and never received
+    # ``overlap_bands``, so two genuinely distinct touching animals inside one
+    # tile's exclusive region -- ios >= threshold, but with no possible
+    # cross-tile duplicate -- were unioned under ``gpu`` and left alone under
+    # ``cv2``.)
     if overlap_bands is None:
         band_idx = np.arange(n)
         passthrough_idx = np.array([], dtype=int)
@@ -128,6 +130,19 @@ def merge_obb_detections(
         passthrough_idx = np.where(~overlap_bands)[0]
     if band_idx.size <= 1:
         return result
+
+    if backend == "gpu":
+        from .merge_gpu import merge_obb_detections_gpu  # lazy; Task 5
+
+        return merge_obb_detections_gpu(
+            result,
+            policy=policy,
+            metric=metric,
+            threshold=threshold,
+            runtime=runtime,
+            band_idx=band_idx,
+            passthrough_idx=passthrough_idx,
+        )
 
     # confidence-descending order over band members.
     order = band_idx[np.argsort(result.confidences[band_idx])[::-1]]

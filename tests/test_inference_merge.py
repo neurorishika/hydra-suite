@@ -204,6 +204,62 @@ def test_gpu_backend_matches_cv2_within_tolerance(policy):
     assert np.allclose(cc, gc, atol=3.0)
 
 
+def test_gpu_backend_honours_overlap_bands_like_cv2():
+    """Finding I1: the gpu backend must apply ``overlap_bands`` exactly like the
+    cv2 oracle, not merge every detection in the frame.
+
+    Two genuinely DISTINCT touching animals inside ONE tile's exclusive region
+    can exceed ``ios >= 0.5`` (here the small one is fully inside the big one's
+    hull, ios = 1.0) -- but they can have no cross-tile duplicate, so the cv2
+    oracle never considers them. Before this fix the gpu backend ignored the
+    band mask entirely and unioned them into one detection: a correctness
+    divergence from the declared oracle in exactly the crowded-scene case this
+    feature exists for.
+
+    The frame also contains a REAL cross-tile duplicate pair straddling the
+    x=256 tile boundary, so the test proves the band mask is being applied
+    (exclusive pair survives) and not merely that merging was disabled
+    (straddling pair still collapses).
+    """
+    tiles = [(0, 0, 256, 256), (240, 0, 496, 256)]
+    exclusive_big = _obb(100, 100, 60, 60, conf=0.9)
+    exclusive_small = _obb(105, 100, 20, 20, conf=0.6)  # ios == 1.0 vs big
+    straddle_a = _obb(250, 200, 40, 40, conf=0.8)
+    straddle_b = _obb(254, 200, 40, 40, conf=0.5)
+    r = _concat(exclusive_big, exclusive_small, straddle_a, straddle_b)
+
+    bands = band_membership(r.corners, tiles)
+    # Non-trivial mask: the exclusive pair is out of band, the straddlers in.
+    assert bands.tolist() == [False, False, True, True]
+
+    kw = dict(policy="greedy_nmm", metric="ios", threshold=0.5, overlap_bands=bands)
+    cv2_out = merge_obb_detections(r, backend="cv2", **kw)
+    gpu_out = merge_obb_detections(r, backend="gpu", **kw)
+
+    # 2 untouched exclusive-region detections + 1 unioned straddling pair.
+    assert cv2_out.num_detections == 3
+    assert gpu_out.num_detections == cv2_out.num_detections
+    cc = np.sort(cv2_out.centroids.sum(axis=1))
+    gc = np.sort(gpu_out.centroids.sum(axis=1))
+    assert np.allclose(cc, gc, atol=3.0)
+
+
+def test_gpu_backend_all_bands_false_is_a_no_op():
+    """No band member can have a cross-tile duplicate -> nothing may merge."""
+    r = _concat(_obb(100, 100, 60, 60, conf=0.9), _obb(105, 100, 20, 20, conf=0.6))
+    bands = np.zeros(r.num_detections, dtype=bool)
+    out = merge_obb_detections(
+        r,
+        policy="greedy_nmm",
+        metric="ios",
+        threshold=0.5,
+        backend="gpu",
+        overlap_bands=bands,
+    )
+    assert out.num_detections == 2
+    np.testing.assert_allclose(out.corners, r.corners, atol=1e-5)
+
+
 def test_gpu_backend_single_member_passthrough():
     r = _obb(100, 100, 40, 40, conf=0.9)
     out = merge_obb_detections(
