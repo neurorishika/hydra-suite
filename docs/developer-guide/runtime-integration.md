@@ -173,10 +173,24 @@ Direct-mode OBB detection supports optional SAHI-style sliced inference
   bug: it skipped merging in exactly the cases where cross-tile duplicates
   occur. Always derive the decision from tile geometry, never from the
   config ratio.
-- **Cost:** tiles flatten into the existing predict batch; ROI-gated tiles are
-  dropped; the overlap-band pre-filter caps the O(n²) merge; native-cuda
-  preserves `_RawOBBTensors` (whole when `overlap==0`, band-only sync when
-  merging). TRT engine batch is sized from tile-chunk, not window depth.
+- **Cost:** tiles flatten into a predict batch that is chunked to at most
+  tiles-per-frame images (`slicing.MAX_TILE_CHUNK`), so peak activation memory
+  is bounded rather than `frames × tiles`; the overlap-band pre-filter caps the
+  O(n²) merge; native-cuda preserves `_RawOBBTensors` (whole when the planned
+  tiles do not overlap, band-only sync when merging). TRT engine batch is sized
+  from the same tile-chunk bound, not window depth.
+- **Tile-count ceiling:** `plan_slices` raises `ValueError` above
+  `slicing.MAX_TILES_PER_FRAME` (4096). A reachable `advanced_config.json`
+  combination (`SLICE_HEIGHT=SLICE_WIDTH=64`, `SLICE_OVERLAP=0.9`) would
+  otherwise plan ~53k tiles per 1080p frame.
+- **ROI gating is implemented but NOT wired:** `plan_slices` accepts a
+  `roi_mask` and drops tiles that do not intersect it (falling back to the full
+  grid if the mask would drop everything), and that behaviour is unit-tested —
+  but every production call site currently passes `roi_mask=None`, so no tile
+  is ROI-dropped in the shipped pipeline. Threading the mask through `run_obb`
+  is a follow-up. ROI correctness does not depend on it: the filtering stage
+  re-applies the mask per detection, so tile gating is purely a compute
+  optimization.
 - **Cache:** slice params fold into `detection_cache_key` only when enabled, so
   existing non-sliced caches stay valid.
 
