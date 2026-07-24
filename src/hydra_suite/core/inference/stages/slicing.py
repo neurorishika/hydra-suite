@@ -71,10 +71,19 @@ def plan_slices(
     frame_hw: tuple[int, int],
     slice_cfg: SliceConfig,
     imgsz: int,
-    roi_mask: "np.ndarray | None",
+    roi_mask: np.ndarray | None,
     ref_object_px: float = 0.0,
 ) -> SlicePlan:
-    """Compute the tile plan for one frame size. Cheap; caller memoizes per video."""
+    """Compute the tile plan for one frame size.
+
+    ROI gating is a compute optimization only: the mask is re-applied per-detection
+    downstream in the filtering stage, so dropping tiles only saves forward passes.
+    If the mask would eliminate every tile (e.g. empty ROI), we fall back to the
+    full grid to prevent silent detection failure, degrading gracefully to "no compute
+    savings" while still producing correct ROI-filtered detections.
+
+    Cheap; caller memoizes per video.
+    """
     frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
     slice_w, slice_h = _tile_size(slice_cfg, imgsz, ref_object_px)
     tiles = get_slice_bboxes(
@@ -93,7 +102,10 @@ def plan_slices(
             xx0, xx1 = max(0, x0), min(w, x1)
             if yy1 > yy0 and xx1 > xx0 and roi_mask[yy0:yy1, xx0:xx1].any():
                 kept.append((x0, y0, x1, y1))
-        tiles = kept if kept else tiles  # never empty the plan
+        # Fallback to the full grid if ROI gating would drop every tile. This prevents
+        # silent detection failure while still producing correct ROI-filtered detections
+        # downstream (filtering stage reapplies the mask per-detection).
+        tiles = kept if kept else tiles
     return SlicePlan(
         tiles=tiles,
         full_frame=bool(slice_cfg.perform_standard_pred),
