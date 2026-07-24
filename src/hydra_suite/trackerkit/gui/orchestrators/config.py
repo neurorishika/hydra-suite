@@ -363,6 +363,14 @@ class ConfigOrchestrator:
             self._panels.detection.combo_yolo_direct_task.currentIndex()
         )
 
+        self._panels.detection.chk_slice_enabled.setChecked(
+            bool(get_cfg("slice_enabled", default=False))
+        )
+        slice_geo = str(get_cfg("slice_geometry_mode", default="auto_model")).strip()
+        if slice_geo not in {"auto_model", "auto_object", "custom"}:
+            slice_geo = "auto_model"
+        self._panels.detection.combo_slice_geometry.setCurrentText(slice_geo)
+
         yolo_direct_model = get_cfg(
             "yolo_obb_direct_model_path",
             "yolo_model_path",
@@ -1538,6 +1546,8 @@ class ConfigOrchestrator:
                     self._panels.detection.combo_yolo_direct_task.currentIndex()
                 ],
                 "yolo_fixed_angle_deg": self._panels.detection.spin_yolo_fixed_angle.value(),
+                "slice_enabled": self._panels.detection.chk_slice_enabled.isChecked(),
+                "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentText(),
                 "yolo_obb_direct_model_path": make_model_path_relative(
                     yolo_direct_path
                 ),
@@ -2111,6 +2121,23 @@ class ConfigOrchestrator:
             "YOLO_OBB_SEG_PAD_RATIO": advanced_config.get("obb_seg_pad_ratio", 0.15),
             "YOLO_OBB_SEG_MASK_THRESHOLD": advanced_config.get(
                 "obb_seg_mask_threshold", 0.5
+            ),
+            "SLICE_ENABLED": self._panels.detection.chk_slice_enabled.isChecked(),
+            "SLICE_GEOMETRY_MODE": self._panels.detection.combo_slice_geometry.currentText(),
+            "SLICE_OVERLAP": advanced_config.get("slice_overlap", 0.2),
+            "SLICE_HEIGHT": advanced_config.get("slice_height", 0),
+            "SLICE_WIDTH": advanced_config.get("slice_width", 0),
+            "SLICE_OBJECT_TILE_FRACTION": advanced_config.get(
+                "slice_object_tile_fraction", 0.15
+            ),
+            "SLICE_MERGE_POLICY": advanced_config.get(
+                "slice_merge_policy", "greedy_nmm"
+            ),
+            "SLICE_MERGE_METRIC": advanced_config.get("slice_merge_metric", "ios"),
+            "SLICE_MERGE_THRESHOLD": advanced_config.get("slice_merge_threshold", 0.5),
+            "SLICE_MERGE_BACKEND": advanced_config.get("slice_merge_backend", "cv2"),
+            "SLICE_PERFORM_STANDARD_PRED": advanced_config.get(
+                "slice_perform_standard_pred", False
             ),
             "YOLO_OBB_DIRECT_MODEL_PATH": yolo_direct_path,
             "YOLO_DETECT_MODEL_PATH": yolo_detect_path,

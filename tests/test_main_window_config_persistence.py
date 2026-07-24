@@ -1666,3 +1666,37 @@ def test_bg_parameter_helper_applies_extended_detection_params(
         round(1200.0 / scaled_body_area, 2)
     )
     window.close()
+
+
+def test_slice_config_persists_and_reloads(monkeypatch, qapp, tmp_path):
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.chk_slice_enabled.setChecked(True)
+    window._detection_panel.combo_slice_geometry.setCurrentText("custom")
+
+    config_path = tmp_path / "slice_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["slice_enabled"] is True
+    assert saved["slice_geometry_mode"] == "custom"
+    window.close()
+
+    reloaded = _make_main_window(monkeypatch)
+    reloaded._load_config_from_file(str(config_path), preset_mode=True)
+    assert reloaded._detection_panel.chk_slice_enabled.isChecked() is True
+    assert reloaded._detection_panel.combo_slice_geometry.currentText() == "custom"
+    reloaded.close()
+
+
+def test_slice_params_reach_upper_snake_dict(monkeypatch, qapp):
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={"slice_overlap": 0.25, "slice_merge_backend": "gpu"},
+    )
+    window._detection_panel.chk_slice_enabled.setChecked(True)
+    window._detection_panel.combo_slice_geometry.setCurrentText("auto_object")
+    params = window.get_parameters_dict()
+    assert params["SLICE_ENABLED"] is True
+    assert params["SLICE_GEOMETRY_MODE"] == "auto_object"
+    assert params["SLICE_OVERLAP"] == 0.25
+    assert params["SLICE_MERGE_BACKEND"] == "gpu"
+    window.close()
