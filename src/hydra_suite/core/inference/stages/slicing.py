@@ -239,10 +239,9 @@ def run_direct_sliced(frames, model, config, runtime):
         per_frame[fi].append(_offset_result(local, max(0, x0), max(0, y0), fi))
 
     out = []
-    overlap = max(slice_cfg.overlap_height_ratio, slice_cfg.overlap_width_ratio)
     for fi in range(len(frames)):
         concat = merge_obb_results(fi, per_frame[fi])
-        if concat.num_detections <= 1 or overlap <= 0.0:
+        if concat.num_detections <= 1:
             merged = concat
         else:
             bands = band_membership(concat.corners, plan.tiles)

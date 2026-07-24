@@ -1,6 +1,7 @@
 import types
 
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceConfig
 from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
@@ -255,6 +256,112 @@ class _FakeYOLO:
         return results
 
 
+class _FakeOBBN:
+    """Fake ultralytics ``.obb`` result carrying an arbitrary (possibly zero)
+    number of xywhr rows, all at a fixed angle of 0."""
+
+    def __init__(self, dets):
+        n = len(dets)
+        if n:
+            arr = np.array([[cx, cy, w, h, 0.0] for cx, cy, w, h in dets], np.float32)
+        else:
+            arr = np.zeros((0, 5), np.float32)
+        self._xywhr = arr
+        self._conf = np.full(n, 0.9, np.float32)
+        self._n = n
+
+    def __len__(self):
+        return self._n
+
+    @property
+    def xywhr(self):
+        import torch
+
+        return torch.from_numpy(self._xywhr)
+
+    @property
+    def conf(self):
+        import torch
+
+        return torch.from_numpy(self._conf)
+
+    @property
+    def cls(self):
+        import torch
+
+        return torch.zeros(self._n)
+
+
+class _FakeYOLOGlobalPoint:
+    """Stub whose detections are keyed on tile GEOMETRY, not local coordinates.
+
+    Given the flattened tile job list, it emits a detection at a single fixed
+    GLOBAL point -- expressed in each tile's own local coordinates -- for
+    every tile whose bounding box actually contains that point, and an empty
+    result for every tile that doesn't. Two tiles that genuinely overlap the
+    global point therefore both "see" the same real object, which
+    ``_FakeYOLO`` (fixed local (60,60) in every tile) can never simulate.
+
+    Relies on ``predict()`` being called once per frame with tiles in the same
+    order as ``plan.tiles`` (true here: single frame, no full-frame job).
+    """
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def __init__(self, tiles, global_point, size=(20.0, 20.0)):
+        self.tiles = tiles
+        self.gx, self.gy = global_point
+        self.w, self.h = size
+        self._call = 0
+
+    def predict(self, source, **kw):
+        results = []
+        for _ in source:
+            x0, y0, x1, y1 = self.tiles[self._call % len(self.tiles)]
+            self._call += 1
+            r = types.SimpleNamespace()
+            if x0 <= self.gx < x1 and y0 <= self.gy < y1:
+                r.obb = _FakeOBBN([(self.gx - x0, self.gy - y0, self.w, self.h)])
+            else:
+                r.obb = _FakeOBBN([])
+            results.append(r)
+        return results
+
+
+class _FakeYOLOEmpty:
+    """Stub: every tile yields zero detections."""
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def predict(self, source, **kw):
+        results = []
+        for _ in source:
+            r = types.SimpleNamespace()
+            r.obb = _FakeOBBN([])
+            results.append(r)
+        return results
+
+
+class _FakeYOLOFirstTileOnly:
+    """Stub: only the first tile job yields a detection; the rest are empty."""
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def predict(self, source, **kw):
+        results = []
+        for i, _ in enumerate(source):
+            r = types.SimpleNamespace()
+            if i == 0:
+                r.obb = _FakeOBBN([(60.0, 60.0, 30.0, 30.0)])
+            else:
+                r.obb = _FakeOBBN([])
+            results.append(r)
+        return results
+
+
 def _direct_cfg(enabled, **slice_kw):
     return OBBConfig(
         mode="direct",
@@ -270,15 +377,95 @@ def _direct_cfg(enabled, **slice_kw):
 
 
 def test_sliced_cpu_obb_remaps_into_frame_space():
-    frame = np.zeros((300, 300, 3), np.uint8)
+    # Asymmetric frame (h=300, w=500) so tiling differs on each axis: an X/Y-swap
+    # bug in `_offset_result` would produce a different (and thus detectable)
+    # result instead of silently passing on a symmetric grid.
+    frame = np.zeros((300, 500, 3), np.uint8)
     cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
     out = run_direct_sliced([frame], _FakeYOLO(), cfg, _FakeRuntime())
     assert len(out) == 1
     res = out[0]
-    # detections remapped: each tile contributes one det at tile_x0+60, tile_y0+60.
-    assert res.num_detections >= 1
-    # at least one detection lands beyond a single tile's local coords (proves offset).
-    assert res.centroids[:, 0].max() > 60
+
+    # Independently derive the expected tile grid + exact global centroids:
+    # get_slice_bboxes(frame_h=300, frame_w=500, slice=256, overlap=0) ->
+    # xs=[0, 244], ys=[0, 44] (edge-flush last tile on each axis) -> 4 tiles,
+    # none of which overlap each other (256px tiles, steps of 244/244 leave the
+    # exclusive interiors of each tile disjoint at the (60, 60) detection point),
+    # so no merge collapses these -- one detection per tile is expected.
+    tiles = get_slice_bboxes(300, 500, 256, 256, 0.0, 0.0)
+    assert tiles == [
+        (0, 0, 256, 256),
+        (244, 0, 500, 256),
+        (0, 44, 256, 300),
+        (244, 44, 500, 300),
+    ]
+    expected = sorted((x0 + 60, y0 + 60) for x0, y0, _, _ in tiles)
+
+    # Exact detection count: one per tile, no drops/dupes from a job/result desync.
+    assert res.num_detections == len(tiles)
+    actual = sorted(map(tuple, res.centroids.tolist()))
+    for (ex, ey), (ax, ay) in zip(expected, actual):
+        assert ax == pytest.approx(ex, abs=1e-3)
+        assert ay == pytest.approx(ey, abs=1e-3)
+
+
+def test_sliced_cpu_obb_merges_cross_tile_duplicate_at_zero_configured_overlap():
+    """Finding 1/2 regression test: at configured overlap 0.0, edge-flush still
+    produces REAL geometric overlap between the last two tiles on each axis, so
+    an object detected independently by both tiles must collapse to ONE
+    detection in the merged frame result -- not silently double-count it.
+
+    Frame 300x300, tile 256x256, overlap 0.0 -> tiles (via get_slice_bboxes):
+      (0,0,256,256), (44,0,300,256), (0,44,256,300), (44,44,300,300)
+    Global point (250, 20) lies inside BOTH tile0 [0,256)x[0,256) and tile1
+    [44,300)x[0,256) -- a genuine 212px cross-tile overlap in x, at y=20 which
+    is outside the y-overlap band, isolating this to an x-axis duplicate.
+    """
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    tiles = get_slice_bboxes(300, 300, 256, 256, 0.0, 0.0)
+    assert tiles == [
+        (0, 0, 256, 256),
+        (44, 0, 300, 256),
+        (0, 44, 256, 300),
+        (44, 44, 300, 300),
+    ]
+    global_point = (250.0, 20.0)
+    model = _FakeYOLOGlobalPoint(tiles, global_point)
+
+    out = run_direct_sliced([frame], model, cfg, _FakeRuntime())
+    res = out[0]
+
+    # Collapsed to exactly one detection at (approximately) the shared global point.
+    assert res.num_detections == 1
+    assert res.centroids[0, 0] == pytest.approx(global_point[0], abs=1.0)
+    assert res.centroids[0, 1] == pytest.approx(global_point[1], abs=1.0)
+
+
+def test_sliced_cpu_obb_one_tile_empty_others_not():
+    """Finding 4: a tile with zero detections must not crash the merge/concat
+    path, and must not contribute any spurious detections."""
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    out = run_direct_sliced([frame], _FakeYOLOFirstTileOnly(), cfg, _FakeRuntime())
+    assert len(out) == 1
+    res = out[0]
+    assert res.num_detections == 1
+    assert res.centroids[0, 0] == pytest.approx(60.0, abs=1e-3)
+    assert res.centroids[0, 1] == pytest.approx(60.0, abs=1e-3)
+
+
+def test_sliced_cpu_obb_all_tiles_empty_yields_empty_result():
+    """Finding 4: every tile yielding zero detections must produce a valid,
+    empty OBBResult (num_detections == 0), not a crash."""
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    out = run_direct_sliced([frame], _FakeYOLOEmpty(), cfg, _FakeRuntime())
+    assert len(out) == 1
+    res = out[0]
+    assert res.num_detections == 0
+    assert res.centroids.shape == (0, 2)
+    assert res.corners.shape[0] == 0
 
 
 def test_enabled_false_dispatch_uses_plain_run_direct(monkeypatch):
