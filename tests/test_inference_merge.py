@@ -113,6 +113,54 @@ def test_overlap_zero_returns_input_unchanged():
     assert out.num_detections == 2
 
 
+def test_nms_kept_survivor_preserves_geometry_of_non_square_box():
+    """Regression for the 90-degree-rotation bug: a kept-single survivor's
+    corners/angle must pass through byte-for-byte, not be reconstructed via
+    cv2.minAreaRect (which can swap w/h and rotate the box 90 degrees for a
+    non-square OBB).
+    """
+    survivor = _obb(100, 100, 60, 20, angle=0.0, conf=0.9)
+    far_away = _obb(500, 500, 5, 5, conf=0.5)  # no overlap -> both are "kept"
+    out = merge_obb_detections(
+        _concat(survivor, far_away),
+        policy="nms",
+        metric="iou",
+        threshold=0.5,
+        backend="cv2",
+    )
+    assert out.num_detections == 2
+    idx = int(np.argmin(np.abs(out.centroids[:, 0] - 100)))
+    np.testing.assert_allclose(out.corners[idx], survivor.corners[0], atol=1e-3)
+    np.testing.assert_allclose(out.angles[idx], survivor.angles[0], atol=1e-5)
+
+
+def test_passthrough_detection_preserves_geometry_of_non_square_box():
+    """Regression for the 90-degree-rotation bug on the passthrough path:
+    a detection outside the overlap band must pass through untouched.
+
+    Needs >= 2 band members so the merge stage actually runs the quadratic
+    loop and reaches ``_assemble`` (with a single band member it early-returns
+    the input unchanged, which would make this test vacuous).
+    """
+    band_member_a = _obb(10, 10, 5, 5, conf=0.9)
+    band_member_b = _obb(500, 500, 5, 5, conf=0.5)  # no overlap w/ band_member_a
+    passthrough = _obb(100, 100, 60, 20, angle=0.0, conf=0.7)
+    r = _concat(band_member_a, band_member_b, passthrough)
+    overlap_bands = np.array([True, True, False])
+    out = merge_obb_detections(
+        r,
+        policy="greedy_nmm",
+        metric="ios",
+        threshold=0.5,
+        backend="cv2",
+        overlap_bands=overlap_bands,
+    )
+    assert out.num_detections == 3
+    idx = int(np.argmin(np.abs(out.centroids[:, 0] - 100)))
+    np.testing.assert_allclose(out.corners[idx], passthrough.corners[0], atol=1e-3)
+    np.testing.assert_allclose(out.angles[idx], passthrough.angles[0], atol=1e-5)
+
+
 def test_band_membership_flags_only_overlap_region():
     tiles = [(0, 0, 100, 100), (80, 0, 180, 100)]  # overlap band x in [80,100]
     corners = np.array(

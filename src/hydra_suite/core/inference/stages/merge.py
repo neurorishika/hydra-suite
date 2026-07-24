@@ -12,11 +12,15 @@ backend with the same policy x metric semantics for large detection counts.
 
 from __future__ import annotations
 
+import logging
+
 import cv2
 import numpy as np
 
 from ..result import OBBResult
 from .obb import _corners_from_xywhr, _empty_obb_result, _normalize_obb_geometry
+
+logger = logging.getLogger(__name__)
 
 
 def _hull(corners: np.ndarray) -> tuple[np.ndarray, float]:
@@ -33,7 +37,12 @@ def _pair_overlap(
     try:
         inter, _ = cv2.intersectConvexConvex(hull_a, hull_b)
         inter = float(max(0.0, inter))
-    except Exception:
+    except cv2.error as exc:
+        logger.debug(
+            "cv2.intersectConvexConvex failed for a hull pair; treating as no "
+            "overlap: %s",
+            exc,
+        )
         inter = 0.0
     if metric == "ios":
         denom = min(area_a, area_b)
@@ -161,45 +170,59 @@ def _assemble(
     passthrough: list[int],
     merged_rows: list[tuple],
 ) -> OBBResult:
-    """Concatenate nms/lone survivors + passthrough + unioned rows into one OBBResult."""
-    keep = sorted(keep_single + passthrough)
-    cxs, cys, ws, hs, angs, confs, clss = [], [], [], [], [], [], []
-    for i in keep:
-        cxs.append(src.centroids[i, 0])
-        cys.append(src.centroids[i, 1])
-        # recover w,h from sizes/shapes is lossy; reuse stored corners' minAreaRect.
-        (mcx, mcy), (mw, mh), mdeg = cv2.minAreaRect(src.corners[i].astype(np.float32))
-        ws.append(mw)
-        hs.append(mh)
-        angs.append(src.angles[i])
-        confs.append(src.confidences[i])
-        clss.append(int(src.class_ids_or_zeros[i]))
-    for cx, cy, w, h, ang, conf, cls in merged_rows:
-        cxs.append(cx)
-        cys.append(cy)
-        ws.append(w)
-        hs.append(h)
-        angs.append(ang)
-        confs.append(conf)
-        clss.append(cls)
-    if not cxs:
+    """Concatenate nms/lone survivors + passthrough + unioned rows into one OBBResult.
+
+    Kept-single and passthrough detections were never modified, so their fields
+    are copied straight through by array indexing -- NO geometry round-trip
+    through ``cv2.minAreaRect``. Recovering (w, h) from ``minAreaRect`` on the
+    stored corners and pairing it with the ORIGINAL ``src.angles[i]`` is unsound:
+    minAreaRect can return the same physical box parametrized with w/h swapped
+    (angle offset by 90 degrees), which silently rotates non-square boxes.  Only
+    ``merged_rows`` (from ``_union_obb``, which pairs w/h with the angle from the
+    SAME minAreaRect call) legitimately need synthesized geometry.
+    """
+    keep = np.asarray(sorted(keep_single + passthrough), dtype=np.int64)
+    n_keep = keep.size
+    n_merged = len(merged_rows)
+    if n_keep == 0 and n_merged == 0:
         return _empty_obb_result(src.frame_idx)
-    cx = np.asarray(cxs, np.float32)
-    cy = np.asarray(cys, np.float32)
-    w = np.asarray(ws, np.float32)
-    h = np.asarray(hs, np.float32)
-    ang = np.asarray(angs, np.float32)
-    ang_fixed, sizes, aspect = _normalize_obb_geometry(w, h, ang)
-    corners = _corners_from_xywhr(cx, cy, w, h, ang_fixed)
-    m = len(cxs)
+
+    centroids = src.centroids[keep]
+    angles = src.angles[keep]
+    sizes = src.sizes[keep]
+    shapes = src.shapes[keep]
+    confidences = src.confidences[keep]
+    corners = src.corners[keep]
+    class_ids = src.class_ids_or_zeros[keep]
+
+    if merged_rows:
+        cx = np.asarray([r[0] for r in merged_rows], np.float32)
+        cy = np.asarray([r[1] for r in merged_rows], np.float32)
+        w = np.asarray([r[2] for r in merged_rows], np.float32)
+        h = np.asarray([r[3] for r in merged_rows], np.float32)
+        ang = np.asarray([r[4] for r in merged_rows], np.float32)
+        ang_fixed, m_sizes, m_aspect = _normalize_obb_geometry(w, h, ang)
+        m_corners = _corners_from_xywhr(cx, cy, w, h, ang_fixed)
+        m_confs = np.asarray([r[5] for r in merged_rows], np.float32)
+        m_cls = np.asarray([r[6] for r in merged_rows], np.int64)
+
+        centroids = np.concatenate([centroids, np.stack([cx, cy], axis=1)], axis=0)
+        angles = np.concatenate([angles, ang_fixed], axis=0)
+        sizes = np.concatenate([sizes, m_sizes], axis=0)
+        shapes = np.concatenate([shapes, np.stack([m_sizes, m_aspect], axis=1)], axis=0)
+        confidences = np.concatenate([confidences, m_confs], axis=0)
+        corners = np.concatenate([corners, m_corners], axis=0)
+        class_ids = np.concatenate([class_ids, m_cls], axis=0)
+
+    m = n_keep + n_merged
     return OBBResult(
         frame_idx=src.frame_idx,
-        centroids=np.stack([cx, cy], axis=1),
-        angles=ang_fixed,
-        sizes=sizes,
-        shapes=np.stack([sizes, aspect], axis=1),
-        confidences=np.asarray(confs, np.float32),
-        corners=corners,
+        centroids=centroids.astype(np.float32, copy=False),
+        angles=angles.astype(np.float32, copy=False),
+        sizes=sizes.astype(np.float32, copy=False),
+        shapes=shapes.astype(np.float32, copy=False),
+        confidences=confidences.astype(np.float32, copy=False),
+        corners=corners.astype(np.float32, copy=False),
         detection_ids=OBBResult.make_detection_ids(src.frame_idx, m),
-        class_ids=np.asarray(clss, np.int64),
+        class_ids=class_ids.astype(np.int64, copy=False),
     )
