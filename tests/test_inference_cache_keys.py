@@ -271,6 +271,69 @@ def test_every_output_affecting_slice_field_is_in_the_hash(
     )
 
 
+# ---- detection_cache_key: ROI mask folding (SAHI ROI tile-gating) ----
+
+
+def _roi(shape=(8, 8), fill=1, corner_zero=False) -> np.ndarray:
+    m = np.full(shape, fill, dtype=np.uint8)
+    if corner_zero:
+        m[: shape[0] // 2, : shape[1] // 2] = 0
+    return m
+
+
+def test_roi_folds_into_key_only_when_slicing_enabled_and_mask_present():
+    """(b) enabled + ROI None == pre-ROI baseline; (a) mask A != mask B."""
+    enabled = _obb_direct_slice(SliceConfig(enabled=True))
+    base = detection_cache_key(enabled)  # no roi arg == roi None
+    base_explicit_none = detection_cache_key(enabled, None)
+    assert base.config_hash == base_explicit_none.config_hash
+    # A non-None mask changes the key vs the None baseline...
+    a = detection_cache_key(enabled, _roi(fill=1))
+    assert a.config_hash != base.config_hash
+    # ...and two DIFFERENT masks give different keys.
+    b = detection_cache_key(enabled, _roi(corner_zero=True))
+    assert a.config_hash != b.config_hash
+
+
+def test_roi_ignored_when_slicing_disabled_key_is_byte_identical():
+    """(c) slicing DISABLED + any ROI == today's disabled key (== '')."""
+    disabled = _obb_direct_slice(SliceConfig(enabled=False))
+    baseline = detection_cache_key(disabled).config_hash
+    with_mask = detection_cache_key(disabled, _roi(corner_zero=True)).config_hash
+    assert baseline == with_mask == ""
+
+
+def test_roi_identical_masks_give_identical_keys():
+    """(d) two content-identical masks => identical keys."""
+    enabled = _obb_direct_slice(SliceConfig(enabled=True))
+    a = detection_cache_key(enabled, _roi(fill=1))
+    b = detection_cache_key(enabled, _roi(fill=1))
+    assert a.config_hash == b.config_hash
+
+
+def test_roi_content_hash_not_truncated_str():
+    """Masks differing only in the middle must NOT collide (content hash, not str())."""
+    enabled = _obb_direct_slice(SliceConfig(enabled=True))
+    big = 200
+    m1 = np.ones((big, big), dtype=np.uint8)
+    m2 = np.ones((big, big), dtype=np.uint8)
+    m2[big // 2, big // 2] = 0  # single interior pixel differs
+    k1 = detection_cache_key(enabled, m1)
+    k2 = detection_cache_key(enabled, m2)
+    assert k1.config_hash != k2.config_hash
+
+
+def test_roi_sequential_mode_ignores_mask():
+    """Sequential mode never slices, so a mask must not perturb its key."""
+    cfg = OBBConfig(
+        mode="sequential",
+        sequential=OBBSequentialConfig(
+            detect_model_path="/det.pt", obb_model_path="/obb.pt"
+        ),
+    )
+    assert detection_cache_key(cfg, _roi()).config_hash == ""
+
+
 # ---- bgsub_detection_cache_key ----
 
 
