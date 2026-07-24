@@ -1,3 +1,4 @@
+import json
 import tempfile
 
 import pytest
@@ -192,6 +193,50 @@ def test_obb_direct_from_dict_parses_nested_slice():
     assert obb.direct.slice.enabled is True
     assert obb.direct.slice.geometry_mode == "custom"
     assert obb.direct.slice.slice_height == 640
+
+
+def test_obb_iou_threshold_defaults_to_legacy_value_through_production_path(
+    tmp_path,
+):
+    """`_dict_to_config` (the production `InferenceConfig.from_json` path) must
+    default a missing `iou_threshold` to the legacy YOLO_IOU_THRESHOLD value
+    (0.45), not `OBBConfig`'s own dataclass default (0.7). `OBBConfig.from_dict`
+    must match this exactly since `_dict_to_config` now delegates to it — a
+    regression here would silently change production filtering behavior."""
+    raw = {
+        "obb": {
+            "mode": "direct",
+            "direct": {"model_path": "m.pt"},
+            # iou_threshold intentionally omitted.
+        },
+        "runtime_tier": "cpu",
+    }
+    path = tmp_path / "cfg.json"
+    path.write_text(json.dumps(raw))
+
+    loaded = InferenceConfig.from_json(str(path))
+    assert loaded.obb.iou_threshold == pytest.approx(0.45)
+
+    # Same dict shape through OBBConfig.from_dict directly must agree.
+    obb = OBBConfig.from_dict(dict(raw["obb"]))
+    assert obb.iou_threshold == pytest.approx(0.45)
+
+
+def test_obb_config_full_round_trip_preserves_iou_threshold(tmp_path):
+    config = InferenceConfig(
+        obb=OBBConfig(
+            mode="direct",
+            direct=OBBDirectConfig(model_path="m.pt"),
+            iou_threshold=0.6,
+        ),
+        runtime_tier="cpu",
+    )
+    path = tmp_path / "cfg.json"
+    config.to_json(str(path))
+    loaded = InferenceConfig.from_json(str(path))
+    assert loaded.obb.iou_threshold == pytest.approx(0.6)
+    assert loaded.obb.mode == "direct"
+    assert loaded.obb.direct.model_path == "m.pt"
 
 
 def test_build_config_reads_slice_params():

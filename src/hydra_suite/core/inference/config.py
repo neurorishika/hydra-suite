@@ -169,7 +169,7 @@ class OBBConfig:
             else None
         )
         return OBBConfig(
-            mode=obb_d.get("mode", "direct"),
+            mode=obb_d["mode"],
             direct=direct,
             sequential=sequential,
             target_classes=obb_d.get("target_classes", []),
@@ -180,7 +180,9 @@ class OBBConfig:
             min_aspect_ratio=obb_d.get("min_aspect_ratio", 0.0),
             max_aspect_ratio=obb_d.get("max_aspect_ratio", float("inf")),
             confidence_threshold=obb_d.get("confidence_threshold", 0.25),
-            iou_threshold=obb_d.get("iou_threshold", 0.7),
+            iou_threshold=obb_d.get(
+                "iou_threshold", 0.45
+            ),  # legacy YOLO_IOU_THRESHOLD default
         )
 
 
@@ -407,40 +409,7 @@ def _config_to_dict(config: InferenceConfig) -> dict[str, Any]:
 
 def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     obb_d = d.get("obb")
-    obb = None
-    if obb_d:
-        if obb_d.get("max_object_size") is None:
-            obb_d["max_object_size"] = float("inf")
-        if obb_d.get("max_aspect_ratio") is None:
-            obb_d["max_aspect_ratio"] = float("inf")
-
-        direct = None
-        if obb_d.get("direct"):
-            direct_d = dict(obb_d["direct"])
-            slice_d = direct_d.pop("slice", None)
-            direct = OBBDirectConfig(**direct_d)
-            if isinstance(slice_d, dict):
-                direct.slice = SliceConfig(**slice_d)
-
-        sequential = (
-            OBBSequentialConfig(**obb_d["sequential"])
-            if obb_d.get("sequential")
-            else None
-        )
-        obb = OBBConfig(
-            mode=obb_d["mode"],
-            direct=direct,
-            sequential=sequential,
-            target_classes=obb_d.get("target_classes", []),
-            max_detections=obb_d.get("max_detections", 20),
-            raw_detection_cap=obb_d.get("raw_detection_cap", 0),
-            min_object_size=obb_d.get("min_object_size", 0.0),
-            max_object_size=obb_d.get("max_object_size", float("inf")),
-            min_aspect_ratio=obb_d.get("min_aspect_ratio", 0.0),
-            max_aspect_ratio=obb_d.get("max_aspect_ratio", float("inf")),
-            confidence_threshold=obb_d.get("confidence_threshold", 0.25),
-            iou_threshold=obb_d.get("iou_threshold", 0.45),
-        )
+    obb = OBBConfig.from_dict(obb_d) if obb_d else None
 
     bgsub_d = d.get("bgsub")
     bgsub = None
@@ -631,12 +600,19 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         )
 
         overlap = _clamped_float(params.get("SLICE_OVERLAP", 0.2), 0.2, 0.0, 0.9)
+        _geometry_mode = (
+            str(params.get("SLICE_GEOMETRY_MODE", "auto_model")).strip().lower()
+        )
+        _merge_policy = (
+            str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
+        )
+        _merge_metric = str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
+        _merge_backend = str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
         slice_cfg = SliceConfig(
             enabled=bool(params.get("SLICE_ENABLED", False)),
             geometry_mode=(
-                str(params.get("SLICE_GEOMETRY_MODE", "auto_model")).strip().lower()
-                if str(params.get("SLICE_GEOMETRY_MODE", "auto_model")).strip().lower()
-                in {"auto_model", "auto_object", "custom"}
+                _geometry_mode
+                if _geometry_mode in {"auto_model", "auto_object", "custom"}
                 else "auto_model"
             ),
             slice_height=_clamped_int(params.get("SLICE_HEIGHT", 0), 0, 0, 8192),
@@ -656,25 +632,16 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 8192.0,
             ),
             merge_policy=(
-                str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
-                if str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
-                in {"nms", "nmm", "greedy_nmm"}
+                _merge_policy
+                if _merge_policy in {"nms", "nmm", "greedy_nmm"}
                 else "greedy_nmm"
             ),
-            merge_metric=(
-                str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
-                if str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
-                in {"iou", "ios"}
-                else "ios"
-            ),
+            merge_metric=(_merge_metric if _merge_metric in {"iou", "ios"} else "ios"),
             merge_threshold=_clamped_float(
                 params.get("SLICE_MERGE_THRESHOLD", 0.5), 0.5, 0.0, 1.0
             ),
             merge_backend=(
-                str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
-                if str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
-                in {"cv2", "gpu"}
-                else "cv2"
+                _merge_backend if _merge_backend in {"cv2", "gpu"} else "cv2"
             ),
             perform_standard_pred=bool(
                 params.get("SLICE_PERFORM_STANDARD_PRED", False)
