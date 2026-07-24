@@ -1482,10 +1482,18 @@ def run_direct_sliced(frames, model, config, runtime):
         per_frame[fi].append(_offset_result(local, max(0, x0), max(0, y0), fi))
 
     out = []
-    overlap = max(slice_cfg.overlap_height_ratio, slice_cfg.overlap_width_ratio)
     for fi in range(len(frames)):
         concat = merge_obb_results(fi, per_frame[fi])
-        if concat.num_detections <= 1 or overlap <= 0.0:
+        # NOTE: do NOT gate this on the configured overlap ratio. get_slice_bboxes
+        # shifts the last tile in each axis flush to the frame edge, which creates
+        # REAL geometric overlap even at a configured ratio of 0.0 (e.g. a 300px
+        # frame with 256px tiles yields tiles [0,256) and [44,300) -> 212px of
+        # genuine overlap). Gating on the config ratio there skips dedup while
+        # tiles actually overlap, silently double-counting detections.
+        # band_membership derives membership from the ACTUAL tile bboxes, so it
+        # returns all-False when tiles truly don't overlap and merge_obb_detections
+        # early-returns at negligible cost.
+        if concat.num_detections <= 1:
             merged = concat
         else:
             bands = band_membership(concat.corners, plan.tiles)
@@ -1664,7 +1672,6 @@ def run_direct_sliced_cuda(frames, model, config, runtime, imgsz):
 
     slice_cfg = config.direct.slice
     model_task = config.direct.model_task
-    overlap = max(slice_cfg.overlap_height_ratio, slice_cfg.overlap_width_ratio)
     frame_hw = (int(frames[0].shape[0]), int(frames[0].shape[1]))
     plan = plan_slices(
         frame_hw, slice_cfg, imgsz, None,
