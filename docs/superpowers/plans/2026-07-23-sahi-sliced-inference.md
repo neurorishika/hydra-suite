@@ -870,6 +870,24 @@ git commit -m "feat(inference): cv2 merge backend (nms/nmm/greedy_nmm x iou/ios)
 > Shoelace area is then one batched reduction.
 >
 > **Perf gate (Step 4a below) is part of this task's definition of done.**
+>
+> **MEASURED RESULT (2026-07-24, mehek / RTX 6000 Ada, torch 2.11+cu130).** The gate
+> failed on the CPU/MPS dev box (0.52x at N=200) but PASSED decisively on the real
+> CUDA target, which is the only device this backend ever runs on:
+>
+> | N | cuda kernel | cv2 | speedup |
+> |---|---|---|---|
+> | 25 | 1.29 ms | 0.31 ms | 0.24x slower |
+> | 50 | 1.31 ms | 1.21 ms | 0.93x ~even |
+> | 100 | 1.28 ms | 4.72 ms | **3.68x** |
+> | 200 | 1.41 ms | 17.83 ms | **12.62x** |
+> | 400 | 3.51 ms | 71.33 ms | **20.33x** |
+> | 800 | 18.77 ms | 286.37 ms | **15.26x** |
+>
+> Max abs error vs the cv2 oracle <= 0.0001 at every N. CUDA crossover is ~N=50, at
+> the bottom of the realistic band-member range; below that the kernel loses by ~1 ms
+> absolute per frame, which is noise against slicing's ~20x forward-pass cost -- so NO
+> small-N fallback branch is warranted. Do not add one.
 
 - [ ] **Step 1: Write the failing test**
 
