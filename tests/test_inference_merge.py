@@ -1,4 +1,7 @@
+import math
+
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages.merge import (
@@ -172,3 +175,110 @@ def test_band_membership_flags_only_overlap_region():
     )
     band = band_membership(corners, tiles)
     assert band.tolist() == [False, True]
+
+
+@pytest.mark.parametrize("policy", ["nms", "greedy_nmm"])
+def test_gpu_backend_matches_cv2_within_tolerance(policy):
+    rng = np.random.default_rng(1)
+    parts = []
+    for _ in range(8):
+        parts.append(
+            _obb(
+                *rng.uniform([60, 60, 30, 30], [200, 200, 60, 60]),
+                angle=float(rng.uniform(0, np.pi)),
+                conf=float(rng.uniform(0.3, 0.99)),
+            )
+        )
+    r = _concat(*parts)
+    cv2_out = merge_obb_detections(
+        r, policy=policy, metric="ios", threshold=0.5, backend="cv2"
+    )
+    gpu_out = merge_obb_detections(
+        r, policy=policy, metric="ios", threshold=0.5, backend="gpu"
+    )
+    # same count (grouping decisions agree) within tolerance.
+    assert gpu_out.num_detections == cv2_out.num_detections
+    # centroids of survivors match within a few px after sorting.
+    cc = np.sort(cv2_out.centroids.sum(axis=1))
+    gc = np.sort(gpu_out.centroids.sum(axis=1))
+    assert np.allclose(cc, gc, atol=3.0)
+
+
+def test_gpu_backend_single_member_passthrough():
+    r = _obb(100, 100, 40, 40, conf=0.9)
+    out = merge_obb_detections(
+        r, policy="greedy_nmm", metric="ios", threshold=0.5, backend="gpu"
+    )
+    assert out.num_detections == 1
+
+
+def test_gpu_backend_nms_keeps_survivor_geometry_verbatim():
+    """Regression for the 90-degree-rotation bug on the gpu NMS path: the
+    kept survivor's corners/angle must pass through untouched by array
+    indexing, not be reconstructed from any geometry kernel.
+    """
+    survivor = _obb(100, 100, 60, 20, angle=0.3, conf=0.9)
+    far_away = _obb(500, 500, 5, 5, conf=0.5)  # no overlap -> both kept
+    out = merge_obb_detections(
+        _concat(survivor, far_away),
+        policy="nms",
+        metric="iou",
+        threshold=0.5,
+        backend="gpu",
+    )
+    assert out.num_detections == 2
+    idx = int(np.argmin(np.abs(out.centroids[:, 0] - 100)))
+    np.testing.assert_allclose(out.corners[idx], survivor.corners[0], atol=1e-3)
+    np.testing.assert_allclose(out.angles[idx], survivor.angles[0], atol=1e-5)
+
+
+def test_gpu_backend_union_corners_match_expected_rotated_rectangle():
+    """Corners-level regression for the exact bug class that hit Task 3's
+    cv2 union path: pairing a (w, h, angle) triple with the WRONG angle
+    convention silently rotates a non-square box 90 degrees while leaving its
+    *area* invariant -- an area/sizes-only assertion cannot catch this.
+
+    Construction: two axis-aligned (in a rotated local frame) rectangles that
+    share the exact same extent along one axis, so their union is *exactly* a
+    single rectangle of known (w, h) -- no ambiguity from convex-hull
+    corner-rounding. The whole configuration is then rigidly rotated by
+    ``theta`` (chosen to land exactly on one of the kernel's 64 candidate
+    angles, eliminating quantization error) so the box is non-axis-aligned.
+    If the union kernel swapped the (w, h, angle) convention, the recovered
+    corners would describe a 40x68 box rotated ~90 degrees from the expected
+    68x40 box -- a completely different footprint that this assertion catches
+    directly, unlike an area-only check.
+    """
+    from hydra_suite.core.inference.stages.obb import _corners_from_xywhr
+
+    k = 5
+    theta = k * math.pi / 64  # exact grid point of _union_via_kernel's search
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+
+    def rot(x, y):
+        return (x * cos_t - y * sin_t, x * sin_t + y * cos_t)
+
+    # Un-rotated construction (theta=0): big spans u in [70,130], v in
+    # [80,120]; small spans u in [62,82], v in [80,120] -- identical v-range,
+    # so their union is exactly the rectangle u in [62,130], v in [80,120]
+    # (w=68, h=40, center u=96, v=100).
+    c1 = rot(100.0, 100.0)
+    c2 = rot(72.0, 100.0)
+    big = _obb(c1[0], c1[1], 60, 40, angle=theta, conf=0.8)
+    small = _obb(c2[0], c2[1], 20, 40, angle=theta, conf=0.7)
+    r = _concat(big, small)
+    out = merge_obb_detections(
+        r, policy="greedy_nmm", metric="ios", threshold=0.5, backend="gpu"
+    )
+    assert out.num_detections == 1
+
+    exp_cx, exp_cy = rot(96.0, 100.0)
+    exp_corners = _corners_from_xywhr(
+        np.array([exp_cx], np.float32),
+        np.array([exp_cy], np.float32),
+        np.array([68.0], np.float32),
+        np.array([40.0], np.float32),
+        np.array([theta], np.float32),
+    )
+    np.testing.assert_allclose(out.corners[0], exp_corners[0], atol=0.5)
+    np.testing.assert_allclose(float(out.angles[0]), theta, atol=1e-3)
