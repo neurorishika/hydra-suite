@@ -23,6 +23,26 @@ MAX_TILES_PER_FRAME = 4096
 # dynamic-batch profile the TensorRT engine was exported with.
 MAX_TILE_CHUNK = 128
 
+# Emitted at most once per process: the ``gpu`` merge backend only exists on
+# the native-CUDA (device-tensor) path (``slicing_cuda.py``); this host path
+# (numpy detections, no on-device tensor for the gpu kernel to act on) always
+# merges with cv2, which is also the correctness oracle. A user who sets
+# ``merge_backend="gpu"`` on cpu/mps/gpu_fast gets cv2 silently otherwise.
+_gpu_merge_backend_downgrade_logged = False
+
+
+def _log_gpu_merge_backend_downgrade_once() -> None:
+    global _gpu_merge_backend_downgrade_logged
+    if _gpu_merge_backend_downgrade_logged:
+        return
+    logger.info(
+        "SliceConfig.merge_backend='gpu' is only honored on the native-CUDA "
+        "runtime tier; this run merges cross-tile detections with the cv2 "
+        "backend instead (cv2 is the correctness oracle, so results are "
+        "unaffected)."
+    )
+    _gpu_merge_backend_downgrade_logged = True
+
 
 @dataclass
 class SlicePlan:
@@ -388,6 +408,8 @@ def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
     if concat.num_detections <= 1:
         return concat
     slice_cfg = config.direct.slice
+    if slice_cfg.merge_backend == "gpu":
+        _log_gpu_merge_backend_downgrade_once()
     bands = band_membership(concat.corners, plan.tiles)
     merged = merge_obb_detections(
         concat,
@@ -395,7 +417,7 @@ def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
         metric=slice_cfg.merge_metric,
         threshold=slice_cfg.merge_threshold,
         # The gpu merge backend is reserved for the native-cuda (device tensor)
-        # path; every host-side path uses the cv2 oracle.
+        # path; every host-side path uses the cv2 oracle (logged above once).
         backend="cv2",
         overlap_bands=bands,
         runtime=runtime,
