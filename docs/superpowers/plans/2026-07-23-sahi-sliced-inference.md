@@ -563,15 +563,36 @@ def test_nms_suppresses_duplicate_keeps_one():
 
 
 def test_nmm_unions_truncated_pair_into_one_larger_box():
-    # Two half-boxes straddling a boundary: low IoU, high IoS.
-    left = _obb(90, 100, 40, 40, conf=0.8)
-    right = _obb(120, 100, 40, 40, conf=0.7)
-    out = merge_obb_detections(left_right := _concat(left, right),
+    """Realistic straddle: one tile catches the whole animal, the neighbouring
+    tile catches only a clipped sliver of it.
+
+    big   x[70,130] area 2400 ; small x[62,82] area 800 ; intersection 12x40=480
+    IoS = 480/min(2400,800) = 0.600  -> >= 0.5, merges
+    IoU = 480/(2400+800-480)= 0.176  -> <  0.5, would NOT merge (see next test)
+    union = x[62,130] = 68x40 = 2720 > 2400
+    """
+    big = _obb(100, 100, 60, 40, conf=0.8)
+    small = _obb(72, 100, 20, 40, conf=0.7)
+    out = merge_obb_detections(_concat(big, small),
                                policy="greedy_nmm", metric="ios", threshold=0.5, backend="cv2")
     assert out.num_detections == 1
-    # union box wider than either member.
-    assert out.sizes[0] > left.sizes[0]
+    # union is strictly larger than the LARGEST member -> real union, not suppression
+    assert out.sizes[0] > big.sizes[0]
     assert out.confidences[0] == 0.8  # max conf
+
+
+def test_iou_metric_does_not_merge_what_ios_merges():
+    """Same straddling pair: IoS=0.60 merges, IoU=0.176 does not.
+
+    This is the whole justification for `ios` being the default metric — a
+    truncated sliver is nested in the full detection, so IoS is high while
+    IoU stays low and would leave a duplicate behind.
+    """
+    big = _obb(100, 100, 60, 40, conf=0.8)
+    small = _obb(72, 100, 20, 40, conf=0.7)
+    out = merge_obb_detections(_concat(big, small),
+                               policy="greedy_nmm", metric="iou", threshold=0.5, backend="cv2")
+    assert out.num_detections == 2
 
 
 def test_ios_vs_iou_threshold_behavior():
