@@ -136,9 +136,10 @@ Mirror the YOLO cache lifecycle for bgsub:
 `detection.npz` under the same `.inference_cache_<stem>` dir. Because a given video is either
 `obb` or `bgsub` (never both — `InferenceConfig` enforces exactly-one detection source), there
 is no filename collision. Existing `bgsub_detection.npz` caches are simply ignored and
-recomputed once on the next forward run. This is acceptable (caches are derived data). Optional:
-best-effort delete of a stale `bgsub_detection.npz` when writing the new cache — decide during
-planning; default is to leave it (harmless orphan).
+recomputed once on the next forward run (caches are derived data). To avoid leaving confusing
+orphan files, the forward pass performs a **best-effort delete of any stale
+`bgsub_detection.npz`** in `.inference_cache_<stem>` when it initializes the runner-owned cache
+(guarded by `try/except`, never fatal, skipped in preview mode).
 
 ## 4. Testing / Verification
 
@@ -166,7 +167,7 @@ on detection results.
 |---|---|
 | Preview overlay subtly differs (e.g. filter application order) from hand-rolled loop | Compare detection counts/dims on fixture frames with filters on and off; the runner filtering stage is the same one production uses, so parity is expected. |
 | Backward parity regression in worker (Slice 2) | Byte-identical trajectory diff on fixture video, both platforms if feasible, per established parity gate. |
-| Stale `bgsub_detection.npz` left on disk confuses users | Filename change is documented; optional best-effort cleanup. Orphan is harmless (never read). |
+| Stale `bgsub_detection.npz` left on disk confuses users | Forward pass best-effort deletes it on cache init (try/except, non-fatal, skipped in preview). |
 | Preview mode accidentally starts persisting a full-path cache | Preserve `cache_dir=None` in preview mode explicitly; assert in test. |
 
 ## 6. Sequencing
