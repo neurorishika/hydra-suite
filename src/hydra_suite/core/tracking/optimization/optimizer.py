@@ -561,10 +561,12 @@ class TrackingOptimizerCore:
             from pathlib import Path
 
             _cfg = build_inference_config_from_params(self.base_params)
+            _roi_mask = self.base_params.get("ROI_MASK", None)
             self.cache = _open_caches(
                 _cfg,
                 Path(self.detection_cache_path),
                 video_signature(self.video_path),
+                _roi_mask,
             ).detection
             if self.cache is None or not self.cache.is_valid():
                 if self._progress_cb is not None:

@@ -206,7 +206,7 @@ def test_run_batch_iterates_frames_and_writes_caches(tmp_path):
     cfg = _cfg()  # InferenceConfig with no headtail/cnn/pose/apriltag
 
     # Stub run_obb to return predictable OBBResults for each frame
-    def fake_run_obb(frames, models, obb_config, runtime):
+    def fake_run_obb(frames, models, obb_config, runtime, roi_mask=None):
         return [_make_obb(n=2, frame_idx=i) for i in range(len(frames))]
 
     # Mock cache handles to record writes

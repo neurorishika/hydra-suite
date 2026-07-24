@@ -58,9 +58,10 @@ def test_preview_worker_opens_new_format_cache_and_does_not_close_it(
     fake_handle = _FakeDetectionHandle()
     calls = {}
 
-    def _fake_open_caches(cfg, cache_dir, video_sig):
+    def _fake_open_caches(cfg, cache_dir, video_sig, roi_mask=None):
         calls["cache_dir"] = cache_dir
         calls["video_sig"] = video_sig
+        calls["roi_mask"] = roi_mask
         return _FakeCaches(fake_handle)
 
     def _fake_video_signature(video_path):

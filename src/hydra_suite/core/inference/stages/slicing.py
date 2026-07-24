@@ -23,6 +23,26 @@ MAX_TILES_PER_FRAME = 4096
 # dynamic-batch profile the TensorRT engine was exported with.
 MAX_TILE_CHUNK = 128
 
+# Emitted at most once per process: the ``gpu`` merge backend only exists on
+# the native-CUDA (device-tensor) path (``slicing_cuda.py``); this host path
+# (numpy detections, no on-device tensor for the gpu kernel to act on) always
+# merges with cv2, which is also the correctness oracle. A user who sets
+# ``merge_backend="gpu"`` on cpu/mps/gpu_fast gets cv2 silently otherwise.
+_gpu_merge_backend_downgrade_logged = False
+
+
+def _log_gpu_merge_backend_downgrade_once() -> None:
+    global _gpu_merge_backend_downgrade_logged
+    if _gpu_merge_backend_downgrade_logged:
+        return
+    logger.info(
+        "SliceConfig.merge_backend='gpu' is only honored on the native-CUDA "
+        "runtime tier; this run merges cross-tile detections with the cv2 "
+        "backend instead (cv2 is the correctness oracle, so results are "
+        "unaffected)."
+    )
+    _gpu_merge_backend_downgrade_logged = True
+
 
 @dataclass
 class SlicePlan:
@@ -173,9 +193,11 @@ def plan_slices(
     full grid to prevent silent detection failure, degrading gracefully to "no compute
     savings" while still producing correct ROI-filtered detections.
 
-    NOTE (finding I4): no production call site passes ``roi_mask`` today -- every
-    caller passes ``None`` -- so ROI tile gating is implemented and tested but
-    not yet wired into the production path. Wiring it is a follow-up.
+    COORDINATE-SPACE CONTRACT: ``roi_mask`` MUST be in the SAME pixel space as
+    ``frame_hw`` (the frame the tiles are cut from). A mask whose ``shape[:2]``
+    differs from ``frame_hw`` would gate the WRONG tiles (dropping real
+    detections), so it is defensively treated as ``None`` (no gating, full grid)
+    with a warning rather than silently mis-gating.
 
     Raises ``ValueError`` when the configured geometry would produce more than
     ``MAX_TILES_PER_FRAME`` tiles (finding I5).
@@ -204,6 +226,18 @@ def plan_slices(
             f"lower SLICE_OVERLAP."
         )
     tiles = [(x, y, x + eff_w, y + eff_h) for y in ys for x in xs]
+    if roi_mask is not None and roi_mask.shape[:2] != (frame_h, frame_w):
+        # Wrong coordinate space: gating here would drop the wrong tiles. Degrade
+        # to no gating (full grid) rather than mis-gate; downstream per-detection
+        # ROI filtering still produces correct results, only compute is unsaved.
+        logger.warning(
+            "ROI mask shape %s does not match frame (%d, %d); skipping ROI tile "
+            "gating for this frame to avoid mis-gating.",
+            tuple(roi_mask.shape[:2]),
+            frame_h,
+            frame_w,
+        )
+        roi_mask = None
     if roi_mask is not None:
         h, w = roi_mask.shape[:2]
         kept = []
@@ -388,6 +422,8 @@ def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
     if concat.num_detections <= 1:
         return concat
     slice_cfg = config.direct.slice
+    if slice_cfg.merge_backend == "gpu":
+        _log_gpu_merge_backend_downgrade_once()
     bands = band_membership(concat.corners, plan.tiles)
     merged = merge_obb_detections(
         concat,
@@ -395,7 +431,7 @@ def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
         metric=slice_cfg.merge_metric,
         threshold=slice_cfg.merge_threshold,
         # The gpu merge backend is reserved for the native-cuda (device tensor)
-        # path; every host-side path uses the cv2 oracle.
+        # path; every host-side path uses the cv2 oracle (logged above once).
         backend="cv2",
         overlap_bands=bands,
         runtime=runtime,
@@ -403,11 +439,16 @@ def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
     return _apply_raw_detection_cap(merged, config.raw_detection_cap)
 
 
-def run_direct_sliced(frames, model, config, runtime):
+def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
     """Sliced-inference wrapper around the direct predict+extract path.
 
     Same return contract as ``_run_direct``. This module-level function is
     dispatched from ``run_obb`` when ``config.obb.direct.slice.enabled`` is True.
+
+    ``roi_mask`` (frame-space, same H x W as the frames) enables ROI tile gating
+    in ``plan_slices``: tiles with no live ROI pixel are dropped, saving forward
+    passes without changing the final ROI-filtered detection set. ``None``
+    (the default) keeps the full tile grid.
 
     TWO ORTHOGONAL DISPATCH DECISIONS (finding C1 -- conflating them crashed
     both CUDA tiers):
@@ -454,7 +495,7 @@ def run_direct_sliced(frames, model, config, runtime):
         frame_hw,
         slice_cfg,
         imgsz,
-        None,
+        roi_mask,
         ref_object_px=slice_cfg.reference_body_px,
     )
 

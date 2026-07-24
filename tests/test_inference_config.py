@@ -7,6 +7,7 @@ from hydra_suite.core.inference.config import (
     CNNConfig,
     HeadTailConfig,
     InferenceConfig,
+    InferenceConfigError,
     OBBConfig,
     OBBDirectConfig,
     OBBSequentialConfig,
@@ -270,6 +271,72 @@ def test_build_config_reads_slice_params():
 def test_build_config_slice_defaults_when_absent():
     params = {"YOLO_OBB_MODE": "direct", "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt"}
     cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.enabled is False
+
+
+def test_slice_config_rejects_bad_geometry_mode():
+    with pytest.raises(InferenceConfigError, match="geometry_mode"):
+        SliceConfig(geometry_mode="bogus")
+
+
+def test_slice_config_rejects_bad_merge_policy():
+    """A hand-edited advanced_config.json typo (e.g. 'nsm' for 'nms') must be
+    rejected loudly instead of silently taking the union branch in
+    stages/merge.py's ``if policy == "nms" or len(group) == 1:`` check."""
+    with pytest.raises(InferenceConfigError, match="merge_policy"):
+        SliceConfig(merge_policy="nsm")
+
+
+def test_slice_config_rejects_bad_merge_metric():
+    with pytest.raises(InferenceConfigError, match="merge_metric"):
+        SliceConfig(merge_metric="bogus")
+
+
+def test_slice_config_rejects_bad_merge_backend():
+    with pytest.raises(InferenceConfigError, match="merge_backend"):
+        SliceConfig(merge_backend="bogus")
+
+
+def test_slice_config_defaults_construct_without_raising():
+    SliceConfig()
+
+
+def test_slice_config_valid_non_default_combination_constructs():
+    s = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_height=512,
+        slice_width=512,
+        merge_policy="nms",
+        merge_metric="iou",
+        merge_backend="gpu",
+    )
+    assert s.geometry_mode == "custom"
+    assert s.merge_policy == "nms"
+    assert s.merge_metric == "iou"
+    assert s.merge_backend == "gpu"
+
+
+def test_obb_direct_config_construction_paths_all_valid():
+    """SliceConfig is built via SliceConfig() defaults, SliceConfig(**slice_d)
+    in OBBConfig.from_dict, and the param-builder -- confirm none of them now
+    raise from the new __post_init__ validation."""
+    assert OBBDirectConfig(model_path="m.pt").slice.enabled is False
+
+    obb = OBBConfig.from_dict(
+        {
+            "mode": "direct",
+            "direct": {
+                "model_path": "m.pt",
+                "slice": {"enabled": True, "merge_policy": "nms"},
+            },
+        }
+    )
+    assert obb.direct.slice.merge_policy == "nms"
+
+    cfg = build_inference_config_from_params(
+        {"YOLO_OBB_MODE": "direct", "YOLO_OBB_DIRECT_MODEL_PATH": "m.pt"}
+    )
     assert cfg.obb.direct.slice.enabled is False
 
 

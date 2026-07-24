@@ -459,19 +459,27 @@ def run_obb(
     models: OBBModels,
     config: OBBConfig,
     runtime: RuntimeContext,
+    roi_mask: np.ndarray | None = None,
 ) -> list[OBBResult | _RawOBBTensors]:
     """Run OBB detection on a batch of frames.
 
     Native CUDA path (tensor_on_cuda=True): returns _RawOBBTensors per frame.
     CPU/MPS or ONNX/TRT path (tensor_on_cuda=False): returns OBBResult per frame.
     iou=1.0 disables YOLO's internal NMS — filtering stage handles it.
+
+    ``roi_mask`` (frame-space, same H x W as ``frames``) enables ROI tile gating
+    for the SLICED path only. It is deliberately ignored on the non-sliced
+    (``_run_direct``) path -- that path never tiles, so gating cannot apply and
+    the disabled-slicing behaviour stays byte-identical to before this feature.
     """
     if models.mode == "direct":
         slice_cfg = getattr(config.direct, "slice", None) if config.direct else None
         if slice_cfg is not None and slice_cfg.enabled:
             from .slicing import run_direct_sliced  # lazy: avoids import cycle
 
-            return run_direct_sliced(frames, models.direct_model, config, runtime)
+            return run_direct_sliced(
+                frames, models.direct_model, config, runtime, roi_mask=roi_mask
+            )
         return _run_direct(frames, models.direct_model, config, runtime)
     return _run_sequential(frames, models, config, runtime)
 

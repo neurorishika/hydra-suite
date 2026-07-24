@@ -59,10 +59,30 @@ class SliceConfig:
     merge_policy: Literal["nms", "nmm", "greedy_nmm"] = "greedy_nmm"
     merge_metric: Literal["iou", "ios"] = "ios"
     merge_threshold: float = 0.5
-    # cv2 = default correctness oracle (all paths); gpu = native-cuda only.
+    # cv2 = default correctness oracle (all paths); gpu is honored only on the
+    # native-CUDA (``gpu`` tier / torch) path -- cpu/mps/gpu_fast always use
+    # cv2 (see stages/slicing.py's host-path downgrade + its logger.info).
     merge_backend: Literal["cv2", "gpu"] = "cv2"
     # extra full-frame pass in addition to tiles (catches > tile-size objects).
     perform_standard_pred: bool = False
+
+    _GEOMETRY_MODES = ("auto_model", "auto_object", "custom")
+    _MERGE_POLICIES = ("nms", "nmm", "greedy_nmm")
+    _MERGE_METRICS = ("iou", "ios")
+    _MERGE_BACKENDS = ("cv2", "gpu")
+
+    def __post_init__(self) -> None:
+        self._validate_choice("geometry_mode", self.geometry_mode, self._GEOMETRY_MODES)
+        self._validate_choice("merge_policy", self.merge_policy, self._MERGE_POLICIES)
+        self._validate_choice("merge_metric", self.merge_metric, self._MERGE_METRICS)
+        self._validate_choice("merge_backend", self.merge_backend, self._MERGE_BACKENDS)
+
+    @staticmethod
+    def _validate_choice(field_name: str, value: str, allowed: tuple[str, ...]) -> None:
+        if value not in allowed:
+            raise InferenceConfigError(
+                f"SliceConfig.{field_name} must be one of {allowed!r}, got {value!r}"
+            )
 
 
 @dataclass

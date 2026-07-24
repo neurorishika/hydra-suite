@@ -3348,7 +3348,10 @@ class ConfigOrchestrator:
 
                     _cfg = build_inference_config_from_params(params)
                     handle = _open_caches(
-                        _cfg, _Path(path), video_signature(video_path)
+                        _cfg,
+                        _Path(path),
+                        video_signature(video_path),
+                        params.get("ROI_MASK", None),
                     ).detection
                     return handle is not None and handle.covers_frame_range(
                         start_frame, end_frame

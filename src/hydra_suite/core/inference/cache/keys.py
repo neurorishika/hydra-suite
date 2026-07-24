@@ -46,11 +46,32 @@ def with_video_signature(key: CacheKey, sig: str) -> CacheKey:
     return replace(key, config_hash=_sha(f"{key.config_hash}|vid={sig}"))
 
 
-def detection_cache_key(config: OBBConfig) -> CacheKey:
+def detection_cache_key(
+    config: OBBConfig, roi_mask: np.ndarray | None = None
+) -> CacheKey:
+    """Cache key for OBB detections.
+
+    ``roi_mask`` is folded into the key ONLY when sliced inference is enabled
+    (direct mode + ``slice.enabled``) AND a mask is actually in use. ROI tile
+    gating drops slice tiles that contain no live ROI pixel, which changes which
+    *raw* detections land in the cache (final tracked results are unchanged --
+    dropped tiles can only yield detections outside the ROI, which filtering
+    removes anyway). Under any other condition -- slicing disabled, sequential
+    mode, or ``roi_mask is None`` -- the ROI term is omitted, so the key is
+    byte-identical to the pre-ROI-gating key and every existing on-disk cache
+    stays valid.
+    """
     if config.mode == "direct":
         assert config.direct is not None
         path = config.direct.model_path
-        slice_hash = _slice_config_hash(config.direct.slice)
+        slice_cfg = config.direct.slice
+        slice_hash = _slice_config_hash(slice_cfg)
+        if slice_cfg is not None and slice_cfg.enabled and roi_mask is not None:
+            # Content-hash the mask (same approach as bgsub's ROI_MASK folding,
+            # via _param_repr: sha256 over a contiguous tobytes() with shape+
+            # dtype). Two different masks => different keys; identical masks =>
+            # identical keys.
+            slice_hash = _sha(f"{slice_hash}|roi={_param_repr(roi_mask)}")
     else:
         assert config.sequential is not None
         path = (

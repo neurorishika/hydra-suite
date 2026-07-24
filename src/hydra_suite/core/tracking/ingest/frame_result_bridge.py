@@ -304,7 +304,9 @@ def build_density_cache_dict(
     if runner._caches is None:
         from hydra_suite.core.inference.runner import _open_caches as _oc
 
-        runner._caches = _oc(runner.config, runner.cache_dir)
+        runner._caches = _oc(
+            runner.config, runner.cache_dir, runner._video_sig, runner._roi_mask
+        )
 
     det_cache = runner._caches.detection
     if det_cache is None:

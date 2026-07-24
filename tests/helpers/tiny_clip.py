@@ -134,7 +134,7 @@ def _make_stub_obb(frame_idx: int, n: int = 2) -> OBBResult:
     )
 
 
-def _fake_run_obb(frames, models, obb_config, runtime):
+def _fake_run_obb(frames, models, obb_config, runtime, roi_mask=None):
     """Deterministic run_obb stub: returns one OBBResult per input frame.
 
     The frame_idx is not available at call time (the pipeline passes raw frame

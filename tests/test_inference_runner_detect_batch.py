@@ -22,7 +22,7 @@ def _make_runner_with_fakes(monkeypatch, per_frame_counts):
     import hydra_suite.core.inference.runner as rmod
     from hydra_suite.core.inference.result import OBBResult
 
-    def fake_run_obb(frames, models, cfg, runtime):
+    def fake_run_obb(frames, models, cfg, runtime, roi_mask=None):
         out = []
         for n in per_frame_counts[: len(frames)]:
             out.append(
