@@ -647,8 +647,10 @@ class _FakeYOLOCudaTensorsFixed:
     """Predict returns one fixed-local-point obb detection per tile.
 
     ``source`` is the (B,3,imgsz,imgsz) GPU-letterboxed batch built by
-    ``run_direct_sliced_cuda`` -- content is irrelevant to this fake, only the
-    batch size matters (one result per tile job).
+    ``run_direct_sliced`` (``slicing.py``) for CUDA-tensor frames, then
+    extracted device-side via ``slicing_cuda.assemble_raw_frames`` -- content
+    is irrelevant to this fake, only the batch size matters (one result per
+    tile job).
     """
 
     imgsz = 256
@@ -752,7 +754,7 @@ class _FakeYOLOCudaLetterboxPoint:
     BEFORE ``_remap_raw`` adds the tile origin. Every other cuda-path fake in
     this file uses tiles exactly == imgsz (r=1, pad=0), so this is the only
     fake that can exercise the letterbox-invert guard in
-    ``run_direct_sliced_cuda``."""
+    ``run_direct_sliced``'s ``_predict_tiles`` helper (``slicing.py``)."""
 
     imgsz = 256
     overrides = {"imgsz": 256}
@@ -774,7 +776,9 @@ def test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad(monkeypatch):
     """Task 7 coverage gap: both existing cuda-path tests use tiles exactly
     == imgsz (256), so the letterbox-invert guard
     ``if r != 1.0 or pad_left != 0.0 or pad_top != 0.0:`` in
-    ``slicing_cuda.py`` never executes -- r==1.0, pad==0.0 always. A
+    ``slicing.py``'s ``_predict_tiles`` never executes -- r==1.0, pad==0.0
+    always (``slicing_cuda.py`` only handles device-tensor EXTRACTION, not
+    letterboxing). A
     non-square 100(h) x 200(w) tile against imgsz=256 forces
     ``_gpu_letterbox_batch`` to compute a REAL scale (min(256/100, 256/200))
     and a REAL vertical pad, covering BOTH halves of the guard.
