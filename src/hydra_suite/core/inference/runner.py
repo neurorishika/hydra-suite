@@ -111,17 +111,16 @@ class _CacheSet:
         return handles
 
 
-# Upper bound on the TRT tile-batch profile. Not a guess at tile count (that
-# is computed exactly in ``_sliced_tile_batch``) — purely a build-safety guard
-# so a pathological frame/imgsz ratio cannot request an unbuildable engine.
-_MAX_TILE_BATCH = 128
-
-
 def _sliced_tile_batch(
     config: InferenceConfig, frame_hw: tuple[int, int], imgsz: int
 ) -> int:
-    """Exact tiles-per-frame for the configured slice plan (+1 for full-frame pass)."""
-    from .stages.slicing import plan_slices
+    """Exact tiles-per-frame for the configured slice plan (+1 for full-frame pass).
+
+    Bounded by ``slicing.MAX_TILE_CHUNK`` — the SAME cap the sliced path chunks
+    its predict calls with, so the exported engine profile always covers the
+    largest batch that will actually be issued.
+    """
+    from .stages.slicing import MAX_TILE_CHUNK, plan_slices
 
     slice_cfg = config.obb.direct.slice
     plan = plan_slices(
@@ -131,8 +130,7 @@ def _sliced_tile_batch(
         None,
         ref_object_px=slice_cfg.reference_body_px,
     )
-    n = len(plan.tiles) + (1 if plan.full_frame else 0)
-    return max(1, min(n, _MAX_TILE_BATCH))
+    return max(1, min(plan.jobs_per_frame, MAX_TILE_CHUNK))
 
 
 def _probe_frame_hw(video_path: str | None) -> tuple[int, int] | None:

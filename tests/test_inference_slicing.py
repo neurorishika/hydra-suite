@@ -159,26 +159,22 @@ def test_overlap_approaching_one():
 
     For slice=64, overlap=0.99: int(64 * (1 - 0.99)) = int(0.64) = 0.
     Without the max(1, ...) guard, range(0, N, 0) would raise ValueError.
-    With the guard, step=max(1, 0)=1, yielding (512-64+1)^2 ≈ 201,601 tiles.
+    With the guard, step=max(1, 0)=1.
+
+    Asserted on the ``get_slice_bboxes`` primitive, not ``plan_slices``: the
+    latter now refuses a pathological tile count outright (finding I5, see
+    ``test_pathological_tile_count_raises_instead_of_hanging``), while the
+    primitive stays a pure, unguarded geometry function.
     """
-    cfg = SliceConfig(
-        enabled=True,
-        geometry_mode="custom",
-        slice_height=64,
-        slice_width=64,
-        overlap_height_ratio=0.99,
-        overlap_width_ratio=0.99,
-    )
-    plan = plan_slices((512, 512), cfg, imgsz=64, roi_mask=None)
+    tiles = get_slice_bboxes(160, 160, 64, 64, 0.99, 0.99)
 
     # Should not crash (max(1, ...) prevents ValueError from range(0, N, 0)).
-    assert len(plan.tiles) > 0
-    # With step=1 (floor engaged), tile count = (512-64+1)^2 ≈ 201,601.
-    # Upper bound accounts for the math: (frame - slice + 1)^2.
-    assert len(plan.tiles) <= (512 - 64 + 1) ** 2
+    assert len(tiles) > 0
+    # With step=1 (floor engaged), tile count = (160-64+1)^2.
+    assert len(tiles) == (160 - 64 + 1) ** 2
 
     # Every tile should be full size (not shrunk).
-    for x0, y0, x1, y1 in plan.tiles:
+    for x0, y0, x1, y1 in tiles:
         assert (x1 - x0) == 64 and (y1 - y0) == 64
 
 
@@ -616,8 +612,35 @@ def test_tiles_overlap_false_for_grid_that_divides_evenly():
 
 
 class _FakeCudaRuntime:
+    """Extraction yields device tensors (``tensor_on_cuda``), device faked to cpu.
+
+    This is the tier ``gpu`` runtime shape: ``tensor_on_cuda=True`` while frames
+    are plain numpy (NVDEC, and therefore CUDA-tensor frames, is confined to
+    ``gpu_fast`` -- see ``runtime._should_use_nvdec``). Tests that additionally
+    need CUDA-tensor FRAMES must say so explicitly via ``_simulate_cuda_frames``.
+    """
+
     device = "cpu"  # simulate: real cuda uses "cuda", tensors stay torch
     tensor_on_cuda = True
+
+
+def _simulate_cuda_frames(monkeypatch):
+    """Make the production device-frame predicate accept CPU torch tensors.
+
+    ``obb._frames_are_cuda_tensors`` requires ``tensor.is_cuda``, which cannot
+    be satisfied on a CPU/MPS box. Patching the ONE predicate the sliced path
+    consults (rather than inventing a parallel test-only predicate) keeps the
+    production dispatch rule under test: everything downstream -- device-side
+    tiling, ``_gpu_letterbox_batch``, the ``DirectExecutorAdapter`` exemption --
+    runs unmodified against real torch tensors.
+    """
+    import hydra_suite.core.inference.stages.obb as obb_mod
+
+    monkeypatch.setattr(
+        obb_mod,
+        "_frames_are_cuda_tensors",
+        lambda frames: bool(frames) and isinstance(frames[0], torch.Tensor),
+    )
 
 
 class _FakeYOLOCudaTensorsFixed:
@@ -747,7 +770,7 @@ class _FakeYOLOCudaLetterboxPoint:
         return results
 
 
-def test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad():
+def test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad(monkeypatch):
     """Task 7 coverage gap: both existing cuda-path tests use tiles exactly
     == imgsz (256), so the letterbox-invert guard
     ``if r != 1.0 or pad_left != 0.0 or pad_top != 0.0:`` in
@@ -761,6 +784,10 @@ def test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad():
     """
     from hydra_suite.core.inference.stages.obb import _gpu_letterbox_batch
 
+    # Combination 4 of the frame/extraction matrix: CUDA-tensor frames AND
+    # device-tensor extraction. Letterboxing only ever happens on the
+    # CUDA-tensor FRAME path, so this test must declare that frame kind.
+    _simulate_cuda_frames(monkeypatch)
     frame = torch.zeros((100, 200, 3), dtype=torch.uint8)  # H=100, W=200
     cfg = OBBConfig(
         mode="direct",
@@ -828,9 +855,17 @@ def test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad():
 
 
 def test_cuda_no_tile_overlap_preserves_raw_tensors():
+    """Combination 1: numpy frames + ``tensor_on_cuda=True`` (tier ``gpu``).
+
+    This is the shape ``RuntimeContext.from_config`` emits for tier ``gpu`` on a
+    CUDA box: torch backend -> device-tensor extraction, but CPU decode -> numpy
+    frames (NVDEC is gpu_fast-only). Before finding C1 was fixed, this exact
+    combination crashed with ``'numpy.ndarray' object has no attribute
+    'permute'`` because the tiling path was selected by ``tensor_on_cuda``.
+    """
     from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 
-    frame = torch.zeros((512, 512, 3), dtype=torch.uint8)  # HWC uint8 (cuda sim)
+    frame = np.zeros((512, 512, 3), np.uint8)
     cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
     out = run_direct_sliced(
         [frame], _FakeYOLOCudaTensorsFixed(), cfg, _FakeCudaRuntime()
@@ -858,7 +893,9 @@ def test_cuda_tile_overlap_with_real_duplicate_materializes_and_merges():
     from hydra_suite.core.inference.result import OBBResult
     from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 
-    frame = torch.zeros((300, 300, 3), dtype=torch.uint8)
+    # Combination 1 again (numpy frames + device-tensor extraction), this time
+    # with genuinely overlapping tiles so the merge/materialize branch runs.
+    frame = np.zeros((300, 300, 3), np.uint8)
     cfg = _direct_cfg(True, overlap_height_ratio=0.2, overlap_width_ratio=0.2)
     tiles = get_slice_bboxes(300, 300, 256, 256, 0.2, 0.2)
     assert tiles_overlap(tiles) is True
@@ -875,3 +912,294 @@ def test_cuda_tile_overlap_with_real_duplicate_materializes_and_merges():
     assert out[0].num_detections == 1
     assert out[0].centroids[0, 0] == pytest.approx(global_point[0], abs=1.0)
     assert out[0].centroids[0, 1] == pytest.approx(global_point[1], abs=1.0)
+
+
+# --- C1: the four frame-kind x extraction-path combinations -------------------
+#
+# The two decisions are ORTHOGONAL and must be dispatched separately:
+#
+#   tiling/preprocess  <- frames are CUDA tensors AND model is not a
+#                         DirectExecutorAdapter  (device tiling + GPU letterbox)
+#   extraction         <- runtime.tensor_on_cuda  (raw device tensors vs OBBResult)
+#
+#   | # | frames | tensor_on_cuda | producible as                        |
+#   |---|--------|----------------|--------------------------------------|
+#   | 1 | numpy  | True           | tier gpu (torch+cuda, CPU decode)    |
+#   | 2 | numpy  | False          | cpu / mps / gpu_fast-CoreML          |
+#   | 3 | cuda   | False          | gpu_fast + NVDEC + TRT adapter       |
+#   | 4 | cuda   | True           | not producible today (defensive)     |
+#
+# Combination 1 is covered by test_cuda_no_tile_overlap_preserves_raw_tensors
+# and test_cuda_tile_overlap_with_real_duplicate_materializes_and_merges;
+# combination 2 by the test_sliced_cpu_* tests; combination 4 by
+# test_cuda_sliced_letterbox_invert_applies_real_scale_and_pad. Combination 3
+# is covered below.
+
+
+class _FakeDirectExecutor:
+    """Stands in for a TRT/ONNX direct executor behind ``DirectExecutorAdapter``.
+
+    Asserts it is handed the RAW tile list (CUDA tensors), never a
+    pre-letterboxed ``(B,3,imgsz,imgsz)`` batch -- the adapter does its own
+    letterbox + original-frame rescale, so pre-batching double-preprocesses
+    (the exact hazard ``_run_direct`` documents at its dispatch site).
+    """
+
+    imgsz = 256
+    names = None
+
+    def __init__(self):
+        self.calls = []
+
+    def predict(self, frames, *, conf_thres, classes, max_det):
+        assert isinstance(frames, list)
+        for f in frames:
+            assert isinstance(f, torch.Tensor), f"adapter got {type(f).__name__}"
+        self.calls.append(len(frames))
+        results = []
+        for _ in frames:
+            r = types.SimpleNamespace()
+            r.obb = _FakeOBBN([(60.0, 60.0, 30.0, 30.0)])
+            results.append(r)
+        return results
+
+
+def test_cuda_frames_with_direct_executor_adapter_keeps_tensor_tiles(monkeypatch):
+    """Combination 3: CUDA-tensor frames + ``tensor_on_cuda=False``.
+
+    tier gpu_fast on CUDA: NVDEC yields CUDA-tensor frames, but the OBB stage
+    resolves to the TensorRT backend, so extraction is the OBBResult kind.
+    Before C1 was fixed this combination hit ``np.ascontiguousarray`` on a CUDA
+    tensor. The adapter must receive tile TENSORS (it letterboxes internally),
+    and the result must be a plain ``OBBResult``.
+    """
+    from hydra_suite.core.inference.result import OBBResult
+    from hydra_suite.core.inference.runtime_artifacts import DirectExecutorAdapter
+
+    _simulate_cuda_frames(monkeypatch)
+    frame = torch.zeros((512, 512, 3), dtype=torch.uint8)
+    executor = _FakeDirectExecutor()
+    model = DirectExecutorAdapter(executor)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+
+    out = run_direct_sliced([frame], model, cfg, _FakeRuntime())
+
+    assert len(out) == 1
+    assert isinstance(out[0], OBBResult)
+    tiles = get_slice_bboxes(512, 512, 256, 256, 0.0, 0.0)
+    assert sum(executor.calls) == len(tiles)  # one job per tile, nothing dropped
+    expected = sorted((x0 + 60, y0 + 60) for x0, y0, _, _ in tiles)
+    actual = sorted(map(tuple, out[0].centroids.tolist()))
+    for (ex, ey), (ax, ay) in zip(expected, actual):
+        assert ax == pytest.approx(ex, abs=1e-3)
+        assert ay == pytest.approx(ey, abs=1e-3)
+
+
+def test_cuda_frames_with_plain_torch_model_letterboxes_device_tiles(monkeypatch):
+    """Combination 3/4 preprocess half: CUDA-tensor frames + a plain ultralytics
+    model must be GPU-letterboxed into a single batched tensor (a list of
+    tensors is not a valid ultralytics predict source)."""
+    _simulate_cuda_frames(monkeypatch)
+    seen = {}
+
+    class _Model:
+        imgsz = 256
+        overrides = {"imgsz": 256}
+
+        def predict(self, source, **kw):
+            seen["type"] = type(source)
+            seen["shape"] = tuple(source.shape)
+            return [
+                types.SimpleNamespace(obb=_FakeOBBN([(60.0, 60.0, 30.0, 30.0)]))
+                for _ in range(source.shape[0])
+            ]
+
+    frame = torch.zeros((512, 512, 3), dtype=torch.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    out = run_direct_sliced([frame], _Model(), cfg, _FakeRuntime())
+    assert seen["type"] is torch.Tensor
+    assert seen["shape"][1:] == (3, 256, 256)
+    assert out[0].num_detections == 4
+
+
+def test_fixture_runtime_flag_combinations_are_producible(monkeypatch):
+    """Guard against the class of error that hid C1: a fixture encoding an
+    IMPOSSIBLE ``RuntimeContext``.
+
+    Derives the (tensor_on_cuda, use_nvdec) pair that
+    ``RuntimeContext.from_config`` really emits per tier on a CUDA host, and
+    pins the two facts the sliced dispatch depends on:
+      * tier ``gpu``   -> tensor_on_cuda=True  AND no NVDEC (numpy frames)
+      * tier gpu_fast  -> NVDEC frames         AND tensor_on_cuda=False
+    i.e. "device-tensor extraction" and "CUDA-tensor frames" are mutually
+    exclusive in production, so neither may be inferred from the other.
+    """
+    from hydra_suite.core.inference import runtime as rt_mod
+    from hydra_suite.core.inference.config import InferenceConfig
+    from hydra_suite.runtime import resolver as resolver_mod
+
+    monkeypatch.setattr(
+        resolver_mod,
+        "detect_platform",
+        lambda: resolver_mod.PlatformInfo(has_cuda=True, has_mps=False),
+    )
+    monkeypatch.setattr(rt_mod, "_cuda_device_available", lambda: "cuda:0")
+    monkeypatch.setattr(rt_mod, "_nvdec_available", lambda: True)
+
+    produced = {}
+    for tier in ("cpu", "gpu", "gpu_fast"):
+        ctx = rt_mod.RuntimeContext.from_config(
+            InferenceConfig(obb=_direct_cfg(True), runtime_tier=tier)
+        )
+        produced[tier] = (bool(ctx.tensor_on_cuda), bool(ctx.use_nvdec))
+
+    assert produced["gpu"] == (True, False)  # combination 1 fixture shape
+    assert produced["gpu_fast"] == (False, True)  # combination 3 fixture shape
+    assert produced["cpu"] == (False, False)  # combination 2 fixture shape
+    # No producible tier yields CUDA-tensor frames AND device-tensor extraction.
+    assert not any(t and n for t, n in produced.values())
+
+    # The fixtures used in this module must each match a producible shape.
+    assert (_FakeCudaRuntime.tensor_on_cuda, False) == produced["gpu"]
+    assert (_FakeRuntime.tensor_on_cuda, False) == produced["cpu"]
+
+
+# --- I2: bounded predict batch ------------------------------------------------
+
+
+def test_predict_is_chunked_to_a_bounded_tile_count():
+    """A window of frames must NOT be issued as one frames x tiles predict call:
+    with 25 tiles that is 25x the peak activation memory the user configured."""
+    from hydra_suite.core.inference.stages.slicing import MAX_TILE_CHUNK
+
+    sizes = []
+
+    class _Model:
+        imgsz = 256
+        overrides = {"imgsz": 256}
+
+        def predict(self, source, **kw):
+            n = source.shape[0] if hasattr(source, "shape") else len(source)
+            sizes.append(n)
+            return [types.SimpleNamespace(obb=_FakeOBBN([])) for _ in range(n)]
+
+    frames = [np.zeros((512, 512, 3), np.uint8) for _ in range(8)]
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    out = run_direct_sliced(frames, _Model(), cfg, _FakeRuntime())
+    assert len(out) == 8
+    assert sum(sizes) == 8 * 4  # 4 tiles/frame, every job issued exactly once
+    assert len(sizes) > 1  # actually chunked, not one giant call
+    assert max(sizes) <= MAX_TILE_CHUNK
+    assert max(sizes) <= 4  # bounded by tiles-per-frame (the TRT engine profile)
+
+
+# --- I3: cap applied before the merge on every path ---------------------------
+
+
+def test_raw_detection_cap_is_applied_before_the_merge(monkeypatch):
+    """The cap must bound the O(n^2) merge input, not just the output -- and
+    both extraction paths must keep the SAME detections."""
+    from hydra_suite.core.inference.stages import merge as merge_mod
+
+    seen = {}
+    real_merge = merge_mod.merge_obb_detections
+
+    def _spy(result, **kw):
+        seen["n_in"] = result.num_detections
+        return real_merge(result, **kw)
+
+    monkeypatch.setattr(merge_mod, "merge_obb_detections", _spy)
+
+    class _ManyDetModel:
+        imgsz = 256
+        overrides = {"imgsz": 256}
+
+        def predict(self, source, **kw):
+            n = source.shape[0] if hasattr(source, "shape") else len(source)
+            return [
+                types.SimpleNamespace(
+                    obb=_FakeOBBN([(20.0 + 5 * i, 20.0, 8.0, 8.0) for i in range(10)])
+                )
+                for _ in range(n)
+            ]
+
+    frame = np.zeros((300, 300, 3), np.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.2, overlap_width_ratio=0.2)
+    cfg.raw_detection_cap = 5
+    out = run_direct_sliced([frame], _ManyDetModel(), cfg, _FakeRuntime())
+    assert seen["n_in"] == 5  # 4 tiles x 10 dets capped to 5 BEFORE merging
+    assert out[0].num_detections <= 5
+
+
+# --- I5: analytic overlap predicate + tile-count guard ------------------------
+
+
+@pytest.mark.parametrize(
+    "frame_h,frame_w,sh,sw,oh,ow",
+    [
+        (300, 300, 256, 256, 0.0, 0.0),
+        (512, 512, 256, 256, 0.0, 0.0),
+        (900, 1600, 256, 384, 0.3, 0.5),
+        (1000, 1000, 256, 256, 0.2, 0.2),
+        (500, 500, 2000, 2000, 0.2, 0.2),
+        (1080, 1920, 640, 640, 0.0, 0.0),
+    ],
+)
+def test_tiles_overlap_matches_the_pairwise_reference(frame_h, frame_w, sh, sw, oh, ow):
+    """The O(1) analytic predicate must agree with the O(T^2) definition."""
+    tiles = get_slice_bboxes(frame_h, frame_w, sh, sw, oh, ow)
+
+    def _reference(ts):
+        for i in range(len(ts)):
+            ax0, ay0, ax1, ay1 = ts[i]
+            for j in range(i + 1, len(ts)):
+                bx0, by0, bx1, by1 = ts[j]
+                if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
+                    return True
+        return False
+
+    assert tiles_overlap(tiles) is _reference(tiles)
+
+
+def test_tiles_overlap_is_not_quadratic_on_a_huge_grid():
+    """53k tiles must be answered instantly; the O(T^2) scan was ~2.8e9 pure
+    Python iterations -- an unkillable-looking hang with no log line."""
+    import time
+
+    tiles = get_slice_bboxes(1080, 1920, 64, 64, 0.9, 0.9)
+    assert len(tiles) > 20000
+    t0 = time.perf_counter()
+    assert tiles_overlap(tiles) is True
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_pathological_tile_count_raises_instead_of_hanging():
+    """slice=64 + overlap=0.9 on 1080p is reachable via advanced_config.json and
+    yields ~53k tiles (53k forward passes). Fail loudly, do not silently spin."""
+    from hydra_suite.core.inference.stages.slicing import MAX_TILES_PER_FRAME
+
+    cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_height=64,
+        slice_width=64,
+        overlap_height_ratio=0.9,
+        overlap_width_ratio=0.9,
+    )
+    with pytest.raises(ValueError, match="tile"):
+        plan_slices((1080, 1920), cfg, imgsz=64, roi_mask=None)
+    # A sane plan of the same shape is unaffected.
+    ok = plan_slices(
+        (1080, 1920),
+        SliceConfig(
+            enabled=True,
+            geometry_mode="custom",
+            slice_height=640,
+            slice_width=640,
+            overlap_height_ratio=0.2,
+            overlap_width_ratio=0.2,
+        ),
+        imgsz=640,
+        roi_mask=None,
+    )
+    assert 0 < len(ok.tiles) <= MAX_TILES_PER_FRAME
