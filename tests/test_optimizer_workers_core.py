@@ -129,7 +129,7 @@ def _patch_cache_open(monkeypatch, fake_handle):
     monkeypatch.setattr(
         ow,
         "_open_caches",
-        lambda cfg, cache_dir, video_sig: _FakeCaches(fake_handle),
+        lambda cfg, cache_dir, video_sig, roi_mask=None: _FakeCaches(fake_handle),
         raising=False,
     )
     monkeypatch.setattr(
@@ -196,7 +196,7 @@ def test_run_tracking_preview_handles_missing_cache_gracefully(monkeypatch, tmp_
     monkeypatch.setattr(
         ow,
         "_open_caches",
-        lambda cfg, cache_dir, video_sig: _FakeCaches(None),
+        lambda cfg, cache_dir, video_sig, roi_mask=None: _FakeCaches(None),
         raising=False,
     )
     monkeypatch.setattr(

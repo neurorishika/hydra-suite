@@ -452,5 +452,77 @@ def test_apriltag_key_has_empty_model_path():
     assert k.model_path == ""
 
 
+# ---- _open_caches: consumer/write-path ROI-mask coordination ----
+#
+# Read-only cache consumers (frame_result_bridge, optimizer.py,
+# optimizer_workers.py, trackerkit config.py) must reopen the OBB detection
+# cache WITH the same roi_mask the write path (InferenceRunner) used, or they
+# compute the pre-ROI key and fail to recognize an ROI-folded cache. This
+# fails safe (mismatched key => cache treated as invalid, never stale-served)
+# but silently defeats the SAHI ROI tile-gating feature for its own target
+# config (sliced inference + arena ROI). These tests prove the write-path key
+# and a fixed consumer's key now agree, and that the old (mask-omitting)
+# consumer call produced a different key -- i.e. the bug existed.
+
+
+def test_open_caches_sliced_roi_write_and_consumer_keys_now_agree():
+    """GREEN: a consumer that now passes roi_mask (matching the write path)
+    produces the identical detection cache key -- the coordination gap is
+    closed for the sliced + ROI config."""
+    from pathlib import Path
+
+    from hydra_suite.core.inference.config import InferenceConfig
+    from hydra_suite.core.inference.runner import _open_caches
+
+    mask = _roi(fill=1)
+    cfg = InferenceConfig(obb=_obb_direct_slice(SliceConfig(enabled=True)))
+
+    # Write path: InferenceRunner opens caches with its own video_sig/roi_mask.
+    write_caches = _open_caches(cfg, Path("/tmp/cache"), "vid-sig", mask)
+
+    # Fixed consumer: now threads the SAME mask through.
+    consumer_caches = _open_caches(cfg, Path("/tmp/cache"), "vid-sig", mask)
+
+    assert write_caches.detection.key == consumer_caches.detection.key
+
+
+def test_open_caches_sliced_roi_old_consumer_behavior_mismatched_key():
+    """RED (documents the bug that existed): a consumer that omits roi_mask
+    (the old buggy call pattern -- ``_open_caches(config, cache_dir,
+    video_sig)`` with no 4th arg) computes a DIFFERENT key than the write
+    path for a sliced + ROI config, so it can never recognize the ROI-folded
+    cache the write path produced."""
+    from pathlib import Path
+
+    from hydra_suite.core.inference.config import InferenceConfig
+    from hydra_suite.core.inference.runner import _open_caches
+
+    mask = _roi(fill=1)
+    cfg = InferenceConfig(obb=_obb_direct_slice(SliceConfig(enabled=True)))
+
+    write_caches = _open_caches(cfg, Path("/tmp/cache"), "vid-sig", mask)
+    old_buggy_consumer_caches = _open_caches(cfg, Path("/tmp/cache"), "vid-sig")
+
+    assert write_caches.detection.key != old_buggy_consumer_caches.detection.key
+
+
+def test_open_caches_non_sliced_key_unchanged_with_or_without_mask():
+    """Byte-parity: for a NON-sliced (or no-ROI) config, passing the mask to
+    _open_caches unconditionally must NOT change the key -- every existing
+    non-sliced call site keeps producing exactly the key it always did."""
+    from pathlib import Path
+
+    from hydra_suite.core.inference.config import InferenceConfig
+    from hydra_suite.core.inference.runner import _open_caches
+
+    mask = _roi(fill=1)
+    cfg = InferenceConfig(obb=_obb_direct_slice(SliceConfig(enabled=False)))
+
+    no_mask = _open_caches(cfg, Path("/tmp/cache"), "vid-sig")
+    with_mask = _open_caches(cfg, Path("/tmp/cache"), "vid-sig", mask)
+
+    assert no_mask.detection.key == with_mask.detection.key
+
+
 # Silence unused-import warnings (np is implicitly required by OBBResult fixtures)
 _ = np

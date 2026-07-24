@@ -316,6 +316,7 @@ def run_tracking_preview(
         cfg,
         Path(detection_cache_path),
         video_signature(video_path),
+        params.get("ROI_MASK", None),
     ).detection
     _pose_cache = None
     try:
