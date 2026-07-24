@@ -127,6 +127,11 @@ def _sliced_tile_batch(
         frame_hw,
         slice_cfg,
         imgsz,
+        # Deliberately UNGATED (roi_mask=None): this sizes the TensorRT dynamic-
+        # batch engine profile and must cover the largest tile chunk that can
+        # ever be issued. ROI gating only ever reduces the tile count (and falls
+        # back to the full grid on an empty ROI), so the ungated count is the
+        # correct upper bound; gating here could undersize the engine profile.
         None,
         ref_object_px=slice_cfg.reference_body_px,
     )
@@ -268,7 +273,10 @@ def _load_all_models(
 
 
 def _open_caches(
-    config: InferenceConfig, cache_dir: Path, video_sig: str = ""
+    config: InferenceConfig,
+    cache_dir: Path,
+    video_sig: str = "",
+    roi_mask: "np.ndarray | None" = None,
 ) -> _CacheSet:
     # Bind every per-video cache to the exact source file so a changed video
     # (e.g. a clip regenerated under the same name with a different frame count)
@@ -277,7 +285,9 @@ def _open_caches(
         return with_video_signature(key, video_sig)
 
     detection_key = (
-        detection_cache_key(config.obb)
+        # roi_mask is folded into the OBB key ONLY when slicing is enabled (see
+        # detection_cache_key); None / disabled slicing => byte-identical key.
+        detection_cache_key(config.obb, roi_mask)
         if config.detection_source == "obb"
         else bgsub_detection_cache_key(config.bgsub)
     )
@@ -464,10 +474,19 @@ class InferenceRunner:
         cache_dir: Path | None = None,
         video_path: str | Path | None = None,
         cache_only: bool = False,
+        roi_mask: "np.ndarray | None" = None,
     ) -> None:
         self.config = config
         self.cache_dir = cache_dir
         self.cache_only = cache_only
+        # Arena ROI mask for sliced-inference tile gating. It is the single
+        # source of truth for BOTH (a) the detection cache key (folded in only
+        # when slicing is enabled AND this is non-None -- see detection_cache_key)
+        # and (b) frame-space tile gating during the batch pass. Setting it at
+        # construction (rather than only per-pass) is what lets a SEPARATE
+        # backward/replay run reproduce the exact same cache key via
+        # caches_all_valid() and read the forward run's cache.
+        self._roi_mask = roi_mask
         # Fingerprint of the source video; folded into every cache key so caches
         # are only reused for the exact file they were computed from.
         self._video_path = str(video_path) if video_path else None
@@ -505,7 +524,9 @@ class InferenceRunner:
     def caches_all_valid(self) -> bool:
         if self.cache_dir is None:
             return False
-        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+        caches = _open_caches(
+            self.config, self.cache_dir, self._video_sig, self._roi_mask
+        )
         return all(h.is_valid() for h in caches.all_handles())
 
     def detection_cache_covers_range(self, start_frame: int, end_frame: int) -> bool:
@@ -518,7 +539,9 @@ class InferenceRunner:
         """
         if self.cache_dir is None:
             return False
-        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+        caches = _open_caches(
+            self.config, self.cache_dir, self._video_sig, self._roi_mask
+        )
         if caches.detection is None:
             return False
         return caches.detection.covers_frame_range(start_frame, end_frame)
@@ -529,7 +552,9 @@ class InferenceRunner:
         """Report up to ``max_report`` frames missing from the detection cache."""
         if self.cache_dir is None:
             return []
-        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+        caches = _open_caches(
+            self.config, self.cache_dir, self._video_sig, self._roi_mask
+        )
         if caches.detection is None:
             return []
         return caches.detection.get_missing_frames(start_frame, end_frame, max_report)
@@ -545,7 +570,9 @@ class InferenceRunner:
         # detections + downstream results. Backward tracking replays them via
         # load_frame; without this, realtime + backward gets an empty backward pass.
         if self._caches is None and self.cache_dir is not None:
-            self._caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+            self._caches = _open_caches(
+                self.config, self.cache_dir, self._video_sig, self._roi_mask
+            )
             self._caches_writable = True
         caches = self._caches if self._caches_writable else None
 
@@ -570,7 +597,16 @@ class InferenceRunner:
                 roi_mask=roi_mask,
             )
         else:
-            raw_list = run_obb([frame], self._models.obb, self.config.obb, self.runtime)
+            # roi_mask is frame-space (the caller passes the mask matching this
+            # exact frame's geometry); it enables ROI tile gating on the sliced
+            # path and is ignored on the non-sliced path (see run_obb).
+            raw_list = run_obb(
+                [frame],
+                self._models.obb,
+                self.config.obb,
+                self.runtime,
+                roi_mask=roi_mask,
+            )
             raw = raw_list[0]
             if isinstance(raw, _RawOBBTensors):
                 raw_obb = materialize_tensors(raw, self.config.obb.raw_detection_cap)
@@ -841,12 +877,43 @@ class InferenceRunner:
             results.append(filtered_obb)
         return results
 
-    def _build_pipeline(self, caches: _CacheSet) -> Pipeline:
+    def _frame_space_roi_mask(
+        self, video_path: str | Path | None
+    ) -> "np.ndarray | None":
+        """Resample ``self._roi_mask`` to the video's native frame geometry.
+
+        Batch-pass frames are decoded at native video resolution (no resize), so
+        the mask handed to ``plan_slices`` must be in that exact H x W space. When
+        the frame size cannot be probed, or the mask already matches, the mask is
+        returned unchanged -- and ``plan_slices``' own coordinate-space guard is
+        the final safety net (a shape mismatch degrades to no gating, never a
+        mis-gate).
+        """
+        mask = self._roi_mask
+        if mask is None:
+            return None
+        frame_hw = _probe_frame_hw(str(video_path) if video_path else None)
+        if frame_hw is None or mask.shape[:2] == frame_hw:
+            return mask
+        import cv2
+
+        return cv2.resize(
+            mask,
+            (frame_hw[1], frame_hw[0]),  # cv2 wants (w, h)
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+    def _build_pipeline(
+        self, caches: _CacheSet, roi_mask: "np.ndarray | None" = None
+    ) -> Pipeline:
         """Construct the depth=1 Pipeline that drives the batch stage layer.
 
         The Pipeline owns the per-window stage sequence (OBB → crops → HT/CNN/pose
         → AprilTag → scatter); cache writes go through a ``CacheWriter`` (sync mode)
         that reproduces ``_run_batch``'s exact raw-result side effects.
+
+        ``roi_mask`` (frame-space) is threaded onto ``PipelineStages`` so the OBB
+        stage can ROI-gate slice tiles; ``None`` keeps the full tile grid.
         """
         stages = PipelineStages(
             config=self.config,
@@ -856,6 +923,7 @@ class InferenceRunner:
             cnn_models=self._models.cnn,
             pose_model=self._models.pose,
             apriltag_model=self._models.apriltag,
+            roi_mask=roi_mask,
         )
         handles: dict[str, CacheHandle] = {}
         if caches.detection is not None:
@@ -883,11 +951,20 @@ class InferenceRunner:
         start_frame: int = 0,
         end_frame: int | None = None,
         should_stop=None,
+        roi_mask: "np.ndarray | None" = None,
     ) -> None:
         from .sources import make_frame_source
 
         if self.cache_dir is None:
             raise RuntimeError("cache_dir must be set before calling run_batch_pass")
+
+        # An explicit roi_mask overrides the construction-time one so the cache
+        # key (opened below) and the tile gating both use the same mask -- and so
+        # a separate backward run built with the same construction-time mask
+        # reproduces the identical key. Passing it only at construction is the
+        # recommended path; this override keeps the two in lockstep either way.
+        if roi_mask is not None:
+            self._roi_mask = roi_mask
 
         # make_frame_source selects NvdecFrameReader when runtime.use_nvdec is True
         # and the decoder is available; otherwise falls back to CpuFrameReader.
@@ -896,7 +973,9 @@ class InferenceRunner:
             video_path, self.runtime, start_frame, end_frame
         )
 
-        caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+        caches = _open_caches(
+            self.config, self.cache_dir, self._video_sig, self._roi_mask
+        )
         self._caches = caches
 
         # Recover the clamped bounds from the reader so range_total matches.
@@ -910,7 +989,12 @@ class InferenceRunner:
         # generator so frames are never all buffered at once. Range clamping,
         # progress cadence, signature binding, and the final cache close are
         # preserved; only the orchestration moved into the Pipeline.
-        pipeline = self._build_pipeline(caches)
+        # Resample the ROI mask to the native frame geometry for tile gating
+        # (the cache key above already folded the mask by content, independent
+        # of this resample).
+        pipeline = self._build_pipeline(
+            caches, roi_mask=self._frame_space_roi_mask(video_path)
+        )
         try:
             pipeline.run(
                 frame_source,
@@ -961,7 +1045,9 @@ class InferenceRunner:
         if self.cache_dir is None:
             raise RuntimeError("cache_dir not set — cannot load cached frames")
         if self._caches is None:
-            self._caches = _open_caches(self.config, self.cache_dir, self._video_sig)
+            self._caches = _open_caches(
+                self.config, self.cache_dir, self._video_sig, self._roi_mask
+            )
 
         raw_obb = (
             self._caches.detection.read_frame(frame_idx)

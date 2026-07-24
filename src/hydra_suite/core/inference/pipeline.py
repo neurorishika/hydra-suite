@@ -105,6 +105,10 @@ class PipelineStages:
     # Set instead of ``obb_models`` when config.detection_source == "bgsub".
     # Last, with a default, so existing keyword constructions are unaffected.
     bgsub_model: Any = None
+    # Frame-space arena ROI mask (same H x W as the decoded frames), or None.
+    # Threaded into run_obb to enable ROI tile gating on the sliced path; a
+    # None keeps the full tile grid (byte-identical to pre-feature behaviour).
+    roi_mask: Any = None
 
 
 # --- test-only frame shim -------------------------------------------------
@@ -217,7 +221,13 @@ class Pipeline:
                 cfg.bgsub,
                 self.runtime,
             )
-        raw_list = run_obb(window.frames, self.stages.obb_models, cfg.obb, self.runtime)
+        raw_list = run_obb(
+            window.frames,
+            self.stages.obb_models,
+            cfg.obb,
+            self.runtime,
+            roi_mask=self.stages.roi_mask,
+        )
         for raw in raw_list:
             if isinstance(raw, _RawOBBTensors):
                 # Same-object handoff: record a CUDA event keyed by each device
