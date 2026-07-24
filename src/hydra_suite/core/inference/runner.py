@@ -111,6 +111,102 @@ class _CacheSet:
         return handles
 
 
+# Upper bound on the TRT tile-batch profile. Not a guess at tile count (that
+# is computed exactly in ``_sliced_tile_batch``) — purely a build-safety guard
+# so a pathological frame/imgsz ratio cannot request an unbuildable engine.
+_MAX_TILE_BATCH = 128
+
+
+def _sliced_tile_batch(
+    config: InferenceConfig, frame_hw: tuple[int, int], imgsz: int
+) -> int:
+    """Exact tiles-per-frame for the configured slice plan (+1 for full-frame pass)."""
+    from .stages.slicing import plan_slices
+
+    slice_cfg = config.obb.direct.slice
+    plan = plan_slices(
+        frame_hw,
+        slice_cfg,
+        imgsz,
+        None,
+        ref_object_px=slice_cfg.reference_body_px,
+    )
+    n = len(plan.tiles) + (1 if plan.full_frame else 0)
+    return max(1, min(n, _MAX_TILE_BATCH))
+
+
+def _probe_frame_hw(video_path: str | None) -> tuple[int, int] | None:
+    """Read (height, width) off the video's first frame metadata, or None."""
+    if not video_path:
+        return None
+    import cv2
+
+    cap = cv2.VideoCapture(str(video_path))
+    try:
+        if not cap.isOpened():
+            return None
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        if h <= 0 or w <= 0:
+            return None
+        return (h, w)
+    except Exception:
+        return None
+    finally:
+        cap.release()
+
+
+def _probe_model_imgsz(model_path: str | None) -> int | None:
+    """Resolve the model's square input size, or None on failure."""
+    if not model_path:
+        return None
+    from .runtime_artifacts import _resolve_imgsz
+
+    try:
+        return _resolve_imgsz(Path(model_path))
+    except Exception:
+        return None
+
+
+def _load_obb_for_config(
+    config: InferenceConfig,
+    runtime: RuntimeContext,
+    video_path: str | None = None,
+) -> OBBModels:
+    """Load OBB models, sizing the TRT engine batch from the real tile count.
+
+    With slicing on, the model is fed TILE batches, not frame batches, so the
+    engine's dynamic profile must cover tiles-per-chunk (spec 5c) — otherwise
+    TensorRT fails ``setInputShape`` at runtime. When slicing is disabled this
+    is a no-op passthrough: ``config.detection_batch_size`` unchanged, exactly
+    as before this helper existed.
+    """
+    from .stages.obb import load_obb_models
+
+    batch_size = config.detection_batch_size
+    direct = config.obb.direct if config.obb is not None else None
+    slice_cfg = getattr(direct, "slice", None) if direct is not None else None
+    if slice_cfg is not None and slice_cfg.enabled:
+        frame_hw = _probe_frame_hw(video_path)
+        imgsz = _probe_model_imgsz(direct.model_path)
+        if frame_hw is not None and imgsz:
+            batch_size = max(batch_size, _sliced_tile_batch(config, frame_hw, imgsz))
+        else:
+            logger.warning(
+                "Sliced OBB inference enabled but frame size (%s) and/or model "
+                "imgsz (%s) could not be probed at load time; falling back to "
+                "detection_batch_size=%d for the TRT engine profile. If the "
+                "runtime tier is gpu_fast, the exported engine's dynamic-batch "
+                "profile may not cover the real tile-chunk size and inference "
+                "may fail at setInputShape — a manually sized engine export "
+                "may be required.",
+                frame_hw,
+                imgsz,
+                batch_size,
+            )
+    return load_obb_models(config.obb, runtime, batch_size=batch_size)
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -137,15 +233,12 @@ def _load_all_models(
     from .stages.bgsub import load_bgsub_model
     from .stages.cnn import load_cnn_model
     from .stages.headtail import load_headtail_model
-    from .stages.obb import load_obb_models
     from .stages.pose import load_pose_model
 
     obb = None
     bgsub = None
     if config.detection_source == "obb":
-        obb = load_obb_models(
-            config.obb, runtime, batch_size=config.detection_batch_size
-        )
+        obb = _load_obb_for_config(config, runtime, video_path=video_path)
     elif not cache_only:
         bgsub = load_bgsub_model(config.bgsub, runtime, video_path=video_path)
 
