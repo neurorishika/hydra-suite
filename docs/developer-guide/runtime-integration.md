@@ -152,6 +152,52 @@ A new model/method integration is complete only when:
 - Manual exported-model-path requirements for standard workflows.
 - Runtime checks scattered across GUI/business logic without shared resolver usage.
 
+## Sliced Inference (SAHI)
+
+Direct-mode OBB detection supports optional SAHI-style sliced inference
+(`SliceConfig`, off by default). `run_obb` dispatches to
+`stages/slicing.py:run_direct_sliced` when `config.obb.direct.slice.enabled`.
+
+- **Geometry:** `auto_model` (tile = model imgsz, no resample — the fast path),
+  `auto_object` (tile from expected object size), `custom` (explicit size).
+- **Merge:** `merge_policy` (nms/nmm/greedy_nmm) × `merge_metric` (iou/ios) ×
+  `merge_backend` (cv2 default; gpu = native-cuda only, cv2-validated). Default
+  `greedy_nmm` + `ios` + `0.5`.
+- **Merge gate is tile geometry, never the configured ratio:** the merge step
+  is gated on `tiles_overlap(plan.tiles)` — whether the *actual* planned tiles
+  overlap — not on whether `overlap_height_ratio`/`overlap_width_ratio` is
+  nonzero. `get_slice_bboxes` flushes the last tile on each axis to the frame
+  edge, so tiles genuinely overlap even at a configured ratio of `0.0` (e.g. a
+  300px frame with 256px tiles yields `[0,256)` and `[44,300)` — 212px of real
+  overlap). Using the configured ratio to decide whether to merge was a real
+  bug: it skipped merging in exactly the cases where cross-tile duplicates
+  occur. Always derive the decision from tile geometry, never from the
+  config ratio.
+- **Cost:** tiles flatten into the existing predict batch; ROI-gated tiles are
+  dropped; the overlap-band pre-filter caps the O(n²) merge; native-cuda
+  preserves `_RawOBBTensors` (whole when `overlap==0`, band-only sync when
+  merging). TRT engine batch is sized from tile-chunk, not window depth.
+- **Cache:** slice params fold into `detection_cache_key` only when enabled, so
+  existing non-sliced caches stay valid.
+
+### `gpu` merge-backend performance
+
+The `gpu` merge backend (native CUDA kernel) exists only where it measurably
+beats the `cv2` oracle. Measured on an RTX 6000 Ada, torch 2.11+cu130, cv2 as
+the correctness oracle:
+
+| N | cuda kernel | cv2 | speedup |
+|---|---|---|---|
+| 50 | 1.31 ms | 1.21 ms | 0.93x |
+| 100 | 1.28 ms | 4.72 ms | 3.68x |
+| 200 | 1.41 ms | 17.83 ms | 12.62x |
+| 400 | 3.51 ms | 71.33 ms | 20.33x |
+
+The CUDA crossover is around N=50 detections per merge call; below that, `cv2`
+is faster or comparable. `cv2` remains the default `merge_backend` and the
+correctness oracle everywhere — `gpu` is an opt-in, CUDA-only acceleration for
+high-detection-count scenes.
+
 ## Related Docs
 
 - [GPU Backends](gpu-backends.md)

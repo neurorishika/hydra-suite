@@ -529,6 +529,29 @@ def test_enabled_false_dispatch_uses_plain_run_direct(monkeypatch):
     assert called["sliced"] is False  # disabled -> never dispatched
 
 
+def test_disabled_slice_is_identical_to_plain_run_direct():
+    """enabled=False must be byte-identical to `_run_direct` (structural bypass):
+    `run_obb` dispatches straight to `_run_direct` when slicing is off, so the
+    disabled path must never diverge from the pre-feature pipeline."""
+    from hydra_suite.core.inference.stages.obb import OBBModels, _run_direct, run_obb
+
+    frame = np.zeros((300, 300, 3), np.uint8)
+    model = _FakeYOLO()
+    models = OBBModels(mode="direct", direct_model=model)
+    cfg_off = _direct_cfg(False)
+
+    got = run_obb([frame], models, cfg_off, _FakeRuntime())
+    expected = _run_direct([frame], model, cfg_off, _FakeRuntime())
+    assert len(got) == len(expected)
+    for g, e in zip(got, expected):
+        assert g.num_detections == e.num_detections
+        np.testing.assert_array_equal(g.centroids, e.centroids)
+        np.testing.assert_array_equal(g.corners, e.corners)
+        np.testing.assert_array_equal(g.confidences, e.confidences)
+        np.testing.assert_array_equal(g.angles, e.angles)
+        np.testing.assert_array_equal(g.sizes, e.sizes)
+
+
 def test_enabled_true_dispatches_to_sliced(monkeypatch):
     frame = np.zeros((300, 300, 3), np.uint8)
     cfg = _direct_cfg(True)
