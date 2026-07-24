@@ -2,6 +2,7 @@ import types
 
 import numpy as np
 import pytest
+import torch
 
 from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceConfig
 from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
@@ -9,6 +10,7 @@ from hydra_suite.core.inference.stages.slicing import (
     get_slice_bboxes,
     plan_slices,
     run_direct_sliced,
+    tiles_overlap,
 )
 
 
@@ -236,6 +238,29 @@ class _FakeOBB:
 
         return torch.zeros(1)
 
+    @property
+    def xyxyxyxy(self):
+        # Axis-aligned corners (angle is always 0 in this fake): TL,TR,BR,BL.
+        cx, cy, w, h = (
+            self._xywhr[0, 0],
+            self._xywhr[0, 1],
+            self._xywhr[0, 2],
+            self._xywhr[0, 3],
+        )
+        hw, hh = w / 2.0, h / 2.0
+        corners = np.array(
+            [
+                [
+                    [cx - hw, cy - hh],
+                    [cx + hw, cy - hh],
+                    [cx + hw, cy + hh],
+                    [cx - hw, cy + hh],
+                ]
+            ],
+            np.float32,
+        )
+        return torch.from_numpy(corners)
+
 
 class _FakeYOLO:
     """Stub: returns one obb detection at a fixed frame-space point per tile that
@@ -290,6 +315,29 @@ class _FakeOBBN:
         import torch
 
         return torch.zeros(self._n)
+
+    @property
+    def xyxyxyxy(self):
+        # Axis-aligned corners (angle is always 0 in this fake): TL,TR,BR,BL.
+        if self._n == 0:
+            return torch.zeros((0, 4, 2), dtype=torch.float32)
+        cx, cy, w, h = (
+            self._xywhr[:, 0],
+            self._xywhr[:, 1],
+            self._xywhr[:, 2],
+            self._xywhr[:, 3],
+        )
+        hw, hh = w / 2.0, h / 2.0
+        corners = np.stack(
+            [
+                np.stack([cx - hw, cy - hh], axis=1),
+                np.stack([cx + hw, cy - hh], axis=1),
+                np.stack([cx + hw, cy + hh], axis=1),
+                np.stack([cx - hw, cy + hh], axis=1),
+            ],
+            axis=1,
+        ).astype(np.float32)
+        return torch.from_numpy(corners)
 
 
 class _FakeYOLOGlobalPoint:
@@ -492,3 +540,162 @@ def test_enabled_true_dispatches_to_sliced(monkeypatch):
     )
     out = run_obb([frame], models, cfg, _FakeRuntime())
     assert out == [marker]
+
+
+# --- Task 7: tiles_overlap geometry predicate ---------------------------------
+
+
+def test_tiles_overlap_true_for_edge_flush_case_at_zero_configured_ratio():
+    """The exact bug example from the task brief: a 300px frame with 256px
+    tiles at a CONFIGURED ratio of 0.0 still edge-flushes the last tile to
+    the frame border, producing 212px of REAL overlap. ``tiles_overlap`` must
+    report True here even though the config ratio is 0 -- this is precisely
+    why callers must gate on tile geometry, never on the config ratio."""
+    tiles = get_slice_bboxes(300, 300, 256, 256, 0.0, 0.0)
+    assert tiles == [
+        (0, 0, 256, 256),
+        (44, 0, 300, 256),
+        (0, 44, 256, 300),
+        (44, 44, 300, 300),
+    ]
+    assert tiles_overlap(tiles) is True
+
+
+def test_tiles_overlap_false_for_grid_that_divides_evenly():
+    """A 512px frame with 256px tiles at ratio 0.0 divides evenly (2x2 grid,
+    no edge-flush needed) -- tiles genuinely do not overlap."""
+    tiles = get_slice_bboxes(512, 512, 256, 256, 0.0, 0.0)
+    assert tiles == [
+        (0, 0, 256, 256),
+        (256, 0, 512, 256),
+        (0, 256, 256, 512),
+        (256, 256, 512, 512),
+    ]
+    assert tiles_overlap(tiles) is False
+
+
+# --- Task 7: native-cuda sliced path (_RawOBBTensors preservation) -------------
+#
+# NOTE on the fixture sizes below: the task brief's own draft tests reused the
+# 300x300/256px-tile geometry (the SAME frame/tile size used above to
+# demonstrate the edge-flush overlap bug) for BOTH a "no cross-tile overlap"
+# scenario and a "real overlap" scenario, varying only the CONFIGURED overlap
+# ratio (0.0 vs 0.2). But as proven above, that frame/tile combination
+# produces REAL tile overlap at BOTH ratios (edge-flush forces it regardless
+# of the ratio) -- so a test asserting "ratio 0.0 -> _RawOBBTensors preserved"
+# on that geometry would be asserting something arithmetically false, exactly
+# the numeric-fixture bug this task explicitly warns about. The two cases
+# below instead use genuinely different tile geometries: a 512x512 frame
+# (divides evenly, tiles_overlap literally False) for the "no dedup needed"
+# path, and the 300x300 frame (genuine tile overlap) WITH a fake model that
+# emits an actual duplicate detection at a shared point for the "merge
+# required" path.
+
+
+class _FakeCudaRuntime:
+    device = "cpu"  # simulate: real cuda uses "cuda", tensors stay torch
+    tensor_on_cuda = True
+
+
+class _FakeYOLOCudaTensorsFixed:
+    """Predict returns one fixed-local-point obb detection per tile.
+
+    ``source`` is the (B,3,imgsz,imgsz) GPU-letterboxed batch built by
+    ``run_direct_sliced_cuda`` -- content is irrelevant to this fake, only the
+    batch size matters (one result per tile job).
+    """
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def predict(self, source, **kw):
+        b = source.shape[0] if hasattr(source, "shape") else len(source)
+        results = []
+        for _ in range(b):
+            r = types.SimpleNamespace()
+            r.obb = _FakeOBB(cx=60, cy=60, w=30, h=30)
+            results.append(r)
+        return results
+
+
+class _FakeYOLOCudaGlobalPoint:
+    """Predict emits a detection at a single fixed GLOBAL point -- expressed in
+    each tile's own local coordinates -- for every tile whose bounding box
+    actually contains that point (mirrors ``_FakeYOLOGlobalPoint``, adapted
+    for the batched-tensor calling convention of the cuda path). Relies on
+    ``predict()`` being called once per frame with tiles in ``plan.tiles``
+    order (true here: single frame, no full-frame job).
+    """
+
+    imgsz = 256
+    overrides = {"imgsz": 256}
+
+    def __init__(self, tiles, global_point, size=(20.0, 20.0)):
+        self.tiles = tiles
+        self.gx, self.gy = global_point
+        self.w, self.h = size
+        self._call = 0
+
+    def predict(self, source, **kw):
+        b = source.shape[0] if hasattr(source, "shape") else len(source)
+        results = []
+        for _ in range(b):
+            x0, y0, x1, y1 = self.tiles[self._call % len(self.tiles)]
+            self._call += 1
+            r = types.SimpleNamespace()
+            if x0 <= self.gx < x1 and y0 <= self.gy < y1:
+                r.obb = _FakeOBBN([(self.gx - x0, self.gy - y0, self.w, self.h)])
+            else:
+                r.obb = _FakeOBBN([])
+            results.append(r)
+        return results
+
+
+def test_cuda_no_tile_overlap_preserves_raw_tensors():
+    from hydra_suite.core.inference.stages.obb import _RawOBBTensors
+
+    frame = torch.zeros((512, 512, 3), dtype=torch.uint8)  # HWC uint8 (cuda sim)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
+    out = run_direct_sliced(
+        [frame], _FakeYOLOCudaTensorsFixed(), cfg, _FakeCudaRuntime()
+    )
+    assert len(out) == 1
+    raw = out[0]
+    assert isinstance(raw, _RawOBBTensors)  # no tile overlap -> zero sync, stays raw
+
+    # Correctness, not just type: 4 disjoint tiles each report local (60, 60),
+    # which remaps to 4 distinct global centroids -- verify the translation.
+    tiles = get_slice_bboxes(512, 512, 256, 256, 0.0, 0.0)
+    expected = sorted((x0 + 60, y0 + 60) for x0, y0, _, _ in tiles)
+    actual = sorted(map(tuple, raw.xywhr[:, :2].tolist()))
+    assert len(actual) == 4
+    for (ex, ey), (ax, ay) in zip(expected, actual):
+        assert ax == pytest.approx(ex, abs=1e-3)
+        assert ay == pytest.approx(ey, abs=1e-3)
+    # w, h, angle untouched by the remap (pure translation only).
+    assert torch.allclose(raw.xywhr[:, 2], torch.full((4,), 30.0))
+    assert torch.allclose(raw.xywhr[:, 3], torch.full((4,), 30.0))
+    assert torch.allclose(raw.xywhr[:, 4], torch.zeros(4))
+
+
+def test_cuda_tile_overlap_with_real_duplicate_materializes_and_merges():
+    from hydra_suite.core.inference.result import OBBResult
+    from hydra_suite.core.inference.stages.obb import _RawOBBTensors
+
+    frame = torch.zeros((300, 300, 3), dtype=torch.uint8)
+    cfg = _direct_cfg(True, overlap_height_ratio=0.2, overlap_width_ratio=0.2)
+    tiles = get_slice_bboxes(300, 300, 256, 256, 0.2, 0.2)
+    assert tiles_overlap(tiles) is True
+    # (200, 200) sits inside all 4 tiles' genuine overlap band -> every tile
+    # independently "detects" the same real object.
+    global_point = (200.0, 200.0)
+    model = _FakeYOLOCudaGlobalPoint(tiles, global_point)
+
+    out = run_direct_sliced([frame], model, cfg, _FakeCudaRuntime())
+    assert len(out) == 1
+    assert not isinstance(out[0], _RawOBBTensors)  # overlap -> materialized + merged
+    assert isinstance(out[0], OBBResult)
+    # 4 identical cross-tile duplicates of the same object collapse to 1.
+    assert out[0].num_detections == 1
+    assert out[0].centroids[0, 0] == pytest.approx(global_point[0], abs=1.0)
+    assert out[0].centroids[0, 1] == pytest.approx(global_point[1], abs=1.0)

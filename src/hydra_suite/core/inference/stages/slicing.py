@@ -52,6 +52,27 @@ def get_slice_bboxes(
     return [(x, y, x + slice_w, y + slice_h) for y in ys for x in xs]
 
 
+def tiles_overlap(tiles: list[tuple[int, int, int, int]]) -> bool:
+    """True when ANY two planned tiles actually intersect.
+
+    Pure predicate over tile boxes -- no detection data, no device sync, and
+    cheap enough to call once per window (tile counts are small).
+
+    Callers must use THIS, not ``SliceConfig.overlap_*_ratio``, to decide
+    whether cross-tile dedup is needed: ``get_slice_bboxes`` flushes the last
+    tile in each axis to the frame edge, so tiles genuinely overlap even at a
+    configured ratio of 0.0 (a 300px frame with 256px tiles yields [0,256) and
+    [44,300) -- 212px of real overlap).
+    """
+    for i in range(len(tiles)):
+        ax0, ay0, ax1, ay1 = tiles[i]
+        for j in range(i + 1, len(tiles)):
+            bx0, by0, bx1, by1 = tiles[j]
+            if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
+                return True
+    return False
+
+
 def _tile_size(
     slice_cfg: SliceConfig, imgsz: int, ref_object_px: float
 ) -> tuple[int, int]:
