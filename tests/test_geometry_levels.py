@@ -142,3 +142,11 @@ def test_resolve_confirm_override(tmp_path):
     _write(labels, "quad.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")
     scan = resolve_source_level_or_block(labels, GeometryLevel.OBB, confirm=True)
     assert scan.is_homogeneous and scan.resolved_level is GeometryLevel.POLYGON
+
+
+def test_xal_mode_for_level():
+    from hydra_suite.detectkit.gui.panels.dataset_panel import xal_mode_for_level
+
+    assert xal_mode_for_level(GeometryLevel.AABB) == "rectangle"
+    assert xal_mode_for_level(GeometryLevel.OBB) == "obb"
+    assert xal_mode_for_level(GeometryLevel.POLYGON) == "polygon"

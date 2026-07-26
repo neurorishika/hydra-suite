@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.paths import get_app_data_dir
+from hydra_suite.training.geometry_levels import GeometryLevel, scan_source_levels
 from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
@@ -52,6 +53,22 @@ def _copy_tree_without_metadata(src: Path, dst: Path) -> None:
     if not src.exists():
         return
     shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=shutil.copyfile)
+
+
+def xal_mode_for_level(level: GeometryLevel) -> str:
+    """Map a geometry level to the X-AnyLabeling convert --mode value.
+
+    NOTE: "obb" is the known-good anchor value, verified against an
+    installed x-anylabeling CLI. The "rectangle"/"polygon" mappings for
+    AABB/POLYGON are implemented per spec but have not been confirmed
+    against an installed x-anylabeling env (`xanylabeling convert --mode`
+    vocabulary) -- confirm before relying on them in production.
+    """
+    return {
+        GeometryLevel.AABB: "rectangle",
+        GeometryLevel.OBB: "obb",
+        GeometryLevel.POLYGON: "polygon",
+    }[level]
 
 
 class DatasetPanel(QWidget):
@@ -413,6 +430,16 @@ class DatasetPanel(QWidget):
             return None
         return self.source_combo.itemData(idx)
 
+    def _selected_source_obj(self):
+        """Return the current source's OBBSource (matched by path), or None."""
+        path = self._selected_source_path()
+        if path is None or self._project is None:
+            return None
+        for src in self._project.sources:
+            if src.path == path:
+                return src
+        return None
+
     @staticmethod
     def _xal_stage_dir_for_source(source_dir: Path) -> Path:
         """Return a stable X-AnyLabeling staging workspace for a DetectKit source."""
@@ -435,16 +462,43 @@ class DatasetPanel(QWidget):
         return stage_dir
 
     def _sync_xal_stage_back(self, source_dir: Path, stage_dir: Path) -> None:
-        """Copy edited X-AnyLabeling labels from the safe staging workspace back."""
-        labels_src = stage_dir / "labels"
-        if labels_src.exists():
-            labels_dst = source_dir / "labels"
-            shutil.rmtree(labels_dst, ignore_errors=True)
-            _copy_tree_without_metadata(labels_src, labels_dst)
+        """Validate staged labels, then copy back and update the source's level.
 
+        Raises RuntimeError (without copying anything back) if the staged
+        labels are not homogeneous -- a mixed staged source must never land
+        on disk.
+        """
+        labels_src = stage_dir / "labels"
+        if not labels_src.exists():
+            classes_src = stage_dir / "classes.txt"
+            if classes_src.exists():
+                shutil.copyfile(classes_src, source_dir / "classes.txt")
+            return
+
+        src_obj = self._selected_source_obj()
+        intended = (
+            GeometryLevel.from_str(getattr(src_obj, "level", "obb"))
+            if src_obj
+            else GeometryLevel.OBB
+        )
+        scan = scan_source_levels(labels_src, intended_level=intended)
+        if not scan.is_homogeneous:
+            raise RuntimeError(
+                "Edited labels are not homogeneous and were not copied back:\n"
+                + scan.reason
+                + "\nConflicting files: "
+                + ", ".join(scan.conflict_files[:8])
+            )
+
+        labels_dst = source_dir / "labels"
+        shutil.rmtree(labels_dst, ignore_errors=True)
+        _copy_tree_without_metadata(labels_src, labels_dst)
         classes_src = stage_dir / "classes.txt"
         if classes_src.exists():
             shutil.copyfile(classes_src, source_dir / "classes.txt")
+
+        if src_obj is not None:
+            src_obj.level = scan.resolved_level.label
 
     def _get_multiple_dirs(self, title: str) -> list[str]:
         """Open a non-native file dialog that allows multi-directory selection."""
@@ -633,8 +687,15 @@ class DatasetPanel(QWidget):
             return
 
         # Build the shell command: activate conda env, convert yolo->xlabel, open GUI
+        src_obj = self._selected_source_obj()
+        level = (
+            GeometryLevel.from_str(getattr(src_obj, "level", "obb"))
+            if src_obj
+            else GeometryLevel.OBB
+        )
+        mode = xal_mode_for_level(level)
         convert_cmd = (
-            "xanylabeling convert --task yolo2xlabel --mode obb "
+            f"xanylabeling convert --task yolo2xlabel --mode {mode} "
             "--images ./images --labels ./labels --output ./images "
             "--classes classes.txt"
         )
@@ -706,7 +767,11 @@ class DatasetPanel(QWidget):
         convert_dir = stage_dir if stage_dir.exists() else source_dir
         self._try_xlabel_convert(str(convert_dir))
         if convert_dir == stage_dir:
-            self._sync_xal_stage_back(source_dir, stage_dir)
+            try:
+                self._sync_xal_stage_back(source_dir, stage_dir)
+            except RuntimeError as exc:
+                QMessageBox.warning(self, "Mixed Geometry", str(exc))
+                return
         self._validate_source(source_path)
         # Refresh image list
         self._on_source_combo_changed(self.source_combo.currentIndex())
