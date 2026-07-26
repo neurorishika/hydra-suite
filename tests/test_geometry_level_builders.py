@@ -1,7 +1,16 @@
+from pathlib import Path
+
+import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.training.contracts import TrainingRole
-from hydra_suite.training.dataset_builders import _parse_geometry_label_lines
+from hydra_suite.training.dataset_builders import (
+    _parse_geometry_label_lines,
+    derive_crop_segment_dataset_from_source,
+    derive_detect_dataset_from_obb,
+    derive_segment_dataset_from_source,
+)
 
 
 def test_new_roles_exist():
@@ -26,3 +35,60 @@ def test_parse_detect_line_expands_to_quad(tmp_path):
     cls, pts = _parse_geometry_label_lines(p)[0]
     assert cls == 2 and pts.shape == (4, 2)
     assert np.allclose(pts[0], [0.4, 0.3])  # x1,y1 = cx-w/2, cy-h/2
+
+
+def _mk_dataset(root: Path, label_line: str):
+    for split in ("train", "val"):
+        (root / "images" / split).mkdir(parents=True, exist_ok=True)
+        (root / "labels" / split).mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(
+            str(root / "images" / split / "a.jpg"), np.zeros((40, 40, 3), np.uint8)
+        )
+        (root / "labels" / split / "a.txt").write_text(label_line, encoding="utf-8")
+
+
+def test_detect_from_polygon(tmp_path):
+    src = tmp_path / "poly"
+    _mk_dataset(src, "0 0.1 0.1 0.9 0.1 0.9 0.9 0.5 0.95 0.1 0.9\n")  # 5-pt contour
+    res = derive_detect_dataset_from_obb(src, tmp_path / "out", class_names=["object"])
+    line = (
+        next((Path(res.dataset_dir) / "labels" / "train").glob("*.txt"))
+        .read_text()
+        .split()
+    )
+    assert len(line) == 5  # class + cx cy w h
+    assert float(line[3]) == pytest.approx(0.8, abs=1e-3)  # width = 0.9-0.1
+
+
+def test_segment_passthrough_preserves_points(tmp_path):
+    src = tmp_path / "poly"
+    line = "0 0.1 0.1 0.9 0.1 0.9 0.9 0.5 0.95 0.1 0.9\n"
+    _mk_dataset(src, line)
+    res = derive_segment_dataset_from_source(
+        src, tmp_path / "out", class_names=["object"]
+    )
+    out = (
+        next((Path(res.dataset_dir) / "labels" / "train").glob("*.txt"))
+        .read_text()
+        .strip()
+    )
+    assert len(out.split()) == 11  # class + 5 points preserved
+
+
+def test_crop_segment_clips_and_renormalizes(tmp_path):
+    src = tmp_path / "poly"
+    _mk_dataset(src, "0 0.2 0.2 0.6 0.2 0.6 0.6 0.2 0.6 0.3 0.7\n")
+    res = derive_crop_segment_dataset_from_source(
+        src,
+        tmp_path / "out",
+        class_names=["object"],
+        enforce_square=False,
+        pad_ratio=0.0,
+    )
+    out = (
+        next((Path(res.dataset_dir) / "labels" / "train").glob("*.txt"))
+        .read_text()
+        .split()
+    )
+    pts = np.asarray([float(v) for v in out[1:]], dtype=np.float32).reshape(-1, 2)
+    assert pts.min() >= 0.0 and pts.max() <= 1.0  # re-normalized into crop space
