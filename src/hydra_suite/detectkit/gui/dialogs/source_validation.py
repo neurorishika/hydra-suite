@@ -14,6 +14,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.training.geometry_levels import (
+    GeometryLevel,
+    SourceLevelScan,
+    scan_source_levels,
+)
 from hydra_suite.widgets.dialogs import HYDRA_DIALOG_MUTED_TEXT_COLOR, BaseDialog
 
 from ..source_import import DetectKitSourceInspection
@@ -27,6 +32,25 @@ class DetectKitSourceAdditionChoice:
     """Choice returned by the DetectKit source review dialog."""
 
     mode: str
+    level: str = "obb"
+
+
+def resolve_source_level_or_block(
+    labels_dir,
+    intended_level: GeometryLevel = GeometryLevel.OBB,
+    *,
+    confirm: bool = False,
+) -> SourceLevelScan:
+    """Resolve a source's level, honoring an explicit quads-are-contours override."""
+    return scan_source_levels(
+        labels_dir, intended_level=intended_level, confirm_quads_are_polygons=confirm
+    )
+
+
+def _intended_level_for_kind(source_kind: str) -> GeometryLevel:
+    if source_kind == "yolo_detect":
+        return GeometryLevel.AABB
+    return GeometryLevel.OBB
 
 
 def _describe_source_kind(source_kind: str) -> str:
@@ -136,7 +160,26 @@ class DetectKitSourceValidationDialog(BaseDialog):
             f"color: {HYDRA_DIALOG_MUTED_TEXT_COLOR};"
         )
         form.addRow("Keep at source:", self._linked_action_value)
+
+        scan = resolve_source_level_or_block(
+            root / "labels",
+            _intended_level_for_kind(inspection.source_kind),
+        )
+        self._level_scan = scan
+        self._level_value = QLabel(scan.resolved_level.label)
+        form.addRow("Geometry level:", self._level_value)
+
         layout.addLayout(form)
+
+        if not scan.is_homogeneous:
+            warn = QLabel(
+                f"Mixed geometry: {scan.reason}\nConflicting files: "
+                + ", ".join(scan.conflict_files[:8])
+                + (" …" if len(scan.conflict_files) > 8 else "")
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #c0392b;")
+            layout.addWidget(warn)
 
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidgetResizable(True)
@@ -169,7 +212,39 @@ class DetectKitSourceValidationDialog(BaseDialog):
         self._portable_button.setDefault(True)
 
     def _accept_choice(self, mode: str) -> None:
-        self._selection = DetectKitSourceAdditionChoice(mode=mode)
+        if not self._level_scan.is_homogeneous:
+            if self._level_scan.needs_confirmation:
+                from PySide6.QtWidgets import QMessageBox
+
+                answer = QMessageBox.question(
+                    self,
+                    "Mixed Geometry",
+                    "This source mixes polygon files with four-point-only files. "
+                    "Confirm the four-point files are genuine contours (treat the "
+                    "whole source as polygon)? Choose No to cancel and fix the source.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+                self._level_scan = resolve_source_level_or_block(
+                    Path(self._path_value.text()) / "labels",
+                    GeometryLevel.OBB,
+                    confirm=True,
+                )
+            else:
+                from PySide6.QtWidgets import QMessageBox
+
+                QMessageBox.warning(
+                    self,
+                    "Mixed Geometry",
+                    "This source cannot be added until its geometry is homogeneous:\n\n"
+                    + self._level_scan.reason,
+                )
+                return
+        self._selection = DetectKitSourceAdditionChoice(
+            mode=mode, level=self._level_scan.resolved_level.label
+        )
         self.accept()
 
     def selected_choice(self) -> DetectKitSourceAdditionChoice | None:

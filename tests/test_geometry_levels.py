@@ -121,3 +121,24 @@ def test_scan_malformed_line_blocks(tmp_path):
     scan = scan_source_levels(labels)
     assert not scan.is_homogeneous
     assert "bad.txt" in scan.conflict_files
+
+
+from hydra_suite.detectkit.gui.dialogs.source_validation import (
+    resolve_source_level_or_block,
+)
+
+
+def test_resolve_blocks_on_mixed(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "poly.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5 0.3 0.7\n")
+    _write(labels, "quad.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")
+    scan = resolve_source_level_or_block(labels, GeometryLevel.OBB, confirm=False)
+    assert not scan.is_homogeneous and scan.needs_confirmation
+
+
+def test_resolve_confirm_override(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "poly.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5 0.3 0.7\n")
+    _write(labels, "quad.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")
+    scan = resolve_source_level_or_block(labels, GeometryLevel.OBB, confirm=True)
+    assert scan.is_homogeneous and scan.resolved_level is GeometryLevel.POLYGON
