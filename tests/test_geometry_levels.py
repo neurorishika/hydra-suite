@@ -90,3 +90,34 @@ def test_scan_mixed_resolved_by_confirm(tmp_path):
     scan = scan_source_levels(labels, confirm_quads_are_polygons=True)
     assert scan.is_homogeneous
     assert scan.resolved_level is GeometryLevel.POLYGON
+
+
+def test_scan_file_mixing_aabb_and_polygon_blocks(tmp_path):
+    labels = tmp_path / "labels"
+    _write(
+        labels,
+        "a.txt",
+        "0 0.5 0.5 0.2 0.2\n0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5 0.3 0.7\n",
+    )
+    scan = scan_source_levels(labels)
+    assert not scan.is_homogeneous
+    assert "a.txt" in scan.conflict_files
+
+
+def test_scan_aabb_file_with_obb_file_blocks(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "box.txt", "0 0.5 0.5 0.2 0.2\n")  # aabb
+    _write(labels, "obb.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")  # four-point
+    scan = scan_source_levels(labels)
+    assert not scan.is_homogeneous
+    assert (
+        not scan.needs_confirmation
+    )  # aabb/oriented conflict cannot be confirmed away
+
+
+def test_scan_malformed_line_blocks(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "bad.txt", "0 0.1 0.2 0.3\n")  # 4 fields => invalid line
+    scan = scan_source_levels(labels)
+    assert not scan.is_homogeneous
+    assert "bad.txt" in scan.conflict_files

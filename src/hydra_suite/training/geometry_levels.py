@@ -73,8 +73,10 @@ def _classify_file(path: Path) -> str:
     """Return the strongest evidence in a single label file.
 
     One of: "polygon", "four_point", "aabb", "empty", "invalid".
-    Any polygon-evidence line makes the file "polygon"; otherwise a file that
-    mixes aabb and four-point lines is "invalid" (internally inconsistent).
+    A file mixing an aabb line with any oriented/contour (polygon or
+    four-point) line is "invalid" (internally inconsistent); this check runs
+    first so aabb evidence is never silently dropped. Otherwise any
+    polygon-evidence line makes the file "polygon".
     """
     seen: set[str] = set()
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -87,10 +89,10 @@ def _classify_file(path: Path) -> str:
         seen.add(kind)
     if not seen:
         return "empty"
+    if "aabb" in seen and ("polygon" in seen or "four_point" in seen):
+        return "invalid"
     if "polygon" in seen:
         return "polygon"
-    if "aabb" in seen and "four_point" in seen:
-        return "invalid"
     if "four_point" in seen:
         return "four_point"
     return "aabb"
