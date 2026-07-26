@@ -151,6 +151,33 @@ def _parse_obb_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
     return out
 
 
+def _parse_geometry_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
+    """Parse a label file of mixed geometry into (class_id, (P,2) points).
+
+    - 5 fields (cx cy w h) expand to the 4-corner axis-aligned quad.
+    - >=7 odd fields are read as a normalized point list of P = (fields-1)/2 points.
+    Raises on malformed lines.
+    """
+    out: list[tuple[int, np.ndarray]] = []
+    for raw in lbl_path.read_text(encoding="utf-8").splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        parts = ln.split()
+        cls_id = int(float(parts[0]))
+        coords = [float(v) for v in parts[1:]]
+        if len(parts) == 5:
+            cx, cy, w, h = coords
+            x1, y1, x2, y2 = cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
+            pts = np.asarray([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+        elif len(coords) >= 6 and len(coords) % 2 == 0:
+            pts = np.asarray(coords, dtype=np.float32).reshape(-1, 2)
+        else:
+            raise RuntimeError(f"Invalid geometry label line in {lbl_path}: {ln}")
+        out.append((cls_id, pts))
+    return out
+
+
 def _render_filtered_obb_label(
     lbl: Path,
     *,

@@ -11,8 +11,11 @@ class TrainingRole(str, Enum):
     """Canonical training roles supported by MAT."""
 
     OBB_DIRECT = "obb_direct"
+    DETECT_DIRECT = "detect_direct"
+    SEGMENT_DIRECT = "segment_direct"
     SEQ_DETECT = "seq_detect"
     SEQ_CROP_OBB = "seq_crop_obb"
+    SEQ_CROP_SEGMENT = "seq_crop_segment"
 
     # ClassKit classification roles
     CLASSIFY_FLAT_YOLO = "classify_flat_yolo"
