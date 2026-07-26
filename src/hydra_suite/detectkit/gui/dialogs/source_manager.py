@@ -228,6 +228,7 @@ class SourceManagerDialog(BaseDialog):
                 original_path=original_path,
                 source_kind=materialized.source_kind,
                 imported=materialized.imported,
+                level=materialized.level,
             )
         )
         self._refresh_list()

@@ -86,3 +86,21 @@ def test_import_coco_segmentation_preserved_as_polygon(tmp_path):
     assert (
         len(line.split()) == 11
     )  # class + 5 points preserved (not collapsed to a quad)
+
+
+def test_added_source_carries_level(tmp_path):
+    root = tmp_path / "src"
+    _img(root / "images" / "a.png")
+    (root / "labels").mkdir(parents=True)
+    (root / "labels" / "a.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+    (root / "classes.txt").write_text("object\n", encoding="utf-8")
+    mat = materialize_detectkit_source(root, tmp_path / "proj", force_import=True)
+    # The source-manager builds the OBBSource with the materialized level.
+    src = OBBSource(
+        path=str(mat.canonical_path),
+        name=mat.display_name,
+        source_kind=mat.source_kind,
+        imported=mat.imported,
+        level=mat.level,
+    )
+    assert src.level == "aabb"
