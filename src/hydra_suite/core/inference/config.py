@@ -165,6 +165,11 @@ class OBBConfig:
     max_aspect_ratio: float = float("inf")
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.7  # legacy YOLO_IOU_THRESHOLD default
+    # Export-only: when True, extractors additionally populate
+    # OBBResult.polygons with native per-detection contours (frame pixel
+    # space). Default False keeps the hot tracking path byte-identical (no
+    # polygons computed, no OBBResult field change).
+    emit_native_geometry: bool = False
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> "OBBConfig":
@@ -203,6 +208,7 @@ class OBBConfig:
             iou_threshold=obb_d.get(
                 "iou_threshold", 0.45
             ),  # legacy YOLO_IOU_THRESHOLD default
+            emit_native_geometry=obb_d.get("emit_native_geometry", False),
         )
 
 

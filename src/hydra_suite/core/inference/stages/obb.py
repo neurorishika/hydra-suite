@@ -562,7 +562,12 @@ def _run_direct(
             ]
         return [
             _apply_raw_detection_cap(
-                _extract_obb_from_boxes(r, idx, fixed_angle_rad),
+                _extract_obb_from_boxes(
+                    r,
+                    idx,
+                    fixed_angle_rad,
+                    emit_native_geometry=config.emit_native_geometry,
+                ),
                 config.raw_detection_cap,
             )
             for idx, r in enumerate(results)
@@ -602,6 +607,7 @@ def _run_direct(
                     crop_size=seg_crop_size,
                     pad_ratio=seg_pad_ratio,
                     mask_threshold=seg_mask_threshold,
+                    emit_native_geometry=config.emit_native_geometry,
                 ),
                 config.raw_detection_cap,
             )
@@ -617,7 +623,12 @@ def _run_direct(
             for idx, r in enumerate(results)
         ]
     return [
-        _apply_raw_detection_cap(extract_obb_result(r, idx), config.raw_detection_cap)
+        _apply_raw_detection_cap(
+            extract_obb_result(
+                r, idx, emit_native_geometry=config.emit_native_geometry
+            ),
+            config.raw_detection_cap,
+        )
         for idx, r in enumerate(results)
     ]
 
@@ -794,6 +805,8 @@ def extract_obb_result(
     frame_idx: int,
     offset: tuple[float, float] = (0.0, 0.0),
     scale: tuple[float, float] = (1.0, 1.0),
+    *,
+    emit_native_geometry: bool = False,
 ) -> OBBResult:
     obb = result.obb
     if obb is None or len(obb) == 0:
@@ -843,7 +856,7 @@ def extract_obb_result(
     corners = _corners_from_xywhr(
         centroids[:, 0], centroids[:, 1], xywhr[:, 2], xywhr[:, 3], angles_fixed
     )
-    return OBBResult(
+    out = OBBResult(
         frame_idx=frame_idx,
         centroids=centroids.astype(np.float32),
         angles=angles_fixed,
@@ -854,12 +867,17 @@ def extract_obb_result(
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
         class_ids=cls,
     )
+    if emit_native_geometry:
+        out.polygons = [corners[i].astype(np.float32).copy() for i in range(n)]
+    return out
 
 
 def _extract_obb_from_boxes(
     result: Any,
     frame_idx: int,
     fixed_angle_rad: float,
+    *,
+    emit_native_geometry: bool = False,
 ) -> OBBResult:
     """Build an OBBResult from a plain (axis-aligned) detect model's boxes.
 
@@ -897,7 +915,7 @@ def _extract_obb_from_boxes(
         )
     n = int(len(conf))
     corners = _corners_from_xywhr(cx, cy, w_arr, h_arr, angles_fixed)
-    return OBBResult(
+    out = OBBResult(
         frame_idx=frame_idx,
         centroids=np.stack([cx, cy], axis=1).astype(np.float32),
         angles=angles_fixed,
@@ -907,6 +925,9 @@ def _extract_obb_from_boxes(
         corners=corners.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
     )
+    if emit_native_geometry:
+        out.polygons = [corners[i].astype(np.float32).copy() for i in range(n)]
+    return out
 
 
 def _extract_obb_from_masks(
@@ -918,6 +939,7 @@ def _extract_obb_from_masks(
     crop_size: int = 64,
     pad_ratio: float = 0.15,
     mask_threshold: float = 0.5,
+    emit_native_geometry: bool = False,
 ) -> OBBResult:
     """Build an OBBResult from a segmentation model's predicted masks.
 
@@ -940,6 +962,16 @@ def _extract_obb_from_masks(
         return _empty_obb_result(frame_idx)
     boxes_orig = boxes.xyxy
 
+    # Export-only: native per-detection mask contours, in the SAME frame
+    # pixel space as `corners` (ultralytics' Masks.xy already scales its
+    # cv2.findContours output from mask space back to result.orig_shape via
+    # the identical gain/pad formula used below). Computed in original
+    # (pre-cap, pre-valid-filter) detection order; re-indexed alongside
+    # every subselection below so it stays aligned with cx/cy/... at return.
+    polygons_native: list[np.ndarray] | None = None
+    if emit_native_geometry:
+        polygons_native = list(masks.xy)
+
     # Optimization: the downstream cap keeps only the top-`raw_detection_cap`
     # detections by confidence (see _apply_raw_detection_cap). Select that same
     # top-k HERE, before rotated_rect_from_masks -- whose cost is
@@ -957,6 +989,8 @@ def _extract_obb_from_masks(
         mask_tensor = mask_tensor[keep]
         boxes_orig = boxes_orig[keep]
         conf_all = conf_all[keep]
+        if polygons_native is not None:
+            polygons_native = [polygons_native[i] for i in order]
 
     gain, pad_x, pad_y = letterbox_gain_pad(
         tuple(mask_tensor.shape[-2:]), tuple(result.orig_shape)
@@ -1010,9 +1044,13 @@ def _extract_obb_from_masks(
             sizes[mask_valid],
             aspect[mask_valid],
         )
+        if polygons_native is not None:
+            polygons_native = [
+                p for p, keep_flag in zip(polygons_native, mask_valid) if keep_flag
+            ]
     n = int(len(conf))
     corners = _corners_from_xywhr(cx, cy, w_arr, h_arr, angles_fixed)
-    return OBBResult(
+    out = OBBResult(
         frame_idx=frame_idx,
         centroids=np.stack([cx, cy], axis=1).astype(np.float32),
         angles=angles_fixed,
@@ -1022,6 +1060,20 @@ def _extract_obb_from_masks(
         corners=corners.astype(np.float32),
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
     )
+    if emit_native_geometry:
+        # Fall back to corners[i] for any detection whose native contour is
+        # unavailable (masks2segments emits an empty (0, 2) array when
+        # cv2.findContours finds nothing, e.g. a below-threshold mask crop).
+        assert polygons_native is not None and len(polygons_native) == n
+        out.polygons = [
+            (
+                p.astype(np.float32)
+                if p.shape[0] > 0
+                else corners[i].astype(np.float32).copy()
+            )
+            for i, p in enumerate(polygons_native)
+        ]
+    return out
 
 
 def _extract_raw_tensors_from_masks(
@@ -1168,6 +1220,11 @@ def _apply_raw_detection_cap(r: OBBResult, cap: int) -> OBBResult:
         corners=np.ascontiguousarray(r.corners[order]),
         detection_ids=OBBResult.make_detection_ids(r.frame_idx, n),
         class_ids=np.ascontiguousarray(r.class_ids_or_zeros[order]),
+        # Re-index alongside every other per-detection field so an
+        # emit_native_geometry=True result survives the raw-detection cap
+        # instead of silently losing its polygons. None when the caller never
+        # requested native geometry (the byte-identical hot path).
+        polygons=([r.polygons[i] for i in order] if r.polygons is not None else None),
     )
 
 
