@@ -32,6 +32,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.training.contracts import TrainingRole
+from hydra_suite.training.dataset_builders import blocked_roles_for_level
+from hydra_suite.training.geometry_levels import GeometryLevel
 from hydra_suite.widgets.dialogs import BaseDialog
 from hydra_suite.widgets.workers import BaseWorker
 
@@ -39,6 +42,16 @@ if TYPE_CHECKING:
     from ..models import DetectKitProject
 
 logger = logging.getLogger(__name__)
+
+
+def merged_level_and_blocker(sources):
+    """Return (min geometry level across sources, the source that set it)."""
+    if not sources:
+        return GeometryLevel.POLYGON, None
+    blocker = min(
+        sources, key=lambda s: GeometryLevel.from_str(getattr(s, "level", "obb"))
+    )
+    return GeometryLevel.from_str(getattr(blocker, "level", "obb")), blocker
 
 
 _RECIPE_ROLE_MAP: dict[str, tuple[bool, bool, bool]] = {
@@ -525,6 +538,8 @@ QTabBar::tab:selected {
 
         for checkbox in (
             self.chk_role_obb_direct,
+            self.chk_role_detect_direct,
+            self.chk_role_segment_direct,
             self.chk_role_seq_detect,
             self.chk_role_seq_crop_obb,
             self.chk_customize_roles,
@@ -541,6 +556,8 @@ QTabBar::tab:selected {
         self.combo_device.currentTextChanged.connect(self._refresh_summary)
 
         self.chk_role_obb_direct.toggled.connect(self._on_role_selection_changed)
+        self.chk_role_detect_direct.toggled.connect(self._on_role_selection_changed)
+        self.chk_role_segment_direct.toggled.connect(self._on_role_selection_changed)
         self.chk_role_seq_detect.toggled.connect(self._on_role_selection_changed)
         self.chk_role_seq_crop_obb.toggled.connect(self._on_role_selection_changed)
         self.chk_customize_roles.toggled.connect(self._on_customize_roles_toggled)
@@ -549,6 +566,10 @@ QTabBar::tab:selected {
         selected = []
         if self.chk_role_obb_direct.isChecked():
             selected.append("obb_direct")
+        if self.chk_role_detect_direct.isChecked():
+            selected.append("detect_direct")
+        if self.chk_role_segment_direct.isChecked():
+            selected.append("segment_direct")
         if self.chk_role_seq_detect.isChecked():
             selected.append("seq_detect")
         if self.chk_role_seq_crop_obb.isChecked():
@@ -654,6 +675,8 @@ QTabBar::tab:selected {
         h = QHBoxLayout(self.role_cards_widget)
         h.setSpacing(10)
         self.chk_role_obb_direct = QCheckBox("obb_direct")
+        self.chk_role_detect_direct = QCheckBox("detect_direct")
+        self.chk_role_segment_direct = QCheckBox("segment_direct")
         self.chk_role_seq_detect = QCheckBox("seq_detect")
         self.chk_role_seq_crop_obb = QCheckBox("seq_crop_obb")
         self.chk_role_obb_direct.setChecked(True)
@@ -664,6 +687,22 @@ QTabBar::tab:selected {
                 self.chk_role_obb_direct,
                 "OBB direct",
                 "Train the main oriented bounding-box model directly on the merged project dataset.",
+            ),
+            1,
+        )
+        h.addWidget(
+            self._build_role_card(
+                self.chk_role_detect_direct,
+                "Detect direct",
+                "Train a full-image axis-aligned detector directly on the merged project dataset.",
+            ),
+            1,
+        )
+        h.addWidget(
+            self._build_role_card(
+                self.chk_role_segment_direct,
+                "Segment direct",
+                "Train a full-image instance-segmentation model directly on the merged project dataset.",
             ),
             1,
         )
@@ -1075,6 +1114,8 @@ QTabBar::tab:selected {
         proj = self._project
 
         self.chk_role_obb_direct.setChecked(proj.role_obb_direct)
+        self.chk_role_detect_direct.setChecked(proj.role_detect_direct)
+        self.chk_role_segment_direct.setChecked(proj.role_segment_direct)
         self.chk_role_seq_detect.setChecked(proj.role_seq_detect)
         self.chk_role_seq_crop_obb.setChecked(proj.role_seq_crop_obb)
 
@@ -1117,6 +1158,7 @@ QTabBar::tab:selected {
 
         self._apply_persistent_state()
         self._sync_recipe_from_roles()
+        self._refresh_role_gating()
         self._set_run_status("Ready to start training for the selected roles.")
         self._refresh_summary()
         self._refresh_overview_data_cards()
@@ -1134,6 +1176,8 @@ QTabBar::tab:selected {
         proj = self._project
 
         proj.role_obb_direct = self.chk_role_obb_direct.isChecked()
+        proj.role_detect_direct = self.chk_role_detect_direct.isChecked()
+        proj.role_segment_direct = self.chk_role_segment_direct.isChecked()
         proj.role_seq_detect = self.chk_role_seq_detect.isChecked()
         proj.role_seq_crop_obb = self.chk_role_seq_crop_obb.isChecked()
 
@@ -1303,7 +1347,34 @@ QTabBar::tab:selected {
             self._set_recipe_combo(recipe_key)
             self.recipe_combo.blockSignals(False)
             self._update_recipe_description()
+        self._refresh_role_gating()
         self._mark_dataset_fit_dirty()
+
+    def _refresh_role_gating(self) -> None:
+        """Disable + annotate roles blocked by the merged geometry level of selected sources."""
+        sources = list(self._project.sources) if self._project else []
+        level, blocker = merged_level_and_blocker(sources)
+        role_checks = {
+            TrainingRole.OBB_DIRECT: self.chk_role_obb_direct,
+            TrainingRole.DETECT_DIRECT: self.chk_role_detect_direct,
+            TrainingRole.SEGMENT_DIRECT: self.chk_role_segment_direct,
+            TrainingRole.SEQ_DETECT: self.chk_role_seq_detect,
+            TrainingRole.SEQ_CROP_OBB: self.chk_role_seq_crop_obb,
+        }
+        blocked = blocked_roles_for_level(level, list(role_checks))
+        for role, chk in role_checks.items():
+            required = blocked.get(role)
+            if required is not None:
+                chk.setEnabled(False)
+                chk.setChecked(False)
+                who = blocker.name if blocker is not None else "a source"
+                chk.setToolTip(
+                    f"{role.value} unavailable: needs {required.label}-level data, but "
+                    f"source '{who}' is {level.label}-level."
+                )
+            else:
+                chk.setEnabled(True)
+                chk.setToolTip("")
 
     def _on_recipe_changed(self, *_args) -> None:
         recipe_key = self._selected_recipe_key()
@@ -1710,6 +1781,10 @@ QTabBar::tab:selected {
         roles = []
         if self.chk_role_obb_direct.isChecked():
             roles.append(TrainingRole.OBB_DIRECT)
+        if self.chk_role_detect_direct.isChecked():
+            roles.append(TrainingRole.DETECT_DIRECT)
+        if self.chk_role_segment_direct.isChecked():
+            roles.append(TrainingRole.SEGMENT_DIRECT)
         if self.chk_role_seq_detect.isChecked():
             roles.append(TrainingRole.SEQ_DETECT)
         if self.chk_role_seq_crop_obb.isChecked():
@@ -1829,6 +1904,7 @@ QTabBar::tab:selected {
             self.role_dataset_dirs = {}
             self._append_log(f"Merged dataset: {merged.dataset_dir}")
 
+            merged_level = merged_level_and_blocker(self._project.sources)[0]
             for role in roles:
                 build = orchestrator.build_role_dataset(
                     role,
@@ -1837,6 +1913,7 @@ QTabBar::tab:selected {
                     crop_pad_ratio=self.spin_crop_pad.value(),
                     min_crop_size_px=self.spin_crop_min_px.value(),
                     enforce_square=self.chk_crop_square.isChecked(),
+                    merged_level=merged_level,
                 )
                 self.role_dataset_dirs[role.value] = build.dataset_dir
                 self._append_log(
@@ -2168,6 +2245,8 @@ QTabBar::tab:selected {
         return {
             "roles": {
                 "obb_direct": self.chk_role_obb_direct.isChecked(),
+                "detect_direct": self.chk_role_detect_direct.isChecked(),
+                "segment_direct": self.chk_role_segment_direct.isChecked(),
                 "seq_detect": self.chk_role_seq_detect.isChecked(),
                 "seq_crop_obb": self.chk_role_seq_crop_obb.isChecked(),
             },
@@ -2210,6 +2289,10 @@ QTabBar::tab:selected {
         roles = data.get("roles", {})
         if "obb_direct" in roles:
             self.chk_role_obb_direct.setChecked(bool(roles["obb_direct"]))
+        if "detect_direct" in roles:
+            self.chk_role_detect_direct.setChecked(bool(roles["detect_direct"]))
+        if "segment_direct" in roles:
+            self.chk_role_segment_direct.setChecked(bool(roles["segment_direct"]))
         if "seq_detect" in roles:
             self.chk_role_seq_detect.setChecked(bool(roles["seq_detect"]))
         if "seq_crop_obb" in roles:
@@ -2265,6 +2348,8 @@ QTabBar::tab:selected {
 
         if "recipe" in data:
             self._set_recipe_combo(str(data["recipe"]))
+
+        self._refresh_role_gating()
 
     def _save_training_config(self) -> None:
         import json

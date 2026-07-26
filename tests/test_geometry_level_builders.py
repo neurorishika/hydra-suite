@@ -125,3 +125,27 @@ def test_prepare_segment_direct_refused_above_level(tmp_path):
             class_names=["object"],
             merged_level=GeometryLevel.OBB,
         )
+
+
+def test_merged_level_min_and_blocker():
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import (
+        merged_level_and_blocker,
+    )
+    from hydra_suite.detectkit.gui.models import OBBSource
+
+    sources = [
+        OBBSource(path="/a", name="poly", level="polygon"),
+        OBBSource(path="/b", name="boxes", level="obb"),
+    ]
+    level, blocker = merged_level_and_blocker(sources)
+    assert level is GeometryLevel.OBB
+    assert blocker is not None and blocker.name == "boxes"
+
+
+def test_merged_level_empty_is_polygon():
+    from hydra_suite.detectkit.gui.dialogs.training_dialog import (
+        merged_level_and_blocker,
+    )
+
+    level, blocker = merged_level_and_blocker([])
+    assert level is GeometryLevel.POLYGON and blocker is None

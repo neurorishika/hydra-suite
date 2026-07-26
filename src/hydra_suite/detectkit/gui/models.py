@@ -113,6 +113,8 @@ class DetectKitProject:
 
     # Roles
     role_obb_direct: bool = True
+    role_detect_direct: bool = False
+    role_segment_direct: bool = False
     role_seq_detect: bool = True
     role_seq_crop_obb: bool = True
 

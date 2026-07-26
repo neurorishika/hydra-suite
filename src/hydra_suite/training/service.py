@@ -16,6 +16,7 @@ from .contracts import (
 )
 from .dataset_builders import merge_obb_sources, prepare_role_dataset
 from .dataset_inspector import inspect_obb_or_detect_dataset
+from .geometry_levels import GeometryLevel
 from .model_publish import (
     classifier_metadata_for_artifact,
     publish_trained_model,
@@ -297,6 +298,7 @@ class TrainingOrchestrator:
         crop_pad_ratio: float = 0.15,
         min_crop_size_px: int = 64,
         enforce_square: bool = True,
+        merged_level: GeometryLevel = GeometryLevel.POLYGON,
     ) -> DatasetBuildResult:
         """Derive a role-specific dataset (detect, crop-OBB, classify) from a merged OBB dataset."""
         out_root = self.workspace_root / "derived" / role.value
@@ -310,6 +312,7 @@ class TrainingOrchestrator:
             crop_pad_ratio=crop_pad_ratio,
             min_crop_size_px=min_crop_size_px,
             enforce_square=enforce_square,
+            merged_level=merged_level,
         )
         report = validate_role_dataset(result.dataset_dir, role)
         result.stats = dict(result.stats)
