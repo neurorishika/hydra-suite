@@ -29,6 +29,10 @@ class OBBResult:
     class_ids: np.ndarray | None = (
         None  # (D,) int64 model class id per detection; None => all class 0
     )
+    # Native contours per detection in frame pixel space, populated ONLY when a
+    # detection stage is asked to emit native geometry (export-only). Never
+    # serialized to the .npz cache; the tracking hot path leaves this None.
+    polygons: list[np.ndarray] | None = None
 
     @property
     def num_detections(self) -> int:
