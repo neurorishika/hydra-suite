@@ -1327,6 +1327,10 @@ class DetectKitMainWindow(QMainWindow):
 
         try:
             detector_fn = self._load_active_detector_fn()
+            model_path = str(self._project.active_model_path or "").strip()
+            kind, _primary, _secondary = detectkit_resolve_inference_models(
+                self._project, model_path
+            )
             request = ALRequest(
                 input_kind=(
                     "video"
@@ -1339,6 +1343,7 @@ class DetectKitMainWindow(QMainWindow):
                 preset=dlg.preset_combo.currentText(),
                 expected_count=dlg.expected_count_spin.value(),
                 detector_fn=detector_fn,
+                export_level=self._resolve_export_level(kind),
             )
         except NotImplementedError as exc:
             dlg.status_label.setText(f"Error: {exc}")
@@ -1366,6 +1371,11 @@ class DetectKitMainWindow(QMainWindow):
         if worker is not None:
             worker.requestInterruption()
 
+    def _resolve_export_level(self, kind: str) -> str:
+        # segment stage-2 -> polygon; obb -> obb; detect-only -> aabb.
+        # Direct OBB / sequential-with-OBB stage-2 keep obb.
+        return "obb"
+
     def _load_active_detector_fn(self):
         """Return a detector_fn(frame, conf, iou) -> list[(cx,cy,w,h,theta,conf)].
 
@@ -1386,7 +1396,7 @@ class DetectKitMainWindow(QMainWindow):
                 "Train or load a YOLO OBB model and try again."
             )
 
-        from .prediction_preview import load_torch_model, predict_obb_for_frame
+        from .prediction_preview import load_torch_model, predict_obb_for_frame_export
 
         kind, primary, secondary = detectkit_resolve_inference_models(
             self._project, model_path
@@ -1417,7 +1427,7 @@ class DetectKitMainWindow(QMainWindow):
         model, device = load_torch_model(primary, device_pref)
 
         def _detector_fn(frame, conf, iou):
-            return predict_obb_for_frame(
+            return predict_obb_for_frame_export(
                 model, frame, device=device, conf=conf, iou=iou
             )
 

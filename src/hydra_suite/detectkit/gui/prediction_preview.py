@@ -184,6 +184,7 @@ def _predict_direct(
     *,
     confidence_threshold: float,
     iou: float = _PREVIEW_IOU,
+    emit_native_geometry: bool = False,
 ) -> Any:
     """Run direct-mode OBB inference on a single BGR frame; return the ``OBBResult``."""
     raw_floor = max(1e-4, float(confidence_threshold))
@@ -195,7 +196,9 @@ def _predict_direct(
     )
     if not results:
         return None
-    return extract_obb_result(results[0], frame_idx=0)
+    return extract_obb_result(
+        results[0], frame_idx=0, emit_native_geometry=emit_native_geometry
+    )
 
 
 def _sequential_obb_result(
@@ -327,6 +330,42 @@ def predict_obb_for_frame(
     if obb is None:
         return []
     return _tuples_from_obb_result(obb)
+
+
+def _tuples_with_polygons_from_obb_result(
+    obb: Any,
+) -> list[tuple]:
+    """Like :func:`_tuples_from_obb_result` but append each detection's native
+    polygon (an ``(P, 2)`` pixel-space array, or ``None`` when unavailable)."""
+    base = _tuples_from_obb_result(obb)
+    polys = obb.polygons if obb.polygons is not None else [None] * len(base)
+    return [(*t, polys[i] if i < len(polys) else None) for i, t in enumerate(base)]
+
+
+def predict_obb_for_frame_export(
+    model,
+    frame,
+    *,
+    device: str = "auto",
+    conf: float = 0.25,
+    iou: float = _PREVIEW_IOU,
+) -> list[tuple]:
+    """Export-oriented direct inference: like :func:`predict_obb_for_frame` but
+    requests native geometry so detections carry ``(..., polygon_or_none)``.
+
+    ``model`` is an executor handle; ``device`` is retained for call-site
+    compatibility but unused.
+    """
+    obb = _predict_direct(
+        model,
+        frame,
+        confidence_threshold=conf,
+        iou=iou,
+        emit_native_geometry=True,
+    )
+    if obb is None:
+        return []
+    return _tuples_with_polygons_from_obb_result(obb)
 
 
 def predict_obb_for_frame_sequential(

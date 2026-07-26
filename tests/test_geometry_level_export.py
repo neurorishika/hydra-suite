@@ -62,3 +62,33 @@ def test_detect_extractor_default_no_polygons():
     res = _FakeDetectResult([[10.0, 20.0, 30.0, 60.0]], [0.9])
     out = _extract_obb_from_boxes(res, frame_idx=0, fixed_angle_rad=0.0)
     assert out.polygons is None
+
+
+# ── Task 14: AL export writes point lists and stamps source level ──────────
+
+
+def test_write_geometry_label_polygon(tmp_path):
+    from hydra_suite.detectkit.jobs.al_worker import _write_geometry_label
+
+    path = tmp_path / "a.txt"
+    poly = np.array(
+        [[10, 20], [30, 20], [30, 60], [20, 70], [10, 60]], np.float32
+    )  # 5 pts
+    records = [(20.0, 40.0, 20.0, 40.0, 0.0, 0.9, poly)]
+    _write_geometry_label(path, records, frame_size=(100, 100))
+    fields = path.read_text().strip().split()
+    assert fields[0] == "0" and len(fields) == 11  # class + 5 points
+    assert (
+        0.0 <= min(float(v) for v in fields[1:])
+        and max(float(v) for v in fields[1:]) <= 1.0
+    )
+
+
+def test_write_geometry_label_none_matches_obb(tmp_path):
+    from hydra_suite.detectkit.jobs.al_worker import _write_geometry_label
+
+    path = tmp_path / "a.txt"
+    records = [(50.0, 50.0, 20.0, 10.0, 0.0, 0.9, None)]
+    _write_geometry_label(path, records, frame_size=(100, 100))
+    fields = path.read_text().strip().split()
+    assert fields[0] == "0" and len(fields) == 9  # class + 8 coords (OBB corners)
