@@ -1,6 +1,12 @@
+from pathlib import Path
+
 import pytest
 
-from hydra_suite.training.geometry_levels import GeometryLevel, classify_label_line
+from hydra_suite.training.geometry_levels import (
+    GeometryLevel,
+    classify_label_line,
+    scan_source_levels,
+)
 
 
 def test_level_ordering_and_labels():
@@ -31,3 +37,56 @@ def test_from_str_rejects_unknown():
 )
 def test_classify_label_line(field_count, expected):
     assert classify_label_line(field_count) == expected
+
+
+def _write(labels: Path, name: str, text: str) -> None:
+    labels.mkdir(parents=True, exist_ok=True)
+    (labels / name).write_text(text, encoding="utf-8")
+
+
+def test_scan_all_polygon(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "a.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5 0.3 0.7\n")  # 5 pts
+    scan = scan_source_levels(labels)
+    assert scan.resolved_level is GeometryLevel.POLYGON
+    assert scan.is_homogeneous
+
+
+def test_scan_four_point_uses_intended(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "a.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")  # 4 pts
+    assert (
+        scan_source_levels(labels, GeometryLevel.OBB).resolved_level
+        is GeometryLevel.OBB
+    )
+    assert (
+        scan_source_levels(labels, GeometryLevel.POLYGON).resolved_level
+        is GeometryLevel.POLYGON
+    )
+
+
+def test_scan_aabb(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "a.txt", "0 0.5 0.5 0.2 0.2\n")  # cx cy w h
+    scan = scan_source_levels(labels)
+    assert scan.resolved_level is GeometryLevel.AABB
+    assert scan.is_homogeneous
+
+
+def test_scan_mixed_polygon_and_fourpoint_blocks(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "poly.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5 0.3 0.7\n")
+    _write(labels, "quad.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")
+    scan = scan_source_levels(labels)
+    assert not scan.is_homogeneous
+    assert scan.needs_confirmation
+    assert "quad.txt" in scan.conflict_files
+
+
+def test_scan_mixed_resolved_by_confirm(tmp_path):
+    labels = tmp_path / "labels"
+    _write(labels, "poly.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5 0.3 0.7\n")
+    _write(labels, "quad.txt", "0 0.1 0.1 0.5 0.1 0.5 0.5 0.1 0.5\n")
+    scan = scan_source_levels(labels, confirm_quads_are_polygons=True)
+    assert scan.is_homogeneous
+    assert scan.resolved_level is GeometryLevel.POLYGON
