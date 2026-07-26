@@ -33,6 +33,7 @@ class OBBSource:
     original_path: str = ""
     source_kind: str = "detectkit"
     imported: bool = False
+    level: str = "obb"  # GeometryLevel.label; "obb" for pre-migration sources
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
@@ -43,6 +44,7 @@ class OBBSource:
             "original_path": self.original_path,
             "source_kind": self.source_kind,
             "imported": self.imported,
+            "level": self.level,
         }
 
     @staticmethod
@@ -55,6 +57,7 @@ class OBBSource:
             original_path=str(d.get("original_path", "")),
             source_kind=str(d.get("source_kind", "detectkit") or "detectkit"),
             imported=bool(d.get("imported", False)),
+            level=str(d.get("level", "obb") or "obb"),
         )
 
 
