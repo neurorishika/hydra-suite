@@ -23,6 +23,7 @@ from .dataset_inspector import (
     split_items_for_training,
     stratified_split_items,
 )
+from .geometry_levels import GeometryLevel
 
 
 def _normalize_class_names(
@@ -873,6 +874,36 @@ def derive_crop_segment_dataset_from_source(
     )
 
 
+_ROLE_MIN_LEVEL = {
+    TrainingRole.OBB_DIRECT: GeometryLevel.OBB,
+    TrainingRole.DETECT_DIRECT: GeometryLevel.AABB,
+    TrainingRole.SEGMENT_DIRECT: GeometryLevel.POLYGON,
+    TrainingRole.SEQ_DETECT: GeometryLevel.AABB,
+    TrainingRole.SEQ_CROP_OBB: GeometryLevel.OBB,
+    TrainingRole.SEQ_CROP_SEGMENT: GeometryLevel.POLYGON,
+}
+
+
+def role_min_level(role: TrainingRole) -> GeometryLevel:
+    """Minimum geometry level a training role requires."""
+    try:
+        return _ROLE_MIN_LEVEL[role]
+    except KeyError as exc:
+        raise RuntimeError(f"Role has no geometry-level requirement: {role}") from exc
+
+
+def blocked_roles_for_level(
+    merged_level: GeometryLevel, roles: list[TrainingRole]
+) -> dict[TrainingRole, GeometryLevel]:
+    """Roles whose minimum level exceeds the merged dataset's level."""
+    blocked: dict[TrainingRole, GeometryLevel] = {}
+    for role in roles:
+        required = role_min_level(role)
+        if required > merged_level:
+            blocked[role] = required
+    return blocked
+
+
 def prepare_role_dataset(
     role: TrainingRole,
     merged_obb_dataset_dir: str,
@@ -883,8 +914,15 @@ def prepare_role_dataset(
     crop_pad_ratio: float = 0.15,
     min_crop_size_px: int = 64,
     enforce_square: bool = True,
+    merged_level: GeometryLevel = GeometryLevel.POLYGON,
 ) -> DatasetBuildResult:
-    """Prepare role-specific dataset from merged OBB source."""
+    """Prepare role-specific dataset from the merged source."""
+    required = role_min_level(role)
+    if required > merged_level:
+        raise RuntimeError(
+            f"Role {role.value} requires {required.label}-level data but the merged "
+            f"dataset is {merged_level.label}-level."
+        )
 
     out_root = Path(role_output_root).expanduser().resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -896,8 +934,15 @@ def prepare_role_dataset(
             stats={"type": "passthrough_obb"},
             manifest_path=str(manifest_path) if manifest_path.exists() else "",
         )
-    if role == TrainingRole.SEQ_DETECT:
+    if role in (TrainingRole.SEQ_DETECT, TrainingRole.DETECT_DIRECT):
         return derive_detect_dataset_from_obb(
+            merged_obb_dataset_dir,
+            out_root,
+            class_name=class_name,
+            class_names=class_names,
+        )
+    if role == TrainingRole.SEGMENT_DIRECT:
+        return derive_segment_dataset_from_source(
             merged_obb_dataset_dir,
             out_root,
             class_name=class_name,
@@ -905,6 +950,16 @@ def prepare_role_dataset(
         )
     if role == TrainingRole.SEQ_CROP_OBB:
         return derive_crop_obb_dataset_from_obb(
+            merged_obb_dataset_dir,
+            out_root,
+            class_name=class_name,
+            class_names=class_names,
+            pad_ratio=crop_pad_ratio,
+            min_crop_size_px=min_crop_size_px,
+            enforce_square=enforce_square,
+        )
+    if role == TrainingRole.SEQ_CROP_SEGMENT:
+        return derive_crop_segment_dataset_from_source(
             merged_obb_dataset_dir,
             out_root,
             class_name=class_name,

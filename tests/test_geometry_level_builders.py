@@ -7,10 +7,14 @@ import pytest
 from hydra_suite.training.contracts import TrainingRole
 from hydra_suite.training.dataset_builders import (
     _parse_geometry_label_lines,
+    blocked_roles_for_level,
     derive_crop_segment_dataset_from_source,
     derive_detect_dataset_from_obb,
     derive_segment_dataset_from_source,
+    prepare_role_dataset,
+    role_min_level,
 )
+from hydra_suite.training.geometry_levels import GeometryLevel
 
 
 def test_new_roles_exist():
@@ -92,3 +96,32 @@ def test_crop_segment_clips_and_renormalizes(tmp_path):
     )
     pts = np.asarray([float(v) for v in out[1:]], dtype=np.float32).reshape(-1, 2)
     assert pts.min() >= 0.0 and pts.max() <= 1.0  # re-normalized into crop space
+
+
+def test_role_min_levels():
+    assert role_min_level(TrainingRole.DETECT_DIRECT) is GeometryLevel.AABB
+    assert role_min_level(TrainingRole.OBB_DIRECT) is GeometryLevel.OBB
+    assert role_min_level(TrainingRole.SEGMENT_DIRECT) is GeometryLevel.POLYGON
+    assert role_min_level(TrainingRole.SEQ_CROP_SEGMENT) is GeometryLevel.POLYGON
+
+
+def test_blocked_roles_for_aabb_merge():
+    roles = [
+        TrainingRole.OBB_DIRECT,
+        TrainingRole.DETECT_DIRECT,
+        TrainingRole.SEGMENT_DIRECT,
+    ]
+    blocked = blocked_roles_for_level(GeometryLevel.AABB, roles)
+    assert TrainingRole.OBB_DIRECT in blocked and TrainingRole.SEGMENT_DIRECT in blocked
+    assert TrainingRole.DETECT_DIRECT not in blocked
+
+
+def test_prepare_segment_direct_refused_above_level(tmp_path):
+    with pytest.raises(RuntimeError, match="polygon"):
+        prepare_role_dataset(
+            TrainingRole.SEGMENT_DIRECT,
+            str(tmp_path),
+            tmp_path / "out",
+            class_names=["object"],
+            merged_level=GeometryLevel.OBB,
+        )
