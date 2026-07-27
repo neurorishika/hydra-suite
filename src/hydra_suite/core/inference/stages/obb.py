@@ -688,9 +688,26 @@ def _run_sequential(
                     if seq.stage2_image_size > 0
                     else (1.0, 1.0)
                 )
-                sub.append(
-                    extract_obb_result(r, frame_idx, offset=offsets[i + j], scale=scale)
-                )
+                if seq.stage2_task == "segment":
+                    sub.append(
+                        _extract_obb_from_masks(
+                            r,
+                            frame_idx,
+                            config.raw_detection_cap,
+                            num_angles=seq.seg_num_angles,
+                            crop_size=seq.seg_crop_size,
+                            pad_ratio=seq.seg_pad_ratio,
+                            mask_threshold=seq.seg_mask_threshold,
+                            offset=offsets[i + j],
+                            scale=scale,
+                        )
+                    )
+                else:
+                    sub.append(
+                        extract_obb_result(
+                            r, frame_idx, offset=offsets[i + j], scale=scale
+                        )
+                    )
         results.append(
             _apply_raw_detection_cap(
                 merge_obb_results(frame_idx, sub), config.raw_detection_cap

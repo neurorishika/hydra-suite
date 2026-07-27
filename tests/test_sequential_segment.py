@@ -109,3 +109,89 @@ def test_sequential_config_from_params_coerces_bad_stage2_task():
     }
     cfg = build_inference_config_from_params(params)
     assert cfg.obb.sequential.stage2_task == "obb"
+
+
+from hydra_suite.core.inference.config import OBBConfig  # noqa: E402
+from hydra_suite.core.inference.runtime import RuntimeContext  # noqa: E402
+
+
+class _FakeStage2SegModel:
+    """Stage-2 stand-in: returns one _FakeSegResult per crop, ignoring inputs."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def predict(self, batch, **kw):
+        self.calls += 1
+        return [_FakeSegResult() for _ in batch]
+
+
+class _S1Boxes:
+    """Stage-1 boxes stand-in: one detection, enough for build_crops to be
+    called (build_crops itself is monkeypatched, so xyxy content is unused)."""
+
+    def __len__(self):
+        return 1
+
+    xyxy = torch.tensor([[10.0, 10.0, 30.0, 30.0]])
+
+
+class _S1Result:
+    boxes = _S1Boxes()
+
+
+class _FakeDetectModel:
+    def predict(self, *a, **kw):
+        return [_S1Result()]
+
+
+def test_run_sequential_segment_dispatch(monkeypatch):
+    """With stage2_task="segment", stage-2 extraction routes through
+    _extract_obb_from_masks (not extract_obb_result), using the same
+    per-crop offset/scale threaded through the direct path."""
+    seq = OBBSequentialConfig(
+        detect_model_path="d.pt",
+        obb_model_path="s.pt",
+        stage2_task="segment",
+        stage2_image_size=80,  # matches the 80x80 fake crop -> scale (1.0, 1.0)
+    )
+    cfg = OBBConfig(mode="sequential", sequential=seq)
+    runtime = RuntimeContext(cuda_mode=False, device="cpu", use_nvdec=False)
+
+    called = {"masks": 0, "obb": 0}
+    real_masks = obb_stage._extract_obb_from_masks
+    real_obb = obb_stage.extract_obb_result
+
+    def mask_spy(*a, **kw):
+        called["masks"] += 1
+        return real_masks(*a, **kw)
+
+    def obb_spy(*a, **kw):
+        called["obb"] += 1
+        return real_obb(*a, **kw)
+
+    monkeypatch.setattr(obb_stage, "_extract_obb_from_masks", mask_spy)
+    monkeypatch.setattr(obb_stage, "extract_obb_result", obb_spy)
+    # _FakeSegResult's orig_shape is (80, 80); build one matching 80x80 crop.
+    monkeypatch.setattr(
+        obb_stage,
+        "build_crops",
+        lambda *a, **kw: ([np.zeros((80, 80, 3), np.uint8)], [(20.0, 30.0)]),
+    )
+
+    frame = np.zeros((200, 200, 3), np.uint8)
+    models = obb_stage.OBBModels(
+        mode="sequential",
+        detect_model=_FakeDetectModel(),
+        obb_model=_FakeStage2SegModel(),
+    )
+
+    out = obb_stage._run_sequential([frame], models, cfg, runtime)
+
+    assert called["masks"] == 1
+    assert called["obb"] == 0
+    assert out[0].num_detections >= 1
+    # Offset (20, 30) threaded through: crop centroid (40,40) at scale 1.0
+    # (stage2_image_size == 80 by default -> orig_w/orig_h == stage2 size).
+    cx, cy = out[0].centroids[0]
+    assert cx == pytest.approx(60.0, abs=3.0) and cy == pytest.approx(70.0, abs=3.0)
