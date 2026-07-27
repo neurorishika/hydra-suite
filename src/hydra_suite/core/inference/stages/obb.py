@@ -326,7 +326,7 @@ def _corners_from_xywhr(
     return np.stack((x, y), axis=2).astype(np.float32)
 
 
-def _assert_direct_task_matches_checkpoint(
+def _assert_task_matches_checkpoint(
     model: Any, model_task: str, model_path: str
 ) -> None:
     """Fail loudly when the checkpoint's own task disagrees with ``model_task``.
@@ -401,7 +401,7 @@ def load_obb_models(
             batch_size=batch_size,
             task=config.direct.model_task,
         )
-        _assert_direct_task_matches_checkpoint(
+        _assert_task_matches_checkpoint(
             m, config.direct.model_task, config.direct.model_path
         )
         return OBBModels(mode="direct", direct_model=m)
@@ -450,6 +450,9 @@ def load_obb_models(
         max_det=config.max_detections,
         imgsz_override=config.sequential.stage2_image_size,
         batch_size=config.sequential.stage2_batch_size or batch_size,
+    )
+    _assert_task_matches_checkpoint(
+        obb, config.sequential.stage2_task, config.sequential.obb_model_path
     )
     return OBBModels(mode="sequential", detect_model=detect, obb_model=obb)
 

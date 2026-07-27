@@ -195,3 +195,22 @@ def test_run_sequential_segment_dispatch(monkeypatch):
     # (stage2_image_size == 80 by default -> orig_w/orig_h == stage2 size).
     cx, cy = out[0].centroids[0]
     assert cx == pytest.approx(60.0, abs=3.0) and cy == pytest.approx(70.0, abs=3.0)
+
+
+def test_assert_task_matches_checkpoint_raises_on_mismatch():
+    from hydra_suite.core.inference.stages import obb as m
+
+    class _Ckpt:
+        task = "segment"
+
+    with pytest.raises(ValueError, match="task"):
+        m._assert_task_matches_checkpoint(_Ckpt(), "obb", "s.pt")
+
+
+def test_assert_task_matches_checkpoint_ok_on_match():
+    from hydra_suite.core.inference.stages import obb as m
+
+    class _Ckpt:
+        task = "segment"
+
+    m._assert_task_matches_checkpoint(_Ckpt(), "segment", "s.pt")  # no raise
