@@ -939,6 +939,8 @@ def _extract_obb_from_masks(
     crop_size: int = 64,
     pad_ratio: float = 0.15,
     mask_threshold: float = 0.5,
+    offset: tuple[float, float] = (0.0, 0.0),
+    scale: tuple[float, float] = (1.0, 1.0),
     emit_native_geometry: bool = False,
 ) -> OBBResult:
     """Build an OBBResult from a segmentation model's predicted masks.
@@ -1022,6 +1024,16 @@ def _extract_obb_from_masks(
     angle_arr = angle_rad.cpu().numpy()
     conf = conf_all.cpu().numpy()
 
+    # Remap crop-space geometry into frame space (sequential stage-2). Same
+    # scale-then-offset semantics as extract_obb_result; identity by default so
+    # the direct segment path stays byte-identical.
+    ox, oy = offset
+    sx, sy = scale
+    cx = cx * sx + ox
+    cy = cy * sy + oy
+    w_arr = w_arr * sx
+    h_arr = h_arr * sy
+
     angles_fixed, sizes, aspect = _normalize_obb_geometry(w_arr, h_arr, angle_arr)
     mask_valid = _valid_detection_mask(cx, cy, w_arr, h_arr, angles_fixed, conf)
     if not mask_valid.all():
@@ -1065,14 +1077,15 @@ def _extract_obb_from_masks(
         # unavailable (masks2segments emits an empty (0, 2) array when
         # cv2.findContours finds nothing, e.g. a below-threshold mask crop).
         assert polygons_native is not None and len(polygons_native) == n
-        out.polygons = [
-            (
-                p.astype(np.float32)
-                if p.shape[0] > 0
-                else corners[i].astype(np.float32).copy()
-            )
-            for i, p in enumerate(polygons_native)
-        ]
+        out.polygons = []
+        for i, p in enumerate(polygons_native):
+            if p.shape[0] > 0:
+                q = p.astype(np.float32).copy()
+                q[:, 0] = q[:, 0] * sx + ox
+                q[:, 1] = q[:, 1] * sy + oy
+                out.polygons.append(q)
+            else:
+                out.polygons.append(corners[i].astype(np.float32).copy())
     return out
 
 
