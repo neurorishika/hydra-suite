@@ -22,14 +22,21 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+import numpy as np
 
 from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
+from hydra_suite.core.inference.stages.merge import (
+    band_membership,
+    merge_obb_detections,
+)
 from hydra_suite.core.inference.stages.obb import (
     build_crops,
     extract_obb_result,
     merge_obb_results,
     resize_crops_for_stage2,
 )
+from hydra_suite.core.inference.stages.slicing import _offset_result
+from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +205,66 @@ def _predict_direct(
         return None
     return extract_obb_result(
         results[0], frame_idx=0, emit_native_geometry=emit_native_geometry
+    )
+
+
+def predict_sliced_obb_result(
+    executor,
+    frame,
+    *,
+    geometry_mode: str,
+    imgsz: int,
+    reference_body_px: float,
+    object_tile_fraction: float,
+    slice_width: int,
+    slice_height: int,
+    overlap: float,
+    merge_threshold: float,
+    confidence_threshold: float,
+    iou: float = _PREVIEW_IOU,
+):
+    """Executor-level sliced OBB inference on one BGR frame (preview/AL).
+
+    Tiles via ``utils.slice_geometry`` (same grid inference uses), predicts each
+    tile, offsets detections into frame space, and merges cross-tile duplicates
+    with the shipped cv2 oracle. Returns a frame-space ``OBBResult`` or None.
+    """
+    fh, fw = int(frame.shape[0]), int(frame.shape[1])
+    tw, th = tile_size_for_mode(
+        geometry_mode=geometry_mode,
+        imgsz=imgsz,
+        reference_body_px=reference_body_px,
+        object_tile_fraction=object_tile_fraction,
+        slice_width=slice_width,
+        slice_height=slice_height,
+    )
+    plan = plan_tiles((fh, fw), tw, th, overlap, overlap)
+    raw_floor = max(1e-4, float(confidence_threshold))
+    tiles_img = [
+        np.ascontiguousarray(frame[y0:y1, x0:x1]) for (x0, y0, x1, y1) in plan.tiles
+    ]
+    if not tiles_img:
+        return _predict_direct(
+            executor, frame, confidence_threshold=confidence_threshold, iou=iou
+        )
+    results = executor.predict(tiles_img, conf=raw_floor, iou=float(iou), verbose=False)
+
+    parts = []
+    for (x0, y0, _x1, _y1), res in zip(plan.tiles, results):
+        local = extract_obb_result(res, frame_idx=0)
+        parts.append(_offset_result(local, max(0, x0), max(0, y0), 0))
+    concat = merge_obb_results(0, parts)
+    if concat.num_detections <= 1:
+        return concat
+    bands = band_membership(concat.corners, plan.tiles)
+    return merge_obb_detections(
+        concat,
+        policy="greedy_nmm",
+        metric="ios",
+        threshold=float(merge_threshold),
+        backend="cv2",
+        overlap_bands=bands,
+        runtime=None,
     )
 
 
