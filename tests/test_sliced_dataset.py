@@ -160,3 +160,47 @@ def test_build_sliced_dataset_area_threshold_drops_slivers(tmp_path):
     # Objects (40px) straddling 100px tile edges lose >5% area on boundary tiles;
     # only tiles fully containing an object keep it. Build must still succeed.
     assert Path(out.dataset_dir, "dataset.yaml").exists()
+
+
+def test_multiscale_emits_distinct_tile_sizes(tmp_path):
+    merged = _write_synthetic_obb_dataset(tmp_path / "merged")
+    params = SliceBuildParams(
+        geometry_mode="auto_object",
+        imgsz=640,
+        reference_body_px=40.0,
+        target_sizes=[80.0, 160.0],
+        full_frame_mix=False,
+        negative_tile_fraction=0.0,
+    )
+    out = build_sliced_obb_dataset(
+        str(merged),
+        str(tmp_path / "out"),
+        level=GeometryLevel.OBB,
+        params=params,
+        seed=1,
+    )
+    names = [p.name for p in Path(out.dataset_dir, "images", "train").glob("*.jpg")]
+    # ref=40, target=80 -> frac=0.125 -> tile 320; target=160 -> frac=0.25 -> tile 160.
+    assert any("_t320x320_" in n for n in names)
+    assert any("_t160x160_" in n for n in names)
+
+
+def test_full_frame_mix_emits_full_frame_sample(tmp_path):
+    merged = _write_synthetic_obb_dataset(tmp_path / "merged")
+    params = SliceBuildParams(
+        geometry_mode="custom",
+        slice_width=256,
+        slice_height=256,
+        target_sizes=[],
+        full_frame_mix=True,
+        negative_tile_fraction=0.0,
+    )
+    out = build_sliced_obb_dataset(
+        str(merged),
+        str(tmp_path / "out"),
+        level=GeometryLevel.OBB,
+        params=params,
+        seed=1,
+    )
+    names = [p.name for p in Path(out.dataset_dir, "images", "train").glob("*.jpg")]
+    assert any("_full" in n for n in names)

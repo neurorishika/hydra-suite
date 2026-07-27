@@ -145,7 +145,32 @@ def _iter_dataset_items(merged_dir: Path):
 
 
 def _tile_sizes_for_params(params, reference_body_px) -> list[tuple[int, int]]:
-    """Resolve the list of (w,h) tile sizes to emit (single-scale here)."""
+    """Resolve the (deduped) list of (w,h) tile sizes to emit.
+
+    ``auto_object`` with a measured reference and a non-empty ``target_sizes``
+    fans out one square tile per target apparent size (target/imgsz -> fraction);
+    otherwise a single size from the geometry mode.
+    """
+    if (
+        params.geometry_mode == "auto_object"
+        and reference_body_px > 0
+        and params.target_sizes
+    ):
+        sizes: list[tuple[int, int]] = []
+        for target in params.target_sizes:
+            frac = max(0.01, min(0.9, float(target) / max(1, params.imgsz)))
+            w, h = tile_size_for_mode(
+                geometry_mode="auto_object",
+                imgsz=params.imgsz,
+                reference_body_px=reference_body_px,
+                object_tile_fraction=frac,
+                slice_width=0,
+                slice_height=0,
+            )
+            if (w, h) not in sizes:
+                sizes.append((w, h))
+        if sizes:
+            return sizes
     w, h = tile_size_for_mode(
         geometry_mode=params.geometry_mode,
         imgsz=params.imgsz,
@@ -205,6 +230,21 @@ def build_sliced_obb_dataset(
                 counts["objects"] += len(lines)
                 if is_negative:
                     counts["negatives"] += 1
+
+        if params.full_frame_mix:
+            lines = []
+            for cls_id, poly_norm in labels:
+                derived = project_to_level(
+                    np.clip(np.asarray(poly_norm, np.float32), 0, 1), level
+                )
+                lines.append(label_line_for_level(int(cls_id), derived, level))
+            stem = f"{img_path.stem}_full"
+            cv2.imwrite(str(out_dir / "images" / split / f"{stem}.jpg"), img)
+            (out_dir / "labels" / split / f"{stem}.txt").write_text(
+                ("\n".join(lines) + "\n") if lines else "", encoding="utf-8"
+            )
+            counts[split] += 1
+            counts["objects"] += len(lines)
 
     _write_sliced_yaml(out_dir, class_names)
     manifest = {
