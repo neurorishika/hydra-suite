@@ -547,6 +547,9 @@ QTabBar::tab:selected {
             self._mark_dataset_fit_dirty
         )
         self.spin_imgsz_seq_crop_obb.valueChanged.connect(self._mark_dataset_fit_dirty)
+        self.spin_imgsz_seq_crop_segment.valueChanged.connect(
+            self._mark_dataset_fit_dirty
+        )
 
         for checkbox in (
             self.chk_role_obb_direct,
@@ -554,6 +557,7 @@ QTabBar::tab:selected {
             self.chk_role_segment_direct,
             self.chk_role_seq_detect,
             self.chk_role_seq_crop_obb,
+            self.chk_role_seq_crop_segment,
             self.chk_customize_roles,
         ):
             checkbox.toggled.connect(self._refresh_summary)
@@ -572,6 +576,7 @@ QTabBar::tab:selected {
         self.chk_role_segment_direct.toggled.connect(self._on_role_selection_changed)
         self.chk_role_seq_detect.toggled.connect(self._on_role_selection_changed)
         self.chk_role_seq_crop_obb.toggled.connect(self._on_role_selection_changed)
+        self.chk_role_seq_crop_segment.toggled.connect(self._on_role_selection_changed)
         self.chk_customize_roles.toggled.connect(self._on_customize_roles_toggled)
 
     def _selected_role_keys(self) -> list[str]:
@@ -586,6 +591,8 @@ QTabBar::tab:selected {
             selected.append("seq_detect")
         if self.chk_role_seq_crop_obb.isChecked():
             selected.append("seq_crop_obb")
+        if self.chk_role_seq_crop_segment.isChecked():
+            selected.append("seq_crop_segment")
         return selected
 
     @staticmethod
@@ -691,6 +698,7 @@ QTabBar::tab:selected {
         self.chk_role_segment_direct = QCheckBox("segment_direct")
         self.chk_role_seq_detect = QCheckBox("seq_detect")
         self.chk_role_seq_crop_obb = QCheckBox("seq_crop_obb")
+        self.chk_role_seq_crop_segment = QCheckBox("seq_crop_segment")
         self.chk_role_obb_direct.setChecked(True)
         self.chk_role_seq_detect.setChecked(True)
         self.chk_role_seq_crop_obb.setChecked(True)
@@ -731,6 +739,14 @@ QTabBar::tab:selected {
                 self.chk_role_seq_crop_obb,
                 "Sequence crop OBB",
                 "Train the crop-focused OBB model used in the second sequence stage.",
+            ),
+            1,
+        )
+        h.addWidget(
+            self._build_role_card(
+                self.chk_role_seq_crop_segment,
+                "Sequence crop segment",
+                "Train the crop-focused segmentation model used in the second sequence stage.",
             ),
             1,
         )
@@ -928,6 +944,16 @@ QTabBar::tab:selected {
         g.addWidget(self.label_imgsz_segment_direct, 4, 2)
         g.addWidget(self.spin_imgsz_segment_direct, 4, 3)
 
+        self.spin_imgsz_seq_crop_segment = QSpinBox()
+        self.spin_imgsz_seq_crop_segment.setRange(64, 2048)
+        self.spin_imgsz_seq_crop_segment.setValue(160)
+        self.spin_imgsz_seq_crop_segment.setToolTip(
+            "Must match YOLO_SEQ_STAGE2_IMGSZ used during inference (default 160)."
+        )
+        self.label_imgsz_seq_crop_segment = QLabel("imgsz (seq_crop_segment)")
+        g.addWidget(self.label_imgsz_seq_crop_segment, 4, 4)
+        g.addWidget(self.spin_imgsz_seq_crop_segment, 4, 5)
+
         return gb
 
     # --- 4. Base Models ---
@@ -996,6 +1022,15 @@ QTabBar::tab:selected {
         self.combo_model_seq_crop_obb.setCurrentText(default_obb)
         self.label_model_seq_crop_obb = QLabel("seq_crop_obb")
         form.addRow(self.label_model_seq_crop_obb, self.combo_model_seq_crop_obb)
+
+        self.combo_model_seq_crop_segment = QComboBox()
+        self.combo_model_seq_crop_segment.setEditable(True)
+        self.combo_model_seq_crop_segment.addItems(seg_options)
+        self.combo_model_seq_crop_segment.setCurrentText(default_seg)
+        self.label_model_seq_crop_segment = QLabel("seq_crop_segment")
+        form.addRow(
+            self.label_model_seq_crop_segment, self.combo_model_seq_crop_segment
+        )
 
         return gb
 
@@ -1160,6 +1195,7 @@ QTabBar::tab:selected {
         self.chk_role_segment_direct.setChecked(proj.role_segment_direct)
         self.chk_role_seq_detect.setChecked(proj.role_seq_detect)
         self.chk_role_seq_crop_obb.setChecked(proj.role_seq_crop_obb)
+        self.chk_role_seq_crop_segment.setChecked(proj.role_seq_crop_segment)
 
         self.spin_train.setValue(proj.split_train)
         self.spin_val.setValue(proj.split_val)
@@ -1185,12 +1221,14 @@ QTabBar::tab:selected {
         self.spin_imgsz_segment_direct.setValue(proj.imgsz_segment_direct)
         self.spin_imgsz_seq_detect.setValue(proj.imgsz_seq_detect)
         self.spin_imgsz_seq_crop_obb.setValue(proj.imgsz_seq_crop_obb)
+        self.spin_imgsz_seq_crop_segment.setValue(proj.imgsz_seq_crop_segment)
 
         self.combo_model_obb_direct.setCurrentText(proj.model_obb_direct)
         self.combo_model_detect_direct.setCurrentText(proj.model_detect_direct)
         self.combo_model_segment_direct.setCurrentText(proj.model_segment_direct)
         self.combo_model_seq_detect.setCurrentText(proj.model_seq_detect)
         self.combo_model_seq_crop_obb.setCurrentText(proj.model_seq_crop_obb)
+        self.combo_model_seq_crop_segment.setCurrentText(proj.model_seq_crop_segment)
 
         self.aug_group.setChecked(proj.aug_enabled)
         self.aug_fliplr.setValue(proj.aug_fliplr)
@@ -1228,6 +1266,7 @@ QTabBar::tab:selected {
         proj.role_segment_direct = self.chk_role_segment_direct.isChecked()
         proj.role_seq_detect = self.chk_role_seq_detect.isChecked()
         proj.role_seq_crop_obb = self.chk_role_seq_crop_obb.isChecked()
+        proj.role_seq_crop_segment = self.chk_role_seq_crop_segment.isChecked()
 
         proj.split_train = self.spin_train.value()
         proj.split_val = self.spin_val.value()
@@ -1253,12 +1292,14 @@ QTabBar::tab:selected {
         proj.imgsz_segment_direct = self.spin_imgsz_segment_direct.value()
         proj.imgsz_seq_detect = self.spin_imgsz_seq_detect.value()
         proj.imgsz_seq_crop_obb = self.spin_imgsz_seq_crop_obb.value()
+        proj.imgsz_seq_crop_segment = self.spin_imgsz_seq_crop_segment.value()
 
         proj.model_obb_direct = self.combo_model_obb_direct.currentText()
         proj.model_detect_direct = self.combo_model_detect_direct.currentText()
         proj.model_segment_direct = self.combo_model_segment_direct.currentText()
         proj.model_seq_detect = self.combo_model_seq_detect.currentText()
         proj.model_seq_crop_obb = self.combo_model_seq_crop_obb.currentText()
+        proj.model_seq_crop_segment = self.combo_model_seq_crop_segment.currentText()
 
         proj.aug_enabled = self.aug_group.isChecked()
         proj.aug_fliplr = self.aug_fliplr.value()
@@ -1351,7 +1392,10 @@ QTabBar::tab:selected {
         show_segment_direct = "segment_direct" in selected_roles
         show_seq_detect = "seq_detect" in selected_roles
         show_seq_crop_obb = "seq_crop_obb" in selected_roles
-        show_sequence_settings = bool(selected_roles & {"seq_detect", "seq_crop_obb"})
+        show_seq_crop_segment = "seq_crop_segment" in selected_roles
+        show_sequence_settings = bool(
+            selected_roles & {"seq_detect", "seq_crop_obb", "seq_crop_segment"}
+        )
 
         for label, field, visible in (
             (self.label_imgsz_obb_direct, self.spin_imgsz_obb_direct, show_direct),
@@ -1370,6 +1414,11 @@ QTabBar::tab:selected {
                 self.label_imgsz_seq_crop_obb,
                 self.spin_imgsz_seq_crop_obb,
                 show_seq_crop_obb,
+            ),
+            (
+                self.label_imgsz_seq_crop_segment,
+                self.spin_imgsz_seq_crop_segment,
+                show_seq_crop_segment,
             ),
             (self.label_model_obb_direct, self.combo_model_obb_direct, show_direct),
             (
@@ -1391,6 +1440,11 @@ QTabBar::tab:selected {
                 self.label_model_seq_crop_obb,
                 self.combo_model_seq_crop_obb,
                 show_seq_crop_obb,
+            ),
+            (
+                self.label_model_seq_crop_segment,
+                self.combo_model_seq_crop_segment,
+                show_seq_crop_segment,
             ),
         ):
             label.setVisible(visible)
@@ -1436,6 +1490,7 @@ QTabBar::tab:selected {
             TrainingRole.SEGMENT_DIRECT: self.chk_role_segment_direct,
             TrainingRole.SEQ_DETECT: self.chk_role_seq_detect,
             TrainingRole.SEQ_CROP_OBB: self.chk_role_seq_crop_obb,
+            TrainingRole.SEQ_CROP_SEGMENT: self.chk_role_seq_crop_segment,
         }
         blocked = blocked_roles_for_level(level, list(role_checks))
         for role, chk in role_checks.items():
@@ -1835,6 +1890,8 @@ QTabBar::tab:selected {
                 return self.spin_imgsz_seq_detect.value()
             if role == TrainingRole.SEQ_CROP_OBB:
                 return self.spin_imgsz_seq_crop_obb.value()
+            if role == TrainingRole.SEQ_CROP_SEGMENT:
+                return self.spin_imgsz_seq_crop_segment.value()
         except ImportError:
             pass
         return 640
@@ -1853,6 +1910,8 @@ QTabBar::tab:selected {
                 return self.combo_model_seq_detect.currentText().strip()
             if role == TrainingRole.SEQ_CROP_OBB:
                 return self.combo_model_seq_crop_obb.currentText().strip()
+            if role == TrainingRole.SEQ_CROP_SEGMENT:
+                return self.combo_model_seq_crop_segment.currentText().strip()
         except ImportError:
             pass
         return ""
@@ -1873,6 +1932,8 @@ QTabBar::tab:selected {
             roles.append(TrainingRole.SEQ_DETECT)
         if self.chk_role_seq_crop_obb.isChecked():
             roles.append(TrainingRole.SEQ_CROP_OBB)
+        if self.chk_role_seq_crop_segment.isChecked():
+            roles.append(TrainingRole.SEQ_CROP_SEGMENT)
         return roles
 
     def _collect_sources(self) -> list:
@@ -1913,7 +1974,7 @@ QTabBar::tab:selected {
         try:
             from hydra_suite.training import TrainingRole
 
-            if role == TrainingRole.SEQ_CROP_OBB:
+            if role in (TrainingRole.SEQ_CROP_OBB, TrainingRole.SEQ_CROP_SEGMENT):
                 training_params["crop_pad_ratio"] = self.spin_crop_pad.value()
                 training_params["min_crop_size_px"] = self.spin_crop_min_px.value()
                 training_params["enforce_square"] = self.chk_crop_square.isChecked()
@@ -2360,6 +2421,7 @@ QTabBar::tab:selected {
                 "segment_direct": self.chk_role_segment_direct.isChecked(),
                 "seq_detect": self.chk_role_seq_detect.isChecked(),
                 "seq_crop_obb": self.chk_role_seq_crop_obb.isChecked(),
+                "seq_crop_segment": self.chk_role_seq_crop_segment.isChecked(),
             },
             "recipe": self._selected_recipe_key(),
             "customize_roles": self.chk_customize_roles.isChecked(),
@@ -2383,11 +2445,13 @@ QTabBar::tab:selected {
             "imgsz_segment_direct": self.spin_imgsz_segment_direct.value(),
             "imgsz_seq_detect": self.spin_imgsz_seq_detect.value(),
             "imgsz_seq_crop_obb": self.spin_imgsz_seq_crop_obb.value(),
+            "imgsz_seq_crop_segment": self.spin_imgsz_seq_crop_segment.value(),
             "model_obb_direct": self.combo_model_obb_direct.currentText(),
             "model_detect_direct": self.combo_model_detect_direct.currentText(),
             "model_segment_direct": self.combo_model_segment_direct.currentText(),
             "model_seq_detect": self.combo_model_seq_detect.currentText(),
             "model_seq_crop_obb": self.combo_model_seq_crop_obb.currentText(),
+            "model_seq_crop_segment": self.combo_model_seq_crop_segment.currentText(),
             "aug_enabled": self.aug_group.isChecked(),
             "aug_fliplr": self.aug_fliplr.value(),
             "aug_flipud": self.aug_flipud.value(),
@@ -2412,6 +2476,8 @@ QTabBar::tab:selected {
             self.chk_role_seq_detect.setChecked(bool(roles["seq_detect"]))
         if "seq_crop_obb" in roles:
             self.chk_role_seq_crop_obb.setChecked(bool(roles["seq_crop_obb"]))
+        if "seq_crop_segment" in roles:
+            self.chk_role_seq_crop_segment.setChecked(bool(roles["seq_crop_segment"]))
 
         for attr, widget in [
             ("split_train", self.spin_train),
@@ -2429,6 +2495,7 @@ QTabBar::tab:selected {
             ("imgsz_segment_direct", self.spin_imgsz_segment_direct),
             ("imgsz_seq_detect", self.spin_imgsz_seq_detect),
             ("imgsz_seq_crop_obb", self.spin_imgsz_seq_crop_obb),
+            ("imgsz_seq_crop_segment", self.spin_imgsz_seq_crop_segment),
             ("aug_fliplr", self.aug_fliplr),
             ("aug_flipud", self.aug_flipud),
             ("aug_degrees", self.aug_degrees),
@@ -2458,6 +2525,7 @@ QTabBar::tab:selected {
             ("model_segment_direct", self.combo_model_segment_direct),
             ("model_seq_detect", self.combo_model_seq_detect),
             ("model_seq_crop_obb", self.combo_model_seq_crop_obb),
+            ("model_seq_crop_segment", self.combo_model_seq_crop_segment),
         ]:
             if attr in data:
                 widget.setCurrentText(str(data[attr]))
