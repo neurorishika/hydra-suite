@@ -58,16 +58,17 @@ def _copy_tree_without_metadata(src: Path, dst: Path) -> None:
 def xal_mode_for_level(level: GeometryLevel) -> str:
     """Map a geometry level to the X-AnyLabeling convert --mode value.
 
-    NOTE: "obb" is the known-good anchor value, verified against an
-    installed x-anylabeling CLI. The "rectangle"/"polygon" mappings for
-    AABB/POLYGON are implemented per spec but have not been confirmed
-    against an installed x-anylabeling env (`xanylabeling convert --mode`
-    vocabulary) -- confirm before relying on them in production.
+    Verified against x-anylabeling 3.3.5 (`xanylabeling convert --task
+    yolo2xlabel`, editable install at /Users/neurorishika/Projects/X-AnyLabeling,
+    anylabeling/views/common/converter.py SUPPORTED_TASKS["yolo2xlabel"]["modes"]):
+    modes = {"detect", "segment", "obb", "pose"}. There is no "rectangle" or
+    "polygon" mode -- AABB maps to "detect" and POLYGON maps to "segment".
+    "obb" was already correct.
     """
     return {
-        GeometryLevel.AABB: "rectangle",
+        GeometryLevel.AABB: "detect",
         GeometryLevel.OBB: "obb",
-        GeometryLevel.POLYGON: "polygon",
+        GeometryLevel.POLYGON: "segment",
     }[level]
 
 

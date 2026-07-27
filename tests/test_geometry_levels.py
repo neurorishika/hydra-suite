@@ -147,6 +147,6 @@ def test_resolve_confirm_override(tmp_path):
 def test_xal_mode_for_level():
     from hydra_suite.detectkit.gui.panels.dataset_panel import xal_mode_for_level
 
-    assert xal_mode_for_level(GeometryLevel.AABB) == "rectangle"
+    assert xal_mode_for_level(GeometryLevel.AABB) == "detect"
     assert xal_mode_for_level(GeometryLevel.OBB) == "obb"
-    assert xal_mode_for_level(GeometryLevel.POLYGON) == "polygon"
+    assert xal_mode_for_level(GeometryLevel.POLYGON) == "segment"
