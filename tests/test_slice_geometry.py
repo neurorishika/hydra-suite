@@ -1,8 +1,10 @@
 import numpy as np
 
 from hydra_suite.utils.slice_geometry import (
+    clip_polygon_to_tile,
     get_slice_bboxes,
     plan_tiles,
+    polygon_area,
     tile_size_for_mode,
     tiles_overlap,
 )
@@ -73,3 +75,29 @@ def test_plan_tiles_roi_gating_drops_tiles():
 
 def test_tiles_overlap_true_for_flush_last_tile():
     assert tiles_overlap(get_slice_bboxes(300, 300, 256, 256, 0.0, 0.0)) is True
+
+
+def test_polygon_area_unit_square():
+    sq = np.array([[0, 0], [10, 0], [10, 10], [0, 10]], dtype=np.float32)
+    assert abs(polygon_area(sq) - 100.0) < 1e-3
+
+
+def test_clip_fully_inside_returns_same_area():
+    poly = np.array([[10, 10], [30, 10], [30, 30], [10, 30]], dtype=np.float32)
+    clipped = clip_polygon_to_tile(poly, (0, 0, 100, 100))
+    assert clipped is not None
+    assert abs(polygon_area(clipped) - 400.0) < 1e-3
+
+
+def test_clip_straddling_boundary_halves_area():
+    # 20x20 square centered on x=100 boundary of tile [0..100]
+    poly = np.array([[90, 40], [110, 40], [110, 60], [90, 60]], dtype=np.float32)
+    clipped = clip_polygon_to_tile(poly, (0, 0, 100, 200))
+    assert clipped is not None
+    assert abs(polygon_area(clipped) - 200.0) < 1e-3  # half of 400
+    assert clipped[:, 0].max() <= 100.0 + 1e-3
+
+
+def test_clip_fully_outside_returns_none():
+    poly = np.array([[200, 200], [220, 200], [220, 220], [200, 220]], dtype=np.float32)
+    assert clip_polygon_to_tile(poly, (0, 0, 100, 100)) is None

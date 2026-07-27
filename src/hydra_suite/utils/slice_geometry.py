@@ -181,3 +181,87 @@ def plan_tiles(
         slice_wh=(eff_w, eff_h),
         frame_wh=(frame_w, frame_h),
     )
+
+
+def polygon_area(poly: np.ndarray) -> float:
+    """Absolute area of an (N,2) polygon via the shoelace formula."""
+    p = np.asarray(poly, dtype=np.float64)
+    if p.shape[0] < 3:
+        return 0.0
+    x, y = p[:, 0], p[:, 1]
+    return float(abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) * 0.5)
+
+
+def _clip_against_edge(poly, inside_fn, intersect_fn):
+    """One Sutherland-Hodgman pass against a single half-plane."""
+    out = []
+    n = len(poly)
+    if n == 0:
+        return out
+    for i in range(n):
+        cur = poly[i]
+        prev = poly[i - 1]
+        cur_in = inside_fn(cur)
+        prev_in = inside_fn(prev)
+        if cur_in:
+            if not prev_in:
+                out.append(intersect_fn(prev, cur))
+            out.append(cur)
+        elif prev_in:
+            out.append(intersect_fn(prev, cur))
+    return out
+
+
+def clip_polygon_to_tile(
+    poly_px: np.ndarray, tile: tuple[int, int, int, int]
+) -> "np.ndarray | None":
+    """Sutherland-Hodgman clip of an (N,2) polygon against an axis-aligned tile rect.
+
+    Returns the clipped (M,2) polygon in the same pixel space, or None when the
+    intersection is empty or degenerate (< 3 vertices, ~zero area).
+    """
+    x0, y0, x1, y1 = (float(tile[0]), float(tile[1]), float(tile[2]), float(tile[3]))
+    poly = [
+        np.asarray(p, dtype=np.float64) for p in np.asarray(poly_px, dtype=np.float64)
+    ]
+
+    def _lerp(a, b, t):
+        return a + (b - a) * t
+
+    # Left x>=x0, Right x<=x1, Top y>=y0, Bottom y<=y1.
+    edges = [
+        (
+            lambda p: p[0] >= x0,
+            lambda a, b: _lerp(
+                a, b, (x0 - a[0]) / (b[0] - a[0]) if b[0] != a[0] else 0.0
+            ),
+        ),
+        (
+            lambda p: p[0] <= x1,
+            lambda a, b: _lerp(
+                a, b, (x1 - a[0]) / (b[0] - a[0]) if b[0] != a[0] else 0.0
+            ),
+        ),
+        (
+            lambda p: p[1] >= y0,
+            lambda a, b: _lerp(
+                a, b, (y0 - a[1]) / (b[1] - a[1]) if b[1] != a[1] else 0.0
+            ),
+        ),
+        (
+            lambda p: p[1] <= y1,
+            lambda a, b: _lerp(
+                a, b, (y1 - a[1]) / (b[1] - a[1]) if b[1] != a[1] else 0.0
+            ),
+        ),
+    ]
+    for inside_fn, intersect_fn in edges:
+        poly = _clip_against_edge(poly, inside_fn, intersect_fn)
+        if not poly:
+            return None
+    if len(poly) < 3:
+        return None
+    arr = np.asarray(poly, dtype=np.float32)
+    if polygon_area(arr) <= 1e-6:
+        return None
+    return arr
