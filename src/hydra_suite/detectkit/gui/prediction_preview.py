@@ -151,6 +151,16 @@ def _dicts_from_obb_result(obb: Any) -> list[dict[str, object]]:
     return detections
 
 
+def dicts_from_obb_result(obb: Any) -> list[dict[str, object]]:
+    """Public wrapper around :func:`_dicts_from_obb_result`.
+
+    Lets callers outside this module (e.g. ``main_window``) convert an
+    ``OBBResult`` -- such as the one returned by :func:`predict_sliced_obb_result`
+    -- into canvas-ready detection dicts without reaching into a private name.
+    """
+    return _dicts_from_obb_result(obb)
+
+
 def _tuples_from_obb_result(
     obb: Any,
 ) -> list[tuple[float, float, float, float, float, float]]:

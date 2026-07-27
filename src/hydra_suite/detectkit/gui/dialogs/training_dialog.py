@@ -381,8 +381,16 @@ QTabBar::tab:selected {
         lower_row.addWidget(self._build_augmentation_group(), 1)
         layout.addLayout(lower_row)
 
+        layout.addWidget(self._build_slice_group())
+
         layout.addStretch(1)
         return self._wrap_scroll_page(page)
+
+    def _build_slice_group(self) -> QGroupBox:
+        from ..panels.slice_settings_widget import SliceSettingsGroup
+
+        self.slice_group = SliceSettingsGroup()
+        return self.slice_group
 
     def _build_summary_card(self) -> QFrame:
         frame = QFrame()
@@ -1194,6 +1202,8 @@ QTabBar::tab:selected {
         self.aug_hsv_s.setValue(proj.aug_hsv_s)
         self.aug_hsv_v.setValue(proj.aug_hsv_v)
 
+        self.slice_group.load_from(proj.slice_settings)
+
         self._apply_persistent_state()
         self._sync_recipe_from_roles()
         self._refresh_role_gating()
@@ -1259,6 +1269,8 @@ QTabBar::tab:selected {
         proj.aug_hsv_h = self.aug_hsv_h.value()
         proj.aug_hsv_s = self.aug_hsv_s.value()
         proj.aug_hsv_v = self.aug_hsv_v.value()
+
+        proj.slice_settings = self.slice_group.to_settings()
 
         self._save_persistent_state()
 
