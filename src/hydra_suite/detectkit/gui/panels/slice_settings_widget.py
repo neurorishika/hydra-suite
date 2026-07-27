@@ -28,6 +28,9 @@ class SliceSettingsGroup(QGroupBox):
         self.spin_frac = QDoubleSpinBox()
         self.spin_frac.setRange(0.01, 0.9)
         self.spin_frac.setSingleStep(0.01)
+        self.spin_ref = QDoubleSpinBox()
+        self.spin_ref.setRange(0.0, 8192.0)
+        self.spin_ref.setSingleStep(1.0)
         self.spin_w = QSpinBox()
         self.spin_w.setRange(0, 8192)
         self.spin_h = QSpinBox()
@@ -50,6 +53,7 @@ class SliceSettingsGroup(QGroupBox):
         form.addRow(self.chk_enabled)
         form.addRow("Geometry mode", self.cmb_mode)
         form.addRow("Object tile fraction", self.spin_frac)
+        form.addRow("Reference body px (0 = auto/imgsz)", self.spin_ref)
         form.addRow("Custom tile W", self.spin_w)
         form.addRow("Custom tile H", self.spin_h)
         form.addRow("Overlap", self.spin_overlap)
@@ -64,6 +68,7 @@ class SliceSettingsGroup(QGroupBox):
         idx = self.cmb_mode.findText(s.geometry_mode)
         self.cmb_mode.setCurrentIndex(idx if idx >= 0 else 0)
         self.spin_frac.setValue(float(s.object_tile_fraction))
+        self.spin_ref.setValue(float(s.reference_body_px))
         self.spin_w.setValue(int(s.slice_width))
         self.spin_h.setValue(int(s.slice_height))
         self.spin_overlap.setValue(float(s.overlap))
@@ -86,6 +91,7 @@ class SliceSettingsGroup(QGroupBox):
             enabled=self.chk_enabled.isChecked(),
             geometry_mode=self.cmb_mode.currentText(),
             object_tile_fraction=self.spin_frac.value(),
+            reference_body_px=self.spin_ref.value(),
             slice_width=self.spin_w.value(),
             slice_height=self.spin_h.value(),
             overlap=self.spin_overlap.value(),

@@ -201,12 +201,6 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
 
             slice_settings = self._slice_settings
             sliced = bool(slice_settings is not None and slice_settings.enabled)
-            if sliced:
-                target_sizes = list(slice_settings.target_sizes or [])
-                reference_body_px = (
-                    sum(target_sizes) / len(target_sizes) if target_sizes else 0.0
-                )
-
             for index, image_path in enumerate(self._image_paths, start=1):
                 if self._cancel:
                     self.status.emit("Inference cancelled.")
@@ -226,7 +220,8 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             frame,
                             geometry_mode=slice_settings.geometry_mode,
                             imgsz=self._imgsz_obb_direct,
-                            reference_body_px=reference_body_px,
+                            # 0.0 => tile_size_for_mode degrades auto_object to imgsz tiling (honest; no fabricated scale)
+                            reference_body_px=slice_settings.reference_body_px,
                             object_tile_fraction=slice_settings.object_tile_fraction,
                             slice_width=slice_settings.slice_width,
                             slice_height=slice_settings.slice_height,

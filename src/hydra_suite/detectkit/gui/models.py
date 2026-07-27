@@ -68,6 +68,7 @@ class SliceTrainingSettings:
     enabled: bool = False
     geometry_mode: str = "auto_object"  # auto_model | auto_object | custom
     object_tile_fraction: float = 0.15
+    reference_body_px: float = 0.0
     slice_width: int = 0
     slice_height: int = 0
     overlap: float = 0.2
@@ -82,6 +83,7 @@ class SliceTrainingSettings:
             "enabled": self.enabled,
             "geometry_mode": self.geometry_mode,
             "object_tile_fraction": self.object_tile_fraction,
+            "reference_body_px": self.reference_body_px,
             "slice_width": self.slice_width,
             "slice_height": self.slice_height,
             "overlap": self.overlap,
@@ -105,6 +107,7 @@ class SliceTrainingSettings:
             object_tile_fraction=float(
                 d.get("object_tile_fraction", base.object_tile_fraction)
             ),
+            reference_body_px=float(d.get("reference_body_px", base.reference_body_px)),
             slice_width=int(d.get("slice_width", base.slice_width)),
             slice_height=int(d.get("slice_height", base.slice_height)),
             overlap=float(d.get("overlap", base.overlap)),
