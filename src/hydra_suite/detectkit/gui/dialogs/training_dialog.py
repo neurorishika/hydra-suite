@@ -534,6 +534,10 @@ QTabBar::tab:selected {
         self.spin_crop_min_px.valueChanged.connect(self._mark_dataset_fit_dirty)
         self.chk_crop_square.toggled.connect(self._mark_dataset_fit_dirty)
         self.spin_imgsz_obb_direct.valueChanged.connect(self._mark_dataset_fit_dirty)
+        self.spin_imgsz_detect_direct.valueChanged.connect(self._mark_dataset_fit_dirty)
+        self.spin_imgsz_segment_direct.valueChanged.connect(
+            self._mark_dataset_fit_dirty
+        )
         self.spin_imgsz_seq_crop_obb.valueChanged.connect(self._mark_dataset_fit_dirty)
 
         for checkbox in (
@@ -902,6 +906,20 @@ QTabBar::tab:selected {
         g.addWidget(self.label_imgsz_seq_crop_obb, 3, 4)
         g.addWidget(self.spin_imgsz_seq_crop_obb, 3, 5)
 
+        self.spin_imgsz_detect_direct = QSpinBox()
+        self.spin_imgsz_detect_direct.setRange(64, 2048)
+        self.spin_imgsz_detect_direct.setValue(640)
+        self.label_imgsz_detect_direct = QLabel("imgsz (detect_direct)")
+        g.addWidget(self.label_imgsz_detect_direct, 4, 0)
+        g.addWidget(self.spin_imgsz_detect_direct, 4, 1)
+
+        self.spin_imgsz_segment_direct = QSpinBox()
+        self.spin_imgsz_segment_direct.setRange(64, 2048)
+        self.spin_imgsz_segment_direct.setValue(640)
+        self.label_imgsz_segment_direct = QLabel("imgsz (segment_direct)")
+        g.addWidget(self.label_imgsz_segment_direct, 4, 2)
+        g.addWidget(self.spin_imgsz_segment_direct, 4, 3)
+
         return gb
 
     # --- 4. Base Models ---
@@ -931,8 +949,10 @@ QTabBar::tab:selected {
 
         obb_options = self._yolo_obb_options()
         detect_options = self._yolo_detect_options()
+        seg_options = ["yolo26s-seg.pt", "yolo11s-seg.pt", "yolo11m-seg.pt"]
         default_obb = "yolo26s-obb.pt"
         default_detect = "yolo26s.pt"
+        default_seg = "yolo26s-seg.pt"
 
         self.combo_model_obb_direct = QComboBox()
         self.combo_model_obb_direct.setEditable(True)
@@ -940,6 +960,20 @@ QTabBar::tab:selected {
         self.combo_model_obb_direct.setCurrentText(default_obb)
         self.label_model_obb_direct = QLabel("obb_direct")
         form.addRow(self.label_model_obb_direct, self.combo_model_obb_direct)
+
+        self.combo_model_detect_direct = QComboBox()
+        self.combo_model_detect_direct.setEditable(True)
+        self.combo_model_detect_direct.addItems(detect_options)
+        self.combo_model_detect_direct.setCurrentText(default_detect)
+        self.label_model_detect_direct = QLabel("detect_direct")
+        form.addRow(self.label_model_detect_direct, self.combo_model_detect_direct)
+
+        self.combo_model_segment_direct = QComboBox()
+        self.combo_model_segment_direct.setEditable(True)
+        self.combo_model_segment_direct.addItems(seg_options)
+        self.combo_model_segment_direct.setCurrentText(default_seg)
+        self.label_model_segment_direct = QLabel("segment_direct")
+        form.addRow(self.label_model_segment_direct, self.combo_model_segment_direct)
 
         self.combo_model_seq_detect = QComboBox()
         self.combo_model_seq_detect.setEditable(True)
@@ -1139,10 +1173,14 @@ QTabBar::tab:selected {
         self.chk_cache.setChecked(proj.cache)
 
         self.spin_imgsz_obb_direct.setValue(proj.imgsz_obb_direct)
+        self.spin_imgsz_detect_direct.setValue(proj.imgsz_detect_direct)
+        self.spin_imgsz_segment_direct.setValue(proj.imgsz_segment_direct)
         self.spin_imgsz_seq_detect.setValue(proj.imgsz_seq_detect)
         self.spin_imgsz_seq_crop_obb.setValue(proj.imgsz_seq_crop_obb)
 
         self.combo_model_obb_direct.setCurrentText(proj.model_obb_direct)
+        self.combo_model_detect_direct.setCurrentText(proj.model_detect_direct)
+        self.combo_model_segment_direct.setCurrentText(proj.model_segment_direct)
         self.combo_model_seq_detect.setCurrentText(proj.model_seq_detect)
         self.combo_model_seq_crop_obb.setCurrentText(proj.model_seq_crop_obb)
 
@@ -1201,10 +1239,14 @@ QTabBar::tab:selected {
         proj.cache = self.chk_cache.isChecked()
 
         proj.imgsz_obb_direct = self.spin_imgsz_obb_direct.value()
+        proj.imgsz_detect_direct = self.spin_imgsz_detect_direct.value()
+        proj.imgsz_segment_direct = self.spin_imgsz_segment_direct.value()
         proj.imgsz_seq_detect = self.spin_imgsz_seq_detect.value()
         proj.imgsz_seq_crop_obb = self.spin_imgsz_seq_crop_obb.value()
 
         proj.model_obb_direct = self.combo_model_obb_direct.currentText()
+        proj.model_detect_direct = self.combo_model_detect_direct.currentText()
+        proj.model_segment_direct = self.combo_model_segment_direct.currentText()
         proj.model_seq_detect = self.combo_model_seq_detect.currentText()
         proj.model_seq_crop_obb = self.combo_model_seq_crop_obb.currentText()
 
@@ -1293,12 +1335,24 @@ QTabBar::tab:selected {
     def _update_advanced_role_controls(self) -> None:
         selected_roles = set(self._selected_role_keys())
         show_direct = "obb_direct" in selected_roles
+        show_detect_direct = "detect_direct" in selected_roles
+        show_segment_direct = "segment_direct" in selected_roles
         show_seq_detect = "seq_detect" in selected_roles
         show_seq_crop_obb = "seq_crop_obb" in selected_roles
         show_sequence_settings = bool(selected_roles & {"seq_detect", "seq_crop_obb"})
 
         for label, field, visible in (
             (self.label_imgsz_obb_direct, self.spin_imgsz_obb_direct, show_direct),
+            (
+                self.label_imgsz_detect_direct,
+                self.spin_imgsz_detect_direct,
+                show_detect_direct,
+            ),
+            (
+                self.label_imgsz_segment_direct,
+                self.spin_imgsz_segment_direct,
+                show_segment_direct,
+            ),
             (self.label_imgsz_seq_detect, self.spin_imgsz_seq_detect, show_seq_detect),
             (
                 self.label_imgsz_seq_crop_obb,
@@ -1306,6 +1360,16 @@ QTabBar::tab:selected {
                 show_seq_crop_obb,
             ),
             (self.label_model_obb_direct, self.combo_model_obb_direct, show_direct),
+            (
+                self.label_model_detect_direct,
+                self.combo_model_detect_direct,
+                show_detect_direct,
+            ),
+            (
+                self.label_model_segment_direct,
+                self.combo_model_segment_direct,
+                show_segment_direct,
+            ),
             (
                 self.label_model_seq_detect,
                 self.combo_model_seq_detect,
@@ -1751,6 +1815,10 @@ QTabBar::tab:selected {
 
             if role == TrainingRole.OBB_DIRECT:
                 return self.spin_imgsz_obb_direct.value()
+            if role == TrainingRole.DETECT_DIRECT:
+                return self.spin_imgsz_detect_direct.value()
+            if role == TrainingRole.SEGMENT_DIRECT:
+                return self.spin_imgsz_segment_direct.value()
             if role == TrainingRole.SEQ_DETECT:
                 return self.spin_imgsz_seq_detect.value()
             if role == TrainingRole.SEQ_CROP_OBB:
@@ -1765,6 +1833,10 @@ QTabBar::tab:selected {
 
             if role == TrainingRole.OBB_DIRECT:
                 return self.combo_model_obb_direct.currentText().strip()
+            if role == TrainingRole.DETECT_DIRECT:
+                return self.combo_model_detect_direct.currentText().strip()
+            if role == TrainingRole.SEGMENT_DIRECT:
+                return self.combo_model_segment_direct.currentText().strip()
             if role == TrainingRole.SEQ_DETECT:
                 return self.combo_model_seq_detect.currentText().strip()
             if role == TrainingRole.SEQ_CROP_OBB:
@@ -2268,9 +2340,13 @@ QTabBar::tab:selected {
             "workers": self.spin_workers.value(),
             "cache": self.chk_cache.isChecked(),
             "imgsz_obb_direct": self.spin_imgsz_obb_direct.value(),
+            "imgsz_detect_direct": self.spin_imgsz_detect_direct.value(),
+            "imgsz_segment_direct": self.spin_imgsz_segment_direct.value(),
             "imgsz_seq_detect": self.spin_imgsz_seq_detect.value(),
             "imgsz_seq_crop_obb": self.spin_imgsz_seq_crop_obb.value(),
             "model_obb_direct": self.combo_model_obb_direct.currentText(),
+            "model_detect_direct": self.combo_model_detect_direct.currentText(),
+            "model_segment_direct": self.combo_model_segment_direct.currentText(),
             "model_seq_detect": self.combo_model_seq_detect.currentText(),
             "model_seq_crop_obb": self.combo_model_seq_crop_obb.currentText(),
             "aug_enabled": self.aug_group.isChecked(),
@@ -2310,6 +2386,8 @@ QTabBar::tab:selected {
             ("patience", self.spin_patience),
             ("workers", self.spin_workers),
             ("imgsz_obb_direct", self.spin_imgsz_obb_direct),
+            ("imgsz_detect_direct", self.spin_imgsz_detect_direct),
+            ("imgsz_segment_direct", self.spin_imgsz_segment_direct),
             ("imgsz_seq_detect", self.spin_imgsz_seq_detect),
             ("imgsz_seq_crop_obb", self.spin_imgsz_seq_crop_obb),
             ("aug_fliplr", self.aug_fliplr),
@@ -2337,6 +2415,8 @@ QTabBar::tab:selected {
 
         for attr, widget in [
             ("model_obb_direct", self.combo_model_obb_direct),
+            ("model_detect_direct", self.combo_model_detect_direct),
+            ("model_segment_direct", self.combo_model_segment_direct),
             ("model_seq_detect", self.combo_model_seq_detect),
             ("model_seq_crop_obb", self.combo_model_seq_crop_obb),
         ]:

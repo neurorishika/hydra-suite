@@ -149,3 +149,21 @@ def test_merged_level_empty_is_polygon():
 
     level, blocker = merged_level_and_blocker([])
     assert level is GeometryLevel.POLYGON and blocker is None
+
+
+def test_project_roundtrips_detect_segment_model_and_imgsz(tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    p = DetectKitProject()
+    p.imgsz_detect_direct = 512
+    p.imgsz_segment_direct = 768
+    p.model_detect_direct = "custom-det.pt"
+    p.model_segment_direct = "custom-seg.pt"
+    dest = tmp_path / "p.json"
+    p.save(dest)
+    q = DetectKitProject.load(dest)
+    assert q.imgsz_detect_direct == 512 and q.imgsz_segment_direct == 768
+    assert (
+        q.model_detect_direct == "custom-det.pt"
+        and q.model_segment_direct == "custom-seg.pt"
+    )
