@@ -1559,7 +1559,10 @@ QTabBar::tab:selected {
             int(self.spin_crop_min_px.value()),
             bool(self.chk_crop_square.isChecked()),
             int(self.spin_imgsz_obb_direct.value()),
+            int(self.spin_imgsz_detect_direct.value()),
+            int(self.spin_imgsz_segment_direct.value()),
             int(self.spin_imgsz_seq_crop_obb.value()),
+            int(self.spin_imgsz_seq_crop_segment.value()),
             tuple(self._selected_role_keys()),
         )
 
@@ -1689,6 +1692,66 @@ QTabBar::tab:selected {
                     f"- {warning}" for warning in warnings_direct
                 ]
                 all_warnings.extend(warnings_direct)
+
+        if "detect_direct" in selected_roles:
+            report_detect_direct, warnings_detect_direct = format_size_analysis(
+                stats,
+                training_imgsz=self.spin_imgsz_detect_direct.value(),
+                pipeline_mode="full_image",
+            )
+            if lines:
+                lines += [""]
+            lines += [
+                "=== Direct Detect ===",
+                f"(imgsz = {self.spin_imgsz_detect_direct.value()})",
+                "",
+                report_detect_direct,
+            ]
+            if warnings_detect_direct:
+                lines += ["", "Warnings:"] + [
+                    f"- {warning}" for warning in warnings_detect_direct
+                ]
+                all_warnings.extend(warnings_detect_direct)
+
+        if "segment_direct" in selected_roles:
+            report_segment_direct, warnings_segment_direct = format_size_analysis(
+                stats,
+                training_imgsz=self.spin_imgsz_segment_direct.value(),
+                pipeline_mode="full_image",
+            )
+            if lines:
+                lines += [""]
+            lines += [
+                "=== Direct Segment ===",
+                f"(imgsz = {self.spin_imgsz_segment_direct.value()})",
+                "",
+                report_segment_direct,
+            ]
+            if warnings_segment_direct:
+                lines += ["", "Warnings:"] + [
+                    f"- {warning}" for warning in warnings_segment_direct
+                ]
+                all_warnings.extend(warnings_segment_direct)
+
+        if "seq_crop_segment" in selected_roles:
+            report_seq_crop_segment, warnings_seq_crop_segment = format_size_analysis(
+                stats,
+                training_imgsz=self.spin_imgsz_seq_crop_segment.value(),
+                pipeline_mode="crop",
+            )
+            if lines:
+                lines += [""]
+            lines += [
+                "=== Sequential Crop-Segment ===",
+                f"(stage-2 imgsz = {self.spin_imgsz_seq_crop_segment.value()})",
+                "",
+                report_seq_crop_segment,
+            ]
+            if warnings_seq_crop_segment:
+                lines += ["", "Warnings:"] + [
+                    f"- {warning}" for warning in warnings_seq_crop_segment
+                ]
+                all_warnings.extend(warnings_seq_crop_segment)
 
         if not lines:
             lines.append("No stages are selected for analysis.")
