@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -51,6 +52,27 @@ def _result_artifact_paths(result: dict) -> list[str]:
     return [artifact_path] if artifact_path else []
 
 
+def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
+    """Return the derived dataset's slice_geometry for OBB_DIRECT publish, else None.
+
+    Reads ``<derived_dataset_dir>/manifest.json`` and returns its
+    ``slice_geometry`` dict when present and non-empty. Any error (missing
+    role match, missing manifest, bad JSON, wrong shape) yields None so that
+    publish behavior is unaffected when slicing was not used.
+    """
+    if spec.role != TrainingRole.OBB_DIRECT:
+        return None
+    try:
+        manifest_path = Path(spec.derived_dataset_dir) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        slice_geometry = manifest.get("slice_geometry")
+        if isinstance(slice_geometry, dict) and slice_geometry:
+            return slice_geometry
+    except Exception:
+        return None
+    return None
+
+
 def _publish_training_artifacts(
     *,
     spec: TrainingRunSpec,
@@ -89,6 +111,7 @@ def _publish_training_artifacts(
         "training_params": (
             dict(training_params) if isinstance(training_params, dict) else None
         ),
+        "slice_geometry": _slice_geometry_for_publish(spec),
     }
 
     if len(artifact_paths) == 1 or spec.role not in _MULTIHEAD_CLASSIFIER_ROLES:
