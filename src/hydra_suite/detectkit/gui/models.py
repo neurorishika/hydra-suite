@@ -149,6 +149,7 @@ class DetectKitProject:
     imgsz_segment_direct: int = 640
     imgsz_seq_detect: int = 640
     imgsz_seq_crop_obb: int = 160
+    imgsz_seq_crop_segment: int = 160
 
     # Base models
     model_obb_direct: str = "yolo26s-obb.pt"
@@ -156,6 +157,7 @@ class DetectKitProject:
     model_segment_direct: str = "yolo26s-seg.pt"
     model_seq_detect: str = "yolo26s.pt"
     model_seq_crop_obb: str = "yolo26s-obb.pt"
+    model_seq_crop_segment: str = "yolo26s-seg.pt"
 
     # Hyperparams
     epochs: int = 100
@@ -183,6 +185,7 @@ class DetectKitProject:
     role_segment_direct: bool = False
     role_seq_detect: bool = True
     role_seq_crop_obb: bool = True
+    role_seq_crop_segment: bool = False
 
     # Device
     device: str = "auto"

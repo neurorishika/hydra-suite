@@ -214,3 +214,18 @@ def test_assert_task_matches_checkpoint_ok_on_match():
         task = "segment"
 
     m._assert_task_matches_checkpoint(_Ckpt(), "segment", "s.pt")  # no raise
+
+
+def test_project_roundtrips_seq_crop_segment(tmp_path):
+    from hydra_suite.detectkit.gui.models import DetectKitProject
+
+    p = DetectKitProject()
+    p.role_seq_crop_segment = True
+    p.imgsz_seq_crop_segment = 192
+    p.model_seq_crop_segment = "custom-seg.pt"
+    dest = tmp_path / "p.json"
+    p.save(dest)
+    q = DetectKitProject.load(dest)
+    assert q.role_seq_crop_segment is True
+    assert q.imgsz_seq_crop_segment == 192
+    assert q.model_seq_crop_segment == "custom-seg.pt"
