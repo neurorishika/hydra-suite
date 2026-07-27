@@ -61,3 +61,51 @@ def test_mask_extract_offset_scale_contours_in_frame_space():
     # contour x in [30,50]*2+100 = [160,200]; y in [30,50]*2+200 = [260,300]
     assert poly[:, 0].min() == pytest.approx(160.0, abs=2.0)
     assert poly[:, 1].max() == pytest.approx(300.0, abs=2.0)
+
+
+from hydra_suite.core.inference.config import (  # noqa: E402
+    OBBSequentialConfig,
+    build_inference_config_from_params,
+)
+
+
+def test_sequential_config_stage2_task_defaults_obb():
+    c = OBBSequentialConfig(detect_model_path="d.pt", obb_model_path="s.pt")
+    assert c.stage2_task == "obb"
+    assert (
+        c.seg_num_angles,
+        c.seg_crop_size,
+        c.seg_pad_ratio,
+        c.seg_mask_threshold,
+    ) == (
+        24,
+        64,
+        0.15,
+        0.5,
+    )
+
+
+def test_sequential_config_from_params_threads_stage2_task():
+    params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_OBB_MODE": "sequential",
+        "YOLO_DETECT_MODEL_PATH": "d.pt",
+        "YOLO_CROP_OBB_MODEL_PATH": "s.pt",
+        "YOLO_SEQ_STAGE2_TASK": "segment",
+        "RUNTIME_TIER": "cpu",
+    }
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.sequential.stage2_task == "segment"
+
+
+def test_sequential_config_from_params_coerces_bad_stage2_task():
+    params = {
+        "DETECTION_METHOD": "yolo_obb",
+        "YOLO_OBB_MODE": "sequential",
+        "YOLO_DETECT_MODEL_PATH": "d.pt",
+        "YOLO_CROP_OBB_MODEL_PATH": "s.pt",
+        "YOLO_SEQ_STAGE2_TASK": "banana",
+        "RUNTIME_TIER": "cpu",
+    }
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.sequential.stage2_task == "obb"

@@ -143,6 +143,13 @@ class OBBSequentialConfig:
     enforce_square_crop: bool = True
     stage2_image_size: int = 160
     stage2_batch_size: int | None = None
+    stage2_task: Literal["obb", "segment"] = "obb"
+    # Read only when stage2_task == "segment"; forwarded to _extract_obb_from_masks.
+    # Defaults match OBBDirectConfig's segment defaults.
+    seg_num_angles: int = 24
+    seg_crop_size: int = 64
+    seg_pad_ratio: float = 0.15
+    seg_mask_threshold: float = 0.5
 
 
 @dataclass
@@ -580,6 +587,18 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                     int(params["YOLO_SEQ_INDIVIDUAL_BATCH_SIZE"])
                     if params.get("YOLO_SEQ_INDIVIDUAL_BATCH_SIZE")
                     else None
+                ),
+                stage2_task=(
+                    "segment"
+                    if str(params.get("YOLO_SEQ_STAGE2_TASK", "obb")).strip().lower()
+                    == "segment"
+                    else "obb"
+                ),
+                seg_num_angles=int(params.get("YOLO_SEQ_SEG_NUM_ANGLES", 24)),
+                seg_crop_size=int(params.get("YOLO_SEQ_SEG_CROP_SIZE", 64)),
+                seg_pad_ratio=float(params.get("YOLO_SEQ_SEG_PAD_RATIO", 0.15)),
+                seg_mask_threshold=float(
+                    params.get("YOLO_SEQ_SEG_MASK_THRESHOLD", 0.5)
                 ),
             ),
             target_classes=target_classes,
