@@ -29,6 +29,7 @@ from .registry import (
     new_run_id,
 )
 from .runner import run_training
+from .sliced_dataset import SliceBuildParams, build_sliced_obb_dataset
 from .validation import (
     format_validation_report,
     validate_obb_dataset,
@@ -286,6 +287,21 @@ class TrainingOrchestrator:
             seed=seed,
             dedup=dedup,
             remap_single_class=len(resolved_class_names) == 1,
+        )
+
+    def build_sliced_obb_dataset(
+        self,
+        merged_obb_dataset_dir: str,
+        *,
+        level: GeometryLevel,
+        params: SliceBuildParams,
+        seed: int = 42,
+    ) -> DatasetBuildResult:
+        """Tile a merged OBB dataset into a sliced dataset for SAHI-usable training."""
+        out_root = self.workspace_root / "datasets_sliced"
+        out_root.mkdir(parents=True, exist_ok=True)
+        return build_sliced_obb_dataset(
+            merged_obb_dataset_dir, out_root, level=level, params=params, seed=int(seed)
         )
 
     def build_role_dataset(

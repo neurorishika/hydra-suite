@@ -1977,10 +1977,37 @@ QTabBar::tab:selected {
             self._append_log(f"Merged dataset: {merged.dataset_dir}")
 
             merged_level = merged_level_and_blocker(self._project.sources)[0]
+
+            role_source_dir = merged.dataset_dir
+            slice_settings = getattr(self._project, "slice_settings", None)
+            if slice_settings is not None and slice_settings.enabled:
+                from hydra_suite.training.sliced_dataset import SliceBuildParams
+
+                params = SliceBuildParams(
+                    geometry_mode=slice_settings.geometry_mode,
+                    imgsz=self._project.imgsz_obb_direct,
+                    object_tile_fraction=slice_settings.object_tile_fraction,
+                    slice_width=slice_settings.slice_width,
+                    slice_height=slice_settings.slice_height,
+                    overlap=slice_settings.overlap,
+                    min_area_ratio=slice_settings.min_area_ratio,
+                    negative_tile_fraction=slice_settings.negative_tile_fraction,
+                    target_sizes=list(slice_settings.target_sizes),
+                    full_frame_mix=slice_settings.full_frame_mix,
+                )
+                sliced = orchestrator.build_sliced_obb_dataset(
+                    merged.dataset_dir,
+                    level=merged_level,
+                    params=params,
+                    seed=self.spin_seed.value(),
+                )
+                role_source_dir = sliced.dataset_dir
+                self._append_log(f"Sliced dataset: {sliced.dataset_dir}")
+
             for role in roles:
                 build = orchestrator.build_role_dataset(
                     role,
-                    merged.dataset_dir,
+                    role_source_dir,
                     class_names=self._class_names(),
                     crop_pad_ratio=self.spin_crop_pad.value(),
                     min_crop_size_px=self.spin_crop_min_px.value(),
