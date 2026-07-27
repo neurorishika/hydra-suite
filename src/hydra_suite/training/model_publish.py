@@ -715,6 +715,7 @@ def publish_trained_model(
     factor_name: str | None = None,
     training_params: dict[str, Any] | None = None,
     classifier_v2_meta: dict[str, Any] | None = None,
+    slice_geometry: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """Copy trained artifact into repository and register metadata.
 
@@ -782,6 +783,18 @@ def publish_trained_model(
             else:
                 _copy_classifier_sidecar(src, dst)
 
+    slice_geom_sidecar_name: str | None = None
+    if (
+        slice_geometry
+        and role == TrainingRole.OBB_DIRECT
+        and dst.suffix.lower() == ".pt"
+    ):
+        slice_sidecar = dst.with_suffix(".slice_meta.json")
+        slice_sidecar.write_text(
+            json.dumps(dict(slice_geometry), indent=2), encoding="utf-8"
+        )
+        slice_geom_sidecar_name = slice_sidecar.name
+
     key = _registry_key_for_model(dst)
     metadata = {
         "size": safe_size,
@@ -803,6 +816,10 @@ def publish_trained_model(
         metadata["training_params"] = dict(training_params)
     if classifier_meta:
         metadata.update(classifier_meta)
+    if slice_geometry and role == TrainingRole.OBB_DIRECT:
+        metadata["slice_geometry"] = dict(slice_geometry)
+        if slice_geom_sidecar_name:
+            metadata["slice_meta_sidecar"] = slice_geom_sidecar_name
 
     # v2 sidecar for YOLO-style artifacts whose weight file cannot embed our schema.
     if dst.suffix.lower() == ".pt" and dst_sidecar.exists():

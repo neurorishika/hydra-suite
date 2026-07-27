@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -29,6 +30,7 @@ from .registry import (
     new_run_id,
 )
 from .runner import run_training
+from .sliced_dataset import SliceBuildParams, build_sliced_obb_dataset
 from .validation import (
     format_validation_report,
     validate_obb_dataset,
@@ -48,6 +50,27 @@ def _result_artifact_paths(result: dict) -> list[str]:
         return [str(path) for path in artifact_paths if str(path).strip()]
     artifact_path = str(result.get("artifact_path", "") or "").strip()
     return [artifact_path] if artifact_path else []
+
+
+def _slice_geometry_for_publish(spec: TrainingRunSpec) -> dict | None:
+    """Return the derived dataset's slice_geometry for OBB_DIRECT publish, else None.
+
+    Reads ``<derived_dataset_dir>/manifest.json`` and returns its
+    ``slice_geometry`` dict when present and non-empty. Any error (missing
+    role match, missing manifest, bad JSON, wrong shape) yields None so that
+    publish behavior is unaffected when slicing was not used.
+    """
+    if spec.role != TrainingRole.OBB_DIRECT:
+        return None
+    try:
+        manifest_path = Path(spec.derived_dataset_dir) / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        slice_geometry = manifest.get("slice_geometry")
+        if isinstance(slice_geometry, dict) and slice_geometry:
+            return slice_geometry
+    except Exception:
+        return None
+    return None
 
 
 def _publish_training_artifacts(
@@ -88,6 +111,7 @@ def _publish_training_artifacts(
         "training_params": (
             dict(training_params) if isinstance(training_params, dict) else None
         ),
+        "slice_geometry": _slice_geometry_for_publish(spec),
     }
 
     if len(artifact_paths) == 1 or spec.role not in _MULTIHEAD_CLASSIFIER_ROLES:
@@ -286,6 +310,21 @@ class TrainingOrchestrator:
             seed=seed,
             dedup=dedup,
             remap_single_class=len(resolved_class_names) == 1,
+        )
+
+    def build_sliced_obb_dataset(
+        self,
+        merged_obb_dataset_dir: str,
+        *,
+        level: GeometryLevel,
+        params: SliceBuildParams,
+        seed: int = 42,
+    ) -> DatasetBuildResult:
+        """Tile a merged OBB dataset into a sliced dataset for SAHI-usable training."""
+        out_root = self.workspace_root / "datasets_sliced"
+        out_root.mkdir(parents=True, exist_ok=True)
+        return build_sliced_obb_dataset(
+            merged_obb_dataset_dir, out_root, level=level, params=params, seed=int(seed)
         )
 
     def build_role_dataset(

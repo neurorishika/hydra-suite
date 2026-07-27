@@ -1,22 +1,23 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+from hydra_suite.utils.slice_geometry import (  # noqa: F401 -- re-exported for callers/tests
+    MAX_TILES_PER_FRAME,
+    SlicePlan,
+    get_slice_bboxes,
+    plan_tiles,
+    tile_size_for_mode,
+    tiles_overlap,
+)
 
 from ..config import SliceConfig
 from ..result import OBBResult
 
 logger = logging.getLogger(__name__)
-
-# Hard ceiling on tiles per frame. `SLICE_OVERLAP` clamps to 0.9 and the tile
-# size to 8192, but slice=64 + overlap=0.9 (reachable via advanced_config.json)
-# gives step 6 -> ~53k tiles on 1080p, i.e. 53k forward passes per frame. That
-# is never a configuration anybody wants; refuse it loudly at plan time instead
-# of spinning for hours with no log line (finding I5).
-MAX_TILES_PER_FRAME = 4096
 
 # Upper bound on the number of tile images handed to a single ``predict`` call.
 # Mirrors ``runner._sliced_tile_batch``'s cap so a chunk can never exceed the
@@ -44,138 +45,17 @@ def _log_gpu_merge_backend_downgrade_once() -> None:
     _gpu_merge_backend_downgrade_logged = True
 
 
-@dataclass
-class SlicePlan:
-    """A memoizable tiling of a fixed-size frame."""
-
-    tiles: list[tuple[int, int, int, int]]  # (x0, y0, x1, y1) per tile
-    full_frame: bool  # append one full-frame pass in addition to tiles
-    slice_wh: tuple[int, int]  # (w, h) of each tile
-    frame_wh: tuple[int, int]  # (w, h) of the source frame
-
-    @property
-    def jobs_per_frame(self) -> int:
-        return len(self.tiles) + (1 if self.full_frame else 0)
-
-
-def _axis_starts(total: int, size: int, step: int) -> list[int]:
-    """Tile start offsets along one axis, last tile flush to the far edge."""
-    if size >= total:
-        return [0]
-    starts = list(range(0, total - size + 1, step))
-    last = total - size
-    if starts[-1] != last:
-        starts.append(last)
-    return starts
-
-
-def _axis_geometry(
-    frame_h: int,
-    frame_w: int,
-    slice_h: int,
-    slice_w: int,
-    overlap_h: float,
-    overlap_w: float,
-) -> tuple[list[int], list[int], int, int]:
-    """Return ``(xs, ys, slice_w, slice_h)`` with sizes clamped to the frame."""
-    slice_w = min(slice_w, frame_w)
-    slice_h = min(slice_h, frame_h)
-    step_x = max(1, int(slice_w * (1.0 - overlap_w)))
-    step_y = max(1, int(slice_h * (1.0 - overlap_h)))
-    return (
-        _axis_starts(frame_w, slice_w, step_x),
-        _axis_starts(frame_h, slice_h, step_y),
-        slice_w,
-        slice_h,
-    )
-
-
-def get_slice_bboxes(
-    frame_h: int,
-    frame_w: int,
-    slice_h: int,
-    slice_w: int,
-    overlap_h: float,
-    overlap_w: float,
-) -> list[tuple[int, int, int, int]]:
-    """SAHI ``get_slice_bboxes``: fixed-size tiles, last tile flush to the edge.
-
-    Step = slice * (1 - overlap). The final tile in each axis is shifted back so
-    its far edge sits exactly on the frame edge (never a shrunken runt tile), so
-    two frames of the same size always tile identically.
-
-    Pure geometry primitive: deliberately UNGUARDED (``plan_slices`` owns the
-    tile-count ceiling), so tests can exercise degenerate steps directly.
-    """
-    xs, ys, slice_w, slice_h = _axis_geometry(
-        frame_h, frame_w, slice_h, slice_w, overlap_h, overlap_w
-    )
-    return [(x, y, x + slice_w, y + slice_h) for y in ys for x in xs]
-
-
-def tiles_overlap(tiles: list[tuple[int, int, int, int]]) -> bool:
-    """True when ANY two planned tiles actually intersect.
-
-    Pure predicate over tile boxes -- no detection data, no device sync.
-
-    Callers must use THIS, not ``SliceConfig.overlap_*_ratio``, to decide
-    whether cross-tile dedup is needed: ``get_slice_bboxes`` flushes the last
-    tile in each axis to the frame edge, so tiles genuinely overlap even at a
-    configured ratio of 0.0 (a 300px frame with 256px tiles yields [0,256) and
-    [44,300) -- 212px of real overlap).
-
-    Computed ANALYTICALLY for the regular grid ``get_slice_bboxes`` emits
-    (finding I5): all tiles share one size, so two distinct tiles intersect iff
-    two distinct starts on some axis are closer than that axis's tile extent --
-    which, since the closest pair of starts is always an adjacent pair, is a
-    single scan over the sorted unique starts. The old pairwise scan was O(T^2):
-    on a pathological 53k-tile plan that is ~2.8e9 pure-Python iterations before
-    any forward pass, indistinguishable from a hang. An irregular tile list (not
-    produced by ``get_slice_bboxes``) falls back to the O(T^2) definition.
-    """
-    n = len(tiles)
-    if n <= 1:
-        return False
-    xs = sorted({t[0] for t in tiles})
-    ys = sorted({t[1] for t in tiles})
-    w = tiles[0][2] - tiles[0][0]
-    h = tiles[0][3] - tiles[0][1]
-    regular_grid = n == len(xs) * len(ys) and all(
-        (t[2] - t[0]) == w and (t[3] - t[1]) == h for t in tiles
-    )
-    if not regular_grid:
-        return _tiles_overlap_pairwise(tiles)
-    if any(b - a < w for a, b in zip(xs, xs[1:])):
-        return True
-    return any(b - a < h for a, b in zip(ys, ys[1:]))
-
-
-def _tiles_overlap_pairwise(tiles: list[tuple[int, int, int, int]]) -> bool:
-    """O(T^2) reference definition; only reached for a non-grid tile list."""
-    for i in range(len(tiles)):
-        ax0, ay0, ax1, ay1 = tiles[i]
-        for j in range(i + 1, len(tiles)):
-            bx0, by0, bx1, by1 = tiles[j]
-            if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
-                return True
-    return False
-
-
 def _tile_size(
     slice_cfg: SliceConfig, imgsz: int, ref_object_px: float
 ) -> tuple[int, int]:
-    """Return (w, h) tile size for the configured geometry mode."""
-    if slice_cfg.geometry_mode == "custom":
-        w = slice_cfg.slice_width if slice_cfg.slice_width > 0 else imgsz
-        h = slice_cfg.slice_height if slice_cfg.slice_height > 0 else imgsz
-        return int(w), int(h)
-    if slice_cfg.geometry_mode == "auto_object" and ref_object_px > 0:
-        frac = max(0.01, min(0.9, slice_cfg.object_tile_fraction))
-        size = int(round(ref_object_px / frac))
-        size = max(64, min(4096, size))
-        return size, size
-    # auto_model (and auto_object fallback when no ref object is known).
-    return int(imgsz), int(imgsz)
+    return tile_size_for_mode(
+        geometry_mode=slice_cfg.geometry_mode,
+        imgsz=imgsz,
+        reference_body_px=ref_object_px,
+        object_tile_fraction=slice_cfg.object_tile_fraction,
+        slice_width=slice_cfg.slice_width,
+        slice_height=slice_cfg.slice_height,
+    )
 
 
 def plan_slices(
@@ -204,57 +84,15 @@ def plan_slices(
 
     Cheap; caller memoizes per video.
     """
-    frame_h, frame_w = int(frame_hw[0]), int(frame_hw[1])
     slice_w, slice_h = _tile_size(slice_cfg, imgsz, ref_object_px)
-    xs, ys, eff_w, eff_h = _axis_geometry(
-        frame_h,
-        frame_w,
-        slice_h,
+    return plan_tiles(
+        frame_hw,
         slice_w,
-        slice_cfg.overlap_height_ratio,
+        slice_h,
         slice_cfg.overlap_width_ratio,
-    )
-    n_tiles = len(xs) * len(ys)
-    if n_tiles > MAX_TILES_PER_FRAME:
-        raise ValueError(
-            f"Sliced inference would produce {n_tiles} tiles per frame "
-            f"({len(xs)}x{len(ys)}) for a {frame_w}x{frame_h} frame with "
-            f"{eff_w}x{eff_h} tiles at overlap "
-            f"({slice_cfg.overlap_width_ratio}, {slice_cfg.overlap_height_ratio}) "
-            f"-- above the {MAX_TILES_PER_FRAME}-tile ceiling, which would mean "
-            f"{n_tiles} forward passes per frame. Increase the slice size or "
-            f"lower SLICE_OVERLAP."
-        )
-    tiles = [(x, y, x + eff_w, y + eff_h) for y in ys for x in xs]
-    if roi_mask is not None and roi_mask.shape[:2] != (frame_h, frame_w):
-        # Wrong coordinate space: gating here would drop the wrong tiles. Degrade
-        # to no gating (full grid) rather than mis-gate; downstream per-detection
-        # ROI filtering still produces correct results, only compute is unsaved.
-        logger.warning(
-            "ROI mask shape %s does not match frame (%d, %d); skipping ROI tile "
-            "gating for this frame to avoid mis-gating.",
-            tuple(roi_mask.shape[:2]),
-            frame_h,
-            frame_w,
-        )
-        roi_mask = None
-    if roi_mask is not None:
-        h, w = roi_mask.shape[:2]
-        kept = []
-        for x0, y0, x1, y1 in tiles:
-            yy0, yy1 = max(0, y0), min(h, y1)
-            xx0, xx1 = max(0, x0), min(w, x1)
-            if yy1 > yy0 and xx1 > xx0 and roi_mask[yy0:yy1, xx0:xx1].any():
-                kept.append((x0, y0, x1, y1))
-        # Fallback to the full grid if ROI gating would drop every tile. This prevents
-        # silent detection failure while still producing correct ROI-filtered detections
-        # downstream (filtering stage reapplies the mask per-detection).
-        tiles = kept if kept else tiles
-    return SlicePlan(
-        tiles=tiles,
+        slice_cfg.overlap_height_ratio,
         full_frame=bool(slice_cfg.perform_standard_pred),
-        slice_wh=(eff_w, eff_h),
-        frame_wh=(frame_w, frame_h),
+        roi_mask=roi_mask,
     )
 
 
