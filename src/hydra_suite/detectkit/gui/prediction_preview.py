@@ -80,7 +80,6 @@ def preview_object_tile_fraction(target_sizes, object_tile_fraction, imgsz) -> f
     sizes = [float(t) for t in (target_sizes or [])]
     if not sizes or int(imgsz) <= 0:
         return float(object_tile_fraction)
-    import numpy as np
 
     frac = float(np.median(np.asarray(sizes, dtype=np.float64))) / float(imgsz)
     return max(0.01, min(0.9, frac))

@@ -45,10 +45,12 @@ def slice_meta_to_panel_values(meta: dict) -> dict:
         object_tile_fraction = max(0.01, min(0.9, frac))
     else:
         object_tile_fraction = stored_fraction
+    _overlap = meta.get("overlap", 0.2)
+    overlap = float(_overlap if _overlap is not None else 0.2)
     return {
         "enabled": True,
         "geometry_mode": str(meta.get("geometry_mode", "auto_object") or "auto_object"),
-        "overlap": float(meta.get("overlap", 0.2) or 0.2),
+        "overlap": overlap,
         "object_tile_fraction": object_tile_fraction,
         "trained_body_px": float(meta.get("reference_body_px", 0.0) or 0.0),
     }

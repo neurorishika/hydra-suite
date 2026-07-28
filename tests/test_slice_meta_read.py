@@ -70,3 +70,8 @@ def test_map_missing_keys_use_defaults():
     assert v["overlap"] == 0.2
     assert v["trained_body_px"] == 0.0
     assert v["object_tile_fraction"] == 0.15
+
+
+def test_map_overlap_zero_is_preserved():
+    v = slice_meta_to_panel_values({"overlap": 0.0, "geometry_mode": "auto_object"})
+    assert v["overlap"] == 0.0
