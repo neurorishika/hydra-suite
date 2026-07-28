@@ -123,6 +123,20 @@ class SliceTrainingSettings:
         )
 
 
+def populate_measured_reference(
+    settings: SliceTrainingSettings, measured: float
+) -> bool:
+    """Set settings.reference_body_px from a measured value only when currently unset.
+
+    Returns True iff it changed the value (settings.reference_body_px was 0.0 and
+    measured > 0). A user-set value is never overwritten.
+    """
+    if settings.reference_body_px == 0.0 and float(measured) > 0.0:
+        settings.reference_body_px = float(measured)
+        return True
+    return False
+
+
 @dataclass
 class DetectKitProject:
     """Full project state, persisted as JSON."""

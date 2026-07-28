@@ -2140,6 +2140,21 @@ QTabBar::tab:selected {
                 role_source_dir = sliced.dataset_dir
                 self._append_log(f"Sliced dataset: {sliced.dataset_dir}")
 
+                from hydra_suite.detectkit.gui.models import populate_measured_reference
+
+                measured_ref = float(
+                    sliced.stats.get("measured_reference_body_px", 0.0)
+                )
+                if populate_measured_reference(
+                    self._project.slice_settings, measured_ref
+                ):
+                    from hydra_suite.detectkit.gui.project import save_project
+
+                    save_project(self._project)
+                    self._append_log(
+                        f"Auto-set reference body size: {measured_ref:.1f}px (measured)"
+                    )
+
             for role in roles:
                 build = orchestrator.build_role_dataset(
                     role,
