@@ -48,6 +48,7 @@ from .prediction_preview import (
     predict_obb_for_frame_sequential,
     predict_preview_detections_for_image,
     predict_sliced_obb_result,
+    preview_object_tile_fraction,
 )
 from .project import (
     create_project,
@@ -222,7 +223,11 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                             imgsz=self._imgsz_obb_direct,
                             # 0.0 => tile_size_for_mode degrades auto_object to imgsz tiling (honest; no fabricated scale)
                             reference_body_px=slice_settings.reference_body_px,
-                            object_tile_fraction=slice_settings.object_tile_fraction,
+                            object_tile_fraction=preview_object_tile_fraction(
+                                slice_settings.target_sizes,
+                                slice_settings.object_tile_fraction,
+                                self._imgsz_obb_direct,
+                            ),
                             slice_width=slice_settings.slice_width,
                             slice_height=slice_settings.slice_height,
                             overlap=slice_settings.overlap,
