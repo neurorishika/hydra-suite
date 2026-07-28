@@ -81,6 +81,22 @@ BOTH the preview (Component B) and the TrackerKit mapping (Component C).
 
 ## 5. Component C — TrackerKit: read the sidecar, pre-fill the SAHI panel (#3)
 
+**Key distinction (from review):** TrackerKit's `REFERENCE_BODY_SIZE` is the ant's size
+in the **full tracking frame** (the user's tracking-scale value, `spin_reference_body_size`,
+range 1–500) and inference derives `reference_body_px = REFERENCE_BODY_SIZE × RESIZE_FACTOR`.
+The sidecar's `reference_body_px` is a **different, model-internal quantity** — the object
+size measured in *training-image* pixels. These must not be conflated. So this design
+introduces a **new, separately-named "trained body size" input** pre-filled from the
+sidecar, and NEVER touches `REFERENCE_BODY_SIZE`.
+
+**New param + override:** add `SLICE_TRAINED_BODY_PX` (advanced-config key
+`slice_trained_body_px`, default `0.0`). In
+`core/inference/config.py:build_inference_config_from_params`, when
+`SLICE_TRAINED_BODY_PX > 0` it becomes `SliceConfig.reference_body_px` (the model-internal
+trained scale); otherwise the existing `REFERENCE_BODY_SIZE × RESIZE_FACTOR` product is used
+unchanged. This keeps the tracking reference and the trained reference as distinct sources,
+with the trained value winning for a sliced model that carries one.
+
 Two pure functions (unit-testable, no Qt) in a new `core/inference/slice_meta.py`
 module (mirroring the `<artifact>.runtime_meta.json` sidecar convention in
 `core/inference/runtime_artifacts.py`; kept in `core/inference` so both DetectKit
@@ -88,24 +104,29 @@ and TrackerKit could reuse them and so they stay Qt-free):
 
 - `read_slice_meta(model_path) -> dict | None` — read `<model_path>.slice_meta.json`;
   return the parsed dict, or `None` on absent file / bad JSON / wrong shape. Never raises.
-- `slice_meta_to_panel_values(meta) -> dict` — translate the sidecar into SAHI panel
+- `slice_meta_to_panel_values(meta) -> dict` — translate the sidecar into panel/config
   values: `enabled=True`; `geometry_mode ← meta["geometry_mode"]`;
-  `overlap ← meta["overlap"]`; `reference_body_px ← meta["reference_body_px"]`;
+  `overlap ← meta["overlap"]`; `trained_body_px ← meta["reference_body_px"]`;
   `object_tile_fraction ← median(meta["target_sizes"]) / meta["imgsz"]` (same median
   convention as Component B; fall back to `meta["object_tile_fraction"]` when
-  `target_sizes` is empty/absent). Missing keys fall back to current defaults.
+  `target_sizes` is empty/absent, and to `meta["object_tile_fraction"]` when `imgsz`
+  is absent/zero). Missing keys fall back to current defaults.
 
 TrackerKit detection-panel wiring:
-- When the user selects an OBB model in the detection panel, call `read_slice_meta` on
-  the chosen model path. If it returns a dict, apply `slice_meta_to_panel_values` to the
-  SAHI widgets (enable checkbox, geometry-mode combo, reference-body / overlap /
-  object-tile-fraction fields) and show a dismissible **"Matched trained SAHI geometry"**
-  banner. **All fields stay editable**; nothing is forced at config-build or inference
-  time — the existing `get_parameters_dict()` path reads whatever the widgets hold.
-- Document at this site the **scale caveat**: the sidecar's `reference_body_px` is in
-  training-image pixels; if the tracking video differs in resolution / `RESIZE_FACTOR`
-  from the training frames, the pre-filled value is approximate and the user should
-  adjust it. (This is exactly why pre-fill is editable rather than forced.)
+- When the user selects an OBB model in the detection panel (the `combo_yolo_model`
+  selection path), call `read_slice_meta` on the chosen model path. If it returns a dict,
+  apply `slice_meta_to_panel_values`: set the SAHI **widgets** `chk_slice_enabled`=True and
+  `combo_slice_geometry`=geometry_mode, and write the **advanced-config** keys
+  `slice_overlap`, `slice_object_tile_fraction`, and `slice_trained_body_px`. Show a
+  dismissible **"Matched trained SAHI geometry"** banner. **All values stay editable**
+  (widgets directly; advanced-config via its existing editor); nothing is forced at
+  config-build or inference time — `get_parameters_dict()` reads whatever the panel +
+  advanced-config hold.
+- The pre-fill transfers only **scale-independent** trained knobs plus the explicitly
+  model-internal `slice_trained_body_px`; `REFERENCE_BODY_SIZE` is left as the user's
+  tracking-scale value. Document at the pre-fill site that `slice_trained_body_px` is the
+  training-image body scale and the user may adjust it if their tracking frames differ in
+  resolution from the training frames.
 
 ## 6. Error handling
 
@@ -116,6 +137,8 @@ TrackerKit detection-panel wiring:
 - `imgsz` absent/zero in the sidecar → fall back to `object_tile_fraction` (guard the
   division).
 - User-set `reference_body_px` in DetectKit settings → build must not overwrite it.
+- `SLICE_TRAINED_BODY_PX` absent/0 in TrackerKit params → `reference_body_px` computation
+  is byte-identical to today (`REFERENCE_BODY_SIZE × RESIZE_FACTOR`).
 
 ## 7. Testing
 
@@ -126,17 +149,22 @@ Pure/unit (synthetic data, no ants, no models):
 - `preview_object_tile_fraction`: `median(target)/imgsz`, and the empty-`target_sizes`
   fallback;
 - `read_slice_meta`: present dict / absent file / malformed JSON → `None`;
-- `slice_meta_to_panel_values`: full mapping incl. median-target → fraction, and each
-  fallback (empty target_sizes, missing imgsz, missing keys).
+- `slice_meta_to_panel_values`: full mapping incl. median-target → fraction, `trained_body_px`
+  from the sidecar reference, and each fallback (empty target_sizes, missing imgsz, missing keys);
+- `build_inference_config_from_params`: `SLICE_TRAINED_BODY_PX > 0` overrides
+  `SliceConfig.reference_body_px`; `0`/absent → `REFERENCE_BODY_SIZE × RESIZE_FACTOR` unchanged.
 
 Guard / regression:
 - No sidecar → TrackerKit panel behavior byte-identical (pre-fill is a no-op).
+- `SLICE_TRAINED_BODY_PX` absent/0 → `reference_body_px` byte-identical to today.
 - DetectKit build with a user-set `reference_body_px` leaves the settings value unchanged.
 - `predict_sliced_obb_result` / non-sliced preview unaffected when slicing off.
 
 Qt (headless, `pytest.importorskip("PySide6")`):
-- selecting a model whose path has a `.slice_meta.json` pre-fills the SAHI group widgets
-  (enable + mode + reference + overlap + fraction) and raises the banner.
+- selecting a model whose path has a `.slice_meta.json` sets `chk_slice_enabled`=True,
+  `combo_slice_geometry`=trained mode, writes `slice_overlap` / `slice_object_tile_fraction`
+  / `slice_trained_body_px` into advanced-config, raises the banner, and leaves
+  `REFERENCE_BODY_SIZE` (`spin_reference_body_size`) untouched.
 
 ## 8. File structure
 
@@ -144,9 +172,14 @@ Qt (headless, `pytest.importorskip("PySide6")`):
 - `src/hydra_suite/training/sliced_dataset.py` — dataset-median measurement + manifest/stats.
 - `src/hydra_suite/detectkit/gui/dialogs/training_dialog.py` — populate settings after build.
 - `src/hydra_suite/detectkit/gui/main_window.py` — preview median-target fraction.
-- `src/hydra_suite/detectkit/gui/prediction_preview.py` OR a small helper module — the
-  pure `preview_object_tile_fraction` helper (place wherever keeps it Qt-free + testable).
-- TrackerKit detection panel + its config/model-selection wiring — sidecar pre-fill + banner.
+- `src/hydra_suite/detectkit/gui/prediction_preview.py` — the pure
+  `preview_object_tile_fraction` helper (already Qt-free).
+- `src/hydra_suite/core/inference/config.py` — `SLICE_TRAINED_BODY_PX` overrides
+  `SliceConfig.reference_body_px` in `build_inference_config_from_params`.
+- `src/hydra_suite/trackerkit/gui/orchestrators/config.py` — emit `SLICE_TRAINED_BODY_PX`
+  from advanced-config `slice_trained_body_px`.
+- TrackerKit detection panel (`detection_panel.py`) + its model-selection wiring —
+  sidecar pre-fill (widgets + advanced-config) + banner.
 
 **New**
 - `src/hydra_suite/core/inference/slice_meta.py` — pure `read_slice_meta` +
@@ -162,7 +195,11 @@ Qt (headless, `pytest.importorskip("PySide6")`):
    only when unset; a user value is preserved.
 3. DetectKit `auto_object` preview tiles at `median(target_sizes)/imgsz`.
 4. `read_slice_meta` + `slice_meta_to_panel_values` are pure, tested, and tolerant of
-   absent/malformed sidecars.
-5. Selecting an OBB model with a sidecar pre-fills the TrackerKit SAHI panel (editable) +
-   shows a banner; no sidecar → byte-identical to today.
-6. The scale caveat is documented at the pre-fill site.
+   absent/malformed sidecars; the mapper emits `trained_body_px` from the sidecar reference.
+5. `SLICE_TRAINED_BODY_PX > 0` overrides `SliceConfig.reference_body_px`; `0`/absent leaves
+   the `REFERENCE_BODY_SIZE × RESIZE_FACTOR` computation byte-identical to today.
+6. Selecting an OBB model with a sidecar pre-fills the TrackerKit SAHI panel — enable +
+   geometry mode + advanced-config overlap/object_tile_fraction/slice_trained_body_px
+   (editable) + banner — and leaves `REFERENCE_BODY_SIZE` untouched; no sidecar →
+   byte-identical to today.
+7. The trained-vs-tracking scale distinction is documented at the pre-fill site.
