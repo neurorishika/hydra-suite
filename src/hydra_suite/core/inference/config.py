@@ -653,6 +653,20 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
         )
         _merge_metric = str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
         _merge_backend = str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
+        _trained_body_px = _clamped_float(
+            params.get("SLICE_TRAINED_BODY_PX", 0.0), 0.0, 0.0, 8192.0
+        )
+        _reference_body_px = (
+            _trained_body_px
+            if _trained_body_px > 0
+            else _clamped_float(
+                float(params.get("REFERENCE_BODY_SIZE", 20.0) or 20.0)
+                * float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
+                0.0,
+                0.0,
+                8192.0,
+            )
+        )
         slice_cfg = SliceConfig(
             enabled=bool(params.get("SLICE_ENABLED", False)),
             geometry_mode=(
@@ -669,13 +683,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             ),
             # auto_object needs a real object scale or it silently degrades to
             # auto_model. Same source/scaling worker.py uses (worker.py:921).
-            reference_body_px=_clamped_float(
-                float(params.get("REFERENCE_BODY_SIZE", 20.0) or 20.0)
-                * float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
-                0.0,
-                0.0,
-                8192.0,
-            ),
+            reference_body_px=_reference_body_px,
             merge_policy=(
                 _merge_policy
                 if _merge_policy in {"nms", "nmm", "greedy_nmm"}
