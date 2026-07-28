@@ -33,8 +33,8 @@ from .dataset_builders import (
 from .geometry_levels import GeometryLevel
 
 
-def measure_reference_body_px(labels, frame_wh) -> float:
-    """Median OBB major axis (px) over a frame's normalized-point labels."""
+def object_major_axes_px(labels, frame_wh) -> list[float]:
+    """All per-object minAreaRect major axes (px) over a frame's normalized labels."""
     w, h = float(frame_wh[0]), float(frame_wh[1])
     majors: list[float] = []
     for _cls_id, pts_norm in labels:
@@ -45,6 +45,12 @@ def measure_reference_body_px(labels, frame_wh) -> float:
             continue
         _c, (bw, bh), _a = cv2.minAreaRect(pts.astype(np.float32))
         majors.append(float(max(bw, bh)))
+    return majors
+
+
+def measure_reference_body_px(labels, frame_wh) -> float:
+    """Median minAreaRect major axis (px) over a frame's normalized-point labels."""
+    majors = object_major_axes_px(labels, frame_wh)
     if not majors:
         return 0.0
     return float(np.median(np.asarray(majors, dtype=np.float64)))
@@ -196,6 +202,7 @@ def build_sliced_obb_dataset(
     rng = random.Random(int(seed))
     counts = {"train": 0, "val": 0, "test": 0, "tiles": 0, "negatives": 0, "objects": 0}
     class_names = _read_class_names(merged_dir)
+    all_majors: list[float] = []
 
     for split, img_path, lbl_path in _iter_dataset_items(merged_dir):
         img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
@@ -203,6 +210,7 @@ def build_sliced_obb_dataset(
             continue
         fh, fw = img.shape[:2]
         labels = _parse_geometry_label_lines(lbl_path)
+        all_majors.extend(object_major_axes_px(labels, (fw, fh)))
         ref_px = params.reference_body_px or measure_reference_body_px(labels, (fw, fh))
         for tile_w, tile_h in _tile_sizes_for_params(params, ref_px):
             try:
@@ -246,6 +254,11 @@ def build_sliced_obb_dataset(
             counts[split] += 1
             counts["objects"] += len(lines)
 
+    measured_reference_body_px = (
+        float(np.median(np.asarray(all_majors, dtype=np.float64)))
+        if all_majors
+        else 0.0
+    )
     _write_sliced_yaml(out_dir, class_names)
     manifest = {
         "type": "sliced_obb",
@@ -253,7 +266,8 @@ def build_sliced_obb_dataset(
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "level": level.label,
         "counts": counts,
-        "slice_geometry": _slice_geometry_manifest(params),
+        "measured_reference_body_px": measured_reference_body_px,
+        "slice_geometry": _slice_geometry_manifest(params, measured_reference_body_px),
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -293,7 +307,12 @@ def _write_sliced_yaml(out_dir: Path, class_names: list[str]) -> None:
     (out_dir / "dataset.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _slice_geometry_manifest(params) -> dict:
+def _slice_geometry_manifest(params, measured_reference_body_px: float = 0.0) -> dict:
+    reference_body_px = (
+        params.reference_body_px
+        if params.reference_body_px > 0
+        else measured_reference_body_px
+    )
     return {
         "geometry_mode": params.geometry_mode,
         "imgsz": params.imgsz,
@@ -305,5 +324,5 @@ def _slice_geometry_manifest(params) -> dict:
         "negative_tile_fraction": params.negative_tile_fraction,
         "target_sizes": list(params.target_sizes),
         "full_frame_mix": params.full_frame_mix,
-        "reference_body_px": params.reference_body_px,
+        "reference_body_px": reference_body_px,
     }
