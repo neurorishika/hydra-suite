@@ -65,6 +65,103 @@ def test_preview_build_inference_params_maps_overlay_and_runtime_keys() -> None:
     assert params["INDIVIDUAL_CROP_PADDING"] == 0.2
 
 
+def _authoritative_params(**overrides) -> dict:
+    """A minimal stand-in for the tracking-side get_parameters_dict() output."""
+    params = {
+        "RUNTIME_TIER": "gpu",
+        "YOLO_OBB_MODE": "direct",
+        "YOLO_OBB_DIRECT_TASK": "obb",
+        "YOLO_OBB_DIRECT_MODEL_PATH": "obb/model.pt",
+        "YOLO_MODEL_PATH": "obb/model.pt",
+        "YOLO_CONFIDENCE_THRESHOLD": 0.3,
+        "YOLO_IOU_THRESHOLD": 0.36,
+        "MAX_TARGETS": 25,
+        "ENABLE_SIZE_FILTERING": True,
+        "MIN_OBJECT_SIZE": 100,
+        "MAX_OBJECT_SIZE": 9000,
+        "SLICE_ENABLED": True,
+        "SLICE_GEOMETRY_MODE": "auto_model",
+        "SLICE_OVERLAP": 0.2,
+        "SLICE_MERGE_POLICY": "greedy_nmm",
+        "SLICE_MERGE_METRIC": "ios",
+        "SLICE_MERGE_THRESHOLD": 0.5,
+        "SLICE_MERGE_BACKEND": "cv2",
+        "ADVANCED_CONFIG": {"enable_aspect_ratio_filtering": True},
+    }
+    params.update(overrides)
+    return params
+
+
+def test_preview_inference_params_inherit_slice_from_tracking_params() -> None:
+    """Regression guard for the SAHI preview divergence: when the authoritative
+    tracking params carry SLICE_ENABLED, the preview must run SLICED too.
+
+    The preview used to re-derive its own params from the lowercase context and
+    silently dropped every SLICE_* key, so "Test detection on Preview" ran
+    non-sliced while the full run sliced. The preview now sources its config from
+    the SAME dict the tracking pass builds from, so slicing flows through."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    ctx = {
+        "tracking_params": _authoritative_params(),
+        "cnn_classifiers": [],
+        "enable_pose_extractor": False,
+        "use_apriltags": False,
+    }
+    params = preview_worker._preview_build_inference_params(ctx, 1.0, True)
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.enabled is True
+    assert cfg.obb.direct.slice.geometry_mode == "auto_model"
+    # Filters ON: the authoritative size gate is preserved.
+    assert params["ENABLE_SIZE_FILTERING"] is True
+
+
+def test_preview_inference_params_filter_toggle_keeps_slice() -> None:
+    """ "Test without filters" drops the size/aspect gates but must NOT disable
+    slicing -- the toggle is about detection filters, not tile geometry."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    ctx = {
+        "tracking_params": _authoritative_params(),
+        "cnn_classifiers": [],
+        "enable_pose_extractor": False,
+        "use_apriltags": False,
+    }
+    params = preview_worker._preview_build_inference_params(ctx, 1.0, False)
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.enabled is True
+    assert params["ENABLE_SIZE_FILTERING"] is False
+    assert params["MIN_OBJECT_SIZE"] == 0
+    assert params["ADVANCED_CONFIG"]["enable_aspect_ratio_filtering"] is False
+
+
+def test_preview_inference_params_falls_back_without_snapshot() -> None:
+    """When no authoritative snapshot is present, the legacy mapping is used and
+    the preview still builds a (non-sliced) config without crashing."""
+    preview_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.preview_worker"
+    )
+    from hydra_suite.core.inference.config import build_inference_config_from_params
+
+    ctx = {
+        "tracking_params": None,
+        "yolo_model_path": "obb/model.pt",
+        "runtime_tier": "gpu",
+        "cnn_classifiers": [],
+        "enable_pose_extractor": False,
+        "use_apriltags": False,
+    }
+    params = preview_worker._preview_build_inference_params(ctx, 1.0, True)
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.direct.slice.enabled is False
+
+
 class _FakeOBBResult:
     """Minimal stand-in for ``core.inference.result.OBBResult``."""
 

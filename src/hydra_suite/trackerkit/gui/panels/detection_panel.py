@@ -1548,6 +1548,22 @@ class DetectionPanel(QWidget):
                 )
 
         context = self._collect_preview_detection_context()
+        # Capture the authoritative tracking params (the SAME dict the real
+        # tracking pass builds its InferenceConfig from) on the main thread,
+        # while Qt widgets are safe to read. The preview YOLO branch uses this
+        # as its config source so the preview runs the EXACT detection config
+        # the full run will -- most importantly the SLICE_* (SAHI) keys, which
+        # the preview's own param mapping never carried, so it silently ran
+        # non-sliced while the run sliced (spurious detections diverged).
+        try:
+            context["tracking_params"] = self._main_window.get_parameters_dict()
+        except Exception:
+            logger.warning(
+                "Could not capture tracking params for preview; falling back "
+                "to preview-local param mapping.",
+                exc_info=True,
+            )
+            context["tracking_params"] = None
         if (
             int(context.get("detection_method", 0)) == 1
             and str(context.get("yolo_obb_mode", "direct")).strip().lower()

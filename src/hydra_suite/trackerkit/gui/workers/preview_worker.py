@@ -448,13 +448,76 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
 
 
 def _preview_build_inference_params(context, resize_f, use_detection_filters):
-    """Assemble an UPPERCASE params dict for ``build_inference_config_from_params``.
+    """Build the preview InferenceConfig params from the authoritative source.
 
-    Extends the OBB/head-tail params from :func:`_preview_build_yolo_params`
-    with the CNN / pose / AprilTag / runtime keys the structured
-    ``InferenceConfig`` builder reads, mapping them off the lowercase preview
-    context. Model paths run through :func:`resolve_model_path` so relative
-    preview paths resolve like the rest of the preview branch.
+    Single source of truth: ``context["tracking_params"]`` is the exact dict the
+    real tracking pass feeds to ``build_inference_config_from_params`` (captured
+    on the main thread in ``_test_detection_on_preview``). Reusing it guarantees
+    the preview runs the SAME detection config as the full run -- so every
+    detection knob, present and future, stays in lock-step instead of being
+    re-derived by a parallel mapping that silently drifts. The SLICE_* (SAHI)
+    keys were the casualty of that drift: the old preview mapping never carried
+    them, so "Test detection on Preview" always ran non-sliced even with SAHI on.
+
+    Only two things stay preview-owned and are layered on top:
+
+    * The "test without filters" toggle, which forces the size/aspect gates off
+      so the raw detection set is shown for size estimation.
+    * Overlay gating (pose / CNN / AprilTag), which the preview intentionally
+      shows without requiring the master identity gate.
+
+    Falls back to the legacy context-derived mapping only if the authoritative
+    snapshot is unavailable (e.g. capture failed).
+    """
+    base = context.get("tracking_params")
+    if not base:
+        return _preview_build_inference_params_legacy(
+            context, resize_f, use_detection_filters
+        )
+
+    params = dict(base)
+
+    # Preview overlay gating stays preview-owned: show pose / CNN / AprilTag
+    # overlays off the preview context, independent of the master identity gate.
+    cnn_cfgs = []
+    for cnn_cfg in context.get("cnn_classifiers", []) or []:
+        cfg = dict(cnn_cfg)
+        cfg["model_path"] = str(resolve_model_path(cfg.get("model_path", "")))
+        cnn_cfgs.append(cfg)
+    params["CNN_CLASSIFIERS"] = cnn_cfgs
+
+    params["ENABLE_POSE_EXTRACTOR"] = bool(context.get("enable_pose_extractor", False))
+    params["POSE_MODEL_TYPE"] = str(context.get("pose_model_type", "yolo"))
+    _pose_model = str(resolve_model_path(context.get("pose_model_dir", "")))
+    params["POSE_MODEL_DIR"] = _pose_model
+    params["POSE_SLEAP_MODEL_DIR"] = _pose_model
+    params["POSE_YOLO_MODEL_DIR"] = _pose_model
+    params["POSE_MODEL_PATH"] = _pose_model
+    params["USE_APRILTAGS"] = bool(context.get("use_apriltags", False))
+
+    # "Test without filters": drop the size/aspect gates so the preview shows the
+    # raw detection set for size estimation, regardless of the UI filter state.
+    if not use_detection_filters:
+        params["ENABLE_SIZE_FILTERING"] = False
+        params["MIN_OBJECT_SIZE"] = 0
+        params["MAX_OBJECT_SIZE"] = float("inf")
+        adv = dict(params.get("ADVANCED_CONFIG", {}) or {})
+        adv["enable_aspect_ratio_filtering"] = False
+        params["ADVANCED_CONFIG"] = adv
+
+    return params
+
+
+def _preview_build_inference_params_legacy(context, resize_f, use_detection_filters):
+    """Legacy preview param mapping, re-derived from the lowercase context.
+
+    Retained only as a fallback for when the authoritative ``tracking_params``
+    snapshot is unavailable. Prefer :func:`_preview_build_inference_params`.
+
+    NOTE: this mapping does NOT carry the SLICE_* keys, so a preview taken
+    through this fallback runs non-sliced. That is acceptable as a last resort
+    (better than crashing) but is exactly the drift the authoritative path
+    exists to prevent.
     """
     params = _preview_build_yolo_params(context, resize_f, use_detection_filters)
 
