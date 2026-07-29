@@ -2130,6 +2130,7 @@ class ConfigOrchestrator:
             "SLICE_OBJECT_TILE_FRACTION": advanced_config.get(
                 "slice_object_tile_fraction", 0.15
             ),
+            "SLICE_TRAINED_BODY_PX": advanced_config.get("slice_trained_body_px", 0.0),
             "SLICE_MERGE_POLICY": advanced_config.get(
                 "slice_merge_policy", "greedy_nmm"
             ),

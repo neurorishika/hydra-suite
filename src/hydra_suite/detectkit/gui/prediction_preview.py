@@ -69,6 +69,22 @@ class _SeqCropSpec:
         self.enforce_square_crop = enforce_square_crop
 
 
+def preview_object_tile_fraction(target_sizes, object_tile_fraction, imgsz) -> float:
+    """object_tile_fraction for auto_object preview: median(target_sizes)/imgsz.
+
+    Uses the trained apparent scale (median of the training target sizes) so the
+    preview tiles at a scale the model was actually trained at. Falls back to the
+    stored object_tile_fraction when target_sizes is empty or imgsz <= 0. Clamped
+    to the same [0.01, 0.9] range tile_size_for_mode uses.
+    """
+    sizes = [float(t) for t in (target_sizes or [])]
+    if not sizes or int(imgsz) <= 0:
+        return float(object_tile_fraction)
+
+    frac = float(np.median(np.asarray(sizes, dtype=np.float64))) / float(imgsz)
+    return max(0.01, min(0.9, frac))
+
+
 def _resolve_torch_device(device_preference: str) -> str:
     """Map a high-level device preference to a torch-style device string."""
     pref = str(device_preference or "auto").strip().lower()

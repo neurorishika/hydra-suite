@@ -1953,6 +1953,49 @@ class DetectionPanel(QWidget):
             return
         self._on_yolo_mode_changed(index)
 
+    def apply_slice_meta_for_model(self, model_path: str) -> None:
+        """Pre-fill SAHI settings from a model's .slice_meta.json sidecar, if present.
+
+        Scale-independent trained knobs + the model-internal slice_trained_body_px;
+        REFERENCE_BODY_SIZE (spin_reference_body_size) is deliberately left untouched
+        (it is the full-frame tracking body size, a different quantity from the
+        training-image body scale). No-op when no sidecar exists.
+        """
+        from hydra_suite.core.inference.slice_meta import (
+            read_slice_meta,
+            slice_meta_to_panel_values,
+        )
+
+        meta = read_slice_meta(model_path)
+        if meta is None:
+            return
+        values = slice_meta_to_panel_values(meta)
+        self.chk_slice_enabled.setChecked(bool(values["enabled"]))
+        idx = self.combo_slice_geometry.findText(values["geometry_mode"])
+        if idx >= 0:
+            self.combo_slice_geometry.setCurrentIndex(idx)
+        adv = self._main_window.advanced_config
+        adv["slice_overlap"] = float(values["overlap"])
+        adv["slice_object_tile_fraction"] = float(values["object_tile_fraction"])
+        adv["slice_trained_body_px"] = float(values["trained_body_px"])
+        self._notify_matched_geometry()
+
+    def _notify_matched_geometry(self) -> None:
+        """Show a dismissible "Matched trained SAHI geometry" banner.
+
+        Reuses TrackerKit's existing status-bar notification mechanism (see
+        MainWindow._auto_apply_yolo_training_params, which already surfaces
+        auto-applied model metadata via `self.statusBar().showMessage(...)`).
+        """
+        main_window = self._main_window
+        if hasattr(main_window, "statusBar"):
+            try:
+                main_window.statusBar().showMessage(
+                    "Matched trained SAHI geometry", 5000
+                )
+            except Exception:
+                pass
+
     def on_yolo_detect_model_changed(self, index: object) -> object:
         """Handle sequential detection model combo-box changes, opening the add-model dialog when the sentinel item is selected."""
         if self.combo_yolo_detect_model.itemData(index, Qt.UserRole) == "__add_new__":

@@ -2221,6 +2221,15 @@ class MainWindow(QMainWindow):
 
         # Switch OBB mode to match the role of the model the user picked.
         panel = self._detection_panel
+
+        if role == "obb_direct":
+            try:
+                panel.apply_slice_meta_for_model(model_path)
+            except Exception:
+                logger.exception(
+                    "Failed to apply slice_meta sidecar for %s", model_path
+                )
+
         try:
             if role in ("seq_detect", "seq_crop_obb"):
                 if panel.combo_yolo_obb_mode.currentIndex() != 1:
