@@ -789,7 +789,11 @@ def publish_trained_model(
         and role == TrainingRole.OBB_DIRECT
         and dst.suffix.lower() == ".pt"
     ):
-        slice_sidecar = dst.with_suffix(".slice_meta.json")
+        # Append to the full name (foo.pt -> foo.pt.slice_meta.json) so the
+        # name matches core.inference.slice_meta.read_slice_meta / the canonical
+        # runtime_artifacts._meta_path convention. Replacing the suffix instead
+        # would write foo.slice_meta.json, which TrackerKit would never find.
+        slice_sidecar = dst.with_suffix(dst.suffix + ".slice_meta.json")
         slice_sidecar.write_text(
             json.dumps(dict(slice_geometry), indent=2), encoding="utf-8"
         )
