@@ -557,6 +557,87 @@ def resolve_finished_weights(info: dict) -> str:
     return ""
 
 
+def parse_loss_components(run_dir):
+    """Parse per-component loss curves from a training run directory.
+
+    Prefers Ultralytics-style ``results.csv`` (one or more ``*loss*`` columns,
+    e.g. ``train/box_loss``/``val/box_loss``), keeping the existing
+    multi-component discovery logic used by the YOLO loss plot. Falls back to
+    the ViTPose trainer's ``metrics.csv`` (``epoch,train_loss,val_loss,...``),
+    which contributes a single component named ``"loss"``. Returns
+    ``({}, {})`` when neither file exists.
+    """
+    rd = Path(run_dir)
+    results_path = rd / "results.csv"
+    metrics_path = rd / "metrics.csv"
+
+    if results_path.exists():
+        lines = results_path.read_text(encoding="utf-8").splitlines()
+        rows = list(csv.reader(lines))
+        if len(rows) < 2:
+            return {}, {}
+        header = [h.strip() for h in rows[0]]
+
+        # Identify columns
+        train_cols = [
+            (i, h.replace("train/", ""))
+            for i, h in enumerate(header)
+            if ("train/" in h or h.startswith("box_loss")) and "loss" in h
+        ]
+        # Some versions use train/box_loss, others box_loss.
+        # We want columns ending in loss basically.
+
+        val_cols = [
+            (i, h.replace("val/", ""))
+            for i, h in enumerate(header)
+            if ("val/" in h) and "loss" in h
+        ]
+
+        # Only graph explicitly loss columns
+        if not train_cols and not val_cols:
+            return {}, {}
+
+        keys = sorted({name for _, name in train_cols + val_cols})
+
+        train_vals = {k: [] for k in keys}
+        val_vals = {k: [] for k in keys}
+
+        for row in rows[1:]:
+            if not row:
+                continue
+
+            # Helper to parse float
+            def _getf(idx, _row=row):
+                if idx >= len(_row):
+                    return None
+                s = _row[idx].strip()
+                if not s:
+                    return None
+                try:
+                    return float(s)
+                except ValueError:
+                    return None
+
+            for i, name in train_cols:
+                if name in keys:
+                    train_vals[name].append(_getf(i))
+            for i, name in val_cols:
+                if name in keys:
+                    val_vals[name].append(_getf(i))
+
+        return train_vals, val_vals
+
+    if metrics_path.exists():
+        tr, vl = [], []
+        with metrics_path.open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                tr.append(float(row["train_loss"]))
+                vl.append(float(row["val_loss"]))
+        return {"loss": tr}, {"loss": vl}
+
+    return {}, {}
+
+
 class TrainingRunnerDialog(QDialog):
     """Dialog to configure and run training/export."""
 
@@ -1672,40 +1753,22 @@ class TrainingRunnerDialog(QDialog):
                 ]
             if candidates:
                 results_path = max(candidates, key=lambda p: p.stat().st_mtime)
-        if not results_path.exists():
+
+        metrics_path = run_dir / "metrics.csv"
+        source_dir = results_path.parent if results_path.exists() else run_dir
+        source_path = results_path if results_path.exists() else metrics_path
+        if not results_path.exists() and not metrics_path.exists():
             return
 
-        if results_path != self._loss_source_path:
-            self._loss_source_path = results_path
-            self.log_view.appendPlainText(f"[loss] using {results_path}")
+        if source_path != self._loss_source_path:
+            self._loss_source_path = source_path
+            self.log_view.appendPlainText(f"[loss] using {source_path}")
         try:
-            # Read full csv
-            lines = results_path.read_text(encoding="utf-8").splitlines()
-            rows = list(csv.reader(lines))
-            if len(rows) < 2:
-                return
-            header = [h.strip() for h in rows[0]]
-
-            # Identify columns
-            train_cols = [
-                (i, h.replace("train/", ""))
-                for i, h in enumerate(header)
-                if ("train/" in h or h.startswith("box_loss")) and "loss" in h
-            ]
-            # Some versions use train/box_loss, others box_loss.
-            # We want columns ending in loss basically.
-
-            val_cols = [
-                (i, h.replace("val/", ""))
-                for i, h in enumerate(header)
-                if ("val/" in h) and "loss" in h
-            ]
-
-            # Only graph explicitly loss columns
-            if not train_cols and not val_cols:
+            train_vals, val_vals = parse_loss_components(source_dir)
+            if not train_vals and not val_vals:
                 return
 
-            keys = sorted({name for _, name in train_cols + val_cols})
+            keys = sorted(set(train_vals) | set(val_vals))
 
             # Rebuild component checks if keys changed
             if not self.loss_component_checks or set(
@@ -1723,38 +1786,12 @@ class TrainingRunnerDialog(QDialog):
                     self.loss_components_layout.addWidget(cb)
                     self.loss_component_checks[name] = cb
 
-            train_vals = {k: [] for k in keys}
-            val_vals = {k: [] for k in keys}
-
-            for row in rows[1:]:
-                if not row:
-                    continue
-
-                # Helper to parse float
-                def _getf(idx, _row=row):
-                    if idx >= len(_row):
-                        return None
-                    s = _row[idx].strip()
-                    if not s:
-                        return None
-                    try:
-                        return float(s)
-                    except ValueError:
-                        return None
-
-                for i, name in train_cols:
-                    if name in keys:
-                        train_vals[name].append(_getf(i))
-                for i, name in val_cols:
-                    if name in keys:
-                        val_vals[name].append(_getf(i))
-
             # Filter by checkbox
             selected = [
                 k for k, cb in self.loss_component_checks.items() if cb.isChecked()
             ]
-            train_vals = {k: train_vals[k] for k in selected}
-            val_vals = {k: val_vals[k] for k in selected}
+            train_vals = {k: train_vals[k] for k in selected if k in train_vals}
+            val_vals = {k: val_vals[k] for k in selected if k in val_vals}
 
             img = make_loss_plot_image(
                 train_vals,
@@ -1766,5 +1803,4 @@ class TrainingRunnerDialog(QDialog):
             self.lbl_loss_plot.setPixmap(pix)
 
         except Exception:
-            pass
             pass
