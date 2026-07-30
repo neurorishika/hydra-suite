@@ -247,7 +247,7 @@ App layers → Core / Runtime / Data / Training / Utils → (no upward imports)
 |---|---|---|
 | Launcher | `hydra_suite.launcher` | `hydra` entry point; routes to individual kits |
 | MAT / TrackerKit | `hydra_suite.trackerkit` | Multi-animal tracking GUI |
-| PoseKit | `hydra_suite.posekit` | Pose-labeling application |
+| PoseKit | `hydra_suite.posekit` | Pose-labeling application (YOLO-pose, SLEAP, ViTPose backends) |
 | ClassKit | `hydra_suite.classkit` | Classification/embedding toolkit |
 | RefineKit | `hydra_suite.refinekit` | Interactive proofreading |
 | FilterKit | `hydra_suite.filterkit` | FilterKit tool |
@@ -372,7 +372,7 @@ Superseded code is moved to `legacy/` for one release cycle before deletion. `le
 1. Image set + project metadata loaded
 2. Annotation state edited in UI (`posekit/gui/`)
 3. Labels persisted to YOLO pose format
-4. Optional model-assisted inference (YOLO pose, SLEAP) and split-generation steps
+4. Optional model-assisted inference (YOLO pose, SLEAP, or ViTPose) and split-generation steps
 
 PoseKit inference uses the same `compute_runtime` system and the same ONNX/TensorRT artifact auto-management pattern as MAT.
 

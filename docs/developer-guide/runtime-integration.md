@@ -50,6 +50,7 @@ Current examples:
 - `yolo_obb_detection`
 - `yolo_pose`
 - `sleap_pose`
+- `vitpose_pose`
 - `cnn_identity`
 - `head_tail`
 
@@ -211,6 +212,42 @@ The CUDA crossover is around N=50 detections per merge call; below that, `cv2`
 is faster or comparable. `cv2` remains the default `merge_backend` and the
 correctness oracle everywhere — `gpu` is an opt-in, CUDA-only acceleration for
 high-detection-count scenes.
+
+## ViTPose Training CLI
+
+ViTPose has a standalone training entry point (invoked by PoseKit's Training Runner
+dialog, or directly for scripted/headless runs):
+
+```bash
+python -m hydra_suite.core.identity.pose.vitpose.training --config run.json
+```
+
+`run.json` is validated against the `RunConfig` schema in
+`src/hydra_suite/core/identity/pose/vitpose/training/config.py`
+(`validate_run_config` rejects unknown keys and bad ranges before training starts).
+Fields:
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `init_checkpoint` | `str` | required | Path to a pretrained ViTPose checkpoint (COCO catalog download or Browse-selected animal/local checkpoint). |
+| `variant` | `str` | required | One of the uppercase `VARIANTS` keys (`S`, `B`, `L`, `H`) from `vitpose/config.py`. |
+| `num_keypoints` | `int` | required | Must be positive; must match the project's keypoint schema. |
+| `dataset_dir` | `str` | required | YOLO-pose dataset root (images + label files). |
+| `output_dir` | `str` | required | Destination for checkpoints, logs, and the loss-curve plot. |
+| `device` | `str` | `"cpu"` | Torch device string (`cpu`, `mps`, `cuda`). |
+| `epochs` | `int` | `40` | Must be positive. |
+| `batch_size` | `int` | `16` | |
+| `lr` | `float` | `5e-4` | |
+| `weight_decay` | `float` | `0.1` | |
+| `drop_path` | `float` | `0.1` | Stochastic depth rate. |
+| `sigma` | `float` | `2.0` | Heatmap target Gaussian sigma. |
+| `grad_clip` | `float` | `1.0` | |
+| `val_fraction` | `float` | `0.2` | Must be strictly between 0 and 1. |
+| `seed` | `int` | `0` | |
+| `resume_from` | `str \| None` | `None` | Optional checkpoint to resume training from. |
+
+The CLI prints `DONE best_pck=<value> best_epoch=<n>` on completion and exits non-zero
+on validation/training failure.
 
 ## Related Docs
 
