@@ -22,6 +22,9 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
+from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 
 
@@ -286,6 +289,50 @@ class PoseInferenceService:
                 self.merge_cache(model_path, preds, backend=backend)
             return preds, ""
 
+        if backend == "vitpose":
+            if not model_path.exists() or not model_path.is_file():
+                return None, f"Weights not found: {model_path}"
+            if model_path.suffix != ".pt":
+                return None, f"Invalid weights file: {model_path}"
+
+            pose_backend = load_pose_backend(
+                backend_family="vitpose",
+                model_path=str(model_path),
+                compute_runtime=device,
+                keypoint_names=list(self.keypoint_names),
+                skeleton_edges=list(self.skeleton_edges),
+                batch_size=max(1, int(batch)),
+                vitpose_batch=max(1, int(batch)),
+            )
+            try:
+                images = _load_images_for_vitpose([Path(p) for p in image_paths])
+                results = pose_backend.predict_batch(images)
+            finally:
+                try:
+                    pose_backend.close()
+                except Exception:
+                    pass
+
+            preds: Dict[str, List[Tuple[float, float, float]]] = {}
+            num_kpts = len(self.keypoint_names)
+            for i, (path, pose) in enumerate(zip(image_paths, results)):
+                keypoints = getattr(pose, "keypoints", None)
+                if keypoints is None:
+                    preds[str(path)] = [(0.0, 0.0, 0.0)] * num_kpts
+                else:
+                    arr = np.asarray(keypoints, dtype=np.float32)
+                    preds[str(path)] = [
+                        (float(r[0]), float(r[1]), float(r[2])) for r in arr
+                    ]
+                if progress_cb:
+                    progress_cb(i + 1, len(image_paths))
+                if cancel_cb and cancel_cb():
+                    return None, "Canceled."
+
+            if cache_predictions:
+                self.merge_cache(model_path, preds, backend=backend)
+            return preds, ""
+
         if not model_path.exists() or not model_path.is_file():
             return None, f"Weights not found: {model_path}"
         if model_path.suffix != ".pt":
@@ -355,6 +402,26 @@ class PoseInferenceService:
         """Return whether native SLEAP in the service env accepts in-memory arrays."""
         health = cls.sleap_service_health()
         return bool(health.get("native_array_video_supported", False))
+
+
+def _load_images_for_vitpose(paths: List[Path]) -> List["np.ndarray"]:
+    """Decode images for ``ViTPoseBackend.predict_batch``.
+
+    Matches the production PoseKit predict path (``PosePredictWorker.run``,
+    ``posekit/gui/workers.py``): each image is read whole (single-instance
+    eval — no detection crop) as a BGR ``uint8`` ndarray via ``cv2.imread``,
+    since ``preprocess_crop`` (``core/identity/pose/vitpose/infer.py``)
+    expects ``crop_bgr`` and treats the full image extent as the box.
+    """
+    import cv2
+
+    images = []
+    for path in paths:
+        img = cv2.imread(str(path))
+        if img is None:
+            raise RuntimeError(f"Failed to read image: {path}")
+        images.append(img)
+    return images
 
 
 def _run_pose_predict_subprocess(

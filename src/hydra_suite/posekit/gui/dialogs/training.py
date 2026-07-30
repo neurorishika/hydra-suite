@@ -1177,7 +1177,7 @@ class TrainingRunnerDialog(QDialog):
         self.log_view.setVisible(is_yolo or is_vitpose)
         self.btn_start.setVisible(is_yolo or is_vitpose)
         self.btn_stop.setVisible(is_yolo or is_vitpose)
-        self.btn_open_eval.setVisible(is_yolo)
+        self.btn_open_eval.setVisible(is_yolo or is_vitpose)
 
         self.vitpose_group.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
@@ -1727,11 +1727,15 @@ class TrainingRunnerDialog(QDialog):
                 self, "Missing weights", "No valid weights found to evaluate."
             )
             return
+        trained_backend = (
+            "vitpose" if self.backend_combo.currentText() == "ViTPose" else "yolo"
+        )
         dlg = EvaluationDashboardDialog(
             self,
             self.project,
             self.image_paths,
             weights_path=weights,
+            backend=trained_backend,
         )
         dlg.exec()
 
