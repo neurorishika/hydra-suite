@@ -530,6 +530,33 @@ class SleapExportWorker(QObject):
             self.failed.emit(str(e))
 
 
+def resolve_finished_weights(info: dict) -> str:
+    """Return the best-weights path from a training worker's finished payload.
+
+    Supports both the YOLO/ultralytics shape ({"weights": ".../weights/best.pt"})
+    and the ViTPose shape ({"run_dir": ..., "best": ".../best.pt"}). Returns "" if
+    no existing weights file can be resolved.
+    """
+    weights = str(info.get("weights") or "").strip()
+    if weights and Path(weights).exists():
+        return weights
+    best = str(info.get("best") or "").strip()
+    if best and Path(best).exists():
+        return best
+    run_dir = info.get("run_dir")
+    if run_dir:
+        rd = Path(run_dir)
+        for cand in (
+            rd / "weights" / "best.pt",
+            rd / "best.pt",
+            rd / "weights" / "last.pt",
+            rd / "last.pt",
+        ):
+            if cand.exists():
+                return str(cand)
+    return ""
+
+
 class TrainingRunnerDialog(QDialog):
     """Dialog to configure and run training/export."""
 
@@ -1536,8 +1563,9 @@ class TrainingRunnerDialog(QDialog):
         if self._loss_timer.isActive():
             self._loss_timer.stop()
         self._update_loss_plot()
-        weights = info.get("weights") or ""
-        self._last_weights = weights if weights else None
+        weights = resolve_finished_weights(info)
+        if weights:
+            self._last_weights = weights
         if self._last_run_dir:
             run_dir = Path(self._last_run_dir)
             try:
@@ -1557,12 +1585,10 @@ class TrainingRunnerDialog(QDialog):
                     self.lbl_run_dir.setText(f"Run dir: {run_dir}")
             except Exception:
                 pass
-            best = run_dir / "weights" / "best.pt"
-            last = run_dir / "weights" / "last.pt"
-            if best.exists():
-                self._last_weights = str(best)
-            elif last.exists():
-                self._last_weights = str(last)
+            if not weights:
+                resolved = resolve_finished_weights({"run_dir": str(run_dir)})
+                if resolved:
+                    self._last_weights = resolved
         if weights:
             self._append_log(f"Weights: {weights}")
             self.btn_open_eval.setEnabled(True)
