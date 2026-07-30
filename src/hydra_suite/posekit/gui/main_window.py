@@ -480,8 +480,10 @@ class MainWindow(QMainWindow):
         self.pred_vitpose_edit = QLineEdit("")
         self.pred_vitpose_edit.setPlaceholderText("Select fine-tuned checkpoint (.pt)")
         self.btn_pred_vitpose = QPushButton("Browse…")
+        self.btn_pred_vitpose_latest = QPushButton("Use Latest")
         pred_vitpose_row.addWidget(self.pred_vitpose_edit, 1)
         pred_vitpose_row.addWidget(self.btn_pred_vitpose)
+        pred_vitpose_row.addWidget(self.btn_pred_vitpose_latest)
         vitpose_layout.addLayout(pred_vitpose_row)
         model_layout.addWidget(self.vitpose_pred_widget)
 
@@ -675,6 +677,7 @@ class MainWindow(QMainWindow):
         self.btn_pred_weights.clicked.connect(self._browse_pred_weights)
         self.btn_pred_weights_latest.clicked.connect(self._use_latest_pred_weights)
         self.btn_pred_vitpose.clicked.connect(self._browse_pred_vitpose)
+        self.btn_pred_vitpose_latest.clicked.connect(self._use_latest_pred_vitpose)
         self.btn_pred_exported.clicked.connect(self._browse_pred_exported_model)
         self.combo_pred_backend.currentTextChanged.connect(self._update_pred_backend_ui)
         self.combo_pred_runtime.currentTextChanged.connect(self._update_pred_backend_ui)
@@ -4308,6 +4311,7 @@ class MainWindow(QMainWindow):
             "btn_pred_weights_latest",
             "pred_vitpose_edit",
             "btn_pred_vitpose",
+            "btn_pred_vitpose_latest",
             "combo_sleap_env",
             "btn_sleap_refresh",
             "sleap_model_edit",
@@ -4780,6 +4784,29 @@ class MainWindow(QMainWindow):
             and Path(self.project.latest_pose_weights).exists()
         ):
             self.pred_weights_edit.setText(str(self.project.latest_pose_weights))
+
+    @staticmethod
+    def _latest_vitpose_candidate(path: str) -> str:
+        p = str(path or "").strip()
+        if not p:
+            return ""
+        fp = Path(p)
+        if fp.is_file() and fp.suffix == ".pt":
+            return str(fp)
+        return ""
+
+    def _use_latest_pred_vitpose(self) -> None:
+        latest = self._latest_vitpose_candidate(
+            str(getattr(self.project, "latest_pose_weights", "") or "")
+        )
+        if latest:
+            self.pred_vitpose_edit.setText(latest)
+        else:
+            QMessageBox.warning(
+                self,
+                "No latest weights",
+                "No latest ViTPose weights available. Train a model first.",
+            )
 
     def _get_pred_weights_or_prompt(self) -> Optional[Path]:
         txt = self.pred_weights_edit.text().strip()
