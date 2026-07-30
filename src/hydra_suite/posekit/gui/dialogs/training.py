@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.paths import get_models_dir, get_training_runs_dir
+from hydra_suite.paths import get_training_runs_dir, get_vitpose_cache_dir
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
@@ -54,7 +54,7 @@ from ...core.extensions import (
     build_yolo_pose_dataset,
     list_labeled_indices,
 )
-from ...core.vitpose_checkpoints import CATALOG
+from ...core.vitpose_checkpoints import CATALOG, check_variant_available
 from ...core.vitpose_training import (
     build_training_command,
     parse_progress_line,
@@ -528,6 +528,114 @@ class SleapExportWorker(QObject):
             self.finished.emit(str(self.slp_path))
         except Exception as e:
             self.failed.emit(str(e))
+
+
+def resolve_finished_weights(info: dict) -> str:
+    """Return the best-weights path from a training worker's finished payload.
+
+    Supports both the YOLO/ultralytics shape ({"weights": ".../weights/best.pt"})
+    and the ViTPose shape ({"run_dir": ..., "best": ".../best.pt"}). Returns "" if
+    no existing weights file can be resolved.
+    """
+    weights = str(info.get("weights") or "").strip()
+    if weights and Path(weights).exists():
+        return weights
+    best = str(info.get("best") or "").strip()
+    if best and Path(best).exists():
+        return best
+    run_dir = info.get("run_dir")
+    if run_dir:
+        rd = Path(run_dir)
+        for cand in (
+            rd / "weights" / "best.pt",
+            rd / "best.pt",
+            rd / "weights" / "last.pt",
+            rd / "last.pt",
+        ):
+            if cand.exists():
+                return str(cand)
+    return ""
+
+
+def parse_loss_components(run_dir):
+    """Parse per-component loss curves from a training run directory.
+
+    Prefers Ultralytics-style ``results.csv`` (one or more ``*loss*`` columns,
+    e.g. ``train/box_loss``/``val/box_loss``), keeping the existing
+    multi-component discovery logic used by the YOLO loss plot. Falls back to
+    the ViTPose trainer's ``metrics.csv`` (``epoch,train_loss,val_loss,...``),
+    which contributes a single component named ``"loss"``. Returns
+    ``({}, {})`` when neither file exists.
+    """
+    rd = Path(run_dir)
+    results_path = rd / "results.csv"
+    metrics_path = rd / "metrics.csv"
+
+    if results_path.exists():
+        lines = results_path.read_text(encoding="utf-8").splitlines()
+        rows = list(csv.reader(lines))
+        if len(rows) < 2:
+            return {}, {}
+        header = [h.strip() for h in rows[0]]
+
+        # Identify columns
+        train_cols = [
+            (i, h.replace("train/", ""))
+            for i, h in enumerate(header)
+            if ("train/" in h or h.startswith("box_loss")) and "loss" in h
+        ]
+        # Some versions use train/box_loss, others box_loss.
+        # We want columns ending in loss basically.
+
+        val_cols = [
+            (i, h.replace("val/", ""))
+            for i, h in enumerate(header)
+            if ("val/" in h) and "loss" in h
+        ]
+
+        # Only graph explicitly loss columns
+        if not train_cols and not val_cols:
+            return {}, {}
+
+        keys = sorted({name for _, name in train_cols + val_cols})
+
+        train_vals = {k: [] for k in keys}
+        val_vals = {k: [] for k in keys}
+
+        for row in rows[1:]:
+            if not row:
+                continue
+
+            # Helper to parse float
+            def _getf(idx, _row=row):
+                if idx >= len(_row):
+                    return None
+                s = _row[idx].strip()
+                if not s:
+                    return None
+                try:
+                    return float(s)
+                except ValueError:
+                    return None
+
+            for i, name in train_cols:
+                if name in keys:
+                    train_vals[name].append(_getf(i))
+            for i, name in val_cols:
+                if name in keys:
+                    val_vals[name].append(_getf(i))
+
+        return train_vals, val_vals
+
+    if metrics_path.exists():
+        tr, vl = [], []
+        with metrics_path.open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                tr.append(float(row["train_loss"]))
+                vl.append(float(row["val_loss"]))
+        return {"loss": tr}, {"loss": vl}
+
+    return {}, {}
 
 
 class TrainingRunnerDialog(QDialog):
@@ -1069,7 +1177,7 @@ class TrainingRunnerDialog(QDialog):
         self.log_view.setVisible(is_yolo or is_vitpose)
         self.btn_start.setVisible(is_yolo or is_vitpose)
         self.btn_stop.setVisible(is_yolo or is_vitpose)
-        self.btn_open_eval.setVisible(is_yolo)
+        self.btn_open_eval.setVisible(is_yolo or is_vitpose)
 
         self.vitpose_group.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
@@ -1468,9 +1576,20 @@ class TrainingRunnerDialog(QDialog):
             )
             return
 
+        variant = self.vitpose_variant_combo.currentText()
+        if checkpoint in CATALOG:
+            # Auto-download (catalog) selection: guard against a variant with
+            # no pinned checkpoint. A Browsed local checkpoint is user-supplied
+            # and must not be blocked here.
+            try:
+                check_variant_available(variant)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Variant unavailable", str(exc))
+                return
+
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = get_training_runs_dir() / "vitpose" / timestamp
-        cache_dir = get_models_dir()
+        cache_dir = get_vitpose_cache_dir()
 
         self._last_run_dir = run_dir
         self._train_start_ts = time.time()
@@ -1536,8 +1655,9 @@ class TrainingRunnerDialog(QDialog):
         if self._loss_timer.isActive():
             self._loss_timer.stop()
         self._update_loss_plot()
-        weights = info.get("weights") or ""
-        self._last_weights = weights if weights else None
+        weights = resolve_finished_weights(info)
+        if weights:
+            self._last_weights = weights
         if self._last_run_dir:
             run_dir = Path(self._last_run_dir)
             try:
@@ -1557,12 +1677,10 @@ class TrainingRunnerDialog(QDialog):
                     self.lbl_run_dir.setText(f"Run dir: {run_dir}")
             except Exception:
                 pass
-            best = run_dir / "weights" / "best.pt"
-            last = run_dir / "weights" / "last.pt"
-            if best.exists():
-                self._last_weights = str(best)
-            elif last.exists():
-                self._last_weights = str(last)
+            if not weights:
+                resolved = resolve_finished_weights({"run_dir": str(run_dir)})
+                if resolved:
+                    self._last_weights = resolved
         if weights:
             self._append_log(f"Weights: {weights}")
             self.btn_open_eval.setEnabled(True)
@@ -1620,11 +1738,15 @@ class TrainingRunnerDialog(QDialog):
                 self, "Missing weights", "No valid weights found to evaluate."
             )
             return
+        trained_backend = (
+            "vitpose" if self.backend_combo.currentText() == "ViTPose" else "yolo"
+        )
         dlg = EvaluationDashboardDialog(
             self,
             self.project,
             self.image_paths,
             weights_path=weights,
+            backend=trained_backend,
         )
         dlg.exec()
 
@@ -1646,40 +1768,22 @@ class TrainingRunnerDialog(QDialog):
                 ]
             if candidates:
                 results_path = max(candidates, key=lambda p: p.stat().st_mtime)
-        if not results_path.exists():
+
+        metrics_path = run_dir / "metrics.csv"
+        source_dir = results_path.parent if results_path.exists() else run_dir
+        source_path = results_path if results_path.exists() else metrics_path
+        if not results_path.exists() and not metrics_path.exists():
             return
 
-        if results_path != self._loss_source_path:
-            self._loss_source_path = results_path
-            self.log_view.appendPlainText(f"[loss] using {results_path}")
+        if source_path != self._loss_source_path:
+            self._loss_source_path = source_path
+            self.log_view.appendPlainText(f"[loss] using {source_path}")
         try:
-            # Read full csv
-            lines = results_path.read_text(encoding="utf-8").splitlines()
-            rows = list(csv.reader(lines))
-            if len(rows) < 2:
-                return
-            header = [h.strip() for h in rows[0]]
-
-            # Identify columns
-            train_cols = [
-                (i, h.replace("train/", ""))
-                for i, h in enumerate(header)
-                if ("train/" in h or h.startswith("box_loss")) and "loss" in h
-            ]
-            # Some versions use train/box_loss, others box_loss.
-            # We want columns ending in loss basically.
-
-            val_cols = [
-                (i, h.replace("val/", ""))
-                for i, h in enumerate(header)
-                if ("val/" in h) and "loss" in h
-            ]
-
-            # Only graph explicitly loss columns
-            if not train_cols and not val_cols:
+            train_vals, val_vals = parse_loss_components(source_dir)
+            if not train_vals and not val_vals:
                 return
 
-            keys = sorted({name for _, name in train_cols + val_cols})
+            keys = sorted(set(train_vals) | set(val_vals))
 
             # Rebuild component checks if keys changed
             if not self.loss_component_checks or set(
@@ -1697,38 +1801,12 @@ class TrainingRunnerDialog(QDialog):
                     self.loss_components_layout.addWidget(cb)
                     self.loss_component_checks[name] = cb
 
-            train_vals = {k: [] for k in keys}
-            val_vals = {k: [] for k in keys}
-
-            for row in rows[1:]:
-                if not row:
-                    continue
-
-                # Helper to parse float
-                def _getf(idx, _row=row):
-                    if idx >= len(_row):
-                        return None
-                    s = _row[idx].strip()
-                    if not s:
-                        return None
-                    try:
-                        return float(s)
-                    except ValueError:
-                        return None
-
-                for i, name in train_cols:
-                    if name in keys:
-                        train_vals[name].append(_getf(i))
-                for i, name in val_cols:
-                    if name in keys:
-                        val_vals[name].append(_getf(i))
-
             # Filter by checkbox
             selected = [
                 k for k, cb in self.loss_component_checks.items() if cb.isChecked()
             ]
-            train_vals = {k: train_vals[k] for k in selected}
-            val_vals = {k: val_vals[k] for k in selected}
+            train_vals = {k: train_vals[k] for k in selected if k in train_vals}
+            val_vals = {k: val_vals[k] for k in selected if k in val_vals}
 
             img = make_loss_plot_image(
                 train_vals,
@@ -1740,5 +1818,4 @@ class TrainingRunnerDialog(QDialog):
             self.lbl_loss_plot.setPixmap(pix)
 
         except Exception:
-            pass
             pass

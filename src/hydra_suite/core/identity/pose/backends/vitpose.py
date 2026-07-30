@@ -1,6 +1,7 @@
 """ViTPose pose backend. Thin driver over the Spec-1 leaf, mirroring yolo.py.
 
-Native path only in Phase 1; ONNX/TensorRT/CoreML runners are wired in Phase 2.
+Native torch is the baseline path; CoreML and TensorRT accelerated runners are
+also wired (auto-exported on demand, see ``auto_export_vitpose_model``).
 """
 
 from __future__ import annotations

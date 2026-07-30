@@ -153,7 +153,12 @@ class InterpolatedCropsWorker(BaseWorker):
             # COMPUTE_RUNTIME param family was retired. load_pose_backend only
             # needs the tier bucket (it re-derives the tier via
             # migrate_runtime_to_tier), so a resolved runtime string is passed.
-            pose_stage = "sleap_pose" if backend_family == "sleap" else "yolo_pose"
+            if backend_family == "sleap":
+                pose_stage = "sleap_pose"
+            elif backend_family == "vitpose":
+                pose_stage = "vitpose_pose"
+            else:
+                pose_stage = "yolo_pose"
             compute_runtime = self._resolved_runtime_string(pose_stage)
 
             backend = load_pose_backend(

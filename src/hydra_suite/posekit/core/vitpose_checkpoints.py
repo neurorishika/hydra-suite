@@ -4,8 +4,11 @@ import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from huggingface_hub import hf_hub_download
+
+from hydra_suite.paths import get_vitpose_cache_dir
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,30 @@ CATALOG: dict[str, CatalogEntry] = {
 }
 
 
-def resolve_checkpoint(name_or_path: str, cache_dir: Path) -> Path:
+def check_variant_available(variant: str) -> None:
+    """Raise ValueError if no catalog checkpoint exists for this variant.
+
+    Only meaningful for auto-download (catalog) selections; a checkpoint
+    resolved via Browse is user-supplied and must not be gated here.
+    """
+    v = str(variant or "").strip().lower()
+    available = sorted({k.split("-")[1] for k in CATALOG})  # e.g. {"b"}
+    if v not in available:
+        raise ValueError(
+            f"No bundled ViTPose checkpoint for variant '{v}'. "
+            f"Available auto-download variants: {', '.join(available)}. "
+            f"Browse to a local {v}-variant checkpoint instead."
+        )
+
+
+def resolve_checkpoint(name_or_path: str, cache_dir: Optional[Path] = None) -> Path:
+    """Resolve a catalog name or local path to a checkpoint file.
+
+    ``cache_dir`` defaults to :func:`hydra_suite.paths.get_vitpose_cache_dir`
+    (honoring ``HYDRA_DATA_DIR``) when not given explicitly.
+    """
+    if cache_dir is None:
+        cache_dir = get_vitpose_cache_dir()
     if name_or_path in CATALOG:
         e = CATALOG[name_or_path]
         return fetch_pinned(

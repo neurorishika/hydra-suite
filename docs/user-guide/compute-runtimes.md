@@ -14,6 +14,7 @@ The same runtime drives:
 - YOLO-OBB detection
 - YOLO-pose inference
 - SLEAP inference
+- ViTPose inference
 
 ## Runtime Options
 
