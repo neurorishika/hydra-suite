@@ -1166,8 +1166,12 @@ class ConfigOrchestrator:
             yolo_pose_model = legacy_pose_model
         if not sleap_pose_model and pose_backend.lower() == "sleap":
             sleap_pose_model = legacy_pose_model
+        vitpose_pose_model = str(get_cfg("pose_vitpose_model_dir", default="")).strip()
+        if not vitpose_pose_model and pose_backend.lower() == "vitpose":
+            vitpose_pose_model = legacy_pose_model
         self._mw._set_pose_model_path_for_backend(yolo_pose_model, backend="yolo")
         self._mw._set_pose_model_path_for_backend(sleap_pose_model, backend="sleap")
+        self._mw._set_pose_model_path_for_backend(vitpose_pose_model, backend="vitpose")
         active_backend = (
             self._panels.identity.combo_pose_model_type.currentText().strip().lower()
         )
@@ -1838,6 +1842,9 @@ class ConfigOrchestrator:
                 ),
                 "pose_sleap_model_dir": make_pose_model_path_relative(
                     self._mw._pose_model_path_for_backend("sleap")
+                ),
+                "pose_vitpose_model_dir": make_pose_model_path_relative(
+                    self._mw._pose_model_path_for_backend("vitpose")
                 ),
                 "pose_exported_model_path": "",
                 "pose_min_kpt_conf_valid": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
