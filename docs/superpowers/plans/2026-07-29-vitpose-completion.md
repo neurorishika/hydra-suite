@@ -365,21 +365,27 @@ git commit -m "feat(posekit): Use-Latest button for ViTPose predict checkpoint"
 
 ### Task 5: Render the ViTPose training loss plot
 
-`_update_loss_plot` (`training.py:1631-1651`) reads only Ultralytics `results.csv` with `train/…loss`/`val/…loss` columns. The ViTPose trainer writes `metrics.csv` with header `epoch,train_loss,val_loss,pck@0.05,pck@0.1` (`training/train.py:89-93`). No `results.csv` is produced, so the ViTPose loss curve stays blank while progress works.
+`_update_loss_plot` (the real method is at `training.py:1657-1770`) reads only Ultralytics `results.csv`. The ViTPose trainer writes `metrics.csv` with header `epoch,train_loss,val_loss,pck@0.05,pck@0.1` (`training/train.py:89-93`). No `results.csv` is produced, so the ViTPose loss curve stays blank while progress works.
+
+**CORRECTED (plan defect found during execution):** `_update_loss_plot` is NOT a two-series `(epochs, train, val)` renderer. It discovers *all* `*loss*` columns in `results.csv`, builds per-component `train_vals: Dict[str, list[float]]` / `val_vals: Dict[str, list[float]]`, creates one `QCheckBox` per component (`self.loss_component_checks`), and renders via `make_loss_plot_image(train_vals, val_vals, ...)` (`dialogs/utils.py:236`) — x-axis is row index, there is no separate epochs list. The fix must PRESERVE this multi-series/checkbox UI. So the extracted helper returns the SAME dict-keyed shape, and the ViTPose branch contributes a single component named `"loss"` that flows through the existing checkbox machinery as one curve.
 
 **Files:**
-- Modify: `src/hydra_suite/posekit/gui/dialogs/training.py` (`_update_loss_plot`, ~1631-1651; extract a pure parser)
+- Modify: `src/hydra_suite/posekit/gui/dialogs/training.py` (`_update_loss_plot`, ~1657-1770; extract a pure parser)
 - Test: `tests/test_vitpose_loss_plot_parse.py` (create)
 
 **Interfaces:**
-- Consumes: a run dir containing either `results.csv` (YOLO) or `metrics.csv` (ViTPose).
-- Produces: `parse_loss_series(run_dir) -> tuple[list[float], list[float], list[float]]` returning `(epochs, train_loss, val_loss)` from whichever file exists.
+- Consumes: a run dir containing either `results.csv` (YOLO, multi-component) or `metrics.csv` (ViTPose, single `train_loss`/`val_loss`).
+- Produces: `parse_loss_components(run_dir) -> tuple[dict[str, list[float]], dict[str, list[float]]]` returning `(train_vals, val_vals)` keyed by loss-component name, from whichever file exists; `({}, {})` when neither exists. For `metrics.csv` the single component is named `"loss"`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Read the real renderer**
+
+Read `_update_loss_plot` (`training.py:1657-1770`) and `make_loss_plot_image` (`dialogs/utils.py:236`) to capture the EXACT existing `results.csv` column-discovery → `train_vals`/`val_vals` dict logic and the component-key derivation (how `"train/box_loss"` becomes the component key). You will transplant this verbatim into the helper's `results.csv` branch — do not reimplement it. Note the real key format so your regression test matches it.
+
+- [ ] **Step 2: Write the failing test**
 
 ```python
 # tests/test_vitpose_loss_plot_parse.py
-from hydra_suite.posekit.gui.dialogs.training import parse_loss_series
+from hydra_suite.posekit.gui.dialogs.training import parse_loss_components
 
 
 def test_parses_vitpose_metrics_csv(tmp_path):
@@ -389,56 +395,72 @@ def test_parses_vitpose_metrics_csv(tmp_path):
         "1,0.9,1.1,0.30,0.45\n",
         encoding="utf-8",
     )
-    epochs, tr, val = parse_loss_series(tmp_path)
-    assert epochs == [0.0, 1.0]
-    assert tr == [1.5, 0.9]
-    assert val == [1.8, 1.1]
+    train_vals, val_vals = parse_loss_components(tmp_path)
+    assert train_vals == {"loss": [1.5, 0.9]}
+    assert val_vals == {"loss": [1.8, 1.1]}
 
 
 def test_returns_empty_when_no_csv(tmp_path):
-    assert parse_loss_series(tmp_path) == ([], [], [])
+    assert parse_loss_components(tmp_path) == ({}, {})
+
+
+def test_results_csv_preserved_as_multi_component(tmp_path):
+    # Mirror the REAL column/key format observed in Step 1. Adjust the header
+    # and the expected component key(s) to match the transplanted logic exactly.
+    (tmp_path / "results.csv").write_text(
+        "epoch,train/box_loss,val/box_loss\n"
+        "0,1.0,1.2\n"
+        "1,0.5,0.7\n",
+        encoding="utf-8",
+    )
+    train_vals, val_vals = parse_loss_components(tmp_path)
+    # component key derived by the existing logic (e.g. "box_loss")
+    assert list(train_vals.values())[0] == [1.0, 0.5]
+    assert list(val_vals.values())[0] == [1.2, 0.7]
+    assert train_vals.keys() == val_vals.keys()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `PYTHONPATH=$PWD/src python -m pytest tests/test_vitpose_loss_plot_parse.py -v`
-Expected: FAIL (`parse_loss_series` not defined).
+Expected: FAIL (`parse_loss_components` not defined).
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 4: Implement**
 
-Add a module-level `parse_loss_series(run_dir)` that prefers `results.csv` (existing Ultralytics column names — reuse the current parsing logic) and falls back to `metrics.csv` (`train_loss`/`val_loss` columns), then have `_update_loss_plot` call it. Keep the existing Ultralytics column handling intact:
+Extract `parse_loss_components(run_dir)` returning `(train_vals, val_vals)` dicts:
 
 ```python
-def parse_loss_series(run_dir):
+def parse_loss_components(run_dir):
     import csv
     from pathlib import Path
 
     rd = Path(run_dir)
     results = rd / "results.csv"
     metrics = rd / "metrics.csv"
-    epochs, tr, val = [], [], []
     if results.exists():
-        # existing Ultralytics parsing: train/*loss + val/*loss columns
-        ...  # preserve current logic, appending into epochs/tr/val
-        return epochs, tr, val
+        # TRANSPLANT the existing _update_loss_plot results.csv logic verbatim:
+        # discover *loss* columns, build train_vals/val_vals dicts keyed by
+        # component name. Return them.
+        ...
+        return train_vals, val_vals
     if metrics.exists():
+        tr, vl = [], []
         with metrics.open(encoding="utf-8", newline="") as fh:
-            for i, row in enumerate(csv.DictReader(fh)):
-                epochs.append(float(row.get("epoch", i)))
+            for row in csv.DictReader(fh):
                 tr.append(float(row["train_loss"]))
-                val.append(float(row["val_loss"]))
-        return epochs, tr, val
-    return [], [], []
+                vl.append(float(row["val_loss"]))
+        return {"loss": tr}, {"loss": vl}
+    return {}, {}
 ```
 
-(Move the real Ultralytics column parsing from `_update_loss_plot` into the `results.exists()` branch verbatim.)
+Then rewire `_update_loss_plot` to call `parse_loss_components(run_dir)` for its data, keeping the checkbox discovery (`keys = union of the returned dict keys`), the per-component `QCheckBox` creation, the checked-filter, and the `make_loss_plot_image(...)` call UNCHANGED. For ViTPose, `keys == {"loss"}` → one checkbox, one curve. Do not alter the plotting/rendering code or `make_loss_plot_image`'s contract.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `PYTHONPATH=$PWD/src python -m pytest tests/test_vitpose_loss_plot_parse.py -v`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add tests/test_vitpose_loss_plot_parse.py src/hydra_suite/posekit/gui/dialogs/training.py
