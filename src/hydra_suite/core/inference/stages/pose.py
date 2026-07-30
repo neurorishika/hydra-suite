@@ -144,6 +144,7 @@ def load_pose_model(
             vitpose_batch=int(config.vitpose.batch_size),
             vitpose_variant=str(config.vitpose.variant),
             vitpose_num_keypoints=int(config.vitpose.num_keypoints),
+            vitpose_auto_export=bool(config.vitpose.auto_export),
         )
         backend = create_pose_backend_from_config(runtime_cfg)
         _warmup_backend(backend)

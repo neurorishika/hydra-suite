@@ -180,6 +180,12 @@ def create_pose_backend_from_config(config: PoseRuntimeConfig) -> PoseInferenceB
                     config, vitpose_flavor, runtime_device=effective_device
                 )
             except Exception as exc:  # noqa: BLE001
+                if not getattr(config, "vitpose_auto_export", True):
+                    raise RuntimeError(
+                        f"ViTPose {vitpose_flavor} artifact is missing/export "
+                        f"failed ({exc}) and auto_export is disabled. Provide a "
+                        f"prebuilt accelerated artifact or enable auto_export."
+                    ) from exc
                 logger.warning(
                     "ViTPose %s export failed (%s); using native runtime.",
                     vitpose_flavor,

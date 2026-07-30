@@ -344,6 +344,10 @@ class PoseViTPoseConfig:
     variant: str = "auto"
     num_keypoints: int = 0
     batch_size: int = 4
+    # When False and no accelerated (tensorrt/coreml) artifact is available,
+    # raise instead of silently falling back to native torch. See
+    # OBBDirectConfig.auto_export.
+    auto_export: bool = True
 
 
 @dataclass

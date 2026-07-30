@@ -44,6 +44,9 @@ class PoseRuntimeConfig:
     vitpose_batch: int = 4
     vitpose_variant: str = "auto"  # "auto" = infer from checkpoint
     vitpose_num_keypoints: int = 0  # 0 = infer from checkpoint
+    # When False and no accelerated (tensorrt/coreml) artifact is available,
+    # raise instead of silently falling back to native torch.
+    vitpose_auto_export: bool = True
     keypoint_names: List[str] = field(default_factory=list)
     skeleton_edges: List[Tuple[int, int]] = field(default_factory=list)
 
