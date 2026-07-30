@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.paths import get_models_dir, get_training_runs_dir
+from hydra_suite.paths import get_training_runs_dir, get_vitpose_cache_dir
 from hydra_suite.utils.conda_utils import popen_conda, run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
@@ -1589,7 +1589,7 @@ class TrainingRunnerDialog(QDialog):
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = get_training_runs_dir() / "vitpose" / timestamp
-        cache_dir = get_models_dir()
+        cache_dir = get_vitpose_cache_dir()
 
         self._last_run_dir = run_dir
         self._train_start_ts = time.time()
