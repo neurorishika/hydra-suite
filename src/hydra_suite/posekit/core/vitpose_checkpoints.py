@@ -66,6 +66,22 @@ CATALOG: dict[str, CatalogEntry] = {
 }
 
 
+def check_variant_available(variant: str) -> None:
+    """Raise ValueError if no catalog checkpoint exists for this variant.
+
+    Only meaningful for auto-download (catalog) selections; a checkpoint
+    resolved via Browse is user-supplied and must not be gated here.
+    """
+    v = str(variant or "").strip().lower()
+    available = sorted({k.split("-")[1] for k in CATALOG})  # e.g. {"b"}
+    if v not in available:
+        raise ValueError(
+            f"No bundled ViTPose checkpoint for variant '{v}'. "
+            f"Available auto-download variants: {', '.join(available)}. "
+            f"Browse to a local {v}-variant checkpoint instead."
+        )
+
+
 def resolve_checkpoint(name_or_path: str, cache_dir: Path) -> Path:
     if name_or_path in CATALOG:
         e = CATALOG[name_or_path]

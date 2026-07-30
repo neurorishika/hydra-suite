@@ -54,7 +54,7 @@ from ...core.extensions import (
     build_yolo_pose_dataset,
     list_labeled_indices,
 )
-from ...core.vitpose_checkpoints import CATALOG
+from ...core.vitpose_checkpoints import CATALOG, check_variant_available
 from ...core.vitpose_training import (
     build_training_command,
     parse_progress_line,
@@ -1575,6 +1575,17 @@ class TrainingRunnerDialog(QDialog):
                 self, "No checkpoint", "Select or browse for an init checkpoint."
             )
             return
+
+        variant = self.vitpose_variant_combo.currentText()
+        if checkpoint in CATALOG:
+            # Auto-download (catalog) selection: guard against a variant with
+            # no pinned checkpoint. A Browsed local checkpoint is user-supplied
+            # and must not be blocked here.
+            try:
+                check_variant_available(variant)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Variant unavailable", str(exc))
+                return
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         run_dir = get_training_runs_dir() / "vitpose" / timestamp
