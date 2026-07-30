@@ -22,8 +22,17 @@ def migrate_runtime_to_tier(runtimes: set[str]) -> RuntimeTier:
     """
     if not runtimes:
         return "gpu"
-    # onnx_* entries kept for legacy-config migration only — not user-selectable.
-    fast = {"onnx_cpu", "onnx_cuda", "onnx_coreml", "tensorrt"}
+    # onnx_* / *_cuda / coreml entries cover both legacy-config migration and the
+    # runtime-flavor strings the GUIs emit for gpu_fast (tensorrt_cuda, coreml, onnx_mps).
+    fast = {
+        "onnx_cpu",
+        "onnx_cuda",
+        "onnx_coreml",
+        "onnx_mps",
+        "tensorrt",
+        "tensorrt_cuda",
+        "coreml",
+    }
     gpu = {"cuda", "mps"}
     if runtimes & fast:
         return "gpu_fast"
