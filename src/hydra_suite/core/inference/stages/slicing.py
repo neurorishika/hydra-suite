@@ -16,8 +16,6 @@ from hydra_suite.utils.slice_geometry import (  # noqa: F401 -- re-exported for 
 
 from ..config import SliceConfig
 from ..result import OBBResult
-from .obb import extract_with_transform, merge_per_frame
-from .regions import Affine
 
 logger = logging.getLogger(__name__)
 
@@ -223,96 +221,13 @@ def _predict_tiles(
     return results
 
 
-def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
-    """Sliced-inference wrapper around the direct predict+extract path.
-
-    Same return contract as ``_run_direct``. This module-level function is
-    dispatched from ``run_obb`` when ``config.obb.direct.slice.enabled`` is True.
-
-    ``roi_mask`` (frame-space, same H x W as the frames) enables ROI tile gating
-    in ``plan_slices``: tiles with no live ROI pixel are dropped, saving forward
-    passes without changing the final ROI-filtered detection set. ``None``
-    (the default) keeps the full tile grid.
-
-    TWO ORTHOGONAL DISPATCH DECISIONS (finding C1 -- conflating them crashed
-    both CUDA tiers):
-
-    * **Tiling / preprocess** is decided by the FRAME KIND, exactly as
-      ``obb._run_direct`` decides it: CUDA-tensor frames (NVDEC) fed to a plain
-      ultralytics model need device-side tile views plus ``_gpu_letterbox_batch``;
-      numpy frames -- and CUDA frames fed to a ``DirectExecutorAdapter``, which
-      does its own letterbox -- take the plain frames-list path.
-    * **Extraction** is decided by ``runtime.tensor_on_cuda``, which means
-      "extraction yields device tensors", NOT "frames are CUDA tensors".
-
-    The two are mutually exclusive in production (``tensor_on_cuda`` requires the
-    torch backend = tier ``gpu``; NVDEC frames are confined to tier ``gpu_fast``
-    -- see ``runtime._should_use_nvdec``), so neither may be inferred from the
-    other. All four combinations are handled here:
-
-    ==================  ================  =====================================
-    frames              tensor_on_cuda    path
-    ==================  ================  =====================================
-    numpy               True              numpy tiles -> raw device tensors (gpu)
-    numpy               False             numpy tiles -> OBBResult (cpu/mps/CoreML)
-    cuda tensors        False             device tiles -> OBBResult (gpu_fast+TRT)
-    cuda tensors        True              device tiles -> raw device tensors
-    ==================  ================  =====================================
-    """
-    from .obb import DirectExecutorAdapter, _frames_are_cuda_tensors, _resolve_imgsz
-
-    slice_cfg = config.direct.slice
-    model_task = config.direct.model_task
-    imgsz = _resolve_imgsz(model)
-
-    device_frames = _frames_are_cuda_tensors(frames)
-    # DirectExecutorAdapter accepts (and internally letterboxes) a raw list of
-    # CUDA frames; pre-batching it double-preprocesses and corrupts the shape
-    # fed to TensorRT. See the long comment at obb._run_direct's dispatch site.
-    letterbox = device_frames and not isinstance(model, DirectExecutorAdapter)
-
-    # Plan is identical for every frame in the window (same size). Memoize on
-    # the first frame's shape.
-    first = frames[0]
-    frame_hw = (int(first.shape[0]), int(first.shape[1]))
-    plan = plan_slices(
-        frame_hw,
-        slice_cfg,
-        imgsz,
-        roi_mask,
-        ref_object_px=slice_cfg.reference_body_px,
-    )
-
-    jobs, images = _build_tile_jobs(frames, plan, device_frames)
-    chunk_size = max(1, min(plan.jobs_per_frame, MAX_TILE_CHUNK))
-    results = _predict_tiles(
-        images,
-        model,
-        config,
-        runtime,
-        imgsz,
-        letterbox=letterbox,
-        chunk_size=chunk_size,
-    )
-
-    if runtime.tensor_on_cuda:
-        from .slicing_cuda import assemble_raw_frames
-
-        return assemble_raw_frames(jobs, results, len(frames), plan, config, runtime)
-
-    per_frame: dict[int, list] = {fi: [] for fi in range(len(frames))}
-    for (fi, x0, y0), res in zip(jobs, results):
-        per_frame[fi].append(
-            extract_with_transform(
-                res,
-                fi,
-                model_task,
-                Affine(offset=(float(max(0, x0)), float(max(0, y0)))),
-                config,
-                runtime,
-            )
-        )
-    return [
-        merge_per_frame(per_frame[fi], "overlap_band_nms", plan, config, runtime)
-        for fi in range(len(frames))
-    ]
+# The predict-tile routine formerly assembled here as `run_direct_sliced`
+# (plan_slices -> _build_tile_jobs -> _predict_tiles -> extract/merge) now
+# lives, verbatim, in `regions.Grid.plan` (tiling) + `regions.Grid.execute`
+# (tile predict) -- `run_obb` (obb.py) drives the shared
+# extract_with_transform/merge_per_frame tail for every RegionSource,
+# including Grid. See regions.py and the retired function's history for the
+# TWO ORTHOGONAL DISPATCH DECISIONS (finding C1) this used to document
+# inline: tiling/preprocess is decided by the frame kind; extraction is
+# decided by ``runtime.tensor_on_cuda``. Both decisions are unchanged, just
+# relocated to `Grid.execute` / `extract_with_transform`.

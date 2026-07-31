@@ -1,27 +1,24 @@
-"""Device-tensor extraction hook for the sliced OBB path.
+"""Device-tensor concat hook for the raw (``tensor_on_cuda``) merge path.
 
-This module owns ONLY the ``runtime.tensor_on_cuda`` half of the sliced
-pipeline: turning per-tile ultralytics results into ``_RawOBBTensors`` without
-a device sync, and remapping them into frame space by pure translation. The
-per-frame merge-or-passthrough decision (whether a cross-tile merge -- the
-one sync point -- is unavoidable) is delegated to
-``obb.merge_per_frame(..., "overlap_band_nms", ...)`` (Task 8), which owns
-that decision for both the raw and numpy universes so the two never drift
-again the way they did before (overlap gate, cap ordering, merge backend --
-finding C1).
+``_concat_raw`` is the on-device (no sync) concatenation of per-region
+``_RawOBBTensors`` that ``obb.merge_per_frame``'s raw branches
+(``"plain"`` and ``_merge_raw_overlap_band_nms``, Task 8) delegate to. Per-tile
+extraction (turning ultralytics results into ``_RawOBBTensors`` and remapping
+by translation) and the per-frame merge-or-passthrough decision both now live
+in ``obb.extract_with_transform`` / ``obb.merge_per_frame``, driven by
+``run_obb``'s shared plan/execute/extract/merge loop (Task 9) -- this module
+no longer assembles frames itself.
 
 Tiling, tile-job building, letterboxing and chunked prediction all live in
 ``slicing.py`` and are shared by every path.
 
-``torch`` is imported at module scope here, so ``slicing.py`` keeps importing
-this module lazily (function-level) -- CPU/MPS installs never pay for it.
+``torch`` is imported at module scope here, so callers keep importing this
+module lazily (function-level) -- CPU/MPS installs never pay for it.
 """
 
 from __future__ import annotations
 
 import torch
-
-from .slicing import SlicePlan
 
 
 def _concat_raw(parts, frame_idx: int):
@@ -55,43 +52,3 @@ def _concat_raw(parts, frame_idx: int):
             dim=0,
         ),
     )
-
-
-def assemble_raw_frames(
-    jobs: list[tuple[int, int, int]],
-    results: list,
-    n_frames: int,
-    plan: SlicePlan,
-    config,
-    runtime,
-):
-    """Per-frame ``_RawOBBTensors`` (or merged ``OBBResult``) from tile results.
-
-    Extracts each tile's raw device tensors (no device sync), remaps them into
-    frame space by pure translation, then delegates the per-frame
-    merge-or-passthrough decision to
-    ``obb.merge_per_frame(..., "overlap_band_nms", ...)`` -- see that
-    function's docstring (and ``_merge_raw_overlap_band_nms``) for the
-    ``tiles_overlap`` gate / materialize / cap-ordering contract this used to
-    implement inline.
-    """
-    from .obb import extract_with_transform, merge_per_frame
-    from .regions import Affine
-
-    per_frame: dict[int, list] = {fi: [] for fi in range(n_frames)}
-    for (fi, x0, y0), res in zip(jobs, results):
-        per_frame[fi].append(
-            extract_with_transform(
-                res,
-                fi,
-                config.direct.model_task,
-                Affine(offset=(float(max(0, x0)), float(max(0, y0)))),
-                config,
-                runtime,
-            )
-        )
-
-    return [
-        merge_per_frame(per_frame[fi], "overlap_band_nms", plan, config, runtime)
-        for fi in range(n_frames)
-    ]

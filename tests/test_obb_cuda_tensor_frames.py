@@ -22,11 +22,41 @@ import torch
 # ---------------------------------------------------------------------------
 from hydra_suite.core.inference.runtime_artifacts import DirectExecutorAdapter
 from hydra_suite.core.inference.stages.obb import (
+    OBBModels,
     _gpu_letterbox_batch,
     _invert_letterbox_on_result,
     _resolve_imgsz,
-    _run_direct,
+    extract_with_transform,
+    merge_per_frame,
 )
+from hydra_suite.core.inference.stages.regions import WholeFrame
+
+
+def _run_direct(frames, model, config, runtime):
+    """Task 9 test shim: `obb._run_direct` was retired -- its predict routine
+    now lives verbatim in `regions.WholeFrame.execute`, driven by `run_obb`'s
+    shared plan -> execute -> extract -> merge loop. This exercises exactly
+    that (WholeFrame only, bypassing `select_region_source`/`run_obb`'s
+    dispatch -- these tests use MagicMock configs, whose auto-created
+    attributes are always truthy and would make the real dispatch's
+    `slice.enabled` check misfire) so every test below keeps validating
+    `_run_direct`'s CUDA-tensor/letterbox/adapter behavior unchanged.
+    """
+    models = OBBModels(mode="direct", direct_model=model)
+    src = WholeFrame()
+    planned = src.plan(frames, models, config, runtime)
+    executed = src.execute(planned, models, config, runtime)
+    out = []
+    for fi, (frame_regions, results) in enumerate(zip(planned, executed)):
+        parts = [
+            extract_with_transform(
+                res, fi, src.task(config), region.affine, config, runtime
+            )
+            for region, res in zip(frame_regions, results)
+        ]
+        out.append(merge_per_frame(parts, src.merge_policy, None, config, runtime))
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Helpers / stubs
@@ -336,12 +366,16 @@ class TestRunDirectNumpyPath:
 
         _run_direct(frames, model, cfg, rt)
 
-        # predict must have been called with the list, not a single tensor
+        # predict must have been called with the frames unchanged and in
+        # order, not a single batched tensor. `WholeFrame.execute` rebuilds
+        # the list from planned regions (one region per frame), so it is an
+        # equal-but-new list object -- `is` identity on the *container* is
+        # not the invariant that matters, only that each element (frame) is
+        # forwarded unmodified.
         call_args = model.predict.call_args
         first_arg = call_args[0][0]
-        assert (
-            first_arg is frames
-        ), "numpy list must be passed directly to model.predict"
+        assert isinstance(first_arg, list) and len(first_arg) == len(frames)
+        assert all(a is b for a, b in zip(first_arg, frames))
 
 
 # ---------------------------------------------------------------------------

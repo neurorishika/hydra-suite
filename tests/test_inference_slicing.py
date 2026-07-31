@@ -9,9 +9,20 @@ from hydra_suite.core.inference.stages.obb import OBBModels, run_obb
 from hydra_suite.core.inference.stages.slicing import (
     get_slice_bboxes,
     plan_slices,
-    run_direct_sliced,
     tiles_overlap,
 )
+
+
+def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
+    """Task 9 test shim: `slicing.run_direct_sliced` was retired (its tile
+    predict now lives in `regions.Grid.execute`, driven by `run_obb`'s shared
+    plan -> execute -> extract -> merge loop). This wraps `run_obb` with the
+    same 5-arg call shape every test in this file already uses, so the tests
+    below -- written against the standalone-orchestrator contract -- still
+    exercise the byte-identical sliced path without a mass rewrite.
+    """
+    models = OBBModels(mode="direct", direct_model=model)
+    return run_obb(frames, models, config, runtime, roi_mask=roi_mask)
 
 
 def test_grid_covers_frame_and_flushes_to_edge():
@@ -512,53 +523,47 @@ def test_sliced_cpu_obb_all_tiles_empty_yields_empty_result():
     assert res.corners.shape[0] == 0
 
 
-def test_enabled_false_dispatch_uses_plain_run_direct(monkeypatch):
-    frame = np.zeros((300, 300, 3), np.uint8)
+def test_enabled_false_dispatch_selects_whole_frame_not_grid(monkeypatch):
+    """Task 9: `run_direct_sliced`/`_run_direct` are retired; dispatch is now
+    `select_region_source(config)` picking `WholeFrame` vs `Grid`.
+    slice.enabled=False must select `WholeFrame` and never touch `Grid`'s
+    tile-predict machinery (`Grid.execute`)."""
+    from hydra_suite.core.inference.stages.regions import (
+        Grid,
+        WholeFrame,
+        select_region_source,
+    )
+
     cfg = _direct_cfg(False)
-    models = OBBModels(mode="direct", direct_model=_FakeYOLO())
-    called = {"sliced": False}
+    assert isinstance(select_region_source(cfg), WholeFrame)
+
+    grid_execute_called = {"called": False}
     monkeypatch.setattr(
-        "hydra_suite.core.inference.stages.slicing.run_direct_sliced",
-        lambda *a, **k: called.__setitem__("sliced", True) or [],
+        Grid,
+        "execute",
+        lambda self, *a, **k: grid_execute_called.__setitem__("called", True) or [],
     )
+    frame = np.zeros((300, 300, 3), np.uint8)
+    models = OBBModels(mode="direct", direct_model=_FakeYOLO())
     run_obb([frame], models, cfg, _FakeRuntime())
-    assert called["sliced"] is False  # disabled -> never dispatched
+    assert grid_execute_called["called"] is False
 
 
-def test_disabled_slice_is_identical_to_plain_run_direct():
-    """enabled=False must be byte-identical to `_run_direct` (structural bypass):
-    `run_obb` dispatches straight to `_run_direct` when slicing is off, so the
-    disabled path must never diverge from the pre-feature pipeline."""
-    from hydra_suite.core.inference.stages.obb import OBBModels, _run_direct, run_obb
+def test_enabled_true_dispatch_selects_grid_and_flows_through():
+    """slice.enabled=True must select `Grid` and route its tile-predict output
+    through `run_obb`'s shared extract/merge tail (not bypass it): a
+    zero-detection tile model still produces a correctly merged empty result
+    via the full plan -> execute -> extract -> merge loop."""
+    from hydra_suite.core.inference.stages.regions import Grid, select_region_source
 
-    frame = np.zeros((300, 300, 3), np.uint8)
-    model = _FakeYOLO()
-    models = OBBModels(mode="direct", direct_model=model)
-    cfg_off = _direct_cfg(False)
-
-    got = run_obb([frame], models, cfg_off, _FakeRuntime())
-    expected = _run_direct([frame], model, cfg_off, _FakeRuntime())
-    assert len(got) == len(expected)
-    for g, e in zip(got, expected):
-        assert g.num_detections == e.num_detections
-        np.testing.assert_array_equal(g.centroids, e.centroids)
-        np.testing.assert_array_equal(g.corners, e.corners)
-        np.testing.assert_array_equal(g.confidences, e.confidences)
-        np.testing.assert_array_equal(g.angles, e.angles)
-        np.testing.assert_array_equal(g.sizes, e.sizes)
-
-
-def test_enabled_true_dispatches_to_sliced(monkeypatch):
-    frame = np.zeros((300, 300, 3), np.uint8)
     cfg = _direct_cfg(True)
-    models = OBBModels(mode="direct", direct_model=_FakeYOLO())
-    marker = object()
-    monkeypatch.setattr(
-        "hydra_suite.core.inference.stages.slicing.run_direct_sliced",
-        lambda *a, **k: [marker],
-    )
+    assert isinstance(select_region_source(cfg), Grid)
+
+    frame = np.zeros((300, 300, 3), np.uint8)
+    models = OBBModels(mode="direct", direct_model=_FakeYOLOEmpty())
     out = run_obb([frame], models, cfg, _FakeRuntime())
-    assert out == [marker]
+    assert len(out) == 1
+    assert out[0].num_detections == 0  # merged (empty) via the shared tail
 
 
 # --- Task 7: tiles_overlap geometry predicate ---------------------------------

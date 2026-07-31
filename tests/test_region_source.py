@@ -8,6 +8,7 @@ torch = pytest.importorskip("torch")
 from hydra_suite.core.inference.config import SliceConfig
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages import obb as m
+from hydra_suite.core.inference.stages import regions
 from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 from hydra_suite.core.inference.stages.regions import (
     Affine,
@@ -211,11 +212,11 @@ def test_whole_frame_plan():
     src = WholeFrame()
     planned = src.plan(frames, models=None, config=None, runtime=None)
     assert len(planned) == 2
-    for fi, regions in enumerate(planned):
-        assert len(regions) == 1
-        assert regions[0].affine == Affine.IDENTITY
-        assert regions[0].frame_idx == fi
-        assert regions[0].image is frames[fi]
+    for fi, frame_regions in enumerate(planned):
+        assert len(frame_regions) == 1
+        assert frame_regions[0].affine == Affine.IDENTITY
+        assert frame_regions[0].frame_idx == fi
+        assert frame_regions[0].image is frames[fi]
     assert src.merge_policy == "plain"
     assert src.device_residency == "on_device_capable"
 
@@ -343,7 +344,7 @@ def test_stage1_proposals_plan_empty_boxes():
     assert planned == [[]]
 
 
-# --- Task 5: _run_direct routes through extract_with_transform -------------
+# --- Task 5/9: WholeFrame.execute (verbatim retired _run_direct predict) ---
 
 
 class _FakeDirectModel:
@@ -358,7 +359,7 @@ class _FakeDirectModel:
         return self._results
 
 
-def test_run_direct_routes_through_extract_with_transform(monkeypatch):
+def test_whole_frame_execute_calls_predict_once_per_batch_and_wraps_per_frame():
     frames = [
         np.zeros((10, 10, 3), dtype=np.uint8),
         np.zeros((10, 10, 3), dtype=np.uint8),
@@ -367,79 +368,22 @@ def test_run_direct_routes_through_extract_with_transform(monkeypatch):
     model = _FakeDirectModel(fake_results)
 
     config = SimpleNamespace(
-        direct=SimpleNamespace(
-            confidence_floor=1e-3,
-            model_task="obb",
-        ),
-        target_classes=[],
-        raw_detection_cap=5,
-        emit_native_geometry=False,
-    )
-    runtime = SimpleNamespace(tensor_on_cuda=False, device="cpu")
-
-    calls = []
-
-    def _fake_extract_with_transform(result, frame_idx, task, affine, cfg, rt):
-        calls.append((result, frame_idx, task, affine, cfg, rt))
-        return f"extracted-{frame_idx}"
-
-    cap_calls = []
-
-    def _fake_apply_cap(extracted, cap):
-        cap_calls.append((extracted, cap))
-        return f"capped-{extracted}"
-
-    monkeypatch.setattr(m, "extract_with_transform", _fake_extract_with_transform)
-    monkeypatch.setattr(m, "_apply_raw_detection_cap", _fake_apply_cap)
-    monkeypatch.setattr(m, "_frames_are_cuda_tensors", lambda frames: False)
-
-    out = m._run_direct(frames, model, config, runtime)
-
-    assert len(calls) == 2
-    for idx, call in enumerate(calls):
-        result, frame_idx, task, affine, cfg, rt = call
-        assert result is fake_results[idx]
-        assert frame_idx == idx
-        assert task == "obb"
-        assert affine == Affine.IDENTITY
-        assert cfg is config
-        assert rt is runtime
-
-    # numpy universe (tensor_on_cuda=False): every extracted result gets the
-    # outer raw-detection cap applied.
-    assert cap_calls == [
-        ("extracted-0", config.raw_detection_cap),
-        ("extracted-1", config.raw_detection_cap),
-    ]
-    assert out == ["capped-extracted-0", "capped-extracted-1"]
-
-
-def test_run_direct_raw_universe_skips_outer_cap(monkeypatch):
-    frames = [np.zeros((10, 10, 3), dtype=np.uint8)]
-    fake_results = [object()]
-    model = _FakeDirectModel(fake_results)
-
-    config = SimpleNamespace(
         direct=SimpleNamespace(confidence_floor=1e-3, model_task="obb"),
         target_classes=[],
-        raw_detection_cap=5,
-        emit_native_geometry=False,
     )
-    runtime = SimpleNamespace(tensor_on_cuda=True, device="cuda")
+    models = SimpleNamespace(direct_model=model)
+    runtime = SimpleNamespace(tensor_on_cuda=False, device="cpu")
 
-    monkeypatch.setattr(m, "extract_with_transform", lambda *a, **kw: "raw-extracted")
-    cap_calls = []
-    monkeypatch.setattr(
-        m,
-        "_apply_raw_detection_cap",
-        lambda extracted, cap: cap_calls.append((extracted, cap)),
-    )
-    monkeypatch.setattr(m, "_frames_are_cuda_tensors", lambda frames: False)
+    src = WholeFrame()
+    planned = src.plan(frames, models, config, runtime)
+    out = src.execute(planned, models, config, runtime)
 
-    out = m._run_direct(frames, model, config, runtime)
-
-    assert cap_calls == []  # raw universe defers the cap to materialize_tensors
-    assert out == ["raw-extracted"]
+    assert len(model.calls) == 1  # single batched predict call
+    called_frames, kwargs = model.calls[0]
+    assert called_frames == frames
+    assert kwargs["conf"] == 1e-3
+    assert kwargs["iou"] == 1.0
+    assert out == [[fake_results[0]], [fake_results[1]]]
 
 
 def test_select_region_source_dispatch():
@@ -456,7 +400,8 @@ def test_select_region_source_dispatch():
     assert isinstance(select_region_source(seq_cfg), Stage1Proposals)
 
 
-# --- Task 7: _run_sequential stage-2 routes through extract_with_transform --
+# --- Task 7/9: Stage1Proposals.execute (verbatim retired _run_sequential
+# stage-2 predict loop) --------------------------------------------------
 
 
 class _Seq2S1Boxes:
@@ -485,69 +430,51 @@ class _Seq2FakeStage2Model:
         return [object() for _ in batch]
 
 
-def test_run_sequential_routes_stage2_through_extract_with_transform(monkeypatch):
-    """Task 7: _run_sequential's stage-2 dispatch calls extract_with_transform
-    (not the old inline if/else), passing seg_source=seq and the per-crop
-    offset/scale computed from the stage-1 crop geometry."""
-    from hydra_suite.core.inference.config import OBBConfig, OBBSequentialConfig
-    from hydra_suite.core.inference.runtime import RuntimeContext
-
-    seq = OBBSequentialConfig(
-        detect_model_path="d.pt",
-        obb_model_path="s.pt",
-        stage2_task="segment",
-        stage2_image_size=80,
-    )
-    cfg = OBBConfig(mode="sequential", sequential=seq)
-    runtime = RuntimeContext(cuda_mode=False, device="cpu", use_nvdec=False)
-
-    calls = []
-
-    def _spy_extract_with_transform(
-        result,
-        frame_idx,
-        task,
-        affine,
-        cfg_arg,
-        rt_arg,
-        seg_source=None,
-        force_numpy=False,
-    ):
-        calls.append(
-            (result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source, force_numpy)
-        )
-        return m._empty_obb_result(frame_idx)
-
-    monkeypatch.setattr(m, "extract_with_transform", _spy_extract_with_transform)
-    # One 80x80 crop offset at (20, 30) -> matches _FakeSegResult-style geometry
-    # used elsewhere; scale (1.0, 1.0) since stage2_image_size == crop size.
+def test_stage1_proposals_execute_calls_stage2_predict_per_frame_batch(monkeypatch):
+    """Stage1Proposals.execute runs stage-2 predict per region, batched per
+    frame by seq.stage2_batch_size, in the same order as the planned regions
+    (mirrors the retired _run_sequential's stage-2 loop)."""
     monkeypatch.setattr(
         m,
         "build_crops",
         lambda *a, **kw: ([np.zeros((80, 80, 3), np.uint8)], [(20.0, 30.0)]),
     )
 
-    frame = np.zeros((200, 200, 3), np.uint8)
-    models = m.OBBModels(
-        mode="sequential",
-        detect_model=_Seq2FakeDetectModel(),
-        obb_model=_Seq2FakeStage2Model(),
+    seq = SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        stage2_image_size=80,
+        stage2_batch_size=0,
+        obb_confidence_threshold=0.2,
+        stage2_task="segment",
     )
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(
+        detect_model=_Seq2FakeDetectModel(), obb_model=_Seq2FakeStage2Model()
+    )
+    runtime = SimpleNamespace(device="cpu")
 
-    m._run_sequential([frame], models, cfg, runtime)
+    frame = np.zeros((200, 200, 3), np.uint8)
+    src = Stage1Proposals()
+    planned = src.plan([frame], models, config, runtime)
+    assert len(planned[0]) == 1
+    assert planned[0][0].affine.offset == (20.0, 30.0)
+    assert planned[0][0].affine.scale == (1.0, 1.0)  # 80/80
 
-    assert len(calls) == 1
-    result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source, force_numpy = calls[0]
-    assert frame_idx == 0
-    assert task == "segment"
-    assert affine.offset == (20.0, 30.0)
-    assert affine.scale == (1.0, 1.0)  # 80/80
-    assert cfg_arg is cfg
-    assert rt_arg is runtime
-    assert seg_source is seq  # A2: seg params sourced from the sequential config
-    # Task 7 fix: sequential always forces numpy, even for this pixel-exact
-    # (translate-only) crop, so it never silently takes the raw gpu path.
-    assert force_numpy is True
+    out = src.execute(planned, models, config, runtime)
+    assert len(out) == 1
+    assert len(out[0]) == 1  # one stage-2 result per planned crop
+
+    assert src.task(config) == "segment"
+    assert src.seg_source(config) is seq
+    assert src.force_numpy is True
+
+
+def test_stage1_proposals_execute_zero_regions_returns_empty_list():
+    src = Stage1Proposals()
+    config = SimpleNamespace(sequential=SimpleNamespace(stage2_batch_size=0))
+    out = src.execute([[]], models=None, config=config, runtime=None)
+    assert out == [[]]
 
 
 # --- Task 8: merge_per_frame (numpy/raw x plain/overlap_band_nms) -----------
@@ -735,3 +662,247 @@ def test_merge_per_frame_overlap_band_nms_raw_materializes_and_merges_when_tiles
     )
     assert isinstance(out, OBBResult)  # materialized, no longer _RawOBBTensors
     assert out.num_detections == 1
+
+
+# --- Task 6/9: Grid.execute (verbatim retired run_direct_sliced tile predict) --
+
+
+class _FakeTileModel:
+    def __init__(self):
+        self.calls = []
+        self._next_id = 0
+
+    def predict(self, images, **kwargs):
+        self.calls.append((list(images), kwargs))
+        out = [f"res-{self._next_id + i}" for i in range(len(images))]
+        self._next_id += len(images)
+        return out
+
+
+def test_grid_execute_regroups_flat_predict_results_per_frame():
+    """Grid.execute must (1) issue ONE chunked predict call over the flattened
+    tile list (verbatim `_predict_tiles`) and (2) regroup results back into
+    per-frame lists aligned with `Grid.plan`'s region order."""
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    frames = [frame, frame]
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=32,
+        slice_height=32,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        perform_standard_pred=False,
+    )
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            slice=slice_cfg, confidence_floor=1e-3, model_task="obb"
+        ),
+        target_classes=[],
+    )
+    model = _FakeTileModel()
+    models = SimpleNamespace(direct_model=model)
+    runtime = SimpleNamespace(device="cpu")
+
+    src = Grid()
+    planned = src.plan(frames, models, config, runtime)
+    assert [len(r) for r in planned] == [4, 4]
+
+    out = src.execute(planned, models, config, runtime)
+
+    # chunk_size == plan.jobs_per_frame (4): 8 tiles total -> 2 chunks of 4,
+    # matching the retired `run_direct_sliced`'s `chunk_size = plan.jobs_per_frame`.
+    assert len(model.calls) == 2
+    for images, kwargs in model.calls:
+        assert len(images) == 4
+        assert kwargs["conf"] == 1e-3
+        assert kwargs["iou"] == 1.0
+
+    assert [len(r) for r in out] == [4, 4]
+    assert out[0] == ["res-0", "res-1", "res-2", "res-3"]
+    assert out[1] == ["res-4", "res-5", "res-6", "res-7"]
+
+    # merge_plan is the memoized SlicePlan from `plan()` -- same object, used
+    # by `run_obb`'s shared merge step for overlap-band NMS tile geometry.
+    assert src.merge_plan(0) is src._plan
+
+
+# --- Task 9: run_obb == select_region_source -> plan -> execute -> extract ->
+# merge, for every mode ------------------------------------------------------
+
+
+def _spy_extract_and_merge(monkeypatch, calls):
+    def _extract(
+        result, frame_idx, task, affine, cfg, rt, seg_source=None, force_numpy=False
+    ):
+        calls["extract"].append(
+            (result, frame_idx, task, affine, cfg, rt, seg_source, force_numpy)
+        )
+        return f"extracted-{frame_idx}-{result}"
+
+    def _merge(parts, policy, plan, cfg, rt):
+        calls["merge"].append((tuple(parts), policy, plan, cfg, rt))
+        return f"merged-{parts}"
+
+    monkeypatch.setattr(m, "extract_with_transform", _extract)
+    monkeypatch.setattr(m, "merge_per_frame", _merge)
+
+
+def test_run_obb_whole_frame_mode_routes_plan_execute_extract_merge(monkeypatch):
+    frames = [np.zeros((10, 10, 3), dtype=np.uint8)]
+    config = SimpleNamespace(
+        mode="direct",
+        direct=SimpleNamespace(slice=SliceConfig(enabled=False), model_task="obb"),
+    )
+    models = SimpleNamespace(mode="direct")
+    runtime = SimpleNamespace()
+
+    calls = {"plan": [], "execute": [], "extract": [], "merge": []}
+
+    def _plan(self, fr, mo, cfg, rt, roi_mask=None):
+        calls["plan"].append((fr, mo, cfg, rt, roi_mask))
+        return [[regions.Region(image="img0", affine=Affine.IDENTITY, frame_idx=0)]]
+
+    def _execute(self, per_frame_regions, mo, cfg, rt):
+        calls["execute"].append((per_frame_regions, mo, cfg, rt))
+        return [["res0"]]
+
+    monkeypatch.setattr(regions.WholeFrame, "plan", _plan)
+    monkeypatch.setattr(regions.WholeFrame, "execute", _execute)
+    _spy_extract_and_merge(monkeypatch, calls)
+
+    out = m.run_obb(frames, models, config, runtime)
+
+    assert len(calls["plan"]) == 1
+    assert len(calls["execute"]) == 1
+    assert calls["extract"] == [
+        ("res0", 0, "obb", Affine.IDENTITY, config, runtime, None, False)
+    ]
+    assert calls["merge"] == [(("extracted-0-res0",), "plain", None, config, runtime)]
+    assert out == ["merged-['extracted-0-res0']"]
+
+
+def test_run_obb_grid_mode_routes_plan_execute_extract_merge(monkeypatch):
+    frames = [np.zeros((64, 64, 3), dtype=np.uint8)]
+    config = SimpleNamespace(
+        mode="direct",
+        direct=SimpleNamespace(slice=SliceConfig(enabled=True), model_task="obb"),
+    )
+    models = SimpleNamespace(mode="direct")
+    runtime = SimpleNamespace()
+    roi_mask = np.ones((64, 64), dtype=bool)
+
+    calls = {"plan": [], "execute": [], "extract": [], "merge": []}
+    fake_plan = object()
+
+    def _plan(self, fr, mo, cfg, rt, roi_mask=None):
+        calls["plan"].append((fr, mo, cfg, rt, roi_mask))
+        self._plan = fake_plan
+        return [
+            [
+                regions.Region(
+                    image="tile0", affine=Affine(offset=(0.0, 0.0)), frame_idx=0
+                ),
+                regions.Region(
+                    image="tile1", affine=Affine(offset=(32.0, 0.0)), frame_idx=0
+                ),
+            ]
+        ]
+
+    def _execute(self, per_frame_regions, mo, cfg, rt):
+        calls["execute"].append((per_frame_regions, mo, cfg, rt))
+        return [["res-t0", "res-t1"]]
+
+    monkeypatch.setattr(regions.Grid, "plan", _plan)
+    monkeypatch.setattr(regions.Grid, "execute", _execute)
+    _spy_extract_and_merge(monkeypatch, calls)
+
+    out = m.run_obb(frames, models, config, runtime, roi_mask=roi_mask)
+
+    # roi_mask is threaded straight through to Grid.plan.
+    assert calls["plan"][0][-1] is roi_mask
+    assert len(calls["extract"]) == 2
+    for call, expected_affine in zip(
+        calls["extract"], [Affine(offset=(0.0, 0.0)), Affine(offset=(32.0, 0.0))]
+    ):
+        _, frame_idx, task, affine, cfg, rt, seg_source, force_numpy = call
+        assert frame_idx == 0
+        assert task == "obb"
+        assert affine == expected_affine
+        assert seg_source is None
+        assert force_numpy is False
+    # Grid's merge_policy + merge_plan (the memoized SlicePlan) flow through.
+    assert calls["merge"][0][1] == "overlap_band_nms"
+    assert calls["merge"][0][2] is fake_plan
+    assert out == ["merged-['extracted-0-res-t0', 'extracted-0-res-t1']"]
+
+
+def test_run_obb_sequential_mode_routes_plan_execute_extract_merge(monkeypatch):
+    frames = [np.zeros((100, 100, 3), dtype=np.uint8)]
+    seq = SimpleNamespace(stage2_task="segment")
+    config = SimpleNamespace(mode="sequential", direct=None, sequential=seq)
+    models = SimpleNamespace(mode="sequential")
+    runtime = SimpleNamespace()
+
+    calls = {"plan": [], "execute": [], "extract": [], "merge": []}
+
+    def _plan(self, fr, mo, cfg, rt, roi_mask=None):
+        calls["plan"].append((fr, mo, cfg, rt, roi_mask))
+        return [
+            [
+                regions.Region(
+                    image="crop0",
+                    affine=Affine(offset=(5.0, 6.0), scale=(2.0, 2.0)),
+                    frame_idx=0,
+                )
+            ]
+        ]
+
+    def _execute(self, per_frame_regions, mo, cfg, rt):
+        calls["execute"].append((per_frame_regions, mo, cfg, rt))
+        return [["res-crop0"]]
+
+    monkeypatch.setattr(regions.Stage1Proposals, "plan", _plan)
+    monkeypatch.setattr(regions.Stage1Proposals, "execute", _execute)
+    _spy_extract_and_merge(monkeypatch, calls)
+
+    out = m.run_obb(frames, models, config, runtime)
+
+    assert len(calls["extract"]) == 1
+    _, frame_idx, task, affine, cfg, rt, seg_source, force_numpy = calls["extract"][0]
+    assert frame_idx == 0
+    assert task == "segment"  # from config.sequential.stage2_task
+    assert affine == Affine(offset=(5.0, 6.0), scale=(2.0, 2.0))
+    assert seg_source is seq  # Stage1Proposals.seg_source == config.sequential
+    assert force_numpy is True  # cpu_crop_boundary invariant (spec S5.2)
+    assert calls["merge"][0][1] == "plain"
+    assert calls["merge"][0][2] is None
+    assert out == ["merged-['extracted-0-res-crop0']"]
+
+
+def test_run_obb_short_circuits_zero_region_frames_without_extract_or_merge(
+    monkeypatch,
+):
+    """A frame with zero planned regions (e.g. sequential stage-1 found
+    nothing) must bypass extract_with_transform/merge_per_frame entirely and
+    get `_empty_obb_result` directly -- mirrors the retired `_run_sequential`'s
+    early-continue for empty stage-1/crops."""
+    frames = [np.zeros((10, 10, 3), dtype=np.uint8)]
+    seq = SimpleNamespace(stage2_task="obb")
+    config = SimpleNamespace(mode="sequential", direct=None, sequential=seq)
+    models = SimpleNamespace(mode="sequential")
+    runtime = SimpleNamespace()
+
+    calls = {"extract": [], "merge": []}
+    _spy_extract_and_merge(monkeypatch, calls)
+
+    monkeypatch.setattr(regions.Stage1Proposals, "plan", lambda self, *a, **kw: [[]])
+    monkeypatch.setattr(regions.Stage1Proposals, "execute", lambda self, *a, **kw: [[]])
+
+    out = m.run_obb(frames, models, config, runtime)
+
+    assert calls["extract"] == []
+    assert calls["merge"] == []
+    assert len(out) == 1
+    assert out[0].frame_idx == 0
+    assert out[0].num_detections == 0

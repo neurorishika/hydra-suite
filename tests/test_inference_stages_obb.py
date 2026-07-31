@@ -17,9 +17,37 @@ from hydra_suite.core.inference.stages.obb import (
     _extract_raw_tensors,
     _RawOBBTensors,
     extract_obb_result,
+    extract_with_transform,
     merge_obb_results,
+    merge_per_frame,
     run_obb,
 )
+from hydra_suite.core.inference.stages.regions import WholeFrame
+
+
+def _run_direct(frames, model, config, runtime):
+    """Task 9 test shim: `obb._run_direct` was retired -- its predict routine
+    now lives verbatim in `regions.WholeFrame.execute`, driven by `run_obb`'s
+    shared plan -> execute -> extract -> merge loop. Every call site below
+    used a real `OBBConfig` (mode="direct", no slicing), so this is exactly
+    what `run_obb` itself would dispatch to; spelled out directly (rather than
+    via `run_obb`/`select_region_source`) so these tests keep reading as
+    `_run_direct`-scoped unit tests.
+    """
+    models = OBBModels(mode="direct", direct_model=model)
+    src = WholeFrame()
+    planned = src.plan(frames, models, config, runtime)
+    executed = src.execute(planned, models, config, runtime)
+    out = []
+    for fi, (frame_regions, results) in enumerate(zip(planned, executed)):
+        parts = [
+            extract_with_transform(
+                res, fi, src.task(config), region.affine, config, runtime
+            )
+            for region, res in zip(frame_regions, results)
+        ]
+        out.append(merge_per_frame(parts, src.merge_policy, None, config, runtime))
+    return out
 
 
 def _cpu_rt() -> RuntimeContext:
@@ -62,6 +90,11 @@ def _mock_ul_result_tensors(n: int = 2) -> MagicMock:
     r.obb.xywhr = xywhr
     r.obb.xyxyxyxy = corners
     r.obb.conf = conf
+    # Real ultralytics OBB results always expose a real `.cls` tensor (class
+    # ids); set it explicitly so `_concat_raw` (Task 9: even a single-region
+    # raw frame now flows through `merge_per_frame`'s plain+raw path) doesn't
+    # try to `torch.cat` a MagicMock auto-attribute.
+    r.obb.cls = torch.zeros(n)
     r.obb.__len__ = lambda self: n
     return r
 
@@ -537,7 +570,6 @@ def test_run_direct_forwards_target_classes_to_predict():
     empty target_classes maps to None (all classes) — legacy yolo_detector.py."""
     from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig
     from hydra_suite.core.inference.runtime import RuntimeContext
-    from hydra_suite.core.inference.stages.obb import _run_direct
 
     rt = RuntimeContext(
         cuda_mode=False,
@@ -844,7 +876,7 @@ def test_run_direct_detect_cuda_frames_returns_original_frame_coords(monkeypatch
     """CRITICAL 1: detect results must be un-letterboxed back to frame coords."""
     from types import SimpleNamespace
 
-    obb_mod = _force_cuda_frames(monkeypatch)
+    _force_cuda_frames(monkeypatch)
 
     H, W, IMGSZ = 40, 80, 64
     r, pad_left, pad_top = _letterbox_params(H, W, IMGSZ)
@@ -882,7 +914,7 @@ def test_run_direct_detect_cuda_frames_returns_original_frame_coords(monkeypatch
         direct=OBBDirectConfig(model_path="/m.pt", model_task="detect"),
     )
     frames = [torch.zeros((H, W, 3), dtype=torch.uint8)]
-    out = obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+    out = _run_direct(frames, _FakeModel(), cfg, _cpu_rt())
 
     assert out[0].num_detections == 1
     np.testing.assert_allclose(out[0].centroids[0], [20.0, 15.0], atol=0.6)
@@ -894,7 +926,7 @@ def test_run_direct_segment_cuda_frames_returns_original_frame_coords(monkeypatc
     """CRITICAL 1: segment masks must map back to original-frame coordinates."""
     from types import SimpleNamespace
 
-    obb_mod = _force_cuda_frames(monkeypatch)
+    _force_cuda_frames(monkeypatch)
 
     H, W, IMGSZ = 40, 80, 64
     r, pad_left, pad_top = _letterbox_params(H, W, IMGSZ)
@@ -929,7 +961,7 @@ def test_run_direct_segment_cuda_frames_returns_original_frame_coords(monkeypatc
         direct=OBBDirectConfig(model_path="/m.pt", model_task="segment"),
     )
     frames = [torch.zeros((H, W, 3), dtype=torch.uint8)]
-    out = obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+    out = _run_direct(frames, _FakeModel(), cfg, _cpu_rt())
 
     assert out[0].num_detections == 1
     np.testing.assert_allclose(out[0].centroids[0], [20.0, 17.0], atol=2.0)
@@ -1347,7 +1379,7 @@ def test_run_direct_segment_threads_configured_kernel_params(monkeypatch):
         ),
     )
     frames = [np.zeros((120, 120, 3), dtype=np.uint8)]
-    obb_mod._run_direct(frames, _FakeModel(), cfg, _cpu_rt())
+    _run_direct(frames, _FakeModel(), cfg, _cpu_rt())
 
     assert recorded == {
         "num_angles": 48,

@@ -186,7 +186,7 @@ def test_run_sequential_segment_dispatch(monkeypatch):
         obb_model=_FakeStage2SegModel(),
     )
 
-    out = obb_stage._run_sequential([frame], models, cfg, runtime)
+    out = obb_stage.run_obb([frame], models, cfg, runtime)
 
     assert called["masks"] == 1
     assert called["obb"] == 0

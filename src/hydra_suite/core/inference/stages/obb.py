@@ -14,8 +14,13 @@ from ....utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
 from ..config import OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
-from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor
-from .regions import Affine
+
+# DirectExecutorAdapter has no direct callers left in this module (Task 9
+# retired obb._run_direct's isinstance check) but stays re-exported: both
+# `regions.WholeFrame.execute` and `regions.Grid.execute` do
+# `from .obb import DirectExecutorAdapter` (mirrors slicing.py's existing
+# re-export pattern for the same reason).
+from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -472,177 +477,50 @@ def run_obb(
     iou=1.0 disables YOLO's internal NMS — filtering stage handles it.
 
     ``roi_mask`` (frame-space, same H x W as ``frames``) enables ROI tile gating
-    for the SLICED path only. It is deliberately ignored on the non-sliced
-    (``_run_direct``) path -- that path never tiles, so gating cannot apply and
-    the disabled-slicing behaviour stays byte-identical to before this feature.
+    for the SLICED (``Grid``) path only -- threaded straight into
+    ``RegionSource.plan``. It is a no-op for ``WholeFrame``/``Stage1Proposals``,
+    which ignore the parameter (those paths never tile, so gating cannot apply
+    and the disabled-slicing behaviour stays byte-identical to before this
+    feature).
+
+    Phase C (region-source unification): every mode is now
+    ``plan -> execute -> extract -> merge`` through a single ``RegionSource``
+    (``regions.py``) -- the standalone ``_run_direct``/``_run_sequential``/
+    ``run_direct_sliced`` orchestrators are retired; their predict routines
+    now live verbatim in each source's ``execute``.
     """
-    if models.mode == "direct":
-        slice_cfg = getattr(config.direct, "slice", None) if config.direct else None
-        if slice_cfg is not None and slice_cfg.enabled:
-            from .slicing import run_direct_sliced  # lazy: avoids import cycle
+    from .regions import select_region_source
 
-            return run_direct_sliced(
-                frames, models.direct_model, config, runtime, roi_mask=roi_mask
+    source = select_region_source(config)
+    per_frame_regions = source.plan(frames, models, config, runtime, roi_mask=roi_mask)
+    per_frame_results = source.execute(per_frame_regions, models, config, runtime)
+    task = source.task(config)
+    seg_source = source.seg_source(config)
+
+    out: list[OBBResult | _RawOBBTensors] = []
+    for fi, (regions, results) in enumerate(zip(per_frame_regions, per_frame_results)):
+        if not regions:
+            out.append(_empty_obb_result(fi))
+            continue
+        parts = [
+            extract_with_transform(
+                res,
+                fi,
+                task,
+                region.affine,
+                config,
+                runtime,
+                seg_source=seg_source,
+                force_numpy=source.force_numpy,
             )
-        return _run_direct(frames, models.direct_model, config, runtime)
-    return _run_sequential(frames, models, config, runtime)
-
-
-def _run_direct(
-    frames: list,
-    model: Any,
-    config: OBBConfig,
-    runtime: RuntimeContext,
-) -> list[OBBResult | _RawOBBTensors]:
-    conf_floor = config.direct.confidence_floor if config.direct else 1e-3
-
-    # Detect the CUDA-tensor frame case: NvdecFrameReader yields a list of
-    # CUDA torch.Tensors (HWC uint8 RGB). A plain ultralytics YOLO model (the
-    # torch cpu/mps/cuda runtimes) does NOT accept a list of tensors as a
-    # prediction source (raises TypeError inside check_source / autocast_list),
-    # so for that case only we GPU-letterbox the list into a single batched
-    # tensor, run predict on that, then invert the letterbox on each result so
-    # downstream extract functions see original-frame coordinates — identical
-    # to what the numpy list path produces.
-    #
-    # DirectExecutorAdapter (gpu_fast direct executors) is NOT an ultralytics
-    # model — its own predict() already accepts a raw list of CUDA HWC frames
-    # and does its own correct letterbox + original-frame coordinate scaling
-    # (_BaseDirectOBBExecutor._preprocess_cuda_batch / _postprocess). Routing
-    # it through the manual pre-batch above double-preprocesses: the adapter
-    # splits the already-letterboxed (B,3,imgsz,imgsz) tensor back into a list
-    # of (3,imgsz,imgsz) slices and re-letterboxes each as if it were a raw
-    # (H,W,3) frame, corrupting the shape fed to TensorRT ("Static dimension
-    # mismatch" in setInputShape) whenever imgsz != 3. So it must take the
-    # plain frames-list path below, same as the non-CUDA-tensor case.
-    if _frames_are_cuda_tensors(frames) and not isinstance(
-        model, DirectExecutorAdapter
-    ):
-        imgsz = _resolve_imgsz(model)
-        batched, lb_params = _gpu_letterbox_batch(frames, imgsz)
-        results = model.predict(
-            batched,
-            conf=conf_floor,
-            iou=1.0,
-            classes=config.target_classes or None,
-            verbose=False,
-            device=runtime.device,
-        )
-        # Invert letterbox so coordinates are in original-frame space before
-        # the extract functions read them. This covers obb (result.obb), detect
-        # (result.boxes) AND segment (result.boxes + restored result.orig_shape,
-        # which the mask<->frame conversion derives its gain from).
-        for frame, result, (r, pad_left, pad_top) in zip(frames, results, lb_params):
-            _invert_letterbox_on_result(
-                result,
-                r,
-                pad_left,
-                pad_top,
-                orig_shape=(int(frame.shape[0]), int(frame.shape[1])),
+            for region, res in zip(regions, results)
+        ]
+        out.append(
+            merge_per_frame(
+                parts, source.merge_policy, source.merge_plan(fi), config, runtime
             )
-    else:
-        results = model.predict(
-            frames,
-            conf=conf_floor,
-            iou=1.0,
-            classes=config.target_classes or None,
-            verbose=False,
-            device=runtime.device,
         )
-
-    task = config.direct.model_task if config.direct else "obb"
-    out = []
-    for idx, res in enumerate(results):
-        extracted = extract_with_transform(
-            res, idx, task, Affine.IDENTITY, config, runtime
-        )
-        if not runtime.tensor_on_cuda:
-            extracted = _apply_raw_detection_cap(extracted, config.raw_detection_cap)
-        out.append(extracted)
     return out
-
-
-def _run_sequential(
-    frames: list,
-    models: OBBModels,
-    config: OBBConfig,
-    runtime: RuntimeContext,
-) -> list[OBBResult]:
-    seq = config.sequential
-    stage1_kwargs: dict[str, Any] = {}
-    if seq.detect_image_size > 0:
-        stage1_kwargs["imgsz"] = seq.detect_image_size
-    stage1 = models.detect_model.predict(
-        frames,
-        conf=seq.detect_confidence_threshold,
-        iou=1.0,
-        classes=config.target_classes or None,
-        verbose=False,
-        device=runtime.device,
-        **stage1_kwargs,
-    )
-    results: list[OBBResult] = []
-    for frame_idx, (frame, s1) in enumerate(zip(frames, stage1)):
-        boxes = s1.boxes
-        if boxes is None or len(boxes) == 0:
-            results.append(_empty_obb_result(frame_idx))
-            continue
-        crops, offsets = build_crops(frame, boxes, seq, runtime)
-        if not crops:
-            results.append(_empty_obb_result(frame_idx))
-            continue
-        orig_sizes = [(c.shape[1], c.shape[0]) for c in crops]  # (w, h)
-        # Mirror legacy yolo_detector._seq_resize_crops_for_stage2: pre-resize
-        # each crop to the exact stage-2 input size with cv2 INTER_LINEAR,
-        # rather than letting Ultralytics' internal letterbox resize it (which
-        # can pick a different interpolation/stride-padded shape and shift
-        # borderline detections across the confidence threshold).
-        crops = resize_crops_for_stage2(crops, seq.stage2_image_size)
-        batch_size = seq.stage2_batch_size or len(crops)
-        sub: list[OBBResult] = []
-        for i in range(0, len(crops), batch_size):
-            batch = crops[i : i + batch_size]
-            s2 = models.obb_model.predict(
-                batch,
-                conf=seq.obb_confidence_threshold,
-                iou=1.0,
-                verbose=False,
-                device=runtime.device,
-                imgsz=seq.stage2_image_size,
-            )
-            for j, r in enumerate(s2):
-                orig_w, orig_h = orig_sizes[i + j]
-                scale = (
-                    (orig_w / seq.stage2_image_size, orig_h / seq.stage2_image_size)
-                    if seq.stage2_image_size > 0
-                    else (1.0, 1.0)
-                )
-                sub.append(
-                    extract_with_transform(
-                        r,
-                        frame_idx,
-                        seq.stage2_task,
-                        Affine(offset=offsets[i + j], scale=scale),
-                        config,
-                        runtime,
-                        seg_source=seq,
-                        # Spec S5.2 opt-in knob: sequential ALWAYS uses the
-                        # numpy extractors (matches A.5), independent of
-                        # affine shape/tier. A pixel-exact crop yields
-                        # scale == (1.0, 1.0) i.e. translate-only, which
-                        # would otherwise slip into the unproven raw path
-                        # on the gpu-native tier. Task 12 will flip this to
-                        # force_numpy=False once the raw-vs-numpy
-                        # sequential equivalence is proven on the harness.
-                        force_numpy=True,
-                    )
-                )
-        results.append(
-            _apply_raw_detection_cap(
-                merge_obb_results(frame_idx, sub), config.raw_detection_cap
-            )
-        )
-    return results
 
 
 def resize_crops_for_stage2(

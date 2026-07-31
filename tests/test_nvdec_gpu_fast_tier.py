@@ -58,6 +58,7 @@ def test_run_direct_gpu_fast_tensorrt_takes_frames_list_path(monkeypatch):
 
     from hydra_suite.core.inference.runtime_artifacts import DirectExecutorAdapter
     from hydra_suite.core.inference.stages import obb as obb_stage
+    from hydra_suite.core.inference.stages import regions as regions_stage
 
     # A frame that passes isinstance(_, torch.Tensor) and reports is_cuda True.
     fake_frame = MagicMock(spec=torch.Tensor)
@@ -73,8 +74,15 @@ def test_run_direct_gpu_fast_tensorrt_takes_frames_list_path(monkeypatch):
         lambda *a, **k: letterbox_spy.__setitem__("called", True) or (None, []),
     )
     # Bypass real Ultralytics Results parsing.
-    monkeypatch.setattr(obb_stage, "extract_obb_result", lambda r, idx: f"obb::{r}")
+    monkeypatch.setattr(
+        obb_stage, "extract_obb_result", lambda r, idx, **kw: f"obb::{r}"
+    )
     monkeypatch.setattr(obb_stage, "_apply_raw_detection_cap", lambda res, cap: res)
+    # merge_per_frame expects real OBBResult/_RawOBBTensors parts (reads
+    # `.frame_idx`, concatenates via merge_obb_results); the fake
+    # extract_obb_result above returns a plain string, so pass a single-part
+    # list straight through instead (this test has exactly one region/frame).
+    monkeypatch.setattr(obb_stage, "merge_per_frame", lambda parts, *a, **kw: parts[0])
 
     cfg = type(
         "C",
@@ -82,12 +90,34 @@ def test_run_direct_gpu_fast_tensorrt_takes_frames_list_path(monkeypatch):
         {
             "target_classes": None,
             "raw_detection_cap": 0,
-            "direct": type("D", (), {"confidence_floor": 1e-3})(),
+            "emit_native_geometry": False,
+            "direct": type("D", (), {"confidence_floor": 1e-3, "model_task": "obb"})(),
         },
     )()
     rt = type("RT", (), {"tensor_on_cuda": False, "device": "cuda"})()
 
-    out = obb_stage._run_direct([fake_frame], model, cfg, rt)
+    # Task 9 test shim: `obb._run_direct` was retired -- its predict routine
+    # now lives verbatim in `regions.WholeFrame.execute`, driven by
+    # `run_obb`'s shared plan -> execute -> extract -> merge loop.
+    models = obb_stage.OBBModels(mode="direct", direct_model=model)
+    src = regions_stage.WholeFrame()
+    planned = src.plan([fake_frame], models, cfg, rt)
+    executed = src.execute(planned, models, cfg, rt)
+    out = [
+        obb_stage.merge_per_frame(
+            [
+                obb_stage.extract_with_transform(
+                    r, fi, src.task(cfg), region.affine, cfg, rt
+                )
+                for region, r in zip(regions_frame, results_frame)
+            ],
+            src.merge_policy,
+            None,
+            cfg,
+            rt,
+        )
+        for fi, (regions_frame, results_frame) in enumerate(zip(planned, executed))
+    ]
 
     assert letterbox_spy["called"] is False  # frames-list path, no pre-batch
     passed_frames = model.predict.call_args.args[0]
