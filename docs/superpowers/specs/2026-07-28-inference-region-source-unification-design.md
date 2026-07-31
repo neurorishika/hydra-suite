@@ -101,6 +101,21 @@ The abstraction changes structure, not which universe a tier uses. On the gpu-na
 ### 5.2 Sequential raw opt-in (harness-gated final step)
 Stage1Proposals keeps `cpu_crop_boundary` and numpy stage-2 extraction — **byte-identical to today**. Because `extract_with_transform` already has a raw branch, routing sequential-stage-2 through raw on the gpu tier is a one-line region-source capability flag. It is attempted as the **last implementation step, gated on the equivalence harness proving byte-identical vs the numpy baseline**. If raw-vs-numpy stage-2 extraction diverges even slightly, the flag ships **off** (documented), and sequential stays numpy. No mid-refactor tradeoff between speed and correctness.
 
+**DETERMINATION (Task 12): the opt-in is INFEASIBLE for byte-identity → shipped OFF.** The
+raw universe is translate-only (the affine invariant: `scale != 1 ⇒ numpy`). Sequential
+stage-2 crops are deliberately **pre-resized to `stage2_image_size`** (so their affine has
+`scale = orig_crop / stage2_size != 1` in general — see `_run_sequential`'s own comment: the
+pre-resize avoids Ultralytics' internal letterbox picking a different stride-padded shape).
+To route stage-2 through raw, the crops would have to be fed at **native size** (`scale = 1`),
+which hands Ultralytics a differently-shaped input → a different internal letterbox → a
+different (not byte-identical) stage-2 result. So there is no way to feed the raw path without
+changing the numerics. The `force_numpy=True` default on `Stage1Proposals` therefore stays;
+sequential is numpy on every tier (confirmed byte-identical MPS+CUDA at Task 9). The gpu-tier
+crop-round-trip cost documented in §3 is inherent to sequential and is not reclaimable by this
+opt-in. If a future effort wants gpu-tier sequential acceleration, it must re-architect crop
+handling (e.g. on-device warp + native-size stage-2 with a matched letterbox), which is a
+behavior change out of scope here.
+
 ## 6. Merge policy is a region-source property
 Encoded on the source, not global: `Grid.merge_policy = overlap_band_nms`; `WholeFrame`/`Stage1Proposals`/`SlicedStage1Proposals.merge_policy = plain`. The `tiles_overlap` geometry predicate (never `overlap_*_ratio` — the documented bug) remains the runtime trigger for whether NMS actually runs. This guarantees sequential/direct output is unchanged (no new NMS).
 
