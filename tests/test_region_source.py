@@ -5,7 +5,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from hydra_suite.core.inference.config import SliceConfig
+from hydra_suite.core.inference.config import (
+    OBBSequentialConfig,
+    SliceConfig,
+    build_inference_config_from_params,
+)
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages import obb as m
 from hydra_suite.core.inference.stages import regions
@@ -13,8 +17,10 @@ from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 from hydra_suite.core.inference.stages.regions import (
     Affine,
     Grid,
+    SlicedStage1Proposals,
     Stage1Proposals,
     WholeFrame,
+    _merge_axis_aligned_boxes,
     select_region_source,
 )
 from hydra_suite.utils.slice_geometry import SlicePlan
@@ -906,3 +912,236 @@ def test_run_obb_short_circuits_zero_region_frames_without_extract_or_merge(
     assert len(out) == 1
     assert out[0].frame_idx == 0
     assert out[0].num_detections == 0
+
+
+# --- Task 11: SlicedStage1Proposals (new capability, correctness tests) -----
+
+
+def test_merge_axis_aligned_boxes_nms_keeps_highest_confidence():
+    boxes = np.array(
+        [[0.0, 0.0, 10.0, 10.0], [2.0, 2.0, 12.0, 12.0], [50.0, 50.0, 60.0, 60.0]]
+    )
+    scores = np.array([0.9, 0.8, 0.5])
+    merged = _merge_axis_aligned_boxes(
+        boxes, scores, policy="nms", metric="iou", threshold=0.3
+    )
+    assert merged.shape[0] == 2  # overlapping pair collapses to one
+    assert any(np.allclose(row, boxes[0]) for row in merged)
+    assert any(np.allclose(row, boxes[2]) for row in merged)
+
+
+def test_merge_axis_aligned_boxes_nmm_unions_overlapping_group():
+    boxes = np.array([[0.0, 0.0, 10.0, 10.0], [5.0, 5.0, 15.0, 15.0]])
+    scores = np.array([0.9, 0.8])
+    merged = _merge_axis_aligned_boxes(
+        boxes, scores, policy="greedy_nmm", metric="iou", threshold=0.1
+    )
+    assert merged.shape[0] == 1
+    assert np.allclose(merged[0], [0.0, 0.0, 15.0, 15.0])
+
+
+def test_merge_axis_aligned_boxes_no_overlap_passthrough():
+    boxes = np.array([[0.0, 0.0, 10.0, 10.0], [50.0, 50.0, 60.0, 60.0]])
+    scores = np.array([0.9, 0.8])
+    merged = _merge_axis_aligned_boxes(
+        boxes, scores, policy="greedy_nmm", metric="iou", threshold=0.5
+    )
+    assert merged.shape[0] == 2
+    assert np.allclose(sorted(merged.tolist()), sorted(boxes.tolist()))
+
+
+class _FakeStage1TileBoxes:
+    def __init__(self, xyxy, conf):
+        self.xyxy = torch.tensor(xyxy, dtype=torch.float32)
+        self.conf = torch.tensor(conf, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.xyxy)
+
+
+class _FakeStage1TileResult:
+    def __init__(self, xyxy, conf):
+        self.boxes = _FakeStage1TileBoxes(xyxy, conf) if xyxy else None
+
+
+class _FakeTiledDetectModel:
+    """Returns one fake stage-1 result per flattened tile image, in order."""
+
+    def __init__(self, per_tile_boxes_conf):
+        self._per_tile = per_tile_boxes_conf
+        self.imgsz = 30
+
+    def predict(self, images, **kwargs):
+        assert len(images) == len(self._per_tile)
+        return [_FakeStage1TileResult(b, c) for b, c in self._per_tile]
+
+
+def _two_tile_slice_cfg(**overrides):
+    # frame (h=20, w=40); slice_width=30 + overlap_width_ratio=0.333 ->
+    # tiles (0,0,30,20) and (10,0,40,20) (verified against plan_tiles).
+    kwargs = dict(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=30,
+        slice_height=20,
+        overlap_width_ratio=0.333,
+        overlap_height_ratio=0.0,
+        perform_standard_pred=False,
+        merge_policy="greedy_nmm",
+        merge_metric="iou",
+        merge_threshold=0.5,
+    )
+    kwargs.update(overrides)
+    return SliceConfig(**kwargs)
+
+
+def _fake_seq_for_sliced_stage1(slice_cfg, stage2_image_size=10):
+    return SimpleNamespace(
+        stage1_slice=slice_cfg,
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        crop_pad_ratio=0.0,
+        min_crop_size_px=0.0,
+        enforce_square_crop=False,
+        stage2_image_size=stage2_image_size,
+    )
+
+
+def test_sliced_stage1_proposals_merges_boundary_detection_and_offsets_crop():
+    """A single object straddling the tile boundary is detected once per tile
+    but must collapse into ONE frame-space box/crop, not two."""
+    frame = np.zeros((20, 40, 3), dtype=np.uint8)
+    frames = [frame]
+    slice_cfg = _two_tile_slice_cfg()
+    seq = _fake_seq_for_sliced_stage1(slice_cfg)
+    # tile0 covers frame x[0,30); tile1 covers frame x[10,40) -- both see the
+    # SAME frame-space object at x[15,25], y[5,15] (local coords differ by
+    # each tile's x0 offset), so both map to the identical frame-space box.
+    per_tile = [
+        ([[15.0, 5.0, 25.0, 15.0]], [0.9]),  # tile0 (x0=0) local box
+        ([[5.0, 5.0, 15.0, 15.0]], [0.8]),  # tile1 (x0=10) local box
+    ]
+    detect_model = _FakeTiledDetectModel(per_tile)
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(detect_model=detect_model)
+    runtime = SimpleNamespace(device="cpu")
+
+    src = SlicedStage1Proposals()
+    planned = src.plan(frames, models, config, runtime)
+    assert len(planned) == 1
+    regions_out = planned[0]
+    assert len(regions_out) == 1  # merged, not double-counted
+    r = regions_out[0]
+    # crop_pad_ratio=0, min_crop_size_px=0 -> half = max(bw, bh)/2 = 5;
+    # cx=20, cy=10 -> ox1=15, oy1=5 (== the merged box's own top-left, since
+    # the merged box is already a 10x10 square).
+    assert r.affine.offset == (15.0, 5.0)
+    assert r.frame_idx == 0
+
+
+def test_sliced_stage1_proposals_keeps_distinct_non_overlapping_detections():
+    """Two genuinely distinct objects, one per exclusive tile region, must
+    NOT be merged into each other."""
+    frame = np.zeros((20, 40, 3), dtype=np.uint8)
+    frames = [frame]
+    slice_cfg = _two_tile_slice_cfg()
+    seq = _fake_seq_for_sliced_stage1(slice_cfg)
+    # tile0-only object near x=5 (frame space); tile1-only object near
+    # frame x=35 -- far apart, zero overlap.
+    per_tile = [
+        ([[0.0, 5.0, 10.0, 15.0]], [0.9]),  # tile0 local -> frame [0,5,10,15]
+        ([[15.0, 5.0, 25.0, 15.0]], [0.8]),  # tile1 (x0=10) -> frame [25,5,35,15]
+    ]
+    detect_model = _FakeTiledDetectModel(per_tile)
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(detect_model=detect_model)
+    runtime = SimpleNamespace(device="cpu")
+
+    planned = SlicedStage1Proposals().plan(frames, models, config, runtime)
+    regions_out = planned[0]
+    assert len(regions_out) == 2
+    offsets = sorted(r.affine.offset for r in regions_out)
+    assert offsets == [(0.0, 5.0), (25.0, 5.0)]
+
+
+def test_sliced_stage1_proposals_empty_stage1_yields_no_regions():
+    frame = np.zeros((20, 40, 3), dtype=np.uint8)
+    slice_cfg = _two_tile_slice_cfg()
+    seq = _fake_seq_for_sliced_stage1(slice_cfg)
+    detect_model = _FakeTiledDetectModel([([], []), ([], [])])
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(detect_model=detect_model)
+    runtime = SimpleNamespace(device="cpu")
+
+    planned = SlicedStage1Proposals().plan([frame], models, config, runtime)
+    assert planned == [[]]
+
+
+def test_select_region_source_sliced_stage1_dispatch():
+    enabled_cfg = SimpleNamespace(
+        mode="sequential",
+        direct=None,
+        sequential=SimpleNamespace(stage1_slice=SliceConfig(enabled=True)),
+    )
+    disabled_cfg = SimpleNamespace(
+        mode="sequential",
+        direct=None,
+        sequential=SimpleNamespace(stage1_slice=SliceConfig(enabled=False)),
+    )
+    assert isinstance(select_region_source(enabled_cfg), SlicedStage1Proposals)
+    assert isinstance(select_region_source(disabled_cfg), Stage1Proposals)
+    assert not isinstance(select_region_source(disabled_cfg), SlicedStage1Proposals)
+
+
+def test_sliced_stage1_proposals_inherits_stage1_proposals_contract():
+    src = SlicedStage1Proposals()
+    assert src.merge_policy == "plain"
+    assert src.device_residency == "cpu_crop_boundary"
+    assert src.force_numpy is True
+    seq = SimpleNamespace(stage2_task="segment")
+    config = SimpleNamespace(sequential=seq)
+    assert src.task(config) == "segment"
+    assert src.seg_source(config) is seq
+
+
+def test_obb_sequential_config_stage1_slice_defaults_disabled():
+    seq_cfg = OBBSequentialConfig(detect_model_path="d.pt", obb_model_path="o.pt")
+    assert isinstance(seq_cfg.stage1_slice, SliceConfig)
+    assert seq_cfg.stage1_slice.enabled is False
+
+
+def test_build_inference_config_from_params_round_trips_stage1_slice():
+    params = {
+        "YOLO_OBB_MODE": "sequential",
+        "YOLO_DETECT_MODEL_PATH": "detect.pt",
+        "YOLO_CROP_OBB_MODEL_PATH": "crop.pt",
+        "YOLO_SEQ_STAGE1_SLICE_ENABLED": True,
+        "YOLO_SEQ_STAGE1_SLICE_GEOMETRY_MODE": "custom",
+        "YOLO_SEQ_STAGE1_SLICE_WIDTH": 128,
+        "YOLO_SEQ_STAGE1_SLICE_HEIGHT": 96,
+        "YOLO_SEQ_STAGE1_SLICE_OVERLAP": 0.3,
+        "YOLO_SEQ_STAGE1_SLICE_MERGE_POLICY": "nms",
+        "YOLO_SEQ_STAGE1_SLICE_MERGE_METRIC": "iou",
+        "YOLO_SEQ_STAGE1_SLICE_MERGE_THRESHOLD": 0.4,
+    }
+    cfg = build_inference_config_from_params(params)
+    slice_cfg = cfg.obb.sequential.stage1_slice
+    assert slice_cfg.enabled is True
+    assert slice_cfg.geometry_mode == "custom"
+    assert slice_cfg.slice_width == 128
+    assert slice_cfg.slice_height == 96
+    assert slice_cfg.overlap_width_ratio == pytest.approx(0.3)
+    assert slice_cfg.overlap_height_ratio == pytest.approx(0.3)
+    assert slice_cfg.merge_policy == "nms"
+    assert slice_cfg.merge_metric == "iou"
+    assert slice_cfg.merge_threshold == pytest.approx(0.4)
+
+
+def test_build_inference_config_from_params_stage1_slice_disabled_by_default():
+    params = {
+        "YOLO_OBB_MODE": "sequential",
+        "YOLO_DETECT_MODEL_PATH": "detect.pt",
+        "YOLO_CROP_OBB_MODEL_PATH": "crop.pt",
+    }
+    cfg = build_inference_config_from_params(params)
+    assert cfg.obb.sequential.stage1_slice.enabled is False

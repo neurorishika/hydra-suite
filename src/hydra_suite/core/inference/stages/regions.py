@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+import torch
+
 
 @dataclass(frozen=True)
 class Affine:
@@ -386,16 +389,229 @@ class Stage1Proposals(RegionSource):
         return out
 
 
+class _FrameSpaceBoxes:
+    """Minimal ``build_crops``-compatible box container.
+
+    ``build_crops`` (obb.py) reads exactly one attribute off its ``boxes``
+    argument: ``boxes.xyxy.cpu().numpy()``. Real stage-1 predict results hand
+    it an ultralytics ``Boxes`` object; ``SlicedStage1Proposals`` instead has
+    already-merged frame-space boxes (a plain ``(N, 4)`` array), so this
+    wraps them in the same minimal shape rather than fabricating a full
+    ultralytics ``Boxes``.
+    """
+
+    def __init__(self, xyxy: torch.Tensor) -> None:
+        self.xyxy = xyxy
+
+    def __len__(self) -> int:
+        return int(self.xyxy.shape[0])
+
+
+def _box_overlap(a: np.ndarray, b: np.ndarray, metric: str) -> float:
+    """IoU or IoS of two axis-aligned ``(x1, y1, x2, y2)`` boxes."""
+    x1 = max(a[0], b[0])
+    y1 = max(a[1], b[1])
+    x2 = min(a[2], b[2])
+    y2 = min(a[3], b[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    if area_a <= 1e-9 or area_b <= 1e-9:
+        return 0.0
+    denom = min(area_a, area_b) if metric == "ios" else area_a + area_b - inter
+    return float(inter / denom) if denom > 1e-9 else 0.0
+
+
+def _merge_axis_aligned_boxes(
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    *,
+    policy: str,
+    metric: str,
+    threshold: float,
+) -> np.ndarray:
+    """Dedup cross-tile stage-1 boxes in frame space (axis-aligned, greedy).
+
+    Same confidence-descending greedy-group structure as
+    ``merge._merge_obb_detections`` (oriented boxes, cv2 hull IoU/IoS), applied
+    to plain axis-aligned stage-1 detect boxes instead: ``policy="nms"`` keeps
+    the highest-confidence member of each overlapping group and drops the
+    rest; ``"nmm"``/``"greedy_nmm"`` union each group into its enclosing
+    axis-aligned box. A tile-boundary-straddling object detected in two
+    overlapping tiles collapses into ONE frame-space box either way, rather
+    than being fed twice into ``build_crops``.
+    """
+    n = boxes.shape[0]
+    if n <= 1:
+        return boxes
+    order = np.argsort(-scores)
+    consumed = np.zeros(n, dtype=bool)
+    out_rows: list[np.ndarray] = []
+    for i in order:
+        if consumed[i]:
+            continue
+        group = [int(i)]
+        for j in order:
+            if j == i or consumed[j]:
+                continue
+            if _box_overlap(boxes[i], boxes[j], metric) >= threshold:
+                consumed[j] = True
+                group.append(int(j))
+        consumed[i] = True
+        if policy == "nms" or len(group) == 1:
+            out_rows.append(boxes[i])
+        else:  # nmm / greedy_nmm -> union into the enclosing box
+            g = boxes[group]
+            out_rows.append(
+                np.array([g[:, 0].min(), g[:, 1].min(), g[:, 2].max(), g[:, 3].max()])
+            )
+    return np.stack(out_rows, axis=0) if out_rows else np.zeros((0, 4))
+
+
+class SlicedStage1Proposals(Stage1Proposals):
+    """Stage1Proposals, but stage-1 detection runs on a tiled grid (Task 11).
+
+    New capability (off by default via ``config.sequential.stage1_slice.
+    enabled``): tiles the frame for the STAGE-1 detect pass only (reusing
+    ``Grid``'s tiling geometry), remaps each tile's stage-1 boxes into frame
+    space, dedups cross-tile duplicates with ``_merge_axis_aligned_boxes``,
+    then hands the merged frame-space boxes to the SAME
+    ``build_crops``/``resize_crops_for_stage2``/stage-2-region construction
+    ``Stage1Proposals.plan`` uses. ``task``/``seg_source``/``execute``/
+    ``force_numpy``/``merge_policy``/``device_residency`` are all inherited
+    unchanged from ``Stage1Proposals`` -- only stage-1 detection geometry
+    differs.
+    """
+
+    def plan(
+        self, frames, models, config, runtime, roi_mask=None
+    ) -> list[list[Region]]:
+        if not frames:
+            return []
+
+        from .obb import (
+            _frames_are_cuda_tensors,
+            _resolve_imgsz,
+            build_crops,
+            resize_crops_for_stage2,
+        )
+        from .slicing import _build_tile_jobs, plan_slices
+
+        seq = config.sequential
+        slice_cfg = seq.stage1_slice
+        model = models.detect_model
+        imgsz = _resolve_imgsz(model)
+        device_frames = _frames_are_cuda_tensors(frames)
+
+        first = frames[0]
+        frame_hw = (int(first.shape[0]), int(first.shape[1]))
+        plan = plan_slices(
+            frame_hw,
+            slice_cfg,
+            imgsz,
+            roi_mask=roi_mask,
+            ref_object_px=slice_cfg.reference_body_px,
+        )
+        jobs, images = _build_tile_jobs(frames, plan, device_frames)
+        n_tiles = len(plan.tiles)
+        per_frame_count = n_tiles + (1 if plan.full_frame else 0)
+
+        stage1_kwargs: dict[str, Any] = {}
+        if seq.detect_image_size > 0:
+            stage1_kwargs["imgsz"] = seq.detect_image_size
+        # Same stage-1 predict kwargs as Stage1Proposals.plan, applied to the
+        # flattened tile-image list instead of the whole-frame list.
+        tile_results = model.predict(
+            images,
+            conf=seq.detect_confidence_threshold,
+            iou=1.0,
+            classes=config.target_classes or None,
+            verbose=False,
+            device=runtime.device,
+            **stage1_kwargs,
+        )
+
+        per_frame: list[list[Region]] = []
+        for frame_idx, frame in enumerate(frames):
+            start = frame_idx * per_frame_count
+            frame_jobs = jobs[start : start + per_frame_count]
+            frame_results = tile_results[start : start + per_frame_count]
+
+            boxes_parts: list[np.ndarray] = []
+            scores_parts: list[np.ndarray] = []
+            for (_, x0, y0), res in zip(frame_jobs, frame_results):
+                b = getattr(res, "boxes", None)
+                if b is None or len(b) == 0:
+                    continue
+                xyxy = np.array(b.xyxy.detach().cpu().numpy(), dtype=np.float64)
+                xyxy[:, [0, 2]] += x0
+                xyxy[:, [1, 3]] += y0
+                conf = getattr(b, "conf", None)
+                scores = (
+                    np.array(conf.detach().cpu().numpy(), dtype=np.float64)
+                    if conf is not None
+                    else np.ones(xyxy.shape[0], dtype=np.float64)
+                )
+                boxes_parts.append(xyxy)
+                scores_parts.append(scores)
+
+            if not boxes_parts:
+                per_frame.append([])
+                continue
+
+            all_boxes = np.concatenate(boxes_parts, axis=0)
+            all_scores = np.concatenate(scores_parts, axis=0)
+            merged = _merge_axis_aligned_boxes(
+                all_boxes,
+                all_scores,
+                policy=slice_cfg.merge_policy,
+                metric=slice_cfg.merge_metric,
+                threshold=slice_cfg.merge_threshold,
+            )
+            if merged.shape[0] == 0:
+                per_frame.append([])
+                continue
+
+            frame_boxes = _FrameSpaceBoxes(torch.as_tensor(merged, dtype=torch.float32))
+            crops, offsets = build_crops(frame, frame_boxes, seq, runtime)
+            if not crops:
+                per_frame.append([])
+                continue
+            orig_sizes = [(c.shape[1], c.shape[0]) for c in crops]  # (w, h)
+            crops = resize_crops_for_stage2(crops, seq.stage2_image_size)
+            regions: list[Region] = []
+            for j, resized in enumerate(crops):
+                orig_w, orig_h = orig_sizes[j]
+                scale = (
+                    (orig_w / seq.stage2_image_size, orig_h / seq.stage2_image_size)
+                    if seq.stage2_image_size > 0
+                    else (1.0, 1.0)
+                )
+                regions.append(
+                    Region(
+                        image=resized,
+                        affine=Affine(offset=offsets[j], scale=scale),
+                        frame_idx=frame_idx,
+                    )
+                )
+            per_frame.append(regions)
+        return per_frame
+
+
 def select_region_source(config) -> RegionSource:
     """Pick the ``RegionSource`` planner implied by an ``OBBConfig``.
 
     ``direct`` + sliced -> ``Grid``; ``direct`` (non-sliced) -> ``WholeFrame``;
-    ``sequential`` -> ``Stage1Proposals``. (A ``SlicedStage1Proposals`` variant
-    is a later task, not selected here.)
+    ``sequential`` + ``stage1_slice.enabled`` -> ``SlicedStage1Proposals``;
+    ``sequential`` (otherwise) -> ``Stage1Proposals``.
     """
     if config.mode == "direct":
         slice_cfg = getattr(config.direct, "slice", None) if config.direct else None
         if slice_cfg is not None and slice_cfg.enabled:
             return Grid()
         return WholeFrame()
+    sequential = getattr(config, "sequential", None)
+    stage1_slice = getattr(sequential, "stage1_slice", None)
+    if stage1_slice is not None and stage1_slice.enabled:
+        return SlicedStage1Proposals()
     return Stage1Proposals()

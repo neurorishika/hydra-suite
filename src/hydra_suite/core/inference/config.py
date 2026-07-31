@@ -160,6 +160,12 @@ class OBBSequentialConfig:
     seg_crop_size: int = 64
     seg_pad_ratio: float = 0.15
     seg_mask_threshold: float = 0.5
+    # SAHI-style tiling for the STAGE-1 (detect) pass only (Phase C, Task 11).
+    # Off by default -- `select_region_source` routes to the unchanged
+    # `Stage1Proposals` source unless `stage1_slice.enabled` is True, so
+    # existing sequential configs are byte-identical to before this field
+    # existed. See `regions.SlicedStage1Proposals`.
+    stage1_slice: SliceConfig = field(default_factory=SliceConfig)
 
 
 @dataclass
@@ -205,11 +211,13 @@ class OBBConfig:
             if isinstance(slice_d, dict):
                 direct.slice = SliceConfig(**slice_d)
 
-        sequential = (
-            OBBSequentialConfig(**obb_d["sequential"])
-            if obb_d.get("sequential")
-            else None
-        )
+        sequential = None
+        if obb_d.get("sequential"):
+            sequential_d = dict(obb_d["sequential"])
+            stage1_slice_d = sequential_d.pop("stage1_slice", None)
+            sequential = OBBSequentialConfig(**sequential_d)
+            if isinstance(stage1_slice_d, dict):
+                sequential.stage1_slice = SliceConfig(**stage1_slice_d)
         return OBBConfig(
             mode=obb_d["mode"],
             direct=direct,
@@ -515,6 +523,69 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
     )
 
 
+def _clamped_int(raw: Any, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return v if lo <= v <= hi else default
+
+
+def _clamped_float(raw: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return v if math.isfinite(v) and lo <= v <= hi else default
+
+
+def _slice_config_from_params(
+    params: dict, prefix: str, *, reference_body_px: float
+) -> SliceConfig:
+    """Build a ``SliceConfig`` from ``{prefix}*`` params.
+
+    Shared by the direct-mode ``SLICE_*`` mapping and the sequential-mode
+    stage-1 ``YOLO_SEQ_STAGE1_SLICE_*`` mapping (Task 11) -- same field
+    semantics, different param-name prefix.
+    """
+    overlap = _clamped_float(params.get(f"{prefix}OVERLAP", 0.2), 0.2, 0.0, 0.9)
+    _geometry_mode = (
+        str(params.get(f"{prefix}GEOMETRY_MODE", "auto_model")).strip().lower()
+    )
+    _merge_policy = (
+        str(params.get(f"{prefix}MERGE_POLICY", "greedy_nmm")).strip().lower()
+    )
+    _merge_metric = str(params.get(f"{prefix}MERGE_METRIC", "ios")).strip().lower()
+    _merge_backend = str(params.get(f"{prefix}MERGE_BACKEND", "cv2")).strip().lower()
+    return SliceConfig(
+        enabled=bool(params.get(f"{prefix}ENABLED", False)),
+        geometry_mode=(
+            _geometry_mode
+            if _geometry_mode in {"auto_model", "auto_object", "custom"}
+            else "auto_model"
+        ),
+        slice_height=_clamped_int(params.get(f"{prefix}HEIGHT", 0), 0, 0, 8192),
+        slice_width=_clamped_int(params.get(f"{prefix}WIDTH", 0), 0, 0, 8192),
+        overlap_height_ratio=overlap,
+        overlap_width_ratio=overlap,
+        object_tile_fraction=_clamped_float(
+            params.get(f"{prefix}OBJECT_TILE_FRACTION", 0.15), 0.15, 0.01, 0.9
+        ),
+        reference_body_px=reference_body_px,
+        merge_policy=(
+            _merge_policy
+            if _merge_policy in {"nms", "nmm", "greedy_nmm"}
+            else "greedy_nmm"
+        ),
+        merge_metric=(_merge_metric if _merge_metric in {"iou", "ios"} else "ios"),
+        merge_threshold=_clamped_float(
+            params.get(f"{prefix}MERGE_THRESHOLD", 0.5), 0.5, 0.0, 1.0
+        ),
+        merge_backend=(_merge_backend if _merge_backend in {"cv2", "gpu"} else "cv2"),
+        perform_standard_pred=bool(params.get(f"{prefix}PERFORM_STANDARD_PRED", False)),
+    )
+
+
 def build_inference_config_from_params(params: dict) -> InferenceConfig:
     """Build an InferenceConfig from a tracking-worker params dict.
 
@@ -577,6 +648,31 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     if obb_mode == "sequential":
         detect_path = str(params.get("YOLO_DETECT_MODEL_PATH", "") or "")
         crop_path = str(params.get("YOLO_CROP_OBB_MODEL_PATH", "") or direct_model_path)
+
+        # Stage-1 tiling (Task 11, off by default). Same reference-body-px
+        # derivation as the direct-mode SLICE_* mapping below, with its own
+        # SLICE_TRAINED_BODY_PX-style override key so a stage-1 tile grid can
+        # be sized independently of any direct-mode grid in the same config.
+        _stage1_trained_body_px = _clamped_float(
+            params.get("YOLO_SEQ_STAGE1_SLICE_TRAINED_BODY_PX", 0.0), 0.0, 0.0, 8192.0
+        )
+        _stage1_reference_body_px = (
+            _stage1_trained_body_px
+            if _stage1_trained_body_px > 0
+            else _clamped_float(
+                float(params.get("REFERENCE_BODY_SIZE", 20.0) or 20.0)
+                * float(params.get("RESIZE_FACTOR", 1.0) or 1.0),
+                0.0,
+                0.0,
+                8192.0,
+            )
+        )
+        stage1_slice_cfg = _slice_config_from_params(
+            params,
+            "YOLO_SEQ_STAGE1_SLICE_",
+            reference_body_px=_stage1_reference_body_px,
+        )
+
         # YOLO_SEQ_* keys mirror the legacy per-stage sequential-OBB knobs
         # (yolo_detector.py:_seq_*); threading them through here keeps the
         # redesign's sequential pipeline config-driven instead of silently
@@ -614,6 +710,7 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 seg_mask_threshold=float(
                     params.get("YOLO_SEQ_SEG_MASK_THRESHOLD", 0.5)
                 ),
+                stage1_slice=stage1_slice_cfg,
             ),
             target_classes=target_classes,
             confidence_threshold=yolo_conf,
@@ -631,20 +728,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             model_task = "obb"
         fixed_angle_deg = float(params.get("YOLO_OBB_FIXED_ANGLE_DEG", 0.0) or 0.0)
 
-        def _clamped_int(raw, default, lo, hi):
-            try:
-                v = int(raw)
-            except (TypeError, ValueError):
-                return default
-            return v if lo <= v <= hi else default
-
-        def _clamped_float(raw, default, lo, hi):
-            try:
-                v = float(raw)
-            except (TypeError, ValueError):
-                return default
-            return v if math.isfinite(v) and lo <= v <= hi else default
-
         seg_num_angles = _clamped_int(
             params.get("YOLO_OBB_SEG_NUM_ANGLES", 24), 24, 4, 180
         )
@@ -658,15 +741,6 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
             params.get("YOLO_OBB_SEG_MASK_THRESHOLD", 0.5), 0.5, 0.05, 0.95
         )
 
-        overlap = _clamped_float(params.get("SLICE_OVERLAP", 0.2), 0.2, 0.0, 0.9)
-        _geometry_mode = (
-            str(params.get("SLICE_GEOMETRY_MODE", "auto_model")).strip().lower()
-        )
-        _merge_policy = (
-            str(params.get("SLICE_MERGE_POLICY", "greedy_nmm")).strip().lower()
-        )
-        _merge_metric = str(params.get("SLICE_MERGE_METRIC", "ios")).strip().lower()
-        _merge_backend = str(params.get("SLICE_MERGE_BACKEND", "cv2")).strip().lower()
         _trained_body_px = _clamped_float(
             params.get("SLICE_TRAINED_BODY_PX", 0.0), 0.0, 0.0, 8192.0
         )
@@ -681,38 +755,10 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 8192.0,
             )
         )
-        slice_cfg = SliceConfig(
-            enabled=bool(params.get("SLICE_ENABLED", False)),
-            geometry_mode=(
-                _geometry_mode
-                if _geometry_mode in {"auto_model", "auto_object", "custom"}
-                else "auto_model"
-            ),
-            slice_height=_clamped_int(params.get("SLICE_HEIGHT", 0), 0, 0, 8192),
-            slice_width=_clamped_int(params.get("SLICE_WIDTH", 0), 0, 0, 8192),
-            overlap_height_ratio=overlap,
-            overlap_width_ratio=overlap,
-            object_tile_fraction=_clamped_float(
-                params.get("SLICE_OBJECT_TILE_FRACTION", 0.15), 0.15, 0.01, 0.9
-            ),
-            # auto_object needs a real object scale or it silently degrades to
-            # auto_model. Same source/scaling worker.py uses (worker.py:921).
-            reference_body_px=_reference_body_px,
-            merge_policy=(
-                _merge_policy
-                if _merge_policy in {"nms", "nmm", "greedy_nmm"}
-                else "greedy_nmm"
-            ),
-            merge_metric=(_merge_metric if _merge_metric in {"iou", "ios"} else "ios"),
-            merge_threshold=_clamped_float(
-                params.get("SLICE_MERGE_THRESHOLD", 0.5), 0.5, 0.0, 1.0
-            ),
-            merge_backend=(
-                _merge_backend if _merge_backend in {"cv2", "gpu"} else "cv2"
-            ),
-            perform_standard_pred=bool(
-                params.get("SLICE_PERFORM_STANDARD_PRED", False)
-            ),
+        # auto_object needs a real object scale or it silently degrades to
+        # auto_model. Same source/scaling worker.py uses (worker.py:921).
+        slice_cfg = _slice_config_from_params(
+            params, "SLICE_", reference_body_px=_reference_body_px
         )
 
         obb_cfg = OBBConfig(
