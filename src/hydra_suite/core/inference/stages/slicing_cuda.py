@@ -16,39 +16,9 @@ this module lazily (function-level) -- CPU/MPS installs never pay for it.
 
 from __future__ import annotations
 
-import math
-
 import torch
 
 from .slicing import SlicePlan, tiles_overlap
-
-
-def _remap_raw(raw, x0: int, y0: int):
-    """Return a copy of a ``_RawOBBTensors`` shifted by ``(x0, y0)`` on-device.
-
-    PURE TRANSLATION only: ``xywhr[:, 2:5]`` (w, h, angle), ``conf`` and ``cls``
-    are untouched. A translation cannot change size or orientation -- see the
-    Task 3 bug this guards against (pairing ``cv2.minAreaRect``'s (w, h, angle)
-    with a differently-conventioned stored angle silently rotated boxes 90
-    degrees; area stayed invariant so every test passed).
-    """
-    from .obb import _RawOBBTensors
-
-    if raw.xywhr.shape[0] == 0:
-        return raw
-    xywhr = raw.xywhr.clone()
-    xywhr[:, 0] += x0
-    xywhr[:, 1] += y0
-    corners = raw.corners.clone()
-    corners[..., 0] += x0
-    corners[..., 1] += y0
-    return _RawOBBTensors(
-        frame_idx=raw.frame_idx,
-        xywhr=xywhr,
-        corners=corners,
-        conf=raw.conf,
-        cls=raw.cls,
-    )
 
 
 def _concat_raw(parts, frame_idx: int):
@@ -84,36 +54,6 @@ def _concat_raw(parts, frame_idx: int):
     )
 
 
-def extract_raw_tile(result, frame_idx: int, config, runtime):
-    """Extract one tile's detections as ``_RawOBBTensors`` (zero ``.cpu()``)."""
-    from .obb import (
-        _extract_raw_tensors,
-        _extract_raw_tensors_from_boxes,
-        _extract_raw_tensors_from_masks,
-    )
-
-    model_task = config.direct.model_task
-    if model_task == "detect":
-        return _extract_raw_tensors_from_boxes(
-            result,
-            frame_idx,
-            math.radians(config.direct.fixed_angle_deg),
-            runtime.device,
-        )
-    if model_task == "segment":
-        return _extract_raw_tensors_from_masks(
-            result,
-            frame_idx,
-            runtime.device,
-            config.raw_detection_cap,
-            num_angles=config.direct.seg_num_angles,
-            crop_size=config.direct.seg_crop_size,
-            pad_ratio=config.direct.seg_pad_ratio,
-            mask_threshold=config.direct.seg_mask_threshold,
-        )
-    return _extract_raw_tensors(result, frame_idx, runtime.device)
-
-
 def assemble_raw_frames(
     jobs: list[tuple[int, int, int]],
     results: list,
@@ -138,13 +78,26 @@ def assemble_raw_frames(
     detections pass straight through.
     """
     from .merge import band_membership, merge_obb_detections
-    from .obb import _apply_raw_detection_cap, materialize_tensors
+    from .obb import (
+        _apply_raw_detection_cap,
+        extract_with_transform,
+        materialize_tensors,
+    )
+    from .regions import Affine
 
     slice_cfg = config.direct.slice
     per_frame: dict[int, list] = {fi: [] for fi in range(n_frames)}
     for (fi, x0, y0), res in zip(jobs, results):
-        raw = extract_raw_tile(res, fi, config, runtime)
-        per_frame[fi].append(_remap_raw(raw, max(0, x0), max(0, y0)))
+        per_frame[fi].append(
+            extract_with_transform(
+                res,
+                fi,
+                config.direct.model_task,
+                Affine(offset=(float(max(0, x0)), float(max(0, y0)))),
+                config,
+                runtime,
+            )
+        )
 
     any_overlap = tiles_overlap(plan.tiles)
 

@@ -16,6 +16,8 @@ from hydra_suite.utils.slice_geometry import (  # noqa: F401 -- re-exported for 
 
 from ..config import SliceConfig
 from ..result import OBBResult
+from .obb import extract_with_transform
+from .regions import Affine
 
 logger = logging.getLogger(__name__)
 
@@ -96,39 +98,15 @@ def plan_slices(
     )
 
 
-def _extract_tile(result: Any, model_task: str, config, tile_local_idx: int):
-    """Run the correct per-task extractor on one tile's ultralytics result.
-
-    Returns an OBBResult in the TILE's local coordinate space (frame_idx is a
-    throwaway tile index; re-stamped after remap).
-    """
-    import math as _math
-
-    from .obb import (
-        _extract_obb_from_boxes,
-        _extract_obb_from_masks,
-        extract_obb_result,
-    )
-
-    if model_task == "detect":
-        return _extract_obb_from_boxes(
-            result, tile_local_idx, _math.radians(config.direct.fixed_angle_deg)
-        )
-    if model_task == "segment":
-        return _extract_obb_from_masks(
-            result,
-            tile_local_idx,
-            config.raw_detection_cap,
-            num_angles=config.direct.seg_num_angles,
-            crop_size=config.direct.seg_crop_size,
-            pad_ratio=config.direct.seg_pad_ratio,
-            mask_threshold=config.direct.seg_mask_threshold,
-        )
-    return extract_obb_result(result, tile_local_idx)
-
-
 def _offset_result(res, x0: int, y0: int, frame_idx: int):
-    """Return a copy of ``res`` with all coordinates shifted by (x0, y0)."""
+    """Return a copy of ``res`` with all coordinates shifted by (x0, y0).
+
+    Retained (Task 6 kept this despite retiring its ``run_direct_sliced``
+    caller in favor of ``extract_with_transform``) because
+    ``detectkit/gui/prediction_preview.py::predict_sliced_obb_result`` -- the
+    executor-driven preview/AL sliced path, which has no ``RuntimeContext`` to
+    hand ``extract_with_transform`` -- still imports and calls this directly.
+    """
     from .obb import _empty_obb_result
 
     if res.num_detections == 0:
@@ -356,8 +334,16 @@ def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
 
     per_frame: dict[int, list] = {fi: [] for fi in range(len(frames))}
     for (fi, x0, y0), res in zip(jobs, results):
-        local = _extract_tile(res, model_task, config, fi)
-        per_frame[fi].append(_offset_result(local, max(0, x0), max(0, y0), fi))
+        per_frame[fi].append(
+            extract_with_transform(
+                res,
+                fi,
+                model_task,
+                Affine(offset=(float(max(0, x0)), float(max(0, y0)))),
+                config,
+                runtime,
+            )
+        )
     return [
         _merge_frame_obb_results(per_frame[fi], fi, plan, config, runtime)
         for fi in range(len(frames))
