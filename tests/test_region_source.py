@@ -1,10 +1,19 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
 
+from hydra_suite.core.inference.config import SliceConfig
 from hydra_suite.core.inference.stages import obb as m
-from hydra_suite.core.inference.stages.regions import Affine
+from hydra_suite.core.inference.stages.regions import (
+    Affine,
+    Grid,
+    Stage1Proposals,
+    WholeFrame,
+    select_region_source,
+)
 
 
 def test_affine_identity_and_translate_only():
@@ -98,3 +107,160 @@ def test_extract_with_transform_raw_rejects_scale():
         m.extract_with_transform(
             object(), 0, "obb", Affine(scale=(2.0, 1.0)), _Cfg, _Rt()
         )
+
+
+# --- Task 4: RegionSource planners ------------------------------------------
+
+
+def test_whole_frame_plan():
+    frames = [
+        np.zeros((10, 10, 3), dtype=np.uint8),
+        np.zeros((10, 10, 3), dtype=np.uint8),
+    ]
+    src = WholeFrame()
+    planned = src.plan(frames, models=None, config=None, runtime=None)
+    assert len(planned) == 2
+    for fi, regions in enumerate(planned):
+        assert len(regions) == 1
+        assert regions[0].affine == Affine.IDENTITY
+        assert regions[0].frame_idx == fi
+        assert regions[0].image is frames[fi]
+    assert src.merge_policy == "plain"
+    assert src.device_residency == "on_device_capable"
+
+
+def test_grid_plan_tiles_translate_only():
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    frames = [frame]
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=32,
+        slice_height=32,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        perform_standard_pred=False,
+    )
+    config = SimpleNamespace(direct=SimpleNamespace(slice=slice_cfg))
+    models = SimpleNamespace(direct_model=SimpleNamespace(imgsz=32))
+    src = Grid()
+    planned = src.plan(frames, models, config, runtime=None)
+    assert len(planned) == 1
+    regions = planned[0]
+    assert len(regions) == 4
+    expected_offsets = {(0.0, 0.0), (32.0, 0.0), (0.0, 32.0), (32.0, 32.0)}
+    seen = set()
+    for r in regions:
+        assert r.affine.is_translate_only
+        assert r.affine.scale == (1.0, 1.0)
+        seen.add(r.affine.offset)
+        assert r.image.shape == (32, 32, 3)
+        assert r.frame_idx == 0
+    assert seen == expected_offsets
+    assert src.merge_policy == "overlap_band_nms"
+    assert src.device_residency == "on_device_capable"
+
+
+def test_grid_plan_full_frame_appended():
+    frame = np.zeros((64, 64, 3), dtype=np.uint8)
+    frames = [frame]
+    slice_cfg = SliceConfig(
+        enabled=True,
+        geometry_mode="custom",
+        slice_width=32,
+        slice_height=32,
+        overlap_width_ratio=0.0,
+        overlap_height_ratio=0.0,
+        perform_standard_pred=True,
+    )
+    config = SimpleNamespace(direct=SimpleNamespace(slice=slice_cfg))
+    models = SimpleNamespace(direct_model=SimpleNamespace(imgsz=32))
+    planned = Grid().plan(frames, models, config, runtime=None)
+    regions = planned[0]
+    assert len(regions) == 5  # 4 tiles + 1 full frame
+    assert regions[-1].affine == Affine.IDENTITY
+    assert regions[-1].image.shape == (64, 64, 3)
+
+
+class _FakeBoxesXY:
+    def __init__(self, xyxy):
+        self.xyxy = torch.tensor(xyxy, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.xyxy)
+
+
+class _FakeStage1Result:
+    def __init__(self, xyxy):
+        self.boxes = _FakeBoxesXY(xyxy) if xyxy else None
+
+
+class _FakeDetectModel:
+    def __init__(self, per_frame_boxes):
+        self._per_frame_boxes = per_frame_boxes
+
+    def predict(self, frames, **kwargs):
+        return [_FakeStage1Result(b) for b in self._per_frame_boxes]
+
+
+def _fake_sequential_config(stage2_image_size=16):
+    return SimpleNamespace(
+        detect_image_size=0,
+        detect_confidence_threshold=0.1,
+        crop_pad_ratio=0.0,
+        min_crop_size_px=0.0,
+        enforce_square_crop=False,
+        stage2_image_size=stage2_image_size,
+    )
+
+
+def test_stage1_proposals_plan_offset_scale():
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    frames = [frame]
+    boxes = [[10.0, 10.0, 30.0, 30.0]]  # square box, 20x20
+    detect_model = _FakeDetectModel([boxes])
+    seq = _fake_sequential_config(stage2_image_size=16)
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(detect_model=detect_model)
+    runtime = SimpleNamespace(device="cpu")
+
+    src = Stage1Proposals()
+    planned = src.plan(frames, models, config, runtime)
+    assert len(planned) == 1
+    regions = planned[0]
+    assert len(regions) == 1
+    r = regions[0]
+    # crop is arr[10:30, 10:30] -> 20x20 orig, resized to 16x16 -> scale 20/16
+    assert r.affine.offset == (10.0, 10.0)
+    assert r.affine.scale[0] == pytest.approx(20 / 16)
+    assert r.affine.scale[1] == pytest.approx(20 / 16)
+    assert r.image.shape[:2] == (16, 16)
+    assert r.frame_idx == 0
+    assert src.merge_policy == "plain"
+    assert src.device_residency == "cpu_crop_boundary"
+
+
+def test_stage1_proposals_plan_empty_boxes():
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    detect_model = _FakeDetectModel([[]])
+    seq = _fake_sequential_config()
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(detect_model=detect_model)
+    runtime = SimpleNamespace(device="cpu")
+
+    planned = Stage1Proposals().plan([frame], models, config, runtime)
+    assert planned == [[]]
+
+
+def test_select_region_source_dispatch():
+    direct_cfg = SimpleNamespace(
+        mode="direct", direct=SimpleNamespace(slice=SliceConfig(enabled=False))
+    )
+    sliced_cfg = SimpleNamespace(
+        mode="direct", direct=SimpleNamespace(slice=SliceConfig(enabled=True))
+    )
+    seq_cfg = SimpleNamespace(mode="sequential", direct=None)
+
+    assert isinstance(select_region_source(direct_cfg), WholeFrame)
+    assert isinstance(select_region_source(sliced_cfg), Grid)
+    assert isinstance(select_region_source(seq_cfg), Stage1Proposals)
