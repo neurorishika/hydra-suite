@@ -40,3 +40,28 @@ def test_extract_boxes_default_identity_byte_identical():
     assert np.array_equal(a.centroids, b.centroids) and np.array_equal(
         a.corners, b.corners
     )
+
+
+def test_extract_with_transform_numpy_detect(monkeypatch):
+    from hydra_suite.core.inference.stages.regions import Affine
+
+    class _Rt:  # numpy universe
+        tensor_on_cuda = False
+        device = "cpu"
+
+    class _Cfg:
+        class direct:
+            fixed_angle_deg = 0.0
+            seg_num_angles = 24
+            seg_crop_size = 64
+            seg_pad_ratio = 0.15
+            seg_mask_threshold = 0.5
+
+        raw_detection_cap = 0
+        emit_native_geometry = False
+
+    res = _FakeDetResult([[10.0, 20.0, 30.0, 60.0]], [0.9])
+    out = m.extract_with_transform(
+        res, 0, "detect", Affine(offset=(100.0, 0.0)), _Cfg, _Rt()
+    )
+    assert out.centroids[0][0] == pytest.approx(120.0)  # 20 + 100

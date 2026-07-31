@@ -820,6 +820,48 @@ def _extract_class_ids(obb: Any, n: int) -> np.ndarray:
     return np.zeros(n, dtype=np.int64)
 
 
+def extract_with_transform(result, frame_idx, task, affine, config, runtime):
+    """Single task x universe extraction seam. Applies `affine` in the matching universe.
+
+    numpy universe (cpu/mps/all gpu_fast): affine applied during extraction (offset+scale).
+    raw universe (gpu-native tensor_on_cuda): translate-only on-device (Task 3).
+    """
+    ox, oy = affine.offset
+    sx, sy = affine.scale
+    if runtime.tensor_on_cuda:
+        raise NotImplementedError("raw universe: Task 3")
+    d = config.direct
+    if task == "detect":
+        return _extract_obb_from_boxes(
+            result,
+            frame_idx,
+            math.radians(d.fixed_angle_deg if d else 0.0),
+            offset=(ox, oy),
+            scale=(sx, sy),
+            emit_native_geometry=config.emit_native_geometry,
+        )
+    if task == "segment":
+        return _extract_obb_from_masks(
+            result,
+            frame_idx,
+            config.raw_detection_cap,
+            num_angles=d.seg_num_angles,
+            crop_size=d.seg_crop_size,
+            pad_ratio=d.seg_pad_ratio,
+            mask_threshold=d.seg_mask_threshold,
+            offset=(ox, oy),
+            scale=(sx, sy),
+            emit_native_geometry=config.emit_native_geometry,
+        )
+    return extract_obb_result(
+        result,
+        frame_idx,
+        offset=(ox, oy),
+        scale=(sx, sy),
+        emit_native_geometry=config.emit_native_geometry,
+    )
+
+
 def extract_obb_result(
     result: Any,
     frame_idx: int,
