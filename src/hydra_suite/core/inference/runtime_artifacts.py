@@ -525,6 +525,44 @@ def _load_torch_executor(model_path: str, runtime: str) -> Any:
     return model
 
 
+class _CoreMLBatchExecutor:
+    """Batch-safe adapter around a CoreML ``YOLO(mlpackage)`` executor.
+
+    The ultralytics CoreML backend (``AutoBackend`` -> ``CoreMLBackend``) is
+    STATIC batch=1: ``CoreMLBackend.forward`` infers only ``im[0]`` and returns
+    a single ``Results`` no matter how many images the batch holds, which then
+    raises ``IndexError`` inside ultralytics' own ``stream_inference``
+    (``self.results[i]`` for ``i >= 1``). Direct-mode OBB never trips this
+    because CoreML is pinned to batch=1 and the direct window feeds
+    ``detection_batch_size`` (=1 in practice) frames per call, but the
+    sequential stage-2 batches crops (``stage2_batch_size``) and hands the
+    CoreML executor multi-crop lists -> hard crash (observed as an empty-CSV
+    run under the ``gpu_fast`` tier on Apple Silicon).
+
+    This wrapper presents the same ``predict(list, **kw)`` batch API every other
+    executor exposes, but dispatches CoreML one image at a time and concatenates
+    the per-image ``Results``. A single-image call is a passthrough --
+    byte-identical to the previous working batch=1 path -- and every other
+    attribute (``.task``, ``.names``, ...) delegates to the wrapped model.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached when normal lookup fails, so the real ``_model`` instance
+        # attribute never routes here; ``__getattribute__`` guards recursion.
+        return getattr(object.__getattribute__(self, "_model"), name)
+
+    def predict(self, source: Any, **kwargs: Any) -> Any:
+        if isinstance(source, (list, tuple)) and len(source) > 1:
+            results: list = []
+            for image in source:
+                results.extend(self._model.predict([image], **kwargs))
+            return results
+        return self._model.predict(source, **kwargs)
+
+
 def _load_coreml_executor(
     model_path: str, *, auto_export: bool, imgsz_override: int | None = None
 ) -> Any:
@@ -549,7 +587,7 @@ def _load_coreml_executor(
                 f"CoreML artifact not found: {resolved}. "
                 "Provide a valid .mlpackage or use a .pt source with auto_export=True."
             )
-        return _load_torch_model(str(resolved))
+        return _CoreMLBatchExecutor(_load_torch_model(str(resolved)))
 
     artifact_path = _artifact_path_for(resolved, "coreml")
     imgsz = (
@@ -577,7 +615,7 @@ def _load_coreml_executor(
         _write_fresh_marker(artifact_path, resolved, imgsz)
         logger.info("Exported CoreML artifact: %s", artifact_path)
 
-    return _load_torch_model(str(artifact_path))
+    return _CoreMLBatchExecutor(_load_torch_model(str(artifact_path)))
 
 
 def _load_direct_executor(
