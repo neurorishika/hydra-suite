@@ -11,8 +11,11 @@ class TrainingRole(str, Enum):
     """Canonical training roles supported by MAT."""
 
     OBB_DIRECT = "obb_direct"
+    DETECT_DIRECT = "detect_direct"
+    SEGMENT_DIRECT = "segment_direct"
     SEQ_DETECT = "seq_detect"
     SEQ_CROP_OBB = "seq_crop_obb"
+    SEQ_CROP_SEGMENT = "seq_crop_segment"
 
     # ClassKit classification roles
     CLASSIFY_FLAT_YOLO = "classify_flat_yolo"
@@ -133,6 +136,10 @@ class AugmentationProfile:
     saturation: float = 0.0
     brightness: float = 0.0
     contrast: float = 0.0
+    decode_color_sim: float = (
+        0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
+    )
+    resample_sim: float = 0.0  # 0=off; ~0.3 recommended. P(apply) alternate resampler.
     monochrome: bool = False
     args: dict[str, Any] = field(default_factory=dict)
     # Label-switching expansion rules.

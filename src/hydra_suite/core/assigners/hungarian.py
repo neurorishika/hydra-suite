@@ -441,7 +441,7 @@ class TrackAssigner:
             )
             logger.warning(warning_msg.replace("\n", " "))
             if self.worker is not None:
-                self.worker.warning_signal.emit(
+                self.worker._emit_warning(
                     "Performance Optimization Available", warning_msg
                 )
             self._large_n_warning_shown = True

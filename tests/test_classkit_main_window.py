@@ -1992,6 +1992,31 @@ def test_make_training_spec_maps_color_augmentations(qapp, tmp_path: Path) -> No
     assert "contrast" not in spec.augmentation_profile.args
 
 
+def test_make_training_spec_maps_decode_resample_augmentations(
+    qapp, tmp_path: Path
+) -> None:
+    window = MainWindow()
+
+    spec = window._make_training_spec(
+        {
+            "base_model": "yolo26n-cls.pt",
+            "epochs": 5,
+            "batch": 8,
+            "lr": 0.001,
+            "patience": 2,
+            "decode_color_sim": 0.5,
+            "resample_sim": 0.3,
+        },
+        window._training_role_for_mode("flat_yolo"),
+        "flat_yolo",
+        True,
+        tmp_path / "export_yolo",
+    )
+
+    assert spec.augmentation_profile.decode_color_sim == pytest.approx(0.5)
+    assert spec.augmentation_profile.resample_sim == pytest.approx(0.3)
+
+
 def test_autoload_cached_analysis_restores_state_without_prompt(qapp) -> None:
     class FakeDB:
         def get_most_recent_embeddings(self):

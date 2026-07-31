@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Signal
@@ -36,6 +35,7 @@ from hydra_suite.utils.batch_policy import (
     clamp_realtime_individual_batch_size,
     should_warn_for_padding_waste,
 )
+from hydra_suite.utils.conda_utils import run_conda
 
 if TYPE_CHECKING:
     from hydra_suite.trackerkit.gui.main_window import MainWindow
@@ -425,21 +425,6 @@ class IdentityPanel(QWidget):
             self._main_window._sync_pose_backend_ui
         )
 
-        self.combo_pose_runtime_flavor = QComboBox()
-        self.combo_pose_runtime_flavor.setToolTip(
-            "Pose runtime implementation.\n"
-            "Auto/Native uses default backend runtime.\n"
-            "ONNX/TensorRT artifacts are exported and reused automatically."
-        )
-        # Note: combo_pose_runtime_flavor will be populated post-construction
-        self.combo_pose_runtime_flavor.currentIndexChanged.connect(
-            self._main_window._sync_pose_backend_ui
-        )
-        fl_pose.addRow("Pose runtime", self.combo_pose_runtime_flavor)
-        self._main_window._set_form_row_visible(
-            fl_pose, self.combo_pose_runtime_flavor, False
-        )
-
         self.combo_pose_model = QComboBox()
         self.combo_pose_model.setToolTip(
             "Pose model for individual analysis.\n"
@@ -612,7 +597,7 @@ class IdentityPanel(QWidget):
         vl_pose.addWidget(self.pose_runtime_content)
         form.addWidget(self.g_pose_runtime)
 
-        # Note: pose_sleap_envs and pose_runtime_flavor will be populated post-construction
+        # Note: pose_sleap_envs will be populated post-construction
         self._sync_headtail_model_remove_button()
         self._sync_pose_model_remove_button()
 
@@ -1115,40 +1100,6 @@ class IdentityPanel(QWidget):
                 message += " Reduce larger saved values when switching back to non-realtime if you want to avoid partially empty exported batches."
             messages.append(message)
 
-        headtail_recommendation = (
-            self._main_window._current_headtail_benchmark_recommendation()
-        )
-        if headtail_recommendation is not None:
-            messages.append(
-                "Benchmark recommendation: "
-                f"head-tail batch {headtail_recommendation.batch_size} on "
-                f"{headtail_recommendation.runtime_label}."
-            )
-
-        pose_recommendation = self._main_window._current_pose_benchmark_recommendation()
-        if pose_recommendation is not None:
-            messages.append(
-                f"Benchmark recommendation: pose batch {pose_recommendation.batch_size} on {pose_recommendation.runtime_label}."
-            )
-
-        cnn_recommendations = self._main_window._current_cnn_benchmark_recommendations()
-        if cnn_recommendations:
-            runtime_recommendation = (
-                self._main_window._current_cnn_runtime_recommendation()
-            )
-            summaries = []
-            for key in sorted(cnn_recommendations):
-                recommendation = cnn_recommendations[key]
-                label = Path(recommendation.model_path).stem
-                summaries.append(f"{label}: {recommendation.batch_size}")
-            prefix = "Benchmark recommendations"
-            if runtime_recommendation is not None:
-                prefix = (
-                    f"Benchmark recommendation: CNN runtime {runtime_recommendation.runtime_label}; "
-                    "batch sizes"
-                )
-            messages.append(prefix + " " + ", ".join(summaries) + ".")
-
         if not messages:
             self.lbl_individual_batch_notice.clear()
             self.lbl_individual_batch_notice.setVisible(False)
@@ -1474,9 +1425,7 @@ class IdentityPanel(QWidget):
             self._main_window.advanced_config.get("pose_sleap_env", "sleap")
         ).strip()
         try:
-            import subprocess
-
-            res = subprocess.run(
+            res = run_conda(
                 ["conda", "env", "list"],
                 capture_output=True,
                 text=True,

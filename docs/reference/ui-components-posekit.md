@@ -78,7 +78,7 @@ Run model-assisted annotation, training, and evaluation workflows.
 
 | Subsection | Includes | Value-selection guidance | Common failure mode |
 |---|---|---|---|
-| Backend selection | YOLO vs SLEAP backend. | Match backend to model family. | Backend/model mismatch. |
+| Backend selection | YOLO vs SLEAP vs ViTPose backend. | Match backend to model family. | Backend/model mismatch. |
 | Prediction controls | Min confidence, current-frame predict, dataset predict, apply predictions, cache clear. | Use higher confidence for conservative adoption. | Bulk apply without review in difficult frames. |
 | YOLO model controls | Weights path, browse/use latest. | Pin known-good weights per project version. | Using stale or incompatible weights. |
 | SLEAP service controls | Conda env, model dir, device, start/stop service. | Validate env/model before long runs. | Service startup issues from bad env resolution. |
@@ -126,7 +126,7 @@ Launch and monitor model training/fine-tuning jobs.
 
 | Control group | Includes | Guidance |
 |---|---|---|
-| Backend/model | Backend, base weights/model dir | Keep backend/model family aligned. |
+| Backend/model | Backend (YOLO/SLEAP/ViTPose), base weights/model dir | Keep backend/model family aligned. For ViTPose: pick the auto-download COCO-B catalog entry, or Browse to a local/animal checkpoint. |
 | Training hyperparameters | Batch size, auto-batch, epochs, patience, image size, device | Increase complexity only after baseline convergence is stable. |
 | Data controls | Train fraction, seed, ignore occluded, auxiliary datasets | Keep split/seed fixed for fair model comparisons. |
 | SLEAP export options | Env, output `.slp`, include aux, embed media | Validate export format before training job launch. |
@@ -138,7 +138,7 @@ Compare predictions against labels with keypoint-level and frame-level diagnosti
 
 | Control | Role | Guidance |
 |---|---|---|
-| Backend + model path | Evaluation inference source. | Lock to specific model version for reproducible reports. |
+| Backend + model path | Evaluation inference source (YOLO, SLEAP, or ViTPose). | Lock to specific model version for reproducible reports. |
 | PCK and OKS thresholds | Metric sensitivity settings. | Use consistent thresholds across model comparisons. |
 | Output directory | Result artifacts location. | Version by date/run id to track history. |
 | Worst-frame tables | Error triage list. | Feed difficult frames back into labeling queue. |

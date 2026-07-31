@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,13 +26,13 @@ from hydra_suite.core.identity.properties.export import (
     DETECTED_HEADING_COLUMNS,
     build_pose_keypoint_labels,
 )
-from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
-    derive_pose_runtime_settings,
-)
+from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
-from hydra_suite.trackerkit.tracking_cache import plan_tracking_cache
+from hydra_suite.trackerkit.tracking_cache import (
+    plan_tracking_cache,
+    resolve_detection_cache_runtime,
+)
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
@@ -47,6 +48,29 @@ logger = logging.getLogger(__name__)
 
 RICH_EXPORT_SUFFIX = "_with_individual"
 LEGACY_RICH_EXPORT_SUFFIX = "_with_pose"
+
+# Preview Mode runs the full detection/tracking pipeline live (no cache-only
+# fast path), so an unbounded frame range makes "Preview" as slow as a full
+# run. Cap it to a fixed wall-clock duration of source video.
+PREVIEW_MAX_DURATION_SECONDS = 300
+
+
+def compute_capped_preview_range(
+    start_frame: int,
+    end_frame: int,
+    fps: float,
+    max_duration_seconds: int = PREVIEW_MAX_DURATION_SECONDS,
+) -> tuple[int, bool]:
+    """Return (clamped_end_frame, was_clamped) for a preview frame range.
+
+    Clamps ``end_frame`` so the selected range covers at most
+    ``max_duration_seconds`` of video at ``fps``, measured from ``start_frame``.
+    """
+    max_frames = max(1, int(round(fps * max_duration_seconds)))
+    selected_frames = end_frame - start_frame + 1
+    if selected_frames <= max_frames:
+        return end_frame, False
+    return start_frame + max_frames - 1, True
 
 
 class TrackingOrchestrator:
@@ -252,7 +276,7 @@ class TrackingOrchestrator:
         # Stop all active workers and subprocess-like threads.
         self._request_qthread_stop(
             getattr(self._mw, "_cache_builder_worker", None),
-            "DetectionCacheBuilderWorker",
+            "DetectionCacheBuildWorker",
         )
         self._request_qthread_stop(
             getattr(self._mw, "merge_worker", None), "MergeWorker", timeout_ms=1200
@@ -272,7 +296,12 @@ class TrackingOrchestrator:
             "PreviewDetectionWorker",
             timeout_ms=1200,
         )
-        self._request_qthread_stop(self._mw.tracking_worker, "TrackingWorker")
+        self._request_qthread_stop(
+            self._mw.tracking_worker,
+            "TrackingWorker",
+            timeout_ms=10000,
+            force_terminate=False,
+        )
         self._stop_csv_writer()
 
         self._cleanup_thread_reference("_cache_builder_worker")
@@ -439,6 +468,29 @@ class TrackingOrchestrator:
 
         return sorted(found.values(), key=lambda path: path.name)
 
+    @staticmethod
+    def _iter_inference_cache_dirs(video_path: str, artifact_base_dirs) -> list[Path]:
+        """Return InferenceRunner per-video cache directories for the given video.
+
+        The InferenceRunner (yolo_obb path) stores its caches in a hidden
+        ``.inference_cache_<stem>/`` directory next to the video (see
+        ``TrackingWorker._resolve_cache_dir``). These hold ``detection.npz``,
+        ``headtail.npz``, ``cnn_*.npz``, ``pose.npz``, ``apriltag.npz``. The
+        file-glob in ``_iter_cache_artifact_paths`` never matches them, so they
+        must be discovered and removed explicitly.
+        """
+        stem = Path(video_path).stem.strip() or "video"
+        found: dict[str, Path] = {}
+        for base_dir in artifact_base_dirs:
+            cache_dir = Path(base_dir).expanduser() / f".inference_cache_{stem}"
+            if cache_dir.is_dir():
+                try:
+                    key = str(cache_dir.resolve())
+                except OSError:
+                    key = str(cache_dir)
+                found[key] = cache_dir
+        return sorted(found.values(), key=lambda path: str(path))
+
     def clear_detection_caches(self) -> None:
         """Delete all current-video cache files for the active video."""
         if self._mw._has_active_progress_task():
@@ -469,6 +521,9 @@ class TrackingOrchestrator:
             preferred_base_dirs=[csv_dir],
         )
         cache_paths = self._iter_cache_artifact_paths(video_path, artifact_base_dirs)
+        inference_cache_dirs = self._iter_inference_cache_dirs(
+            video_path, artifact_base_dirs
+        )
 
         current_cache_path = str(
             getattr(self._mw, "current_detection_cache_path", "") or ""
@@ -485,7 +540,7 @@ class TrackingOrchestrator:
             if current_props_cache.exists() and current_props_cache not in cache_paths:
                 cache_paths.append(current_props_cache)
 
-        if not cache_paths:
+        if not cache_paths and not inference_cache_dirs:
             QMessageBox.information(
                 self._mw,
                 "No Caches Found",
@@ -557,6 +612,16 @@ class TrackingOrchestrator:
                     exc_info=True,
                 )
 
+        deleted_dirs = 0
+        for cache_dir in inference_cache_dirs:
+            try:
+                shutil.rmtree(cache_dir)
+                deleted_dirs += 1
+            except FileNotFoundError:
+                pass
+            except Exception:
+                failed.append(str(cache_dir))
+
         if removed_current_cache or (
             current_cache_path and not Path(current_cache_path).expanduser().exists()
         ):
@@ -568,8 +633,9 @@ class TrackingOrchestrator:
             self._mw.current_individual_properties_cache_path = None
 
         logger.info(
-            "Cleared %d cache file(s) for %s%s",
+            "Cleared %d cache file(s) and %d inference cache dir(s) for %s%s",
             deleted,
+            deleted_dirs,
             video_path,
             f"; failed={len(failed)}" if failed else "",
         )
@@ -578,14 +644,16 @@ class TrackingOrchestrator:
             QMessageBox.warning(
                 self._mw,
                 "Cache Cleanup Incomplete",
-                f"Deleted {deleted} cache file(s), but {len(failed)} could not be removed.",
+                f"Deleted {deleted} cache file(s) and {deleted_dirs} inference "
+                f"cache folder(s), but {len(failed)} item(s) could not be removed.",
             )
             return
 
         QMessageBox.information(
             self._mw,
             "Caches Cleared",
-            f"Deleted {deleted} cache file(s) for the current video.",
+            f"Deleted {deleted} cache file(s) and {deleted_dirs} inference "
+            f"cache folder(s) for the current video.",
         )
 
     def on_stats_update(self, stats):
@@ -3731,7 +3799,7 @@ class TrackingOrchestrator:
 
     def start_preview_on_video(self, video_path):
         """start_preview_on_video method documentation."""
-        from hydra_suite.core.tracking import TrackingWorker
+        from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker
 
         if self._mw.tracking_worker and self._mw.tracking_worker.isRunning():
             return
@@ -3751,29 +3819,53 @@ class TrackingOrchestrator:
             params, mode_label="tracking preview"
         ):
             return
+
+        preview_fps = self._mw._resolve_source_video_fps()
+        preview_start_frame = int(params.get("START_FRAME", 0))
+        preview_end_frame = int(params.get("END_FRAME", preview_start_frame))
+        clamped_end_frame, was_clamped = compute_capped_preview_range(
+            preview_start_frame, preview_end_frame, preview_fps
+        )
+        if was_clamped:
+            minutes = PREVIEW_MAX_DURATION_SECONDS // 60
+            QMessageBox.warning(
+                self._mw,
+                "Preview Range Capped",
+                f"The selected range ({preview_end_frame - preview_start_frame + 1} "
+                f"frames) exceeds the {minutes}-minute preview limit.\n\n"
+                f"Preview will run frames {preview_start_frame}-{clamped_end_frame} "
+                "only. Use 'Start Full Tracking' to process the entire selected range.",
+            )
+            params["END_FRAME"] = clamped_end_frame
+
         # Preview should always render frames regardless of visualization-free toggle
         params["VISUALIZATION_FREE_MODE"] = False
-        # Preview must not use ONNX/TensorRT — downgrade to the native device runtime.
-        safe_rt = self._mw._preview_safe_runtime(params.get("COMPUTE_RUNTIME", "cpu"))
-        if safe_rt != params.get("COMPUTE_RUNTIME"):
-            safe_det = derive_detection_runtime_settings(safe_rt)
-            params["COMPUTE_RUNTIME"] = safe_rt
+        # Preview must not build exported accelerator engines (ONNX/TensorRT/
+        # CoreML). Backend selection is driven by RUNTIME_TIER (already carried
+        # in params); the retired COMPUTE_RUNTIME string family no longer needs
+        # sanitizing here (Runtime Gen-2 FT1). We still downgrade the auxiliary
+        # detection fields (owned by later slices) to their native-device
+        # equivalents, deriving the pre-downgrade runtime from the selected tier
+        # instead of the removed COMPUTE_RUNTIME param. The pose runtime is fully
+        # tier-derived downstream (Runtime Gen-2 FT2), so no pose-flavor param is
+        # threaded here.
+        resolved_obb = self._mw._resolved_obb_backend()
+        if resolved_obb.backend in ("tensorrt", "coreml"):
+            import dataclasses
+
+            safe = dataclasses.replace(resolved_obb, backend="torch")
+            safe_det = legacy_detection_runtime_fields(safe)
             params["YOLO_DEVICE"] = safe_det["yolo_device"]
             params["ENABLE_GPU_BACKGROUND"] = safe_det["enable_gpu_background"]
             params["ENABLE_TENSORRT"] = safe_det["enable_tensorrt"]
             params["ENABLE_ONNX_RUNTIME"] = safe_det["enable_onnx_runtime"]
-            safe_pose = derive_pose_runtime_settings(
-                safe_rt, backend_family=params.get("POSE_MODEL_TYPE", "yolo")
-            )
-            params["POSE_RUNTIME_FLAVOR"] = safe_pose["pose_runtime_flavor"]
-        params["HEADTAIL_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
-            params.get("HEADTAIL_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-        )
-        params["CNN_COMPUTE_RUNTIME"] = self._mw._preview_safe_runtime(
-            params.get("CNN_COMPUTE_RUNTIME", params.get("COMPUTE_RUNTIME", "cpu"))
-        )
 
-        # Preview mode runs live (realtime) detection — no cache lookup or build.
+        # Preview mode runs forward detection live, but reuses a valid,
+        # range-covering YOLO-OBB InferenceRunner cache when one already
+        # exists for the current model/config/video (see worker.py:1030-1054).
+        # Background-subtraction has no forward-mode cache-read path, so this
+        # flag is a no-op for it (see Task 3 for why bgsub must not *write*
+        # into the shared cache during preview).
         self._mw.tracking_worker = TrackingWorker(
             video_path,
             csv_writer_thread=None,
@@ -3781,7 +3873,7 @@ class TrackingOrchestrator:
             backward_mode=False,
             detection_cache_path=None,
             preview_mode=True,
-            use_cached_detections=False,
+            use_cached_detections=True,
         )
         self._mw.tracking_worker.set_parameters(params)
         self._mw.tracking_worker.frame_signal.connect(self.on_new_frame)
@@ -3861,9 +3953,15 @@ class TrackingOrchestrator:
         """Generate raw-detection and TensorRT-engine cache identity keys."""
         resize_factor = params.get("RESIZE_FACTOR", 1.0)
         resize_str = f"r{int(resize_factor * 100)}"
+        _compute_runtime = resolve_detection_cache_runtime(params)
 
         def _extract(keys):
-            return {k: self._normalize_for_hash(params.get(k)) for k in keys}
+            return {
+                k: self._normalize_for_hash(
+                    _compute_runtime if k == "COMPUTE_RUNTIME" else params.get(k)
+                )
+                for k in keys
+            }
 
         def _build_id(prefix, cache_params, model_stem=""):
             digest = hashlib.md5(
@@ -4167,7 +4265,7 @@ class TrackingOrchestrator:
         # Do NOT delete old detection caches; keep all for reuse
         self._mw.current_detection_cache_path = detection_cache_path
 
-        from hydra_suite.core.tracking import TrackingWorker
+        from hydra_suite.trackerkit.gui.workers.tracking_worker import TrackingWorker
 
         self._mw.tracking_worker = TrackingWorker(
             video_path,

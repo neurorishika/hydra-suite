@@ -28,6 +28,7 @@ def describe_headtail_candidate(model_path: str) -> dict[str, Any]:
     from hydra_suite.core.identity.classification.headtail import (
         validate_headtail_labels,
     )
+    from hydra_suite.runtime.resolver import ResolvedBackend
 
     summary: dict[str, Any] = {
         "valid": False,
@@ -38,7 +39,7 @@ def describe_headtail_candidate(model_path: str) -> dict[str, Any]:
         "reason": "",
     }
     try:
-        backend = ClassifierBackend(model_path, compute_runtime="cpu")
+        backend = ClassifierBackend(model_path, ResolvedBackend("torch", "cpu", False))
     except ClassifierError as exc:
         summary["reason"] = f"cannot parse metadata: {exc}"
         return summary

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from hydra_suite.core.tracking.confidence_density import (
+from hydra_suite.core.tracking.confidence.confidence_density import (
     DensityRegion,
     export_diagnostic_video,
 )

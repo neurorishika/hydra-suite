@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple
 
 from hydra_suite.core.identity.pose.backends.sleap import (
     SleapExportedBackend,
@@ -17,174 +16,17 @@ from hydra_suite.core.identity.pose.backends.sleap import (
     auto_export_sleap_model,
     looks_like_sleap_export_path,
 )
-from hydra_suite.core.identity.pose.backends.sleap_utils import (
-    derive_sleap_export_input_hw,
-)
 from hydra_suite.core.identity.pose.backends.yolo import (
     YoloNativeBackend,
     auto_export_yolo_model,
 )
 from hydra_suite.core.identity.pose.types import PoseInferenceBackend, PoseRuntimeConfig
 from hydra_suite.core.identity.pose.utils import (
-    load_skeleton_from_json,
     normalize_runtime_flavor,
     parse_runtime_request,
 )
-from hydra_suite.runtime.compute_runtime import derive_pose_runtime_settings
-from hydra_suite.utils.batch_policy import clamp_realtime_individual_batch_size
 
 logger = logging.getLogger(__name__)
-
-
-def _norm_hw(value: Any) -> Optional[int]:
-    """Normalize a height/width value: align to 32, clamp to [64, 1024]."""
-    try:
-        v = int(value)
-    except Exception:
-        return None
-    if v <= 0:
-        return None
-    v = int(((v + 31) // 32) * 32)
-    v = max(64, min(1024, v))
-    return v
-
-
-def _resolve_device_and_batch(
-    params: Dict[str, Any],
-    backend_family: str,
-    derived_device: str,
-) -> Tuple[str, int]:
-    """Resolve the device string and batch size from params and derived settings."""
-    if backend_family == "sleap":
-        device = (
-            derived_device
-            or str(params.get("POSE_SLEAP_DEVICE", "auto")).strip()
-            or "auto"
-        )
-        batch_size = int(params.get("POSE_SLEAP_BATCH", 4))
-    else:
-        device = derived_device or (
-            str(params.get("YOLO_DEVICE", params.get("POSE_DEVICE", "auto"))).strip()
-            or "auto"
-        )
-        batch_size = int(
-            params.get("POSE_YOLO_BATCH", params.get("POSE_BATCH_SIZE", 4))
-        )
-    return device, batch_size
-
-
-def _resolve_export_hw(
-    params: Dict[str, Any],
-    backend_family: str,
-    model_path: str,
-) -> Optional[Tuple[int, int]]:
-    """Resolve the SLEAP export input height/width from params and model introspection."""
-    derived_model_hw: Optional[Tuple[int, int]] = None
-    if backend_family == "sleap" and model_path:
-        try:
-            derived_model_hw = derive_sleap_export_input_hw(model_path)
-        except Exception:
-            derived_model_hw = None
-
-    export_h = _norm_hw(params.get("POSE_SLEAP_EXPORT_INPUT_HEIGHT", 0))
-    export_w = _norm_hw(params.get("POSE_SLEAP_EXPORT_INPUT_WIDTH", 0))
-    if export_h is None and export_w is None and derived_model_hw is not None:
-        export_h, export_w = int(derived_model_hw[0]), int(derived_model_hw[1])
-    if export_h is None and export_w is None:
-        crop_hint = _norm_hw(params.get("IDENTITY_CROP_MAX_SIZE", 0))
-        if crop_hint is not None:
-            export_h = crop_hint
-            export_w = crop_hint
-    if export_h is None and export_w is not None:
-        export_h = export_w
-    if export_w is None and export_h is not None:
-        export_w = export_h
-    return (int(export_h), int(export_w)) if (export_h and export_w) else None
-
-
-def build_runtime_config(
-    params: Dict[str, Any],
-    out_root: str,
-    keypoint_names_override: Optional[Sequence[str]] = None,
-    skeleton_edges_override: Optional[Sequence[Sequence[int]]] = None,
-) -> PoseRuntimeConfig:
-    """Construct a PoseRuntimeConfig from a tracking params dict.
-
-    Resolves backend family, runtime flavor, device, batch size, skeleton, and
-    all model-path fields, applying compute_runtime-derived overrides where appropriate.
-    """
-    backend_family = str(params.get("POSE_MODEL_TYPE", "yolo")).strip().lower()
-    runtime_flavor = str(params.get("POSE_RUNTIME_FLAVOR", "auto")).strip().lower()
-    model_path = str(params.get("POSE_MODEL_DIR", "")).strip()
-    exported_model_path = str(params.get("POSE_EXPORTED_MODEL_PATH", "")).strip()
-    compute_runtime = str(
-        params.get("COMPUTE_RUNTIME", params.get("compute_runtime", ""))
-    ).strip()
-
-    skeleton_file = str(params.get("POSE_SKELETON_FILE", "")).strip()
-    skeleton_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
-
-    if keypoint_names_override:
-        skeleton_names = [str(v) for v in keypoint_names_override]
-    if skeleton_edges_override:
-        skeleton_edges = [
-            (int(edge[0]), int(edge[1]))
-            for edge in skeleton_edges_override
-            if isinstance(edge, (list, tuple)) and len(edge) >= 2
-        ]
-
-    derived_device = ""
-    explicit_runtime_flavor = runtime_flavor not in {"", "auto"}
-    if compute_runtime:
-        derived = derive_pose_runtime_settings(compute_runtime, backend_family)
-        if not explicit_runtime_flavor:
-            runtime_flavor = (
-                str(derived.get("pose_runtime_flavor", runtime_flavor)).strip().lower()
-            )
-            derived_device = (
-                str(derived.get("pose_sleap_device", "auto")).strip() or "auto"
-            )
-
-    device, batch_size = _resolve_device_and_batch(
-        params,
-        backend_family,
-        derived_device,
-    )
-    batch_size = clamp_realtime_individual_batch_size(
-        batch_size,
-        max_animals=params.get("MAX_TARGETS", 1),
-        realtime_enabled=params.get("TRACKING_REALTIME_MODE", False),
-        workflow_mode=params.get("TRACKING_WORKFLOW_MODE", "non_realtime"),
-    )
-    sleap_batch_size = clamp_realtime_individual_batch_size(
-        params.get("POSE_SLEAP_BATCH", batch_size),
-        max_animals=params.get("MAX_TARGETS", 1),
-        realtime_enabled=params.get("TRACKING_REALTIME_MODE", False),
-        workflow_mode=params.get("TRACKING_WORKFLOW_MODE", "non_realtime"),
-    )
-    export_hw = _resolve_export_hw(params, backend_family, model_path)
-
-    return PoseRuntimeConfig(
-        backend_family=backend_family,
-        runtime_flavor=runtime_flavor,
-        device=device,
-        batch_size=max(1, batch_size),
-        model_path=model_path,
-        exported_model_path=exported_model_path,
-        out_root=str(out_root),
-        min_valid_conf=float(params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
-        yolo_conf=float(params.get("POSE_YOLO_CONF", 1e-4)),
-        yolo_iou=float(params.get("POSE_YOLO_IOU", 0.7)),
-        yolo_max_det=int(params.get("POSE_YOLO_MAX_DET", 1)),
-        yolo_batch=max(1, int(batch_size)),
-        sleap_env=str(params.get("POSE_SLEAP_ENV", "sleap")).strip() or "sleap",
-        sleap_device=derived_device or str(params.get("POSE_SLEAP_DEVICE", "auto")),
-        sleap_batch=max(1, int(sleap_batch_size)),
-        sleap_max_instances=int(params.get("POSE_SLEAP_MAX_INSTANCES", 1)),
-        sleap_export_input_hw=export_hw,
-        keypoint_names=skeleton_names,
-        skeleton_edges=skeleton_edges,
-    )
 
 
 def create_pose_backend_from_config(config: PoseRuntimeConfig) -> PoseInferenceBackend:
@@ -313,5 +155,51 @@ def create_pose_backend_from_config(config: PoseRuntimeConfig) -> PoseInferenceB
             export_input_hw=config.sleap_export_input_hw,
         )
         return service_backend
+
+    if backend_family == "vitpose":
+        from .backends.vitpose import ViTPoseBackend
+
+        model_path = str(config.model_path).strip()
+        if not model_path:
+            raise RuntimeError("ViTPose backend requires a model_path (checkpoint)")
+        # requested_runtime preserves the concrete flavor the pose stage set
+        # (native/tensorrt/coreml); the normalized `runtime_flavor` local
+        # collapses coreml->native (parse/normalize only know native/onnx/
+        # tensorrt), so derive the ViTPose flavor from requested_runtime.
+        vitpose_flavor = (
+            requested_runtime
+            if requested_runtime in ("native", "tensorrt", "coreml")
+            else "native"
+        )
+        exported = ""
+        if vitpose_flavor in ("tensorrt", "coreml"):
+            from .backends.vitpose import auto_export_vitpose_model
+
+            try:
+                exported = auto_export_vitpose_model(
+                    config, vitpose_flavor, runtime_device=effective_device
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not getattr(config, "vitpose_auto_export", True):
+                    raise RuntimeError(
+                        f"ViTPose {vitpose_flavor} artifact is missing/export "
+                        f"failed ({exc}) and auto_export is disabled. Provide a "
+                        f"prebuilt accelerated artifact or enable auto_export."
+                    ) from exc
+                logger.warning(
+                    "ViTPose %s export failed (%s); using native runtime.",
+                    vitpose_flavor,
+                    exc,
+                )
+                vitpose_flavor = "native"
+        return ViTPoseBackend(
+            model_path=model_path,
+            device=effective_device,
+            runtime_flavor=vitpose_flavor,
+            min_valid_conf=config.min_valid_conf,
+            keypoint_names=list(config.keypoint_names) or None,
+            batch_size=config.vitpose_batch,
+            exported_model_path=exported,
+        )
 
     raise RuntimeError(f"Unsupported pose backend family: {backend_family}")

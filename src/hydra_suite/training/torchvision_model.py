@@ -517,3 +517,45 @@ def export_torchvision_to_onnx(
             **export_kwargs,
         )
     return onnx_path
+
+
+def export_torchvision_to_coreml(
+    model: nn.Module, ckpt: dict[str, Any], mlpackage_path: str | Path
+) -> Path:
+    """Export a torchvision/timm classifier to a CoreML .mlpackage.
+
+    Uses ``input_size`` from *ckpt* to build the dummy input (``(H, W)``,
+    default ``(224, 224)``).  The batch axis is a ``RangeDim`` so any batch
+    size works at inference time.
+
+    Conversion uses ``torch.jit.trace`` followed by ``coremltools.convert``.
+    Requires the ``coremltools`` package (``pip install coremltools``).
+
+    Args:
+        model: Model in eval mode.
+        ckpt: Checkpoint dict (used for ``input_size``).
+        mlpackage_path: Output path for the ``.mlpackage`` bundle.
+
+    Returns:
+        Path to the exported ``.mlpackage``.
+    """
+    import coremltools as ct
+
+    mlpackage_path = Path(mlpackage_path)
+    h, w = ckpt.get("input_size", (224, 224))
+    model.eval()
+    dummy = torch.zeros(1, 3, int(h), int(w))
+    traced = torch.jit.trace(model, dummy)
+    mlmodel = ct.convert(
+        traced,
+        inputs=[
+            ct.TensorType(
+                name="input",
+                shape=ct.Shape(shape=(ct.RangeDim(1, 512), 3, int(h), int(w))),
+            )
+        ],
+        compute_units=ct.ComputeUnit.ALL,
+        minimum_deployment_target=ct.target.macOS13,
+    )
+    mlmodel.save(str(mlpackage_path))
+    return mlpackage_path

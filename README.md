@@ -25,7 +25,7 @@ HYDRA Suite is organized as one launcher plus a set of focused applications:
 | ------- | ------- |
 | `hydra` | Launcher and entry point |
 | `trackerkit` | Multi-animal tracking |
-| `posekit` | Pose labeling and pose-project workflows |
+| `posekit` | Pose labeling and pose-project workflows (YOLO-pose, SLEAP, and ViTPose backends) |
 | `classkit` | Classification and embedding tools |
 | `detectkit` | Detection model training and dataset tooling |
 | `filterkit` | Dataset filtering and curation |

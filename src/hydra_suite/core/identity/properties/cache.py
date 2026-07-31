@@ -160,21 +160,63 @@ def _compute_pose_statistics(
     return mean_conf, valid_fraction, num_valid, num_keypoints
 
 
+def _resolve_tier_backend(params: Dict[str, Any], stage: str = "obb"):
+    """Resolve ``RUNTIME_TIER`` to a ``ResolvedBackend`` for cache-key derivation.
+
+    Core stays pure -- imports only from ``hydra_suite.runtime.resolver``, never
+    an app layer. The resolver is stage-inert except for ``bgsub``, so ``"obb"``
+    reproduces the string the legacy GUI wrote into ``COMPUTE_RUNTIME`` /
+    ``POSE_SLEAP_DEVICE`` (both derived, pre-Gen-2, from the tier resolver for
+    the OBB / SLEAP pose stage, which resolve identically). Uses the default
+    ``artifact_available=True`` to
+    match the FT1 classify cache-key helper (``worker._classify_cache_runtime_string``).
+    """
+    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+    tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+    if tier not in {"cpu", "gpu", "gpu_fast"}:
+        tier = "cpu"
+    return RuntimeResolver(tier, detect_platform()).resolve(stage)
+
+
+def _runtime_string_from_resolved(resolved) -> str:
+    """Map a ``ResolvedBackend`` to the legacy compute-runtime cache string."""
+    if resolved.backend == "tensorrt":
+        return "tensorrt"
+    if resolved.backend == "coreml":
+        return "coreml"
+    return resolved.device  # "cpu" / "cuda" / "mps"
+
+
+def _sleap_device_from_resolved(resolved) -> str:
+    """Reproduce the legacy ``POSE_SLEAP_DEVICE`` string from a resolved backend.
+
+    The old GUI mapped the resolved SLEAP pose runtime to a SLEAP device string
+    (cpu->"cpu", mps->"mps", cuda->"cuda:0", tensorrt->"cuda:0"). That is exactly
+    ``"cuda:0"`` on CUDA, else the device.
+    """
+    return "cuda:0" if resolved.device == "cuda" else resolved.device
+
+
 def compute_extractor_hash(params: Dict[str, Any]) -> str:
     """Hash extractor settings that shape individual-property outputs.
 
     Note: pose_min_kpt_conf_valid is NOT included in the hash anymore.
     Summary statistics are computed on-demand when reading from cache,
     so changing the threshold doesn't invalidate the cache.
+
+    Runtime Gen-2 (FT2): the ``compute_runtime`` / ``pose_sleap_device`` payload
+    fields are a PERSISTED cache key (via ``compute_individual_properties_id``).
+    They are now STABLE-derived from ``RUNTIME_TIER`` instead of the retired
+    ``COMPUTE_RUNTIME`` / ``POSE_SLEAP_DEVICE`` params, reproducing the pre-Gen-2
+    strings byte-for-byte so existing property caches stay valid. The payload
+    key shape is unchanged.
     """
     pose_enabled = bool(params.get("ENABLE_POSE_EXTRACTOR", False))
     pose_model_type = str(params.get("POSE_MODEL_TYPE", "yolo")).strip().lower()
     pose_model_dir = str(params.get("POSE_MODEL_DIR", "")).strip()
-    compute_runtime = (
-        str(params.get("COMPUTE_RUNTIME", params.get("compute_runtime", "cpu")))
-        .strip()
-        .lower()
-    )
+    resolved_backend = _resolve_tier_backend(params, stage="obb")
+    compute_runtime = _runtime_string_from_resolved(resolved_backend)
     pose_exported_model_path = str(params.get("POSE_EXPORTED_MODEL_PATH", "")).strip()
     pose_skeleton_file = str(params.get("POSE_SKELETON_FILE", "")).strip()
     payload = {
@@ -193,7 +235,7 @@ def compute_extractor_hash(params: Dict[str, Any]) -> str:
     }
     if pose_model_type == "sleap":
         payload["pose_sleap_env"] = params.get("POSE_SLEAP_ENV", "sleap")
-        payload["pose_sleap_device"] = params.get("POSE_SLEAP_DEVICE", "auto")
+        payload["pose_sleap_device"] = _sleap_device_from_resolved(resolved_backend)
         payload["pose_sleap_batch"] = params.get("POSE_SLEAP_BATCH", 4)
         payload["pose_sleap_max_instances"] = 1
     if pose_enabled:

@@ -33,6 +33,7 @@ class OBBSource:
     original_path: str = ""
     source_kind: str = "detectkit"
     imported: bool = False
+    level: str = "obb"  # GeometryLevel.label; "obb" for pre-migration sources
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
@@ -43,6 +44,7 @@ class OBBSource:
             "original_path": self.original_path,
             "source_kind": self.source_kind,
             "imported": self.imported,
+            "level": self.level,
         }
 
     @staticmethod
@@ -55,7 +57,84 @@ class OBBSource:
             original_path=str(d.get("original_path", "")),
             source_kind=str(d.get("source_kind", "detectkit") or "detectkit"),
             imported=bool(d.get("imported", False)),
+            level=str(d.get("level", "obb") or "obb"),
         )
+
+
+@dataclass
+class SliceTrainingSettings:
+    """Shared SAHI sliced-training + preview geometry, persisted with the project."""
+
+    enabled: bool = False
+    geometry_mode: str = "auto_object"  # auto_model | auto_object | custom
+    object_tile_fraction: float = 0.15
+    reference_body_px: float = 0.0
+    slice_width: int = 0
+    slice_height: int = 0
+    overlap: float = 0.2
+    min_area_ratio: float = 0.1
+    negative_tile_fraction: float = 0.15
+    target_sizes: list[float] = field(default_factory=lambda: [200.0, 300.0, 400.0])
+    full_frame_mix: bool = True
+    merge_threshold: float = 0.5
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "geometry_mode": self.geometry_mode,
+            "object_tile_fraction": self.object_tile_fraction,
+            "reference_body_px": self.reference_body_px,
+            "slice_width": self.slice_width,
+            "slice_height": self.slice_height,
+            "overlap": self.overlap,
+            "min_area_ratio": self.min_area_ratio,
+            "negative_tile_fraction": self.negative_tile_fraction,
+            "target_sizes": list(self.target_sizes),
+            "full_frame_mix": self.full_frame_mix,
+            "merge_threshold": self.merge_threshold,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "SliceTrainingSettings":
+        base = SliceTrainingSettings()
+        if not isinstance(d, dict):
+            return base
+        return SliceTrainingSettings(
+            enabled=bool(d.get("enabled", base.enabled)),
+            geometry_mode=str(
+                d.get("geometry_mode", base.geometry_mode) or base.geometry_mode
+            ),
+            object_tile_fraction=float(
+                d.get("object_tile_fraction", base.object_tile_fraction)
+            ),
+            reference_body_px=float(d.get("reference_body_px", base.reference_body_px)),
+            slice_width=int(d.get("slice_width", base.slice_width)),
+            slice_height=int(d.get("slice_height", base.slice_height)),
+            overlap=float(d.get("overlap", base.overlap)),
+            min_area_ratio=float(d.get("min_area_ratio", base.min_area_ratio)),
+            negative_tile_fraction=float(
+                d.get("negative_tile_fraction", base.negative_tile_fraction)
+            ),
+            target_sizes=[
+                float(x) for x in (d.get("target_sizes") or base.target_sizes)
+            ],
+            full_frame_mix=bool(d.get("full_frame_mix", base.full_frame_mix)),
+            merge_threshold=float(d.get("merge_threshold", base.merge_threshold)),
+        )
+
+
+def populate_measured_reference(
+    settings: SliceTrainingSettings, measured: float
+) -> bool:
+    """Set settings.reference_body_px from a measured value only when currently unset.
+
+    Returns True iff it changed the value (settings.reference_body_px was 0.0 and
+    measured > 0). A user-set value is never overwritten.
+    """
+    if settings.reference_body_px == 0.0 and float(measured) > 0.0:
+        settings.reference_body_px = float(measured)
+        return True
+    return False
 
 
 @dataclass
@@ -80,13 +159,19 @@ class DetectKitProject:
 
     # Per-role imgsz
     imgsz_obb_direct: int = 640
+    imgsz_detect_direct: int = 640
+    imgsz_segment_direct: int = 640
     imgsz_seq_detect: int = 640
     imgsz_seq_crop_obb: int = 160
+    imgsz_seq_crop_segment: int = 160
 
     # Base models
     model_obb_direct: str = "yolo26s-obb.pt"
+    model_detect_direct: str = "yolo26s.pt"
+    model_segment_direct: str = "yolo26s-seg.pt"
     model_seq_detect: str = "yolo26s.pt"
     model_seq_crop_obb: str = "yolo26s-obb.pt"
+    model_seq_crop_segment: str = "yolo26s-seg.pt"
 
     # Hyperparams
     epochs: int = 100
@@ -110,8 +195,11 @@ class DetectKitProject:
 
     # Roles
     role_obb_direct: bool = True
+    role_detect_direct: bool = False
+    role_segment_direct: bool = False
     role_seq_detect: bool = True
     role_seq_crop_obb: bool = True
+    role_seq_crop_segment: bool = False
 
     # Device
     device: str = "auto"
@@ -127,6 +215,7 @@ class DetectKitProject:
     last_image_index: int = 0
     active_model_path: str = ""
     training_history: list[dict[str, Any]] = field(default_factory=list)
+    slice_settings: SliceTrainingSettings = field(default_factory=SliceTrainingSettings)
 
     @property
     def class_name(self) -> str:
@@ -147,6 +236,8 @@ class DetectKitProject:
                 d[f.name] = str(val)
             elif f.name == "sources":
                 d[f.name] = [s.to_dict() for s in val]
+            elif f.name == "slice_settings":
+                d[f.name] = val.to_dict()
             else:
                 d[f.name] = val
         return d
@@ -176,6 +267,8 @@ class DetectKitProject:
                 proj.class_names = normalize_class_names(val)
             elif name == "sources":
                 proj.sources = [OBBSource.from_dict(s) for s in val]
+            elif name == "slice_settings":
+                proj.slice_settings = SliceTrainingSettings.from_dict(val)
             else:
                 # Type-cast based on the default type.
                 default_val = getattr(proj, name)

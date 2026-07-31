@@ -15,9 +15,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-from hydra_suite.trackerkit.benchmarking import BenchmarkRecommendation
 from hydra_suite.trackerkit.gui.main_window import MainWindow
-from hydra_suite.trackerkit.gui.orchestrators import session as session_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
 
 
@@ -719,220 +717,131 @@ def test_preview_detection_restores_analyze_individual_controls(
     window.close()
 
 
-def test_compute_runtime_tooltip_explains_coreml_hidden_for_sleap(
+def test_tier_combo_exists_and_old_per_stage_combos_removed(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
 ) -> None:
-    monkeypatch.setattr(session_module, "ONNXRUNTIME_COREML_AVAILABLE", True)
-    monkeypatch.setattr(session_module, "MPS_AVAILABLE", True)
+    """combo_runtime_tier replaces the three old per-stage runtime combos."""
+    from PySide6.QtWidgets import QComboBox, QLabel
 
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        window._session_orch,
-        "_compute_runtime_options_for_current_ui",
-        lambda: [("CPU", "cpu"), ("MPS", "mps"), ("ONNX (CPU)", "onnx_cpu")],
-    )
-    monkeypatch.setattr(
-        window._session_orch,
-        "_runtime_pipelines_for_current_ui",
-        lambda: ["yolo_obb_detection", "sleap_pose"],
-    )
-
-    window._on_runtime_context_changed()
-
-    tooltip = window._setup_panel.combo_compute_runtime.toolTip()
-    assert "ONNX (CoreML) is available in this environment" in tooltip
-    assert "current enabled pipeline combination" in tooltip
+    panel = window._setup_panel
+    assert hasattr(panel, "combo_runtime_tier"), "combo_runtime_tier missing"
+    assert isinstance(panel.combo_runtime_tier, QComboBox)
+    assert panel.combo_runtime_tier.count() >= 1
+    assert hasattr(panel, "lbl_runtime_fallback"), "lbl_runtime_fallback missing"
+    assert isinstance(panel.lbl_runtime_fallback, QLabel)
+    assert not hasattr(
+        panel, "combo_compute_runtime"
+    ), "old combo_compute_runtime present"
+    assert not hasattr(
+        panel, "combo_headtail_runtime"
+    ), "old combo_headtail_runtime present"
+    assert not hasattr(panel, "combo_cnn_runtime"), "old combo_cnn_runtime present"
     window.close()
 
 
-def test_setup_panel_pose_runtime_visibility_tracks_pose_enable(
+def test_setup_panel_has_no_pose_runtime_control(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """Pose runtime has no UI control at all — it's fully derived from Compute tier."""
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda _pipeline: ["cpu", "mps", "onnx_coreml"],
-    )
-
-    window._identity_panel.chk_enable_pose_extractor.setChecked(False)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_pose_runtime_flavor.isHidden() is True
-
-    window._identity_panel.chk_enable_pose_extractor.setChecked(True)
-    window._identity_panel.combo_pose_model_type.setCurrentText("SLEAP")
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_pose_runtime_flavor.isHidden() is True
-
-    _select_first_nonempty_model(window._identity_panel.combo_pose_model)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_pose_runtime_flavor.isHidden() is False
-    assert window._identity_panel.combo_pose_runtime_flavor.isHidden() is True
+    assert not hasattr(window._setup_panel, "lbl_pose_runtime_flavor")
+    assert not hasattr(window._setup_panel, "combo_pose_runtime_flavor")
+    assert not hasattr(window._identity_panel, "combo_pose_runtime_flavor")
     window.close()
 
 
-def test_setup_panel_headtail_and_cnn_runtime_visibility_tracks_enablement(
+def test_setup_panel_single_tier_combo_always_visible(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
-    window = _make_main_window(monkeypatch)
-
-    window._identity_panel.g_identity.setChecked(True)
-    window._identity_panel.g_headtail.setChecked(False)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_headtail_runtime.isHidden() is True
-    assert window._setup_panel.combo_cnn_runtime.isHidden() is True
-
-    window._identity_panel.g_headtail.setChecked(True)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_headtail_runtime.isHidden() is True
-
-    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_headtail_runtime.isHidden() is False
-
-    window._identity_panel._add_cnn_classifier_row()
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_cnn_runtime.isHidden() is True
-
-    cnn_row = window._identity_panel._cnn_classifier_rows()[0]
-    _select_first_nonempty_model(cnn_row.combo_model)
-    window._sync_individual_analysis_mode_ui()
-    assert window._setup_panel.combo_cnn_runtime.isHidden() is False
-    window.close()
-
-
-def test_setup_panel_performance_runtime_cards_reflow_when_visibility_changes(
-    monkeypatch: pytest.MonkeyPatch,
-    qapp: QApplication,
-    tmp_path: Path,
-) -> None:
+    """The single compute-tier combo is always visible regardless of identity config."""
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
     panel = window._setup_panel
-    grid = panel.performance_control_grid
-    headtail_card = panel._performance_optional_control_cards[
-        panel.combo_headtail_runtime
-    ]
-    pose_card = panel._performance_optional_control_cards[
-        panel.combo_pose_runtime_flavor
-    ]
 
-    window._set_form_row_visible(None, panel.combo_headtail_runtime, True)
-    window._set_form_row_visible(None, panel.combo_pose_runtime_flavor, True)
-    qapp.processEvents()
+    window._identity_panel.g_identity.setChecked(False)
+    window._sync_individual_analysis_mode_ui()
+    assert panel.combo_runtime_tier.isHidden() is False
 
-    assert grid.itemAtPosition(1, 0).widget() is headtail_card
-    assert grid.itemAtPosition(1, 1).widget() is pose_card
-
-    window._set_form_row_visible(None, panel.combo_headtail_runtime, False)
-    qapp.processEvents()
-
-    assert grid.itemAtPosition(1, 0).widget() is pose_card
-    assert grid.itemAtPosition(1, 1) is None
+    window._identity_panel.g_identity.setChecked(True)
+    window._identity_panel.g_headtail.setChecked(True)
+    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
+    window._sync_individual_analysis_mode_ui()
+    assert panel.combo_runtime_tier.isHidden() is False
     window.close()
 
 
-def test_saved_config_preserves_selected_pose_runtime_flavor(
+def test_saved_config_omits_retired_pose_runtime_flavor(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """Runtime Gen-2 (FT2): pose runtime is not stored; it is fully tier-derived.
+
+    The legacy ``pose_runtime_flavor`` / ``pose_sleap_device`` stored-config fields
+    are retired -- only ``runtime_tier`` is persisted, and the pose device is
+    resolved from it downstream.
+    """
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda _pipeline: ["cpu", "mps", "onnx_coreml", "onnx_cpu"],
-    )
 
     window._identity_panel.chk_enable_pose_extractor.setChecked(True)
     window._identity_panel.combo_pose_model_type.setCurrentText("SLEAP")
-    window._populate_pose_runtime_flavor_options("sleap", preferred="onnx_mps")
 
-    idx = window._setup_panel.combo_pose_runtime_flavor.findData("onnx_mps")
+    idx = window._setup_panel.combo_runtime_tier.findData("cpu")
     assert idx >= 0
-    window._setup_panel.combo_pose_runtime_flavor.setCurrentIndex(idx)
+    window._setup_panel.combo_runtime_tier.setCurrentIndex(idx)
 
     config_path = tmp_path / "pose_runtime.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved_cfg["pose_runtime_flavor"] == "onnx_mps"
+    assert "pose_runtime_flavor" not in saved_cfg
+    assert "pose_sleap_device" not in saved_cfg
+    assert saved_cfg["runtime_tier"] == "cpu"
     window.close()
 
 
-def test_saved_config_preserves_selected_headtail_and_cnn_runtimes(
+def test_saved_config_preserves_runtime_tier(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    _seed_trackerkit_model_repository(tmp_path, monkeypatch)
+    """Saving config persists the selected runtime_tier."""
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda pipeline: (
-            ["cpu", "mps", "onnx_coreml", "onnx_cpu"]
-            if pipeline == "head_tail"
-            else ["cpu", "mps", "onnx_cpu"]
-        ),
-    )
+    combo = window._setup_panel.combo_runtime_tier
+    # Select the first tier (cpu) explicitly.
+    combo.setCurrentIndex(0)
+    first_tier = combo.currentData()
 
-    window._identity_panel.g_identity.setChecked(True)
-    window._identity_panel.g_headtail.setChecked(True)
-    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
-    window._identity_panel._add_cnn_classifier_row()
-    window._populate_headtail_runtime_options(preferred="onnx_coreml")
-    window._populate_cnn_runtime_options(preferred="onnx_cpu")
-
-    headtail_idx = window._setup_panel.combo_headtail_runtime.findData("onnx_coreml")
-    cnn_idx = window._setup_panel.combo_cnn_runtime.findData("onnx_cpu")
-    assert headtail_idx >= 0
-    assert cnn_idx >= 0
-    window._setup_panel.combo_headtail_runtime.setCurrentIndex(headtail_idx)
-    window._setup_panel.combo_cnn_runtime.setCurrentIndex(cnn_idx)
-
-    config_path = tmp_path / "aux_runtime.json"
+    config_path = tmp_path / "tier_runtime.json"
     assert window.save_config(preset_mode=True, preset_path=str(config_path))
     saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved_cfg["headtail_runtime"] == "onnx_coreml"
-    assert saved_cfg["cnn_runtime"] == "onnx_cpu"
+    assert saved_cfg["runtime_tier"] == first_tier
     window.close()
 
 
-def test_headtail_runtime_selector_uses_setup_panel_only(
+def test_headtail_runtime_derives_from_tier_combo(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
+    """The retired per-stage runtime combos are gone; the OBB backend is
+    resolved from the selected tier (Runtime Gen-2)."""
+    from hydra_suite.runtime.resolver import ResolvedBackend
+
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
     window = _make_main_window(monkeypatch)
-    monkeypatch.setattr(
-        session_module,
-        "supported_runtimes_for_pipeline",
-        lambda pipeline: (
-            ["cpu", "onnx_coreml", "onnx_cpu"] if pipeline == "head_tail" else ["cpu"]
-        ),
-    )
 
-    window._identity_panel.g_identity.setChecked(True)
-    window._identity_panel.g_headtail.setChecked(True)
-    _select_first_nonempty_model(window._identity_panel.combo_yolo_headtail_model)
-    window._populate_headtail_runtime_options(preferred="cpu")
-
-    setup_combo = window._setup_panel.combo_headtail_runtime
-    assert not hasattr(window._identity_panel, "combo_headtail_runtime")
-
-    setup_idx = setup_combo.findData("onnx_cpu")
-    assert setup_combo.findData("onnx_coreml") >= 0
-    assert setup_idx >= 0
-    setup_combo.setCurrentIndex(setup_idx)
-    assert window._selected_headtail_runtime() == "onnx_cpu"
+    # headtail and cnn combos no longer exist on setup panel.
+    assert not hasattr(window._setup_panel, "combo_headtail_runtime")
+    assert not hasattr(window._setup_panel, "combo_cnn_runtime")
+    # There is a single tier-derived resolved OBB backend for all stages.
+    assert isinstance(window._resolved_obb_backend(), ResolvedBackend)
     window.close()
 
 
@@ -1171,7 +1080,7 @@ def test_realtime_batch_policy_clamps_identity_controls_to_animal_count(
     assert (
         "one frame at a time" in window._detection_panel.lbl_batch_policy_notice.text()
     )
-    assert window._detection_panel.spin_yolo_batch_size.isEnabled() is False
+    assert window._detection_panel.spin_detection_batch_size.isEnabled() is False
     assert window._identity_panel.spin_pose_batch.maximum() == 3
     assert window._identity_panel.spin_pose_batch.value() == 3
     assert row.spin_batch.maximum() == 3
@@ -1197,7 +1106,7 @@ def test_realtime_sequential_mode_keeps_crop_batch_setting_visible(
     window._detection_panel.spin_yolo_seq_individual_batch_size.setValue(7)
     window._setup_panel.chk_realtime_mode.setChecked(True)
 
-    assert window._detection_panel.spin_yolo_batch_size.isEnabled() is False
+    assert window._detection_panel.spin_detection_batch_size.isEnabled() is False
     assert (
         window._detection_panel.spin_yolo_seq_individual_batch_size.isEnabled() is True
     )
@@ -1229,7 +1138,7 @@ def test_realtime_direct_mode_exposes_micro_batch_controls(
 
     window._detection_panel.chk_enable_realtime_yolo_micro_batching.setChecked(True)
     window._detection_panel.spin_realtime_yolo_micro_batch_size.setValue(4)
-    window._detection_panel._sync_batch_policy_controls()
+    window._detection_panel._sync_live_detection_batch_controls()
 
     assert (
         window._detection_panel.spin_realtime_yolo_micro_batch_size.isEnabled() is True
@@ -1302,7 +1211,7 @@ def test_sequential_crop_batch_roundtrip_persists(
     reloaded_window.close()
 
 
-def test_benchmark_recommendations_surface_in_runtime_and_batch_ui(
+def test_yolo_direct_task_and_fixed_angle_roundtrip_persists(
     monkeypatch: pytest.MonkeyPatch,
     qapp: QApplication,
     tmp_path: Path,
@@ -1310,34 +1219,53 @@ def test_benchmark_recommendations_surface_in_runtime_and_batch_ui(
     _seed_trackerkit_model_repository(tmp_path, monkeypatch)
 
     window = _make_main_window(monkeypatch)
-    window._detection_panel.combo_detection_method.setCurrentIndex(1)
-    window._benchmark_recommendations = {
-        "detection_direct": BenchmarkRecommendation(
-            target_key="detection_direct",
-            target_label="Detection",
-            runtime="cpu",
-            runtime_label="CPU",
-            batch_size=8,
-            mean_ms=20.0,
-            throughput_fps=400.0,
-            reason="test",
-            model_path="/tmp/direct.pt",
-            mean_per_frame_ms=2.5,
-        )
-    }
+    window._detection_panel.combo_yolo_direct_task.setCurrentIndex(1)  # "Detect"
+    window._detection_panel.spin_yolo_fixed_angle.setValue(42.5)
 
-    window._populate_compute_runtime_options(preferred="cpu")
-    texts = [
-        window._setup_panel.combo_compute_runtime.itemText(index)
-        for index in range(window._setup_panel.combo_compute_runtime.count())
-    ]
+    # The fixed-angle row should only be visible while "Detect" is selected.
+    # (isHidden() reflects the widget's own explicit visibility flag, unlike
+    # isVisible()/isVisibleTo(), which are also gated by ancestor tab/stack
+    # visibility and would be False here regardless of our own wiring.)
+    assert window._detection_panel.spin_yolo_fixed_angle.isHidden() is False
 
-    assert any("(Recommended)" in text for text in texts)
-    window._detection_panel._sync_batch_policy_controls()
+    params = window.get_parameters_dict()
+    assert params["YOLO_OBB_DIRECT_TASK"] == "detect"
+    assert params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(42.5)
+
+    config_path = tmp_path / "yolo_direct_task_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved_cfg["yolo_obb_direct_task"] == "detect"
+    assert saved_cfg["yolo_fixed_angle_deg"] == pytest.approx(42.5)
+    window.close()
+
+    reloaded_window = _make_main_window(monkeypatch)
+    reloaded_window._load_config_from_file(str(config_path), preset_mode=True)
+
+    assert reloaded_window._detection_panel.combo_yolo_direct_task.currentIndex() == 1
     assert (
-        "Benchmark recommendation"
-        in window._detection_panel.lbl_batch_policy_notice.text()
+        reloaded_window._detection_panel.spin_yolo_fixed_angle.value()
+        == pytest.approx(42.5)
     )
+    assert reloaded_window._detection_panel.spin_yolo_fixed_angle.isHidden() is False
+    reloaded_params = reloaded_window.get_parameters_dict()
+    assert reloaded_params["YOLO_OBB_DIRECT_TASK"] == "detect"
+    assert reloaded_params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(42.5)
+    reloaded_window.close()
+
+
+def test_yolo_direct_task_default_is_obb_and_hides_fixed_angle_row(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(monkeypatch)
+
+    assert window._detection_panel.combo_yolo_direct_task.currentIndex() == 0
+    assert window._detection_panel.spin_yolo_fixed_angle.isHidden() is True
+
+    params = window.get_parameters_dict()
+    assert params["YOLO_OBB_DIRECT_TASK"] == "obb"
+    assert params["YOLO_OBB_FIXED_ANGLE_DEG"] == pytest.approx(0.0)
     window.close()
 
 
@@ -1486,6 +1414,68 @@ def test_get_parameters_dict_exposes_identity_decoder_advanced_overrides(
     assert params["IDENTITY_RESPAWN_PRIOR_DECAY"] == pytest.approx(0.93)
     assert params["IDENTITY_RESPAWN_PRIOR_MAX_GAP"] == 44
     assert params["ADVANCED_CONFIG"]["identity_respawn_prior_max_gap"] == 44
+    window.close()
+
+
+def test_advanced_config_defaults_include_obb_seg_kernel_params(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    advanced_path = tmp_path / "advanced_config.json"
+
+    monkeypatch.setattr(
+        "hydra_suite.paths.get_advanced_config_path",
+        lambda: advanced_path,
+    )
+
+    advanced = ConfigOrchestrator._load_advanced_config(object())
+
+    assert advanced["obb_seg_num_angles"] == 24
+    assert advanced["obb_seg_crop_size"] == 64
+    assert advanced["obb_seg_pad_ratio"] == pytest.approx(0.15)
+    assert advanced["obb_seg_mask_threshold"] == pytest.approx(0.5)
+
+    saved = json.loads(advanced_path.read_text(encoding="utf-8"))
+    assert saved["obb_seg_num_angles"] == 24
+    assert saved["obb_seg_mask_threshold"] == pytest.approx(0.5)
+
+
+def test_get_parameters_dict_exposes_obb_seg_kernel_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={
+            "obb_seg_num_angles": 48,
+            "obb_seg_crop_size": 128,
+            "obb_seg_pad_ratio": 0.25,
+            "obb_seg_mask_threshold": 0.35,
+        },
+    )
+
+    params = window.get_parameters_dict()
+
+    assert params["YOLO_OBB_SEG_NUM_ANGLES"] == 48
+    assert params["YOLO_OBB_SEG_CROP_SIZE"] == 128
+    assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.25)
+    assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.35)
+    assert params["ADVANCED_CONFIG"]["obb_seg_num_angles"] == 48
+    window.close()
+
+
+def test_get_parameters_dict_obb_seg_kernel_overrides_default_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    qapp: QApplication,
+) -> None:
+    window = _make_main_window(monkeypatch, advanced_config={})
+
+    params = window.get_parameters_dict()
+
+    assert params["YOLO_OBB_SEG_NUM_ANGLES"] == 24
+    assert params["YOLO_OBB_SEG_CROP_SIZE"] == 64
+    assert params["YOLO_OBB_SEG_PAD_RATIO"] == pytest.approx(0.15)
+    assert params["YOLO_OBB_SEG_MASK_THRESHOLD"] == pytest.approx(0.5)
     window.close()
 
 
@@ -1675,4 +1665,38 @@ def test_bg_parameter_helper_applies_extended_detection_params(
     assert window._detection_panel.spin_max_object_size.value() == pytest.approx(
         round(1200.0 / scaled_body_area, 2)
     )
+    window.close()
+
+
+def test_slice_config_persists_and_reloads(monkeypatch, qapp, tmp_path):
+    window = _make_main_window(monkeypatch)
+    window._detection_panel.chk_slice_enabled.setChecked(True)
+    window._detection_panel.combo_slice_geometry.setCurrentText("custom")
+
+    config_path = tmp_path / "slice_roundtrip.json"
+    assert window.save_config(preset_mode=True, preset_path=str(config_path))
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["slice_enabled"] is True
+    assert saved["slice_geometry_mode"] == "custom"
+    window.close()
+
+    reloaded = _make_main_window(monkeypatch)
+    reloaded._load_config_from_file(str(config_path), preset_mode=True)
+    assert reloaded._detection_panel.chk_slice_enabled.isChecked() is True
+    assert reloaded._detection_panel.combo_slice_geometry.currentText() == "custom"
+    reloaded.close()
+
+
+def test_slice_params_reach_upper_snake_dict(monkeypatch, qapp):
+    window = _make_main_window(
+        monkeypatch,
+        advanced_config={"slice_overlap": 0.25, "slice_merge_backend": "gpu"},
+    )
+    window._detection_panel.chk_slice_enabled.setChecked(True)
+    window._detection_panel.combo_slice_geometry.setCurrentText("auto_object")
+    params = window.get_parameters_dict()
+    assert params["SLICE_ENABLED"] is True
+    assert params["SLICE_GEOMETRY_MODE"] == "auto_object"
+    assert params["SLICE_OVERLAP"] == 0.25
+    assert params["SLICE_MERGE_BACKEND"] == "gpu"
     window.close()

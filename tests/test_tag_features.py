@@ -7,7 +7,7 @@ import numpy as np
 from tests.helpers.module_loader import load_src_module
 
 mod = load_src_module(
-    "hydra_suite/core/tracking/tag_features.py",
+    "hydra_suite/core/tracking/features/tag_features.py",
     "tag_features_under_test",
 )
 NO_TAG = mod.NO_TAG

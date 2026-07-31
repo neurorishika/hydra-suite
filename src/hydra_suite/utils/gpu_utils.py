@@ -95,6 +95,14 @@ ONNXRUNTIME_COREML_AVAILABLE = ONNXRUNTIME_AVAILABLE and (
     "CoreMLExecutionProvider" in ONNXRUNTIME_PROVIDERS
 )
 
+# CoreML Tools for Apple Silicon native model conversion and inference
+try:
+    import coremltools as _ct  # noqa: F401
+
+    COREMLTOOLS_AVAILABLE = True
+except Exception:
+    COREMLTOOLS_AVAILABLE = False
+
 
 def _module_exists(module_name: str) -> bool:
     try:

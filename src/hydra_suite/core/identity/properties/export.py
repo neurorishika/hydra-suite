@@ -8,6 +8,17 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 import pandas as pd
 
+# DetectedPropertiesCache, IndividualPropertiesCache, and CNNIdentityCache are
+# legacy combined-schema caches that aggregate detection + head-tail + pose +
+# CNN results in a single .npz. They are NOT structurally interchangeable with
+# the per-type CacheHandle objects in core/inference/cache/store.py — the
+# legacy classes accept ``(cache_path, mode="r"|"w")`` constructors and expose
+# their own ``read_*``/``save_*``/``is_compatible`` API. A previous attempt
+# (Task 17c) aliased the new DetectionCacheHandle to DetectedPropertiesCache,
+# which broke the rich-export path with ``TypeError: ... unexpected keyword
+# argument 'mode'`` at runtime. Until the rich-export path is rewired to read
+# from the new per-type caches directly, this module stays on the legacy
+# classes.
 from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
 
 from .cache import IndividualPropertiesCache

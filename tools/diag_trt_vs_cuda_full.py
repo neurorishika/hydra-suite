@@ -1,5 +1,6 @@
 """
-diag_trt_vs_cuda_full.py — Full pipeline comparison using YOLOOBBDetector.
+diag_trt_vs_cuda_full.py — Full pipeline comparison using the direct OBB
+executors in ``hydra_suite.core.inference.direct_executors``.
 
 Shows the 3 root causes of TRT vs CUDA result differences:
 
@@ -90,7 +91,7 @@ print("=" * 70)
 print("ROOT CAUSE 2: FP16 (TRT) vs FP32 (CUDA/ONNX) precision")
 print("=" * 70)
 
-from hydra_suite.core.detectors._direct_obb_runtime import (
+from hydra_suite.core.inference.direct_executors import (
     DirectONNXOBBExecutor,
     DirectTensorRTOBBExecutor,
 )

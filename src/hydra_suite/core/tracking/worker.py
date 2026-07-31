@@ -7,17 +7,15 @@ import gc
 import logging
 import math
 import os
+import threading
 import time
 from collections import deque
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QMutex, QThread, Signal, Slot
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
-from hydra_suite.core.background.model import BackgroundModel
-from hydra_suite.core.detectors import DetectionFilter, create_detector
 from hydra_suite.core.filters.kalman import KalmanFilterManager
 from hydra_suite.core.identity.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
@@ -43,35 +41,23 @@ from hydra_suite.core.identity.pose.features import (
 from hydra_suite.core.identity.pose.features import (
     resolve_pose_group_indices as _pf_resolve_indices,
 )
-from hydra_suite.core.tracking.density import get_density_region_flags
-from hydra_suite.core.tracking.live_features import (
+from hydra_suite.core.tracking.confidence.density import get_density_region_flags
+from hydra_suite.core.tracking.features.live_features import (
     LiveCNNIdentityStore,
     LivePosePropertiesStore,
     LiveTagObservationStore,
 )
-from hydra_suite.core.tracking.precompute import (
-    AprilTagPrecomputePhase,
-    CNNPrecomputePhase,
-    CropConfig,
-    UnifiedPrecompute,
-)
-from hydra_suite.core.tracking.profiler import TrackingProfiler
-from hydra_suite.core.tracking.tag_features import (
+from hydra_suite.core.tracking.features.tag_features import (
     NO_TAG,
     build_detection_tag_id_list,
     build_tag_detection_hamming_map,
     build_tag_detection_map,
     get_detection_tag_csv_values,
 )
-from hydra_suite.data.detection_cache import DetectionCache
+from hydra_suite.core.tracking.profiler import TrackingProfiler
 from hydra_suite.data.tag_observation_cache import TagObservationCache
-from hydra_suite.utils.batch_policy import clamp_realtime_individual_batch_size
 from hydra_suite.utils.frame_prefetcher import FramePrefetcher
 from hydra_suite.utils.geometry import estimate_detection_crop_quality
-from hydra_suite.utils.image_processing import (
-    apply_image_adjustments,
-    stabilize_lighting,
-)
 from hydra_suite.utils.video_artifacts import (
     build_detected_properties_cache_path,
     build_individual_properties_cache_path,
@@ -80,19 +66,54 @@ from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
+# Task 18: USE_NEW_INFERENCE_PIPELINE feature flag removed — new InferenceRunner
+# pipeline is now the permanent path.  The legacy env-var toggle has been dropped.
+from hydra_suite.core.inference.config import (  # noqa: E402
+    BgSubConfig,
+    InferenceConfig,
+    build_inference_config_from_params,
+)
+from hydra_suite.core.inference.runner import InferenceRunner  # noqa: E402
+from hydra_suite.core.tracking.ingest.frame_result_bridge import (  # noqa: E402
+    build_density_cache_dict,
+    frame_result_to_meas,
+    populate_live_cnn_store,
+    populate_live_pose_store,
+    populate_live_tag_store,
+)
 
-class TrackingWorker(QThread):
+
+def _classify_cache_runtime_string(params: dict, stage: str = "cnn") -> str:
+    """Derive the classify cache-key runtime string from ``RUNTIME_TIER``.
+
+    STABLE cache-key derivation (Runtime Gen-2 / FT1): the classify cache-key
+    must stay byte-identical to the legacy ``CNN_COMPUTE_RUNTIME`` string so
+    existing identity caches remain valid. The legacy GUI set that string via
+    the tier resolver; this reproduces the SAME mapping directly from the live
+    ``RUNTIME_TIER`` param (the resolver only branches on ``stage`` for
+    ``bgsub``, so ``stage="cnn"`` and the legacy ``stage="obb"`` used by
+    ``_selected_cnn_runtime`` yield identical strings). Does NOT read the removed
+    ``COMPUTE_RUNTIME`` family, and does NOT depend on the retired legacy
+    runtime-string surface.
+    """
+    from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+    tier = str(params.get("RUNTIME_TIER", "") or "").strip().lower()
+    if tier not in {"cpu", "gpu", "gpu_fast"}:
+        tier = "cpu"
+    resolved = RuntimeResolver(tier, detect_platform()).resolve(stage)
+    if resolved.backend == "tensorrt":
+        return "tensorrt"
+    if resolved.backend == "coreml":
+        return "coreml"
+    return resolved.device  # cpu / cuda / mps
+
+
+class TrackingEngineCore:
     """
     Core tracking engine. Orchestrates tracking components to be functionally
     identical to the original monolithic implementation.
     """
-
-    frame_signal = Signal(np.ndarray)
-    finished_signal = Signal(bool, list, list)
-    progress_signal = Signal(int, str)
-    stats_signal = Signal(dict)  # Real-time FPS/ETA stats
-    warning_signal = Signal(str, str)  # (title, message) for UI warnings
-    pose_exported_model_resolved_signal = Signal(str)
 
     def __init__(
         self,
@@ -103,9 +124,20 @@ class TrackingWorker(QThread):
         detection_cache_path=None,
         preview_mode=False,
         use_cached_detections=False,
-        parent=None,
+        *,
+        on_frame=None,
+        on_finished=None,
+        on_progress=None,
+        on_stats=None,
+        on_warning=None,
+        on_pose_model_resolved=None,
     ):
-        super().__init__(parent)
+        self._on_frame = on_frame
+        self._on_finished = on_finished
+        self._on_progress = on_progress
+        self._on_stats = on_stats
+        self._on_warning = on_warning
+        self._on_pose_model_resolved = on_pose_model_resolved
         self.video_path = video_path
         self.csv_writer_thread = csv_writer_thread
         self.video_output_path = video_output_path
@@ -114,7 +146,7 @@ class TrackingWorker(QThread):
         self.preview_mode = preview_mode
         self.use_cached_detections = use_cached_detections
         self.video_writer = None
-        self.params_mutex = QMutex()
+        self._params_lock = threading.Lock()
         self.parameters = {}
         self.individual_properties_cache_path = None
         self.detected_properties_cache_path = None
@@ -135,25 +167,45 @@ class TrackingWorker(QThread):
         self.frame_prefetcher = None
         self.frame_prefetcher = None
 
+    def _emit_frame(self, rgb):
+        if self._on_frame is not None:
+            self._on_frame(rgb)
+
+    def _emit_finished(self, success, fps_list, full_traj):
+        if self._on_finished is not None:
+            self._on_finished(success, fps_list, full_traj)
+
+    def _emit_progress(self, pct, msg):
+        if self._on_progress is not None:
+            self._on_progress(pct, msg)
+
+    def _emit_stats(self, stats):
+        if self._on_stats is not None:
+            self._on_stats(stats)
+
+    def _emit_warning(self, title, msg):
+        if self._on_warning is not None:
+            self._on_warning(title, msg)
+
+    def _emit_pose_model_resolved(self, path):
+        if self._on_pose_model_resolved is not None:
+            self._on_pose_model_resolved(path)
+
     def set_parameters(self: object, p: dict) -> object:
         """Set full tracking parameter dictionary in a thread-safe way."""
-        self.params_mutex.lock()
-        self.parameters = p
-        self.params_mutex.unlock()
+        with self._params_lock:
+            self.parameters = p
 
-    @Slot(dict)
     def update_parameters(self: object, new_params: dict) -> object:
-        """Slot to safely update parameters from the GUI thread."""
-        self.params_mutex.lock()
-        self.parameters = new_params
-        self.params_mutex.unlock()
+        """Safely update parameters from the GUI thread."""
+        with self._params_lock:
+            self.parameters = new_params
         logger.info("Tracking worker parameters updated.")
 
     def get_current_params(self: object) -> object:
         """Return a shallow copy of current tracking parameters."""
-        self.params_mutex.lock()
-        p = dict(self.parameters)
-        self.params_mutex.unlock()
+        with self._params_lock:
+            p = dict(self.parameters)
         return p
 
     def _confidence_density_enabled(self, params=None) -> bool:
@@ -196,7 +248,7 @@ class TrackingWorker(QThread):
             resized_mask = cv2.resize(
                 roi_mask,
                 (resolved_target_w, resolved_target_h),
-                cv2.INTER_NEAREST,
+                interpolation=cv2.INTER_NEAREST,
             )
         else:
             resized_mask = roi_mask
@@ -436,7 +488,7 @@ class TrackingWorker(QThread):
     def emit_frame(self: object, bgr: object) -> object:
         """Emit current frame to GUI in RGB format."""
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        self.frame_signal.emit(rgb)
+        self._emit_frame(rgb)
 
     def _build_individual_properties_cache_path(
         self, properties_id: str, start_frame: int, end_frame: int
@@ -448,6 +500,87 @@ class TrackingWorker(QThread):
             start_frame,
             end_frame,
             detection_cache_path=self.detection_cache_path,
+        )
+
+    def _flush_live_pose_cache(
+        self,
+        live_store,
+        keypoint_names,
+        params,
+        start_frame,
+        end_frame,
+    ) -> None:
+        """Persist an in-memory pose store to a file-backed properties cache.
+
+        The InferenceRunner path populates ``LivePosePropertiesStore`` per frame
+        for the in-loop direction override but, unlike detected-properties, never
+        wrote it to disk — so the rich-export merge (which reads
+        ``individual_properties_cache_path``) had no source and the final CSV
+        carried no pose columns. This flush mirrors the detected-properties save:
+        it writes one ``IndividualPropertiesCache`` keyed by frame + detection ID
+        and records ``individual_properties_cache_path`` for the GUI handoff.
+        """
+        from hydra_suite.core.identity.properties.cache import (
+            IndividualPropertiesCache,
+            compute_detection_hash,
+            compute_extractor_hash,
+            compute_filter_settings_hash,
+            compute_individual_properties_id,
+        )
+
+        frames = list(live_store.get_cached_frames())
+        if not frames:
+            logger.info("No live pose frames to persist; skipping pose cache flush.")
+            return
+
+        detection_hash = compute_detection_hash(
+            params.get("INFERENCE_MODEL_ID", ""),
+            self.video_path,
+            start_frame,
+            end_frame,
+            detection_cache_version="2.0",
+        )
+        filter_hash = compute_filter_settings_hash(params)
+        extractor_hash = compute_extractor_hash(params)
+        properties_id = compute_individual_properties_id(
+            detection_hash, filter_hash, extractor_hash
+        )
+        pose_cache_path = self._build_individual_properties_cache_path(
+            properties_id, start_frame, end_frame
+        )
+        cache = IndividualPropertiesCache(str(pose_cache_path), mode="w")
+        try:
+            for frame_idx in frames:
+                raw = live_store.get_raw_frame(frame_idx)
+                if raw is None:
+                    continue
+                cache.add_frame(
+                    int(frame_idx),
+                    raw.get("detection_ids", []),
+                    pose_keypoints=raw.get("pose_keypoints", []),
+                )
+            cache.save(
+                metadata={
+                    "individual_properties_id": properties_id,
+                    "detection_hash": detection_hash,
+                    "filter_settings_hash": filter_hash,
+                    "extractor_hash": extractor_hash,
+                    "pose_keypoint_names": [str(k) for k in (keypoint_names or [])],
+                    "start_frame": int(start_frame),
+                    "end_frame": int(end_frame),
+                    "video_path": str(Path(self.video_path).expanduser().resolve()),
+                }
+            )
+        finally:
+            cache.close()
+
+        self.individual_properties_cache_path = str(pose_cache_path)
+        params["INDIVIDUAL_PROPERTIES_ID"] = properties_id
+        params["INDIVIDUAL_PROPERTIES_CACHE_PATH"] = str(pose_cache_path)
+        logger.info(
+            "Persisted %d live pose frames to properties cache: %s",
+            len(frames),
+            pose_cache_path,
         )
 
     def _build_detected_properties_cache_path(
@@ -532,16 +665,16 @@ class TrackingWorker(QThread):
         if collapse is not None:
             return collapse(theta_axis, reference_theta)
 
-        theta0 = TrackingWorker._normalize_theta(theta_axis)
-        theta1 = TrackingWorker._normalize_theta(theta0 + math.pi)
+        theta0 = TrackingEngineCore._normalize_theta(theta_axis)
+        theta1 = TrackingEngineCore._normalize_theta(theta0 + math.pi)
         if reference_theta is None:
             return theta0
         try:
-            ref = TrackingWorker._normalize_theta(float(reference_theta))
+            ref = TrackingEngineCore._normalize_theta(float(reference_theta))
         except Exception:
             return theta0
-        d0 = TrackingWorker._circular_abs_diff_rad(theta0, ref)
-        d1 = TrackingWorker._circular_abs_diff_rad(theta1, ref)
+        d0 = TrackingEngineCore._circular_abs_diff_rad(theta0, ref)
+        d1 = TrackingEngineCore._circular_abs_diff_rad(theta1, ref)
         return theta0 if d0 <= d1 else theta1
 
     def _build_cnn_identity_cache_path(
@@ -566,404 +699,7 @@ class TrackingWorker(QThread):
             )
         )
 
-    def _build_tag_cache_path(self, apriltag_id, start_frame, end_frame):
-        """Build an independent, hash-keyed AprilTag cache path."""
-        from hydra_suite.utils.video_artifacts import build_apriltag_cache_path
-
-        return str(
-            build_apriltag_cache_path(
-                self.video_path,
-                apriltag_id,
-                start_frame,
-                end_frame,
-                artifact_base_dir=(
-                    Path(self.detection_cache_path).parent
-                    if self.detection_cache_path
-                    else None
-                ),
-                create_dir=True,
-            )
-        )
-
-    def _build_pose_phase(
-        self,
-        params,
-        start_frame,
-        end_frame,
-        ignore_existing_cache: bool = False,
-    ):
-        """Build the pose precompute phase if enabled. Returns phase or None."""
-        if not bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
-            return None
-
-        from hydra_suite.core.identity.properties.cache import (
-            IndividualPropertiesCache,
-            compute_detection_hash,
-            compute_extractor_hash,
-            compute_filter_settings_hash,
-            compute_individual_properties_id,
-        )
-
-        detection_hash = compute_detection_hash(
-            params.get("INFERENCE_MODEL_ID", ""),
-            self.video_path,
-            start_frame,
-            end_frame,
-            detection_cache_version="2.0",
-        )
-        filter_hash = compute_filter_settings_hash(params)
-        extractor_hash = compute_extractor_hash(params)
-        properties_id = compute_individual_properties_id(
-            detection_hash, filter_hash, extractor_hash
-        )
-        pose_cache_path = self._build_individual_properties_cache_path(
-            properties_id, start_frame, end_frame
-        )
-        self.individual_properties_cache_path = str(pose_cache_path)
-        params["INDIVIDUAL_PROPERTIES_ID"] = properties_id
-        params["INDIVIDUAL_PROPERTIES_CACHE_PATH"] = str(pose_cache_path)
-
-        pose_cache_hit = False
-        if ignore_existing_cache and pose_cache_path.exists():
-            logger.info(
-                "Realtime workflow ignoring existing pose cache: %s",
-                pose_cache_path,
-            )
-        elif pose_cache_path.exists():
-            existing = IndividualPropertiesCache(str(pose_cache_path), mode="r")
-            try:
-                pose_cache_hit = existing.is_compatible()
-            finally:
-                existing.close()
-
-        pose_backend, pose_cache_writer, finalize_metadata = self._prepare_pose_backend(
-            params,
-            pose_cache_hit,
-            pose_cache_path,
-            properties_id,
-            detection_hash,
-            filter_hash,
-            extractor_hash,
-            start_frame,
-            end_frame,
-        )
-
-        return self._create_pose_pipeline(
-            params,
-            pose_backend,
-            pose_cache_writer,
-            pose_cache_hit,
-            pose_cache_path,
-            finalize_metadata,
-        )
-
-    def _prepare_pose_backend(
-        self,
-        params,
-        pose_cache_hit,
-        pose_cache_path,
-        properties_id,
-        detection_hash,
-        filter_hash,
-        extractor_hash,
-        start_frame,
-        end_frame,
-    ):
-        """Prepare pose backend and cache writer when cache is stale."""
-        from hydra_suite.core.identity.pose.api import (
-            build_runtime_config,
-            create_pose_backend_from_config,
-        )
-        from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
-
-        if pose_cache_hit:
-            return None, None, {}
-
-        pose_out_root = str(params.get("INDIVIDUAL_DATASET_OUTPUT_DIR", "")).strip()
-        if not pose_out_root:
-            pose_out_root = str(pose_cache_path.parent)
-
-        pose_config = build_runtime_config(params, out_root=pose_out_root)
-        pose_backend = create_pose_backend_from_config(pose_config)
-        pose_backend.warmup()
-
-        runtime_flavor = str(params.get("POSE_RUNTIME_FLAVOR", "")).lower()
-        if runtime_flavor.startswith("onnx") or runtime_flavor.startswith("tensorrt"):
-            try:
-                resolved = str(
-                    getattr(pose_backend, "exported_model_path", "")
-                    or getattr(pose_backend, "model_path", "")
-                ).strip()
-            except Exception:
-                resolved = ""
-            if resolved:
-                params["POSE_EXPORTED_MODEL_PATH"] = resolved
-                self.pose_exported_model_resolved_signal.emit(resolved)
-
-        pose_cache_writer = IndividualPropertiesCache(str(pose_cache_path), mode="w")
-        keypoint_names = list(getattr(pose_backend, "output_keypoint_names", []) or [])
-        finalize_metadata = {
-            "individual_properties_id": properties_id,
-            "detection_hash": detection_hash,
-            "filter_settings_hash": filter_hash,
-            "extractor_hash": extractor_hash,
-            "pose_keypoint_names": keypoint_names,
-            "start_frame": int(start_frame),
-            "end_frame": int(end_frame),
-            "video_path": str(Path(self.video_path).expanduser().resolve()),
-        }
-        return pose_backend, pose_cache_writer, finalize_metadata
-
-    def _create_pose_pipeline(
-        self,
-        params,
-        pose_backend,
-        pose_cache_writer,
-        pose_cache_hit,
-        pose_cache_path,
-        finalize_metadata,
-    ):
-        """Instantiate a PosePipeline from the prepared components."""
-        from hydra_suite.core.tracking.pose_pipeline import PosePipeline
-
-        _POSE_CROSS_FRAME_BATCH = int(params.get("POSE_PRECOMPUTE_BATCH_SIZE", 64))
-        if bool(params.get("TRACKING_REALTIME_MODE", False)):
-            _POSE_CROSS_FRAME_BATCH = 1
-        _bg_raw = params.get("INDIVIDUAL_BACKGROUND_COLOR", [0, 0, 0])
-        _pose_bg_color = (
-            tuple(int(c) for c in _bg_raw)
-            if isinstance(_bg_raw, (list, tuple)) and len(_bg_raw) == 3
-            else (0, 0, 0)
-        )
-        _suppress_foreign_obb = bool(params.get("SUPPRESS_FOREIGN_OBB_REGIONS", True))
-        _crop_workers = int(params.get("POSE_PIPELINE_CROP_WORKERS", 4))
-        _pre_resize = int(params.get("POSE_PIPELINE_PRE_RESIZE", 0))
-        if _pre_resize <= 0 and pose_backend is not None:
-            _pre_resize = int(getattr(pose_backend, "preferred_input_size", 0) or 0)
-
-        return PosePipeline(
-            pose_backend,
-            pose_cache_writer,
-            cross_frame_batch=_POSE_CROSS_FRAME_BATCH,
-            crop_workers=_crop_workers,
-            pre_resize_target=_pre_resize,
-            bg_color=_pose_bg_color,
-            suppress_foreign_obb=_suppress_foreign_obb,
-            padding_fraction=float(params.get("INDIVIDUAL_CROP_PADDING", 0.1)),
-            cache_hit=pose_cache_hit,
-            cache_path=str(pose_cache_path),
-            finalize_metadata=finalize_metadata,
-        )
-
-    def _build_apriltag_phase(
-        self,
-        params,
-        start_frame,
-        end_frame,
-        ignore_existing_cache: bool = False,
-    ):
-        """Build the AprilTag precompute phase if enabled. Returns phase or None."""
-        if not bool(params.get("USE_APRILTAGS", False)):
-            return None
-
-        from hydra_suite.core.identity.classification.apriltag import AprilTagConfig
-        from hydra_suite.core.identity.properties.cache import compute_apriltag_cache_id
-
-        cfg = AprilTagConfig.from_params(params)
-        apriltag_id = compute_apriltag_cache_id(
-            params,
-            inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
-        )
-        tag_cache_path = self._build_tag_cache_path(apriltag_id, start_frame, end_frame)
-        if tag_cache_path is None:
-            return None
-        try:
-            return AprilTagPrecomputePhase(
-                detector_config=cfg,
-                cache_path=tag_cache_path,
-                start_frame=start_frame,
-                end_frame=end_frame,
-                video_path=str(Path(self.video_path).expanduser().resolve()),
-                ignore_existing_cache=ignore_existing_cache,
-            )
-        except ImportError as exc:
-            logger.warning("AprilTag precompute skipped: %s", exc)
-            self.warning_signal.emit("AprilTag Unavailable", str(exc))
-            return None
-
-    def _build_cnn_phases(
-        self,
-        params,
-        start_frame,
-        end_frame,
-        ignore_existing_cache: bool = False,
-    ):
-        """Build CNN identity precompute phases. Returns list of phases."""
-        phases = []
-        for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
-            label = str(cnn_cfg_dict.get("label", "cnn_identity"))
-            model_path = str(cnn_cfg_dict.get("model_path", ""))
-            if not model_path or not os.path.exists(model_path):
-                logger.warning(
-                    "CNN identity precompute skipped (%s): model not found: %s",
-                    label,
-                    model_path,
-                )
-                continue
-            from hydra_suite.core.identity.calibration import CalibrationModel
-            from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
-            from hydra_suite.core.identity.properties.cache import (
-                compute_classify_cache_id,
-            )
-
-            cnn_cfg = CNNIdentityConfig(
-                model_path=model_path,
-                confidence=float(cnn_cfg_dict.get("confidence", 0.5)),
-                scoring_mode=str(cnn_cfg_dict.get("scoring_mode", "atomic")),
-                batch_size=clamp_realtime_individual_batch_size(
-                    cnn_cfg_dict.get("batch_size", 64),
-                    max_animals=params.get("MAX_TARGETS", 1),
-                    realtime_enabled=params.get("TRACKING_REALTIME_MODE", False),
-                    workflow_mode=params.get("TRACKING_WORKFLOW_MODE", "non_realtime"),
-                ),
-            )
-            calibration_temperature = float(
-                cnn_cfg_dict.get(
-                    "calibration_temperature",
-                    cnn_cfg_dict.get("temperature", 1.0),
-                )
-            )
-            calibration_model = (
-                CalibrationModel(temperature=calibration_temperature)
-                if abs(calibration_temperature - 1.0) > 1e-6
-                else None
-            )
-            classify_id = compute_classify_cache_id(
-                model_path=model_path,
-                compute_runtime=str(
-                    params.get(
-                        "CNN_COMPUTE_RUNTIME",
-                        params.get("COMPUTE_RUNTIME", "cpu"),
-                    )
-                ),
-                inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
-                calibration_signature=(
-                    calibration_model.signature if calibration_model is not None else ""
-                ),
-            )
-            cnn_cache_path = self._build_cnn_identity_cache_path(
-                label, classify_id, start_frame, end_frame
-            )
-            if cnn_cache_path:
-                self.detected_cnn_cache_paths[label] = str(cnn_cache_path)
-                phase = CNNPrecomputePhase(
-                    config=cnn_cfg,
-                    model_path=model_path,
-                    cache_path=cnn_cache_path,
-                    compute_runtime=str(
-                        params.get(
-                            "CNN_COMPUTE_RUNTIME",
-                            params.get("COMPUTE_RUNTIME", "cpu"),
-                        )
-                    ),
-                    name=label,
-                    calibration_model=calibration_model,
-                    ignore_existing_cache=ignore_existing_cache,
-                )
-                phases.append(phase)
-        return phases
-
-    def _build_precompute_phases(
-        self,
-        params: dict,
-        detection_method: str,
-        detection_cache,
-        start_frame: int,
-        end_frame: int,
-    ) -> list:
-        """Build the list of enabled precompute phases for a tracking run.
-
-        Returns [] when precompute should be skipped entirely (backward mode,
-        preview mode, wrong detection method, or no detection cache).
-        """
-        if detection_method != "yolo_obb":
-            return []
-        if self.backward_mode or self.preview_mode:
-            return []
-        if detection_cache is None:
-            return []
-
-        ignore_existing_cache = bool(
-            params.get(
-                "TRACKING_REALTIME_MODE",
-                str(params.get("TRACKING_WORKFLOW_MODE", "non_realtime"))
-                .strip()
-                .lower()
-                == "realtime",
-            )
-        )
-
-        phases = []
-
-        pose_phase = self._build_pose_phase(
-            params,
-            start_frame,
-            end_frame,
-            ignore_existing_cache=ignore_existing_cache,
-        )
-        if pose_phase is not None:
-            phases.append(pose_phase)
-
-        apriltag_phase = self._build_apriltag_phase(
-            params,
-            start_frame,
-            end_frame,
-            ignore_existing_cache=ignore_existing_cache,
-        )
-        if apriltag_phase is not None:
-            phases.append(apriltag_phase)
-
-        phases.extend(
-            self._build_cnn_phases(
-                params,
-                start_frame,
-                end_frame,
-                ignore_existing_cache=ignore_existing_cache,
-            )
-        )
-
-        return phases
-
-    def _run_batched_detection_phase(
-        self,
-        cap,
-        detection_cache,
-        detector,
-        params,
-        start_frame,
-        end_frame,
-        profiler=None,
-    ):
-        """Phase 1: Run batched YOLO detection and cache results."""
-        from hydra_suite.core.tracking.detection_phase import (
-            run_batched_detection_phase,
-        )
-
-        return run_batched_detection_phase(
-            cap,
-            detection_cache,
-            detector,
-            params,
-            start_frame,
-            end_frame,
-            is_stop_requested=lambda: self._stop_requested,
-            on_progress=lambda pct, msg: self.progress_signal.emit(pct, msg),
-            on_stats=lambda stats: self.stats_signal.emit(stats),
-            profiler=profiler,
-            video_path=self.video_path,
-        )
-
-    def run(self: object) -> object:  # noqa: C901
+    def run_tracking(self: object) -> object:  # noqa: C901
         """Execute tracking pipeline for the configured video and parameters."""
         # === 1. INITIALIZATION (Identical to Original) ===
         gc.collect()
@@ -983,7 +719,7 @@ class TrackingWorker(QThread):
         cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             logger.error(f"Failed to open video: {self.video_path}")
-            self.finished_signal.emit(True, [], [])
+            self._emit_finished(True, [], [])
             return
 
         total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -1031,14 +767,18 @@ class TrackingWorker(QThread):
                 == "realtime",
             )
         )
+        # NOTE: this no longer selects a detection architecture -- the legacy
+        # two-phase prepass it once gated is gone, and InferenceRunner owns the
+        # batch pass. It survives as the condition for the Phase 2 frame
+        # prefetcher (see use_prefetcher below), profiler metadata, and the
+        # status string. The old GPU-batching-toggle term was dropped with
+        # the legacy batching config; it defaulted to True, so this is
+        # unchanged for any config that did not explicitly disable it.
         use_batched_detection = (
             not self.preview_mode  # Not preview mode
             and not self.backward_mode  # Not backward mode (uses cache)
             and detection_method == "yolo_obb"  # Only YOLO benefits from batching
             and not realtime_tracking_mode_requested
-            and advanced_config.get(
-                "enable_yolo_batching", True
-            )  # Batching enabled in config
             and self.detection_cache_path
             is not None  # Need cache path for two-phase approach
         )
@@ -1048,12 +788,10 @@ class TrackingWorker(QThread):
         elif detection_method == "yolo_obb" and not self.preview_mode:
             logger.info("Using frame-by-frame YOLO detection")
 
-        # Initialize background model only if using background subtraction
-        # Skip priming in backward mode since it uses cached detections.
-        bg_model = None
-        if detection_method == "background_subtraction" and not self.backward_mode:
-            bg_model = BackgroundModel(p)
-            bg_model.prime_background(cap)
+        # Background model priming (formerly done here) now lives inside the
+        # InferenceRunner bg-sub stage: load_bgsub_model primes the model from
+        # the video when the runner is constructed below. Backward mode replays
+        # cached detections and never constructs a runner.
 
         # Seek to start frame if not at beginning
         if start_frame > 0:
@@ -1073,7 +811,7 @@ class TrackingWorker(QThread):
                 "Background subtraction mode runs tracking without individual-analysis outputs."
             )
             logger.info(msg)
-            self.warning_signal.emit("Individual Analysis Disabled", msg)
+            self._emit_warning("Individual Analysis Disabled", msg)
             individual_pipeline_enabled = False
 
         # Whether any precompute phase will be needed (pose, AprilTag, CNN identity).
@@ -1089,21 +827,15 @@ class TrackingWorker(QThread):
             )
         )
         # === Streaming Phase 5/6 ===
-        # Fresh forward YOLO runs now default to streaming-first individual
-        # analysis. Replay/precompute remains available as an explicit fallback
-        # for cached-detection rebuilds or callers that set
-        # FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY.
+        # Forward YOLO runs perform individual analysis (pose, AprilTag, CNN
+        # identity) inline via the InferenceRunner streaming path.
         _streaming_explicitly_requested = bool(
             p.get("ENABLE_STREAMING_INDIVIDUAL_ANALYSIS", False)
-        )
-        _force_individual_replay = bool(
-            p.get("FORCE_INDIVIDUAL_PRECOMPUTE_REPLAY", False)
         )
         streaming_precompute_enabled = bool(
             individual_data_precompute_enabled
             and not self.preview_mode
             and not self.backward_mode
-            and not _force_individual_replay
         )
         effective_realtime_tracking_mode = bool(
             realtime_tracking_mode_requested
@@ -1126,21 +858,23 @@ class TrackingWorker(QThread):
                 logger.info(
                     "Non-realtime YOLO forward runs now default to streaming individual analysis."
                 )
-        elif _force_individual_replay and individual_data_precompute_enabled:
-            logger.info(
-                "Replay individual-analysis fallback enabled: using cached/precompute rebuild path."
-            )
         elif effective_realtime_tracking_mode:
             logger.info(
                 "Realtime workflow enabled: using streaming forward detection/tracking."
             )
 
-        if individual_data_precompute_enabled and not self.detection_cache_path:
+        # For yolo_obb, InferenceRunner manages its own cache dir via _resolve_cache_dir()
+        # so individual precompute can proceed without a legacy detection_cache_path.
+        if (
+            individual_data_precompute_enabled
+            and not self.detection_cache_path
+            and detection_method != "yolo_obb"
+        ):
             logger.error(
                 "Individual precompute requires detection caching, but no detection cache path is configured."
             )
             cap.release()
-            self.finished_signal.emit(False, [], [])
+            self._emit_finished(False, [], [])
             return
 
         # Replay/precompute fallback needs full raw detections before tracking
@@ -1179,8 +913,8 @@ class TrackingWorker(QThread):
         tracking_continuity = [0] * N
         trajectory_ids, next_trajectory_id = list(range(N)), N
 
-        detection_initialized, tracking_stabilized = False, False
-        detection_counts, tracking_counts = 0, 0
+        detection_initialized = False
+        detection_counts = 0
 
         # Diagnostic: log gate parameters for debugging jumps
         _diag_body = float(
@@ -1204,7 +938,10 @@ class TrackingWorker(QThread):
         )
 
         start_time, self.frame_count, fps_list = time.time(), 0, []
-        local_counts, intensity_history, lighting_state = [0] * N, deque(maxlen=50), {}
+        # Lighting stabilization state (intensity_history / lighting_state) now
+        # lives on BackgroundModel inside the bg-sub stage, so the worker no
+        # longer tracks it here.
+        local_counts = [0] * N
         roi_fill_color = None  # Average color outside ROI for visualization overlay
 
         # Pipeline profiler — store run metadata now that all params are known,
@@ -1213,7 +950,7 @@ class TrackingWorker(QThread):
             detection_method=detection_method,
             n_targets=N,
             resize_factor=float(p.get("RESIZE_FACTOR", 1.0)),
-            compute_runtime=str(p.get("COMPUTE_RUNTIME", "cpu")),
+            compute_runtime=str(p.get("RUNTIME_TIER", "cpu")),
             start_frame=start_frame,
             end_frame=end_frame,
             backward_mode=self.backward_mode,
@@ -1225,123 +962,138 @@ class TrackingWorker(QThread):
         )
         profiler.phase_end("initialization")
 
-        # Initialize detection cache
-        detection_cache = None
+        # Initialize detection.
+        # For YOLO OBB: InferenceRunner owns detection, caching, and all per-frame
+        # inference (headtail, CNN, pose, AprilTag).  The legacy DetectionCache is
+        # not used for this path.
+        # For background subtraction: InferenceRunner bg-sub stage drives forward
+        # detection live (constructed below); backward replays a cache.
+        inference_runner = None  # InferenceRunner for yolo_obb mode
+        bgsub_runner = None  # InferenceRunner for background-subtraction mode
+        detection_cache = None  # Legacy cache — only used for background subtraction
         use_cached_detections = False
         cached_frame_indices = set()
-        detector = None
-        if self.detection_cache_path:
-            # Check if we should load existing cache
-            cache_exists = os.path.exists(self.detection_cache_path)
-            should_load_cache = self.backward_mode or (
-                not effective_realtime_tracking_mode
-                and self.use_cached_detections
-                and cache_exists
-            )
 
-            if should_load_cache and cache_exists:
-                # Load cached detections and validate frame range
-                detection_cache = DetectionCache(self.detection_cache_path, mode="r")
-                if not detection_cache.is_compatible():
-                    logger.warning(
-                        "Detection cache format is incompatible; deleting and regenerating."
-                    )
-                    detection_cache.close()
-                    detection_cache = None
-                    os.remove(self.detection_cache_path)
-                    cache_exists = False
-                else:
-                    cached_start, cached_end = detection_cache.get_frame_range()
-
-                    # Check if cache fully covers requested frame range
-                    if detection_cache.covers_frame_range(start_frame, end_frame):
-                        requested_total_frames = end_frame - start_frame + 1
-                        cache_total_frames = detection_cache.get_total_frames()
-                        # Progress and iteration should always reflect the requested subset,
-                        # not the full cached file span.
-                        total_frames = requested_total_frames
-                        use_cached_detections = True
-                        if self.backward_mode:
-                            logger.info(
-                                f"Backward pass using cached detections for requested range "
-                                f"{start_frame}-{end_frame} ({requested_total_frames} frames; cache has {cache_total_frames})"
-                            )
-                        else:
-                            logger.info(
-                                f"Reusing cached detections for requested range "
-                                f"{start_frame}-{end_frame} ({requested_total_frames} frames; cache has {cache_total_frames})"
-                            )
-                    else:
-                        # Frame range mismatch - invalidate cache
-                        missing = detection_cache.get_missing_frames(
-                            start_frame, end_frame
-                        )
-                        if missing:
-                            logger.warning(
-                                f"Cache missing {len(missing)}+ frame(s) in requested range (sample: {missing[:5]})"
-                            )
-                        logger.warning(
-                            f"Cache frame range mismatch! Cache: {cached_start}-{cached_end}, Requested: {start_frame}-{end_frame}"
-                        )
-                        logger.warning(
-                            "Deleting old cache and regenerating detections..."
-                        )
-                        detection_cache.close()
-                        detection_cache = None
-                        os.remove(self.detection_cache_path)
-                        cache_exists = False
-
-            if self.backward_mode and not use_cached_detections:
+        if detection_method == "yolo_obb":
+            # ── YOLO OBB: InferenceRunner path ──────────────────────────────
+            if self.backward_mode and not self.detection_cache_path:
                 logger.error(
-                    "Backward tracking requires a compatible forward detection cache. "
+                    "Backward tracking requires a configured forward detection cache path. "
                     "Please run forward tracking first."
                 )
-                if detection_cache:
-                    detection_cache.close()
                 cap.release()
-                self.finished_signal.emit(False, [], [])
+                self._emit_finished(False, [], [])
                 return
 
-            # Initialize the detection/filter surface only after cache reuse is
-            # resolved. Cached YOLO passes only need raw-detection filtering, not a
-            # full runtime-backed detector that can trigger ONNX/TRT artifact builds.
-            if use_cached_detections and detection_method == "yolo_obb":
-                detector = DetectionFilter(p)
-                logger.info(
-                    "Using lightweight YOLO detection filter for cached detections"
+            try:
+                _inference_cfg = build_inference_config_from_params(p)
+            except Exception as _cfg_err:
+                logger.error(
+                    "Failed to build InferenceConfig from params: %s", _cfg_err
                 )
-            elif use_cached_detections:
-                detector = None
-            else:
-                # Preview mode remains compatible with fixed-batch runtimes by using
-                # single-frame padding in the detector path.
-                detector = create_detector(p)
+                cap.release()
+                self._emit_finished(False, [], [])
+                return
 
-            # Load density regions for backward pass from the sidecar JSON written
-            # by the forward pass (backward mode skips pre-detection, so regions are
-            # not computed here — they are loaded from disk instead).
+            _cache_dir = self._resolve_cache_dir()
+            _cache_dir.mkdir(parents=True, exist_ok=True)
+            # Backward (replay) passes only call load_frame / caches_all_valid —
+            # they never invoke run_realtime or run_batch_pass.  Skip loading
+            # HeadTail, CNN, Pose (incl. SLEAP), and AprilTag backends in that
+            # mode to avoid the ~8 s per-session SLEAP/ORT-TRT-EP init cost.
+            inference_runner = InferenceRunner(
+                _inference_cfg,
+                cache_dir=_cache_dir,
+                video_path=self.video_path,
+                cache_only=self.backward_mode,
+                # Arena ROI mask (native video resolution). Folded into the
+                # detection cache key ONLY when sliced inference is enabled, and
+                # used to ROI-gate slice tiles in the batch pass. Passing it at
+                # construction (both forward and backward runs) is what lets a
+                # backward/replay run reproduce the same cache key and read the
+                # forward cache. None / non-sliced runs => key unchanged.
+                roi_mask=p.get("ROI_MASK"),
+            )
+
+            if self.backward_mode:
+                if not inference_runner.caches_all_valid():
+                    logger.error(
+                        "Backward tracking requires valid forward-pass inference caches. "
+                        "Please run forward tracking first."
+                    )
+                    inference_runner.close()
+                    cap.release()
+                    self._emit_finished(False, [], [])
+                    return
+                if not inference_runner.detection_cache_covers_range(
+                    start_frame, end_frame
+                ):
+                    _missing = inference_runner.detection_cache_missing_frames(
+                        start_frame, end_frame
+                    )
+                    logger.error(
+                        "Backward tracking requires a forward-pass cache covering "
+                        "frames %d-%d, but it is incomplete (missing e.g. %s). "
+                        "Please re-run forward tracking over the full range.",
+                        start_frame,
+                        end_frame,
+                        _missing,
+                    )
+                    inference_runner.close()
+                    cap.release()
+                    self._emit_finished(False, [], [])
+                    return
+                use_cached_detections = True
+                logger.info(
+                    "Backward pass: using pre-computed InferenceRunner caches from %s",
+                    _cache_dir,
+                )
+            elif (
+                not effective_realtime_tracking_mode
+                and self.use_cached_detections
+                and inference_runner.caches_all_valid()
+                and inference_runner.detection_cache_covers_range(
+                    start_frame, end_frame
+                )
+            ):
+                use_cached_detections = True
+                logger.info(
+                    "Reusing pre-computed InferenceRunner caches from %s", _cache_dir
+                )
+            else:
+                use_cached_detections = False
+                if not self.use_cached_detections:
+                    logger.info(
+                        "Cache reuse disabled by user; InferenceRunner will recompute "
+                        "detections (realtime=%s)",
+                        effective_realtime_tracking_mode,
+                    )
+                else:
+                    logger.info(
+                        "InferenceRunner will compute detections (realtime=%s)",
+                        effective_realtime_tracking_mode,
+                    )
+
+            # Load density regions sidecar for backward pass
             if density_map_enabled and self.backward_mode and not self._density_regions:
                 try:
-                    from pathlib import Path as _Path
-
-                    from hydra_suite.core.tracking.confidence_density import (
+                    from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
                     )
 
-                    _regions_path = _Path(self.detection_cache_path).with_name(
-                        _Path(self.detection_cache_path).stem
-                        + "_confidence_regions.json"
-                    )
+                    _regions_path = _cache_dir / "confidence_regions.json"
                     if _regions_path.exists():
                         self._density_regions = _load_regions(_regions_path)
                         logger.info(
-                            f"Backward pass: loaded {len(self._density_regions)} "
-                            f"density regions from {_regions_path}"
+                            "Backward pass: loaded %d density regions from %s",
+                            len(self._density_regions),
+                            _regions_path,
                         )
                     else:
                         logger.info(
-                            "Backward pass: no density regions sidecar found "
-                            f"({_regions_path}); density-aware assignment disabled."
+                            "Backward pass: no density regions sidecar at %s; "
+                            "density-aware assignment disabled.",
+                            _regions_path,
                         )
                 except Exception:
                     logger.exception(
@@ -1349,64 +1101,147 @@ class TrackingWorker(QThread):
                     )
                     self._density_regions = []
 
-            # Create new cache for writing if needed
-            if not use_cached_detections:
-                detection_cache = DetectionCache(
-                    self.detection_cache_path,
-                    mode="w",
-                    start_frame=start_frame,
-                    end_frame=end_frame,
-                )
-                logger.info(
-                    f"Forward pass caching detections for range {start_frame}-{end_frame}"
-                )
         else:
-            if self.backward_mode:
-                logger.error(
-                    "Backward tracking requires a configured forward detection cache path. "
-                    "Please run forward tracking first."
-                )
-                cap.release()
-                self.finished_signal.emit(False, [], [])
-                return
+            # ── Background subtraction ───────────────────────────────────────
+            # Detections are produced live in the forward loop (the adaptive
+            # background model needs sequential frames, so there is no separate
+            # batch pass), and cached via InferenceRunner so the backward pass
+            # can replay them — parity with the OBB path.
+            #
+            # Build the InferenceConfig + resolve the cache dir ONCE, above the
+            # backward/forward split, so both branches share the identical
+            # config (Tasks 5-6 consume this for the unified cache path).
+            from hydra_suite.core.inference.config import migrate_runtime_to_tier
 
-            # Runs without a detection cache still need a live detector.
-            detector = create_detector(p)
-
-        # === RUN BATCHED DETECTION PHASE (if applicable) ===
-        # Only run batched detection if we don't already have cached detections
-        if use_batched_detection and not use_cached_detections:
-            # Phase 1: Batched YOLO detection
-            profiler.phase_start("batched_detection")
-            frames_processed = self._run_batched_detection_phase(
-                cap,
-                detection_cache,
-                detector,
-                p,
-                start_frame,
-                end_frame,
-                profiler=profiler,
+            _compute_runtime = str(p.get("COMPUTE_RUNTIME", "cpu"))
+            _raw_tier = str(p.get("RUNTIME_TIER", "") or "").strip().lower()
+            _runtime_tier = (
+                _raw_tier
+                if _raw_tier in {"cpu", "gpu", "gpu_fast"}
+                else migrate_runtime_to_tier({_compute_runtime})
             )
+            bgsub_inference_config = InferenceConfig(
+                obb=None,
+                bgsub=BgSubConfig.from_params(p),
+                runtime_tier=_runtime_tier,
+                detection_batch_size=int(p.get("DETECTION_BATCH_SIZE", 1) or 1),
+            )
+            _cache_dir = self._resolve_cache_dir()
+
+            if self.backward_mode:
+                _cache_dir.mkdir(parents=True, exist_ok=True)
+                bgsub_runner = InferenceRunner(
+                    bgsub_inference_config,
+                    cache_dir=_cache_dir,
+                    video_path=self.video_path,
+                    cache_only=True,
+                )
+                if not bgsub_runner.caches_all_valid() or not (
+                    bgsub_runner.detection_cache_covers_range(start_frame, end_frame)
+                ):
+                    logger.error(
+                        "Backward tracking requires a valid forward bg-sub "
+                        "detection cache covering frames %d-%d at %s. Please run "
+                        "forward tracking over the full range first.",
+                        start_frame,
+                        end_frame,
+                        _cache_dir / "detection.npz",
+                    )
+                    bgsub_runner.close()
+                    cap.release()
+                    self._emit_finished(False, [], [])
+                    return
+                use_cached_detections = True
+                logger.info(
+                    "Backward pass: replaying cached bg-sub detections via "
+                    "InferenceRunner from %s",
+                    _cache_dir / "detection.npz",
+                )
+            else:
+                # Forward pass. The runner owns the detection cache exactly like
+                # the yolo_obb path. Preview mode uses cache_dir=None: the cache
+                # file is one fixed path per video (not qualified by frame range),
+                # so a short preview range must not write/truncate it.
+                _fwd_cache_dir = None if self.preview_mode else _cache_dir
+                if _fwd_cache_dir is not None:
+                    _fwd_cache_dir.mkdir(parents=True, exist_ok=True)
+                    # Best-effort remove the pre-unification hand-rolled cache so
+                    # it does not linger as a confusing orphan. Never fatal.
+                    try:
+                        (_fwd_cache_dir / "bgsub_detection.npz").unlink(missing_ok=True)
+                    except Exception:
+                        logger.debug(
+                            "Could not remove stale bgsub_detection.npz (non-fatal)",
+                            exc_info=True,
+                        )
+                bgsub_runner = InferenceRunner(
+                    bgsub_inference_config,
+                    cache_dir=_fwd_cache_dir,
+                    video_path=self.video_path,
+                    cache_only=False,
+                )
+                if _fwd_cache_dir is not None:
+                    logger.info(
+                        "Forward pass caching bg-sub detections via InferenceRunner "
+                        "to %s",
+                        _fwd_cache_dir / "detection.npz",
+                    )
+                else:
+                    logger.info(
+                        "Preview mode: bg-sub runner has no cache (cache_dir=None)."
+                    )
+
+        # === RUN BATCHED INFERENCE PHASE (if applicable) ===
+        # For YOLO OBB: InferenceRunner.run_batch_pass() when caches are not yet valid.
+        # For background subtraction: no batched phase; legacy detector runs per frame.
+        if (
+            inference_runner is not None
+            and not use_cached_detections
+            and not effective_realtime_tracking_mode
+        ):
+            profiler.phase_start("batched_detection")
+            logger.info("=" * 80)
+            logger.info("PHASE 1: InferenceRunner batch pass")
+            logger.info("=" * 80)
+            try:
+                inference_runner.run_batch_pass(
+                    Path(self.video_path),
+                    progress_cb=self._emit_inference_progress,
+                    start_frame=int(p.get("START_FRAME", 0)),
+                    end_frame=(
+                        int(p.get("END_FRAME", -1))
+                        if int(p.get("END_FRAME", -1)) >= 0
+                        else None
+                    ),
+                    should_stop=lambda: self._stop_requested,
+                )
+            except Exception as _bp_err:
+                profiler.phase_end("batched_detection")
+                logger.exception(
+                    "InferenceRunner batch pass failed (fatal): %s", _bp_err
+                )
+                self._emit_warning(
+                    "Inference Failed",
+                    f"Batch detection pass failed:\n{_bp_err}",
+                )
+                inference_runner.close()
+                cap.release()
+                if self.video_writer:
+                    self.video_writer.release()
+                self._emit_finished(False, [], [])
+                return
             profiler.phase_end("batched_detection")
+            use_cached_detections = True
+            logger.info(
+                "InferenceRunner batch pass complete; caches written to %s", _cache_dir
+            )
 
-            # Save detection cache after phase 1
-            detection_cache.save()
-            logger.info("Detection cache saved after batched phase")
-
-            # Reopen cache in read mode for phase 2
-            detection_cache.close()
-            detection_cache = DetectionCache(self.detection_cache_path, mode="r")
-            total_frames = frames_processed
-            use_cached_detections = True  # Phase 2 uses cached detections
-
-            # Reset video capture to start frame for phase 2 (tracking + visualization)
-            # Reopen instead of seeking — seeking is unreliable with some
-            # codecs after reading through all frames.
+            # Reset video capture for the tracking loop phase.
             cap.release()
             cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
             if start_frame > 0:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            logger.info(f"Reset video to start frame {start_frame} for phase 2")
+            logger.info("Reset video to start frame %d for tracking loop", start_frame)
 
             logger.info("=" * 80)
             logger.info("PHASE 2: Tracking and Visualization")
@@ -1415,30 +1250,29 @@ class TrackingWorker(QThread):
         # === COMPUTE CONFIDENCE DENSITY MAP ===
         # Runs for BOTH fresh and cached detections (forward pass only).
         # Backward pass loads regions from the sidecar JSON instead.
+        # For YOLO OBB: uses InferenceRunner detection cache via build_density_cache_dict.
+        # For background subtraction: no cached detections → skip density map.
         if (
             density_map_enabled
             and not self.backward_mode
-            and self.detection_cache_path
-            and detection_cache is not None
+            and inference_runner is not None
             and use_cached_detections
         ):
             profiler.phase_start("confidence_density")
-            from pathlib import Path as _Path
 
-            _regions_path = _Path(self.detection_cache_path).with_name(
-                _Path(self.detection_cache_path).stem + "_confidence_regions.json"
-            )
+            _regions_path = _cache_dir / "confidence_regions.json"
             if _regions_path.exists():
                 # Regions already computed — just load them.
                 try:
-                    from hydra_suite.core.tracking.confidence_density import (
+                    from hydra_suite.core.tracking.confidence.confidence_density import (
                         load_regions as _load_regions,
                     )
 
                     self._density_regions = _load_regions(_regions_path)
                     logger.info(
-                        f"Loaded {len(self._density_regions)} existing density "
-                        f"regions from {_regions_path}"
+                        "Loaded %d existing density regions from %s",
+                        len(self._density_regions),
+                        _regions_path,
                     )
                 except Exception:
                     logger.exception(
@@ -1446,11 +1280,11 @@ class TrackingWorker(QThread):
                     )
                     self._density_regions = []
             else:
-                # Compute density map from detection cache.
+                # Compute density map from InferenceRunner detection cache.
                 try:
                     import cv2 as _cv2
 
-                    from hydra_suite.core.tracking.confidence_density import (
+                    from hydra_suite.core.tracking.confidence.confidence_density import (
                         compute_density_map_from_cache,
                         export_diagnostic_video,
                         save_regions,
@@ -1459,38 +1293,17 @@ class TrackingWorker(QThread):
                     _frame_h = int(cap.get(_cv2.CAP_PROP_FRAME_HEIGHT))
                     _frame_w = int(cap.get(_cv2.CAP_PROP_FRAME_WIDTH))
 
-                    # Build a plain dict {frame_idx: (meas_arr, confs_arr, sizes_arr)}
-                    _cache_frames = sorted(detection_cache._cached_frames or [])
-                    _cache_dict = {}
-                    for _fidx in _cache_frames:
-                        (
-                            _meas_list,
-                            _sizes_list,
-                            _shapes_list,
-                            _confs_list,
-                            _obb_corners,
-                            _det_ids,
-                            _heading_hints,
-                            _heading_confidences,
-                            _directed_mask,
-                            _canonical_affines,
-                            _canvas_dims,
-                            _M_inverse,
-                        ) = detection_cache.get_frame(_fidx)
-                        if _meas_list:
-                            _meas_arr = np.array(_meas_list, dtype=np.float32)
-                        else:
-                            _meas_arr = np.zeros((0, 3), dtype=np.float32)
-                        _confs_arr = np.array(_confs_list, dtype=np.float32)
-                        _sizes_arr = np.array(_sizes_list, dtype=np.float32)
-                        _cache_dict[_fidx] = (_meas_arr, _confs_arr, _sizes_arr)
+                    # Build {frame_idx: (meas_arr, confs_arr, sizes_arr)} from runner caches
+                    _cache_dict = build_density_cache_dict(
+                        inference_runner, start_frame, end_frame
+                    )
 
                     def _density_progress(pct, msg):
                         logger.info(msg)
-                        self.progress_signal.emit(pct, msg)
+                        self._emit_progress(pct, msg)
 
                     logger.info("Computing confidence density map...")
-                    self.progress_signal.emit(0, "Computing confidence density map...")
+                    self._emit_progress(0, "Computing confidence density map...")
 
                     # Compute min_area_px in grid-pixel units from body-size fraction.
                     _density_ds = int(p.get("DENSITY_DOWNSAMPLE_FACTOR", 8))
@@ -1527,8 +1340,8 @@ class TrackingWorker(QThread):
                     # sequential frame reading (avoids expensive random seeks
                     # on large videos).  Saved next to the source video so it
                     # is easy to find regardless of where the cache lives.
-                    _diag_path = _Path(self.video_path).parent / (
-                        _Path(self.video_path).stem + "_confidence_map.mp4"
+                    _diag_path = Path(self.video_path).parent / (
+                        Path(self.video_path).stem + "_confidence_map.mp4"
                     )
                     _fps = cap.get(_cv2.CAP_PROP_FPS) or 25.0
 
@@ -1544,9 +1357,7 @@ class TrackingWorker(QThread):
 
                     if self._confidence_density_video_export_enabled(p):
                         logger.info("Exporting confidence density diagnostic video...")
-                        self.progress_signal.emit(
-                            50, "Exporting confidence density video..."
-                        )
+                        self._emit_progress(50, "Exporting confidence density video...")
 
                         # Output at reduced resolution for speed.
                         _diag_ds = 4  # 4× downsample for diagnostic video (independent of density grid ds)
@@ -1571,7 +1382,7 @@ class TrackingWorker(QThread):
                         logger.info(
                             "Skipping confidence density diagnostic video export by configuration."
                         )
-                    self.progress_signal.emit(100, "Density map complete")
+                    self._emit_progress(100, "Density map complete")
 
                     # Reopen video capture for subsequent phases.
                     # CAP_PROP_POS_FRAMES seek is unreliable with some
@@ -1594,282 +1405,86 @@ class TrackingWorker(QThread):
 
             profiler.phase_end("confidence_density")
 
-        # === UNIFIED PRECOMPUTE ===
+        # === PER-FRAME INFERENCE LIVE STORES ===
+        # For YOLO OBB with InferenceRunner: live stores are populated per-frame
+        # inside the tracking loop from FrameResult.cnn / .pose / .apriltag.
+        # The runner's batch pass has already cached all inference results.
         props_path = None
         tag_observation_cache_path = None
-        live_feature_precompute = None
+        live_feature_precompute = None  # kept for legacy bg-subtraction paths
         live_pose_props_cache = None
         live_pose_keypoint_names = []
         live_tag_obs_cache = None
         live_cnn_caches = {}
 
-        phases = self._build_precompute_phases(
-            p, detection_method, detection_cache, start_frame, end_frame
+        # Live pose store: created whenever the InferenceRunner drives detections
+        # (forward run_realtime OR backward load_frame). Backward mode sets
+        # individual_data_precompute_enabled=False, but it still reads per-frame
+        # keypoints from FrameResult.pose via load_frame and must populate this
+        # store too. Otherwise pose-direction override is dead on the backward
+        # pass and the merged final falls back to head-tail headings for every
+        # detection (legacy reuses its on-disk pose cache on the backward pass,
+        # so ~87% of its headings are pose-derived).
+        _pose_live_store_enabled = (
+            inference_runner is not None
+            and not self.preview_mode
+            and detection_method == "yolo_obb"
+            and bool(p.get("ENABLE_POSE_EXTRACTOR", False))
         )
-        if phases:
-            _bg_raw = p.get("INDIVIDUAL_BACKGROUND_COLOR", [0, 0, 0])
-            _adv = p.get("ADVANCED_CONFIG", {})
-            _ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
-            crop_config = CropConfig(
-                padding_fraction=float(p.get("INDIVIDUAL_CROP_PADDING", 0.1)),
-                suppress_foreign=bool(p.get("SUPPRESS_FOREIGN_OBB_REGIONS", True)),
-                bg_color=(
-                    tuple(int(c) for c in _bg_raw)
-                    if isinstance(_bg_raw, (list, tuple)) and len(_bg_raw) == 3
-                    else (0, 0, 0)
-                ),
-                reference_aspect_ratio=_ref_ar,
-            )
-            if streaming_precompute_enabled and not use_cached_detections:
-                for phase in phases:
-                    if phase.name == "pose":
-                        props_path = str(getattr(phase, "_cache_path", "") or "")
-                        if phase.has_cache_hit():
-                            continue
-                        live_pose_props_cache = LivePosePropertiesStore()
-                        live_pose_keypoint_names = list(
-                            getattr(phase, "_finalize_metadata", {}).get(
-                                "pose_keypoint_names", []
-                            )
-                            or []
-                        )
-                        set_callback = getattr(phase, "set_frame_result_callback", None)
-                        if callable(set_callback):
-                            set_callback(live_pose_props_cache.update_frame)
-                    elif phase.name == "apriltag":
-                        tag_observation_cache_path = str(
-                            getattr(phase, "_cache_path", "") or ""
-                        )
-                        if phase.has_cache_hit():
-                            continue
-                        live_tag_obs_cache = LiveTagObservationStore()
-                        set_callback = getattr(phase, "set_frame_result_callback", None)
-                        if callable(set_callback):
-                            set_callback(live_tag_obs_cache.update_frame)
-                    else:
-                        cnn_cache_path = str(getattr(phase, "_cache_path", "") or "")
-                        if phase.has_cache_hit():
-                            live_cnn_caches[phase.name] = cnn_cache_path
-                            continue
-                        live_store = LiveCNNIdentityStore()
-                        live_cnn_caches[phase.name] = live_store
-                        set_callback = getattr(phase, "set_frame_result_callback", None)
-                        if callable(set_callback):
-                            set_callback(live_store.update_frame)
-                        # === Streaming Phase 3+4 / Identity Phase 0 ===
-                        # Wire identity evidence emitter when individual pipeline is active.
-                        if cnn_cache_path and individual_pipeline_enabled:
-                            try:
-                                from hydra_suite.core.tracking.evidence_emitter import (
-                                    IdentityEvidenceEmitter,
-                                    build_evidence_cache_path,
-                                )
-
-                                _backend = getattr(phase, "_backend", None)
-                                _meta = (
-                                    getattr(_backend, "metadata", None)
-                                    if _backend
-                                    else None
-                                )
-                                _factor_labels = (
-                                    list(_meta.class_names_per_factor)
-                                    if _meta
-                                    and hasattr(_meta, "class_names_per_factor")
-                                    else [["unknown"]]
-                                )
-                                _ev_path = build_evidence_cache_path(
-                                    cnn_cache_path, phase.name, "live"
-                                )
-                                _ev_emitter = IdentityEvidenceEmitter(
-                                    cache_path=_ev_path,
-                                    source_name=phase.name,
-                                    class_labels_per_factor=_factor_labels,
-                                    runtime_signature=str(
-                                        p.get("COMPUTE_RUNTIME", "cpu")
-                                    ),
-                                    calibration_signature=str(
-                                        getattr(phase, "_calibration_signature", "")
-                                        or ""
-                                    ),
-                                )
-                                live_store.set_catalog_labels(
-                                    _ev_emitter.catalog_labels
-                                )
-                                if callable(set_callback):
-                                    # Chain emitter after live_store callback
-                                    def _chained_cb(
-                                        fi,
-                                        preds,
-                                        posteriors=None,
-                                        detection_ids=None,
-                                        _store=live_store,
-                                        _ev=_ev_emitter,
-                                    ):
-                                        _evidences = _ev.build_frame_evidences(
-                                            fi,
-                                            preds,
-                                            posteriors=posteriors,
-                                            detection_ids=detection_ids,
-                                        )
-                                        _store.update_frame(
-                                            fi,
-                                            preds,
-                                            posteriors=posteriors,
-                                            evidences=_evidences,
-                                        )
-                                        _ev.emit_evidences(fi, _evidences)
-
-                                    set_callback(_chained_cb)
-                                # Register for flush at finalization
-                                if bool(
-                                    p.get("ENABLE_IDENTITY_POSTERIOR_CACHE", False)
-                                ):
-                                    if not hasattr(self, "_evidence_emitters"):
-                                        self._evidence_emitters = []
-                                    self._evidence_emitters.append(_ev_emitter)
-                                logger.info(
-                                    "Identity evidence emitter enabled for '%s': %s",
-                                    phase.name,
-                                    _ev_path,
-                                )
-                            except Exception as _ee_err:
-                                logger.warning(
-                                    "Failed to set up identity evidence emitter for '%s': %s",
-                                    phase.name,
-                                    _ee_err,
-                                )
-
-                live_feature_precompute = UnifiedPrecompute(phases, crop_config)
-            else:
-                if streaming_precompute_enabled and use_cached_detections:
-                    logger.info(
-                        "Using replay individual-analysis fallback from cached detections for this run."
-                    )
-                # === Streaming Phase 3+4 / Identity Phase 0 ===
-                # Wire identity evidence emitters for the batch (non-streaming) precompute path.
-                if individual_pipeline_enabled:
-                    try:
-                        from hydra_suite.core.tracking.evidence_emitter import (
-                            IdentityEvidenceEmitter,
-                            build_evidence_cache_path,
-                        )
-
-                        for _phase in phases:
-                            if _phase.name in ("pose", "apriltag"):
-                                continue
-                            _cnn_cache_path = str(
-                                getattr(_phase, "_cache_path", "") or ""
-                            )
-                            if not _cnn_cache_path:
-                                continue
-                            _set_cb = getattr(_phase, "set_frame_result_callback", None)
-                            if not callable(_set_cb):
-                                continue
-                            _backend = getattr(_phase, "_backend", None)
-                            _meta = (
-                                getattr(_backend, "metadata", None)
-                                if _backend
-                                else None
-                            )
-                            _factor_labels = (
-                                list(_meta.class_names_per_factor)
-                                if _meta and hasattr(_meta, "class_names_per_factor")
-                                else [["unknown"]]
-                            )
-                            _ev_path = build_evidence_cache_path(
-                                _cnn_cache_path, _phase.name, "batch"
-                            )
-                            _ev_emitter = IdentityEvidenceEmitter(
-                                cache_path=_ev_path,
-                                source_name=_phase.name,
-                                class_labels_per_factor=_factor_labels,
-                                runtime_signature=str(p.get("COMPUTE_RUNTIME", "cpu")),
-                                calibration_signature=str(
-                                    getattr(_phase, "_calibration_signature", "") or ""
-                                ),
-                            )
-                            _set_cb(_ev_emitter)
-                            if not hasattr(self, "_evidence_emitters"):
-                                self._evidence_emitters = []
-                            self._evidence_emitters.append(_ev_emitter)
-                            logger.info(
-                                "Identity evidence emitter (batch) enabled for '%s': %s",
-                                _phase.name,
-                                _ev_path,
-                            )
-                    except Exception as _ee_err:
-                        logger.warning(
-                            "Failed to set up batch identity evidence emitters: %s",
-                            _ee_err,
-                        )
-
-                precompute = UnifiedPrecompute(phases, crop_config)
-                profiler.phase_start("precompute")
+        if _pose_live_store_enabled:
+            live_pose_props_cache = LivePosePropertiesStore()
+            # Use the canonical skeleton loader (same as the pose stage) so both
+            # the modern "keypoint_names"/"skeleton_edges" schema and the legacy
+            # "keypoints"/"edges" aliases resolve. A brittle
+            # `_skel.get("keypoints")` here left the names empty for the modern
+            # schema, which silently disabled pose-direction override.
+            if _inference_cfg.pose and _inference_cfg.pose.skeleton_file:
                 try:
-                    results = precompute.run(
-                        cap,
-                        detection_cache,
-                        detector,
-                        start_frame,
-                        end_frame,
-                        float(p.get("RESIZE_FACTOR", 1.0)),
-                        p.get("ROI_MASK", None),
-                        progress_cb=lambda pct, msg: self.progress_signal.emit(
-                            pct, msg
-                        ),
-                        stop_check=lambda: self._stop_requested,
-                        warning_cb=lambda title, msg: self.warning_signal.emit(
-                            title, msg
-                        ),
-                        profiler=profiler,
+                    from hydra_suite.core.identity.pose.utils import (
+                        load_skeleton_from_json,
                     )
-                except Exception as exc:
-                    profiler.phase_end("precompute")
-                    logger.exception("Unified precompute failed (fatal phase).")
-                    self.warning_signal.emit(
-                        "Precompute Failed",
-                        f"Tracking aborted because precompute failed:\n{exc}",
+
+                    _names, _ = load_skeleton_from_json(
+                        _inference_cfg.pose.skeleton_file
                     )
-                    if detection_cache:
-                        detection_cache.close()
-                    cap.release()
-                    if self.video_writer:
-                        self.video_writer.release()
-                    self.finished_signal.emit(False, [], [])
-                    return
+                    live_pose_keypoint_names = [str(k) for k in _names]
+                except Exception:
+                    live_pose_keypoint_names = []
+            logger.info(
+                "Live pose store ready for InferenceRunner per-frame population."
+            )
 
-                props_path = results.get("pose")
-                tag_observation_cache_path = results.get("apriltag")
-                profiler.phase_end("precompute")
+        if inference_runner is not None and individual_data_precompute_enabled:
+            # Instantiate remaining live stores; populated per-frame from FrameResult.
+            if bool(p.get("USE_APRILTAGS", False)):
+                live_tag_obs_cache = LiveTagObservationStore()
+                logger.info(
+                    "Live tag store ready for InferenceRunner per-frame population."
+                )
 
-                # If the user requested a stop during precompute, exit cleanly
-                # before performing the long tracking loop.
-                if self._stop_requested:
-                    logger.info(
-                        "Stop requested during precompute; aborting tracking run."
-                    )
-                    if detection_cache:
-                        try:
-                            detection_cache.close()
-                        except Exception:
-                            logger.debug(
-                                "detection_cache.close() failed", exc_info=True
-                            )
-                    cap.release()
-                    if self.video_writer:
-                        self.video_writer.release()
-                    self.finished_signal.emit(False, [], [])
-                    return
-
-                if props_path:
-                    logger.info("Individual properties cache: %s", props_path)
-
-                # Reset cap position after precompute consumed all frames.
-                # Reopen for reliability — codec-dependent seek can fail post-EOF.
-                cap.release()
-                cap = cv2.VideoCapture(self.video_path, cv2.CAP_FFMPEG)
-                if start_frame > 0:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            # Build IdentityEvidenceEmitter per CNN phase so populate_live_cnn_store
+            # can push calibrated full-catalog log_probs into the live store. The
+            # online identity decoder reads these via load_evidences() to do
+            # Bayesian updates; without them it can only commit identity on top-1
+            # confidence and dramatically under-commits (regression observed:
+            # 4/26 labels committed, 80/324 rows vs main's 14/26 and 267/329).
+            cnn_evidence_emitters: dict = {}
+            for cnn_cfg_dict in p.get("CNN_CLASSIFIERS", []):
+                _cnn_label = str(cnn_cfg_dict.get("label", "cnn_identity"))
+                _live_cnn_store = LiveCNNIdentityStore()
+                live_cnn_caches[_cnn_label] = _live_cnn_store
+                _ev_emitter = self._build_cnn_evidence_emitter(
+                    cnn_cfg_dict, _live_cnn_store, p
+                )
+                if _ev_emitter is not None:
+                    cnn_evidence_emitters[_cnn_label] = _ev_emitter
+                    if not hasattr(self, "_evidence_emitters"):
+                        self._evidence_emitters = []
+                    self._evidence_emitters.append(_ev_emitter)
+                logger.info(
+                    "Live CNN store ready for InferenceRunner per-frame population (%s)",
+                    _cnn_label,
+                )
 
         # Open tag observation cache for reading during tracking loop.
         tag_obs_cache = live_tag_obs_cache
@@ -1947,9 +1562,7 @@ class TrackingWorker(QThread):
 
                 classify_id = compute_classify_cache_id(
                     model_path=model_path,
-                    compute_runtime=str(
-                        p.get("CNN_COMPUTE_RUNTIME", p.get("COMPUTE_RUNTIME", "cpu"))
-                    ),
+                    compute_runtime=_classify_cache_runtime_string(p),
                     inference_model_id=str(p.get("INFERENCE_MODEL_ID", "")),
                     calibration_signature=_calibration_signature,
                 )
@@ -1960,7 +1573,7 @@ class TrackingWorker(QThread):
                     from hydra_suite.core.identity.classification.cnn import (
                         CNNIdentityCache,
                     )
-                    from hydra_suite.core.tracking.evidence_emitter import (
+                    from hydra_suite.core.tracking.identity.evidence_emitter import (
                         build_evidence_cache_path,
                     )
 
@@ -2547,121 +2160,178 @@ class TrackingWorker(QThread):
             raw_heading_hints = []
             raw_heading_confidences = []
             raw_directed_mask = []
+            # Initialized here so the streaming-payload block can reference them
+            # via the "x in locals()" guard on the background-subtraction path.
+            filtered_heading_hints: list = []
+            filtered_heading_confidences: list = []
+            filtered_directed_mask: list = []
             yolo_results = None
             fg_mask = None
             bg_u8 = None
+            _current_frame_result = (
+                None  # FrameResult from InferenceRunner (yolo_obb path)
+            )
 
             # Get detections either from cache or by detection
-            if use_cached_detections:
-                # Load cached detections using actual frame index
-                # The cache keys are actual video frame indices, so we use actual_frame_index directly
-                (
-                    raw_meas,
-                    raw_sizes,
-                    raw_shapes,
-                    raw_confidences,
-                    raw_obb_corners,
-                    raw_detection_ids,
-                    raw_heading_hints,
-                    raw_heading_confidences,
-                    raw_directed_mask,
-                    raw_canonical_affines,
-                    _raw_canvas_dims,
-                    _raw_M_inverse,
-                ) = detection_cache.get_frame(actual_frame_index)
-
-                if detection_method == "yolo_obb":
-                    (
-                        meas,
-                        sizes,
-                        shapes,
-                        detection_confidences,
-                        filtered_obb_corners,
-                        detection_ids,
-                        filtered_heading_hints,
-                        filtered_heading_confidences,
-                        filtered_directed_mask,
-                    ) = detector.filter_raw_detections(
-                        raw_meas,
-                        raw_sizes,
-                        raw_shapes,
-                        raw_confidences,
-                        raw_obb_corners,
-                        roi_mask=ROI_mask_current,
-                        detection_ids=raw_detection_ids,
-                        heading_hints=raw_heading_hints,
-                        heading_confidences=raw_heading_confidences,
-                        directed_mask=raw_directed_mask,
-                    )
-                    detection_headtail_heading = np.asarray(
-                        filtered_heading_hints, dtype=np.float32
-                    )
-                    detection_headtail_confidence = np.asarray(
-                        filtered_heading_confidences, dtype=np.float32
-                    )
-                    headtail_directed_mask = np.asarray(
-                        filtered_directed_mask, dtype=np.uint8
-                    )
+            if use_cached_detections and inference_runner is not None:
+                # Load per-frame results from InferenceRunner caches (YOLO OBB path).
+                # All filtering (ROI, confidence, IOU) was applied during the batch pass.
+                _frame_result = inference_runner.load_frame(actual_frame_index)
+                if _frame_result is not None and _frame_result.obb.num_detections > 0:
+                    _obb = _frame_result.obb
+                    # meas carries the OBB axis angle (legacy convention, [0, pi));
+                    # downstream resolve_tracking_theta picks between theta and
+                    # theta+pi using motion history + headtail heading_hints.
+                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
+                    shapes = [
+                        (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                        for i in range(_obb.num_detections)
+                    ]
+                    detection_confidences = [
+                        float(_obb.confidences[i]) for i in range(_obb.num_detections)
+                    ]
+                    filtered_obb_corners = [
+                        _obb.corners[i] for i in range(_obb.num_detections)
+                    ]
+                    detection_ids = [
+                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
+                    ]
+                    raw_detection_ids = detection_ids
+                    raw_meas = meas
+                    raw_sizes = sizes
+                    raw_shapes = shapes
+                    raw_confidences = detection_confidences
+                    raw_obb_corners = filtered_obb_corners
+                    if _frame_result.headtail is not None:
+                        detection_headtail_heading = np.asarray(
+                            _frame_result.headtail.heading_hints, dtype=np.float32
+                        )
+                        detection_headtail_confidence = np.asarray(
+                            _frame_result.headtail.heading_confidences, dtype=np.float32
+                        )
+                        headtail_directed_mask = np.asarray(
+                            _frame_result.headtail.directed_mask, dtype=np.uint8
+                        )
+                        raw_heading_hints = list(detection_headtail_heading)
+                        raw_heading_confidences = list(detection_headtail_confidence)
+                        raw_directed_mask = list(headtail_directed_mask)
+                    else:
+                        detection_headtail_heading = np.asarray([], dtype=np.float32)
+                        detection_headtail_confidence = np.asarray([], dtype=np.float32)
+                        headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                        raw_heading_hints = []
+                        raw_heading_confidences = []
+                        raw_directed_mask = []
+                    raw_canonical_affines = None
+                    # Store FrameResult for Site F (live store population)
+                    _current_frame_result = _frame_result
                 else:
-                    meas = raw_meas
-                    sizes = raw_sizes
-                    shapes = raw_shapes
-                    detection_confidences = raw_confidences
-                    filtered_obb_corners = raw_obb_corners
-                    detection_ids = raw_detection_ids
+                    # Empty frame — no detections this frame
+                    meas = []
+                    sizes = []
+                    shapes = []
+                    detection_confidences = []
+                    filtered_obb_corners = []
+                    detection_ids = []
+                    raw_detection_ids = []
+                    raw_meas = []
+                    raw_sizes = []
+                    raw_shapes = []
+                    raw_confidences = []
+                    raw_obb_corners = []
                     detection_headtail_heading = np.asarray([], dtype=np.float32)
                     detection_headtail_confidence = np.asarray([], dtype=np.float32)
                     headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                    raw_heading_hints = []
+                    raw_heading_confidences = []
+                    raw_directed_mask = []
+                    raw_canonical_affines = None
+                    _current_frame_result = _frame_result
+
+            elif (
+                use_cached_detections
+                and detection_method == "background_subtraction"
+                and bgsub_runner is not None
+            ):
+                # Backward pass: replay cached bg-sub detections (no live frame).
+                _fr = bgsub_runner.load_frame(actual_frame_index)
+                _obb = _fr.obb if _fr is not None else None
+                if _obb is not None and _obb.num_detections > 0:
+                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
+                    shapes = [
+                        (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                        for i in range(_obb.num_detections)
+                    ]
+                    detection_confidences = [
+                        float(_obb.confidences[i]) for i in range(_obb.num_detections)
+                    ]
+                    detection_ids = [
+                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
+                    ]
+                else:
+                    meas, sizes, shapes, detection_confidences, detection_ids = (
+                        [],
+                        [],
+                        [],
+                        [],
+                        [],
+                    )
+                filtered_obb_corners = []
+                raw_meas = meas
+                raw_sizes = sizes
+                raw_shapes = shapes
+                raw_confidences = detection_confidences
+                raw_obb_corners = filtered_obb_corners
+                raw_detection_ids = detection_ids
+                raw_heading_hints = []
+                raw_heading_confidences = []
+                raw_directed_mask = []
+                raw_canonical_affines = None
 
             elif detection_method == "background_subtraction" and frame is not None:
-                # Background subtraction detection pipeline
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = apply_image_adjustments(
-                    gray,
-                    params["BRIGHTNESS"],
-                    params["CONTRAST"],
-                    params["GAMMA"],
-                    params.get("ENABLE_GPU_BACKGROUND", False),
+                # Background subtraction detection pipeline. The InferenceRunner
+                # bg-sub stage owns the whole sequence the worker used to inline:
+                # grayscale + image adjustments, lighting stabilization, adaptive
+                # background update, foreground mask, ROI intersection,
+                # conservative split, and contour measurement. The frame MUST
+                # already be scaled by RESIZE_FACTOR (done at frame_resize above),
+                # and ROI_mask_current is already in that resized space, so the
+                # stage's ROI resolver is a shape no-op. bg-sub is strictly
+                # sequential; this loop feeds frames in ascending order.
+                _bgsub_result = bgsub_runner.run_realtime(
+                    frame, actual_frame_index, roi_mask=ROI_mask_current
                 )
-
-                if params.get("ENABLE_LIGHTING_STABILIZATION", True):
-                    gray, intensity_history, _ = stabilize_lighting(
-                        gray,
-                        bg_model.reference_intensity,
-                        intensity_history,
-                        params.get("LIGHTING_SMOOTH_FACTOR", 0.95),
-                        ROI_mask_current,
-                        params.get("LIGHTING_MEDIAN_WINDOW", 5),
-                        lighting_state,
-                        params.get("ENABLE_GPU_BACKGROUND", False),
-                    )
-
-                bg_u8 = bg_model.update_and_get_background(
-                    gray, ROI_mask_current, tracking_stabilized
-                )
+                # SHOW_FG / SHOW_BG overlays read these (realtime-only; the stage
+                # stashes the exact mask detection ran on).
+                fg_mask = _bgsub_result.fg_mask
+                bg_u8 = _bgsub_result.bg_u8
                 if bg_u8 is None:
+                    # First frame(s): the background model has no history yet, so
+                    # there are no detections. Emit the raw frame and skip the
+                    # rest of the loop, matching the legacy warmup behavior.
                     if frame is not None:
                         self.emit_frame(frame)
                     continue
 
-                fg_mask = bg_model.generate_foreground_mask(gray, bg_u8)
-
-                # Apply ROI mask to foreground mask
-                if ROI_mask_current is not None:
-                    fg_mask = cv2.bitwise_and(fg_mask, fg_mask, mask=ROI_mask_current)
-                if detection_initialized and params.get(
-                    "ENABLE_CONSERVATIVE_SPLIT", True
-                ):
-                    fg_mask = detector.apply_conservative_split(fg_mask, gray, bg_u8)
-                meas, sizes, shapes, yolo_results, detection_confidences = (
-                    detector.detect_objects(fg_mask, actual_frame_index)
-                )
-                # No OBB corners for background subtraction
-                filtered_obb_corners = []
-                # Calculate DetectionID for each detection using actual frame index
-                detection_ids = [
-                    actual_frame_index * 10000 + i for i in range(len(meas))
+                _obb = _bgsub_result.obb
+                # meas carries the OBB axis angle in [0, pi); downstream
+                # resolve_tracking_theta disambiguates theta vs theta+pi.
+                meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
+                shapes = [
+                    (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                    for i in range(_obb.num_detections)
                 ]
+                # bg-sub confidences are NaN by design (legacy); do NOT gate on them.
+                detection_confidences = [
+                    float(_obb.confidences[i]) for i in range(_obb.num_detections)
+                ]
+                # No OBB corners are drawn for background subtraction.
+                filtered_obb_corners = []
+                # detection_ids match legacy (frame_idx * STRIDE + slot).
+                detection_ids = [int(did) for did in _obb.detection_ids]
                 raw_meas = meas
                 raw_sizes = sizes
                 raw_shapes = shapes
@@ -2675,66 +2345,80 @@ class TrackingWorker(QThread):
 
             elif (
                 detection_method == "yolo_obb" and frame is not None
-            ):  # YOLO OBB detection
-                # YOLO uses the original BGR frame directly without masking
-                # This preserves natural image context for better confidence estimates
-                # Note: no frame.copy() needed — Ultralytics letterboxing already
-                # copies/transforms the input internally.
-
-                (
-                    raw_meas,
-                    raw_sizes,
-                    raw_shapes,
-                    yolo_results,
-                    raw_confidences,
-                    raw_obb_corners,
-                    raw_heading_hints,
-                    raw_heading_confidences,
-                    raw_directed_mask,
-                    raw_canonical_affines,
-                ) = detector.detect_objects(
-                    frame,
-                    self.frame_count,
-                    return_raw=True,
-                    profiler=profiler,
-                )
-
-                raw_detection_ids = [
-                    actual_frame_index * 10000 + i for i in range(len(raw_meas))
-                ]
-                (
-                    meas,
-                    sizes,
-                    shapes,
-                    detection_confidences,
-                    filtered_obb_corners,
-                    detection_ids,
-                    filtered_heading_hints,
-                    filtered_heading_confidences,
-                    filtered_directed_mask,
-                ) = detector.filter_raw_detections(
-                    raw_meas,
-                    raw_sizes,
-                    raw_shapes,
-                    raw_confidences,
-                    raw_obb_corners,
-                    roi_mask=ROI_mask_current,
-                    detection_ids=raw_detection_ids,
-                    heading_hints=raw_heading_hints,
-                    heading_confidences=raw_heading_confidences,
-                    directed_mask=raw_directed_mask,
-                )
-                detection_headtail_heading = np.asarray(
-                    filtered_heading_hints, dtype=np.float32
-                )
-                detection_headtail_confidence = np.asarray(
-                    filtered_heading_confidences, dtype=np.float32
-                )
-                headtail_directed_mask = np.asarray(
-                    filtered_directed_mask, dtype=np.uint8
-                )
-                if yolo_results is not None:
-                    pass
+            ):  # YOLO OBB realtime detection (non-cached)
+                # InferenceRunner.run_realtime() runs the full inference stack
+                # (OBB + headtail + CNN + pose + AprilTag) on a single frame and
+                # returns a FrameResult.  No legacy detector is used here.  The
+                # frame index is passed so detections are cached per-frame for the
+                # backward pass to replay (realtime + backward support).
+                _frame_result = inference_runner.run_realtime(frame, actual_frame_index)
+                _current_frame_result = _frame_result
+                if _frame_result is not None and _frame_result.obb.num_detections > 0:
+                    _obb = _frame_result.obb
+                    # meas carries the OBB axis angle (see cached path above).
+                    meas = frame_result_to_meas(_obb.centroids, _obb.angles)
+                    sizes = [float(_obb.sizes[i]) for i in range(_obb.num_detections)]
+                    shapes = [
+                        (float(_obb.shapes[i, 0]), float(_obb.shapes[i, 1]))
+                        for i in range(_obb.num_detections)
+                    ]
+                    detection_confidences = [
+                        float(_obb.confidences[i]) for i in range(_obb.num_detections)
+                    ]
+                    filtered_obb_corners = [
+                        _obb.corners[i] for i in range(_obb.num_detections)
+                    ]
+                    detection_ids = [
+                        int(_obb.detection_ids[i]) for i in range(_obb.num_detections)
+                    ]
+                    raw_detection_ids = detection_ids
+                    raw_meas = meas
+                    raw_sizes = sizes
+                    raw_shapes = shapes
+                    raw_confidences = detection_confidences
+                    raw_obb_corners = filtered_obb_corners
+                    if _frame_result.headtail is not None:
+                        detection_headtail_heading = np.asarray(
+                            _frame_result.headtail.heading_hints, dtype=np.float32
+                        )
+                        detection_headtail_confidence = np.asarray(
+                            _frame_result.headtail.heading_confidences, dtype=np.float32
+                        )
+                        headtail_directed_mask = np.asarray(
+                            _frame_result.headtail.directed_mask, dtype=np.uint8
+                        )
+                        raw_heading_hints = list(detection_headtail_heading)
+                        raw_heading_confidences = list(detection_headtail_confidence)
+                        raw_directed_mask = list(headtail_directed_mask)
+                    else:
+                        detection_headtail_heading = np.asarray([], dtype=np.float32)
+                        detection_headtail_confidence = np.asarray([], dtype=np.float32)
+                        headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                        raw_heading_hints = []
+                        raw_heading_confidences = []
+                        raw_directed_mask = []
+                    raw_canonical_affines = None
+                else:
+                    # Empty frame — no detections this frame
+                    meas = []
+                    sizes = []
+                    shapes = []
+                    detection_confidences = []
+                    filtered_obb_corners = []
+                    detection_ids = []
+                    raw_detection_ids = []
+                    raw_meas = []
+                    raw_sizes = []
+                    raw_shapes = []
+                    raw_confidences = []
+                    raw_obb_corners = []
+                    detection_headtail_heading = np.asarray([], dtype=np.float32)
+                    detection_headtail_confidence = np.asarray([], dtype=np.float32)
+                    headtail_directed_mask = np.asarray([], dtype=np.uint8)
+                    raw_heading_hints = []
+                    raw_heading_confidences = []
+                    raw_directed_mask = []
+                    raw_canonical_affines = None
 
             else:
                 # No frame and no cached detections - skip this iteration
@@ -2744,24 +2428,8 @@ class TrackingWorker(QThread):
                     )
                     continue
 
-            # Cache detections during forward pass (only when actively detecting, not when loading from cache)
-            if detection_cache and not self.backward_mode and not use_cached_detections:
-                # Cache raw detections so confidence/IOU/ROI filtering can be tuned without re-running inference.
-                detection_cache.add_frame(
-                    actual_frame_index,
-                    raw_meas,
-                    raw_sizes,
-                    raw_shapes,
-                    raw_confidences,
-                    raw_obb_corners if raw_obb_corners else None,
-                    raw_detection_ids,
-                    raw_heading_hints,
-                    raw_heading_confidences,
-                    raw_directed_mask,
-                    canonical_affines=raw_canonical_affines,
-                )
-                cached_frame_indices.add(actual_frame_index)
-
+            # InferenceRunner writes its own caches during run_batch_pass / run_realtime.
+            # Legacy detection_cache.add_frame() is not used for yolo_obb mode.
             profiler.tock("detection")
 
             # === Streaming Phase 1: Build shared analysis payload ===
@@ -2773,7 +2441,7 @@ class TrackingWorker(QThread):
                 and not self.backward_mode
             ):
                 try:
-                    from hydra_suite.core.tracking.streaming_payload import (
+                    from hydra_suite.core.tracking.ingest.streaming_payload import (
                         build_streaming_payload,
                     )
 
@@ -2808,7 +2476,7 @@ class TrackingWorker(QThread):
                         ),
                         detection_ids=detection_ids,
                         input_is_bgr=True,
-                        runtime_family=str(p.get("COMPUTE_RUNTIME", "cpu")),
+                        runtime_family=str(p.get("RUNTIME_TIER", "cpu")),
                     )
                     profiler.tock("streaming_payload_build")
                 except Exception as _spay_err:
@@ -2820,52 +2488,45 @@ class TrackingWorker(QThread):
             else:
                 _streaming_payload = None
 
-            if (
-                live_feature_precompute is not None
-                and frame is not None
-                and not use_cached_detections
-            ):
-                try:
-                    live_feature_precompute.process_live_frame(
-                        frame_idx=actual_frame_index,
-                        frame=frame,
-                        detector=detector,
-                        raw_meas=raw_meas,
-                        raw_sizes=raw_sizes,
-                        raw_shapes=raw_shapes,
-                        raw_confs=raw_confidences,
-                        raw_obb=raw_obb_corners,
-                        raw_ids=raw_detection_ids,
-                        raw_headings=raw_heading_hints,
-                        raw_heading_confidences=raw_heading_confidences,
-                        raw_directed=raw_directed_mask,
-                        raw_canonical_affines=raw_canonical_affines,
-                        roi_mask=ROI_mask_current,
-                        streaming_payload=_streaming_payload,
-                        profiler=profiler,
+            # === Site F: Populate live stores from FrameResult (YOLO OBB path) ===
+            # For YOLO OBB: push CNN, pose, and AprilTag results from the FrameResult
+            # produced by InferenceRunner (load_frame or run_realtime) into the
+            # corresponding live stores so the tracking loop can look them up by
+            # frame index and detection ID.
+            if inference_runner is not None and _current_frame_result is not None:
+                _fr = _current_frame_result
+                _det_ids_arr = (
+                    np.asarray(detection_ids, dtype=np.int64)
+                    if detection_ids
+                    else np.zeros(0, dtype=np.int64)
+                )
+                if live_pose_props_cache is not None:
+                    populate_live_pose_store(
+                        live_pose_props_cache,
+                        _fr.pose,
+                        _det_ids_arr,
+                        actual_frame_index,
                     )
-                except TypeError:
-                    live_feature_precompute.process_live_frame(
-                        frame_idx=actual_frame_index,
-                        frame=frame,
-                        detector=detector,
-                        raw_meas=raw_meas,
-                        raw_sizes=raw_sizes,
-                        raw_shapes=raw_shapes,
-                        raw_confs=raw_confidences,
-                        raw_obb=raw_obb_corners,
-                        raw_ids=raw_detection_ids,
-                        raw_headings=raw_heading_hints,
-                        raw_heading_confidences=raw_heading_confidences,
-                        raw_directed=raw_directed_mask,
-                        raw_canonical_affines=raw_canonical_affines,
-                        roi_mask=ROI_mask_current,
-                        profiler=profiler,
+                if live_tag_obs_cache is not None:
+                    populate_live_tag_store(
+                        live_tag_obs_cache,
+                        _fr.apriltag,
+                        _det_ids_arr,
+                        actual_frame_index,
                     )
-                try:
-                    live_feature_precompute.sync_live_frame(profiler=profiler)
-                except TypeError:
-                    live_feature_precompute.sync_live_frame()
+                for _cnn_label, _cnn_store in live_cnn_caches.items():
+                    populate_live_cnn_store(
+                        _cnn_store,
+                        _fr.cnn,
+                        _det_ids_arr,
+                        actual_frame_index,
+                        _cnn_label,
+                        evidence_emitter=(
+                            cnn_evidence_emitters.get(_cnn_label)
+                            if "cnn_evidence_emitters" in locals()
+                            else None
+                        ),
+                    )
 
             profiler.tick("features")
             detection_crop_quality = np.zeros(len(meas), dtype=np.float32)
@@ -2980,6 +2641,23 @@ class TrackingWorker(QThread):
                     )
 
             if detected_props_cache is not None and detection_ids:
+                n_dets = len(detection_ids)
+
+                def _pad_to_n(arr, n, fill_value, dtype):
+                    a = np.asarray(arr, dtype=dtype).reshape(-1)
+                    if a.size == n:
+                        return a
+                    out = np.full(n, fill_value, dtype=dtype)
+                    out[: min(a.size, n)] = a[: min(a.size, n)]
+                    return out
+
+                ht_directed = _pad_to_n(headtail_directed_mask, n_dets, 0, np.uint8)
+                ht_heading = _pad_to_n(
+                    detection_headtail_heading, n_dets, np.nan, np.float32
+                )
+                ht_conf = _pad_to_n(
+                    detection_headtail_confidence, n_dets, 0.0, np.float32
+                )
                 detected_props_cache.add_frame(
                     actual_frame_index,
                     detection_ids=detection_ids,
@@ -2987,9 +2665,9 @@ class TrackingWorker(QThread):
                     theta_resolved=detection_theta_resolved,
                     heading_source=detection_heading_source,
                     heading_directed=detection_directed_mask,
-                    headtail_heading=detection_headtail_heading,
-                    headtail_confidence=detection_headtail_confidence,
-                    headtail_directed=headtail_directed_mask,
+                    headtail_heading=ht_heading,
+                    headtail_confidence=ht_conf,
+                    headtail_directed=ht_directed,
                 )
 
             if len(meas) >= params.get("MIN_DETECTIONS_TO_START", 1):
@@ -3555,7 +3233,6 @@ class TrackingWorker(QThread):
                 # --- KF Update & State Update ---
                 profiler.tock("state_update")
                 profiler.tick("kf_update")
-                total_cost = 0.0
                 # Identity-rejoin pairs use the same KF correct path but skip hard reset
                 for r, c in list(zip(rows, cols)) + list(identity_rejoin_pairs):
                     meas_x = float(meas[c][0])
@@ -3809,8 +3486,6 @@ class TrackingWorker(QThread):
 
                         self.csv_writer_thread.enqueue(row_data)
                         local_counts[r] += 1
-                    current_cost = cost[r, c]
-                    total_cost += current_cost
 
                 # --- CSV for Unmatched & Final Respawn (Identical to Original) ---
                 if self.csv_writer_thread:
@@ -3959,18 +3634,6 @@ class TrackingWorker(QThread):
                             local_counts[track_idx] = 0
                             next_trajectory_id += 1
                             break
-
-                avg_cost = total_cost / len(rows) if rows else float("inf")
-                if avg_cost < params["MAX_DISTANCE_THRESHOLD"]:
-                    tracking_counts += 1
-                else:
-                    tracking_counts = 0
-                if (
-                    tracking_counts >= params["MIN_TRACKING_COUNTS"]
-                    and not tracking_stabilized
-                ):
-                    tracking_stabilized = True
-                    logger.info(f"Tracking stabilized (avg cost={avg_cost:.2f})")
 
                 profiler.tock("kf_update")
 
@@ -4207,7 +3870,7 @@ class TrackingWorker(QThread):
                             f"(abs {actual_frame_index})"
                         )
 
-                    self.progress_signal.emit(percentage, status_text)
+                    self._emit_progress(percentage, status_text)
 
             # --- Visualization, Output & Loop Maintenance ---
             viz_free_mode = params.get("VISUALIZATION_FREE_MODE", False)
@@ -4325,9 +3988,7 @@ class TrackingWorker(QThread):
 
             # Emit stats every 10 frames to avoid overwhelming the UI
             if self.frame_count % 10 == 0:
-                self.stats_signal.emit(
-                    {"fps": current_fps, "elapsed": elapsed, "eta": eta}
-                )
+                self._emit_stats({"fps": current_fps, "elapsed": elapsed, "eta": eta})
 
             # Finalize profiling for this frame and log periodically
             profiler.end_frame()
@@ -4366,7 +4027,7 @@ class TrackingWorker(QThread):
         if live_feature_precompute is not None and not stop_requested:
             try:
                 live_results = live_feature_precompute.finalize_live(
-                    warning_cb=lambda title, msg: self.warning_signal.emit(title, msg)
+                    warning_cb=lambda title, msg: self._emit_warning(title, msg)
                 )
                 props_path = props_path or live_results.get("pose")
                 tag_observation_cache_path = (
@@ -4374,7 +4035,7 @@ class TrackingWorker(QThread):
                 )
             except Exception as exc:
                 logger.exception("Realtime feature finalization failed")
-                self.warning_signal.emit(
+                self._emit_warning(
                     "Realtime Analysis Finalization Failed",
                     f"Tracking finished, but finalizing realtime analysis artifacts failed:\n{exc}",
                 )
@@ -4404,6 +4065,26 @@ class TrackingWorker(QThread):
         if self.video_writer:
             self.video_writer.release()
 
+        # Persist live pose keypoints to a file-backed properties cache so the
+        # rich-export merge can attach pose columns to the final CSV. Only the
+        # in-memory live store carries keypoints in the InferenceRunner path;
+        # without this flush the final output had no pose data even though pose
+        # ran during inference. Skipped on stop/preview and when no frames exist.
+        if (
+            not stop_requested
+            and not self.preview_mode
+            and isinstance(live_pose_props_cache, LivePosePropertiesStore)
+        ):
+            try:
+                self._flush_live_pose_cache(
+                    live_pose_props_cache,
+                    live_pose_keypoint_names,
+                    p,
+                    start_frame,
+                    end_frame,
+                )
+            except Exception:
+                logger.exception("Failed to persist live pose cache for export.")
         if pose_props_cache is not None:
             try:
                 pose_props_cache.close()
@@ -4436,6 +4117,19 @@ class TrackingWorker(QThread):
             else:
                 # Backward pass or Phase 2: just close cache (read-only mode)
                 detection_cache.close()
+
+        # Flush the InferenceRunner. On a realtime forward pass this writes the
+        # per-frame detection/headtail/cnn/pose caches to disk so the backward pass
+        # can replay them; close() is a no-op flush for read-only (backward) handles.
+        if inference_runner is not None:
+            inference_runner.close()
+
+        # Flush/close the bg-sub runner. On a forward pass with a cache_dir this
+        # writes the per-frame detection cache to disk (parity with yolo_obb); on
+        # preview (cache_dir=None) and backward (cache_only) it is a resource
+        # release / no-op flush.
+        if bgsub_runner is not None:
+            bgsub_runner.close()
 
         # Finalize individual dataset if enabled
         if individual_generator is not None and not stop_requested:
@@ -4474,9 +4168,7 @@ class TrackingWorker(QThread):
 
         logger.info("Tracking worker finished. Emitting raw trajectory data.")
 
-        self.finished_signal.emit(
-            not self._stop_requested, fps_list, self.trajectories_full
-        )
+        self._emit_finished(not self._stop_requested, fps_list, self.trajectories_full)
 
     def _smooth_orientation(
         self,
@@ -4488,7 +4180,7 @@ class TrackingWorker(QThread):
         position_deques,
         directed_heading=False,
     ):
-        from hydra_suite.core.tracking.orientation import smooth_orientation
+        from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
         return smooth_orientation(
             r,
@@ -4531,3 +4223,140 @@ class TrackingWorker(QThread):
             obb_corners=obb_corners,
             identity_labels=identity_labels,
         )
+
+    # ── InferenceRunner-based pipeline helpers ────────────────────────────────
+
+    def _resolve_cache_dir(self) -> Path:
+        """Return the per-video cache directory for InferenceRunner caches."""
+        video_path = Path(self.video_path)
+        return video_path.parent / f".inference_cache_{video_path.stem}"
+
+    def _build_cnn_evidence_emitter(
+        self,
+        cnn_cfg_dict: dict,
+        live_store,
+        params: dict,
+    ):
+        """Construct an IdentityEvidenceEmitter for one CNN phase, or None on failure.
+
+        The emitter converts per-detection per-factor full posteriors into
+        catalog-level ``IdentityEvidence`` rows (calibrated log_probs over
+        catalog_size). populate_live_cnn_store calls
+        ``emitter.build_frame_evidences`` and pushes the result into the live
+        store via ``update_frame(..., evidences=...)`` so the online identity
+        decoder can read them through ``live_store.load_evidences()``.
+
+        Returns None if CNN classifier metadata can't be resolved (degraded
+        mode: top-1 predictions only — the online decoder will under-commit).
+        """
+        try:
+            from hydra_suite.core.tracking.identity.evidence_emitter import (
+                IdentityEvidenceEmitter,
+                build_evidence_cache_path,
+            )
+        except Exception:
+            return None
+
+        label = str(cnn_cfg_dict.get("label", "cnn_identity"))
+        model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
+        if not model_path:
+            return None
+        # Prefer per-factor labels stored on the config; fall back to loading
+        # the artifact metadata (cheap; reads schema-version header only).
+        factor_labels = cnn_cfg_dict.get("class_names_per_factor") or []
+        factor_labels = [list(f) for f in factor_labels if f]
+        if not factor_labels:
+            try:
+                from hydra_suite.core.identity.classification.backend import (
+                    ClassifierBackend,
+                )
+                from hydra_suite.runtime.resolver import ResolvedBackend
+
+                # Metadata-only read (class_names_per_factor); parsing the
+                # artifact header never loads weights, so CPU/torch is sufficient
+                # and device-independent here.
+                _backend = ClassifierBackend(
+                    model_path,
+                    ResolvedBackend("torch", "cpu", False),
+                )
+                _meta = getattr(_backend, "metadata", None)
+                if _meta is not None and hasattr(_meta, "class_names_per_factor"):
+                    factor_labels = [list(f) for f in _meta.class_names_per_factor]
+            except Exception:
+                logger.debug(
+                    "Could not resolve class_names_per_factor for CNN '%s'; "
+                    "evidence emitter disabled.",
+                    label,
+                    exc_info=True,
+                )
+                return None
+        if not factor_labels:
+            return None
+
+        from hydra_suite.core.identity.calibration import CalibrationModel
+        from hydra_suite.core.identity.properties.cache import compute_classify_cache_id
+
+        _calibration_temperature = float(
+            cnn_cfg_dict.get(
+                "calibration_temperature",
+                cnn_cfg_dict.get("temperature", 1.0),
+            )
+        )
+        _calibration_model = (
+            CalibrationModel(temperature=_calibration_temperature)
+            if abs(_calibration_temperature - 1.0) > 1e-6
+            else None
+        )
+        _calibration_signature = (
+            _calibration_model.signature if _calibration_model is not None else ""
+        )
+
+        try:
+            classify_id = compute_classify_cache_id(
+                model_path=model_path,
+                compute_runtime=_classify_cache_runtime_string(params),
+                inference_model_id=str(params.get("INFERENCE_MODEL_ID", "")),
+                calibration_signature=_calibration_signature,
+            )
+            start_frame = int(params.get("START_FRAME", 0))
+            end_frame = int(params.get("END_FRAME", -1))
+            if end_frame < 0:
+                end_frame = start_frame
+            cnn_cache_path = self._build_cnn_identity_cache_path(
+                label, classify_id, start_frame, end_frame
+            )
+            ev_path = build_evidence_cache_path(cnn_cache_path, label, "live")
+        except Exception:
+            return None
+
+        try:
+            emitter = IdentityEvidenceEmitter(
+                cache_path=ev_path,
+                source_name=label,
+                class_labels_per_factor=factor_labels,
+                runtime_signature=str(params.get("RUNTIME_TIER", "cpu")),
+                calibration_signature=_calibration_signature,
+                calibration=_calibration_model,
+            )
+        except Exception:
+            logger.debug(
+                "IdentityEvidenceEmitter construction failed for '%s'",
+                label,
+                exc_info=True,
+            )
+            return None
+
+        live_store.set_catalog_labels(emitter.catalog_labels)
+        logger.info(
+            "Identity evidence emitter enabled for '%s': %s",
+            label,
+            ev_path,
+        )
+        return emitter
+
+    def _emit_inference_progress(self, done: int, total: int) -> None:
+        """Translate batch-pass progress to the progress callback (surfaced as
+        the wrapper's ``progress_signal``)."""
+        if total > 0:
+            pct = int(done * 100 / total)
+            self._emit_progress(pct, f"Inference pass: {done}/{total} frames")

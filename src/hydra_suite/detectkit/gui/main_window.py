@@ -39,13 +39,16 @@ from hydra_suite.widgets.busy import BusyTaskError, run_blocking_with_busy_dialo
 from hydra_suite.widgets.workers import BaseWorker
 
 from .canvas import OBBCanvas
-from .models import DetectKitProject
+from .models import DetectKitProject, SliceTrainingSettings
 from .panels.dataset_panel import DatasetPanel
 from .panels.tools_panel import ToolsPanel
 from .prediction_preview import (
+    dicts_from_obb_result,
     load_torch_model,
     predict_obb_for_frame_sequential,
     predict_preview_detections_for_image,
+    predict_sliced_obb_result,
+    preview_object_tile_fraction,
 )
 from .project import (
     create_project,
@@ -82,6 +85,8 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         device_preference: str,
         confidence_threshold: float,
         secondary_model_path: "str | None" = None,
+        slice_settings: "SliceTrainingSettings | None" = None,
+        imgsz_obb_direct: int = 640,
     ) -> None:
         super().__init__()
         self._image_paths = list(image_paths)
@@ -91,6 +96,8 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
         self._secondary_model_path = (
             str(secondary_model_path).strip() if secondary_model_path else None
         )
+        self._slice_settings = slice_settings
+        self._imgsz_obb_direct = int(imgsz_obb_direct)
         self._cancel = False
 
     def cancel(self) -> None:
@@ -193,6 +200,8 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
             self.status.emit("Loading model…")
             model, device = load_torch_model(self._model_path, self._device_preference)
 
+            slice_settings = self._slice_settings
+            sliced = bool(slice_settings is not None and slice_settings.enabled)
             for index, image_path in enumerate(self._image_paths, start=1):
                 if self._cancel:
                     self.status.emit("Inference cancelled.")
@@ -201,12 +210,40 @@ class _DetectKitDatasetInferenceWorker(BaseWorker):
                     f"Running inference on image {index}/{total}: {Path(image_path).name}"
                 )
                 try:
-                    detections = predict_preview_detections_for_image(
-                        model,
-                        image_path,
-                        device=device,
-                        confidence_threshold=confidence_threshold,
-                    )
+                    if sliced:
+                        import cv2
+
+                        frame = cv2.imread(str(image_path))
+                        if frame is None:
+                            raise RuntimeError(f"Could not read image: {image_path}")
+                        obb = predict_sliced_obb_result(
+                            model,
+                            frame,
+                            geometry_mode=slice_settings.geometry_mode,
+                            imgsz=self._imgsz_obb_direct,
+                            # 0.0 => tile_size_for_mode degrades auto_object to imgsz tiling (honest; no fabricated scale)
+                            reference_body_px=slice_settings.reference_body_px,
+                            object_tile_fraction=preview_object_tile_fraction(
+                                slice_settings.target_sizes,
+                                slice_settings.object_tile_fraction,
+                                self._imgsz_obb_direct,
+                            ),
+                            slice_width=slice_settings.slice_width,
+                            slice_height=slice_settings.slice_height,
+                            overlap=slice_settings.overlap,
+                            merge_threshold=slice_settings.merge_threshold,
+                            confidence_threshold=confidence_threshold,
+                        )
+                        detections = (
+                            dicts_from_obb_result(obb) if obb is not None else []
+                        )
+                    else:
+                        detections = predict_preview_detections_for_image(
+                            model,
+                            image_path,
+                            device=device,
+                            confidence_threshold=confidence_threshold,
+                        )
                 except Exception:
                     logger.warning(
                         "Dataset inference failed on %s", image_path, exc_info=True
@@ -1327,6 +1364,10 @@ class DetectKitMainWindow(QMainWindow):
 
         try:
             detector_fn = self._load_active_detector_fn()
+            model_path = str(self._project.active_model_path or "").strip()
+            kind, _primary, _secondary = detectkit_resolve_inference_models(
+                self._project, model_path
+            )
             request = ALRequest(
                 input_kind=(
                     "video"
@@ -1339,6 +1380,7 @@ class DetectKitMainWindow(QMainWindow):
                 preset=dlg.preset_combo.currentText(),
                 expected_count=dlg.expected_count_spin.value(),
                 detector_fn=detector_fn,
+                export_level=self._resolve_export_level(kind),
             )
         except NotImplementedError as exc:
             dlg.status_label.setText(f"Error: {exc}")
@@ -1366,6 +1408,11 @@ class DetectKitMainWindow(QMainWindow):
         if worker is not None:
             worker.requestInterruption()
 
+    def _resolve_export_level(self, kind: str) -> str:
+        # segment stage-2 -> polygon; obb -> obb; detect-only -> aabb.
+        # Direct OBB / sequential-with-OBB stage-2 keep obb.
+        return "obb"
+
     def _load_active_detector_fn(self):
         """Return a detector_fn(frame, conf, iou) -> list[(cx,cy,w,h,theta,conf)].
 
@@ -1386,7 +1433,7 @@ class DetectKitMainWindow(QMainWindow):
                 "Train or load a YOLO OBB model and try again."
             )
 
-        from .prediction_preview import load_torch_model, predict_obb_for_frame
+        from .prediction_preview import load_torch_model, predict_obb_for_frame_export
 
         kind, primary, secondary = detectkit_resolve_inference_models(
             self._project, model_path
@@ -1417,7 +1464,7 @@ class DetectKitMainWindow(QMainWindow):
         model, device = load_torch_model(primary, device_pref)
 
         def _detector_fn(frame, conf, iou):
-            return predict_obb_for_frame(
+            return predict_obb_for_frame_export(
                 model, frame, device=device, conf=conf, iou=iou
             )
 
@@ -1556,6 +1603,8 @@ class DetectKitMainWindow(QMainWindow):
             self._project.device or "auto",
             settings.confidence_threshold,
             secondary_model_path=secondary if kind == "sequential" else None,
+            slice_settings=self._project.slice_settings,
+            imgsz_obb_direct=self._project.imgsz_obb_direct,
         )
         worker.progress.connect(progress.setValue)
         worker.status.connect(progress.setLabelText)

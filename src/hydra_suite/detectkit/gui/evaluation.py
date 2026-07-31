@@ -152,7 +152,10 @@ def open_quick_test_dialog(
             return False
 
     try:
-        from hydra_suite.trackerkit.gui.dialogs.model_test_dialog import ModelTestDialog
+        from hydra_suite.trackerkit.gui.dialogs.model_test_dialog import (
+            ModelTestDialog,
+            training_device_to_compute_runtime,
+        )
     except ImportError:
         QMessageBox.information(
             parent,
@@ -165,7 +168,7 @@ def open_quick_test_dialog(
         model_path=model_path,
         role=role,
         dataset_dir=dataset_dir,
-        device=project.device or "cpu",
+        compute_runtime=training_device_to_compute_runtime(project.device or "cpu"),
         imgsz=imgsz,
         crop_pad_ratio=project.crop_pad_ratio,
         min_crop_size_px=project.min_crop_size_px,

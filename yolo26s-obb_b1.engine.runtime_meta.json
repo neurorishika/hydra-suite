@@ -1,9 +1,0 @@
-{
-  "signature": "25ff04906e36ab5c",
-  "batch_size": 1,
-  "imgsz": 1024,
-  "workspace_gb": 4.0,
-  "gpu_name": "NVIDIA GeForce RTX 3090 Ti",
-  "cuda_version": "13.0",
-  "end2end": false
-}

@@ -4,7 +4,7 @@ import math
 from collections import deque
 
 from hydra_suite.core.identity.geometry import collapse_obb_axis_theta
-from hydra_suite.core.tracking.orientation import smooth_orientation
+from hydra_suite.core.tracking.features.orientation import smooth_orientation
 
 
 def _simulate_backward_orientation_loop(

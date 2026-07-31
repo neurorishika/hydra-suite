@@ -4,6 +4,7 @@ import importlib
 
 import pandas as pd
 
+from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
 
 
@@ -99,20 +100,27 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     observed: dict[str, object] = {}
 
     class FakeCNNConfig:
-        def __init__(self, model_path: str, confidence: float, batch_size: int) -> None:
+        def __init__(
+            self,
+            model_path: str,
+            confidence: float,
+            batch_size: int,
+            scoring_mode: str = "atomic",
+        ) -> None:
             self.model_path = model_path
             self.confidence = confidence
             self.batch_size = batch_size
+            self.scoring_mode = scoring_mode
 
     class FakeCNNBackend:
         def __init__(
-            self, config, model_path: str | None = None, compute_runtime: str = "cpu"
+            self, config, model_path: str | None = None, resolved=None
         ) -> None:
-            observed["cnn_runtime"] = compute_runtime
+            observed["cnn_resolved"] = resolved
 
     class FakeHeadTailAnalyzer:
-        def __init__(self, model_path: str, device: str = "cpu", **kwargs) -> None:
-            observed["headtail_device"] = device
+        def __init__(self, model_path: str, resolved=None, **kwargs) -> None:
+            observed["headtail_resolved"] = resolved
             self.is_available = True
 
         def close(self) -> None:
@@ -122,6 +130,10 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     monkeypatch.setattr(cnn_module, "CNNIdentityBackend", FakeCNNBackend)
     monkeypatch.setattr(headtail_module, "HeadTailAnalyzer", FakeHeadTailAnalyzer)
 
+    # Gen-2: the worker resolves the single RUNTIME_TIER through RuntimeResolver
+    # and threads a ResolvedBackend to both the CNN and head-tail stages. The
+    # "cpu" tier resolves to native torch/CPU on every host, independent of
+    # platform accelerators.
     worker = InterpolatedCropsWorker(
         "tracks.csv",
         "source.mp4",
@@ -130,15 +142,170 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
             "CNN_CLASSIFIERS": [
                 {"label": "cnn_identity", "model_path": str(cnn_model), "batch_size": 4}
             ],
-            "CNN_COMPUTE_RUNTIME": "onnx_cpu",
-            "COMPUTE_RUNTIME": "mps",
+            "RUNTIME_TIER": "cpu",
             "YOLO_HEADTAIL_MODEL_PATH": str(headtail_model),
-            "HEADTAIL_COMPUTE_RUNTIME": "cuda",
         },
     )
 
     worker._init_cnn_backends()
     worker._init_headtail_analyzer()
 
-    assert observed["cnn_runtime"] == "onnx_cpu"
-    assert observed["headtail_device"] == "cuda"
+    assert observed["cnn_resolved"] == ResolvedBackend("torch", "cpu", False)
+    assert observed["headtail_resolved"] == ResolvedBackend("torch", "cpu", False)
+
+
+def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
+    monkeypatch, tmp_path
+) -> None:
+    """Golden rule: the YOLO pose branch routes through the shared
+    ``core/inference/api.load_pose_backend`` shim (patched here in the worker's
+    module) instead of duplicating the runtime-flavor ladder."""
+    crops_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.crops_worker"
+    )
+    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
+
+    monkeypatch.setattr(
+        pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0", "kpt1"], [])
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeBackend:
+        output_keypoint_names = ["kpt0", "kpt1"]
+
+        def __init__(self) -> None:
+            self.warmup_calls = 0
+
+        def warmup(self) -> None:
+            self.warmup_calls += 1
+            captured["warmed_up"] = True
+
+    fake_backend = FakeBackend()
+
+    def _fake_load_pose_backend(**kwargs):
+        captured.update(kwargs)
+        return fake_backend
+
+    monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
+
+    worker = InterpolatedCropsWorker(
+        "tracks.csv",
+        "source.mp4",
+        "cache.npz",
+        {
+            "ENABLE_POSE_EXTRACTOR": True,
+            "POSE_MODEL_TYPE": "yolo",
+            "POSE_MODEL_DIR": "/models/yolo_pose.pt",
+            "POSE_MIN_KPT_CONF_VALID": 0.3,
+            "POSE_BATCH_SIZE": 8,
+            "RUNTIME_TIER": "cpu",
+        },
+    )
+
+    backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
+
+    assert backend is fake_backend
+    assert captured["backend_family"] == "yolo"
+    assert captured["model_path"] == "/models/yolo_pose.pt"
+    # Runtime is derived from RUNTIME_TIER (Gen-2 FT1); the "cpu" tier resolves
+    # to native torch/CPU on every host, so the threaded string is host-stable.
+    assert captured["compute_runtime"] == "cpu"
+    # Regression guard: load_pose_backend (-> load_pose_model) already warms
+    # the backend it returns; a second GUI-side warmup() call is redundant
+    # and, for the SLEAP service backend, breaks _service_started_here
+    # ownership tracking, leaking the service subprocess past close().
+    assert fake_backend.warmup_calls == 0
+    assert "warmed_up" not in captured
+    assert kpt_source_names == ["kpt0", "kpt1"]
+    assert kpt_labels
+
+
+def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
+    monkeypatch, tmp_path
+) -> None:
+    """Golden rule: the SLEAP pose branch routes through the shared
+    ``load_pose_backend`` shim and threads SLEAP settings (env, max_instances)
+    through -- the tier -> flavor decision lives in ``load_pose_model``, not
+    here, so this asserts delegation + settings, not the resolved flavor."""
+    crops_worker = importlib.import_module(
+        "hydra_suite.trackerkit.gui.workers.crops_worker"
+    )
+    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
+
+    monkeypatch.setattr(
+        pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0"], [(0, 1)])
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeBackend:
+        output_keypoint_names = ["kpt0"]
+
+        def __init__(self) -> None:
+            self.warmup_calls = 0
+
+        def warmup(self) -> None:
+            self.warmup_calls += 1
+            captured["warmed_up"] = True
+
+    fake_backend = FakeBackend()
+
+    def _fake_load_pose_backend(**kwargs):
+        captured.update(kwargs)
+        return fake_backend
+
+    monkeypatch.setattr(crops_worker, "load_pose_backend", _fake_load_pose_backend)
+
+    worker = InterpolatedCropsWorker(
+        "tracks.csv",
+        "source.mp4",
+        "cache.npz",
+        {
+            "ENABLE_POSE_EXTRACTOR": True,
+            "POSE_MODEL_TYPE": "sleap",
+            "POSE_MODEL_DIR": "/models/sleap_model",
+            "POSE_MIN_KPT_CONF_VALID": 0.25,
+            "POSE_BATCH_SIZE": 4,
+            "POSE_SLEAP_ENV": "sleap_env_x",
+            "POSE_SLEAP_MAX_INSTANCES": 2,
+            "RUNTIME_TIER": "cpu",
+        },
+    )
+
+    backend, kpt_source_names, kpt_labels = worker._init_pose_backend(str(tmp_path))
+
+    assert backend is fake_backend
+    # Regression guard: same double-warmup leak as the YOLO case above, but
+    # more severe for SLEAP -- the service backend's warmup() ownership
+    # bookkeeping (_service_started_here) is not idempotent across calls, so
+    # a second warmup() here leaves the SLEAP service process orphaned after
+    # close().
+    assert fake_backend.warmup_calls == 0
+    assert "warmed_up" not in captured
+    assert kpt_source_names == ["kpt0"]
+
+    assert captured["backend_family"] == "sleap"
+    assert captured["compute_runtime"] == "cpu"
+    assert captured["sleap_env"] == "sleap_env_x"
+    assert captured["sleap_max_instances"] == 2
+    assert captured["model_path"] == "/models/sleap_model"
+    assert captured["out_root"] == str(tmp_path)
+
+
+def test_crops_worker_has_no_divergent_flavor_ladder() -> None:
+    """Source guard: the deleted runtime-flavor ladder must not reappear."""
+    from pathlib import Path as _Path
+
+    src = _Path(
+        importlib.import_module(
+            "hydra_suite.trackerkit.gui.workers.crops_worker"
+        ).__file__
+    ).read_text(encoding="utf-8")
+    for banned in (
+        "is_cuda_like",
+        "onnx_cuda",
+        "create_pose_backend_from_config",
+        "YoloNativeBackend",
+    ):
+        assert banned not in src, f"divergent pose ladder token still present: {banned}"

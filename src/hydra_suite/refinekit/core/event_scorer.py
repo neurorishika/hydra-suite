@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.tracking.confidence_density import DensityRegion
+from hydra_suite.core.tracking.confidence.confidence_density import DensityRegion
 from hydra_suite.refinekit.core.event_types import EventType, SuspicionEvent
 
 # ---------------------------------------------------------------------------

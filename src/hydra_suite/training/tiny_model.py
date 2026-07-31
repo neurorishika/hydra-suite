@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from hydra_suite.runtime.resolver import ResolvedBackend
 
 _LEGACY_TINY_ARCH_VERSION = 1
 _DEFAULT_TINY_ARCH_VERSION = 2
@@ -513,17 +516,62 @@ def export_tiny_to_onnx(
     return onnx_path
 
 
-def load_tiny_onnx(onnx_path: str | Path, compute_runtime: str = "onnx_cpu"):
+def export_tiny_to_coreml(
+    model: Any, ckpt: dict[str, Any], mlpackage_path: str | Path
+) -> Path:
+    """Export a TinyClassifier to a CoreML .mlpackage.
+
+    Uses ``input_size`` from *ckpt* to build the dummy input (``[H, W]``,
+    default ``[64, 128]``).  The batch axis is a ``RangeDim`` so any batch
+    size works at inference time.
+
+    Conversion uses ``torch.jit.trace`` followed by ``coremltools.convert``.
+    Requires the ``coremltools`` package (``pip install coremltools``).
+
+    Args:
+        model: TinyClassifier model in eval mode.
+        ckpt: Checkpoint dict (used for ``input_size``).
+        mlpackage_path: Output path for the ``.mlpackage`` bundle.
+
+    Returns:
+        Path to the exported ``.mlpackage``.
+    """
+    import coremltools as ct
+    import torch
+
+    mlpackage_path = Path(mlpackage_path)
+    input_h, input_w = ckpt.get("input_size", [64, 128])
+    model.eval()
+    dummy = torch.zeros(1, 3, int(input_h), int(input_w))
+    traced = torch.jit.trace(model, dummy)
+    mlmodel = ct.convert(
+        traced,
+        inputs=[
+            ct.TensorType(
+                name="input",
+                shape=ct.Shape(
+                    shape=(ct.RangeDim(1, 512), 3, int(input_h), int(input_w))
+                ),
+            )
+        ],
+        compute_units=ct.ComputeUnit.ALL,
+        minimum_deployment_target=ct.target.macOS13,
+    )
+    mlmodel.save(str(mlpackage_path))
+    return mlpackage_path
+
+
+def load_tiny_onnx(onnx_path: str | Path, resolved: "ResolvedBackend"):
     """Load a TinyClassifier ONNX model as an ``onnxruntime.InferenceSession``.
 
-    *compute_runtime* must be one of the canonical runtimes:
-    ``onnx_coreml``, ``onnx_cpu``, ``onnx_cuda``, or ``tensorrt``.
+    *resolved* is a ``ResolvedBackend`` (Runtime Gen-2 vocabulary); the ONNX
+    Runtime provider list is derived from it via ``execution_providers_for``.
     """
     import onnxruntime as ort
 
-    from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+    from hydra_suite.runtime.onnx_providers import execution_providers_for
 
-    providers = derive_onnx_execution_providers(compute_runtime)
+    providers = execution_providers_for(resolved)
     return ort.InferenceSession(str(onnx_path), providers=providers)
 
 

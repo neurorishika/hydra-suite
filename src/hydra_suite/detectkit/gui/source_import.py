@@ -17,6 +17,7 @@ from hydra_suite.training.class_mapping import (
     resolve_dataset_class_names,
 )
 from hydra_suite.training.dataset_inspector import inspect_obb_or_detect_dataset
+from hydra_suite.training.geometry_levels import GeometryLevel, scan_source_levels
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class MaterializedDetectKitSource:
     annotation_count: int
     discovered_labels: list[str]
     imported: bool
+    level: str = "obb"
 
 
 IMPORT_MODE_PORTABLE = "portable"
@@ -394,15 +396,21 @@ def _coco_bbox_to_polygon(bbox: Any, width: int, height: int) -> list[float] | N
     ]
 
 
-def _coco_annotation_to_obb(
+def _coco_annotation_to_points(
     annotation: dict[str, Any], width: int, height: int
-) -> list[float] | None:
+) -> tuple[list[float], str] | None:
+    """Return (normalized_coords, evidence). Segmentation is preserved as a full
+    contour ("polygon"); a bbox-only annotation yields an axis-aligned quad ("aabb")."""
     points = _coco_segmentation_points(annotation.get("segmentation"))
-    if points:
-        polygon = _points_to_min_area_rect(points, width, height)
-        if polygon is not None:
-            return polygon
-    return _coco_bbox_to_polygon(annotation.get("bbox"), width, height)
+    if len(points) >= 3:
+        coords: list[float] = []
+        for x_pos, y_pos in points:
+            coords.extend([x_pos / float(width), y_pos / float(height)])
+        return coords, "polygon"
+    quad = _coco_bbox_to_polygon(annotation.get("bbox"), width, height)
+    if quad is not None:
+        return quad, "aabb"
+    return None
 
 
 def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
@@ -454,10 +462,11 @@ def _materialize_coco_source(source_root: Path, dest_root: Path) -> list[str]:
             dense_id = category_to_dense.get(int(category_id))
             if dense_id is None:
                 continue
-            polygon = _coco_annotation_to_obb(annotation, width, height)
-            if polygon is None:
+            converted = _coco_annotation_to_points(annotation, width, height)
+            if converted is None:
                 continue
-            lines.append(_format_obb_line(dense_id, polygon))
+            coords, _evidence = converted
+            lines.append(_format_obb_line(dense_id, coords))
 
         _write_text(
             dest_root / "labels" / relative_path.with_suffix(".txt"),
@@ -525,6 +534,35 @@ def remap_materialized_source_classes(
         )
 
 
+def _coco_source_level(source_root: Path) -> str:
+    """Resolve a COCO source's geometry level from its annotation payload evidence."""
+    loaded = _load_coco_dataset(source_root)
+    if loaded is None:
+        return GeometryLevel.OBB.label
+    _json_path, payload = loaded
+    has_polygon = False
+    has_box = False
+    for annotation in payload.get("annotations", []):
+        if len(_coco_segmentation_points(annotation.get("segmentation"))) >= 3:
+            has_polygon = True
+        elif isinstance(annotation.get("bbox"), list) and len(annotation["bbox"]) >= 4:
+            has_box = True
+    if has_polygon:
+        return GeometryLevel.POLYGON.label
+    if has_box:
+        return GeometryLevel.AABB.label
+    return GeometryLevel.OBB.label
+
+
+def _detect_source_level(source_root: Path, inspection) -> str:
+    """Resolve a source's geometry level from its ORIGINAL input evidence,
+    before label conversion collapses detect boxes into quads."""
+    if inspection.source_kind == "coco":
+        return _coco_source_level(source_root)
+    scan = scan_source_levels(source_root / "labels", intended_level=GeometryLevel.OBB)
+    return scan.resolved_level.label
+
+
 def materialize_detectkit_source(
     source_root: str | Path,
     project_dir: str | Path,
@@ -535,6 +573,7 @@ def materialize_detectkit_source(
     """Resolve *source_root* into a DetectKit-ready source for *project_dir*."""
     root = Path(source_root).expanduser().resolve()
     inspection = inspect_detectkit_source(root)
+    level = _detect_source_level(root, inspection)
     if import_mode not in {IMPORT_MODE_PORTABLE, IMPORT_MODE_LINKED}:
         raise ValueError(f"Unsupported DetectKit import mode: {import_mode}")
 
@@ -553,6 +592,7 @@ def materialize_detectkit_source(
             annotation_count=inspection.annotation_count,
             discovered_labels=list(inspection.discovered_labels),
             imported=False,
+            level=level,
         )
 
     if not inspection.requires_import and not force_import:
@@ -565,6 +605,7 @@ def materialize_detectkit_source(
             annotation_count=inspection.annotation_count,
             discovered_labels=list(inspection.discovered_labels),
             imported=False,
+            level=level,
         )
 
     dest_root = _standardized_source_dir(root, Path(project_dir))
@@ -586,4 +627,5 @@ def materialize_detectkit_source(
         annotation_count=inspection.annotation_count,
         discovered_labels=list(inspection.discovered_labels),
         imported=True,
+        level=level,
     )

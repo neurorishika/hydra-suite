@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 
 def _build_tiny_state(n_classes: int = 3):
     from hydra_suite.training.tiny_model import _build_tiny_classifier_class
@@ -113,7 +115,7 @@ def test_tiny_checkpoint_v2_consumable_by_backend(tmp_path):
         best_val_acc=None,
         history={},
     )
-    backend = ClassifierBackend(str(out_path))
+    backend = ClassifierBackend(str(out_path), ResolvedBackend("torch", "cpu", False))
     meta = backend.metadata
     assert meta.class_names_per_factor == [["left", "right", "unknown"]]
     assert meta.factor_names == ["flat"]
@@ -150,7 +152,7 @@ def test_legacy_tiny_checkpoint_still_loads_via_backend(tmp_path):
         str(out_path),
     )
 
-    backend = ClassifierBackend(str(out_path))
+    backend = ClassifierBackend(str(out_path), ResolvedBackend("torch", "cpu", False))
     meta = backend.metadata
     assert meta.arch == "tinyclassifier"
     assert meta.class_names_per_factor == [["left", "right", "unknown"]]
@@ -361,6 +363,6 @@ def test_torchvision_v2_roundtrips_through_backend(
     assert ckpt["class_names_per_factor"] == class_names_per_factor
     assert ckpt["input_size"] == [input_size[0], input_size[1]]
     if len(factor_names) == 1:
-        backend = ClassifierBackend(str(out))
+        backend = ClassifierBackend(str(out), ResolvedBackend("torch", "cpu", False))
         assert backend.metadata.input_size == input_size
         backend.close()

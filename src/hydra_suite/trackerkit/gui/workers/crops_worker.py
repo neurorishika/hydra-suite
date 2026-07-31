@@ -20,6 +20,7 @@ from hydra_suite.core.identity.properties.export import (
     flatten_pose_keypoints_row,
     pose_wide_columns_for_labels,
 )
+from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.data.detection_cache import DetectionCache
 from hydra_suite.utils.geometry import wrap_angle_degs
 from hydra_suite.widgets.workers import BaseWorker
@@ -126,20 +127,61 @@ class InterpolatedCropsWorker(BaseWorker):
         return InterpolatedCropsWorker._size_from_shapes(shapes, idx)
 
     def _init_pose_backend(self, output_dir):
-        """Initialize pose estimation backend. Returns (backend, kpt_source_names, kpt_labels)."""
+        """Initialize pose estimation backend. Returns (backend, kpt_source_names, kpt_labels).
+
+        Routes through ``core/inference/api.load_pose_backend`` (the shared shim
+        over ``stages/pose.load_pose_model`` — the single source of the pose
+        runtime golden rule) instead of duplicating the runtime-flavor ladder
+        here. ``load_pose_model`` still honors the SLEAP-flavor debug override
+        internally.
+        """
         if not bool(self.params.get("ENABLE_POSE_EXTRACTOR", False)):
             return None, [], []
-        from hydra_suite.core.identity.pose.api import (
-            build_runtime_config,
-            create_pose_backend_from_config,
-        )
-
         try:
-            pose_config = build_runtime_config(
-                self.params, out_root=str(Path(output_dir).expanduser())
+            from hydra_suite.core.identity.pose.utils import load_skeleton_from_json
+
+            backend_family = (
+                str(self.params.get("POSE_MODEL_TYPE", "yolo")).strip().lower()
             )
-            backend = create_pose_backend_from_config(pose_config)
-            backend.warmup()
+            model_path = str(self.params.get("POSE_MODEL_DIR", ""))
+            min_valid_conf = float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2))
+            batch_size = int(self.params.get("POSE_BATCH_SIZE", 4))
+            skeleton_file = str(self.params.get("POSE_SKELETON_FILE", "") or "")
+            keypoint_names, skeleton_edges = load_skeleton_from_json(skeleton_file)
+
+            # Runtime comes solely from RUNTIME_TIER (Runtime Gen-2 FT1): the
+            # COMPUTE_RUNTIME param family was retired. load_pose_backend only
+            # needs the tier bucket (it re-derives the tier via
+            # migrate_runtime_to_tier), so a resolved runtime string is passed.
+            if backend_family == "sleap":
+                pose_stage = "sleap_pose"
+            elif backend_family == "vitpose":
+                pose_stage = "vitpose_pose"
+            else:
+                pose_stage = "yolo_pose"
+            compute_runtime = self._resolved_runtime_string(pose_stage)
+
+            backend = load_pose_backend(
+                backend_family=backend_family,
+                model_path=model_path,
+                compute_runtime=compute_runtime,
+                keypoint_names=list(keypoint_names),
+                skeleton_edges=skeleton_edges,
+                batch_size=max(1, batch_size),
+                min_valid_confidence=min_valid_conf,
+                out_root=str(Path(output_dir).expanduser()),
+                sleap_env=str(self.params.get("POSE_SLEAP_ENV", "sleap")),
+                sleap_batch=max(1, batch_size),
+                sleap_max_instances=int(self.params.get("POSE_SLEAP_MAX_INSTANCES", 1)),
+            )
+
+            # NOTE: do NOT call backend.warmup() here -- load_pose_backend
+            # (-> stages/pose.load_pose_model) already warms the backend it
+            # returns. A second warmup() is redundant, and for the SLEAP
+            # service backend it is not idempotent w.r.t. ownership: the
+            # first warmup sets _service_started_here=True, a second sees
+            # was_running=True and flips it back to False, so close() later
+            # skips shutdown and leaks the SLEAP service subprocess.
             kpt_source_names = list(getattr(backend, "output_keypoint_names", []) or [])
             kpt_labels = build_pose_keypoint_labels(
                 kpt_source_names, len(kpt_source_names)
@@ -151,6 +193,34 @@ class InterpolatedCropsWorker(BaseWorker):
                 exc,
             )
             return None, [], []
+
+    def _resolve_backend(self, stage: str):
+        """Resolve the runtime tier in ``params`` to a concrete ResolvedBackend.
+
+        The single Gen-2 authority (``RuntimeResolver``) owns the tier -> backend
+        decision; this worker no longer threads per-stage compute_runtime strings.
+        Falls back to the CPU tier when no valid ``RUNTIME_TIER`` is present.
+        """
+        from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
+
+        tier = str(self.params.get("RUNTIME_TIER", "cpu") or "cpu").strip().lower()
+        if tier not in {"cpu", "gpu", "gpu_fast"}:
+            tier = "cpu"
+        return RuntimeResolver(tier, detect_platform()).resolve(stage)
+
+    def _resolved_runtime_string(self, stage: str) -> str:
+        """Resolve ``RUNTIME_TIER`` to a compute-runtime string for ``stage``.
+
+        Used only where a downstream shim (``load_pose_backend``) still takes a
+        runtime string rather than a ``ResolvedBackend``; the string maps back to
+        the correct tier via ``migrate_runtime_to_tier``.
+        """
+        resolved = self._resolve_backend(stage)
+        if resolved.backend == "tensorrt":
+            return "tensorrt"
+        if resolved.backend == "coreml":
+            return "coreml"
+        return resolved.device  # cpu / cuda / mps
 
     def _init_apriltag_detector(self):
         """Initialize AprilTag detector if configured. Returns detector or None."""
@@ -184,11 +254,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 CNNIdentityConfig,
             )
 
-            compute_rt = str(
-                self.params.get(
-                    "CNN_COMPUTE_RUNTIME", self.params.get("COMPUTE_RUNTIME", "cpu")
-                )
-            )
+            cnn_resolved = self._resolve_backend("cnn")
             for cnn_cfg_dict in cnn_classifiers_cfg:
                 model_path = str(cnn_cfg_dict.get("model_path", ""))
                 if not model_path or not os.path.exists(model_path):
@@ -204,7 +270,7 @@ class InterpolatedCropsWorker(BaseWorker):
                     backend = CNNIdentityBackend(
                         cnn_cfg,
                         model_path=model_path,
-                        compute_runtime=compute_rt,
+                        resolved=cnn_resolved,
                     )
                     cnn_backends.append(backend)
                     cnn_labels.append(label)
@@ -231,15 +297,9 @@ class InterpolatedCropsWorker(BaseWorker):
             return None
         from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-        _ht_runtime = str(
-            self.params.get(
-                "HEADTAIL_COMPUTE_RUNTIME",
-                self.params.get("COMPUTE_RUNTIME", "cpu"),
-            )
-        )
         analyzer = HeadTailAnalyzer(
             model_path=headtail_model_path,
-            compute_runtime=_ht_runtime,
+            resolved=self._resolve_backend("head_tail"),
             conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
             batch_size=max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64))),
             reference_aspect_ratio=float(
@@ -586,7 +646,7 @@ class InterpolatedCropsWorker(BaseWorker):
         interp_tag_rows,
     ):
         """Detect AprilTags in all interpolated crops for one frame."""
-        from hydra_suite.core.tracking.pose_pipeline import (
+        from hydra_suite.core.tracking.pose.pose_pipeline import (
             extract_one_crop as _extract_aabb_crop,
         )
 

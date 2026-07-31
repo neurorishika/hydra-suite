@@ -1,0 +1,1 @@
+"""Pose-crop precompute pipeline."""

@@ -103,7 +103,7 @@ class EvaluationWorker(QObject):
         self._cancel = True
 
     def _validate_inputs(self):
-        if self.backend != "sleap":
+        if self.backend == "yolo":
             try:
                 import ultralytics  # noqa: F401
             except ImportError as e:
@@ -459,6 +459,7 @@ class EvaluationDashboardDialog(QDialog):
         image_paths: List[Path],
         weights_path: Optional[str] = None,
         add_frames_callback=None,
+        backend: Optional[str] = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Evaluation Dashboard")
@@ -467,6 +468,7 @@ class EvaluationDashboardDialog(QDialog):
         self.project = project
         self.image_paths = image_paths
         self.add_frames_callback = add_frames_callback
+        self._preset_backend = (backend or "").strip().lower()
         self._lock_model = False
         self._thread = None
         self._worker = None
@@ -492,7 +494,7 @@ class EvaluationDashboardDialog(QDialog):
         cfg_layout = QFormLayout(cfg_group)
 
         self.backend_combo = QComboBox()
-        self.backend_combo.addItems(["YOLO", "SLEAP"])
+        self.backend_combo.addItems(["YOLO", "ViTPose", "SLEAP"])
         cfg_layout.addRow("Backend", self.backend_combo)
 
         self.weights_label = QLabel("Weights")
@@ -622,6 +624,14 @@ class EvaluationDashboardDialog(QDialog):
         self._apply_settings()
         self._apply_latest_weights_default()
         self._refresh_sleap_envs()
+        if self._preset_backend:
+            display = {
+                "yolo": "YOLO",
+                "vitpose": "ViTPose",
+                "sleap": "SLEAP",
+            }.get(self._preset_backend)
+            if display:
+                self.backend_combo.setCurrentText(display)
         self._apply_backend_ui()
 
     def lock_model_path(self: object, path: str) -> object:

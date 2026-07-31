@@ -410,10 +410,13 @@ models/model_registry.json
 # remove .claude directory (only at the base)
 /.claude/
 
+# superpowers local scratch (SDD progress ledger)
+/.superpowers/
+
 # remove test_classkit.db
 test_classkit.db
 
 .VSCodeCounter/
 .worktrees/
-docs/superpowers/
+.worktree/
 headtail_batch25_bench.json

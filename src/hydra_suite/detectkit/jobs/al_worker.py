@@ -54,6 +54,7 @@ class ALRequest:
     candidate_pool: CandidatePoolConfig = field(default_factory=CandidatePoolConfig)
     base_conf: float = 0.25
     base_iou: float = 0.7
+    export_level: str = "obb"
 
 
 @dataclass
@@ -83,6 +84,9 @@ def _frame_signals(
     base_conf: float,
     base_iou: float,
 ) -> tuple[ALSignals, list]:
+    # Detections may be 6-tuples (cx,cy,w,h,theta,conf) or 7-tuples with a
+    # trailing native polygon (Task 14 export path); d[5] and d[:5] are valid
+    # for both, so no branching is needed here.
     detections = list(detector_fn(frame, base_conf, base_iou))
     confidences = [d[5] for d in detections]
     mean_conf, margin = score_uncertainty(confidences, conf_floor=base_conf)
@@ -109,17 +113,36 @@ def _frame_signals(
     return signal, detections
 
 
+def _write_geometry_label(
+    path: Path, records: list, frame_size: tuple[int, int]
+) -> None:
+    """Write YOLO labels: a native polygon when present, else OBB corners.
+
+    Each record is a 6-tuple ``(cx, cy, w, h, theta, conf)`` or a 7-tuple with
+    a trailing native polygon (an ``(P, 2)`` pixel-space array, or ``None``).
+    When the polygon is absent, output is byte-identical to the legacy
+    OBB-corner writer.
+    """
+    h, w = frame_size
+    with path.open("w") as fp:
+        for rec in records:
+            cx, cy, ww, hh, theta, _conf = rec[:6]
+            polygon = rec[6] if len(rec) > 6 else None
+            if polygon is not None:
+                pts = np.asarray(polygon, dtype=np.float32).reshape(-1, 2).copy()
+            else:
+                pts = _detection_corners(cx, cy, ww, hh, theta)
+            pts[:, 0] = np.clip(pts[:, 0] / w, 0.0, 1.0)
+            pts[:, 1] = np.clip(pts[:, 1] / h, 0.0, 1.0)
+            line = "0 " + " ".join(f"{v:.6f}" for v in pts.reshape(-1)) + "\n"
+            fp.write(line)
+
+
 def _write_yolo_obb_label(
     path: Path, detections: list, frame_size: tuple[int, int]
 ) -> None:
-    h, w = frame_size
-    with path.open("w") as fp:
-        for cx, cy, ww, hh, theta, _ in detections:
-            corners = _detection_corners(cx, cy, ww, hh, theta)
-            corners[:, 0] = np.clip(corners[:, 0] / w, 0.0, 1.0)
-            corners[:, 1] = np.clip(corners[:, 1] / h, 0.0, 1.0)
-            line = "0 " + " ".join(f"{v:.6f}" for v in corners.flatten()) + "\n"
-            fp.write(line)
+    """Back-compat alias for :func:`_write_geometry_label`."""
+    _write_geometry_label(path, detections, frame_size)
 
 
 def run_active_learning(
@@ -199,7 +222,7 @@ def run_active_learning(
         dets = detections_by_id[fid]
         img_path = images_dir / f"f_{fid:06d}.jpg"
         cv2.imwrite(str(img_path), img)
-        _write_yolo_obb_label(
+        _write_geometry_label(
             labels_dir / f"f_{fid:06d}.txt",
             dets,
             frame_size=img.shape[:2],
@@ -215,6 +238,7 @@ def run_active_learning(
         original_path=req.input_path,
         source_kind="detectkit_al",
         imported=True,
+        level=req.export_level,
     )
     req.project.sources.append(new_source)
 

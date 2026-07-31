@@ -408,6 +408,8 @@ class ClassKitTrainingDialog(QDialog):
             (self.contrast_spin, "contrast"),
             (self.flip_ud_spin, "flipud"),
             (self.flip_lr_spin, "fliplr"),
+            (self.decode_color_spin, "decode_color_sim"),
+            (self.resample_spin, "resample_sim"),
         ):
             self._set_spin_value(widget, settings, key)
         if "monochrome" in settings:
@@ -1624,6 +1626,30 @@ class ClassKitTrainingDialog(QDialog):
         )
         aug_form.addRow("<b>Hue Jitter:</b>", self.hue_spin)
 
+        self.decode_color_spin = QDoubleSpinBox()
+        self.decode_color_spin.setRange(0.0, 1.0)
+        self.decode_color_spin.setSingleStep(0.05)
+        self.decode_color_spin.setDecimals(2)
+        self.decode_color_spin.setValue(0.0)
+        self.decode_color_spin.setToolTip(
+            "Decode-color robustness: probability of re-decoding each crop through a "
+            "random YCbCr matrix/range convention. Hardens colortag/identity models "
+            "against GPU-Fast/NVDEC and cross-codec decode differences. 0 = off."
+        )
+        aug_form.addRow("Decode-color Robustness:", self.decode_color_spin)
+
+        self.resample_spin = QDoubleSpinBox()
+        self.resample_spin.setRange(0.0, 1.0)
+        self.resample_spin.setSingleStep(0.05)
+        self.resample_spin.setDecimals(2)
+        self.resample_spin.setValue(0.0)
+        self.resample_spin.setToolTip(
+            "Resample robustness: probability of re-warping each crop through an "
+            "alternate resampler (cv2 / torch grid_sample). Hardens against the "
+            "training-vs-inference crop geometry gap. 0 = off."
+        )
+        aug_form.addRow("Resample Robustness:", self.resample_spin)
+
         self.monochrome_check = QCheckBox("Force monochrome derived dataset")
         self.monochrome_check.setToolTip(
             "Convert the exported training dataset to grayscale RGB before training. This removes color information across train and validation splits."
@@ -2054,6 +2080,12 @@ class ClassKitTrainingDialog(QDialog):
             enabled_augments.append(f"saturation {self.saturation_spin.value():.2f}")
         if self.hue_spin.value() > 0:
             enabled_augments.append(f"hue {self.hue_spin.value():.2f}")
+        if self.decode_color_spin.value() > 0:
+            enabled_augments.append(
+                f"decode-color {self.decode_color_spin.value():.2f}"
+            )
+        if self.resample_spin.value() > 0:
+            enabled_augments.append(f"resample {self.resample_spin.value():.2f}")
         if self.monochrome_check.isChecked():
             enabled_augments.append("monochrome")
 
@@ -2381,6 +2413,8 @@ class ClassKitTrainingDialog(QDialog):
             "saturation": saturation_value,
             "brightness": brightness_value,
             "contrast": contrast_value,
+            "decode_color_sim": self.decode_color_spin.value(),
+            "resample_sim": self.resample_spin.value(),
             "monochrome": monochrome_value,
             "label_expansion": label_expansion,
         }

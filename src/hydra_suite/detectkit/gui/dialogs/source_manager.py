@@ -228,6 +228,11 @@ class SourceManagerDialog(BaseDialog):
                 original_path=original_path,
                 source_kind=materialized.source_kind,
                 imported=materialized.imported,
+                level=(
+                    selection.level
+                    if getattr(selection, "level", None)
+                    else materialized.level
+                ),
             )
         )
         self._refresh_list()

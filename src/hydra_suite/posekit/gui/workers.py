@@ -10,11 +10,61 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
+from hydra_suite.core.inference.api import load_pose_backend
 from hydra_suite.integrations.sleap.service import PoseInferenceService
 
 from .utils import _maybe_empty_cuda_cache
 
 logger = logging.getLogger("pose_label")
+
+
+def _build_pose_backend(
+    *,
+    backend_family: str,
+    model_path: str,
+    exported_model_path: str,
+    compute_runtime: str,
+    min_valid_conf: float,
+    batch_size: int,
+    conf: float,
+    keypoint_names: List[str],
+    skeleton_edges: List[Tuple[int, int]],
+    out_root: str,
+    sleap_env: Optional[str],
+    sleap_batch: Optional[int] = None,
+    sleap_max_instances: int = 1,
+    vitpose_batch: Optional[int] = None,
+) -> Any:
+    """Construct a pose backend via the canonical ``load_pose_backend`` shim.
+
+    Delegates the entire runtime-flavor decision to
+    ``core/inference/api.load_pose_backend`` (which routes through
+    ``stages/pose.load_pose_model`` — the single source of the pose runtime
+    golden rule), instead of duplicating a CUDA/ONNX runtime-flavor ladder
+    here. ``load_pose_model`` still honors the SLEAP-flavor debug override
+    internally.
+
+    ``compute_runtime`` is the tier-resolved pose runtime flavor string (e.g.
+    ``"cpu"``, ``"mps"``, ``"cuda"``, ``"tensorrt_cuda"``, ``"coreml"``) as
+    produced by ``MainWindow._pred_runtime_flavor`` (tier -> RuntimeResolver ->
+    flavor).
+    """
+    return load_pose_backend(
+        backend_family=backend_family,
+        model_path=model_path,
+        compute_runtime=compute_runtime,
+        keypoint_names=list(keypoint_names),
+        skeleton_edges=skeleton_edges,
+        confidence_threshold=conf,
+        batch_size=max(1, int(batch_size)),
+        min_valid_confidence=min_valid_conf,
+        out_root=out_root,
+        exported_model_path=exported_model_path,
+        sleap_env=sleap_env,
+        sleap_batch=sleap_batch,
+        sleap_max_instances=sleap_max_instances,
+        vitpose_batch=vitpose_batch,
+    )
 
 
 class PosePredictWorker(QObject):
@@ -43,6 +93,7 @@ class PosePredictWorker(QObject):
         sleap_batch: int = 4,
         sleap_max_instances: int = 1,
         cache_backend: Optional[str] = None,
+        vitpose_batch: Optional[int] = None,
     ):
         super().__init__()
         self.model_path = Path(model_path)
@@ -66,10 +117,18 @@ class PosePredictWorker(QObject):
         # Enforce single-instance predictions for PoseKit.
         self.sleap_max_instances = 1
         self.cache_backend = str(cache_backend or self.backend).strip().lower()
+        self.vitpose_batch = vitpose_batch
 
     def _resolved_runtime_artifact_path(self, backend_obj: Any) -> str:
-        runtime = str(self.runtime_flavor or "").strip().lower()
-        if not (runtime.startswith("onnx") or runtime.startswith("tensorrt")):
+        # Only SLEAP flavors that actually export an artifact (onnx/tensorrt)
+        # have a resolved path worth surfacing; native SLEAP (Apple GPU/GPU-Fast)
+        # and the YOLO backend (always native .pt/.onnx/.engine passed through
+        # as-is, never auto-exported here) have nothing new to report.
+        rt = str(self.runtime_flavor or "").strip().lower()
+        is_apple_like = rt in ("mps", "coreml") or rt.startswith(
+            ("onnx_mps", "onnx_coreml")
+        )
+        if self.backend != "sleap" or is_apple_like:
             return ""
         for attr in ("exported_model_path", "model_path"):
             value = getattr(backend_obj, attr, None)
@@ -90,43 +149,41 @@ class PosePredictWorker(QObject):
                 self.finished.emit(cached)
                 return
 
-            # Preferred path: shared runtime API.
+            # Preferred path: the shared load_pose_backend shim (single source
+            # of the pose runtime golden rule via
+            # core/inference/stages/pose.py::load_pose_model), not a hand-rolled
+            # runtime-flavor ladder.
             try:
-                from hydra_suite.core.identity.pose.api import (
-                    build_runtime_config,
-                    create_pose_backend_from_config,
-                )
-
-                params = {
-                    "POSE_MODEL_TYPE": self.backend,
-                    "POSE_MODEL_DIR": str(self.model_path),
-                    "POSE_RUNTIME_FLAVOR": self.runtime_flavor,
-                    "POSE_EXPORTED_MODEL_PATH": (
+                backend = _build_pose_backend(
+                    backend_family=self.backend,
+                    model_path=str(self.model_path),
+                    exported_model_path=(
                         str(self.exported_model_path)
                         if self.exported_model_path is not None
                         else ""
                     ),
-                    "POSE_MIN_KPT_CONF_VALID": 0.0,
-                    "POSE_YOLO_BATCH": self.yolo_batch,
-                    "POSE_BATCH_SIZE": self.yolo_batch,
-                    "POSE_YOLO_CONF": float(self.conf),
-                    "POSE_SLEAP_ENV": self.sleap_env or "sleap",
-                    "POSE_SLEAP_DEVICE": self.sleap_device or "auto",
-                    "POSE_SLEAP_BATCH": int(max(1, self.sleap_batch)),
-                    "POSE_SLEAP_MAX_INSTANCES": 1,
-                }
-                cfg = build_runtime_config(
-                    params=params,
+                    compute_runtime=self.runtime_flavor,
+                    min_valid_conf=0.0,
+                    batch_size=self.yolo_batch,
+                    conf=float(self.conf),
+                    keypoint_names=self.keypoint_names,
+                    skeleton_edges=self.skeleton_edges,
                     out_root=str(self.out_root),
-                    keypoint_names_override=self.keypoint_names,
-                    skeleton_edges_override=self.skeleton_edges,
+                    sleap_env=self.sleap_env,
+                    sleap_batch=int(max(1, self.sleap_batch)),
+                    sleap_max_instances=1,
+                    vitpose_batch=self.vitpose_batch,
                 )
-                backend = create_pose_backend_from_config(cfg)
                 resolved_path = self._resolved_runtime_artifact_path(backend)
                 if resolved_path:
                     self.resolved_exported_model_signal.emit(resolved_path)
                 try:
-                    backend.warmup()
+                    # NOTE: no backend.warmup() here -- load_pose_backend
+                    # (-> stages/pose.load_pose_model) already warms the
+                    # backend it returns. A redundant second warmup() breaks
+                    # the SLEAP service backend's _service_started_here
+                    # ownership tracking and leaks the service subprocess
+                    # past close().
                     img = cv2.imread(str(self.image_path))
                     if img is None:
                         raise RuntimeError(f"Failed to read image: {self.image_path}")
@@ -146,9 +203,9 @@ class PosePredictWorker(QObject):
                     except Exception:
                         pass
             except Exception as exc:
-                if self.backend == "sleap":
+                if self.backend in ("sleap", "vitpose"):
                     raise RuntimeError(
-                        "SLEAP shared runtime path failed in PoseKit. "
+                        f"{self.backend} shared runtime path failed in PoseKit. "
                         "Legacy fallback is disabled for parity with MAT. "
                         f"Original error: {exc}"
                     ) from exc
@@ -220,6 +277,7 @@ class BulkPosePredictWorker(QObject):
         sleap_batch: int = 4,
         sleap_max_instances: int = 1,
         cache_backend: Optional[str] = None,
+        vitpose_batch: Optional[int] = None,
     ):
         super().__init__()
         self.model_path = Path(model_path)
@@ -242,11 +300,19 @@ class BulkPosePredictWorker(QObject):
         # Enforce single-instance predictions for PoseKit.
         self.sleap_max_instances = 1
         self.cache_backend = str(cache_backend or self.backend).strip().lower()
+        self.vitpose_batch = vitpose_batch
         self._cancel = False
 
     def _resolved_runtime_artifact_path(self, backend_obj: Any) -> str:
-        runtime = str(self.runtime_flavor or "").strip().lower()
-        if not (runtime.startswith("onnx") or runtime.startswith("tensorrt")):
+        # Only SLEAP flavors that actually export an artifact (onnx/tensorrt)
+        # have a resolved path worth surfacing; native SLEAP (Apple GPU/GPU-Fast)
+        # and the YOLO backend (always native .pt/.onnx/.engine passed through
+        # as-is, never auto-exported here) have nothing new to report.
+        rt = str(self.runtime_flavor or "").strip().lower()
+        is_apple_like = rt in ("mps", "coreml") or rt.startswith(
+            ("onnx_mps", "onnx_coreml")
+        )
+        if self.backend != "sleap" or is_apple_like:
             return ""
         for attr in ("exported_model_path", "model_path"):
             value = getattr(backend_obj, attr, None)
@@ -265,43 +331,41 @@ class BulkPosePredictWorker(QObject):
                 self.out_root, self.keypoint_names, self.skeleton_edges
             )
 
-            # Preferred path: shared runtime API with chunked image loading.
+            # Preferred path: the shared load_pose_backend shim (single source
+            # of the pose runtime golden rule via
+            # core/inference/stages/pose.py::load_pose_model) with chunked image
+            # loading, not a hand-rolled runtime-flavor ladder.
             try:
-                from hydra_suite.core.identity.pose.api import (
-                    build_runtime_config,
-                    create_pose_backend_from_config,
-                )
-
-                params = {
-                    "POSE_MODEL_TYPE": self.backend,
-                    "POSE_MODEL_DIR": str(self.model_path),
-                    "POSE_RUNTIME_FLAVOR": self.runtime_flavor,
-                    "POSE_EXPORTED_MODEL_PATH": (
+                backend = _build_pose_backend(
+                    backend_family=self.backend,
+                    model_path=str(self.model_path),
+                    exported_model_path=(
                         str(self.exported_model_path)
                         if self.exported_model_path is not None
                         else ""
                     ),
-                    "POSE_MIN_KPT_CONF_VALID": 0.0,
-                    "POSE_YOLO_BATCH": int(max(1, self.batch)),
-                    "POSE_BATCH_SIZE": int(max(1, self.batch)),
-                    "POSE_SLEAP_ENV": self.sleap_env or "sleap",
-                    "POSE_SLEAP_DEVICE": self.sleap_device or "auto",
-                    "POSE_SLEAP_BATCH": int(max(1, self.sleap_batch)),
-                    "POSE_SLEAP_MAX_INSTANCES": 1,
-                    "POSE_YOLO_CONF": float(self.conf),
-                }
-                cfg = build_runtime_config(
-                    params=params,
+                    compute_runtime=self.runtime_flavor,
+                    min_valid_conf=0.0,
+                    batch_size=int(max(1, self.batch)),
+                    conf=float(self.conf),
+                    keypoint_names=self.keypoint_names,
+                    skeleton_edges=self.skeleton_edges,
                     out_root=str(self.out_root),
-                    keypoint_names_override=self.keypoint_names,
-                    skeleton_edges_override=self.skeleton_edges,
+                    sleap_env=self.sleap_env,
+                    sleap_batch=int(max(1, self.sleap_batch)),
+                    sleap_max_instances=1,
+                    vitpose_batch=self.vitpose_batch,
                 )
-                backend = create_pose_backend_from_config(cfg)
                 resolved_path = self._resolved_runtime_artifact_path(backend)
                 if resolved_path:
                     self.resolved_exported_model_signal.emit(resolved_path)
                 try:
-                    backend.warmup()
+                    # NOTE: no backend.warmup() here -- load_pose_backend
+                    # (-> stages/pose.load_pose_model) already warms the
+                    # backend it returns. A redundant second warmup() breaks
+                    # the SLEAP service backend's _service_started_here
+                    # ownership tracking and leaks the service subprocess
+                    # past close().
                     preds: Dict[str, List[Tuple[float, float, float]]] = {}
                     total = len(self.image_paths)
                     done = 0
@@ -348,9 +412,9 @@ class BulkPosePredictWorker(QObject):
                     except Exception:
                         pass
             except Exception as exc:
-                if self.backend == "sleap":
+                if self.backend in ("sleap", "vitpose"):
                     raise RuntimeError(
-                        "SLEAP shared runtime bulk path failed in PoseKit. "
+                        f"{self.backend} shared runtime bulk path failed in PoseKit. "
                         "Legacy fallback is disabled for parity with MAT. "
                         f"Original error: {exc}"
                     ) from exc

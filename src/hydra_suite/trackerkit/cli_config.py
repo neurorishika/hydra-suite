@@ -14,13 +14,50 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
-    infer_compute_runtime_from_legacy,
+from hydra_suite.runtime.resolver import (
+    ResolvedBackend,
+    RuntimeResolver,
+    detect_platform,
 )
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
+
+
+def legacy_detection_runtime_fields(runtime: ResolvedBackend) -> dict:
+    """Map a resolved backend to legacy detection config fields.
+
+    Takes a ``ResolvedBackend`` (Runtime Gen-2 vocabulary) — the sole input
+    since the legacy ``compute_runtime`` string path was retired (FT7b). Both
+    the live GUI path and the CLI path resolve a ``RUNTIME_TIER`` to a
+    ``ResolvedBackend`` and pass it here.
+
+    These fields no longer drive any live detector construction: the
+    ``"yolo_obb"`` detection method runs entirely through
+    ``InferenceRunner``/``load_obb_executor``, keyed off ``RUNTIME_TIER``,
+    which never reads these fields back. They are kept only for (a) legacy
+    config-file field backward-compatibility (display / round-tripping old
+    preset files) and (b) contributing to the detection/engine
+    cache-invalidation hash key (see
+    ``trackerkit/gui/orchestrators/tracking.py``'s cache-id builder), so the
+    derived values MUST stay stable to preserve existing tracking caches.
+
+    ``yolo_device`` is the resolved device (``"cuda"`` -> ``"cuda:0"``),
+    ``enable_tensorrt`` is ``backend == "tensorrt"``, ``enable_gpu_background``
+    is ``device != "cpu"``, and ``enable_onnx_runtime`` is always ``False``
+    (the resolver never emits an ONNX-Runtime backend). ``"coreml"`` (native
+    Apple GPU-Fast) maps to the plain ``"mps"`` device with no ONNX flag set,
+    distinct from the legacy ``"onnx_coreml"`` string.
+    """
+    device_map = {"cpu": "cpu", "cuda": "cuda:0", "mps": "mps"}
+    yolo_device = device_map.get(runtime.device, "cpu")
+    return {
+        "yolo_device": yolo_device,
+        "enable_tensorrt": runtime.backend == "tensorrt",
+        "enable_onnx_runtime": False,
+        "enable_gpu_background": runtime.device != "cpu",
+    }
+
 
 KALMAN_ANISOTROPY_RATIO_CONST = 50.0
 POSE_REJECTION_THRESHOLD_CONST = 0.5
@@ -248,27 +285,6 @@ def build_tracking_parameters(
 ) -> dict[str, Any]:
     """Translate saved TrackerKit JSON config into worker params."""
     advanced = dict(advanced_config or load_advanced_tracker_config())
-    advanced["enable_yolo_batching"] = bool(
-        _cfg_get(
-            cfg,
-            "enable_yolo_batching",
-            default=advanced.get("enable_yolo_batching", False),
-        )
-    )
-    advanced["yolo_batch_size_mode"] = str(
-        _cfg_get(
-            cfg,
-            "yolo_batch_size_mode",
-            default=advanced.get("yolo_batch_size_mode", "auto"),
-        )
-    )
-    advanced["yolo_manual_batch_size"] = int(
-        _cfg_get(
-            cfg,
-            "yolo_manual_batch_size",
-            default=advanced.get("yolo_manual_batch_size", 4),
-        )
-    )
     advanced["yolo_seq_individual_batch_size"] = int(
         _cfg_get(
             cfg,
@@ -371,11 +387,6 @@ def build_tracking_parameters(
             cfg, "min_detect_seconds", "min_detection_counts", default_seconds=0.33
         )
     )
-    min_tracking_counts = _seconds_to_frames(
-        _cfg_get_time(
-            cfg, "min_track_seconds", "min_tracking_counts", default_seconds=0.33
-        )
-    )
     min_trajectory_length = _seconds_to_frames(
         _cfg_get_time(
             cfg,
@@ -407,18 +418,25 @@ def build_tracking_parameters(
         min_frames=0,
     )
 
-    compute_runtime = str(
-        _cfg_get(
-            cfg,
-            "compute_runtime",
-            default=infer_compute_runtime_from_legacy(
-                str(_cfg_get(cfg, "yolo_device", default="auto")),
-                bool(_cfg_get(cfg, "enable_tensorrt", default=False)),
-                str(_cfg_get(cfg, "pose_runtime_flavor", default="")),
-            ),
-        )
-    )
-    detection_runtime = derive_detection_runtime_settings(compute_runtime)
+    # RUNTIME_TIER is the sole runtime knob (Runtime Gen-2 FT1). Prefer the
+    # config's explicit tier; if a legacy config carries an explicit
+    # compute_runtime, migrate it; otherwise default to the pipeline tier "gpu".
+    from hydra_suite.core.inference.config import migrate_runtime_to_tier
+
+    runtime_tier = str(_cfg_get(cfg, "runtime_tier", default="")).strip().lower()
+    if runtime_tier not in {"cpu", "gpu", "gpu_fast"}:
+        legacy_runtime = _cfg_get(cfg, "compute_runtime", default=None)
+        if legacy_runtime:
+            runtime_tier = migrate_runtime_to_tier({str(legacy_runtime)})
+        else:
+            runtime_tier = "gpu"
+    # Legacy detection fields derive from the resolved backend for the tier
+    # (Runtime Gen-2). The resolver is host-dependent (matching the live GUI
+    # path), and the ResolvedBackend branch of ``legacy_detection_runtime_fields``
+    # reproduces the historical cache-keyed values byte-for-byte, so existing
+    # tracking caches stay valid. Detection resolves against the "obb" stage.
+    resolved_backend = RuntimeResolver(runtime_tier, detect_platform()).resolve("obb")
+    detection_runtime = legacy_detection_runtime_fields(resolved_backend)
     yolo_mode = str(_cfg_get(cfg, "yolo_obb_mode", default="direct")).strip().lower()
     yolo_direct_path = resolve_model_path(
         _cfg_get(cfg, "yolo_obb_direct_model_path", "yolo_model_path", default="")
@@ -517,6 +535,7 @@ def build_tracking_parameters(
         "YOLO_SEQ_STAGE2_RUNTIME_BUILD_BATCH_SIZE": int(
             _cfg_get(cfg, "yolo_seq_individual_batch_size", default=4)
         ),
+        "YOLO_BATCH_SIZE": int(_cfg_get(cfg, "detection_batch_size", default=1)),
         "YOLO_SEQ_STAGE2_POW2_PAD": bool(
             _cfg_get(cfg, "yolo_seq_stage2_pow2_pad", default=False)
         ),
@@ -540,9 +559,6 @@ def build_tracking_parameters(
                 default=advanced.get("headtail_batch_size", 64),
             )
         ),
-        "HEADTAIL_COMPUTE_RUNTIME": str(
-            _cfg_get(cfg, "headtail_runtime", default=compute_runtime)
-        ),
         "YOLO_CONFIDENCE_THRESHOLD": float(
             _cfg_get(cfg, "yolo_confidence_threshold", default=0.25)
         ),
@@ -553,19 +569,20 @@ def build_tracking_parameters(
         "YOLO_TARGET_CLASSES": _coerce_int_list(
             _cfg_get(cfg, "yolo_target_classes", default=None)
         ),
-        "COMPUTE_RUNTIME": compute_runtime,
-        "CNN_COMPUTE_RUNTIME": str(
-            _cfg_get(cfg, "cnn_compute_runtime", "cnn_runtime", default=compute_runtime)
-        ),
+        "RUNTIME_TIER": runtime_tier,
         "YOLO_DEVICE": detection_runtime["yolo_device"],
         "ENABLE_GPU_BACKGROUND": detection_runtime["enable_gpu_background"],
         "ENABLE_TENSORRT": detection_runtime["enable_tensorrt"],
         "ENABLE_ONNX_RUNTIME": detection_runtime["enable_onnx_runtime"],
+        # Defaults to the detection batch the engine will actually be fed.
+        # Previously defaulted to the legacy manual YOLO batch key (now removed).
         "TENSORRT_MAX_BATCH_SIZE": int(
             _cfg_get(
                 cfg,
                 "tensorrt_max_batch_size",
-                default=max(1, int(advanced["yolo_manual_batch_size"])),
+                default=max(
+                    1, int(_cfg_get(cfg, "detection_batch_size", default=1) or 1)
+                ),
             )
         ),
         "TENSORRT_BUILD_WORKSPACE_GB": float(
@@ -647,11 +664,19 @@ def build_tracking_parameters(
         "MIN_RESPAWN_DISTANCE": min_respawn_multiplier * scaled_body_size,
         "MIN_DETECTION_COUNTS": min_detection_counts,
         "MIN_DETECTIONS_TO_START": MIN_DETECTIONS_TO_START_CONST,
-        "MIN_TRACKING_COUNTS": min_tracking_counts,
         "TRAJECTORY_HISTORY_SECONDS": float(
             _cfg_get(cfg, "trajectory_history_seconds", default=2.0)
         ),
         "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
+        "BACKGROUND_CONVERGENCE_EPSILON": float(
+            _cfg_get(cfg, "background_convergence_epsilon", default=1e-4)
+        ),
+        "BACKGROUND_CONVERGENCE_FRAMES": int(
+            _cfg_get(cfg, "background_convergence_frames", default=30)
+        ),
+        "BACKGROUND_CONVERGENCE_PIXEL_DELTA": float(
+            _cfg_get(cfg, "background_convergence_pixel_delta", default=5.0)
+        ),
         "ENABLE_LIGHTING_STABILIZATION": bool(
             _cfg_get(cfg, "enable_lighting_stabilization", default=True)
         ),

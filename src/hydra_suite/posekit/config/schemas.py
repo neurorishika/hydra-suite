@@ -19,6 +19,7 @@ class PoseKitConfig:
     show_pred_conf: bool = False
     sleap_env_path: str = ""
     autosave_delay_ms: int = 3000
+    runtime_tier: str = "gpu"  # 'cpu' | 'gpu' | 'gpu_fast'
     frame_mode: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -29,17 +30,26 @@ class PoseKitConfig:
             "show_pred_conf": self.show_pred_conf,
             "sleap_env_path": self.sleap_env_path,
             "autosave_delay_ms": self.autosave_delay_ms,
+            "runtime_tier": self.runtime_tier,
             "frame_mode": self.frame_mode,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PoseKitConfig":
-        """Reconstruct a PoseKitConfig from a dictionary produced by ``to_dict``."""
+        """Reconstruct a PoseKitConfig from a dictionary produced by ``to_dict``.
+
+        ``runtime_tier`` is the sole runtime knob (Runtime Gen-2). Old settings
+        that only stored legacy ``compute_runtime`` / ``pred_runtime`` strings
+        are migrated by the one-shot config-migration script; here a missing
+        tier simply defaults to ``"gpu"``.
+        """
+        runtime_tier = str(data.get("runtime_tier", "")).strip() or "gpu"
         return cls(
             mode=data.get("mode", "frame"),
             show_predictions=data.get("show_predictions", True),
             show_pred_conf=data.get("show_pred_conf", False),
             sleap_env_path=data.get("sleap_env_path", ""),
             autosave_delay_ms=data.get("autosave_delay_ms", 3000),
+            runtime_tier=runtime_tier,
             frame_mode=data.get("frame_mode", False),
         )

@@ -23,6 +23,7 @@ from .dataset_inspector import (
     split_items_for_training,
     stratified_split_items,
 )
+from .geometry_levels import GeometryLevel
 
 
 def _normalize_class_names(
@@ -148,6 +149,33 @@ def _parse_obb_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
         cls_id = int(float(parts[0]))
         vals = np.asarray([float(v) for v in parts[1:]], dtype=np.float32).reshape(4, 2)
         out.append((cls_id, vals))
+    return out
+
+
+def _parse_geometry_label_lines(lbl_path: Path) -> list[tuple[int, np.ndarray]]:
+    """Parse a label file of mixed geometry into (class_id, (P,2) points).
+
+    - 5 fields (cx cy w h) expand to the 4-corner axis-aligned quad.
+    - >=7 odd fields are read as a normalized point list of P = (fields-1)/2 points.
+    Raises on malformed lines.
+    """
+    out: list[tuple[int, np.ndarray]] = []
+    for raw in lbl_path.read_text(encoding="utf-8").splitlines():
+        ln = raw.strip()
+        if not ln:
+            continue
+        parts = ln.split()
+        cls_id = int(float(parts[0]))
+        coords = [float(v) for v in parts[1:]]
+        if len(parts) == 5:
+            cx, cy, w, h = coords
+            x1, y1, x2, y2 = cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
+            pts = np.asarray([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
+        elif len(coords) >= 6 and len(coords) % 2 == 0:
+            pts = np.asarray(coords, dtype=np.float32).reshape(-1, 2)
+        else:
+            raise RuntimeError(f"Invalid geometry label line in {lbl_path}: {ln}")
+        out.append((cls_id, pts))
     return out
 
 
@@ -386,11 +414,11 @@ def derive_detect_dataset_from_obb(
             if lbl_path is None:
                 continue
 
-            detections = _parse_obb_label_lines(lbl_path)
+            detections = _parse_geometry_label_lines(lbl_path)
             out_lines = []
-            for cls_id, poly in detections:
+            for cls_id, pts in detections:
                 encountered_class_ids.add(int(cls_id))
-                cx, cy, bw, bh = _convert_obb_to_aabb(poly)
+                cx, cy, bw, bh = _convert_obb_to_aabb(pts)
                 out_lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
             if not out_lines:
                 continue
@@ -615,6 +643,267 @@ def derive_crop_obb_dataset_from_obb(
     )
 
 
+def derive_segment_dataset_from_source(
+    src_dataset_dir: str | Path,
+    output_root: str | Path,
+    class_name: str | None = None,
+    *,
+    class_names: list[str] | None = None,
+) -> DatasetBuildResult:
+    """YOLO-seg passthrough: copy images and normalized-contour labels verbatim."""
+    resolved_class_names = _normalize_class_names(
+        class_names=class_names,
+        class_name=class_name,
+    )
+
+    src = Path(src_dataset_dir).expanduser().resolve()
+    out_root = Path(output_root).expanduser().resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
+    out_dir = out_root / f"derived_segment_{_timestamp()}"
+
+    for split in ("train", "val", "test"):
+        (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
+        (out_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+
+    counts = {"train": 0, "val": 0, "test": 0, "objects": 0}
+    encountered_class_ids: set[int] = set()
+
+    for split in ("train", "val", "test"):
+        src_img = src / "images" / split
+        src_lbl = src / "labels" / split
+        if not src_img.exists():
+            continue
+        for img_path in sorted(src_img.rglob("*")):
+            if img_path.suffix.lower() not in IMAGE_EXTS:
+                continue
+            lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
+            if lbl_path is None:
+                continue
+
+            detections = _parse_geometry_label_lines(lbl_path)
+            if not detections:
+                continue
+            for cls_id, _pts in detections:
+                encountered_class_ids.add(int(cls_id))
+
+            dst_img, dst_lbl = _unique_dst_pair(out_dir, split, img_path)
+            shutil.copy2(img_path, dst_img)
+            shutil.copy2(lbl_path, dst_lbl)
+            counts[split] += 1
+            counts["objects"] += len(detections)
+
+    include_test = counts["test"] > 0
+    _validate_class_name_coverage(
+        resolved_class_names,
+        encountered_class_ids,
+        dataset_label="Derived segment dataset",
+    )
+    _write_dataset_yaml(
+        out_dir,
+        class_names=resolved_class_names,
+        include_test=include_test,
+    )
+    manifest = {
+        "type": "derived_segment",
+        "source": str(src),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "counts": counts,
+    }
+    manifest_path = out_dir / "manifest.json"
+    _write_manifest(manifest_path, manifest)
+    return DatasetBuildResult(
+        str(out_dir), stats=manifest, manifest_path=str(manifest_path)
+    )
+
+
+def _extract_crop_for_contour(
+    img: np.ndarray,
+    poly_norm: np.ndarray,
+    pad_ratio: float,
+    min_crop_size_px: int,
+    enforce_square: bool,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Crop around a contour's AABB; return (crop, contour re-normalized+clipped to crop)."""
+    h, w = img.shape[:2]
+    pts_px = poly_norm.astype(np.float32).copy()
+    pts_px[:, 0] *= float(w)
+    pts_px[:, 1] *= float(h)
+
+    x1, x2 = float(pts_px[:, 0].min()), float(pts_px[:, 0].max())
+    y1, y2 = float(pts_px[:, 1].min()), float(pts_px[:, 1].max())
+    bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)
+    cx, cy = x1 + bw * 0.5, y1 + bh * 0.5
+
+    crop_w = max(float(min_crop_size_px), bw * (1.0 + 2.0 * max(0.0, pad_ratio)))
+    crop_h = max(float(min_crop_size_px), bh * (1.0 + 2.0 * max(0.0, pad_ratio)))
+    if enforce_square:
+        crop_w = crop_h = max(crop_w, crop_h)
+
+    c = _clip_crop(
+        cx - crop_w * 0.5, cy - crop_h * 0.5, cx + crop_w * 0.5, cy + crop_h * 0.5, w, h
+    )
+    if c is None:
+        return None
+    xi1, yi1, xi2, yi2 = c
+    crop = img[yi1:yi2, xi1:xi2]
+    if crop is None or crop.size == 0:
+        return None
+    ch, cw = crop.shape[:2]
+    if ch <= 0 or cw <= 0:
+        return None
+
+    contour = pts_px.copy()
+    contour[:, 0] = np.clip((contour[:, 0] - float(xi1)) / float(cw), 0.0, 1.0)
+    contour[:, 1] = np.clip((contour[:, 1] - float(yi1)) / float(ch), 0.0, 1.0)
+    return crop, contour
+
+
+def _process_crop_segment_image(
+    img_path: Path,
+    lbl_path: Path,
+    out_dir: Path,
+    split: str,
+    pad_ratio: float,
+    min_crop_size_px: int,
+    enforce_square: bool,
+) -> tuple[int, set[int]]:
+    """Create crop-domain segmentation samples for one source image."""
+    img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+    if img is None or img.size == 0:
+        return 0, set()
+
+    written = 0
+    class_ids: set[int] = set()
+    for obj_idx, (cls_id, poly_norm) in enumerate(
+        _parse_geometry_label_lines(lbl_path)
+    ):
+        class_ids.add(int(cls_id))
+        result = _extract_crop_for_contour(
+            img, poly_norm, pad_ratio, min_crop_size_px, enforce_square
+        )
+        if result is None:
+            continue
+
+        crop, contour = result
+        stem = f"{img_path.stem}__obj{obj_idx:03d}"
+        dst_img, dst_lbl = _unique_crop_output_paths(out_dir, split, stem)
+        cv2.imwrite(str(dst_img), crop)
+        coords = " ".join(f"{float(v):.6f}" for v in contour.reshape(-1))
+        dst_lbl.write_text(f"{cls_id} {coords}\n", encoding="utf-8")
+        written += 1
+
+    return written, class_ids
+
+
+def derive_crop_segment_dataset_from_source(
+    src_dataset_dir: str | Path,
+    output_root: str | Path,
+    class_name: str | None = None,
+    *,
+    class_names: list[str] | None = None,
+    pad_ratio: float = 0.15,
+    min_crop_size_px: int = 64,
+    enforce_square: bool = True,
+) -> DatasetBuildResult:
+    """Crop-domain segmentation dataset: clip each contour to its padded crop."""
+    resolved_class_names = _normalize_class_names(
+        class_names=class_names,
+        class_name=class_name,
+    )
+
+    src = Path(src_dataset_dir).expanduser().resolve()
+    out_root = Path(output_root).expanduser().resolve()
+    out_root.mkdir(parents=True, exist_ok=True)
+    out_dir = out_root / f"derived_crop_segment_{_timestamp()}"
+
+    for split in ("train", "val", "test"):
+        (out_dir / "images" / split).mkdir(parents=True, exist_ok=True)
+        (out_dir / "labels" / split).mkdir(parents=True, exist_ok=True)
+
+    counts = {"train": 0, "val": 0, "test": 0, "objects": 0}
+    encountered_class_ids: set[int] = set()
+
+    for split in ("train", "val", "test"):
+        src_img = src / "images" / split
+        src_lbl = src / "labels" / split
+        if not src_img.exists():
+            continue
+        for img_path in sorted(src_img.rglob("*")):
+            if img_path.suffix.lower() not in IMAGE_EXTS:
+                continue
+            lbl_path = _find_label_for_obb_image(img_path, src_img, src_lbl)
+            if lbl_path is None:
+                continue
+            written, class_ids = _process_crop_segment_image(
+                img_path,
+                lbl_path,
+                out_dir,
+                split,
+                pad_ratio,
+                min_crop_size_px,
+                enforce_square,
+            )
+            encountered_class_ids.update(class_ids)
+            counts[split] += written
+            counts["objects"] += written
+
+    include_test = counts["test"] > 0
+    _validate_class_name_coverage(
+        resolved_class_names,
+        encountered_class_ids,
+        dataset_label="Derived crop segment dataset",
+    )
+    _write_dataset_yaml(
+        out_dir,
+        class_names=resolved_class_names,
+        include_test=include_test,
+    )
+    manifest = {
+        "type": "derived_crop_segment",
+        "source": str(src),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "pad_ratio": float(pad_ratio),
+        "min_crop_size_px": int(min_crop_size_px),
+        "enforce_square": bool(enforce_square),
+        "counts": counts,
+    }
+    manifest_path = out_dir / "manifest.json"
+    _write_manifest(manifest_path, manifest)
+    return DatasetBuildResult(
+        str(out_dir), stats=manifest, manifest_path=str(manifest_path)
+    )
+
+
+_ROLE_MIN_LEVEL = {
+    TrainingRole.OBB_DIRECT: GeometryLevel.OBB,
+    TrainingRole.DETECT_DIRECT: GeometryLevel.AABB,
+    TrainingRole.SEGMENT_DIRECT: GeometryLevel.POLYGON,
+    TrainingRole.SEQ_DETECT: GeometryLevel.AABB,
+    TrainingRole.SEQ_CROP_OBB: GeometryLevel.OBB,
+    TrainingRole.SEQ_CROP_SEGMENT: GeometryLevel.POLYGON,
+}
+
+
+def role_min_level(role: TrainingRole) -> GeometryLevel:
+    """Minimum geometry level a training role requires."""
+    try:
+        return _ROLE_MIN_LEVEL[role]
+    except KeyError as exc:
+        raise RuntimeError(f"Role has no geometry-level requirement: {role}") from exc
+
+
+def blocked_roles_for_level(
+    merged_level: GeometryLevel, roles: list[TrainingRole]
+) -> dict[TrainingRole, GeometryLevel]:
+    """Roles whose minimum level exceeds the merged dataset's level."""
+    blocked: dict[TrainingRole, GeometryLevel] = {}
+    for role in roles:
+        required = role_min_level(role)
+        if required > merged_level:
+            blocked[role] = required
+    return blocked
+
+
 def prepare_role_dataset(
     role: TrainingRole,
     merged_obb_dataset_dir: str,
@@ -625,8 +914,15 @@ def prepare_role_dataset(
     crop_pad_ratio: float = 0.15,
     min_crop_size_px: int = 64,
     enforce_square: bool = True,
+    merged_level: GeometryLevel = GeometryLevel.POLYGON,
 ) -> DatasetBuildResult:
-    """Prepare role-specific dataset from merged OBB source."""
+    """Prepare role-specific dataset from the merged source."""
+    required = role_min_level(role)
+    if required > merged_level:
+        raise RuntimeError(
+            f"Role {role.value} requires {required.label}-level data but the merged "
+            f"dataset is {merged_level.label}-level."
+        )
 
     out_root = Path(role_output_root).expanduser().resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -638,8 +934,15 @@ def prepare_role_dataset(
             stats={"type": "passthrough_obb"},
             manifest_path=str(manifest_path) if manifest_path.exists() else "",
         )
-    if role == TrainingRole.SEQ_DETECT:
+    if role in (TrainingRole.SEQ_DETECT, TrainingRole.DETECT_DIRECT):
         return derive_detect_dataset_from_obb(
+            merged_obb_dataset_dir,
+            out_root,
+            class_name=class_name,
+            class_names=class_names,
+        )
+    if role == TrainingRole.SEGMENT_DIRECT:
+        return derive_segment_dataset_from_source(
             merged_obb_dataset_dir,
             out_root,
             class_name=class_name,
@@ -647,6 +950,16 @@ def prepare_role_dataset(
         )
     if role == TrainingRole.SEQ_CROP_OBB:
         return derive_crop_obb_dataset_from_obb(
+            merged_obb_dataset_dir,
+            out_root,
+            class_name=class_name,
+            class_names=class_names,
+            pad_ratio=crop_pad_ratio,
+            min_crop_size_px=min_crop_size_px,
+            enforce_square=enforce_square,
+        )
+    if role == TrainingRole.SEQ_CROP_SEGMENT:
+        return derive_crop_segment_dataset_from_source(
             merged_obb_dataset_dir,
             out_root,
             class_name=class_name,

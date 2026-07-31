@@ -1,30 +1,24 @@
 """PreviewDetectionWorker — non-blocking single-frame detection preview."""
 
-import hashlib
 import logging
 import math
 import os
-import threading
-from collections import OrderedDict, defaultdict
-from pathlib import Path
+from collections import defaultdict
 
 import cv2
 import numpy as np
 from PySide6.QtCore import Signal
 
+from hydra_suite.core.inference.config import (
+    BgSubConfig,
+    InferenceConfig,
+    build_inference_config_from_params,
+)
+from hydra_suite.core.inference.runner import InferenceRunner
 from hydra_suite.utils.pose_visualization import is_renderable_pose_keypoint
 from hydra_suite.widgets.workers import BaseWorker
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Module-level background cache
-# ---------------------------------------------------------------------------
-
-_PREVIEW_BACKGROUND_CACHE_MAX_ENTRIES = 4
-_PREVIEW_BACKGROUND_CACHE = OrderedDict()
-_PREVIEW_BACKGROUND_CACHE_LOCK = threading.Lock()
-
 
 # ---------------------------------------------------------------------------
 # Local path helper (avoids circular import from main_window)
@@ -75,41 +69,8 @@ def resolve_model_path(model_path: object) -> object:
 
 
 # ---------------------------------------------------------------------------
-# Region 1: preview background cache helpers
+# Region 1: preview background params
 # ---------------------------------------------------------------------------
-
-
-def _clear_preview_background_cache() -> None:
-    """Clear preview-only cached background models."""
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        _PREVIEW_BACKGROUND_CACHE.clear()
-
-
-def _hash_preview_roi_mask(roi_mask) -> str | None:
-    """Build a stable hash for the preview ROI mask."""
-    if roi_mask is None:
-        return None
-
-    mask = np.ascontiguousarray(roi_mask)
-    digest = hashlib.sha1()
-    digest.update(str(mask.shape).encode("ascii"))
-    digest.update(str(mask.dtype).encode("ascii"))
-    digest.update(memoryview(mask))
-    return digest.hexdigest()
-
-
-def _preview_background_cache_key(context: dict) -> tuple:
-    """Return the cache key for preview background priming inputs."""
-    return (
-        "preview-background-v1",
-        os.path.abspath(os.path.expanduser(str(context.get("video_path", "")))),
-        int(context.get("bg_prime_frames", 30)),
-        int(context.get("brightness", 0)),
-        round(float(context.get("contrast", 1.0)), 6),
-        round(float(context.get("gamma", 1.0)), 6),
-        round(float(context.get("resize_factor", 1.0)), 6),
-        _hash_preview_roi_mask(context.get("roi_mask")),
-    )
 
 
 def _preview_object_size_pixels(context: dict, key: str, default: float) -> int:
@@ -155,90 +116,32 @@ def _build_preview_background_params(context: dict) -> dict:
     }
 
 
-def _get_cached_preview_background_state(context: dict) -> dict | None:
-    """Return a copy of cached preview background state if available."""
-    cache_key = _preview_background_cache_key(context)
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        cached_state = _PREVIEW_BACKGROUND_CACHE.get(cache_key)
-        if cached_state is None:
-            return None
-        _PREVIEW_BACKGROUND_CACHE.move_to_end(cache_key)
-        return {
-            "lightest_background": cached_state["lightest_background"].copy(),
-            "adaptive_background": cached_state["adaptive_background"].copy(),
-            "reference_intensity": cached_state["reference_intensity"],
-        }
+def _preview_build_bgsub_params(context: dict, use_detection_filters: bool) -> dict:
+    """Assemble an UPPER_SNAKE bg-sub param dict for ``BgSubConfig.from_params``.
 
+    Reuses the existing preview bg-sub param mapping and layers on the two
+    knobs the InferenceRunner bg-sub stage reads that the raw mapping omits:
 
-def _store_preview_background_state(context: dict, bg_model) -> None:
-    """Store a copy of preview background state for reuse across previews."""
-    if bg_model.lightest_background is None or bg_model.adaptive_background is None:
-        return
-
-    cache_key = _preview_background_cache_key(context)
-    cache_entry = {
-        "lightest_background": bg_model.lightest_background.copy(),
-        "adaptive_background": bg_model.adaptive_background.copy(),
-        "reference_intensity": bg_model.reference_intensity,
-    }
-
-    with _PREVIEW_BACKGROUND_CACHE_LOCK:
-        _PREVIEW_BACKGROUND_CACHE[cache_key] = cache_entry
-        _PREVIEW_BACKGROUND_CACHE.move_to_end(cache_key)
-        while len(_PREVIEW_BACKGROUND_CACHE) > _PREVIEW_BACKGROUND_CACHE_MAX_ENTRIES:
-            _PREVIEW_BACKGROUND_CACHE.popitem(last=False)
-
-
-def _build_preview_background_model(context: dict):
-    """Build or restore a preview-only primed background model."""
-    from hydra_suite.core.background.model import BackgroundModel
-
-    bg_params = _build_preview_background_params(context)
-    bg_model = BackgroundModel(bg_params)
-
-    cached_state = _get_cached_preview_background_state(context)
-    if cached_state is not None:
-        bg_model.lightest_background = cached_state["lightest_background"]
-        bg_model.adaptive_background = cached_state["adaptive_background"]
-        bg_model.reference_intensity = cached_state["reference_intensity"]
-        logger.info("Reusing cached background model for test detection")
-        return bg_model, bg_params
-
-    logger.info("Building background model for test detection...")
-    cap = cv2.VideoCapture(str(context.get("video_path", "")))
-    if not cap.isOpened():
-        raise RuntimeError("Cannot open video for background priming")
-
-    try:
-        bg_model.prime_background(cap)
-    finally:
-        cap.release()
-
-    if bg_model.lightest_background is None:
-        raise RuntimeError("Failed to build background model")
-
-    _store_preview_background_state(context, bg_model)
-    return bg_model, bg_params
+    * ``ENABLE_SIZE_FILTERING`` — the ``BackgroundMeasurer`` only applies the
+      MIN/MAX_OBJECT_SIZE window when this is set (measure.py:231). Toggling it
+      off is how ``use_detection_filters=False`` yields the unfiltered set;
+      MIN_CONTOUR_AREA still applies in both modes (measure.py:210), matching
+      the old preview loop and production. Aspect-ratio filtering the old
+      preview loop did is intentionally dropped — the production measurer has
+      no such filter.
+    * ``RUNTIME_TIER`` — the sole runtime knob; bg-sub only uses it to pick the
+      grayscale/adjustment device, but the config carries it for parity.
+    """
+    params = _build_preview_background_params(context)
+    params["ENABLE_SIZE_FILTERING"] = bool(use_detection_filters)
+    _tier = str(context.get("runtime_tier", "") or "").strip().lower()
+    params["RUNTIME_TIER"] = _tier if _tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
+    return params
 
 
 # ---------------------------------------------------------------------------
 # Region 2: preview rendering helpers + worker + job
 # ---------------------------------------------------------------------------
-
-
-def _normalize_preview_model_names(names) -> dict[int, str]:
-    """Normalize Ultralytics model names into an int->label mapping."""
-    if isinstance(names, dict):
-        out = {}
-        for key, value in names.items():
-            try:
-                out[int(key)] = str(value)
-            except Exception:
-                continue
-        return out
-    if isinstance(names, (list, tuple)):
-        return {int(i): str(value) for i, value in enumerate(names)}
-    return {}
 
 
 def _preview_class_label(names: dict[int, str], class_id: object) -> str:
@@ -369,123 +272,99 @@ def _preview_resize_frame(frame_bgr, test_frame, resize_f):
     return frame_bgr, test_frame
 
 
-def _preview_bg_size_thresholds(context, resize_f, use_detection_filters):
-    reference_body_size = float(context.get("reference_body_size", 50.0))
-    reference_body_area = math.pi * (reference_body_size / 2.0) ** 2
-    scaled_body_area = reference_body_area * (resize_f**2)
-    apply_ar = bool(
-        use_detection_filters and context.get("enable_aspect_ratio_filtering", False)
-    )
-    if use_detection_filters:
-        min_size_px2 = float(context.get("min_object_size", 0.0)) * scaled_body_area
-        max_size_px2 = float(context.get("max_object_size", 999.0)) * scaled_body_area
-    else:
-        min_size_px2 = 0.0
-        max_size_px2 = float("inf")
-    ref_ar = float(context.get("reference_aspect_ratio", 2.0))
-    min_ar = ref_ar * float(context.get("min_aspect_ratio_multiplier", 0.5))
-    max_ar = ref_ar * float(context.get("max_aspect_ratio_multiplier", 2.0))
-    return min_size_px2, max_size_px2, apply_ar, min_ar, max_ar
-
-
 def _preview_run_bg_subtraction(
     frame_bgr, test_frame, context, resize_f, use_detection_filters
 ):
-    from hydra_suite.core.detectors import ObjectDetector
-    from hydra_suite.utils.image_processing import apply_image_adjustments
+    """Run bg-sub preview detection through the shared InferenceRunner stage.
 
-    bg_model, bg_params = _build_preview_background_model(context)
+    Behaviour matches PRODUCTION bg-sub (worker.py), not the old hand-rolled
+    preview loop: the runner primes the background from the video on each call
+    (there is no cross-preview background cache anymore), applies lighting
+    stabilization, and filters via BackgroundMeasurer. See the plan's Slice 1
+    acceptance note.
+    """
     frame_to_process, test_frame = _preview_resize_frame(
         frame_bgr, test_frame, resize_f
     )
 
-    gray = cv2.cvtColor(frame_to_process, cv2.COLOR_BGR2GRAY)
-    gray = apply_image_adjustments(
-        gray,
-        bg_params["BRIGHTNESS"],
-        bg_params["CONTRAST"],
-        bg_params["GAMMA"],
-        use_gpu=False,
+    params = _preview_build_bgsub_params(context, use_detection_filters)
+    cfg = InferenceConfig(
+        obb=None,
+        bgsub=BgSubConfig.from_params(params),
+        runtime_tier=params["RUNTIME_TIER"],
     )
 
-    roi_for_test = bg_params["ROI_MASK"]
-    if roi_for_test is not None and resize_f < 1.0:
-        roi_for_test = cv2.resize(
-            roi_for_test,
-            (gray.shape[1], gray.shape[0]),
+    roi_for_bgsub = context.get("roi_mask")
+    if roi_for_bgsub is not None and resize_f < 1.0:
+        roi_for_bgsub = cv2.resize(
+            roi_for_bgsub,
+            (frame_to_process.shape[1], frame_to_process.shape[0]),
             interpolation=cv2.INTER_NEAREST,
         )
 
-    # Use update_and_get_background to match the production tracking
-    # pipeline. tracking_stabilized=False returns the lightest
-    # background, which is correct for a single preview frame.
-    bg_u8 = bg_model.update_and_get_background(
-        gray, roi_mask=None, tracking_stabilized=False
+    logger.info("Running bg-sub preview via InferenceRunner.run_realtime")
+
+    runner = InferenceRunner(
+        cfg, cache_dir=None, video_path=str(context.get("video_path", "")) or None
     )
-    if bg_u8 is None:
-        bg_u8 = cv2.convertScaleAbs(bg_model.lightest_background)
-    fg_mask = bg_model.generate_foreground_mask(gray, bg_u8)
+    try:
+        fr = runner.run_realtime(frame_to_process, roi_mask=roi_for_bgsub)
 
-    # Apply ROI mask to foreground mask (not to gray) to match the
-    # production tracking pipeline in worker.py.
-    if roi_for_test is not None:
-        fg_mask = cv2.bitwise_and(fg_mask, fg_mask, mask=roi_for_test)
+        obb = getattr(fr, "obb", None)
+        keep = list(getattr(fr, "filtered_indices", []) or [])
+        if obb is None:
+            keep = []
 
-    # Apply conservative split to separate merged blobs, matching the
-    # production pipeline in worker.py.
-    if bg_params.get("ENABLE_CONSERVATIVE_SPLIT", True):
-        det = ObjectDetector(bg_params)
-        fg_mask = det.apply_conservative_split(fg_mask, gray, bg_u8)
+        detections = []
+        detected_dimensions = []
+        for i in keep:
+            cx, cy = float(obb.centroids[i, 0]), float(obb.centroids[i, 1])
+            corners = np.asarray(obb.corners[i], dtype=np.float32)
+            major_axis = float(np.linalg.norm(corners[1] - corners[0]))
+            minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
+            if major_axis < minor_axis:
+                major_axis, minor_axis = minor_axis, major_axis
+            ang = float(np.degrees(obb.angles[i]))
+            area = float(obb.sizes[i])
+            detections.append(((cx, cy), (major_axis, minor_axis), ang, area))
+            detected_dimensions.append((major_axis, minor_axis))
+            cv2.ellipse(
+                test_frame,
+                ((int(cx), int(cy)), (int(major_axis), int(minor_axis)), ang),
+                (0, 255, 0),
+                2,
+            )
+            cv2.circle(test_frame, (int(cx), int(cy)), 3, (0, 0, 255), -1)
 
-    cnts, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    min_contour = float(context.get("min_contour", 50.0))
-    min_size_px2, max_size_px2, apply_ar, min_ar, max_ar = _preview_bg_size_thresholds(
-        context, resize_f, use_detection_filters
-    )
+        # FG / BG thumbnails come straight from what the stage detected on.
+        fg_mask = getattr(fr, "fg_mask", None)
+        bg_u8 = getattr(fr, "bg_u8", None)
+        if fg_mask is not None:
+            small_fg = cv2.resize(fg_mask, (0, 0), fx=0.3, fy=0.3)
+            test_frame[0 : small_fg.shape[0], 0 : small_fg.shape[1]] = cv2.cvtColor(
+                small_fg, cv2.COLOR_GRAY2BGR
+            )
+        if bg_u8 is not None:
+            small_bg = cv2.resize(bg_u8, (0, 0), fx=0.3, fy=0.3)
+            bg_bgr = cv2.cvtColor(small_bg, cv2.COLOR_GRAY2BGR)
+            test_frame[0 : bg_bgr.shape[0], -bg_bgr.shape[1] :] = bg_bgr
 
-    detections = []
-    detected_dimensions = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        if area < min_contour or len(c) < 5:
-            continue
-        (cx, cy), (ax1, ax2), ang = cv2.fitEllipse(c)
-        major_axis = max(ax1, ax2)
-        minor_axis = min(ax1, ax2)
-        aspect_ratio = (
-            float(major_axis) / float(minor_axis)
-            if minor_axis and float(minor_axis) > 0.0
-            else float("inf")
+        prime_frames = params.get("BACKGROUND_PRIME_FRAMES", 0)
+        cv2.putText(
+            test_frame,
+            f"Detections: {len(detections)} (BG from {prime_frames} frames)",
+            (10, test_frame.shape[0] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 255),
+            2,
         )
-        if use_detection_filters and not (min_size_px2 <= area <= max_size_px2):
-            continue
-        if apply_ar and not (min_ar <= aspect_ratio <= max_ar):
-            continue
-        detections.append(((cx, cy), (ax1, ax2), ang, area))
-        detected_dimensions.append((major_axis, minor_axis))
-        cv2.ellipse(
-            test_frame, ((int(cx), int(cy)), (int(ax1), int(ax2)), ang), (0, 255, 0), 2
-        )
-        cv2.circle(test_frame, (int(cx), int(cy)), 3, (0, 0, 255), -1)
-
-    small_fg = cv2.resize(fg_mask, (0, 0), fx=0.3, fy=0.3)
-    test_frame[0 : small_fg.shape[0], 0 : small_fg.shape[1]] = cv2.cvtColor(
-        small_fg, cv2.COLOR_GRAY2BGR
-    )
-    small_bg = cv2.resize(bg_u8, (0, 0), fx=0.3, fy=0.3)
-    bg_bgr = cv2.cvtColor(small_bg, cv2.COLOR_GRAY2BGR)
-    test_frame[0 : bg_bgr.shape[0], -bg_bgr.shape[1] :] = bg_bgr
-
-    cv2.putText(
-        test_frame,
-        f"Detections: {len(detections)} (BG from {bg_params['BACKGROUND_PRIME_FRAMES']} frames)",
-        (10, test_frame.shape[0] - 10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 255),
-        2,
-    )
-    return detections, detected_dimensions, test_frame
+        return detections, detected_dimensions, test_frame
+    finally:
+        try:
+            runner.close()
+        except Exception:
+            pass
 
 
 def _preview_build_yolo_params(context, resize_f, use_detection_filters):
@@ -533,9 +412,6 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
             context.get("yolo_headtail_model_path", "")
         ),
         "POSE_OVERRIDES_HEADTAIL": bool(context.get("pose_overrides_headtail", True)),
-        "HEADTAIL_COMPUTE_RUNTIME": str(
-            context.get("headtail_runtime", context.get("compute_runtime", "cpu"))
-        ),
         "HEADTAIL_BATCH_SIZE": int(context.get("headtail_batch_size", 64)),
         "YOLO_SEQ_CROP_PAD_RATIO": float(context.get("yolo_seq_crop_pad_ratio", 0.15)),
         "YOLO_SEQ_MIN_CROP_SIZE_PX": int(context.get("yolo_seq_min_crop_size_px", 64)),
@@ -562,11 +438,7 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
         "YOLO_IOU_THRESHOLD": float(context.get("yolo_iou", 0.45)),
         "USE_CUSTOM_OBB_IOU_FILTERING": True,
         "YOLO_TARGET_CLASSES": context.get("yolo_target_classes"),
-        "YOLO_DEVICE": context.get("yolo_device"),
         "ENABLE_GPU_BACKGROUND": bool(context.get("enable_gpu_background", False)),
-        "ENABLE_TENSORRT": bool(context.get("enable_tensorrt", False)),
-        "ENABLE_ONNX_RUNTIME": bool(context.get("enable_onnx_runtime", False)),
-        "TENSORRT_MAX_BATCH_SIZE": int(context.get("tensorrt_max_batch_size", 1)),
         "MAX_TARGETS": int(context.get("max_targets", 1)),
         "MAX_CONTOUR_MULTIPLIER": float(context.get("max_contour_multiplier", 3.0)),
         "ENABLE_SIZE_FILTERING": bool(use_detection_filters),
@@ -575,400 +447,292 @@ def _preview_build_yolo_params(context, resize_f, use_detection_filters):
     }
 
 
-def _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params):
+def _preview_build_inference_params(context, resize_f, use_detection_filters):
+    """Build the preview InferenceConfig params from the authoritative source.
 
-    raw_conf_floor = max(
-        1e-4, float(yolo_params.get("RAW_YOLO_CONFIDENCE_FLOOR", 1e-3))
+    Single source of truth: ``context["tracking_params"]`` is the exact dict the
+    real tracking pass feeds to ``build_inference_config_from_params`` (captured
+    on the main thread in ``_test_detection_on_preview``). Reusing it guarantees
+    the preview runs the SAME detection config as the full run -- so every
+    detection knob, present and future, stays in lock-step instead of being
+    re-derived by a parallel mapping that silently drifts. The SLICE_* (SAHI)
+    keys were the casualty of that drift: the old preview mapping never carried
+    them, so "Test detection on Preview" always ran non-sliced even with SAHI on.
+
+    Only two things stay preview-owned and are layered on top:
+
+    * The "test without filters" toggle, which forces the size/aspect gates off
+      so the raw detection set is shown for size estimation.
+    * Overlay gating (pose / CNN / AprilTag), which the preview intentionally
+      shows without requiring the master identity gate.
+
+    Falls back to the legacy context-derived mapping only if the authoritative
+    snapshot is unavailable (e.g. capture failed).
+    """
+    base = context.get("tracking_params")
+    if not base:
+        return _preview_build_inference_params_legacy(
+            context, resize_f, use_detection_filters
+        )
+
+    params = dict(base)
+
+    # Preview overlay gating stays preview-owned: show pose / CNN / AprilTag
+    # overlays off the preview context, independent of the master identity gate.
+    cnn_cfgs = []
+    for cnn_cfg in context.get("cnn_classifiers", []) or []:
+        cfg = dict(cnn_cfg)
+        cfg["model_path"] = str(resolve_model_path(cfg.get("model_path", "")))
+        cnn_cfgs.append(cfg)
+    params["CNN_CLASSIFIERS"] = cnn_cfgs
+
+    params["ENABLE_POSE_EXTRACTOR"] = bool(context.get("enable_pose_extractor", False))
+    params["POSE_MODEL_TYPE"] = str(context.get("pose_model_type", "yolo"))
+    _pose_model = str(resolve_model_path(context.get("pose_model_dir", "")))
+    params["POSE_MODEL_DIR"] = _pose_model
+    params["POSE_SLEAP_MODEL_DIR"] = _pose_model
+    params["POSE_YOLO_MODEL_DIR"] = _pose_model
+    params["POSE_MODEL_PATH"] = _pose_model
+    params["USE_APRILTAGS"] = bool(context.get("use_apriltags", False))
+
+    # "Test without filters": drop the size/aspect gates so the preview shows the
+    # raw detection set for size estimation, regardless of the UI filter state.
+    if not use_detection_filters:
+        params["ENABLE_SIZE_FILTERING"] = False
+        params["MIN_OBJECT_SIZE"] = 0
+        params["MAX_OBJECT_SIZE"] = float("inf")
+        adv = dict(params.get("ADVANCED_CONFIG", {}) or {})
+        adv["enable_aspect_ratio_filtering"] = False
+        params["ADVANCED_CONFIG"] = adv
+
+    return params
+
+
+def _preview_build_inference_params_legacy(context, resize_f, use_detection_filters):
+    """Legacy preview param mapping, re-derived from the lowercase context.
+
+    Retained only as a fallback for when the authoritative ``tracking_params``
+    snapshot is unavailable. Prefer :func:`_preview_build_inference_params`.
+
+    NOTE: this mapping does NOT carry the SLICE_* keys, so a preview taken
+    through this fallback runs non-sliced. That is acceptable as a last resort
+    (better than crashing) but is exactly the drift the authoritative path
+    exists to prevent.
+    """
+    params = _preview_build_yolo_params(context, resize_f, use_detection_filters)
+
+    # Runtime: RUNTIME_TIER is the sole runtime knob (drives backend/device
+    # selection in the redesign). The COMPUTE_RUNTIME string family was retired
+    # (Runtime Gen-2 FT1); build_inference_config_from_params reads RUNTIME_TIER.
+    _tier = str(context.get("runtime_tier", "") or "").strip().lower()
+    params["RUNTIME_TIER"] = _tier if _tier in {"cpu", "gpu", "gpu_fast"} else "cpu"
+
+    # CNN classifiers (model paths resolved; existence-gated inside the builder).
+    cnn_cfgs = []
+    for cnn_cfg in context.get("cnn_classifiers", []) or []:
+        cfg = dict(cnn_cfg)
+        cfg["model_path"] = str(resolve_model_path(cfg.get("model_path", "")))
+        cnn_cfgs.append(cfg)
+    params["CNN_CLASSIFIERS"] = cnn_cfgs
+
+    # Pose stage.
+    params["ENABLE_POSE_EXTRACTOR"] = bool(context.get("enable_pose_extractor", False))
+    params["POSE_MODEL_TYPE"] = str(context.get("pose_model_type", "yolo"))
+    _pose_model = str(resolve_model_path(context.get("pose_model_dir", "")))
+    params["POSE_MODEL_DIR"] = _pose_model
+    params["POSE_SLEAP_MODEL_DIR"] = _pose_model
+    params["POSE_YOLO_MODEL_DIR"] = _pose_model
+    params["POSE_MODEL_PATH"] = _pose_model
+    params["POSE_SKELETON_FILE"] = str(context.get("pose_skeleton_file", "") or "")
+    params["POSE_BATCH_SIZE"] = int(context.get("pose_batch_size", 4))
+    params["POSE_MIN_KPT_CONF_VALID"] = float(
+        context.get("pose_min_kpt_conf_valid", 0.2)
     )
-    yolo_mode = str(yolo_params.get("YOLO_OBB_MODE", "direct")).strip().lower()
-    if yolo_mode == "sequential":
-        (
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confidences,
-            raw_obb_corners,
-            raw_class_ids,
-            stage1_result,
-        ) = detector._run_sequential_raw_detection(
-            frame_to_process,
-            target_classes=yolo_params.get("YOLO_TARGET_CLASSES"),
-            raw_conf_floor=raw_conf_floor,
-            max_det=max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2,
-            return_class_ids=True,
-        )
-    else:
-        (
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confidences,
-            raw_obb_corners,
-            raw_class_ids,
-            stage1_result,
-        ) = detector._run_direct_raw_detection(
-            frame_to_process,
-            target_classes=yolo_params.get("YOLO_TARGET_CLASSES"),
-            raw_conf_floor=raw_conf_floor,
-            max_det=max(1, int(yolo_params.get("MAX_TARGETS", 1))) * 2,
-            return_class_ids=True,
-        )
-    raw_heading_hints = []
-    raw_heading_confidences = []
-    raw_directed_mask = []
-    if raw_meas:
-        candidate_indices = detector._select_headtail_candidate_indices(
-            raw_meas,
-            raw_sizes,
-            raw_shapes,
-            raw_confidences,
-            raw_obb_corners,
-        )
-        (
-            raw_heading_hints,
-            raw_heading_confidences,
-            raw_directed_mask,
-            _,
-        ) = detector._compute_headtail_hints_for_indices(
-            frame_to_process,
-            raw_obb_corners,
-            candidate_indices,
-        )
-    return (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        raw_class_ids,
-        raw_heading_hints,
-        raw_heading_confidences,
-        raw_directed_mask,
-        stage1_result,
+    params["POSE_IGNORE_KEYPOINTS"] = list(
+        context.get("pose_ignore_keypoints", []) or []
     )
-
-
-def _preview_yolo_sequential_stage1_viz(
-    test_frame, detector, stage1_result, filtered_obb_corners, detected_dimensions
-):
-    detect_color = (255, 200, 0)
-    boxes = getattr(stage1_result, "boxes", None)
-    if boxes is None or len(boxes) == 0:
-        return detected_dimensions
-    try:
-        det_xyxy = np.ascontiguousarray(boxes.xyxy.cpu().numpy(), dtype=np.float32)
-        det_conf = np.ascontiguousarray(boxes.conf.cpu().numpy(), dtype=np.float32)
-        det_cls = np.ascontiguousarray(boxes.cls.cpu().numpy(), dtype=np.int32)
-    except Exception:
-        det_xyxy = np.empty((0, 4), dtype=np.float32)
-        det_conf = np.empty((0,), dtype=np.float32)
-        det_cls = np.empty((0,), dtype=np.int32)
-    detect_names = _normalize_preview_model_names(
-        getattr(stage1_result, "names", None)
-        or getattr(getattr(detector.detect_model, "model", None), "names", None)
-        or getattr(detector.detect_model, "names", None)
+    params["POSE_DIRECTION_ANTERIOR_KEYPOINTS"] = list(
+        context.get("pose_direction_anterior_keypoints", []) or []
     )
-    for di in range(len(det_xyxy)):
-        x1, y1, x2, y2 = [int(v) for v in det_xyxy[di]]
-        cv2.rectangle(test_frame, (x1, y1), (x2, y2), detect_color, 1)
-        if di < len(det_conf):
-            detect_label = _preview_class_label(
-                detect_names, det_cls[di] if di < len(det_cls) else -1
-            )
-            _draw_preview_label_stack(
-                test_frame,
-                (min(test_frame.shape[1] - 140, x2 + 6), max(14, y1 + 12)),
-                [f"det {detect_label} {float(det_conf[di]):.2f}"],
-                detect_color,
-            )
-    # In sequential mode, stage-2 OBB can occasionally yield zero
-    # usable detections in preview. Fall back to stage-1 detect box
-    # dimensions so body-size auto-set remains functional.
-    if len(filtered_obb_corners) == 0 and len(det_xyxy) > 0:
-        for di in range(len(det_xyxy)):
-            x1f, y1f, x2f, y2f = [float(v) for v in det_xyxy[di]]
-            w_box = max(1.0, x2f - x1f)
-            h_box = max(1.0, y2f - y1f)
-            detected_dimensions.append((max(w_box, h_box), min(w_box, h_box)))
-    return detected_dimensions
-
-
-def _preview_compute_canonical_crops(filtered_corners, frame_to_process, context):
-    from hydra_suite.core.canonicalization.crop import (
-        compute_native_scale_affine,
-        extract_canonical_crop,
+    params["POSE_DIRECTION_POSTERIOR_KEYPOINTS"] = list(
+        context.get("pose_direction_posterior_keypoints", []) or []
     )
 
-    crop_padding = float(context.get("individual_crop_padding", 0.1))
-    bg_color = tuple(
-        int(v) for v in context.get("individual_background_color", [0, 0, 0])
+    # Shared crop geometry (pose + AprilTag).
+    params["INDIVIDUAL_CROP_PADDING"] = float(
+        context.get("individual_crop_padding", 0.1)
     )
-    suppress_foreign = bool(context.get("suppress_foreign_obb_regions", True))
-    ref_aspect_ratio = float(context.get("reference_aspect_ratio", 2.0))
-    canonical_crops = [None] * len(filtered_corners)
-    canonical_inverses = [None] * len(filtered_corners)
-    for i, corners in enumerate(filtered_corners):
-        try:
-            M_align, canvas_w, canvas_h, _ = compute_native_scale_affine(
-                corners, ref_aspect_ratio, crop_padding
-            )
-            foreign = (
-                [other for ci, other in enumerate(filtered_corners) if ci != i]
-                if suppress_foreign
-                else None
-            )
-            canonical_crops[i] = extract_canonical_crop(
-                frame_to_process,
-                M_align,
-                canvas_w,
-                canvas_h,
-                bg_color=bg_color,
-                foreign_corners=foreign,
-            )
-            canonical_inverses[i] = cv2.invertAffineTransform(M_align).astype(
-                np.float32
-            )
-        except Exception:
-            canonical_crops[i] = None
-            canonical_inverses[i] = None
-    return canonical_crops, canonical_inverses, crop_padding, bg_color, suppress_foreign
+    params["SUPPRESS_FOREIGN_OBB_REGIONS"] = bool(
+        context.get("suppress_foreign_obb_regions", True)
+    )
+
+    # AprilTag stage.
+    params["USE_APRILTAGS"] = bool(context.get("use_apriltags", False))
+    params["APRILTAG_FAMILY"] = str(context.get("apriltag_family", "tag36h11"))
+    params["APRILTAG_DECIMATE"] = float(context.get("apriltag_decimate", 1.0))
+
+    return params
 
 
-def _preview_run_pose_overlay(
-    filtered_corners,
-    canonical_crops,
-    canonical_inverses,
-    context,
-    label_stacks,
-    pose_keypoints_by_det,
-):
-    if not filtered_corners or not bool(context.get("enable_pose_extractor", False)):
-        return None
-    try:
-        from hydra_suite.core.canonicalization.crop import (
-            invert_keypoints as _invert_kpts,
+def _preview_aabb_crop_origin(obb, det_idx, padding, frame_shape):
+    """Reconstruct the AABB-crop origin ``extract_aabb_crops`` used for ``det_idx``.
+
+    ``run_apriltag`` returns tag corners in CROP-LOCAL coordinates and
+    ``FrameResult`` does not carry the crop offsets, so preview re-derives them
+    from the OBB corners with the exact geometry ``extract_aabb_crops`` used, to
+    place tag outlines back in frame space.
+    """
+    if obb is None or det_idx < 0 or det_idx >= obb.num_detections:
+        return 0, 0
+    corners = np.asarray(obb.corners[det_idx], dtype=np.float32)
+    x1 = float(corners[:, 0].min())
+    y1 = float(corners[:, 1].min())
+    x2 = float(corners[:, 0].max())
+    y2 = float(corners[:, 1].max())
+    bw, bh = x2 - x1, y2 - y1
+    pad = padding * max(bw, bh)
+    ox1 = max(0, int(x1 - pad))
+    oy1 = max(0, int(y1 - pad))
+    return ox1, oy1
+
+
+def _preview_format_cnn_result(label_name: str, det_pred) -> str:
+    """Format a preview label from a FrameResult ``CNNDetectionPrediction``.
+
+    Reads the ``(factor_name, class_names, raw_probabilities)`` contract of the
+    inference ``CNNResult``, taking the arg-max class per factor. Flat (K=1)
+    models render ``"label: class conf"``; multi-head render
+    ``"label: f=class c | ..."``.
+    """
+    factors = list(getattr(det_pred, "factors", []) or [])
+    if not factors:
+        return f"{label_name}: ?"
+
+    def _top(factor):
+        probs = np.asarray(getattr(factor, "raw_probabilities", []), dtype=np.float32)
+        names = list(getattr(factor, "class_names", []) or [])
+        if probs.size == 0 or not names:
+            return "unknown", 0.0
+        j = int(np.argmax(probs))
+        name = (
+            str(names[j]) if 0 <= j < len(names) and names[j] is not None else "unknown"
         )
-        from hydra_suite.core.identity.pose.api import (
-            build_runtime_config,
-            create_pose_backend_from_config,
-        )
+        return name, float(probs[j])
 
-        preview_pose_params = {
-            "POSE_MODEL_TYPE": str(context.get("pose_model_type", "yolo")),
-            "POSE_MODEL_DIR": str(context.get("pose_model_dir", "")),
-            "POSE_RUNTIME_FLAVOR": str(context.get("pose_runtime_flavor", "auto")),
-            "POSE_SKELETON_FILE": str(context.get("pose_skeleton_file", "")),
-            "POSE_MIN_KPT_CONF_VALID": float(
-                context.get("pose_min_kpt_conf_valid", 0.2)
-            ),
-            "POSE_YOLO_BATCH": int(context.get("pose_batch_size", 4)),
-            "POSE_BATCH_SIZE": int(context.get("pose_batch_size", 4)),
-            "POSE_SLEAP_BATCH": int(context.get("pose_batch_size", 4)),
-            "POSE_SLEAP_ENV": str(context.get("pose_sleap_env", "sleap")),
-            "POSE_SLEAP_DEVICE": str(context.get("pose_sleap_device", "auto")),
-            "COMPUTE_RUNTIME": str(context.get("compute_runtime", "cpu")),
-            "YOLO_DEVICE": str(context.get("yolo_device", "cpu")),
-        }
-        video_path = str(context.get("video_path", "") or "").strip()
-        out_root = (
-            str(Path(video_path).expanduser().resolve().parent)
-            if video_path
-            else os.getcwd()
-        )
-        pose_config = build_runtime_config(preview_pose_params, out_root=out_root)
-        pose_backend = create_pose_backend_from_config(pose_config)
-        valid_pose_entries = [
-            (idx, crop)
-            for idx, crop in enumerate(canonical_crops)
-            if crop is not None and getattr(crop, "size", 0) > 0
-        ]
-        if valid_pose_entries:
-            pose_results = pose_backend.predict_batch(
-                [crop for _, crop in valid_pose_entries]
-            )
-            for pidx, (det_idx, _crop) in enumerate(valid_pose_entries):
-                pose_out = pose_results[pidx] if pidx < len(pose_results) else None
-                if pose_out is None:
-                    continue
-                pose_mean_conf = float(getattr(pose_out, "mean_conf", 0.0))
-                pose_num_valid = int(getattr(pose_out, "num_valid", 0))
-                pose_num_keypoints = int(getattr(pose_out, "num_keypoints", 0))
-                label_stacks[det_idx].append(
-                    f"pose {pose_mean_conf:.2f} {pose_num_valid}/{pose_num_keypoints}"
-                )
-                keypoints = getattr(pose_out, "keypoints", None)
-                if (
-                    keypoints is not None
-                    and canonical_inverses[det_idx] is not None
-                    and len(keypoints) > 0
-                ):
-                    pose_keypoints_by_det[det_idx] = _invert_kpts(
-                        np.asarray(keypoints, dtype=np.float32),
-                        canonical_inverses[det_idx],
-                    ).astype(np.float32)
-        return pose_backend
-    except Exception as exc:
-        logger.warning("Preview pose overlay disabled: %s", exc)
-        return None
-
-
-def _preview_format_cnn_prediction(label_name: str, prediction) -> str:
-    """Return a preview-friendly label for flat or multihead CNN predictions."""
-    factor_names = tuple(getattr(prediction, "factor_names", ()) or ())
-    class_names = tuple(getattr(prediction, "class_names", ()) or ())
-    confidences = tuple(getattr(prediction, "confidences", ()) or ())
-
-    if len(factor_names) <= 1:
-        pred_label = str(getattr(prediction, "class_name", None) or "?")
-        pred_conf = float(getattr(prediction, "confidence", 0.0))
-        return f"{label_name}: {pred_label} {pred_conf:.2f}"
-
+    if len(factors) == 1:
+        name, conf = _top(factors[0])
+        return f"{label_name}: {name} {conf:.2f}"
     parts = []
-    for idx, factor_name in enumerate(factor_names):
-        factor_label = (
-            str(class_names[idx])
-            if idx < len(class_names) and class_names[idx] is not None
-            else "unknown"
-        )
-        factor_conf = float(confidences[idx]) if idx < len(confidences) else 0.0
-        parts.append(f"{factor_name}={factor_label} {factor_conf:.2f}")
+    for factor in factors:
+        name, conf = _top(factor)
+        parts.append(f"{getattr(factor, 'factor_name', '?')}={name} {conf:.2f}")
     return f"{label_name}: " + " | ".join(parts)
 
 
-def _preview_run_cnn_overlay(filtered_corners, canonical_crops, context, label_stacks):
-    cnn_cfgs = context.get("cnn_classifiers", []) or []
-    if not filtered_corners or not cnn_cfgs:
-        return []
-    cnn_backends = []
-    try:
-        from hydra_suite.core.identity.classification.cnn import (
-            CNNIdentityBackend,
-            CNNIdentityConfig,
-        )
+def _preview_run_pose_overlay(
+    pose_result, context, label_stacks, pose_keypoints_by_det
+):
+    """Populate pose label lines + frame-space keypoints from ``FrameResult.pose``.
 
-        valid_cnn_entries = [
-            (idx, crop)
-            for idx, crop in enumerate(canonical_crops)
-            if crop is not None and getattr(crop, "size", 0) > 0
-        ]
-        if valid_cnn_entries:
-            cnn_crops = [crop for _, crop in valid_cnn_entries]
-            for cnn_cfg in cnn_cfgs:
-                model_path = str(resolve_model_path(cnn_cfg.get("model_path", "")))
-                if not model_path or not os.path.exists(model_path):
-                    continue
-                label_name = str(cnn_cfg.get("label", "cnn"))
-                backend = CNNIdentityBackend(
-                    CNNIdentityConfig(
-                        model_path=model_path,
-                        confidence=float(cnn_cfg.get("confidence", 0.5)),
-                        scoring_mode=str(cnn_cfg.get("scoring_mode", "atomic")),
-                        batch_size=int(cnn_cfg.get("batch_size", 64)),
-                    ),
-                    model_path=model_path,
-                    compute_runtime=str(
-                        context.get(
-                            "cnn_runtime",
-                            context.get("compute_runtime", "cpu"),
-                        )
-                    ),
+    ``run_pose`` returns image-space keypoints (already inverted out of the
+    canonical crop), so they are drawn directly. Per-detection stats
+    (mean_conf, valid/total) are recomputed from the keypoint confidences.
+    """
+    if pose_result is None:
+        return
+    keypoints = getattr(pose_result, "keypoints", None)
+    valid_mask = getattr(pose_result, "valid_mask", None)
+    if keypoints is None:
+        return
+    kp = np.asarray(keypoints, dtype=np.float32)
+    if kp.ndim != 3 or kp.shape[0] == 0:
+        return
+    min_valid_conf = float(context.get("pose_min_kpt_conf_valid", 0.2))
+    for i in range(min(kp.shape[0], len(label_stacks))):
+        det_kp = kp[i]
+        num_keypoints = int(det_kp.shape[0])
+        if num_keypoints == 0:
+            continue
+        confs = det_kp[:, 2]
+        num_valid = int(np.count_nonzero(confs >= min_valid_conf))
+        is_valid = (
+            bool(valid_mask[i])
+            if valid_mask is not None and i < len(valid_mask)
+            else num_valid > 0
+        )
+        if not is_valid and num_valid == 0:
+            continue
+        mean_conf = float(np.mean(confs))
+        label_stacks[i].append(f"pose {mean_conf:.2f} {num_valid}/{num_keypoints}")
+        pose_keypoints_by_det[i] = det_kp
+
+
+def _preview_run_cnn_overlay(cnn_results, label_stacks):
+    """Populate CNN label lines from ``FrameResult.cnn`` (one CNNResult per phase)."""
+    for cnn_result in cnn_results or []:
+        label_name = str(getattr(cnn_result, "label", "cnn"))
+        for det_pred in getattr(cnn_result, "predictions", []) or []:
+            det_idx = int(getattr(det_pred, "det_index", -1))
+            if 0 <= det_idx < len(label_stacks):
+                label_stacks[det_idx].append(
+                    _preview_format_cnn_result(label_name, det_pred)
                 )
-                cnn_backends.append(backend)
-                cnn_predictions = backend.predict_batch(cnn_crops)
-                for pidx, (det_idx, _crop) in enumerate(valid_cnn_entries):
-                    if pidx >= len(cnn_predictions):
-                        continue
-                    prediction = cnn_predictions[pidx]
-                    label_stacks[det_idx].append(
-                        _preview_format_cnn_prediction(label_name, prediction)
-                    )
-    except Exception as exc:
-        logger.warning("Preview CNN overlay disabled: %s", exc)
-    return cnn_backends
 
 
 def _preview_run_apriltag_overlay(
-    filtered_corners,
-    frame_to_process,
-    context,
-    label_stacks,
-    test_frame,
-    crop_padding,
-    suppress_foreign,
-    bg_color,
+    apriltag_result, obb, context, label_stacks, test_frame
 ):
-    if not filtered_corners or not bool(context.get("use_apriltags", False)):
-        return None
-    apriltag_color = (0, 165, 255)
-    try:
-        from hydra_suite.core.identity.classification.apriltag import (
-            AprilTagConfig,
-            AprilTagDetector,
-        )
-        from hydra_suite.core.tracking.pose_pipeline import (
-            extract_one_crop as _extract_aabb_crop,
-        )
+    """Draw AprilTag outlines + labels from ``FrameResult.apriltag``.
 
-        apriltag_detector = AprilTagDetector(
-            AprilTagConfig.from_params(
-                {
-                    "APRILTAG_FAMILY": context.get("apriltag_family", "tag36h11"),
-                    "APRILTAG_DECIMATE": context.get("apriltag_decimate", 1.0),
-                    "INDIVIDUAL_CROP_PADDING": crop_padding,
-                }
-            )
+    Corners come back crop-local from ``run_apriltag``; they are offset back
+    into frame space via the reconstructed AABB-crop origin for the tag's
+    detection.
+    """
+    if apriltag_result is None:
+        return
+    tag_ids = list(getattr(apriltag_result, "tag_ids", []) or [])
+    if not tag_ids:
+        return
+    det_indices = list(getattr(apriltag_result, "det_indices", []) or [])
+    corners = np.asarray(
+        getattr(apriltag_result, "corners", np.zeros((0, 4, 2), dtype=np.float32)),
+        dtype=np.float32,
+    )
+    apriltag_color = (0, 165, 255)
+    crop_padding = float(context.get("individual_crop_padding", 0.1))
+    tags_by_det = defaultdict(list)
+    for t, tag_id in enumerate(tag_ids):
+        det_idx = int(det_indices[t]) if t < len(det_indices) else -1
+        tags_by_det[det_idx].append(int(tag_id))
+        if t >= len(corners):
+            continue
+        ox1, oy1 = _preview_aabb_crop_origin(
+            obb, det_idx, crop_padding, test_frame.shape
         )
-        tag_crops = []
-        tag_offsets = []
-        tag_det_indices = []
-        for det_idx, corners in enumerate(filtered_corners):
-            aabb_result = _extract_aabb_crop(
-                frame_to_process,
-                corners,
-                det_idx,
-                crop_padding,
-                filtered_corners,
-                suppress_foreign,
-                bg_color,
-            )
-            if aabb_result is None:
-                continue
-            crop, offset, mapped_idx = aabb_result
-            tag_crops.append(crop)
-            tag_offsets.append(offset)
-            tag_det_indices.append(mapped_idx)
-        if tag_crops:
-            tag_obs = apriltag_detector.detect_in_crops(
-                tag_crops, tag_offsets, det_indices=tag_det_indices
-            )
-            tags_by_det = defaultdict(list)
-            for obs in tag_obs:
-                tags_by_det[int(obs.det_index)].append(int(obs.tag_id))
-                tag_corners = np.asarray(obs.corners, dtype=np.int32)
-                cv2.polylines(
-                    test_frame,
-                    [tag_corners],
-                    isClosed=True,
-                    color=apriltag_color,
-                    thickness=2,
-                )
-                _draw_preview_label_stack(
-                    test_frame,
-                    (
-                        int(np.max(tag_corners[:, 0]) + 6),
-                        int(np.min(tag_corners[:, 1]) + 14),
-                    ),
-                    [f"tag {int(obs.tag_id)}"],
-                    apriltag_color,
-                    font_scale=0.4,
-                )
-            for det_idx, tag_ids in tags_by_det.items():
-                unique_ids = ",".join(str(tag_id) for tag_id in sorted(set(tag_ids)))
-                label_stacks[det_idx].append(f"tag {unique_ids}")
-        return apriltag_detector
-    except Exception as exc:
-        logger.warning("Preview AprilTag overlay disabled: %s", exc)
-        return None
+        frame_corners = (corners[t] + np.asarray([ox1, oy1], dtype=np.float32)).astype(
+            np.int32
+        )
+        cv2.polylines(
+            test_frame,
+            [frame_corners],
+            isClosed=True,
+            color=apriltag_color,
+            thickness=2,
+        )
+        _draw_preview_label_stack(
+            test_frame,
+            (
+                int(np.max(frame_corners[:, 0]) + 6),
+                int(np.min(frame_corners[:, 1]) + 14),
+            ),
+            [f"tag {int(tag_id)}"],
+            apriltag_color,
+            font_scale=0.4,
+        )
+    for det_idx, ids in tags_by_det.items():
+        if 0 <= det_idx < len(label_stacks):
+            unique_ids = ",".join(str(i) for i in sorted(set(ids)))
+            label_stacks[det_idx].append(f"tag {unique_ids}")
 
 
 def _preview_draw_obb_annotations(
@@ -1039,24 +803,6 @@ def _preview_draw_obb_annotations(
                 )
 
 
-def _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector):
-    try:
-        if pose_backend is not None and hasattr(pose_backend, "close"):
-            pose_backend.close()
-    except Exception:
-        pass
-    for backend in cnn_backends:
-        try:
-            backend.close()
-        except Exception:
-            pass
-    try:
-        if apriltag_detector is not None:
-            apriltag_detector.close()
-    except Exception:
-        pass
-
-
 def _preview_draw_yolo_footer(
     test_frame, meas, yolo_params, context, filtered_headtail=None
 ):
@@ -1108,12 +854,10 @@ def _preview_draw_yolo_footer(
 def _preview_run_yolo_branch(
     frame_bgr, test_frame, context, resize_f, use_detection_filters
 ):
-    from hydra_suite.core.detectors import YOLOOBBDetector
-
     frame_to_process, test_frame = _preview_resize_frame(
         frame_bgr, test_frame, resize_f
     )
-    yolo_params = _preview_build_yolo_params(context, resize_f, use_detection_filters)
+    params = _preview_build_inference_params(context, resize_f, use_detection_filters)
 
     roi_for_yolo = context.get("roi_mask")
     if roi_for_yolo is not None and resize_f < 1.0:
@@ -1124,148 +868,90 @@ def _preview_run_yolo_branch(
         )
 
     logger.info(
-        f"Running YOLO detection (conf={yolo_params['YOLO_CONFIDENCE_THRESHOLD']:.2f}, "
-        f"iou={yolo_params['YOLO_IOU_THRESHOLD']:.2f})"
+        "Running YOLO preview via InferenceRunner.run_realtime "
+        "(conf=%.2f, iou=%.2f)",
+        float(params.get("YOLO_CONFIDENCE_THRESHOLD", 0.5)),
+        float(params.get("YOLO_IOU_THRESHOLD", 0.45)),
     )
-    detector = YOLOOBBDetector(yolo_params)
-    yolo_mode = str(yolo_params.get("YOLO_OBB_MODE", "direct")).strip().lower()
-
-    (
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        raw_class_ids,
-        raw_heading_hints,
-        raw_heading_confidences,
-        raw_directed_mask,
-        stage1_result,
-    ) = _preview_run_yolo_raw_detection(detector, frame_to_process, yolo_params)
-
-    raw_ids = list(range(len(raw_meas)))
-    (
-        meas,
-        _sizes,
-        _shapes,
-        detection_confidences,
-        filtered_obb_corners,
-        filtered_ids,
-        filtered_heading_hints,
-        filtered_heading_confidences,
-        filtered_directed_mask,
-    ) = detector.filter_raw_detections(
-        raw_meas,
-        raw_sizes,
-        raw_shapes,
-        raw_confidences,
-        raw_obb_corners,
-        roi_mask=roi_for_yolo,
-        detection_ids=raw_ids,
-        heading_hints=raw_heading_hints,
-        heading_confidences=raw_heading_confidences,
-        directed_mask=raw_directed_mask,
-    )
-
-    stage2_names = _normalize_preview_model_names(
-        getattr(detector.model, "names", None)
-        or getattr(getattr(detector.model, "model", None), "names", None)
-    )
-    filtered_class_labels = []
-    for det_id in filtered_ids:
-        if 0 <= int(det_id) < len(raw_class_ids):
-            filtered_class_labels.append(
-                _preview_class_label(stage2_names, raw_class_ids[int(det_id)])
-            )
-        else:
-            filtered_class_labels.append("cls ?")
-
-    filtered_headtail = []
-    for idx in range(len(filtered_obb_corners)):
-        heading = (
-            filtered_heading_hints[idx]
-            if idx < len(filtered_heading_hints)
-            else float("nan")
+    if str(params.get("YOLO_OBB_MODE", "direct")).strip().lower() == "sequential":
+        logger.info(
+            "Preview: sequential stage-1 detect-box overlay is no longer shown "
+            "(run_realtime does not expose the internal stage-1 boxes)."
         )
-        confidence = (
-            filtered_heading_confidences[idx]
-            if idx < len(filtered_heading_confidences)
-            else 0.0
-        )
-        directed = (
-            filtered_directed_mask[idx] if idx < len(filtered_directed_mask) else 0
-        )
-        filtered_headtail.append((heading, confidence, directed))
 
-    detected_dimensions = []
-    if yolo_mode == "sequential" and stage1_result is not None:
-        detected_dimensions = _preview_yolo_sequential_stage1_viz(
+    cfg = build_inference_config_from_params(params)
+    runner = InferenceRunner(cfg)
+    try:
+        fr = runner.run_realtime(frame_to_process, roi_mask=roi_for_yolo)
+
+        obb = getattr(fr, "obb", None)
+        num_dets = obb.num_detections if obb is not None else 0
+
+        filtered_corners = [
+            np.asarray(obb.corners[i], dtype=np.float32) for i in range(num_dets)
+        ]
+        detection_confidences = [float(obb.confidences[i]) for i in range(num_dets)]
+        names = runner.obb_class_names or {}
+        class_ids = obb.class_ids_or_zeros if obb is not None else []
+        filtered_class_labels = [
+            _preview_class_label(names, int(class_ids[i])) for i in range(num_dets)
+        ]
+
+        ht = getattr(fr, "headtail", None)
+        filtered_headtail = []
+        for i in range(num_dets):
+            if ht is not None:
+                heading = float(ht.heading_hints[i])
+                ht_conf = float(ht.heading_confidences[i])
+                directed = int(ht.directed_mask[i])
+            else:
+                heading, ht_conf, directed = float("nan"), 0.0, 0
+            filtered_headtail.append((heading, ht_conf, directed))
+
+        detected_dimensions = []
+        label_anchors = []
+        label_stacks = [[] for _ in range(num_dets)]
+        for corners in filtered_corners:
+            major_axis = float(np.linalg.norm(corners[1] - corners[0]))
+            minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
+            if major_axis < minor_axis:
+                major_axis, minor_axis = minor_axis, major_axis
+            detected_dimensions.append((major_axis, minor_axis))
+            label_anchors.append(_preview_label_anchor(corners, test_frame.shape))
+
+        pose_keypoints_by_det: dict[int, np.ndarray] = {}
+        _preview_run_pose_overlay(
+            getattr(fr, "pose", None), context, label_stacks, pose_keypoints_by_det
+        )
+        _preview_run_cnn_overlay(getattr(fr, "cnn", None) or [], label_stacks)
+        _preview_run_apriltag_overlay(
+            getattr(fr, "apriltag", None), obb, context, label_stacks, test_frame
+        )
+
+        _preview_draw_obb_annotations(
             test_frame,
-            detector,
-            stage1_result,
-            filtered_obb_corners,
-            detected_dimensions,
+            filtered_corners,
+            detection_confidences,
+            filtered_class_labels,
+            label_stacks,
+            label_anchors,
+            pose_keypoints_by_det,
+            filtered_headtail,
+            context,
         )
-
-    filtered_corners = [np.asarray(c, dtype=np.float32) for c in filtered_obb_corners]
-    label_stacks = [[] for _ in range(len(filtered_corners))]
-    label_anchors = []
-    for corners in filtered_corners:
-        major_axis = float(np.linalg.norm(corners[1] - corners[0]))
-        minor_axis = float(np.linalg.norm(corners[2] - corners[1]))
-        if major_axis < minor_axis:
-            major_axis, minor_axis = minor_axis, major_axis
-        detected_dimensions.append((major_axis, minor_axis))
-        label_anchors.append(_preview_label_anchor(corners, test_frame.shape))
-
-    canonical_crops, canonical_inverses, crop_padding, bg_color, suppress_foreign = (
-        _preview_compute_canonical_crops(filtered_corners, frame_to_process, context)
-    )
-
-    pose_keypoints_by_det = {}
-    pose_backend = _preview_run_pose_overlay(
-        filtered_corners,
-        canonical_crops,
-        canonical_inverses,
-        context,
-        label_stacks,
-        pose_keypoints_by_det,
-    )
-    cnn_backends = _preview_run_cnn_overlay(
-        filtered_corners, canonical_crops, context, label_stacks
-    )
-    apriltag_detector = _preview_run_apriltag_overlay(
-        filtered_corners,
-        frame_to_process,
-        context,
-        label_stacks,
-        test_frame,
-        crop_padding,
-        suppress_foreign,
-        bg_color,
-    )
-
-    _preview_draw_obb_annotations(
-        test_frame,
-        filtered_corners,
-        detection_confidences,
-        filtered_class_labels,
-        label_stacks,
-        label_anchors,
-        pose_keypoints_by_det,
-        filtered_headtail,
-        context,
-    )
-    _preview_cleanup_backends(pose_backend, cnn_backends, apriltag_detector)
-    _preview_draw_yolo_footer(
-        test_frame,
-        meas,
-        yolo_params,
-        context,
-        filtered_headtail=filtered_headtail,
-    )
-
-    return detected_dimensions, test_frame
+        _preview_draw_yolo_footer(
+            test_frame,
+            filtered_corners,
+            params,
+            context,
+            filtered_headtail=filtered_headtail,
+        )
+        return detected_dimensions, test_frame
+    finally:
+        try:
+            runner.close()
+        except Exception:
+            pass
 
 
 def _run_preview_detection_job(

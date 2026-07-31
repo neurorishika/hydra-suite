@@ -26,16 +26,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from hydra_suite.runtime.compute_runtime import (
-    derive_detection_runtime_settings,
-    derive_pose_runtime_settings,
-    infer_compute_runtime_from_legacy,
-)
-from hydra_suite.trackerkit.benchmarking import (
-    collect_active_targets,
-    derive_benchmark_geometry_from_video,
-    lookup_cached_recommendation,
-)
+from hydra_suite.core.inference.config import migrate_runtime_to_tier
+from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.model_utils import (
     _normalize_usage_role,
     _sanitize_model_token,
@@ -94,6 +86,29 @@ def _get_video_config_path(video_path: str):
     video_dir = os.path.dirname(video_path)
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     return os.path.join(video_dir, f"{video_name}_config.json")
+
+
+def resolve_tensorrt_max_batch_size(
+    *, detection_batch_size: int, fixed_runtime: bool
+) -> int:
+    """Return the TensorRT engine's max batch size.
+
+    On a fixed runtime (TensorRT, or gpu_fast-on-CoreML) this must match the
+    detection batch the engine will actually be fed, so it tracks
+    detection_batch_size -- the single detection-batching value in the UI.
+
+    On any other runtime TensorRT is off (enable_tensorrt is derived from the
+    runtime; see cli_config.legacy_detection_runtime_fields) and this value is
+    inert, so it is pinned to 1 rather than carrying a stale widget value into
+    the engine-cache key.
+
+    Previously the fixed-runtime branch read the legacy 'Frame batch' spin from
+    the 'Legacy Detector Batching' box -- a control whose own help text claimed
+    it did not affect live tracking.
+    """
+    if not fixed_runtime:
+        return 1
+    return max(1, int(detection_batch_size or 1))
 
 
 class ConfigOrchestrator:
@@ -333,6 +348,29 @@ class ConfigOrchestrator:
             1 if yolo_mode == "sequential" else 0
         )
 
+        yolo_direct_task = (
+            str(get_cfg("yolo_obb_direct_task", default="obb")).strip().lower()
+        )
+        if yolo_direct_task not in {"obb", "detect", "segment"}:
+            yolo_direct_task = "obb"
+        self._panels.detection.combo_yolo_direct_task.setCurrentIndex(
+            ["obb", "detect", "segment"].index(yolo_direct_task)
+        )
+        self._panels.detection.spin_yolo_fixed_angle.setValue(
+            float(get_cfg("yolo_fixed_angle_deg", default=0.0))
+        )
+        self._panels.detection._on_yolo_direct_task_changed(
+            self._panels.detection.combo_yolo_direct_task.currentIndex()
+        )
+
+        self._panels.detection.chk_slice_enabled.setChecked(
+            bool(get_cfg("slice_enabled", default=False))
+        )
+        slice_geo = str(get_cfg("slice_geometry_mode", default="auto_model")).strip()
+        if slice_geo not in {"auto_model", "auto_object", "custom"}:
+            slice_geo = "auto_model"
+        self._panels.detection.combo_slice_geometry.setCurrentText(slice_geo)
+
         yolo_direct_model = get_cfg(
             "yolo_obb_direct_model_path",
             "yolo_model_path",
@@ -475,64 +513,31 @@ class ConfigOrchestrator:
         else:
             self._panels.detection.line_yolo_classes.clear()
 
-        compute_runtime_cfg = (
-            str(
-                get_cfg(
-                    "compute_runtime",
-                    default=infer_compute_runtime_from_legacy(
-                        yolo_device=str(get_cfg("yolo_device", default="auto")),
-                        enable_tensorrt=bool(get_cfg("enable_tensorrt", default=False)),
-                        pose_runtime_flavor=str(
-                            get_cfg("pose_runtime_flavor", default="auto")
-                        ),
-                    ),
-                )
-            )
-            .strip()
-            .lower()
-        )
-        self._mw._populate_compute_runtime_options(preferred=compute_runtime_cfg)
+        # Load runtime_tier: prefer the new key; if absent, migrate an explicit
+        # legacy compute_runtime string, else default to the pipeline tier "gpu".
+        # (Legacy runtime inference is retired; old configs are migrated by FT6.)
+        raw_tier = get_cfg("runtime_tier", default=None)
+        if raw_tier is None:
+            legacy_runtime = str(get_cfg("compute_runtime", default="")).strip().lower()
+            if legacy_runtime:
+                raw_tier = migrate_runtime_to_tier({legacy_runtime})
+            else:
+                raw_tier = "gpu"
+        tier = str(raw_tier).strip()
+        if hasattr(self._panels.setup, "combo_runtime_tier"):
+            combo = self._panels.setup.combo_runtime_tier
+            idx = combo.findData(tier)
+            if idx >= 0:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(idx)
+                combo.blockSignals(False)
+        if hasattr(self._mw, "config"):
+            self._mw.config.runtime_tier = tier
         self._mw._on_runtime_context_changed()
-        self._mw._populate_headtail_runtime_options(
-            preferred=str(get_cfg("headtail_runtime", default=compute_runtime_cfg))
-            .strip()
-            .lower()
-        )
-        self._mw._populate_cnn_runtime_options(
-            preferred=str(get_cfg("cnn_runtime", default=compute_runtime_cfg))
-            .strip()
-            .lower()
-        )
 
-        # TensorRT batch size is still configurable (runtime-derived usage).
-        self._panels.detection.spin_tensorrt_batch.setValue(
-            get_cfg("tensorrt_max_batch_size", default=16)
-        )
-        self._panels.detection.spin_tensorrt_batch.setEnabled(
-            bool(
-                derive_detection_runtime_settings(self._mw._selected_compute_runtime())[
-                    "enable_tensorrt"
-                ]
-            )
-        )
-        self._panels.detection.lbl_tensorrt_batch.setEnabled(
-            bool(
-                derive_detection_runtime_settings(self._mw._selected_compute_runtime())[
-                    "enable_tensorrt"
-                ]
-            )
-        )
-
-        # YOLO Batching settings
-        self._panels.detection.chk_enable_yolo_batching.setChecked(
-            get_cfg("enable_yolo_batching", default=True)
-        )
-        batch_mode = get_cfg("yolo_batch_size_mode", default="auto")
-        self._panels.detection.combo_yolo_batch_mode.setCurrentIndex(
-            0 if batch_mode == "auto" else 1
-        )
-        self._panels.detection.spin_yolo_batch_size.setValue(
-            get_cfg("yolo_manual_batch_size", default=16)
+        # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+        self._panels.detection.spin_detection_batch_size.setValue(
+            get_cfg("detection_batch_size", default=1)
         )
         # Re-apply runtime-derived constraints (e.g., TensorRT => manual batch mode).
         self._mw._on_runtime_context_changed()
@@ -707,14 +712,6 @@ class ConfigOrchestrator:
                 "min_detect_seconds",
                 "min_detect_frames",
                 "min_detect_counts",
-                default_seconds=0.33,
-            )
-        )
-        self._panels.tracking.spin_min_track.setValue(
-            get_cfg_time(
-                "min_track_seconds",
-                "min_track_frames",
-                "min_track_counts",
                 default_seconds=0.33,
             )
         )
@@ -1169,35 +1166,20 @@ class ConfigOrchestrator:
             yolo_pose_model = legacy_pose_model
         if not sleap_pose_model and pose_backend.lower() == "sleap":
             sleap_pose_model = legacy_pose_model
+        vitpose_pose_model = str(get_cfg("pose_vitpose_model_dir", default="")).strip()
+        if not vitpose_pose_model and pose_backend.lower() == "vitpose":
+            vitpose_pose_model = legacy_pose_model
         self._mw._set_pose_model_path_for_backend(yolo_pose_model, backend="yolo")
         self._mw._set_pose_model_path_for_backend(sleap_pose_model, backend="sleap")
+        self._mw._set_pose_model_path_for_backend(vitpose_pose_model, backend="vitpose")
         active_backend = (
             self._panels.identity.combo_pose_model_type.currentText().strip().lower()
         )
         self._mw._refresh_pose_model_combo(
             preferred_model_path=self._mw._pose_model_path_for_backend(active_backend)
         )
-        pose_runtime_flavor = (
-            str(
-                get_cfg(
-                    "pose_runtime_flavor",
-                    default=derive_pose_runtime_settings(
-                        self._mw._selected_compute_runtime(),
-                        backend_family=self._panels.identity.combo_pose_model_type.currentText()
-                        .strip()
-                        .lower(),
-                    )["pose_runtime_flavor"],
-                )
-            )
-            .strip()
-            .lower()
-        )
-        self._mw._populate_pose_runtime_flavor_options(
-            backend=self._panels.identity.combo_pose_model_type.currentText()
-            .strip()
-            .lower(),
-            preferred=pose_runtime_flavor,
-        )
+        # Pose runtime is fully derived from Compute tier (spec §2/§5.2) — any
+        # legacy per-preset "pose_runtime_flavor" value is ignored on load.
         self._panels.identity.spin_pose_min_kpt_conf_valid.setValue(
             get_cfg("pose_min_kpt_conf_valid", default=0.2)
         )
@@ -1515,13 +1497,7 @@ class ConfigOrchestrator:
                 }
             )
 
-        compute_runtime = self._mw._selected_compute_runtime()
-        pose_runtime_derived = derive_pose_runtime_settings(
-            compute_runtime,
-            backend_family=self._panels.identity.combo_pose_model_type.currentText()
-            .strip()
-            .lower(),
-        )
+        resolved_obb = self._mw._resolved_obb_backend()
 
         cfg.update(
             {
@@ -1570,6 +1546,12 @@ class ConfigOrchestrator:
                 # Store relative path if model is in archive, otherwise absolute
                 "yolo_model_path": make_model_path_relative(yolo_path),
                 "yolo_obb_mode": yolo_mode,
+                "yolo_obb_direct_task": ["obb", "detect", "segment"][
+                    self._panels.detection.combo_yolo_direct_task.currentIndex()
+                ],
+                "yolo_fixed_angle_deg": self._panels.detection.spin_yolo_fixed_angle.value(),
+                "slice_enabled": self._panels.detection.chk_slice_enabled.isChecked(),
+                "slice_geometry_mode": self._panels.detection.combo_slice_geometry.currentText(),
                 "yolo_obb_direct_model_path": make_model_path_relative(
                     yolo_direct_path
                 ),
@@ -1592,7 +1574,6 @@ class ConfigOrchestrator:
                 "yolo_headtail_conf_threshold": self._panels.identity.spin_yolo_headtail_conf.value(),
                 "yolo_headtail_detect_conf_threshold": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
                 "headtail_batch_size": self._panels.identity.spin_headtail_batch.value(),
-                "headtail_runtime": self._mw._selected_headtail_runtime(),
                 "reference_aspect_ratio": self._panels.detection.spin_reference_aspect_ratio.value(),
                 "enable_aspect_ratio_filtering": self._panels.detection.chk_enable_aspect_ratio_filtering.isChecked(),
                 "min_aspect_ratio_multiplier": self._panels.detection.spin_min_ar_multiplier.value(),
@@ -1630,29 +1611,25 @@ class ConfigOrchestrator:
             cfg[f"{role_key}_usage_role"] = role_meta.get("usage_role", "")
 
         # === COMPUTE RUNTIME ===
-        runtime_detection = derive_detection_runtime_settings(compute_runtime)
-        cfg["compute_runtime"] = compute_runtime
+        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
+        cfg["runtime_tier"] = self._mw._selected_runtime_tier()
         # Keep legacy fields writable for backward compatibility.
         if not preset_mode:
             cfg["yolo_device"] = runtime_detection["yolo_device"]
 
         cfg.update(
             {
-                # TensorRT
+                # Live Detection Batching (drives InferenceConfig.detection_batch_size)
+                "detection_batch_size": self._panels.detection.spin_detection_batch_size.value(),
+                # TensorRT: derived from the selected runtime, retained for
+                # legacy config round-tripping and the engine-cache key.
                 "enable_tensorrt": runtime_detection["enable_tensorrt"],
-                "tensorrt_max_batch_size": (
-                    self._panels.detection.spin_yolo_batch_size.value()
-                    if self._mw._runtime_requires_fixed_yolo_batch(compute_runtime)
-                    else self._panels.detection.spin_tensorrt_batch.value()
+                "tensorrt_max_batch_size": resolve_tensorrt_max_batch_size(
+                    detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
+                    fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(
+                        resolved_obb
+                    ),
                 ),
-                # YOLO Batching
-                "enable_yolo_batching": self._panels.detection.chk_enable_yolo_batching.isChecked(),
-                "yolo_batch_size_mode": (
-                    "auto"
-                    if self._panels.detection.combo_yolo_batch_mode.currentIndex() == 0
-                    else "manual"
-                ),
-                "yolo_manual_batch_size": self._panels.detection.spin_yolo_batch_size.value(),
                 # === CORE TRACKING ===
                 "max_targets": self._panels.setup.spin_max_targets.value(),
                 "max_assignment_distance_multiplier": self._panels.tracking.spin_max_dist.value(),
@@ -1702,7 +1679,6 @@ class ConfigOrchestrator:
                 "min_respawn_distance_multiplier": self._panels.tracking.spin_min_respawn_distance.value(),
                 "min_detections_to_start_seconds": self._panels.tracking._min_detections_to_start_seconds,
                 "min_detect_seconds": self._panels.tracking.spin_min_detect.value(),
-                "min_track_seconds": self._panels.tracking.spin_min_track.value(),
                 # === POST-PROCESSING ===
                 "enable_postprocessing": self._panels.postprocess.enable_postprocessing.isChecked(),
                 "identity_postprocess_mode": self._panels.postprocess.cmb_identity_postprocess_mode.currentText(),
@@ -1843,7 +1819,6 @@ class ConfigOrchestrator:
                 "enable_identity_swap_correction": self._panels.tracking.chk_enable_identity_swap_correction.isChecked(),
                 "identity_swap_min_frames": self._panels.tracking.spin_identity_swap_min_frames.value(),
                 "cnn_classifier_window": self._panels.identity.spin_cnn_window.value(),
-                "cnn_runtime": self._mw._selected_cnn_runtime(),
             }
         )
 
@@ -1868,7 +1843,9 @@ class ConfigOrchestrator:
                 "pose_sleap_model_dir": make_pose_model_path_relative(
                     self._mw._pose_model_path_for_backend("sleap")
                 ),
-                "pose_runtime_flavor": self._mw._selected_pose_runtime_flavor(),
+                "pose_vitpose_model_dir": make_pose_model_path_relative(
+                    self._mw._pose_model_path_for_backend("vitpose")
+                ),
                 "pose_exported_model_path": "",
                 "pose_min_kpt_conf_valid": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
                 "pose_skeleton_file": self._panels.identity.line_pose_skeleton_file.text().strip(),
@@ -1878,7 +1855,6 @@ class ConfigOrchestrator:
                 "pose_batch_size": self._panels.identity.spin_pose_batch.value(),
                 "pose_yolo_batch": self._panels.identity.spin_pose_batch.value(),
                 "pose_sleap_env": self._mw._selected_pose_sleap_env(),
-                "pose_sleap_device": pose_runtime_derived["pose_sleap_device"],
                 "pose_sleap_batch": self._panels.identity.spin_pose_batch.value(),
                 "pose_sleap_max_instances": 1,
                 "tracking_workflow_mode": self._mw._session_orch._workflow_mode_key(),
@@ -2051,9 +2027,6 @@ class ConfigOrchestrator:
         min_detection_counts = _seconds_to_frames(
             self._panels.tracking.spin_min_detect.value()
         )
-        min_tracking_counts = _seconds_to_frames(
-            self._panels.tracking.spin_min_track.value()
-        )
         min_trajectory_length = _seconds_to_frames(
             self._panels.postprocess.spin_min_trajectory_length.value()
         )
@@ -2066,18 +2039,9 @@ class ConfigOrchestrator:
         stitch_max_gap_frames = _seconds_to_frames(
             self._panels.postprocess.spin_stitch_max_gap_seconds.value(), min_frames=0
         )
-        # YOLO Batching settings from UI (overrides advanced_config defaults)
         advanced_config = self._mw.advanced_config.copy()
-        advanced_config["enable_yolo_batching"] = (
-            self._panels.detection.chk_enable_yolo_batching.isChecked()
-        )
-        advanced_config["yolo_batch_size_mode"] = (
-            "auto"
-            if self._panels.detection.combo_yolo_batch_mode.currentIndex() == 0
-            else "manual"
-        )
-        advanced_config["yolo_manual_batch_size"] = (
-            self._panels.detection.spin_yolo_batch_size.value()
+        advanced_config["detection_batch_size"] = (
+            self._panels.detection.spin_detection_batch_size.value()
         )
         advanced_config["yolo_seq_individual_batch_size"] = (
             self._panels.detection.spin_yolo_seq_individual_batch_size.value()
@@ -2126,14 +2090,11 @@ class ConfigOrchestrator:
         identity_method = (
             self._mw._selected_identity_method()
         )  # kept for backward compat
-        compute_runtime = self._mw._selected_compute_runtime()
-        headtail_runtime = self._mw._selected_headtail_runtime()
-        cnn_runtime = self._mw._selected_cnn_runtime()
-        runtime_detection = derive_detection_runtime_settings(compute_runtime)
-        trt_batch_size = (
-            self._panels.detection.spin_yolo_batch_size.value()
-            if self._mw._runtime_requires_fixed_yolo_batch(compute_runtime)
-            else self._panels.detection.spin_tensorrt_batch.value()
+        resolved_obb = self._mw._resolved_obb_backend()
+        runtime_detection = legacy_detection_runtime_fields(resolved_obb)
+        trt_batch_size = resolve_tensorrt_max_batch_size(
+            detection_batch_size=self._panels.detection.spin_detection_batch_size.value(),
+            fixed_runtime=self._mw._runtime_requires_fixed_yolo_batch(resolved_obb),
         )
         trt_build_batch_size_raw = advanced_config.get(
             "tensorrt_build_batch_size", None
@@ -2145,21 +2106,6 @@ class ConfigOrchestrator:
                 trt_build_batch_size = max(1, int(trt_build_batch_size_raw))
             except (TypeError, ValueError):
                 trt_build_batch_size = None
-        pose_backend_family = (
-            self._panels.identity.combo_pose_model_type.currentText().strip().lower()
-        )
-        selected_pose_runtime = self._mw._selected_pose_runtime_flavor()
-        pose_runtime_canonical = {
-            "onnx_mps": "onnx_coreml",
-            "onnx_coreml": "onnx_coreml",
-            "onnx_cpu": "onnx_cpu",
-            "onnx_cuda": "onnx_cuda",
-            "tensorrt_cuda": "tensorrt",
-        }.get(selected_pose_runtime, selected_pose_runtime)
-        runtime_pose = derive_pose_runtime_settings(
-            pose_runtime_canonical, backend_family=pose_backend_family
-        )
-
         p = {
             "ADVANCED_CONFIG": advanced_config,  # Include advanced config for batch optimization
             "DETECTION_METHOD": det_method,
@@ -2170,6 +2116,37 @@ class ConfigOrchestrator:
             "END_FRAME": self._panels.setup.spin_end_frame.value(),
             "YOLO_MODEL_PATH": yolo_path,
             "YOLO_OBB_MODE": yolo_mode,
+            "YOLO_OBB_DIRECT_TASK": ["obb", "detect", "segment"][
+                self._panels.detection.combo_yolo_direct_task.currentIndex()
+            ],
+            "YOLO_OBB_FIXED_ANGLE_DEG": self._panels.detection.spin_yolo_fixed_angle.value(),
+            # Segment-as-OBB rotated-rect kernel knobs (advanced config only;
+            # only read when YOLO_OBB_DIRECT_TASK == "segment"). No dedicated
+            # detection-panel UI -- power users tune via advanced_config.json.
+            "YOLO_OBB_SEG_NUM_ANGLES": advanced_config.get("obb_seg_num_angles", 24),
+            "YOLO_OBB_SEG_CROP_SIZE": advanced_config.get("obb_seg_crop_size", 64),
+            "YOLO_OBB_SEG_PAD_RATIO": advanced_config.get("obb_seg_pad_ratio", 0.15),
+            "YOLO_OBB_SEG_MASK_THRESHOLD": advanced_config.get(
+                "obb_seg_mask_threshold", 0.5
+            ),
+            "SLICE_ENABLED": self._panels.detection.chk_slice_enabled.isChecked(),
+            "SLICE_GEOMETRY_MODE": self._panels.detection.combo_slice_geometry.currentText(),
+            "SLICE_OVERLAP": advanced_config.get("slice_overlap", 0.2),
+            "SLICE_HEIGHT": advanced_config.get("slice_height", 0),
+            "SLICE_WIDTH": advanced_config.get("slice_width", 0),
+            "SLICE_OBJECT_TILE_FRACTION": advanced_config.get(
+                "slice_object_tile_fraction", 0.15
+            ),
+            "SLICE_TRAINED_BODY_PX": advanced_config.get("slice_trained_body_px", 0.0),
+            "SLICE_MERGE_POLICY": advanced_config.get(
+                "slice_merge_policy", "greedy_nmm"
+            ),
+            "SLICE_MERGE_METRIC": advanced_config.get("slice_merge_metric", "ios"),
+            "SLICE_MERGE_THRESHOLD": advanced_config.get("slice_merge_threshold", 0.5),
+            "SLICE_MERGE_BACKEND": advanced_config.get("slice_merge_backend", "cv2"),
+            "SLICE_PERFORM_STANDARD_PRED": advanced_config.get(
+                "slice_perform_standard_pred", False
+            ),
             "YOLO_OBB_DIRECT_MODEL_PATH": yolo_direct_path,
             "YOLO_DETECT_MODEL_PATH": yolo_detect_path,
             "YOLO_CROP_OBB_MODEL_PATH": yolo_crop_obb_path,
@@ -2186,13 +2163,14 @@ class ConfigOrchestrator:
             "YOLO_HEADTAIL_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_conf.value(),
             "YOLO_HEADTAIL_DETECT_CONF_THRESHOLD": self._panels.identity.spin_yolo_headtail_detect_conf.value(),
             "HEADTAIL_BATCH_SIZE": self._panels.identity.spin_headtail_batch.value(),
-            "HEADTAIL_COMPUTE_RUNTIME": headtail_runtime,
             "YOLO_CONFIDENCE_THRESHOLD": self._panels.detection.spin_yolo_confidence.value(),
             "YOLO_IOU_THRESHOLD": self._panels.detection.spin_yolo_iou.value(),
             "USE_CUSTOM_OBB_IOU_FILTERING": True,
             "YOLO_TARGET_CLASSES": yolo_cls,
-            "COMPUTE_RUNTIME": compute_runtime,
-            "CNN_COMPUTE_RUNTIME": cnn_runtime,
+            # Live Detection Batching: feeds InferenceConfig.detection_batch_size
+            # via config.build_inference_config_from_params.
+            "YOLO_BATCH_SIZE": self._panels.detection.spin_detection_batch_size.value(),
+            "RUNTIME_TIER": self._mw._selected_runtime_tier(),
             "YOLO_DEVICE": runtime_detection["yolo_device"],
             "ENABLE_GPU_BACKGROUND": runtime_detection["enable_gpu_background"],
             "ENABLE_TENSORRT": runtime_detection["enable_tensorrt"],
@@ -2243,7 +2221,6 @@ class ConfigOrchestrator:
             "MIN_RESPAWN_DISTANCE": min_respawn_distance_pixels,
             "MIN_DETECTION_COUNTS": min_detection_counts,
             "MIN_DETECTIONS_TO_START": min_detections_to_start,
-            "MIN_TRACKING_COUNTS": min_tracking_counts,
             "TRAJECTORY_HISTORY_SECONDS": self._panels.setup.spin_traj_hist.value(),
             "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
             "ENABLE_LIGHTING_STABILIZATION": self._panels.detection.chk_lighting_stab.isChecked(),
@@ -2444,7 +2421,6 @@ class ConfigOrchestrator:
                 .strip()
                 .lower(),
             ),
-            "POSE_RUNTIME_FLAVOR": self._mw._selected_pose_runtime_flavor(),
             "POSE_EXPORTED_MODEL_PATH": "",
             "POSE_MIN_KPT_CONF_VALID": self._panels.identity.spin_pose_min_kpt_conf_valid.value(),
             "POSE_SKELETON_FILE": self._panels.identity.line_pose_skeleton_file.text().strip(),
@@ -2454,7 +2430,6 @@ class ConfigOrchestrator:
             "POSE_YOLO_BATCH": self._panels.identity.spin_pose_batch.value(),
             "POSE_BATCH_SIZE": self._panels.identity.spin_pose_batch.value(),
             "POSE_SLEAP_ENV": self._mw._selected_pose_sleap_env(),
-            "POSE_SLEAP_DEVICE": runtime_pose["pose_sleap_device"],
             "POSE_SLEAP_BATCH": self._panels.identity.spin_pose_batch.value(),
             "POSE_SLEAP_MAX_INSTANCES": 1,
             "INDIVIDUAL_PROPERTIES_CACHE_PATH": str(
@@ -2775,6 +2750,13 @@ class ConfigOrchestrator:
             "identity_swap_conf_margin": 0.2,  # prob margin to count a frame as mutual mismatch
             "identity_rejoin_velocity_budget": 1.5,  # safety factor on (frames_lost * v_max) for identity rejoin distance
             "identity_rejoin_dist_floor": None,  # absolute min rejoin distance (None = 2 * body_size)
+            # Segment-as-OBB rotated-rect kernel (advanced; only read when
+            # YOLO_OBB_DIRECT_TASK == "segment" -- tune here only if the
+            # defaults are too slow/inaccurate for your footage).
+            "obb_seg_num_angles": 24,  # coarse angle-search steps over [0, pi); linear cost
+            "obb_seg_crop_size": 64,  # mask resample resolution (crop_size^2 pixels); quadratic cost
+            "obb_seg_pad_ratio": 0.15,  # fractional padding around the box before cropping (clip safety)
+            "obb_seg_mask_threshold": 0.5,  # foreground cutoff on the resampled soft mask
         }
 
         if os.path.exists(config_path):
@@ -3358,6 +3340,32 @@ class ConfigOrchestrator:
             """Return True if *path* is a compatible cache covering the frame range."""
             if not path or not os.path.exists(path):
                 return False
+            if os.path.isdir(path):
+                # InferenceRunner cache dir (built by DetectionCacheBuildWorker):
+                # key-constructed handle, not a legacy single-file DetectionCache.
+                try:
+                    from pathlib import Path as _Path
+
+                    from hydra_suite.core.inference.config import (
+                        build_inference_config_from_params,
+                    )
+                    from hydra_suite.core.inference.runner import (
+                        _open_caches,
+                        video_signature,
+                    )
+
+                    _cfg = build_inference_config_from_params(params)
+                    handle = _open_caches(
+                        _cfg,
+                        _Path(path),
+                        video_signature(video_path),
+                        params.get("ROI_MASK", None),
+                    ).detection
+                    return handle is not None and handle.covers_frame_range(
+                        start_frame, end_frame
+                    )
+                except Exception:
+                    return False
             try:
                 dc = DetectionCache(path, mode="r")
                 ok = dc.is_compatible() and dc.covers_frame_range(
@@ -3419,12 +3427,17 @@ class ConfigOrchestrator:
     def _build_optimizer_detection_cache(
         self, video_path: str, cache_path: str, params: dict
     ):
-        """Spin up a DetectionCacheBuilderWorker and show progress in the main window."""
-        from hydra_suite.core.tracking.optimizer_workers import (
-            DetectionCacheBuilderWorker,
+        """Spin up a DetectionCacheBuildWorker and show progress in the main window.
+
+        ``cache_path`` is used as the InferenceRunner cache **directory**
+        (it holds ``detection.npz`` plus a cache key), not a legacy
+        single-file ``DetectionCache``.
+        """
+        from hydra_suite.trackerkit.gui.workers.param_optimizer_worker import (
+            DetectionCacheBuildWorker,
         )
 
-        self._mw._cache_builder_worker = DetectionCacheBuilderWorker(
+        self._mw._cache_builder_worker = DetectionCacheBuildWorker(
             video_path,
             cache_path,
             params,
@@ -3675,179 +3688,6 @@ class ConfigOrchestrator:
                 "Detection parameters have been applied to the UI.\n"
                 "Use 'Preview Detection' to verify the results.",
             )
-
-    def _open_benchmark_dialog(self):
-        """Open the TrackerKit benchmark dialog for current model selections."""
-        from hydra_suite.trackerkit.gui.dialogs.benchmark_dialog import (
-            TrackerBenchmarkDialog,
-        )
-
-        video_path = self._panels.setup.file_line.text().strip()
-        if not video_path or not os.path.exists(video_path):
-            QMessageBox.warning(self._mw, "No Video", "Please load a video first.")
-            return
-
-        targets, notes = collect_active_targets(self._mw)
-        if not targets:
-            message = "No benchmarkable model targets are currently enabled."
-            if notes:
-                message += "\n\n" + "\n".join(notes)
-            QMessageBox.information(self._mw, "No Targets", message)
-            return
-
-        dialog = TrackerBenchmarkDialog(self._mw, self._mw)
-        if dialog.exec() == QDialog.Accepted:
-            notes = self._apply_benchmark_recommendations(dialog.recommendations())
-            self._refresh_benchmark_recommendations()
-            self._mw._on_runtime_context_changed()
-            message = "Benchmark recommendations applied to the current UI."
-            if notes:
-                message += "\n\n" + "\n".join(f"• {note}" for note in notes)
-            QMessageBox.information(self._mw, "Recommendations Applied", message)
-
-    def _refresh_benchmark_recommendations(self) -> None:
-        """Refresh cached benchmark recommendations for the current UI state."""
-        video_path = self._panels.setup.file_line.text().strip()
-        if not video_path or not os.path.exists(video_path):
-            self._mw._benchmark_recommendations = {}
-            return
-        try:
-            geometry = derive_benchmark_geometry_from_video(
-                video_path,
-                resize_factor=float(self._panels.setup.spin_resize.value()),
-                reference_body_size=float(
-                    self._panels.detection.spin_reference_body_size.value()
-                ),
-                reference_aspect_ratio=float(
-                    self._panels.detection.spin_reference_aspect_ratio.value()
-                ),
-                padding_fraction=float(
-                    self._panels.identity.spin_individual_padding.value()
-                ),
-            )
-        except Exception:
-            logger.debug(
-                "Could not derive benchmark geometry for the current video.",
-                exc_info=True,
-            )
-            self._mw._benchmark_recommendations = {}
-            return
-
-        recommendations = {}
-        targets, _notes = collect_active_targets(self._mw)
-        for target in targets:
-            recommendation = lookup_cached_recommendation(
-                target,
-                geometry,
-                realtime_enabled=self._mw._is_realtime_tracking_mode_enabled(),
-            )
-            if recommendation is not None:
-                recommendations[target.key] = recommendation
-        self._mw._benchmark_recommendations = recommendations
-
-    def _apply_benchmark_recommendations(
-        self, recommendations: dict[str, object]
-    ) -> list[str]:
-        """Apply cached benchmark recommendations back into the current UI."""
-        notes: list[str] = []
-
-        def _set_combo_data(combo: QComboBox, value: object) -> bool:
-            index = combo.findData(value)
-            if index < 0:
-                return False
-            combo.setCurrentIndex(index)
-            return True
-
-        detection = recommendations.get(
-            "detection_direct"
-            if self._panels.detection.combo_yolo_obb_mode.currentIndex() == 0
-            else "detection_sequential"
-        )
-        if detection is not None:
-            _set_combo_data(self._panels.setup.combo_compute_runtime, detection.runtime)
-            self._panels.detection.chk_enable_yolo_batching.setChecked(True)
-            self._panels.detection.combo_yolo_batch_mode.setCurrentIndex(1)
-            self._panels.detection.spin_yolo_batch_size.setValue(
-                int(detection.batch_size)
-            )
-            individual_batch_size = getattr(detection, "individual_batch_size", None)
-            if individual_batch_size is not None and hasattr(
-                self._panels.detection, "spin_yolo_seq_individual_batch_size"
-            ):
-                self._panels.detection.spin_yolo_seq_individual_batch_size.setValue(
-                    int(individual_batch_size)
-                )
-
-        headtail = recommendations.get("headtail")
-        if headtail is not None:
-            _set_combo_data(self._panels.setup.combo_headtail_runtime, headtail.runtime)
-            if hasattr(self._panels.identity, "spin_headtail_batch"):
-                self._panels.identity.spin_headtail_batch.setValue(
-                    int(headtail.batch_size)
-                )
-
-        pose = recommendations.get(f"pose_{self._mw._current_pose_backend_key()}")
-        if pose is not None:
-            pose_flavor = derive_pose_runtime_settings(
-                pose.runtime,
-                backend_family=self._mw._current_pose_backend_key(),
-            ).get("pose_runtime_flavor", "cpu")
-            _set_combo_data(self._panels.setup.combo_pose_runtime_flavor, pose_flavor)
-            self._panels.identity.spin_pose_batch.setValue(int(pose.batch_size))
-
-        cnn_recommendations = [
-            recommendation
-            for key, recommendation in recommendations.items()
-            if str(key).startswith("cnn_")
-        ]
-        if cnn_recommendations:
-            shared_runtimes = {
-                recommendation.runtime for recommendation in cnn_recommendations
-            }
-            if len(shared_runtimes) == 1:
-                _set_combo_data(
-                    self._panels.setup.combo_cnn_runtime,
-                    cnn_recommendations[0].runtime,
-                )
-            else:
-                notes.append(
-                    "CNN runtime recommendations differed across classifiers, so the shared CNN runtime selector was left unchanged."
-                )
-            rows = self._panels.identity._cnn_classifier_rows()
-            for index, row in enumerate(rows):
-                recommendation = recommendations.get(f"cnn_{index}")
-                if recommendation is not None:
-                    row.spin_batch.setValue(int(recommendation.batch_size))
-
-        self._panels.detection._sync_batch_policy_controls()
-        self._panels.identity._sync_realtime_individual_batch_ui()
-        return notes
-
-    # =========================================================================
-    # COMPUTE RUNTIME (DELEGATE)
-    # =========================================================================
-
-    def _populate_compute_runtime_options(self, preferred=None):
-        """Populate the compute runtime combo box with valid options for the current UI state."""
-        if not hasattr(self._mw, "_setup_panel"):
-            return
-        combo = self._mw._setup_panel.combo_compute_runtime
-        selected = (
-            str(preferred or self._mw._selected_compute_runtime() or "cpu")
-            .strip()
-            .lower()
-        )
-        options = self._mw._compute_runtime_options_for_current_ui()
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
-        combo.blockSignals(True)
-        combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
-        combo.blockSignals(False)
 
     # =========================================================================
     # MODEL MANAGEMENT

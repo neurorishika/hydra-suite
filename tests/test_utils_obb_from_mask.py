@@ -1,0 +1,433 @@
+"""CPU unit tests for the cv2-free, GPU-native mask -> rotated-rect kernel."""
+
+from __future__ import annotations
+
+import math
+
+import torch
+import torchvision.ops as tv_ops
+
+import hydra_suite.utils.obb_from_mask as obb_from_mask
+from hydra_suite.utils.obb_from_mask import letterbox_gain_pad, rotated_rect_from_masks
+
+
+def _rasterize_rotated_rect(
+    size: int, cx: float, cy: float, w: float, h: float, angle_deg: float
+) -> torch.Tensor:
+    """Build a (size, size) binary mask of a rotated rectangle, for ground truth."""
+    ys, xs = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    dx, dy = xs - cx, ys - cy
+    theta = math.radians(angle_deg)
+    # Rotate the query grid into the rectangle's own axis-aligned frame.
+    u = dx * math.cos(theta) + dy * math.sin(theta)
+    v = -dx * math.sin(theta) + dy * math.cos(theta)
+    return ((u.abs() <= w / 2) & (v.abs() <= h / 2)).float()
+
+
+def test_letterbox_gain_pad_matches_scale_boxes_formula():
+    # Square mask canvas (160x160), non-square original frame (1080x1920) --
+    # the exact scenario that breaks a naive per-axis ratio.
+    gain, pad_x, pad_y = letterbox_gain_pad((160, 160), (1080, 1920))
+    expected_gain = min(160 / 1080, 160 / 1920)
+    assert math.isclose(gain, expected_gain, rel_tol=1e-6)
+    assert pad_x >= 0 and pad_y >= 0
+    # The wider dimension (1920) should produce zero pad on that axis, all
+    # the pad should land on the shorter (1080) axis.
+    assert math.isclose(pad_x, 0.0, abs_tol=1e-3)
+    assert pad_y > 0
+
+
+def test_rotated_rect_from_masks_recovers_axis_aligned_rectangle():
+    mask = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    masks = mask.unsqueeze(0)  # (1, 128, 128)
+    boxes = torch.tensor([[64 - 25 - 5, 64 - 10 - 5, 64 + 25 + 5, 64 + 10 + 5]])
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=24, crop_size=64)
+
+    assert rect.shape == (1, 5)
+    cx, cy, w, h, angle = rect[0].tolist()
+    assert math.isclose(cx, 64, abs_tol=1.5)
+    assert math.isclose(cy, 64, abs_tol=1.5)
+    major, minor = max(w, h), min(w, h)
+    assert math.isclose(major, 50, abs_tol=3.0)
+    assert math.isclose(minor, 20, abs_tol=3.0)
+    # Major axis along x -> angle ~ 0 (mod pi).
+    assert min(angle % math.pi, math.pi - (angle % math.pi)) < math.radians(5)
+
+
+def test_rotated_rect_from_masks_recovers_rotated_rectangle():
+    mask = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=35.0)
+    masks = mask.unsqueeze(0)
+    # Loose axis-aligned bbox covering the rotated rect, padded generously.
+    boxes = torch.tensor([[14.0, 14.0, 114.0, 114.0]])
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+
+    _, _, w, h, angle = rect[0].tolist()
+    major, minor = max(w, h), min(w, h)
+    assert math.isclose(major, 50, abs_tol=4.0)
+    assert math.isclose(minor, 20, abs_tol=4.0)
+    expected_rad = math.radians(35.0)
+    diff = min(
+        abs((angle % math.pi) - expected_rad),
+        math.pi - abs((angle % math.pi) - expected_rad),
+    )
+    assert diff < math.radians(6)
+
+
+def test_rotated_rect_from_masks_empty_mask_yields_nan_row():
+    masks = torch.zeros((1, 64, 64))
+    boxes = torch.tensor([[10.0, 10.0, 20.0, 20.0]])
+    rect = rotated_rect_from_masks(masks, boxes)
+    assert torch.isnan(rect[0]).all()
+
+
+def test_rotated_rect_from_masks_handles_zero_detections():
+    masks = torch.zeros((0, 64, 64))
+    boxes = torch.zeros((0, 4))
+    rect = rotated_rect_from_masks(masks, boxes)
+    assert rect.shape == (0, 5)
+
+
+def test_rotated_rect_from_masks_batched_multi_detection():
+    """Verify per-row independence: two detections in a single call."""
+    # First detection: axis-aligned rectangle at (64, 64), w=50, h=20, angle=0.
+    mask1 = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    # Second detection: rotated rectangle at (64, 64), w=50, h=20, angle=35.
+    mask2 = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=35.0)
+    # Stack into (2, 128, 128) batch.
+    masks = torch.stack([mask1, mask2], dim=0)
+    # Provide matching bounding boxes (loose axis-aligned coverage).
+    boxes = torch.tensor(
+        [
+            [14.0, 14.0, 114.0, 114.0],  # covers both
+            [14.0, 14.0, 114.0, 114.0],
+        ]
+    )
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+
+    # Both rows should be returned with correct shape.
+    assert rect.shape == (2, 5)
+
+    # Row 0: axis-aligned rectangle (angle ~ 0 mod pi).
+    cx0, cy0, w0, h0, angle0 = rect[0].tolist()
+    assert math.isclose(cx0, 64, abs_tol=1.5)
+    assert math.isclose(cy0, 64, abs_tol=1.5)
+    major0, minor0 = max(w0, h0), min(w0, h0)
+    assert math.isclose(major0, 50, abs_tol=3.0)
+    assert math.isclose(minor0, 20, abs_tol=3.0)
+    assert min(angle0 % math.pi, math.pi - (angle0 % math.pi)) < math.radians(5)
+
+    # Row 1: rotated rectangle (angle ~ 35° mod pi).
+    cx1, cy1, w1, h1, angle1 = rect[1].tolist()
+    assert math.isclose(cx1, 64, abs_tol=1.5)
+    assert math.isclose(cy1, 64, abs_tol=1.5)
+    major1, minor1 = max(w1, h1), min(w1, h1)
+    assert math.isclose(major1, 50, abs_tol=4.0)
+    assert math.isclose(minor1, 20, abs_tol=4.0)
+    expected_rad = math.radians(35.0)
+    diff = min(
+        abs((angle1 % math.pi) - expected_rad),
+        math.pi - abs((angle1 % math.pi) - expected_rad),
+    )
+    assert diff < math.radians(6)
+
+
+def test_rotated_rect_from_masks_asymmetric_mask_reports_rect_center():
+    """The returned center must be the RECTANGLE's center, not the mask's mass
+    centroid: for an asymmetric wedge the two differ by many pixels."""
+    size = 128
+    ys, xs = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    # Right triangle wedge: x in [40, 90], y in [50, 70]; the mask's mass
+    # centroid sits well left/up of the bounding rectangle's center (65, 60).
+    inside = (
+        (xs >= 40)
+        & (xs <= 90)
+        & (ys >= 50)
+        & (ys <= 70)
+        & ((ys - 50) <= (xs - 40) * (20.0 / 50.0))
+    )
+    masks = inside.float().unsqueeze(0)
+    boxes = torch.tensor([[38.0, 48.0, 92.0, 72.0]])
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+    cx, cy, _, _, angle = rect[0].tolist()
+
+    # Ground truth, angle-agnostic: in the frame of the RETURNED angle, the
+    # rectangle's center is the midpoint of the foreground's (min, max) extent
+    # -- NOT the mask's mass centroid.
+    fg = torch.nonzero(inside, as_tuple=False).float()
+    px, py = fg[:, 1], fg[:, 0]
+    cos_t, sin_t = math.cos(angle), math.sin(angle)
+    u = px * cos_t + py * sin_t
+    v = -px * sin_t + py * cos_t
+    mid_u = float((u.max() + u.min()) / 2)
+    mid_v = float((v.max() + v.min()) / 2)
+    exp_cx = mid_u * cos_t - mid_v * sin_t
+    exp_cy = mid_u * sin_t + mid_v * cos_t
+
+    # Sanity: the mass centroid is far from the rect center, so this test can
+    # actually tell the two apart.
+    mass_cx, mass_cy = float(px.mean()), float(py.mean())
+    assert math.hypot(mass_cx - exp_cx, mass_cy - exp_cy) > 5.0
+
+    assert math.isclose(cx, exp_cx, abs_tol=2.0), f"cx={cx} expected {exp_cx}"
+    assert math.isclose(cy, exp_cy, abs_tol=2.0), f"cy={cy} expected {exp_cy}"
+
+
+def test_rotated_rect_from_masks_size_not_inflated_by_grid_endpoints():
+    """The local sampling grid must use roi_align bin CENTERS, not an
+    endpoint-inclusive linspace (which inflates w/h by crop_size/(crop_size-1)).
+
+    Fully-saturated crop: a 32x32 foreground square with the ROI box exactly on
+    it and ``pad_ratio=0`` means EVERY one of the 16x16 roi_align bins samples
+    foreground.  The bins sit at physical offsets (i + 0.5) * 2 px inside the
+    32 px ROI, so the true extent of the sampled foreground is 15 * 2 = 30 px.
+    The endpoint-inclusive grid instead reports the full 32 px ROI side.
+    """
+    canvas = torch.zeros((64, 64))
+    canvas[16:48, 16:48] = 1.0
+    rect = rotated_rect_from_masks(
+        canvas.unsqueeze(0),
+        torch.tensor([[16.0, 16.0, 48.0, 48.0]]),
+        num_angles=24,
+        crop_size=16,
+        pad_ratio=0.0,
+    )
+    _, _, w, h, _ = rect[0].tolist()
+    assert math.isclose(w, 30.0, abs_tol=0.05), f"w={w}"
+    assert math.isclose(h, 30.0, abs_tol=0.05), f"h={h}"
+
+
+def test_rotated_rect_from_masks_falls_back_to_cpu_when_mps_roi_align_missing(
+    monkeypatch,
+):
+    """Simulate an old-torchvision install where ``roi_align`` has no MPS
+    kernel: the first call raises ``NotImplementedError`` for an "mps"
+    tensor. The kernel must transparently retry on CPU rather than crash,
+    and still return correct geometry."""
+    mask = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    masks = mask.unsqueeze(0)
+    boxes = torch.tensor([[64 - 25 - 5, 64 - 10 - 5, 64 + 25 + 5, 64 + 10 + 5]])
+
+    real_roi_align = tv_ops.roi_align
+    calls = {"n": 0}
+
+    def fake_roi_align(input_tensor, boxes_arg, output_size, aligned):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise NotImplementedError(
+                "Could not run 'torchvision::roi_align' with arguments from "
+                "the 'MPS' backend."
+            )
+        return real_roi_align(
+            input_tensor, boxes_arg, output_size=output_size, aligned=aligned
+        )
+
+    monkeypatch.setattr(obb_from_mask, "roi_align", fake_roi_align)
+    monkeypatch.setattr(obb_from_mask, "_is_mps_tensor", lambda t: True)
+    obb_from_mask._warned_mps_roi_align_fallback = False
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=24, crop_size=64)
+
+    assert calls["n"] == 2  # first call raised, fallback retried on CPU
+    assert rect.shape == (1, 5)
+    cx, cy, w, h, angle = rect[0].tolist()
+    assert math.isclose(cx, 64, abs_tol=1.5)
+    assert math.isclose(cy, 64, abs_tol=1.5)
+    major, minor = max(w, h), min(w, h)
+    assert math.isclose(major, 50, abs_tol=3.0)
+    assert math.isclose(minor, 20, abs_tol=3.0)
+    assert min(angle % math.pi, math.pi - (angle % math.pi)) < math.radians(5)
+
+
+def test_rotated_rect_from_masks_reraises_non_mps_not_implemented_error(monkeypatch):
+    """A ``NotImplementedError`` on a non-MPS (e.g. CPU/CUDA) tensor must NOT
+    be swallowed -- the guard only catches the specific MPS-missing-kernel
+    signature, so a genuine error on another device propagates."""
+    masks = torch.zeros((1, 64, 64))
+    boxes = torch.tensor([[10.0, 10.0, 20.0, 20.0]])
+
+    def always_raise(*args, **kwargs):
+        raise NotImplementedError("some unrelated op is not implemented")
+
+    monkeypatch.setattr(obb_from_mask, "roi_align", always_raise)
+
+    try:
+        rotated_rect_from_masks(masks, boxes)
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected NotImplementedError to propagate")
+
+
+def test_rotated_rect_from_masks_normal_path_unaffected_by_guard():
+    """The guard must not change behavior on the common (no-exception) path."""
+    mask = _rasterize_rotated_rect(128, cx=64, cy=64, w=50, h=20, angle_deg=0.0)
+    masks = mask.unsqueeze(0)
+    boxes = torch.tensor([[64 - 25 - 5, 64 - 10 - 5, 64 + 25 + 5, 64 + 10 + 5]])
+
+    rect = rotated_rect_from_masks(masks, boxes, num_angles=24, crop_size=64)
+
+    assert rect.shape == (1, 5)
+    assert torch.isfinite(rect).all()
+
+
+# ---------------------------------------------------------------------------
+# foreground_only optimization: projecting ONLY foreground pixels (ragged ->
+# padded to the batch-max foreground count) must be bit-identical to the
+# full-pixel path, at a fraction of the projection-tensor size.
+# ---------------------------------------------------------------------------
+
+
+def _assert_rects_equivalent(a: torch.Tensor, b: torch.Tensor, atol: float = 1e-4):
+    """NaN rows must agree as NaN; finite rows must match within ``atol``."""
+    assert a.shape == b.shape
+    nan_a = torch.isnan(a).any(dim=1)
+    nan_b = torch.isnan(b).any(dim=1)
+    assert torch.equal(nan_a, nan_b), f"NaN-row mask mismatch: {nan_a} vs {nan_b}"
+    finite = ~nan_a
+    if finite.any():
+        torch.testing.assert_close(a[finite], b[finite], atol=atol, rtol=0.0)
+
+
+def _diverse_mask_batch(size: int = 128) -> tuple[torch.Tensor, torch.Tensor]:
+    """A batch of structurally diverse masks + matching loose boxes."""
+    ys, xs = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    masks = []
+    boxes = []
+
+    def _box_full():
+        return [8.0, 8.0, float(size - 8), float(size - 8)]
+
+    # 1. Axis-aligned rectangle.
+    masks.append(_rasterize_rotated_rect(size, 64, 64, 50, 20, 0.0))
+    boxes.append(_box_full())
+    # 2. Rotated rectangle.
+    masks.append(_rasterize_rotated_rect(size, 64, 64, 50, 20, 37.0))
+    boxes.append(_box_full())
+    # 3. Ellipse.
+    ell = (((xs - 64) / 30.0) ** 2 + ((ys - 60) / 15.0) ** 2 <= 1.0).float()
+    masks.append(ell)
+    boxes.append(_box_full())
+    # 4. Asymmetric triangle / wedge.
+    wedge = (
+        (xs >= 40)
+        & (xs <= 95)
+        & (ys >= 45)
+        & (ys <= 80)
+        & ((ys - 45) <= (xs - 40) * (35.0 / 55.0))
+    ).float()
+    masks.append(wedge)
+    boxes.append(_box_full())
+    # 5. L-shape.
+    lshape = (
+        ((xs >= 40) & (xs <= 55) & (ys >= 40) & (ys <= 90))
+        | ((xs >= 40) & (xs <= 90) & (ys >= 75) & (ys <= 90))
+    ).float()
+    masks.append(lshape)
+    boxes.append(_box_full())
+    # 6. Single foreground pixel.
+    single = torch.zeros((size, size))
+    single[70, 55] = 1.0
+    masks.append(single)
+    boxes.append([50.0, 65.0, 60.0, 75.0])
+    # 7. Empty mask.
+    masks.append(torch.zeros((size, size)))
+    boxes.append([50.0, 50.0, 60.0, 60.0])
+    # 8. Second rotated rectangle (>=2 batch coverage, different angle).
+    masks.append(_rasterize_rotated_rect(size, 60, 68, 44, 24, 110.0))
+    boxes.append(_box_full())
+
+    return torch.stack(masks, dim=0), torch.tensor(boxes, dtype=torch.float32)
+
+
+def test_rotated_rect_from_masks_foreground_only_matches_full_pixel():
+    """The key equivalence test: foreground-only == full-pixel, element-wise."""
+    masks, boxes = _diverse_mask_batch(128)
+    full = rotated_rect_from_masks(
+        masks, boxes, num_angles=36, crop_size=64, foreground_only=False
+    )
+    fg = rotated_rect_from_masks(
+        masks, boxes, num_angles=36, crop_size=64, foreground_only=True
+    )
+    # Sanity: at least one NaN row (the empty mask) and several finite rows.
+    assert torch.isnan(fg).any(dim=1).sum() >= 1
+    assert torch.isfinite(fg).all(dim=1).sum() >= 5
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_single_detection():
+    for angle in (0.0, 35.0, 110.0):
+        mask = _rasterize_rotated_rect(128, 64, 64, 50, 20, angle).unsqueeze(0)
+        boxes = torch.tensor([[14.0, 14.0, 114.0, 114.0]])
+        full = rotated_rect_from_masks(mask, boxes, num_angles=36, crop_size=96)
+        fg = rotated_rect_from_masks(
+            mask, boxes, num_angles=36, crop_size=96, foreground_only=True
+        )
+        _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_all_empty_batch():
+    """M == 0 (every mask empty): both modes return all-NaN, no crash."""
+    masks = torch.zeros((3, 64, 64))
+    boxes = torch.tensor(
+        [[10.0, 10.0, 20.0, 20.0], [5.0, 5.0, 15.0, 15.0], [30.0, 30.0, 40.0, 40.0]]
+    )
+    full = rotated_rect_from_masks(masks, boxes, foreground_only=False)
+    fg = rotated_rect_from_masks(masks, boxes, foreground_only=True)
+    assert torch.isnan(fg).all()
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_mixed_empty_and_nonempty():
+    """A batch mixing empty and non-empty detections stays row-wise correct."""
+    m0 = _rasterize_rotated_rect(128, 64, 64, 50, 20, 20.0)
+    m1 = torch.zeros((128, 128))  # empty -> NaN row
+    m2 = _rasterize_rotated_rect(128, 60, 60, 40, 30, 80.0)
+    masks = torch.stack([m0, m1, m2], dim=0)
+    boxes = torch.tensor(
+        [
+            [14.0, 14.0, 114.0, 114.0],
+            [50.0, 50.0, 60.0, 60.0],
+            [14.0, 14.0, 114.0, 114.0],
+        ]
+    )
+    full = rotated_rect_from_masks(masks, boxes, num_angles=36, crop_size=96)
+    fg = rotated_rect_from_masks(
+        masks, boxes, num_angles=36, crop_size=96, foreground_only=True
+    )
+    assert torch.isnan(fg[1]).all()
+    assert torch.isfinite(fg[0]).all() and torch.isfinite(fg[2]).all()
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_single_pixel():
+    single = torch.zeros((64, 64))
+    single[30, 40] = 1.0
+    boxes = torch.tensor([[35.0, 25.0, 45.0, 35.0]])
+    full = rotated_rect_from_masks(single.unsqueeze(0), boxes, crop_size=48)
+    fg = rotated_rect_from_masks(
+        single.unsqueeze(0), boxes, crop_size=48, foreground_only=True
+    )
+    _assert_rects_equivalent(full, fg)
+
+
+def test_rotated_rect_from_masks_foreground_only_zero_detections():
+    masks = torch.zeros((0, 64, 64))
+    boxes = torch.zeros((0, 4))
+    rect = rotated_rect_from_masks(masks, boxes, foreground_only=True)
+    assert rect.shape == (0, 5)

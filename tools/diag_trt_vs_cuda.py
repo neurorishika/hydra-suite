@@ -58,7 +58,7 @@ from ultralytics.utils import nms, ops
 # ─────────────────────────────────────────────────────────────────────────────
 # Load direct executors
 # ─────────────────────────────────────────────────────────────────────────────
-from hydra_suite.core.detectors._direct_obb_runtime import (
+from hydra_suite.core.inference.direct_executors import (
     DirectONNXOBBExecutor,
     DirectTensorRTOBBExecutor,
 )

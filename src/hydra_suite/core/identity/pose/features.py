@@ -72,19 +72,63 @@ def resolve_pose_group_indices(raw_spec, keypoint_names: List[str]) -> List[int]
     return indices
 
 
+def _frame_dict_from_pose_cache(
+    pose_cache,
+    detection_cache,
+    frame_idx: int,
+) -> Optional[Dict]:
+    """Adapter: return a frame dict shaped like the legacy IndividualPropertiesCache.
+
+    Reads PoseResult from the new PoseCache and the matching detection_ids array
+    from DetectionCache. Returns None if either cache has no entry for this frame.
+
+    This adapter enables build_pose_detection_keypoint_map to work with both the
+    legacy IndividualPropertiesCache (via get_frame()) and the new cache pair.
+    """
+    try:
+        pose_result = pose_cache.read_frame(frame_idx)
+        obb_result = detection_cache.read_frame(frame_idx)
+    except Exception:
+        return None
+    if pose_result is None or obb_result is None:
+        return None
+    return {
+        "detection_ids": obb_result.detection_ids,
+        "pose_keypoints": pose_result.keypoints,  # (D, K, 3)
+        "pose_valid_mask": pose_result.valid_mask,  # (D,)
+    }
+
+
 def build_pose_detection_keypoint_map(
-    pose_props_cache, frame_idx: int
+    pose_props_cache, frame_idx: int, detection_cache=None
 ) -> Dict[int, Any]:
     """Return {detection_id: keypoints_array} for one frame from cache.
+
+    Supports two call patterns:
+    - Legacy: ``build_pose_detection_keypoint_map(legacy_cache, frame_idx)``
+      where legacy_cache has a ``.get_frame()`` method.
+    - New pipeline: ``build_pose_detection_keypoint_map(pose_cache, frame_idx,
+      detection_cache=det_cache)`` where both are new-style cache handles.
 
     Returns an empty dict if the cache is None or the frame is not found.
     """
     if pose_props_cache is None:
         return {}
-    try:
-        frame = pose_props_cache.get_frame(int(frame_idx))
-    except Exception:
-        return {}
+
+    # New pipeline path: pose_cache + detection_cache pair
+    if detection_cache is not None:
+        frame = _frame_dict_from_pose_cache(
+            pose_props_cache, detection_cache, frame_idx
+        )
+        if frame is None:
+            return {}
+    else:
+        # Legacy path: IndividualPropertiesCache with get_frame()
+        try:
+            frame = pose_props_cache.get_frame(int(frame_idx))
+        except Exception:
+            return {}
+
     ids = frame.get("detection_ids", [])
     keypoints = frame.get("pose_keypoints", [])
     n = min(len(ids), len(keypoints))

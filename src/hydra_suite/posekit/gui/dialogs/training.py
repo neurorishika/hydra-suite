@@ -45,12 +45,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from hydra_suite.paths import get_training_runs_dir, get_vitpose_cache_dir
+from hydra_suite.utils.conda_utils import popen_conda, run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from ...core.extensions import (
     build_coco_keypoints_dataset,
     build_yolo_pose_dataset,
     list_labeled_indices,
+)
+from ...core.vitpose_checkpoints import CATALOG, check_variant_available
+from ...core.vitpose_training import (
+    build_training_command,
+    parse_progress_line,
+    prepare_run,
 )
 from .evaluation import EvaluationDashboardDialog
 from .utils import (
@@ -292,6 +300,112 @@ class TrainingWorker(QObject):
             pass
 
 
+class ViTPoseTrainingWorker(QObject):
+    """Runs ViTPose fine-tuning as an in-env subprocess (mirrors TrainingWorker)."""
+
+    log = Signal(str)
+    progress = Signal(int, int)
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        image_paths,
+        labels_dir,
+        run_dir,
+        cache_dir,
+        class_names,
+        keypoint_names,
+        skeleton_edges,
+        variant,
+        init_checkpoint,
+        num_keypoints,
+        epochs,
+        batch,
+        device,
+    ):
+        super().__init__()
+        self.image_paths = list(image_paths)
+        self.labels_dir = Path(labels_dir)
+        self.run_dir = Path(run_dir)
+        self.cache_dir = Path(cache_dir)
+        self.class_names = list(class_names)
+        self.keypoint_names = list(keypoint_names)
+        self.skeleton_edges = list(skeleton_edges)
+        self.variant = variant
+        self.init_checkpoint = init_checkpoint
+        self.num_keypoints = int(num_keypoints)
+        self.epochs = int(epochs)
+        self.batch = int(batch)
+        self.device = device
+        self._cancel = False
+        self._proc = None
+
+    def cancel(self):
+        self._cancel = True
+        try:
+            if self._proc and self._proc.poll() is None:
+                self._proc.terminate()
+        except Exception:
+            pass
+
+    def run(self):
+        try:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            self.log.emit("Building COCO-keypoints dataset…")
+            ds = build_coco_keypoints_dataset(
+                image_paths=self.image_paths,
+                labels_dir=self.labels_dir,
+                output_dir=self.run_dir / "dataset",
+                class_names=self.class_names,
+                keypoint_names=self.keypoint_names,
+                skeleton_edges=self.skeleton_edges,
+            )
+            params = dict(
+                init_checkpoint=self.init_checkpoint,
+                variant=self.variant,
+                num_keypoints=self.num_keypoints,
+                dataset_dir=str(ds["dataset_dir"]),
+                device=self.device,
+                epochs=self.epochs,
+                batch_size=self.batch,
+            )
+            run_json = prepare_run(params, self.run_dir, self.cache_dir)
+            cmd = build_training_command(run_json)
+            self.log.emit(f"Launching: {' '.join(cmd)}")
+            self.progress.emit(0, max(1, self.epochs))
+
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=os.environ.copy(),
+            )
+            for line in self._proc.stdout:
+                if self._cancel:
+                    break
+                self.log.emit(line.rstrip())
+                prog = parse_progress_line(line)
+                if prog is not None:
+                    self.progress.emit(prog["epoch"] + 1, self.epochs)
+            code = self._proc.wait()
+            if self._cancel:
+                self.failed.emit("Training cancelled.")
+            elif code != 0:
+                self.failed.emit(f"Training subprocess exited with code {code}.")
+            else:
+                self.finished.emit(
+                    {
+                        "run_dir": str(self.run_dir),
+                        "best": str(self.run_dir / "best.pt"),
+                    }
+                )
+        except Exception as exc:  # surfaced to the dialog
+            self.failed.emit(str(exc))
+
+
 class SleapExportWorker(QObject):
     """Worker for exporting to SLEAP."""
 
@@ -398,7 +512,7 @@ class SleapExportWorker(QObject):
                 code,
                 str(req_path),
             ]
-            proc = subprocess.run(cmd, capture_output=True, text=True)
+            proc = run_conda(cmd, capture_output=True, text=True)
             if proc.returncode != 0:
                 err = (
                     proc.stderr.strip() or proc.stdout.strip() or "SLEAP export failed."
@@ -414,6 +528,114 @@ class SleapExportWorker(QObject):
             self.finished.emit(str(self.slp_path))
         except Exception as e:
             self.failed.emit(str(e))
+
+
+def resolve_finished_weights(info: dict) -> str:
+    """Return the best-weights path from a training worker's finished payload.
+
+    Supports both the YOLO/ultralytics shape ({"weights": ".../weights/best.pt"})
+    and the ViTPose shape ({"run_dir": ..., "best": ".../best.pt"}). Returns "" if
+    no existing weights file can be resolved.
+    """
+    weights = str(info.get("weights") or "").strip()
+    if weights and Path(weights).exists():
+        return weights
+    best = str(info.get("best") or "").strip()
+    if best and Path(best).exists():
+        return best
+    run_dir = info.get("run_dir")
+    if run_dir:
+        rd = Path(run_dir)
+        for cand in (
+            rd / "weights" / "best.pt",
+            rd / "best.pt",
+            rd / "weights" / "last.pt",
+            rd / "last.pt",
+        ):
+            if cand.exists():
+                return str(cand)
+    return ""
+
+
+def parse_loss_components(run_dir):
+    """Parse per-component loss curves from a training run directory.
+
+    Prefers Ultralytics-style ``results.csv`` (one or more ``*loss*`` columns,
+    e.g. ``train/box_loss``/``val/box_loss``), keeping the existing
+    multi-component discovery logic used by the YOLO loss plot. Falls back to
+    the ViTPose trainer's ``metrics.csv`` (``epoch,train_loss,val_loss,...``),
+    which contributes a single component named ``"loss"``. Returns
+    ``({}, {})`` when neither file exists.
+    """
+    rd = Path(run_dir)
+    results_path = rd / "results.csv"
+    metrics_path = rd / "metrics.csv"
+
+    if results_path.exists():
+        lines = results_path.read_text(encoding="utf-8").splitlines()
+        rows = list(csv.reader(lines))
+        if len(rows) < 2:
+            return {}, {}
+        header = [h.strip() for h in rows[0]]
+
+        # Identify columns
+        train_cols = [
+            (i, h.replace("train/", ""))
+            for i, h in enumerate(header)
+            if ("train/" in h or h.startswith("box_loss")) and "loss" in h
+        ]
+        # Some versions use train/box_loss, others box_loss.
+        # We want columns ending in loss basically.
+
+        val_cols = [
+            (i, h.replace("val/", ""))
+            for i, h in enumerate(header)
+            if ("val/" in h) and "loss" in h
+        ]
+
+        # Only graph explicitly loss columns
+        if not train_cols and not val_cols:
+            return {}, {}
+
+        keys = sorted({name for _, name in train_cols + val_cols})
+
+        train_vals = {k: [] for k in keys}
+        val_vals = {k: [] for k in keys}
+
+        for row in rows[1:]:
+            if not row:
+                continue
+
+            # Helper to parse float
+            def _getf(idx, _row=row):
+                if idx >= len(_row):
+                    return None
+                s = _row[idx].strip()
+                if not s:
+                    return None
+                try:
+                    return float(s)
+                except ValueError:
+                    return None
+
+            for i, name in train_cols:
+                if name in keys:
+                    train_vals[name].append(_getf(i))
+            for i, name in val_cols:
+                if name in keys:
+                    val_vals[name].append(_getf(i))
+
+        return train_vals, val_vals
+
+    if metrics_path.exists():
+        tr, vl = [], []
+        with metrics_path.open(encoding="utf-8", newline="") as fh:
+            for row in csv.DictReader(fh):
+                tr.append(float(row["train_loss"]))
+                vl.append(float(row["val_loss"]))
+        return {"loss": tr}, {"loss": vl}
+
+    return {}, {}
 
 
 class TrainingRunnerDialog(QDialog):
@@ -458,10 +680,26 @@ class TrainingRunnerDialog(QDialog):
         backend_layout = QFormLayout(self.backend_group)
 
         self.backend_combo = QComboBox()
-        self.backend_combo.addItems(["YOLO Pose", "ViTPose (soon)", "SLEAP"])
+        self.backend_combo.addItems(["YOLO Pose", "ViTPose", "SLEAP"])
         backend_layout.addRow("Backend", self.backend_combo)
 
         content_layout.addWidget(self.backend_group)
+
+        # ViTPose config (variant + init checkpoint)
+        self.vitpose_group = QGroupBox("ViTPose Config")
+        vitpose_layout = QFormLayout(self.vitpose_group)
+
+        self.vitpose_variant_combo = QComboBox()
+        self.vitpose_variant_combo.addItems(["B", "L", "H"])
+        self.vitpose_variant_combo.setCurrentText("B")
+        vitpose_layout.addRow("Variant", self.vitpose_variant_combo)
+
+        self.vitpose_checkpoint_combo = QComboBox()
+        self.vitpose_checkpoint_combo.setEditable(True)
+        self.vitpose_checkpoint_combo.addItems(list(CATALOG.keys()) + ["Browse…"])
+        vitpose_layout.addRow("Init checkpoint", self.vitpose_checkpoint_combo)
+
+        content_layout.addWidget(self.vitpose_group)
 
         # Config
         self.cfg_group = QGroupBox("Config")
@@ -748,6 +986,9 @@ class TrainingRunnerDialog(QDialog):
         self.btn_sleap_export.clicked.connect(self._export_sleap_labels)
         self.btn_sleap_open.clicked.connect(self._open_sleap)
         self.backend_combo.currentIndexChanged.connect(self._update_backend_ui)
+        self.vitpose_checkpoint_combo.activated.connect(
+            self._on_vitpose_checkpoint_activated
+        )
 
         self._toggle_aug_widgets(self.cb_augment.isChecked())
         self._apply_settings()
@@ -924,20 +1165,38 @@ class TrainingRunnerDialog(QDialog):
     def _update_backend_ui(self):
         backend = self.backend_combo.currentText()
         is_yolo = backend == "YOLO Pose"
+        is_vitpose = backend == "ViTPose"
         is_sleap = backend.startswith("SLEAP")
 
         self.cfg_group.setVisible(is_yolo)
         self.aug_group.setVisible(is_yolo)
-        self.info_group.setVisible(is_yolo)
-        self.progress.setVisible(is_yolo)
+        self.info_group.setVisible(is_yolo or is_vitpose)
+        self.progress.setVisible(is_yolo or is_vitpose)
         self.lbl_loss_plot.setVisible(is_yolo)
         self.loss_components_box.setVisible(is_yolo)
-        self.log_view.setVisible(is_yolo)
-        self.btn_start.setVisible(is_yolo)
-        self.btn_stop.setVisible(is_yolo)
-        self.btn_open_eval.setVisible(is_yolo)
+        self.log_view.setVisible(is_yolo or is_vitpose)
+        self.btn_start.setVisible(is_yolo or is_vitpose)
+        self.btn_stop.setVisible(is_yolo or is_vitpose)
+        self.btn_open_eval.setVisible(is_yolo or is_vitpose)
 
+        self.vitpose_group.setVisible(is_vitpose)
         self.sleap_group.setVisible(is_sleap)
+
+    def _on_vitpose_checkpoint_activated(self, index: int):
+        if self.vitpose_checkpoint_combo.itemText(index) == "Browse…":
+            self._resolve_vitpose_checkpoint()
+
+    def _resolve_vitpose_checkpoint(self) -> str:
+        text = self.vitpose_checkpoint_combo.currentText().strip()
+        if text == "Browse…":
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select checkpoint", "", "*.pth *.pt"
+            )
+            if path:
+                self.vitpose_checkpoint_combo.setCurrentText(path)
+                return path
+            return ""
+        return text
 
     def _default_sleap_out_path(self) -> Path:
         base = self.project.out_root / "posekit" / "sleap"
@@ -1082,7 +1341,7 @@ class TrainingRunnerDialog(QDialog):
 
         def _supports_cmd(args: List[str]) -> bool:
             try:
-                res = subprocess.run(
+                res = run_conda(
                     ["conda", "run", "-n", env] + args,
                     capture_output=True,
                     text=True,
@@ -1098,7 +1357,7 @@ class TrainingRunnerDialog(QDialog):
             cmd = ["conda", "run", "-n", env, "sleap-label", str(slp_path)]
 
         try:
-            subprocess.Popen(cmd)
+            popen_conda(cmd)
             self._append_log(f"[SLEAP] Launching: {' '.join(cmd)}")
         except Exception as e:
             QMessageBox.warning(self, "SLEAP launch failed", str(e))
@@ -1170,11 +1429,14 @@ class TrainingRunnerDialog(QDialog):
 
     def _start_training(self):
         backend = self.backend_combo.currentText()
+        if backend == "ViTPose":
+            self._start_vitpose_training()
+            return
         if backend != "YOLO Pose":
             QMessageBox.information(
                 self,
                 "Not Implemented",
-                "Only YOLO Pose is wired up right now. Other backends are coming soon.",
+                "Only YOLO Pose and ViTPose are wired up right now. Other backends are coming soon.",
             )
             return
 
@@ -1295,6 +1557,78 @@ class TrainingRunnerDialog(QDialog):
         self.btn_stop.setEnabled(True)
         self.btn_open_eval.setEnabled(False)
 
+    def _start_vitpose_training(self):
+        labeled_count = len(
+            list_labeled_indices(self.image_paths, self.project.labels_dir)
+        )
+        if labeled_count < 2:
+            QMessageBox.warning(
+                self,
+                "Not enough labels",
+                "Need at least 2 labeled frames to train.",
+            )
+            return
+
+        checkpoint = self._resolve_vitpose_checkpoint()
+        if not checkpoint:
+            QMessageBox.warning(
+                self, "No checkpoint", "Select or browse for an init checkpoint."
+            )
+            return
+
+        variant = self.vitpose_variant_combo.currentText()
+        if checkpoint in CATALOG:
+            # Auto-download (catalog) selection: guard against a variant with
+            # no pinned checkpoint. A Browsed local checkpoint is user-supplied
+            # and must not be blocked here.
+            try:
+                check_variant_available(variant)
+            except ValueError as exc:
+                QMessageBox.warning(self, "Variant unavailable", str(exc))
+                return
+
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        run_dir = get_training_runs_dir() / "vitpose" / timestamp
+        cache_dir = get_vitpose_cache_dir()
+
+        self._last_run_dir = run_dir
+        self._train_start_ts = time.time()
+        self._loss_source_path = None
+        self.lbl_run_dir.setText(f"Run dir: {run_dir}")
+        self.log_view.clear()
+        self.progress.setValue(0)
+
+        self._thread = QThread()
+        self._worker = ViTPoseTrainingWorker(
+            image_paths=self.image_paths,
+            labels_dir=self.project.labels_dir,
+            run_dir=run_dir,
+            cache_dir=cache_dir,
+            class_names=self.project.class_names,
+            keypoint_names=self.project.keypoint_names,
+            skeleton_edges=self.project.skeleton_edges,
+            variant=self.vitpose_variant_combo.currentText(),
+            init_checkpoint=checkpoint,
+            num_keypoints=len(self.project.keypoint_names),
+            epochs=self.epochs_spin.value(),
+            batch=self.batch_spin.value(),
+            device=self.device_combo.currentText(),
+        )
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.log.connect(self._append_log)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.finished.connect(self._thread.deleteLater)
+        self._thread.start()
+
+        self.btn_start.setEnabled(False)
+        self.btn_stop.setEnabled(True)
+        self.btn_open_eval.setEnabled(False)
+
     def _stop_training(self):
         if self._worker:
             self._worker.cancel()
@@ -1321,8 +1655,9 @@ class TrainingRunnerDialog(QDialog):
         if self._loss_timer.isActive():
             self._loss_timer.stop()
         self._update_loss_plot()
-        weights = info.get("weights") or ""
-        self._last_weights = weights if weights else None
+        weights = resolve_finished_weights(info)
+        if weights:
+            self._last_weights = weights
         if self._last_run_dir:
             run_dir = Path(self._last_run_dir)
             try:
@@ -1342,12 +1677,10 @@ class TrainingRunnerDialog(QDialog):
                     self.lbl_run_dir.setText(f"Run dir: {run_dir}")
             except Exception:
                 pass
-            best = run_dir / "weights" / "best.pt"
-            last = run_dir / "weights" / "last.pt"
-            if best.exists():
-                self._last_weights = str(best)
-            elif last.exists():
-                self._last_weights = str(last)
+            if not weights:
+                resolved = resolve_finished_weights({"run_dir": str(run_dir)})
+                if resolved:
+                    self._last_weights = resolved
         if weights:
             self._append_log(f"Weights: {weights}")
             self.btn_open_eval.setEnabled(True)
@@ -1405,11 +1738,15 @@ class TrainingRunnerDialog(QDialog):
                 self, "Missing weights", "No valid weights found to evaluate."
             )
             return
+        trained_backend = (
+            "vitpose" if self.backend_combo.currentText() == "ViTPose" else "yolo"
+        )
         dlg = EvaluationDashboardDialog(
             self,
             self.project,
             self.image_paths,
             weights_path=weights,
+            backend=trained_backend,
         )
         dlg.exec()
 
@@ -1431,40 +1768,22 @@ class TrainingRunnerDialog(QDialog):
                 ]
             if candidates:
                 results_path = max(candidates, key=lambda p: p.stat().st_mtime)
-        if not results_path.exists():
+
+        metrics_path = run_dir / "metrics.csv"
+        source_dir = results_path.parent if results_path.exists() else run_dir
+        source_path = results_path if results_path.exists() else metrics_path
+        if not results_path.exists() and not metrics_path.exists():
             return
 
-        if results_path != self._loss_source_path:
-            self._loss_source_path = results_path
-            self.log_view.appendPlainText(f"[loss] using {results_path}")
+        if source_path != self._loss_source_path:
+            self._loss_source_path = source_path
+            self.log_view.appendPlainText(f"[loss] using {source_path}")
         try:
-            # Read full csv
-            lines = results_path.read_text(encoding="utf-8").splitlines()
-            rows = list(csv.reader(lines))
-            if len(rows) < 2:
-                return
-            header = [h.strip() for h in rows[0]]
-
-            # Identify columns
-            train_cols = [
-                (i, h.replace("train/", ""))
-                for i, h in enumerate(header)
-                if ("train/" in h or h.startswith("box_loss")) and "loss" in h
-            ]
-            # Some versions use train/box_loss, others box_loss.
-            # We want columns ending in loss basically.
-
-            val_cols = [
-                (i, h.replace("val/", ""))
-                for i, h in enumerate(header)
-                if ("val/" in h) and "loss" in h
-            ]
-
-            # Only graph explicitly loss columns
-            if not train_cols and not val_cols:
+            train_vals, val_vals = parse_loss_components(source_dir)
+            if not train_vals and not val_vals:
                 return
 
-            keys = sorted({name for _, name in train_cols + val_cols})
+            keys = sorted(set(train_vals) | set(val_vals))
 
             # Rebuild component checks if keys changed
             if not self.loss_component_checks or set(
@@ -1482,38 +1801,12 @@ class TrainingRunnerDialog(QDialog):
                     self.loss_components_layout.addWidget(cb)
                     self.loss_component_checks[name] = cb
 
-            train_vals = {k: [] for k in keys}
-            val_vals = {k: [] for k in keys}
-
-            for row in rows[1:]:
-                if not row:
-                    continue
-
-                # Helper to parse float
-                def _getf(idx, _row=row):
-                    if idx >= len(_row):
-                        return None
-                    s = _row[idx].strip()
-                    if not s:
-                        return None
-                    try:
-                        return float(s)
-                    except ValueError:
-                        return None
-
-                for i, name in train_cols:
-                    if name in keys:
-                        train_vals[name].append(_getf(i))
-                for i, name in val_cols:
-                    if name in keys:
-                        val_vals[name].append(_getf(i))
-
             # Filter by checkbox
             selected = [
                 k for k, cb in self.loss_component_checks.items() if cb.isChecked()
             ]
-            train_vals = {k: train_vals[k] for k in selected}
-            val_vals = {k: val_vals[k] for k in selected}
+            train_vals = {k: train_vals[k] for k in selected if k in train_vals}
+            val_vals = {k: val_vals[k] for k in selected if k in val_vals}
 
             img = make_loss_plot_image(
                 train_vals,
@@ -1525,5 +1818,4 @@ class TrainingRunnerDialog(QDialog):
             self.lbl_loss_plot.setPixmap(pix)
 
         except Exception:
-            pass
             pass

@@ -21,6 +21,7 @@ from hydra_suite.core.identity.classification.errors import (
     ClassifierFormatError,
     ClassifierRuntimeError,
 )
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 __all__ = ["ClassifierMetadata", "ClassifierBackend"]
 
@@ -361,7 +362,7 @@ class _ClassifierMultiheadBundleLoader:
         )
 
     @staticmethod
-    def load(path: str, device: str):
+    def load(path: str, resolved: ResolvedBackend):
         """Load each referenced factor model as a flat ClassifierBackend."""
         import json
 
@@ -375,7 +376,7 @@ class _ClassifierMultiheadBundleLoader:
         models = []
         for entry in data["factor_models"]:
             factor_path = (base / entry["path"]).resolve()
-            factor_backend = ClassifierBackend(str(factor_path), compute_runtime=device)
+            factor_backend = ClassifierBackend(str(factor_path), resolved)
             if factor_backend.metadata.is_multihead:
                 factor_backend.close()
                 raise ClassifierFormatError(
@@ -422,15 +423,14 @@ def _select_loader(path: str):
     )
 
 
-def _torch_device(compute_runtime: str) -> str:
-    rt = compute_runtime
-    if rt in ("cuda", "onnx_cuda", "tensorrt"):
-        return "cuda"
-    if rt in ("mps", "onnx_coreml"):
-        return "mps"
-    if rt in ("rocm", "onnx_rocm"):
-        return "cuda"  # kept for legacy configs; ROCm is no longer supported
-    return "cpu"
+def _torch_device_for_resolved(resolved) -> str:
+    """Return the torch device string for a ResolvedBackend.
+
+    The resolver only ever emits (backend, device) pairs drawn from
+    {(torch,cpu),(torch,mps),(torch,cuda),(tensorrt,cuda),(coreml,mps)}, so the
+    torch device a backend should load onto is exactly ``resolved.device``.
+    """
+    return resolved.device
 
 
 def _provider_key(provider: object) -> str:
@@ -439,11 +439,11 @@ def _provider_key(provider: object) -> str:
     return str(provider)
 
 
-def _requested_onnx_accelerator_providers(compute_runtime: str) -> list[str]:
-    from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+def _requested_onnx_accelerator_providers(resolved: ResolvedBackend) -> list[str]:
+    from hydra_suite.runtime.onnx_providers import execution_providers_for
 
-    providers = derive_onnx_execution_providers(
-        compute_runtime,
+    providers = execution_providers_for(
+        resolved,
         include_cpu_fallback=False,
     )
     return [_provider_key(provider) for provider in providers]
@@ -476,8 +476,8 @@ def _looks_like_cuda_alloc_failure(exc: BaseException) -> bool:
     )
 
 
-def _native_accelerator_available(compute_runtime: str) -> bool:
-    device = _torch_device(compute_runtime)
+def _native_accelerator_available(resolved: ResolvedBackend) -> bool:
+    device = resolved.device
     if device == "cuda":
         try:
             import torch
@@ -510,7 +510,7 @@ class ClassifierBackend:
     def __init__(
         self,
         model_path: str,
-        compute_runtime: str = "cpu",
+        resolved: ResolvedBackend,
         trt_profile_max_batch: int | None = None,
     ) -> None:
         if not model_path:
@@ -519,7 +519,7 @@ class ClassifierBackend:
         if not os.path.exists(path):
             raise ClassifierFormatError(f"{path!r}: file does not exist")
         self._model_path = path
-        self._compute_runtime = str(compute_runtime or "cpu")
+        self._resolved = resolved
         self._loader = _select_loader(path)
         self._metadata = self._loader.parse_metadata(path)
         self._model = None
@@ -536,8 +536,12 @@ class ClassifierBackend:
         return self._metadata
 
     def _uses_onnx(self) -> bool:
-        rt = self._compute_runtime
-        return rt.startswith("onnx_") or rt == "tensorrt"
+        # The resolver never emits onnx_* runtimes; TensorRT is the only backend
+        # that loads through ONNX Runtime (CoreML has its own load path).
+        return self._resolved.backend == "tensorrt"
+
+    def _uses_coreml(self) -> bool:
+        return self._resolved.backend == "coreml"
 
     def _uses_factor_backends(self) -> bool:
         return self._metadata.arch in ("yolo_multihead", "classifier_multihead")
@@ -548,7 +552,7 @@ class ClassifierBackend:
         if Path(self._model_path).suffix.lower() != ".pth":
             return False
 
-        requested = _requested_onnx_accelerator_providers(self._compute_runtime)
+        requested = _requested_onnx_accelerator_providers(self._resolved)
         if not requested:
             return False
 
@@ -556,18 +560,20 @@ class ClassifierBackend:
         if any(provider in available for provider in requested):
             return False
 
-        return _native_accelerator_available(self._compute_runtime)
+        return _native_accelerator_available(self._resolved)
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
         try:
-            if self._uses_onnx() and not self._uses_factor_backends():
+            if self._uses_coreml() and not self._uses_factor_backends():
+                self._load_coreml()
+            elif self._uses_onnx() and not self._uses_factor_backends():
                 if self._should_fallback_to_native_runtime():
-                    native_device = _torch_device(self._compute_runtime)
+                    native_device = self._resolved.device
                     logger.warning(
-                        "ClassifierBackend: requested ONNX runtime %s for %s but matching ONNX providers are unavailable; falling back to native %s execution",
-                        self._compute_runtime,
+                        "ClassifierBackend: requested %s backend for %s but matching ONNX providers are unavailable; falling back to native %s execution",
+                        self._resolved.backend,
                         self._model_path,
                         native_device,
                     )
@@ -580,9 +586,9 @@ class ClassifierBackend:
                     self._active_execution_backend = "onnx"
             else:
                 loader_target = (
-                    self._compute_runtime
+                    self._resolved
                     if self._uses_factor_backends()
-                    else _torch_device(self._compute_runtime)
+                    else self._resolved.device
                 )
                 self._model = self._loader.load(self._model_path, loader_target)
                 self._active_execution_backend = "native"
@@ -590,7 +596,7 @@ class ClassifierBackend:
                 # kernel JIT compilation now rather than stalling Phase-1 batch 1
                 # for ~45 s on Ada/Hopper GPUs (e.g. EfficientNet-B0 head-tail).
                 if not self._uses_factor_backends():
-                    device_str = _torch_device(self._compute_runtime)
+                    device_str = self._resolved.device
                     if device_str.startswith("cuda"):
                         self._warmup_native_cuda_model()
         except ClassifierError:
@@ -616,7 +622,7 @@ class ClassifierBackend:
             import torch
 
             h, w = self._metadata.input_size
-            device_str = _torch_device(self._compute_runtime)
+            device_str = self._resolved.device
             dummy = torch.zeros(1, 3, h, w, dtype=torch.float32, device=device_str)
             with torch.no_grad():
                 self._model(dummy)
@@ -658,10 +664,10 @@ class ClassifierBackend:
     def _load_onnx(self) -> None:
         import onnxruntime as ort
 
-        from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+        from hydra_suite.runtime.onnx_providers import execution_providers_for
 
         peer = self._derive_onnx_peer()
-        providers = derive_onnx_execution_providers(self._compute_runtime)
+        providers = execution_providers_for(self._resolved)
 
         is_trt = any(
             "tensorrt" in (p if isinstance(p, str) else p[0]).lower() for p in providers
@@ -678,7 +684,10 @@ class ClassifierBackend:
                 pass  # silently fall back to providers without profile options
 
         is_gpu_requested = any(
-            any(kw in (p if isinstance(p, str) else p[0]).lower() for kw in ("cuda", "tensorrt"))
+            any(
+                kw in (p if isinstance(p, str) else p[0]).lower()
+                for kw in ("cuda", "tensorrt")
+            )
             for p in providers
         )
         try:
@@ -807,6 +816,84 @@ class ClassifierBackend:
         except Exception:
             pass
 
+    def _derive_coreml_peer(self) -> Path:
+        """Return (creating if necessary) the CoreML .mlpackage peer for this artifact."""
+        src = Path(self._model_path)
+        peer = src.with_suffix(".mlpackage")
+        if peer.exists():
+            return peer
+        h, w = self._metadata.input_size
+        if self._uses_factor_backends():
+            # Per-factor export: each factor backend derives its own peer.
+            # This method should only be called for flat (non-bundle) artifacts.
+            raise ClassifierRuntimeError(
+                f"{self._model_path!r}: cannot derive a single CoreML peer for a "
+                "multihead bundle — export each factor model individually"
+            )
+        if self._metadata.arch == "yolo":
+            from ultralytics import YOLO
+
+            YOLO(str(src)).export(format="coreml", imgsz=max(h, w))
+            return peer
+        if self._metadata.arch == "tinyclassifier":
+            from hydra_suite.training.tiny_model import (
+                export_tiny_to_coreml,
+                load_tiny_classifier,
+            )
+
+            model, ckpt = load_tiny_classifier(str(src), device="cpu")
+            export_tiny_to_coreml(model, ckpt, str(peer))
+            return peer
+        # torchvision / timm arch
+        from hydra_suite.training.torchvision_model import (
+            export_torchvision_to_coreml,
+            load_torchvision_classifier,
+        )
+
+        model, ckpt = load_torchvision_classifier(str(src), device="cpu")
+        export_torchvision_to_coreml(model, ckpt, str(peer))
+        return peer
+
+    def _load_coreml(self) -> None:
+        """Load the .mlpackage via coremltools and cache the output feature name."""
+        import coremltools
+
+        peer = self._derive_coreml_peer()
+        self._model = coremltools.models.MLModel(str(peer))
+        # Resolve and cache the output feature name at load time so _forward_coreml
+        # does not need to inspect the spec on every call.
+        output_descs = self._model.output_description._fd_spec
+        if output_descs:
+            self._coreml_output_name: str | None = output_descs[0].name
+        else:
+            self._coreml_output_name = None
+        self._active_execution_backend = "coreml"
+
+    def _forward_coreml(self, batch_np: np.ndarray) -> np.ndarray:
+        """Run a preprocessed (N, 3, H, W) float32 batch through the CoreML model.
+
+        Calls predict() ONCE for the whole batch. The exported .mlpackage's
+        input already uses a RangeDim(1, 512) batch axis (see
+        export_tiny_to_coreml / export_torchvision_to_coreml) -- looping
+        per-crop was a correctness-preserving but throughput-destroying bug:
+        measured 7.8x slower per-frame at batch=32 than a single batched call
+        (Spec 1 Phase A/B, 2026-07-04).
+
+        The output feature name assigned by coremltools varies by model graph
+        (e.g. ``'var_23'``). We therefore index the prediction dict by the
+        cached name when known, falling back to the first value by position.
+
+        The model was traced with an NCHW ``ct.TensorType(name="input", ...)``
+        input, so we feed the preprocessed batch as-is in NCHW under the
+        "input" key — no layout transpose is needed.
+        """
+        pred = self._model.predict({"input": batch_np})
+        if self._coreml_output_name is not None and self._coreml_output_name in pred:
+            logits = pred[self._coreml_output_name]
+        else:
+            logits = next(iter(pred.values()))
+        return np.asarray(logits, dtype=np.float32).reshape(batch_np.shape[0], -1)
+
     def _uses_imagenet_normalization(self) -> bool:
         """Return True when the checkpoint expects ImageNet mean/std normalization."""
         return self._metadata.arch != "tinyclassifier"
@@ -849,10 +936,15 @@ class ClassifierBackend:
     def _forward_torch(self, batch_np: np.ndarray) -> np.ndarray:
         import torch
 
-        device = _torch_device(self._compute_runtime)
-        t = torch.from_numpy(batch_np).to(device)
-        with torch.no_grad():
-            logits = self._model(t).detach().cpu().numpy()
+        device = self._resolved.device
+        t = torch.from_numpy(batch_np)
+        if device.startswith("cuda") and torch.cuda.is_available():
+            # Pinned staging enables async DMA to the CUDA device.
+            t = t.pin_memory().to(device, non_blocking=True)
+        else:
+            t = t.to(device)
+        with torch.inference_mode():
+            logits = self._model(t).float().cpu().numpy()
         return logits
 
     def _forward_yolo(self, crops: list[np.ndarray]) -> np.ndarray:
@@ -874,6 +966,51 @@ class ClassifierBackend:
             )
             per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
         return np.concatenate(per_factor_logits, axis=-1)
+
+    def _forward_multi_cuda(self, crops_chw: list, input_is_bgr: bool) -> np.ndarray:
+        """GPU-native counterpart of :meth:`_forward_yolo_multi`.
+
+        Identical shape/semantics — concatenated per-factor log-probs — but each
+        factor's probabilities come from its ``predict_batch_cuda`` (crops stay on
+        device) instead of the numpy ``predict_batch``. Used for factor bundles
+        whose every factor is CUDA-capable (see :meth:`supports_cuda_forward`).
+        """
+        per_factor_logits: list[np.ndarray] = []
+        for factor_backend in self._model:
+            factor_probs = factor_backend.predict_batch_cuda(crops_chw, input_is_bgr)
+            probs = np.array(
+                [per_crop[0] for per_crop in factor_probs], dtype=np.float32
+            )
+            per_factor_logits.append(np.log(np.clip(probs, 1e-9, 1.0)))
+        return np.concatenate(per_factor_logits, axis=-1)
+
+    def supports_cuda_forward(self) -> bool:
+        """True iff this backend has a CUDA-native forward.
+
+        For a flat backend: its active execution backend is ``native`` (torch) or
+        ``onnx`` (IOBinding). For a factor bundle: EVERY factor must qualify (and
+        expose ``predict_batch_cuda``). Consumed by the strict gpu-tier capability
+        check so an unsupported classifier fails at load rather than silently
+        round-tripping through CPU.
+
+        ``_active_execution_backend`` is ``"unloaded"`` until the (lazy)
+        ``_ensure_loaded`` runs, so we force-load first — otherwise a
+        perfectly CUDA-capable native model reads as unsupported. This mirrors
+        ``predict_batch_cuda``, which also ``_ensure_loaded``s before branching on
+        ``_active_execution_backend``.
+        """
+        self._ensure_loaded()
+        if self._uses_factor_backends():
+            for factor in self._model:
+                ensure = getattr(factor, "_ensure_loaded", None)
+                if callable(ensure):
+                    ensure()
+            return all(
+                getattr(f, "_active_execution_backend", None) in ("native", "onnx")
+                and hasattr(f, "predict_batch_cuda")
+                for f in self._model
+            )
+        return getattr(self, "_active_execution_backend", None) in ("native", "onnx")
 
     def _forward_onnx(self, batch_np: np.ndarray) -> np.ndarray:
         input_name = self._model.get_inputs()[0].name
@@ -1020,12 +1157,12 @@ class ClassifierBackend:
     def _forward_torch_cuda(self, batch_cuda):
         """Run the torch model on a device-resident batch; returns logits on device.
 
-        Unlike :meth:`_forward_torch`, no host↔device transfers occur.  The
-        returned tensor stays on the same device as ``batch_cuda``.
+        No host<->device transfers occur. The returned tensor stays on the same
+        device as ``batch_cuda``.
         """
         import torch
 
-        with torch.no_grad():
+        with torch.inference_mode():
             return self._model(batch_cuda).detach()
 
     def predict_batch_cuda(
@@ -1057,12 +1194,33 @@ class ClassifierBackend:
         self._ensure_loaded()
 
         if self._uses_factor_backends():
-            # Factor-backend models require individual HWC numpy crops.
+            if self.supports_cuda_forward():
+                # Every factor is CUDA-capable: run the bundle on-GPU (crops stay
+                # on device) instead of the numpy round-trip.
+                logits = self._forward_multi_cuda(crops_chw, input_is_bgr)
+                cardinalities = self._cardinalities()
+                expected_total = sum(cardinalities)
+                if logits.shape[-1] != expected_total:
+                    raise ClassifierRuntimeError(
+                        f"{self._model_path!r}: multi output width "
+                        f"{logits.shape[-1]} does not match expected total "
+                        f"{expected_total}"
+                    )
+                results: list[list[np.ndarray]] = []
+                for row in logits:
+                    per_factor: list[np.ndarray] = []
+                    offset = 0
+                    for width in cardinalities:
+                        per_factor.append(self._softmax(row[offset : offset + width]))
+                        offset += width
+                    results.append(per_factor)
+                return results
+            # A factor lacks a CUDA forward: fall back to individual HWC numpy crops.
             numpy_crops = [
                 c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
                 for c in crops_chw
             ]
-            return self.predict_batch(numpy_crops)
+            return self.predict_batch(numpy_crops, input_is_bgr=input_is_bgr)
 
         try:
             # Preprocess on GPU in all cases — this is cheaper than 400 individual
@@ -1082,7 +1240,7 @@ class ClassifierBackend:
                     c.permute(1, 2, 0).cpu().numpy() if hasattr(c, "cpu") else c
                     for c in crops_chw
                 ]
-                return self.predict_batch(numpy_crops)
+                return self.predict_batch(numpy_crops, input_is_bgr=input_is_bgr)
         except ClassifierError:
             raise
         except Exception as exc:
@@ -1107,13 +1265,45 @@ class ClassifierBackend:
             results.append(per_factor)
         return results
 
+    def _ensure_loaded_best_effort(self) -> None:
+        """Load with best-effort TRT→native fallback for gpu_fast / coreml tiers.
+
+        Calls ``_ensure_loaded()``; if the ONNX/TRT or CoreML path raises for any
+        reason, logs a WARNING and reloads natively on the same device.  Never
+        falls back to CPU — if the native device is unavailable the exception
+        propagates.
+        """
+        if self._loaded:
+            return
+        if not self._uses_onnx() and not self._uses_coreml():
+            self._ensure_loaded()
+            return
+        try:
+            self._ensure_loaded()
+        except Exception as exc:  # noqa: BLE001
+            native_device = self._resolved.device
+            if not native_device or native_device == "cpu":
+                # coreml only makes sense on Apple Silicon; fall back to mps
+                native_device = "mps"
+            logger.warning(
+                "Accelerated classifier backend failed (%s); falling back to native %s",
+                exc,
+                native_device,
+            )
+            self._model = self._loader.load(self._model_path, native_device)
+            self._active_execution_backend = "native"
+            self._loaded = True
+
     def predict_batch(self, crops: list[np.ndarray]) -> list[list[np.ndarray]]:
         """Run inference on ``crops``. Returns ``[N_crops][K_factors]`` probability vectors."""
         if not crops:
             return []
-        self._ensure_loaded()
+        self._ensure_loaded_best_effort()
         try:
-            if self._active_execution_backend == "onnx":
+            if self._active_execution_backend == "coreml":
+                batch_np = self._preprocess(crops)
+                logits = self._forward_coreml(batch_np)
+            elif self._active_execution_backend == "onnx":
                 batch_np = self._preprocess(crops)
                 logits = self._forward_onnx(batch_np)
             elif self._metadata.arch == "yolo":

@@ -7,7 +7,6 @@ import gc
 import hashlib
 import json
 import logging
-import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -56,6 +55,7 @@ from hydra_suite.posekit.core.frame_grouping import (
     FRAME_MODE_CONFIRMATION_TEMPLATE,
     group_indices_by_frame,
 )
+from hydra_suite.utils.conda_utils import run_conda
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
 
 from .canvas import FrameListDelegate, PoseCanvas
@@ -77,13 +77,7 @@ from .project import (
     remove_source_from_project,
     save_project_state,
 )
-from .runtimes import (
-    CANONICAL_RUNTIMES,
-    allowed_runtimes_for_pipelines,
-    derive_pose_runtime_settings,
-    infer_compute_runtime_from_legacy,
-    runtime_label,
-)
+from .runtimes import available_tiers, detect_platform, tier_label
 from .utils import (
     enhance_for_pose,
     get_default_skeleton_dir,
@@ -415,7 +409,7 @@ class MainWindow(QMainWindow):
             QLabel("Which inference backend should generate predictions?")
         )
         self.combo_pred_backend = QComboBox()
-        self.combo_pred_backend.addItems(["YOLO", "SLEAP"])
+        self.combo_pred_backend.addItems(["YOLO", "SLEAP", "ViTPose"])
         backend_row.addWidget(self.combo_pred_backend, 1)
         model_layout.addLayout(backend_row)
 
@@ -485,6 +479,22 @@ class MainWindow(QMainWindow):
         pred_weights_row.addWidget(self.btn_pred_weights_latest)
         yolo_layout.addLayout(pred_weights_row)
         model_layout.addWidget(self.yolo_pred_widget)
+
+        # ViTPose settings (fine-tuned checkpoint .pt)
+        self.vitpose_pred_widget = QWidget()
+        vitpose_layout = QVBoxLayout(self.vitpose_pred_widget)
+        vitpose_layout.setContentsMargins(0, 0, 0, 0)
+        vitpose_layout.addWidget(QLabel("ViTPose checkpoint (.pt)"))
+        pred_vitpose_row = QHBoxLayout()
+        self.pred_vitpose_edit = QLineEdit("")
+        self.pred_vitpose_edit.setPlaceholderText("Select fine-tuned checkpoint (.pt)")
+        self.btn_pred_vitpose = QPushButton("Browse…")
+        self.btn_pred_vitpose_latest = QPushButton("Use Latest")
+        pred_vitpose_row.addWidget(self.pred_vitpose_edit, 1)
+        pred_vitpose_row.addWidget(self.btn_pred_vitpose)
+        pred_vitpose_row.addWidget(self.btn_pred_vitpose_latest)
+        vitpose_layout.addLayout(pred_vitpose_row)
+        model_layout.addWidget(self.vitpose_pred_widget)
 
         # SLEAP settings
         self.sleap_pred_widget = QWidget()
@@ -675,6 +685,8 @@ class MainWindow(QMainWindow):
         self.btn_clear_pred_cache.clicked.connect(self._clear_prediction_cache)
         self.btn_pred_weights.clicked.connect(self._browse_pred_weights)
         self.btn_pred_weights_latest.clicked.connect(self._use_latest_pred_weights)
+        self.btn_pred_vitpose.clicked.connect(self._browse_pred_vitpose)
+        self.btn_pred_vitpose_latest.clicked.connect(self._use_latest_pred_vitpose)
         self.btn_pred_exported.clicked.connect(self._browse_pred_exported_model)
         self.combo_pred_backend.currentTextChanged.connect(self._update_pred_backend_ui)
         self.combo_pred_runtime.currentTextChanged.connect(self._update_pred_backend_ui)
@@ -1404,9 +1416,9 @@ class MainWindow(QMainWindow):
             "autosave_delay_ms": int(self.autosave_delay_ms),
             "pred_conf": float(self.sp_pred_conf.value()),
             "pred_weights": self.pred_weights_edit.text().strip(),
+            "pred_vitpose": self.pred_vitpose_edit.text().strip(),
             "pred_backend": self.combo_pred_backend.currentText().strip(),
-            "compute_runtime": self._selected_compute_runtime(),
-            "pred_runtime": self._selected_compute_runtime(),
+            "runtime_tier": self._selected_tier(),
             "pred_exported_model": "",
             "pred_batch": int(self.spin_pred_batch.value()),
             "sleap_env": self.combo_sleap_env.currentText().strip(),
@@ -1441,21 +1453,23 @@ class MainWindow(QMainWindow):
             self.sp_autosave_delay.setValue(self.autosave_delay_ms / 1000.0)
 
     def _apply_pred_runtime_setting(self, settings):
-        runtime_setting = str(
-            settings.get("compute_runtime", settings.get("pred_runtime", ""))
-        ).strip()
+        # ``runtime_tier`` is the sole runtime knob (Runtime Gen-2). Legacy
+        # ``compute_runtime``/``pred_runtime`` strings from old saved settings
+        # are migrated by the one-shot config-migration script, not inferred
+        # here.
+        runtime_setting = str(settings.get("runtime_tier", "")).strip()
         if not runtime_setting:
             return
-        canonical_runtime = runtime_setting
-        if canonical_runtime not in CANONICAL_RUNTIMES:
-            canonical_runtime = infer_compute_runtime_from_legacy(
-                yolo_device="auto",
-                enable_tensorrt=False,
-                pose_runtime_flavor=runtime_setting,
-            )
-        self._populate_pred_runtime_options(
-            self._pred_backend(), preferred=canonical_runtime
-        )
+        # If a stored tier id is valid for this platform, use it; otherwise
+        # default to a sensible tier (legacy runtime strings are migrated by
+        # the one-shot config-migration script, not inferred here).
+        platform = detect_platform()
+        tiers = available_tiers(platform)
+        if runtime_setting in tiers:
+            preferred_tier = runtime_setting
+        else:
+            preferred_tier = "gpu" if "gpu" in tiers else "cpu"
+        self._populate_pred_runtime_options(preferred_tier=preferred_tier)
 
     def _apply_pred_batch_setting(self, settings):
         if "pred_batch" in settings:
@@ -1473,6 +1487,8 @@ class MainWindow(QMainWindow):
             self.sp_pred_conf.setValue(float(settings["pred_conf"]))
         if "pred_weights" in settings:
             self.pred_weights_edit.setText(str(settings["pred_weights"]))
+        if "pred_vitpose" in settings:
+            self.pred_vitpose_edit.setText(str(settings["pred_vitpose"]))
         if "pred_backend" in settings:
             backend = str(settings["pred_backend"])
             if backend:
@@ -4381,47 +4397,51 @@ class MainWindow(QMainWindow):
     def _pred_backend(self) -> str:
         try:
             txt = self.combo_pred_backend.currentText().strip().lower()
-            return "sleap" if txt.startswith("sleap") else "yolo"
+            if txt.startswith("sleap"):
+                return "sleap"
+            if txt.startswith("vitpose"):
+                return "vitpose"
+            return "yolo"
         except Exception:
             return "yolo"
 
-    def _selected_compute_runtime(self) -> str:
+    def _selected_tier(self) -> str:
+        """Return the currently selected runtime tier id (e.g. ``'cpu'``, ``'gpu'``)."""
         if hasattr(self, "combo_pred_runtime"):
             data = self.combo_pred_runtime.currentData()
             if data:
-                value = str(data).strip().lower()
-                if value in CANONICAL_RUNTIMES:
-                    return value
-            txt = self.combo_pred_runtime.currentText().strip().lower()
-            if txt in CANONICAL_RUNTIMES:
-                return txt
+                return str(data).strip().lower()
         return "cpu"
 
-    def _pred_runtime_options_for_backend(self, backend: str) -> List[Tuple[str, str]]:
-        pipeline = (
-            "sleap_pose" if str(backend).strip().lower() == "sleap" else "yolo_pose"
-        )
-        allowed = allowed_runtimes_for_pipelines([pipeline]) or ["cpu"]
-        return [(runtime_label(rt), rt) for rt in allowed if rt in CANONICAL_RUNTIMES]
-
     def _populate_pred_runtime_options(
-        self, backend: str, preferred: Optional[str] = None
+        self, backend: str = "", preferred_tier: Optional[str] = None
     ):
+        """Populate the runtime combo with platform-level tiers (cpu / gpu / gpu_fast).
+
+        The *backend* argument is kept for call-site compatibility but is ignored —
+        tiers are platform-level, not per-pipeline.  *preferred_tier* is the tier
+        id (``"cpu"``, ``"gpu"``, ``"gpu_fast"``) to pre-select; if ``None`` the
+        current selection is preserved.
+        """
         if not hasattr(self, "combo_pred_runtime"):
             return
         combo = self.combo_pred_runtime
-        selected = (
-            str(preferred or self._selected_compute_runtime() or "cpu").strip().lower()
-        )
-        options = self._pred_runtime_options_for_backend(backend)
-        values = [value for _label, value in options]
-        if selected not in values:
-            selected = values[0] if values else "cpu"
+        platform = detect_platform()
+        tiers = available_tiers(platform)
+        # Determine which tier to pre-select.
+        current_data = combo.currentData()
+        current_tier = str(current_data).strip().lower() if current_data else ""
+        if preferred_tier and preferred_tier in tiers:
+            selected_tier = preferred_tier
+        elif current_tier in tiers:
+            selected_tier = current_tier
+        else:
+            selected_tier = tiers[0]
         combo.blockSignals(True)
         combo.clear()
-        for label, value in options:
-            combo.addItem(label, value)
-        idx = combo.findData(selected)
+        for t in tiers:
+            combo.addItem(tier_label(t, platform), t)
+        idx = combo.findData(selected_tier)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
         combo.blockSignals(False)
 
@@ -4460,6 +4480,9 @@ class MainWindow(QMainWindow):
             "pred_weights_edit",
             "btn_pred_weights",
             "btn_pred_weights_latest",
+            "pred_vitpose_edit",
+            "btn_pred_vitpose",
+            "btn_pred_vitpose_latest",
             "combo_sleap_env",
             "btn_sleap_refresh",
             "sleap_model_edit",
@@ -4489,12 +4512,12 @@ class MainWindow(QMainWindow):
         if self._bulk_prediction_locked:
             return
         backend = self._pred_backend()
-        self._populate_pred_runtime_options(
-            backend=backend, preferred=self._selected_compute_runtime()
-        )
         is_sleap = backend == "sleap"
+        is_vitpose = backend == "vitpose"
         if hasattr(self, "yolo_pred_widget"):
-            self.yolo_pred_widget.setVisible(not is_sleap)
+            self.yolo_pred_widget.setVisible(backend == "yolo")
+        if hasattr(self, "vitpose_pred_widget"):
+            self.vitpose_pred_widget.setVisible(is_vitpose)
         if hasattr(self, "sleap_pred_widget"):
             self.sleap_pred_widget.setVisible(is_sleap)
         if hasattr(self, "lbl_pred_exported"):
@@ -4528,7 +4551,7 @@ class MainWindow(QMainWindow):
         self.combo_sleap_env.setEnabled(True)
         envs: List[str] = []
         try:
-            res = subprocess.run(
+            res = run_conda(
                 ["conda", "env", "list"],
                 capture_output=True,
                 text=True,
@@ -4809,20 +4832,44 @@ class MainWindow(QMainWindow):
         backend = self._pred_backend()
         if backend == "sleap":
             return self._get_sleap_model_or_prompt()
+        if backend == "vitpose":
+            return self._get_pred_vitpose_or_prompt()
         return self._get_pred_weights_or_prompt()
 
     def _get_pred_model_silent(self) -> Optional[Path]:
         backend = self._pred_backend()
         if backend == "sleap":
             return self._get_sleap_model_silent()
+        if backend == "vitpose":
+            return self._get_pred_vitpose_silent()
         return self._get_pred_weights_silent()
 
     def _pred_runtime_flavor(self) -> str:
-        backend = self._pred_backend()
-        derived = derive_pose_runtime_settings(
-            self._selected_compute_runtime(), backend_family=backend
-        )
-        return str(derived.get("pose_runtime_flavor", "cpu")).strip().lower()
+        # Derive the live pose-inference flavor directly from the tier-resolved
+        # backend (Runtime Gen-2). The selected tier resolves via
+        # RuntimeResolver against the active pose backend's stage profile
+        # ("sleap_pose" for SLEAP, "yolo_pose" otherwise), so only the five
+        # resolver-producible backends reach here. This reproduces the retired
+        # ``derive_pose_runtime_settings`` byte-for-byte: tensorrt ->
+        # "tensorrt_cuda", coreml (native Apple GPU-Fast) -> "coreml", and every
+        # torch backend is its plain device (cpu / mps / cuda). Native CoreML is
+        # NOT routed through the ONNX-CoreML-EP flavor ("onnx_mps").
+        from hydra_suite.runtime.resolver import RuntimeResolver
+
+        tier = self._selected_tier()
+        _b = self._pred_backend()
+        if _b == "sleap":
+            stage = "sleap_pose"
+        elif _b == "vitpose":
+            stage = "vitpose_pose"
+        else:
+            stage = "yolo_pose"
+        resolved = RuntimeResolver(tier, detect_platform()).resolve(stage)
+        if resolved.backend == "tensorrt":
+            return "tensorrt_cuda"
+        if resolved.backend == "coreml":
+            return "coreml"
+        return resolved.device  # "cpu", "mps", or "cuda"
 
     def _browse_pred_exported_model(self):
         backend = self._pred_backend()
@@ -4909,6 +4956,29 @@ class MainWindow(QMainWindow):
         ):
             self.pred_weights_edit.setText(str(self.project.latest_pose_weights))
 
+    @staticmethod
+    def _latest_vitpose_candidate(path: str) -> str:
+        p = str(path or "").strip()
+        if not p:
+            return ""
+        fp = Path(p)
+        if fp.is_file() and fp.suffix == ".pt":
+            return str(fp)
+        return ""
+
+    def _use_latest_pred_vitpose(self) -> None:
+        latest = self._latest_vitpose_candidate(
+            str(getattr(self.project, "latest_pose_weights", "") or "")
+        )
+        if latest:
+            self.pred_vitpose_edit.setText(latest)
+        else:
+            QMessageBox.warning(
+                self,
+                "No latest weights",
+                "No latest ViTPose weights available. Train a model first.",
+            )
+
     def _get_pred_weights_or_prompt(self) -> Optional[Path]:
         txt = self.pred_weights_edit.text().strip()
         if txt:
@@ -4933,6 +5003,34 @@ class MainWindow(QMainWindow):
             return None
         if self.project.latest_pose_weights:
             p = Path(self.project.latest_pose_weights)
+            if p.exists() and p.is_file() and p.suffix == ".pt":
+                return p
+        return None
+
+    def _browse_pred_vitpose(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select ViTPose checkpoint", "", "*.pt"
+        )
+        if path:
+            self.pred_vitpose_edit.setText(path)
+
+    def _get_pred_vitpose_or_prompt(self) -> Optional[Path]:
+        txt = self.pred_vitpose_edit.text().strip()
+        if txt:
+            p = Path(txt).expanduser().resolve()
+            if p.exists() and p.is_file() and p.suffix == ".pt":
+                return p
+            QMessageBox.warning(
+                self, "Invalid checkpoint", "ViTPose checkpoint not found."
+            )
+            return None
+        QMessageBox.warning(self, "No checkpoint", "Select a ViTPose checkpoint (.pt).")
+        return None
+
+    def _get_pred_vitpose_silent(self) -> Optional[Path]:
+        txt = self.pred_vitpose_edit.text().strip()
+        if txt:
+            p = Path(txt).expanduser().resolve()
             if p.exists() and p.is_file() and p.suffix == ".pt":
                 return p
         return None
@@ -5107,6 +5205,7 @@ class MainWindow(QMainWindow):
             sleap_device="auto",
             sleap_batch=int(self.spin_pred_batch.value()),
             sleap_max_instances=1,
+            vitpose_batch=int(self.spin_pred_batch.value()),
             cache_backend=cache_backend,
         )
         self._pred_worker.moveToThread(self._pred_thread)
@@ -5418,6 +5517,7 @@ class MainWindow(QMainWindow):
                 sleap_device="auto",
                 sleap_batch=int(pred_batch),
                 sleap_max_instances=1,
+                vitpose_batch=int(pred_batch),
                 cache_backend=cache_backend,
             )
             self._bulk_pred_worker.moveToThread(self._bulk_pred_thread)

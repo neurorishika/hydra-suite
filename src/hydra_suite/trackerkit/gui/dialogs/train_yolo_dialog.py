@@ -1530,7 +1530,9 @@ class TrainYoloDialog(BaseDialog):
             QMessageBox.warning(
                 self,
                 "Training Completed with Failures",
-                f"Succeeded: {len(succeeded)}\nFailed: {len(failed)}\nSee logs for details.",
+                f"Succeeded: {
+                    len(succeeded)}\nFailed: {
+                    len(failed)}\nSee logs for details.",
             )
         else:
             QMessageBox.information(
@@ -1550,7 +1552,10 @@ class TrainYoloDialog(BaseDialog):
 
     def _quick_test(self):
         """Open the Quick Test dialog for the last successful training result."""
-        from hydra_suite.trackerkit.gui.dialogs.model_test_dialog import ModelTestDialog
+        from hydra_suite.trackerkit.gui.dialogs.model_test_dialog import (
+            ModelTestDialog,
+            training_device_to_compute_runtime,
+        )
 
         results = getattr(self, "_last_training_results", [])
         succeeded = [r for r in results if r.get("success")]
@@ -1584,7 +1589,9 @@ class TrainYoloDialog(BaseDialog):
             )
             return
 
-        device = self.combo_device.currentText() or "cpu"
+        compute_runtime = training_device_to_compute_runtime(
+            self.combo_device.currentText() or "cpu"
+        )
 
         # Pick the appropriate imgsz for the role
         imgsz_map = {
@@ -1598,7 +1605,7 @@ class TrainYoloDialog(BaseDialog):
             model_path=model_path,
             role=role,
             dataset_dir=dataset_dir,
-            device=device,
+            compute_runtime=compute_runtime,
             imgsz=imgsz,
             crop_pad_ratio=self.spin_crop_pad.value(),
             min_crop_size_px=self.spin_crop_min_px.value(),

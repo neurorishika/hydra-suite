@@ -1,5 +1,5 @@
 """
-Tests for ObjectDetector class (background subtraction detection).
+Tests for BackgroundMeasurer class (background subtraction detection).
 
 Tests cover:
 - Basic object detection from foreground masks
@@ -12,7 +12,7 @@ Tests cover:
 import cv2
 import numpy as np
 
-from hydra_suite.core.detectors import ObjectDetector
+from hydra_suite.core.background.measure import BackgroundMeasurer
 
 
 def create_test_foreground_mask(num_objects=2, width=320, height=240, object_size=30):
@@ -40,8 +40,8 @@ def create_test_foreground_mask(num_objects=2, width=320, height=240, object_siz
     return mask
 
 
-class TestObjectDetector:
-    """Test suite for ObjectDetector class."""
+class TestBackgroundMeasurer:
+    """Test suite for BackgroundMeasurer class."""
 
     def test_initialization(self):
         """Test detector initialization with basic parameters."""
@@ -54,7 +54,7 @@ class TestObjectDetector:
             "RESIZE_FACTOR": 1.0,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         assert detector.params == params
 
@@ -66,10 +66,10 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(num_objects=1, object_size=25)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -78,7 +78,6 @@ class TestObjectDetector:
         assert len(sizes) == 1
         assert len(shapes) == 1
         assert len(confidences) == 1
-        assert yolo_results is None
 
         # Check measurement format [cx, cy, angle]
         assert meas[0].shape == (3,)
@@ -96,10 +95,10 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(num_objects=3, object_size=25)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -117,12 +116,12 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(
             num_objects=2, object_size=10
         )  # Small objects
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -137,12 +136,12 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(
             num_objects=4, object_size=25
         )  # Create 4 objects
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -160,7 +159,7 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Create mask with objects of different sizes
         mask = np.zeros((240, 320), dtype=np.uint8)
@@ -168,9 +167,7 @@ class TestObjectDetector:
         cv2.circle(mask, (160, 120), 25, 255, -1)  # Medium (area ~2000)
         cv2.circle(mask, (240, 120), 40, 255, -1)  # Large (area ~5000)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
-            mask, frame_count=0
-        )
+        meas, sizes, shapes, confidences = detector.detect_objects(mask, frame_count=0)
 
         # Only medium object should pass filtering
         assert len(meas) == 1
@@ -185,10 +182,10 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(num_objects=3, object_size=25)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -202,10 +199,10 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = np.zeros((240, 320), dtype=np.uint8)  # Empty mask
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -222,14 +219,12 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Create very noisy mask with many small contours
         mask = np.random.randint(0, 2, (240, 320), dtype=np.uint8) * 255
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
-            mask, frame_count=0
-        )
+        meas, sizes, shapes, confidences = detector.detect_objects(mask, frame_count=0)
 
         # Should handle gracefully (may return empty or limited results)
         assert isinstance(meas, list)
@@ -243,10 +238,10 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(num_objects=2, object_size=25)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -265,10 +260,10 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
         fg_mask = create_test_foreground_mask(num_objects=2, object_size=25)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
+        meas, sizes, shapes, confidences = detector.detect_objects(
             fg_mask, frame_count=0
         )
 
@@ -287,7 +282,7 @@ class TestObjectDetector:
             "MERGE_AREA_THRESHOLD": 1000,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Create a large blob that might be merged objects
         mask = np.zeros((240, 320), dtype=np.uint8)
@@ -310,7 +305,7 @@ class TestObjectDetector:
             "RESIZE_FACTOR": 1.0,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Create small objects that shouldn't be affected
         mask = create_test_foreground_mask(num_objects=2, object_size=20)
@@ -333,7 +328,7 @@ class TestObjectDetector:
             "RESIZE_FACTOR": 1.0,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         mask = create_test_foreground_mask(num_objects=2, object_size=20)
         result_mask = detector.apply_conservative_split(mask.copy())
@@ -351,7 +346,7 @@ class TestObjectDetector:
             "RESIZE_FACTOR": 1.0,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         mask = np.zeros((240, 320), dtype=np.uint8)
         cv2.circle(mask, (145, 120), 24, 255, -1)
@@ -375,7 +370,7 @@ class TestObjectDetector:
             "REFERENCE_BODY_SIZE": 30.0,
             "RESIZE_FACTOR": 1.0,
         }
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Build a background (white) and a gray frame with two dark circles
         # connected by a faint bridge.
@@ -419,7 +414,7 @@ class TestObjectDetector:
             "REFERENCE_BODY_SIZE": 30.0,
             "RESIZE_FACTOR": 1.0,
         }
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         background = np.full((240, 320), 200, dtype=np.uint8)
         gray = background.copy()
@@ -454,15 +449,13 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Create object at known position
         mask = np.zeros((240, 320), dtype=np.uint8)
         cv2.circle(mask, (160, 120), 25, 255, -1)  # Center of image
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
-            mask, frame_count=0
-        )
+        meas, sizes, shapes, confidences = detector.detect_objects(mask, frame_count=0)
 
         assert len(meas) == 1
         cx, cy, angle = meas[0]
@@ -481,15 +474,13 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         # Create elongated ellipse
         mask = np.zeros((240, 320), dtype=np.uint8)
         cv2.ellipse(mask, (160, 120), (40, 20), 0, 0, 360, 255, -1)
 
-        meas, sizes, shapes, yolo_results, confidences = detector.detect_objects(
-            mask, frame_count=0
-        )
+        meas, sizes, shapes, confidences = detector.detect_objects(mask, frame_count=0)
 
         assert len(meas) == 1
         assert len(shapes) == 1
@@ -506,7 +497,7 @@ class TestObjectDetector:
             "MAX_CONTOUR_MULTIPLIER": 20,
         }
 
-        detector = ObjectDetector(params)
+        detector = BackgroundMeasurer(params)
 
         sizes = [(240, 320), (480, 640), (120, 160)]
 
@@ -514,8 +505,8 @@ class TestObjectDetector:
             mask = np.zeros((height, width), dtype=np.uint8)
             cv2.circle(mask, (width // 2, height // 2), 25, 255, -1)
 
-            meas, det_sizes, shapes, yolo_results, confidences = (
-                detector.detect_objects(mask, frame_count=0)
+            meas, det_sizes, shapes, confidences = detector.detect_objects(
+                mask, frame_count=0
             )
 
             assert len(meas) == 1

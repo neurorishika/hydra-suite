@@ -606,77 +606,51 @@ class SetupPanel(QWidget):
             "1.0 = full resolution, 0.5 = half resolution (4× faster).\n"
             "All body-size-based parameters auto-scale with this value."
         )
-        self.combo_compute_runtime = QComboBox()
-        self.combo_compute_runtime.setFixedHeight(30)
-        self.combo_compute_runtime.setToolTip(
-            "Detection runtime for the primary tracking detector.\n"
-            "Only runtimes compatible with the active detection pipeline are shown."
+        from hydra_suite.runtime.resolver import (
+            available_tiers,
+            detect_platform,
+            tier_label,
         )
-        self.combo_compute_runtime.currentIndexChanged.connect(
-            self._main_window._on_runtime_context_changed
+
+        self.combo_runtime_tier = QComboBox()
+        self.combo_runtime_tier.setFixedHeight(30)
+        self.combo_runtime_tier.setToolTip(
+            "Compute tier for the whole pipeline.\n"
+            "CPU · GPU (exact) · GPU-Fast (max speed, some accuracy loss)."
         )
+        _platform = detect_platform()
+        for _tier in available_tiers(_platform):
+            self.combo_runtime_tier.addItem(tier_label(_tier, _platform), _tier)
+        self.combo_runtime_tier.currentIndexChanged.connect(
+            self._main_window._on_runtime_tier_changed
+        )
+        # §5.4 fallback indicator: shown under the tier selector when GPU-Fast is
+        # active, noting that stages without a fast artifact run on the native GPU.
+        self.lbl_runtime_fallback = QLabel("")
+        self.lbl_runtime_fallback.setWordWrap(True)
+        self.lbl_runtime_fallback.setStyleSheet("color: gray; font-size: 10px;")
+        self.lbl_runtime_fallback.setVisible(False)
+
         scale_card = self._create_performance_control_card("Scale", self.spin_resize)
         self._performance_base_control_cards.append(scale_card)
         self._performance_control_cards.append(scale_card)
-        detection_card = self._create_performance_control_card(
-            "Detection runtime",
-            self.combo_compute_runtime,
+        # Stack the tier combo and the fallback hint in one container so the hint
+        # renders inside the "Compute tier" card.
+        _tier_container = QWidget()
+        _tier_layout = QVBoxLayout(_tier_container)
+        _tier_layout.setContentsMargins(0, 0, 0, 0)
+        _tier_layout.setSpacing(2)
+        _tier_layout.addWidget(self.combo_runtime_tier)
+        _tier_layout.addWidget(self.lbl_runtime_fallback)
+        tier_card = self._create_performance_control_card(
+            "Compute tier",
+            _tier_container,
         )
-        self._performance_base_control_cards.append(detection_card)
-        self._performance_control_cards.append(detection_card)
+        self._performance_base_control_cards.append(tier_card)
+        self._performance_control_cards.append(tier_card)
 
-        self.combo_headtail_runtime = QComboBox()
-        self.combo_headtail_runtime.setFixedHeight(30)
-        self.combo_headtail_runtime.setToolTip(
-            "Head-tail runtime for oriented crop classification.\n"
-            "Visible only when head-tail analysis is enabled."
-        )
-        self.combo_headtail_runtime.currentIndexChanged.connect(
-            lambda _index: self._main_window._sync_headtail_runtime_selection(
-                self.combo_headtail_runtime
-            )
-        )
-        self._register_optional_performance_control(
-            self.combo_headtail_runtime,
-            "Head-tail runtime",
-        )
-        self._main_window._set_form_row_visible(
-            self.form_performance,
-            self.combo_headtail_runtime,
-            False,
-        )
-
-        self.combo_cnn_runtime = QComboBox()
-        self.combo_cnn_runtime.setFixedHeight(30)
-        self.combo_cnn_runtime.setToolTip(
-            "CNN identity runtime for per-animal classifiers.\n"
-            "Visible only when at least one CNN classifier is configured."
-        )
-        self._register_optional_performance_control(
-            self.combo_cnn_runtime,
-            "CNN runtime",
-        )
-        self._main_window._set_form_row_visible(
-            self.form_performance,
-            self.combo_cnn_runtime,
-            False,
-        )
-
-        self.combo_pose_runtime_flavor = QComboBox()
-        self.combo_pose_runtime_flavor.setFixedHeight(30)
-        self.combo_pose_runtime_flavor.setToolTip(
-            "Pose runtime used by the pose extraction pipeline.\n"
-            "This can be set independently from detection when pose is enabled."
-        )
-        self._register_optional_performance_control(
-            self.combo_pose_runtime_flavor,
-            "Pose runtime",
-        )
-        self._main_window._set_form_row_visible(
-            self.form_performance,
-            self.combo_pose_runtime_flavor,
-            False,
-        )
+        # Pose runtime is fully derived from Compute tier (spec §2/§5.2) — no
+        # UI control for it at all, not even read-only. See RuntimeResolver.
 
         self.check_save_confidence = QCheckBox("Save metrics")
         self.check_save_confidence.setChecked(True)
@@ -756,19 +730,9 @@ class SetupPanel(QWidget):
         self.btn_clear_detection_caches.clicked.connect(
             self._main_window._clear_detection_caches
         )
-        self.btn_benchmark_models = QPushButton("Benchmark Models...")
-        self.btn_benchmark_models.setFixedHeight(28)
-        self.btn_benchmark_models.setToolTip(
-            "Benchmark the currently selected TrackerKit model pipelines across runtimes\n"
-            "and batch sizes using the loaded video geometry and body-size settings."
-        )
-        self.btn_benchmark_models.clicked.connect(
-            self._main_window._open_benchmark_dialog
-        )
         _perf_actions_row = QHBoxLayout()
         _perf_actions_row.setContentsMargins(0, 0, 0, 0)
         _perf_actions_row.addStretch(1)
-        _perf_actions_row.addWidget(self.btn_benchmark_models)
         _perf_actions_row.addWidget(self.btn_clear_detection_caches)
         vl_sys.addLayout(_perf_actions_row)
 
@@ -897,8 +861,8 @@ class SetupPanel(QWidget):
             self.chk_use_cached_detections.setChecked(False)
         self.chk_use_cached_detections.setEnabled(not realtime_enabled)
         self._sync_batch_policy_controls()
-        # NOTE: _populate_compute_runtime_options and _on_runtime_context_changed
-        # are called after panel construction in main_window.py
+        # NOTE: the compute-tier selector is populated at panel construction;
+        # _on_runtime_context_changed is called afterward in main_window.py
 
     def _create_performance_control_card(self, title: str, widget: QWidget) -> QFrame:
         """Build a compact labeled card for one performance control."""
@@ -975,7 +939,7 @@ class SetupPanel(QWidget):
     def _sync_batch_policy_controls(self, *_args) -> None:
         """Notify dependent panels when realtime or animal-count policy changes."""
         if hasattr(self._main_window, "_detection_panel"):
-            self._main_window._detection_panel._sync_batch_policy_controls()
+            self._main_window._detection_panel._sync_live_detection_batch_controls()
         if hasattr(self._main_window, "_identity_panel"):
             self._main_window._identity_panel._sync_realtime_individual_batch_ui()
 

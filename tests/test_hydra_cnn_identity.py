@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 # ---------------------------------------------------------------------------
 # CNNIdentityConfig tests
 # ---------------------------------------------------------------------------
@@ -176,7 +178,9 @@ def test_backend_predict_batch_cardinality(tiny_flat_headtail):
     cfg = CNNIdentityConfig(model_path=str(tiny_flat_headtail), confidence=0.0)
     crops = [np.zeros((64, 64, 3), dtype=np.uint8) for _ in range(3)]
     backend = CNNIdentityBackend(
-        cfg, model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+        cfg,
+        model_path=str(tiny_flat_headtail),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     results = backend.predict_batch(crops)
     backend.close()
@@ -199,7 +203,9 @@ def test_backend_below_confidence_returns_none_class(tiny_flat_headtail):
     cfg = CNNIdentityConfig(model_path=str(tiny_flat_headtail), confidence=0.999)
     crops = [np.zeros((64, 64, 3), dtype=np.uint8)]
     backend = CNNIdentityBackend(
-        cfg, model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+        cfg,
+        model_path=str(tiny_flat_headtail),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     results = backend.predict_batch(crops)
     backend.close()
@@ -366,7 +372,9 @@ def test_cnn_identity_backend_flat_predict(tiny_flat_headtail):
 
     cfg = CNNIdentityConfig(model_path=str(tiny_flat_headtail), confidence=0.0)
     backend = CNNIdentityBackend(
-        cfg, model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+        cfg,
+        model_path=str(tiny_flat_headtail),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     import numpy as _np
 
@@ -393,7 +401,9 @@ def test_cnn_identity_backend_multihead_predict(tiny_multi_identity):
         scoring_mode="per_head_average",
     )
     backend = CNNIdentityBackend(
-        cfg, model_path=str(tiny_multi_identity), compute_runtime="cpu"
+        cfg,
+        model_path=str(tiny_multi_identity),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     import numpy as _np
 
@@ -422,7 +432,9 @@ def test_cnn_identity_backend_rejects_multihead_without_scoring_mode(
     cfg = CNNIdentityConfig(model_path=str(tiny_multi_identity), scoring_mode="")
     with pytest.raises(ClassifierConfigError):
         CNNIdentityBackend(
-            cfg, model_path=str(tiny_multi_identity), compute_runtime="cpu"
+            cfg,
+            model_path=str(tiny_multi_identity),
+            resolved=ResolvedBackend("torch", "cpu", False),
         )
 
 
@@ -440,7 +452,9 @@ def test_cnn_identity_backend_per_factor_threshold(tiny_multi_identity):
         scoring_mode="atomic",
     )
     backend = CNNIdentityBackend(
-        cfg, model_path=str(tiny_multi_identity), compute_runtime="cpu"
+        cfg,
+        model_path=str(tiny_multi_identity),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     import numpy as _np
 

@@ -53,10 +53,6 @@ from .model_utils import (
 )
 from .widgets.collapsible import CollapsibleGroupBox
 from .widgets.help_label import CompactHelpLabel
-from .workers.preview_worker import (  # noqa: F401 (re-export for tests)
-    _build_preview_background_model,
-    _clear_preview_background_cache,
-)
 
 try:
     from hydra_suite.posekit.gui.dialogs.utils import get_available_devices
@@ -403,7 +399,6 @@ class MainWindow(QMainWindow):
 
         # Advanced configuration (for power users)
         self.advanced_config = self._load_advanced_config()
-        self._benchmark_recommendations = {}
 
         # Video player state
         self.video_cap = None  # cv2.VideoCapture for video playback
@@ -921,7 +916,6 @@ class MainWindow(QMainWindow):
         # =====================================================================
         # Setup panel bootstrap
         self._populate_preset_combo()
-        self._populate_compute_runtime_options(preferred="cpu")
         self._on_runtime_context_changed()
 
         # Detection panel bootstrap
@@ -933,12 +927,6 @@ class MainWindow(QMainWindow):
         self._identity_panel._refresh_cnn_identity_model_combo()
         self._identity_panel._refresh_yolo_headtail_model_combo()
         self._update_background_color_button()
-        self._populate_pose_runtime_flavor_options(backend="yolo")
-        self._set_form_row_visible(
-            self._identity_panel.form_pose_runtime,
-            self._identity_panel.combo_pose_runtime_flavor,
-            False,
-        )
         self._refresh_pose_model_combo()
         self._identity_panel._refresh_pose_sleap_envs()
         self._identity_panel._refresh_pose_direction_keypoint_lists()
@@ -1027,13 +1015,14 @@ class MainWindow(QMainWindow):
     def _build_optimizer_detection_cache(
         self, video_path: str, cache_path: str, params: dict
     ):
-        """Spin up a DetectionCacheBuilderWorker and show progress in the main window."""
+        """Spin up a DetectionCacheBuildWorker and show progress in the main window."""
         self._config_orch._build_optimizer_detection_cache(
             video_path, cache_path, params
         )
 
     def _on_optimizer_cache_built(self, ok: bool, cache_path: str):
-        """Called when DetectionCacheBuilderWorker finishes."""
+        """Called when DetectionCacheBuildWorker finishes. ``cache_path`` is the
+        InferenceRunner cache directory."""
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
 
@@ -1054,7 +1043,7 @@ class MainWindow(QMainWindow):
         self._open_parameter_helper()
 
     def _on_preview_cache_built(self, ok: bool, cache_path: str):
-        """Called when DetectionCacheBuilderWorker finishes building the preview cache."""
+        """Called when a detection-cache builder worker finishes building the preview cache."""
         self.progress_bar.setVisible(False)
         self.progress_label.setVisible(False)
 
@@ -1088,52 +1077,6 @@ class MainWindow(QMainWindow):
     def _open_bg_parameter_helper(self):
         """Open the BG-subtraction parameter auto-tuner dialog."""
         self._config_orch._open_bg_parameter_helper()
-
-    def _open_benchmark_dialog(self):
-        """Open the runtime and batch benchmarking dialog."""
-        self._config_orch._open_benchmark_dialog()
-
-    def _refresh_benchmark_recommendations(self) -> None:
-        """Refresh cached benchmark recommendations for the current UI state."""
-        self._config_orch._refresh_benchmark_recommendations()
-
-    def _current_detection_benchmark_recommendation(self):
-        """Return the active detection recommendation for the current OBB mode."""
-        key = "detection_sequential"
-        if (
-            hasattr(self, "_detection_panel")
-            and self._detection_panel.combo_yolo_obb_mode.currentIndex() == 0
-        ):
-            key = "detection_direct"
-        return self._benchmark_recommendations.get(key)
-
-    def _current_headtail_benchmark_recommendation(self):
-        """Return the cached head-tail recommendation, if available."""
-        return self._benchmark_recommendations.get("headtail")
-
-    def _current_pose_benchmark_recommendation(self):
-        """Return the cached pose recommendation for the active backend."""
-        return self._benchmark_recommendations.get(
-            f"pose_{self._current_pose_backend_key()}"
-        )
-
-    def _current_cnn_benchmark_recommendations(self):
-        """Return cached CNN recommendations keyed by classifier index."""
-        return {
-            key: value
-            for key, value in self._benchmark_recommendations.items()
-            if str(key).startswith("cnn_")
-        }
-
-    def _current_cnn_runtime_recommendation(self):
-        """Return a shared CNN runtime recommendation only when all rows agree."""
-        recommendations = list(self._current_cnn_benchmark_recommendations().values())
-        if not recommendations:
-            return None
-        runtimes = {recommendation.runtime for recommendation in recommendations}
-        if len(runtimes) != 1:
-            return None
-        return recommendations[0]
 
     def _ensure_pose_model_path_store(self):
         if not hasattr(self, "_pose_model_path_by_backend"):
@@ -1386,107 +1329,54 @@ class MainWindow(QMainWindow):
             return "sleap"
         return txt
 
-    def _runtime_pipelines_for_current_ui(self):
-        """Return active pipeline keys for runtime intersection."""
+    def _on_runtime_tier_changed(self, _index: int = 0) -> None:
+        """Store the selected tier and refresh dependent controls."""
         if hasattr(self, "_session_orch"):
-            return self._session_orch._runtime_pipelines_for_current_ui()
-        return []
+            self._session_orch._on_runtime_tier_changed()
 
-    def _compute_runtime_options_for_current_ui(self):
-        """Return (label, value) pairs for the compute runtime combo."""
+    def _selected_runtime_tier(self) -> str:
+        """Return the currently selected runtime tier id.
+
+        Prefers the GUI selector; falls back to the loaded config's
+        ``runtime_tier`` (headless CLI runs have no populated combo) before the
+        ``"gpu"`` default.
+        """
+        if hasattr(self, "_setup_panel") and hasattr(
+            self._setup_panel, "combo_runtime_tier"
+        ):
+            data = self._setup_panel.combo_runtime_tier.currentData()
+            if data:
+                return str(data)
+        cfg = getattr(self, "config", None)
+        cfg_tier = getattr(cfg, "runtime_tier", None) if cfg is not None else None
+        if cfg_tier:
+            return str(cfg_tier)
+        return "gpu"
+
+    def _resolved_obb_backend(self):
+        """Resolve the OBB-stage backend for the selected tier and host platform."""
         if hasattr(self, "_session_orch"):
-            return self._session_orch._compute_runtime_options_for_current_ui()
-        return []
+            return self._session_orch._resolved_obb_backend()
+        from hydra_suite.runtime.resolver import RuntimeResolver, detect_platform
 
-    def _populate_compute_runtime_options(self, preferred=None):
-        self._config_orch._populate_compute_runtime_options(preferred=preferred)
+        return RuntimeResolver("cpu", detect_platform()).resolve("obb")
 
-    def _selected_compute_runtime(self) -> str:
-        """Return the currently selected compute runtime key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_compute_runtime()
-        return "cpu"
-
-    def _headtail_runtime_options(self):
-        """Return (label, value) pairs for the head-tail runtime combo."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._headtail_runtime_options()
-        return []
-
-    def _populate_headtail_runtime_options(self, preferred=None):
-        """Populate the head-tail runtime combo."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._populate_headtail_runtime_options(preferred=preferred)
-
-    def _selected_headtail_runtime(self) -> str:
-        """Return the currently selected head-tail runtime key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_headtail_runtime()
-        return self._selected_compute_runtime()
-
-    def _sync_headtail_runtime_selection(self, source_combo=None) -> None:
-        """Keep duplicated head-tail runtime selectors synchronized."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._sync_headtail_runtime_selection(source_combo)
-
-    def _cnn_runtime_options(self):
-        """Return (label, value) pairs for the CNN runtime combo."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._cnn_runtime_options()
-        return []
-
-    def _populate_cnn_runtime_options(self, preferred=None):
-        """Populate the CNN runtime combo."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._populate_cnn_runtime_options(preferred=preferred)
-
-    def _selected_cnn_runtime(self) -> str:
-        """Return the currently selected CNN runtime key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_cnn_runtime()
-        return self._selected_compute_runtime()
-
-    def _runtime_requires_fixed_yolo_batch(self, runtime=None) -> bool:
+    def _runtime_requires_fixed_yolo_batch(self, resolved=None) -> bool:
         """Return True when runtime mandates a fixed YOLO batch size."""
         if hasattr(self, "_session_orch"):
-            return self._session_orch._runtime_requires_fixed_yolo_batch(runtime)
+            return self._session_orch._runtime_requires_fixed_yolo_batch(resolved)
         return False
 
-    @staticmethod
-    def _preview_safe_runtime(runtime: str) -> str:
-        """Downgrade ONNX/TensorRT runtimes to their native equivalents."""
-        rt = str(runtime or "cpu").strip().lower()
-        if rt == "onnx_cpu":
-            return "cpu"
-        if rt == "onnx_coreml":
-            return "mps"
-        if rt in ("onnx_cuda", "tensorrt"):
-            return "cuda"
-        return rt
+    def _gpu_fast_obb_is_coreml_only(self) -> bool:
+        """Return True when gpu_fast OBB detection will run on CoreML (batch=1 only)."""
+        if hasattr(self, "_session_orch"):
+            return self._session_orch._gpu_fast_obb_is_coreml_only()
+        return False
 
     def _on_runtime_context_changed(self, *_args):
         """Update runtime combo and sync dependent controls."""
         if hasattr(self, "_session_orch"):
             self._session_orch._on_runtime_context_changed(*_args)
-
-    def _pose_runtime_options_for_backend(self, backend: str):
-        """Return (label, flavor) pairs for the pose runtime flavor combo."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._pose_runtime_options_for_backend(backend)
-        return []
-
-    def _populate_pose_runtime_flavor_options(self, backend: str, preferred=None):
-        """Populate the pose runtime flavor combo."""
-        if hasattr(self, "_session_orch"):
-            self._session_orch._populate_pose_runtime_flavor_options(
-                backend, preferred=preferred
-            )
-
-    def _selected_pose_runtime_flavor(self) -> str:
-        """Return the currently selected pose runtime flavor key."""
-        if hasattr(self, "_session_orch"):
-            return self._session_orch._selected_pose_runtime_flavor()
-        return "cpu"
 
     def _set_form_row_visible(self, form_layout, field_widget, visible: bool):
         """Show/hide a QFormLayout row by field widget."""
@@ -2331,6 +2221,15 @@ class MainWindow(QMainWindow):
 
         # Switch OBB mode to match the role of the model the user picked.
         panel = self._detection_panel
+
+        if role == "obb_direct":
+            try:
+                panel.apply_slice_meta_for_model(model_path)
+            except Exception:
+                logger.exception(
+                    "Failed to apply slice_meta sidecar for %s", model_path
+                )
+
         try:
             if role in ("seq_detect", "seq_crop_obb"):
                 if panel.combo_yolo_obb_mode.currentIndex() != 1:

@@ -18,7 +18,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install hydra-suite[cuda]
 
 # Apple Silicon
-pip install hydra-suite[mps]
+pip install hydra-suite[mps]   # requires torchvision>=0.16.0 for the native MPS roi_align kernel
 ```
 
 ### Full Environment (conda)
@@ -54,6 +54,79 @@ make test-cov-html         # Tests + HTML coverage (htmlcov/index.html)
 ```
 
 pytest is configured in `pyproject.toml`. Test files are in `tests/`. Benchmarks are excluded by default (`-m "not benchmark"`).
+
+## Equivalence & Benchmark Verification (byte-identical tracking + perf, MPS + CUDA)
+
+The `tools/equivalence/` harness proves the pipeline produces **byte-identical tracking
+output** (and no perf regression) vs a baseline, across devices. Use it to attribute any
+behavior change to a specific slice. **Method:** the pipeline that runs is decided purely
+by which `hydra_suite` is importable, so "baseline vs current" = "`MAIN_SRC` src vs
+`WT_SRC` src", same env/models/config. `run_matrix.sh` runs baseline ×1 + current ×2 per
+clip and prints DETERMINISM (noise floor), EQUIVALENCE (baseline vs current), and
+PERFORMANCE per clip. Full guide: `tools/equivalence/README.md`.
+
+### The fast path (copy-paste)
+
+Baseline = the `legacy/main` tag (the pre-migration pipeline); current = `HEAD`. Two
+git worktrees provide the two `src/` trees; the CURRENT tree provides the harness scripts
++ fixtures.
+
+```bash
+# 0. Fixtures (once per machine): short clips + models from the GitHub Release.
+#    (already present if tools/equivalence/fixtures/clips/*.mp4 exist)
+conda activate hydra-mps       # or hydra-cuda on the NVIDIA box (mehek)
+bash tools/equivalence/fixtures/fetch_fixtures.sh
+
+# 1. Baseline worktree from the legacy tag (detached).
+git fetch origin --tags
+git worktree add --detach .worktrees/equiv-legacy legacy/main
+
+# 2. Run the matrix: MAIN_SRC=legacy, WT_SRC=current. RUNTIME=mps (here) / cuda (mehek).
+#    conda MUST be active — the SLEAP service spawns `conda run -n sleap`; a bare shell
+#    yields EMPTY CSVs that FALSELY compare "EQUIVALENT". Always verify row counts > 0.
+REPO=$PWD WT=$PWD \
+  MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
+  OUT=/tmp/equiv_gen2 RUNTIME=mps \
+  bash tools/equivalence/run_matrix.sh
+#   subset while iterating:  ... RUNTIME=mps bash tools/equivalence/run_matrix.sh fly_obb worm_bgsub
+
+# 3. Cleanup
+git worktree remove --force .worktrees/equiv-legacy && git worktree prune
+```
+
+### Acceptance
+- **Equivalence:** every clip's EQUIVALENCE (legacy vs new_a) at/near its DETERMINISM
+  floor — positions p99 ≈ 0, θ max ≈ 0, identical row counts, 0 unmatched, for BOTH the
+  `_forward.csv` and `_tracking_final.csv`. Known baseline noise: **bistable head/tail
+  π-flips** on head/tail clips (θ can flip by π on some rows) — that's the migration's
+  documented noise floor, not a regression (see memory `project-migration-verification`).
+- **Performance:** `new/legacy` wall-clock ratio ≤ `PERF_TOLERANCE` (default 1.25).
+- **Both platforms:** MPS (Apple, `hydra-mps`, this box) **and** CUDA (mehek, `hydra-cuda`).
+
+### CUDA box (mehek)
+```bash
+ssh rutalab@mehek.taild08eb9.ts.net
+cd ~/hydra-suite && git fetch origin --tags && git checkout <current-sha>
+source ~/mambaforge/etc/profile.d/conda.sh && conda activate hydra-cuda   # find conda: `which conda`/`ls ~/*forge*`
+bash tools/equivalence/fixtures/fetch_fixtures.sh          # once
+git worktree add --detach .worktrees/equiv-legacy legacy/main
+REPO=$PWD WT=$PWD MAIN_SRC=$PWD/.worktrees/equiv-legacy/src WT_SRC=$PWD/src \
+  OUT=/tmp/equiv_gen2 RUNTIME=cuda nohup bash tools/equivalence/run_matrix.sh > /tmp/equiv_cuda.log 2>&1 &
+# pose/SLEAP clips REQUIRE the `sleap` conda env on the box + conda on PATH.
+```
+
+### Gotchas (why "future testing is faster")
+- **conda MUST be active** for any pose/SLEAP clip, else empty CSVs falsely pass — verify
+  `wc -l` on the CSVs > 1 before trusting an `EQUIVALENT`.
+- **`export KMP_DUPLICATE_LIB_OK=TRUE`** (run_matrix.sh sets it) — double-linked libomp
+  aborts torch otherwise ("OMP Error #15").
+- **`RUNTIME`** accepts the Gen-2 tier names `gpu`/`gpu_fast` (runner.py maps them) as well
+  as `cpu`/`mps`/`cuda`/`tensorrt`.
+- Clips: `emi_obb_identity`, `ant_pose_headtail`, `ant_obb_sleap`, `ant_obb_sequential`,
+  `worm_bgsub`, `ant_cnn_identity`, `fly_obb`. `fly_obb`/`worm_bgsub` are the fastest
+  smoke clips (no pose/SLEAP).
+- **Sequence for a refactor:** run this BEFORE and AFTER a risky slice with the same
+  baseline, so each slice's effect is isolated (attribution), not conflated.
 
 ## Launching the Applications
 
@@ -174,7 +247,7 @@ App layers → Core / Runtime / Data / Training / Utils → (no upward imports)
 |---|---|---|
 | Launcher | `hydra_suite.launcher` | `hydra` entry point; routes to individual kits |
 | MAT / TrackerKit | `hydra_suite.trackerkit` | Multi-animal tracking GUI |
-| PoseKit | `hydra_suite.posekit` | Pose-labeling application |
+| PoseKit | `hydra_suite.posekit` | Pose-labeling application (YOLO-pose, SLEAP, ViTPose backends) |
 | ClassKit | `hydra_suite.classkit` | Classification/embedding toolkit |
 | RefineKit | `hydra_suite.refinekit` | Interactive proofreading |
 | FilterKit | `hydra_suite.filterkit` | FilterKit tool |
@@ -247,16 +320,27 @@ measurement = [x, y, theta]
 
 Process noise is anisotropic (longitudinal vs. lateral). Young tracks have attenuated velocity (`KALMAN_MATURITY_AGE`, `KALMAN_INITIAL_VELOCITY_RETENTION`).
 
-### Identity / Runtime System
+### Identity / Runtime System (Runtime Gen-2)
 
-All compute-heavy methods use a single `compute_runtime` setting. Runtime support logic is centralized in:
+All compute-heavy methods select a backend from a single **runtime tier**. There is one stored knob and one value that flows:
 
-- `src/hydra_suite/runtime/compute_runtime.py`
-- `src/hydra_suite/utils/gpu_utils.py`
+```
+config.runtime_tier ∈ {cpu, gpu, gpu_fast}
+  → RuntimeResolver(tier, platform).resolve(stage)
+  → ResolvedBackend(backend ∈ {torch, tensorrt, coreml}, device ∈ {cpu, cuda, mps}, used_fallback)
+```
 
-Canonical runtimes: `cpu`, `mps`, `cuda`, `onnx_cpu`, `onnx_cuda`, `tensorrt`.
+Runtime support logic is centralized in:
 
-When adding a new model/method: define a pipeline key, add capability rules in `_pipeline_supports_runtime()`, add runtime translation, wire UI intersection gating. See `docs/developer-guide/runtime-integration.md` for the full checklist.
+- `src/hydra_suite/runtime/resolver.py` — the single authority mapping tier + platform + stage → `ResolvedBackend` (pure; availability injected). Also `available_tiers`/`tier_label` for UI.
+- `src/hydra_suite/runtime/onnx_providers.py` — `execution_providers_for(resolved)`: the ONNX Runtime execution-provider list for a `ResolvedBackend` (TensorRT/CoreML/CPU), plus the TensorRT engine-cache options.
+- `src/hydra_suite/utils/gpu_utils.py` — host accelerator availability flags.
+
+Backends (`core/identity/classification/*`, `core/identity/pose/backends/sleap.py`) and every inference stage consume a `ResolvedBackend` directly — there is no `compute_runtime` string vocabulary anymore. `RuntimeContext.resolved` carries the backend on the live path; `resolved_backend_for(ctx)` derives one for hand-built contexts.
+
+Legacy config files (pre-tier, with per-stage `compute_runtime`/`pose_runtime_flavor` strings) are migrated once via `scripts/migrate_runtime_config.py`; loading a config with no `runtime_tier` raises a loud error pointing at that script.
+
+When adding a new model/method: choose the stage's backend from `resolved.backend`/`resolved.device`; if it runs ONNX, get providers from `execution_providers_for(resolved)`. See `docs/developer-guide/runtime-integration.md`.
 
 ### Extension Points
 
@@ -273,7 +357,8 @@ When adding a new model/method: define a pipeline key, add capability rules in `
 - `src/hydra_suite/core/identity/runtime_api.py`
 - `src/hydra_suite/core/identity/classification/backend.py` — shared classifier loader
 - `src/hydra_suite/core/identity/classification/errors.py` — classifier error hierarchy
-- `src/hydra_suite/runtime/compute_runtime.py`
+- `src/hydra_suite/runtime/resolver.py` — tier + platform + stage → `ResolvedBackend` (runtime single authority)
+- `src/hydra_suite/runtime/onnx_providers.py` — ONNX execution-provider list for a `ResolvedBackend`
 - `src/hydra_suite/paths.py` — central path resolution (all asset/data paths)
 - `src/hydra_suite/widgets/workers.py` — BaseWorker base class (in-progress)
 - `src/hydra_suite/widgets/dialogs.py` — BaseDialog base class (in-progress)
@@ -287,7 +372,7 @@ Superseded code is moved to `legacy/` for one release cycle before deletion. `le
 1. Image set + project metadata loaded
 2. Annotation state edited in UI (`posekit/gui/`)
 3. Labels persisted to YOLO pose format
-4. Optional model-assisted inference (YOLO pose, SLEAP) and split-generation steps
+4. Optional model-assisted inference (YOLO pose, SLEAP, or ViTPose) and split-generation steps
 
 PoseKit inference uses the same `compute_runtime` system and the same ONNX/TensorRT artifact auto-management pattern as MAT.
 

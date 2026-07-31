@@ -129,8 +129,6 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
     background_model = types.ModuleType("hydra_suite.core.background.model")
     background_model.BackgroundModel = object
 
-    core_detectors.create_detector = lambda *_args, **_kwargs: None
-
     assigner = types.ModuleType("hydra_suite.core.assigners.hungarian")
     assigner.TrackAssigner = object
 
@@ -140,7 +138,7 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
     )
     identity_dataset_generator.IndividualDatasetGenerator = object
 
-    tag_features = types.ModuleType("hydra_suite.core.tracking.tag_features")
+    tag_features = types.ModuleType("hydra_suite.core.tracking.features.tag_features")
     tag_features.NO_TAG = -1
     tag_features.build_detection_tag_id_list = lambda *_args, **_kwargs: []
     tag_features.build_tag_detection_hamming_map = lambda *_args, **_kwargs: {}
@@ -160,7 +158,7 @@ def _build_core_dependency_stubs() -> dict[str, types.ModuleType]:
         "hydra_suite.core.assigners.hungarian": assigner,
         "hydra_suite.core.identity.dataset": identity_dataset,
         "hydra_suite.core.identity.dataset.generator": identity_dataset_generator,
-        "hydra_suite.core.tracking.tag_features": tag_features,
+        "hydra_suite.core.tracking.features.tag_features": tag_features,
     }
 
 
@@ -202,7 +200,6 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     pose_features_new.normalize_pose_keypoints = lambda *_args, **_kwargs: None
     pose_features_new.resolve_pose_group_indices = lambda *_args, **_kwargs: []
     pose_api = types.ModuleType("hydra_suite.core.identity.pose.api")
-    pose_api.build_runtime_config = lambda *_args, **_kwargs: None
     pose_api.create_pose_backend_from_config = lambda *_args, **_kwargs: None
 
     properties_pkg = types.ModuleType("hydra_suite.core.identity.properties")
@@ -213,28 +210,15 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
     properties_cache.compute_filter_settings_hash = lambda *_args, **_kwargs: ""
     properties_cache.compute_individual_properties_id = lambda *_args, **_kwargs: ""
 
-    density = types.ModuleType("hydra_suite.core.tracking.density")
+    density = types.ModuleType("hydra_suite.core.tracking.confidence.density")
     density.get_density_region_flags = lambda *_args, **_kwargs: np.zeros(0, dtype=bool)
 
-    cnn_features = types.ModuleType("hydra_suite.core.tracking.cnn_features")
-    cnn_features.cnn_build_association_entries = lambda *_args, **_kwargs: (
-        None,
-        None,
-        None,
-    )
-    cnn_features.cnn_update_track_history = lambda *_args, **_kwargs: None
-
-    pose_pipeline = types.ModuleType("hydra_suite.core.tracking.pose_pipeline")
+    pose_pipeline = types.ModuleType("hydra_suite.core.tracking.pose.pose_pipeline")
     pose_pipeline.extract_one_crop = lambda *_args, **_kwargs: None
-    live_features = types.ModuleType("hydra_suite.core.tracking.live_features")
+    live_features = types.ModuleType("hydra_suite.core.tracking.features.live_features")
     live_features.LiveCNNIdentityStore = object
     live_features.LivePosePropertiesStore = object
     live_features.LiveTagObservationStore = object
-    precompute = types.ModuleType("hydra_suite.core.tracking.precompute")
-    precompute.AprilTagPrecomputePhase = object
-    precompute.CNNPrecomputePhase = object
-    precompute.CropConfig = object
-    precompute.UnifiedPrecompute = object
     profiler = types.ModuleType("hydra_suite.core.tracking.profiler")
     profiler.TrackingProfiler = object
 
@@ -249,11 +233,9 @@ def _build_identity_and_tracking_stubs() -> dict[str, types.ModuleType]:
         "hydra_suite.core.identity.pose.api": pose_api,
         "hydra_suite.core.identity.properties": properties_pkg,
         "hydra_suite.core.identity.properties.cache": properties_cache,
-        "hydra_suite.core.tracking.density": density,
-        "hydra_suite.core.tracking.cnn_features": cnn_features,
-        "hydra_suite.core.tracking.live_features": live_features,
-        "hydra_suite.core.tracking.pose_pipeline": pose_pipeline,
-        "hydra_suite.core.tracking.precompute": precompute,
+        "hydra_suite.core.tracking.confidence.density": density,
+        "hydra_suite.core.tracking.features.live_features": live_features,
+        "hydra_suite.core.tracking.pose.pose_pipeline": pose_pipeline,
         "hydra_suite.core.tracking.profiler": profiler,
     }
 
@@ -289,7 +271,7 @@ def test_resolve_pose_group_indices_accepts_names_and_indices() -> None:
 
 def test_individual_data_precompute_gate_requires_pose_extractor() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
 
     assert (
         worker._should_precompute_individual_data(
@@ -319,7 +301,7 @@ def test_individual_properties_cache_path_defaults_to_video_cache_dir(
 ) -> None:
     mod = _load_worker_module()
     video_path = tmp_path / "clip.mp4"
-    worker = mod.TrackingWorker(str(video_path))
+    worker = mod.TrackingEngineCore(str(video_path))
 
     cache_path = worker._build_individual_properties_cache_path("props", 4, 9)
 
@@ -329,7 +311,7 @@ def test_individual_properties_cache_path_defaults_to_video_cache_dir(
 
 def test_confidence_density_enabled_defaults_true_and_respects_flag() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
 
     assert worker._confidence_density_enabled({}) is True
     assert (
@@ -347,7 +329,7 @@ def test_confidence_density_enabled_defaults_true_and_respects_flag() -> None:
 
 def test_confidence_density_video_export_defaults_false_and_respects_flag() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
 
     assert worker._confidence_density_video_export_enabled({}) is False
     assert (
@@ -369,7 +351,7 @@ def test_confidence_density_video_export_defaults_false_and_respects_flag() -> N
 
 def test_resolve_resized_roi_mask_reuses_cached_resize() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
     roi_mask = np.ones((8, 12), dtype=np.uint8)
     resize_calls = []
 
@@ -401,7 +383,7 @@ def test_resolve_resized_roi_mask_reuses_cached_resize() -> None:
 
 def test_resolve_resized_roi_mask_returns_original_when_shape_matches() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
     roi_mask = np.ones((5, 7), dtype=np.uint8)
 
     def _fail_resize(*_args, **_kwargs):
@@ -422,7 +404,7 @@ def test_resolve_resized_roi_mask_returns_original_when_shape_matches() -> None:
 
 def test_resize_tracking_frame_uses_linear_for_yolo_downscale() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
     frame = np.ones((8, 8, 3), dtype=np.uint8)
     resize_calls = []
 
@@ -439,7 +421,7 @@ def test_resize_tracking_frame_uses_linear_for_yolo_downscale() -> None:
 
 def test_resize_tracking_frame_uses_area_for_non_yolo_downscale() -> None:
     mod = _load_worker_module()
-    worker = mod.TrackingWorker("dummy.mp4")
+    worker = mod.TrackingEngineCore("dummy.mp4")
     frame = np.ones((8, 8, 3), dtype=np.uint8)
     resize_calls = []
 
@@ -462,23 +444,23 @@ def test_should_emit_visualization_frame_respects_realtime_stride() -> None:
         "ADVANCED_CONFIG": {"realtime_visualization_emit_stride": 3},
     }
 
-    assert mod.TrackingWorker._should_emit_visualization_frame(3, params) is True
-    assert mod.TrackingWorker._should_emit_visualization_frame(4, params) is False
+    assert mod.TrackingEngineCore._should_emit_visualization_frame(3, params) is True
+    assert mod.TrackingEngineCore._should_emit_visualization_frame(4, params) is False
 
 
 def test_should_emit_visualization_frame_defaults_to_every_frame() -> None:
     mod = _load_worker_module()
 
-    assert mod.TrackingWorker._should_emit_visualization_frame(1, {}) is True
-    assert mod.TrackingWorker._should_emit_visualization_frame(2, {}) is True
+    assert mod.TrackingEngineCore._should_emit_visualization_frame(1, {}) is True
+    assert mod.TrackingEngineCore._should_emit_visualization_frame(2, {}) is True
 
 
 def test_realtime_yolo_micro_batch_size_requires_direct_realtime_opt_in() -> None:
     mod = _load_worker_module()
 
-    assert mod.TrackingWorker._realtime_yolo_micro_batch_size({}) == 1
+    assert mod.TrackingEngineCore._realtime_yolo_micro_batch_size({}) == 1
     assert (
-        mod.TrackingWorker._realtime_yolo_micro_batch_size(
+        mod.TrackingEngineCore._realtime_yolo_micro_batch_size(
             {
                 "TRACKING_REALTIME_MODE": True,
                 "DETECTION_METHOD": "yolo_obb",
@@ -490,7 +472,7 @@ def test_realtime_yolo_micro_batch_size_requires_direct_realtime_opt_in() -> Non
         == 4
     )
     assert (
-        mod.TrackingWorker._realtime_yolo_micro_batch_size(
+        mod.TrackingEngineCore._realtime_yolo_micro_batch_size(
             {
                 "TRACKING_REALTIME_MODE": True,
                 "DETECTION_METHOD": "yolo_obb",

@@ -132,6 +132,13 @@ def get_models_dir() -> Path:
     return p
 
 
+def get_vitpose_cache_dir() -> Path:
+    """Return (and create) the cache dir for downloaded ViTPose checkpoints."""
+    p = _user_data_dir() / "vitpose-assets"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def get_training_runs_dir() -> Path:
     """Return (and create) the training runs directory."""
     p = _user_data_dir() / "training" / "runs"
@@ -203,6 +210,7 @@ def print_paths() -> None:
     print(f"Data dir:          {_user_data_dir()}")
     print(f"Projects dir:      {_user_projects_dir()}")
     print(f"Models:            {get_models_dir()}")
+    print(f"ViTPose cache:     {get_vitpose_cache_dir()}")
     print(f"Training runs:     {get_training_runs_dir()}")
     print(f"Presets:           {get_presets_dir()}")
     print(f"Skeletons:         {get_skeleton_dir()}")

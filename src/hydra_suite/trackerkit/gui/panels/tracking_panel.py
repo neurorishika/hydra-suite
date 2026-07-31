@@ -867,21 +867,10 @@ class TrackingPanel(QWidget):
             "Recommended: 0.15-0.70 s."
         )
 
-        self.spin_min_track = QDoubleSpinBox()
-        self.spin_min_track.setRange(0.01, 30.0)
-        self.spin_min_track.setSingleStep(0.1)
-        self.spin_min_track.setDecimals(2)
-        self.spin_min_track.setValue(0.33)
-        self.spin_min_track.setToolTip(
-            "Minimum tracking time including predictions (seconds).\n"
-            "Filters out tracks with too many gaps.\n"
-            "Recommended: similar to min detection time."
-        )
         f_stab.addRow(
             self._build_field_grid(
                 [
                     ("Min detection time (s)", self.spin_min_detect),
-                    ("Min total time (s)", self.spin_min_track),
                 ]
             )
         )

@@ -7,6 +7,8 @@ import math
 import numpy as np
 import pytest
 
+from hydra_suite.runtime.resolver import ResolvedBackend
+
 
 def test_normalize_label_accepts_canonical_tokens():
     from hydra_suite.core.identity.classification.headtail import (
@@ -73,7 +75,8 @@ def test_headtail_accepts_flat_tiny_five_class(tiny_flat_headtail):
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer(
-        model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+        model_path=str(tiny_flat_headtail),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     assert analyzer.is_loaded()
     # Expect the normalized label set in order of the checkpoint.
@@ -83,7 +86,10 @@ def test_headtail_accepts_flat_tiny_five_class(tiny_flat_headtail):
 def test_headtail_accepts_flat_tiny_subset(tiny_flat_subset):
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
-    analyzer = HeadTailAnalyzer(model_path=str(tiny_flat_subset), compute_runtime="cpu")
+    analyzer = HeadTailAnalyzer(
+        model_path=str(tiny_flat_subset),
+        resolved=ResolvedBackend("torch", "cpu", False),
+    )
     assert analyzer.canonical_labels == ("left", "right")
 
 
@@ -95,7 +101,8 @@ def test_headtail_accepts_legacy_flat_torchvision_subset(
 
     with pytest.raises(ClassifierFormatError):
         HeadTailAnalyzer(
-            model_path=str(legacy_torchvision_flat_headtail), compute_runtime="cpu"
+            model_path=str(legacy_torchvision_flat_headtail),
+            resolved=ResolvedBackend("torch", "cpu", False),
         )
 
 
@@ -104,7 +111,10 @@ def test_headtail_rejects_multi_head(tiny_multi_identity):
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     with pytest.raises(HeadTailFormatError):
-        HeadTailAnalyzer(model_path=str(tiny_multi_identity), compute_runtime="cpu")
+        HeadTailAnalyzer(
+            model_path=str(tiny_multi_identity),
+            resolved=ResolvedBackend("torch", "cpu", False),
+        )
 
 
 def test_headtail_rejects_non_headtail_labels(torchvision_flat_identity):
@@ -113,7 +123,8 @@ def test_headtail_rejects_non_headtail_labels(torchvision_flat_identity):
 
     with pytest.raises(HeadTailFormatError):
         HeadTailAnalyzer(
-            model_path=str(torchvision_flat_identity), compute_runtime="cpu"
+            model_path=str(torchvision_flat_identity),
+            resolved=ResolvedBackend("torch", "cpu", False),
         )
 
 
@@ -122,7 +133,8 @@ def test_headtail_predict_labels_returns_normalized(tiny_flat_headtail):
     from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer(
-        model_path=str(tiny_flat_headtail), compute_runtime="cpu"
+        model_path=str(tiny_flat_headtail),
+        resolved=ResolvedBackend("torch", "cpu", False),
     )
     crops = [np.zeros((32, 32, 3), dtype=np.uint8) for _ in range(2)]
     out = analyzer.predict_labels(crops)
@@ -183,7 +195,9 @@ def test_headtail_load_failure_surfaces_as_exception(tmp_path):
     bad = tmp_path / "not_a_checkpoint.pth"
     bad.write_bytes(b"garbage")
     with pytest.raises(ClassifierFormatError):
-        HeadTailAnalyzer(model_path=str(bad), compute_runtime="cpu")
+        HeadTailAnalyzer(
+            model_path=str(bad), resolved=ResolvedBackend("torch", "cpu", False)
+        )
 
 
 def test_headtail_predict_chunks_large_crop_batches():

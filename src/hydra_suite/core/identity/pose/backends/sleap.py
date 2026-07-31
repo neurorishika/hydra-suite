@@ -7,7 +7,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
-import tempfile
 import time
 from multiprocessing import shared_memory
 from pathlib import Path
@@ -26,13 +25,25 @@ from hydra_suite.core.identity.pose.backends.sleap_utils import (
     looks_like_sleap_export_path,
     run_cli_command,
 )
+from hydra_suite.core.identity.pose.runtime.onnx_session import (
+    OnnxSessionRunner as _DirectOnnxSession,
+)
+from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (  # noqa: F401
+    _TRT_PROFILE_MAX_BATCH,
+)
+from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (
+    TensorRTEngineRunner as _DirectTensorRTEngine,
+)
+from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (
+    build_trt_engine_from_onnx as _build_trt_engine_from_onnx,
+)
 from hydra_suite.core.identity.pose.types import PoseResult, PoseRuntimeConfig
 from hydra_suite.core.identity.pose.utils import (
     coerce_prediction_batch,
     empty_pose_result,
     summarize_keypoints,
 )
-from hydra_suite.runtime.compute_runtime import derive_onnx_execution_providers
+from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
 
@@ -137,94 +148,23 @@ def _detect_export_input_spec(
     return input_hw, input_channels
 
 
-def _detect_onnx_input_spec(
-    session: Any,
-) -> Tuple[Optional[Tuple[int, int]], Optional[int]]:
-    if session is None or not hasattr(session, "get_inputs"):
-        return None, None
-    try:
-        inputs = session.get_inputs()
-    except Exception:
-        return None, None
-    if not inputs:
-        return None, None
-
-    try:
-        shape = list(getattr(inputs[0], "shape", []) or [])
-    except Exception:
-        shape = []
-    dims: List[int] = []
-    for dim in shape:
-        try:
-            dims.append(int(dim))
-        except Exception:
-            dims.append(-1)
-
-    input_hw = None
-    input_channels = None
-    if len(dims) >= 4:
-        if dims[-1] in (1, 3):
-            input_channels = int(dims[-1])
-            if dims[-3] > 0 and dims[-2] > 0:
-                input_hw = (int(dims[-3]), int(dims[-2]))
-        elif dims[1] in (1, 3):
-            input_channels = int(dims[1])
-            if dims[-2] > 0 and dims[-1] > 0:
-                input_hw = (int(dims[-2]), int(dims[-1]))
-    return input_hw, input_channels
-
-
-def _detect_onnx_input_format(session: Any) -> Optional[Dict[str, Any]]:
-    if session is None or not hasattr(session, "get_inputs"):
-        return None
-    try:
-        inputs = session.get_inputs()
-        if not inputs:
-            return None
-        inp = inputs[0]
-        raw_type = str(getattr(inp, "type", "")).lower()
-        shape = list(getattr(inp, "shape", []) or [])
-    except Exception:
-        return None
-
-    dims: List[int] = []
-    for dim in shape:
-        try:
-            dims.append(int(dim))
-        except Exception:
-            dims.append(-1)
-
-    layout = "nhwc"
-    if len(dims) >= 4:
-        if dims[1] in (1, 3):
-            layout = "nchw"
-        elif dims[-1] in (1, 3):
-            layout = "nhwc"
-    return {"layout": layout, "is_float": "float" in raw_type}
-
-
-def _detect_onnx_min_batch(session: Any) -> Optional[int]:
-    if session is None or not hasattr(session, "get_inputs"):
-        return None
-    try:
-        inputs = session.get_inputs()
-        if not inputs:
-            return None
-        shape = getattr(inputs[0], "shape", [])
-        if not shape:
-            return None
-        batch = int(shape[0])
-        return batch if batch > 0 else None
-    except Exception:
-        return None
-
-
 def _prepare_export_crop(
     crop: np.ndarray,
     input_hw: Tuple[int, int],
     input_channels: Optional[int],
 ) -> Tuple[np.ndarray, ExportTransform]:
-    arr = np.asarray(crop, dtype=np.uint8)
+    # The pipeline's canonical crops are float32 [0, 1]; casting them straight to
+    # uint8 floors every pixel to 0 (all-black image → SLEAP returns zero-conf
+    # keypoints). Scale [0, 1] floats to [0, 255] before the cast; pass uint8 /
+    # [0, 255] inputs through. Mirrors SleapServiceBackend._to_uint8_image; this
+    # is the shared choke point for the onnx_cuda/tensorrt exported CPU path.
+    arr = np.asarray(crop)
+    if arr.dtype != np.uint8:
+        a = arr.astype(np.float32)
+        finite = a[np.isfinite(a)]
+        if finite.size and float(finite.max()) <= 1.0 + 1e-3:
+            a = a * 255.0
+        arr = np.clip(np.nan_to_num(a), 0.0, 255.0).astype(np.uint8)
     if arr.ndim == 2:
         arr = arr[:, :, None]
     if arr.ndim != 3:
@@ -329,281 +269,29 @@ def _canonical_export_runtime(
     return "onnx_cpu"
 
 
-class _DirectOnnxSession:
-    def __init__(
-        self,
-        model_path: Path,
-        compute_runtime: str,
-    ) -> None:
-        import onnxruntime as ort
+def _resolved_from_canonical_export(canonical_runtime: str) -> ResolvedBackend:
+    """Map an existing canonical SLEAP export string to a ``ResolvedBackend``.
 
-        self._session = ort.InferenceSession(
-            str(model_path),
-            providers=derive_onnx_execution_providers(compute_runtime),
-        )
-        self.input_name = self._session.get_inputs()[0].name
-        self.output_names = [output.name for output in self._session.get_outputs()]
-        self.input_hw, self.input_channels = _detect_onnx_input_spec(self._session)
-        self.input_format = _detect_onnx_input_format(self._session)
-        self.model_min_batch = _detect_onnx_min_batch(self._session)
-
-    def run(self, batch: np.ndarray) -> Any:
-        return self._session.run(None, {self.input_name: batch})
-
-    def close(self) -> None:
-        self._session = None
-
-
-class _DirectTensorRTEngine:
-    def __init__(self, model_path: Path) -> None:
-        import tensorrt as trt
-        import torch
-
-        self._trt = trt
-        self._torch = torch
-        self._logger = trt.Logger(trt.Logger.WARNING)
-        self._runtime = trt.Runtime(self._logger)
-        self._engine_bytes = model_path.read_bytes()
-        self._engine = self._runtime.deserialize_cuda_engine(self._engine_bytes)
-        if self._engine is None:
-            raise RuntimeError(f"Failed to deserialize TensorRT engine: {model_path}")
-        self._context = self._engine.create_execution_context()
-        if self._context is None:
-            raise RuntimeError(f"Failed to create TensorRT context: {model_path}")
-
-        self.input_name = self._first_tensor_name(self._trt.TensorIOMode.INPUT)
-        self.output_names = self._tensor_names(self._trt.TensorIOMode.OUTPUT)
-        self.input_hw, self.input_channels = self._detect_input_spec()
-        self.input_format = self._detect_input_format()
-        self.model_min_batch = self._detect_min_batch()
-
-    def _tensor_names(self, mode: Any) -> List[str]:
-        names: List[str] = []
-        if hasattr(self._engine, "num_io_tensors"):
-            for idx in range(int(self._engine.num_io_tensors)):
-                name = self._engine.get_tensor_name(idx)
-                if self._engine.get_tensor_mode(name) == mode:
-                    names.append(str(name))
-            return names
-        if hasattr(self._engine, "num_bindings"):
-            for idx in range(int(self._engine.num_bindings)):
-                is_input = bool(self._engine.binding_is_input(idx))
-                if is_input == (mode == self._trt.TensorIOMode.INPUT):
-                    names.append(str(self._engine.get_binding_name(idx)))
-        return names
-
-    def _first_tensor_name(self, mode: Any) -> str:
-        names = self._tensor_names(mode)
-        if not names:
-            raise RuntimeError("TensorRT engine is missing an input tensor.")
-        return names[0]
-
-    def _tensor_shape(self, name: str) -> Tuple[int, ...]:
-        if hasattr(self._engine, "get_tensor_shape"):
-            return tuple(int(v) for v in self._engine.get_tensor_shape(name))
-        if hasattr(self._engine, "get_binding_shape"):
-            index = self._engine.get_binding_index(name)
-            return tuple(int(v) for v in self._engine.get_binding_shape(index))
-        raise RuntimeError("TensorRT engine does not expose tensor shapes.")
-
-    def _tensor_dtype(self, name: str):
-        if hasattr(self._engine, "get_tensor_dtype"):
-            return self._engine.get_tensor_dtype(name)
-        if hasattr(self._engine, "get_binding_dtype"):
-            index = self._engine.get_binding_index(name)
-            return self._engine.get_binding_dtype(index)
-        raise RuntimeError("TensorRT engine does not expose tensor dtypes.")
-
-    def _detect_input_spec(self) -> Tuple[Optional[Tuple[int, int]], Optional[int]]:
-        shape = list(self._tensor_shape(self.input_name))
-        dims: List[int] = []
-        for dim in shape:
-            dims.append(int(dim) if int(dim) > 0 else -1)
-        input_hw = None
-        input_channels = None
-        if len(dims) >= 4:
-            if dims[1] in (1, 3):
-                input_channels = int(dims[1])
-                if dims[-2] > 0 and dims[-1] > 0:
-                    input_hw = (int(dims[-2]), int(dims[-1]))
-            elif dims[-1] in (1, 3):
-                input_channels = int(dims[-1])
-                if dims[-3] > 0 and dims[-2] > 0:
-                    input_hw = (int(dims[-3]), int(dims[-2]))
-        return input_hw, input_channels
-
-    def _detect_input_format(self) -> Dict[str, Any]:
-        shape = list(self._tensor_shape(self.input_name))
-        layout = "nhwc"
-        if len(shape) >= 4:
-            if int(shape[1]) in (1, 3):
-                layout = "nchw"
-            elif int(shape[-1]) in (1, 3):
-                layout = "nhwc"
-        dtype_name = str(self._tensor_dtype(self.input_name)).lower()
-        return {"layout": layout, "is_float": "float" in dtype_name}
-
-    def _detect_min_batch(self) -> Optional[int]:
-        if hasattr(self._engine, "get_tensor_profile_shape"):
-            try:
-                min_shape, _opt_shape, _max_shape = (
-                    self._engine.get_tensor_profile_shape(
-                        self.input_name,
-                        0,
-                    )
-                )
-                batch = int(min_shape[0])
-                return batch if batch > 0 else None
-            except Exception:
-                pass
-        if hasattr(self._engine, "get_profile_shape"):
-            try:
-                index = self._engine.get_binding_index(self.input_name)
-                min_shape, _opt_shape, _max_shape = self._engine.get_profile_shape(
-                    0, index
-                )
-                batch = int(min_shape[0])
-                return batch if batch > 0 else None
-            except Exception:
-                pass
-        shape = self._tensor_shape(self.input_name)
-        if shape and int(shape[0]) > 0:
-            return int(shape[0])
-        return None
-
-    def _torch_dtype(self, trt_dtype: Any):
-        np_dtype = np.dtype(self._trt.nptype(trt_dtype))
-        mapping = {
-            np.dtype(np.float32): self._torch.float32,
-            np.dtype(np.float16): self._torch.float16,
-            np.dtype(np.int32): self._torch.int32,
-            np.dtype(np.int8): self._torch.int8,
-            np.dtype(np.uint8): self._torch.uint8,
-            np.dtype(np.bool_): self._torch.bool,
-        }
-        if np_dtype not in mapping:
-            raise RuntimeError(f"Unsupported TensorRT dtype: {np_dtype}")
-        return mapping[np_dtype]
-
-    def run(self, batch: np.ndarray) -> Dict[str, np.ndarray]:
-        input_shape = tuple(int(v) for v in batch.shape)
-        if hasattr(self._context, "set_input_shape"):
-            self._context.set_input_shape(self.input_name, input_shape)
-        elif hasattr(self._context, "set_binding_shape"):
-            index = self._engine.get_binding_index(self.input_name)
-            self._context.set_binding_shape(index, input_shape)
-
-        input_dtype = self._torch_dtype(self._tensor_dtype(self.input_name))
-        input_tensor = self._torch.as_tensor(
-            np.ascontiguousarray(batch),
-            device="cuda",
-            dtype=input_dtype,
-        )
-        output_tensors: Dict[str, Any] = {}
-        if hasattr(self._context, "set_tensor_address"):
-            self._context.set_tensor_address(
-                self.input_name, int(input_tensor.data_ptr())
-            )
-            for name in self.output_names:
-                out_shape = tuple(int(v) for v in self._context.get_tensor_shape(name))
-                out_tensor = self._torch.empty(
-                    out_shape,
-                    device="cuda",
-                    dtype=self._torch_dtype(self._tensor_dtype(name)),
-                )
-                self._context.set_tensor_address(name, int(out_tensor.data_ptr()))
-                output_tensors[name] = out_tensor
-            stream = self._torch.cuda.current_stream().cuda_stream
-            ok = self._context.execute_async_v3(stream_handle=stream)
-        else:
-            bindings: List[int] = [0] * int(self._engine.num_bindings)
-            in_index = self._engine.get_binding_index(self.input_name)
-            bindings[in_index] = int(input_tensor.data_ptr())
-            for name in self.output_names:
-                out_index = self._engine.get_binding_index(name)
-                out_shape = tuple(
-                    int(v) for v in self._context.get_binding_shape(out_index)
-                )
-                out_tensor = self._torch.empty(
-                    out_shape,
-                    device="cuda",
-                    dtype=self._torch_dtype(self._tensor_dtype(name)),
-                )
-                bindings[out_index] = int(out_tensor.data_ptr())
-                output_tensors[name] = out_tensor
-            stream = self._torch.cuda.current_stream().cuda_stream
-            ok = self._context.execute_async_v2(bindings=bindings, stream_handle=stream)
-        if not ok:
-            raise RuntimeError("TensorRT inference failed.")
-        self._torch.cuda.current_stream().synchronize()
-        return {
-            name: tensor.detach().cpu().numpy()
-            for name, tensor in output_tensors.items()
-        }
-
-    def run_cuda(self, batch_cuda: Any) -> Dict[str, np.ndarray]:
-        """Like :meth:`run` but accepts a device-resident CUDA tensor.
-
-        Eliminates the ``np.ascontiguousarray`` → ``torch.as_tensor(device='cuda')``
-        host-to-device copy when the batch is already on the GPU.  The output
-        keypoint tensors are small so the final GPU→CPU transfer is negligible.
-        """
-        input_shape = tuple(int(v) for v in batch_cuda.shape)
-        if hasattr(self._context, "set_input_shape"):
-            self._context.set_input_shape(self.input_name, input_shape)
-        elif hasattr(self._context, "set_binding_shape"):
-            index = self._engine.get_binding_index(self.input_name)
-            self._context.set_binding_shape(index, input_shape)
-
-        input_dtype = self._torch_dtype(self._tensor_dtype(self.input_name))
-        input_tensor = batch_cuda.contiguous().to(dtype=input_dtype)
-
-        output_tensors: Dict[str, Any] = {}
-        if hasattr(self._context, "set_tensor_address"):
-            self._context.set_tensor_address(
-                self.input_name, int(input_tensor.data_ptr())
-            )
-            for name in self.output_names:
-                out_shape = tuple(int(v) for v in self._context.get_tensor_shape(name))
-                out_tensor = self._torch.empty(
-                    out_shape,
-                    device="cuda",
-                    dtype=self._torch_dtype(self._tensor_dtype(name)),
-                )
-                self._context.set_tensor_address(name, int(out_tensor.data_ptr()))
-                output_tensors[name] = out_tensor
-            stream = self._torch.cuda.current_stream().cuda_stream
-            ok = self._context.execute_async_v3(stream_handle=stream)
-        else:
-            bindings: List[int] = [0] * int(self._engine.num_bindings)
-            in_index = self._engine.get_binding_index(self.input_name)
-            bindings[in_index] = int(input_tensor.data_ptr())
-            for name in self.output_names:
-                out_index = self._engine.get_binding_index(name)
-                out_shape = tuple(
-                    int(v) for v in self._context.get_binding_shape(out_index)
-                )
-                out_tensor = self._torch.empty(
-                    out_shape,
-                    device="cuda",
-                    dtype=self._torch_dtype(self._tensor_dtype(name)),
-                )
-                bindings[out_index] = int(out_tensor.data_ptr())
-                output_tensors[name] = out_tensor
-            stream = self._torch.cuda.current_stream().cuda_stream
-            ok = self._context.execute_async_v2(bindings=bindings, stream_handle=stream)
-        if not ok:
-            raise RuntimeError("TensorRT inference failed.")
-        self._torch.cuda.current_stream().synchronize()
-        return {
-            name: tensor.detach().cpu().numpy()
-            for name, tensor in output_tensors.items()
-        }
-
-    def close(self) -> None:
-        self._context = None
-        self._engine = None
-        self._runtime = None
+    ``SleapExportedBackend`` keeps its public string signature; internally we
+    translate the canonical export string (``_canonical_export_runtime``) into
+    the Gen-2 ``ResolvedBackend`` vocabulary so the ONNX session can source its
+    execution providers via ``execution_providers_for``. The mapping reproduces
+    the legacy canonical-string provider derivation exactly for the
+    producible combos:
+      * ``onnx_coreml`` -> ``(coreml, mps)``  -> [CoreML-EP, CPU]
+      * ``tensorrt``    -> ``(tensorrt, cuda)`` -> [TRT-EP+cache, CUDA-EP, CPU]
+      * else (``onnx_cpu``) -> ``(torch, cpu)`` -> [CPU]
+    ``onnx_cuda`` is not producible through the Gen-2 resolver (it never emits
+    ONNX-on-CUDA; gpu_fast CUDA uses TensorRT) and collapses to the CPU case —
+    a debug-only ``HYDRA_SLEAP_FLAVOR=onnx_cuda`` override loses its CUDA EP,
+    which is intentional under the single-path consolidation.
+    """
+    rt = str(canonical_runtime or "").strip().lower()
+    if rt == "onnx_coreml":
+        return ResolvedBackend("coreml", "mps", False)
+    if rt == "tensorrt":
+        return ResolvedBackend("tensorrt", "cuda", False)
+    return ResolvedBackend("torch", "cpu", False)
 
 
 class SleapExportedBackend:
@@ -650,18 +338,18 @@ class SleapExportedBackend:
         self._input_channels = metadata_channels
         self._output_names: List[str] = []
 
-        if self.runtime_flavor == "tensorrt" and self.model_path.suffix.lower() in {
-            ".engine",
-            ".trt",
-        }:
-            self._runner = _DirectTensorRTEngine(self.model_path)
+        if self.runtime_flavor == "tensorrt":
+            self._runner = self._init_tensorrt_runner(self.model_path)
         else:
             canonical_runtime = _canonical_export_runtime(
                 self.runtime_request,
                 self.runtime_flavor,
                 self.device,
             )
-            self._runner = _DirectOnnxSession(self.model_path, canonical_runtime)
+            self._runner = _DirectOnnxSession(
+                self.model_path,
+                _resolved_from_canonical_export(canonical_runtime),
+            )
 
         self._output_names = list(getattr(self._runner, "output_names", []) or [])
         self._input_hw = getattr(self._runner, "input_hw", None) or self._input_hw
@@ -678,6 +366,116 @@ class SleapExportedBackend:
             raise RuntimeError(
                 "SLEAP exported runtime requires fixed input shape metadata or explicit export_input_hw."
             )
+
+    def _init_tensorrt_runner(
+        self, model_path: Path
+    ) -> "_DirectTensorRTEngine | _DirectOnnxSession":
+        """Select the best backend when runtime_flavor == 'tensorrt'.
+
+        Decision tree
+        -------------
+        1. If *model_path* is a native ``.engine``/``.trt`` file → attempt to
+           deserialize directly.  On version-mismatch / stale-engine the
+           ``deserialize_cuda_engine`` call returns ``None`` and
+           ``_DirectTensorRTEngine`` raises; in that case fall through to (2).
+        2. If *model_path* is an ``.onnx`` file (fallback from
+           ``_resolve_export_model_path`` when no ``.trt`` was found) OR after a
+           stale-engine failure → attempt to build a fresh native TRT engine from
+           the ONNX via :func:`_build_trt_engine_from_onnx` and deserialize it.
+        3. If building is not feasible (CUDA absent, TRT import fails, builder
+           error) → fall back to ``_DirectOnnxSession`` with the ORT TensorRT-EP.
+           Emit a WARNING so operators know which slow path is active.
+
+        The ONNX path from step 2/3 is stored beside the resolved ``model_path``
+        directory with a ``.trt`` suffix so the next startup skips the build.
+        """
+        is_native_engine = model_path.suffix.lower() in {".engine", ".trt"}
+        is_onnx = model_path.suffix.lower() == ".onnx"
+
+        if is_native_engine:
+            try:
+                return _DirectTensorRTEngine(model_path)
+            except Exception as exc:  # incl. ImportError when tensorrt is absent
+                logger.warning(
+                    "TensorRT engine at %s failed to deserialize (stale/version "
+                    "mismatch: %s). Attempting to rebuild from ONNX.",
+                    model_path,
+                    exc,
+                )
+                # Locate a sibling .onnx to rebuild from
+                onnx_siblings = sorted(model_path.parent.rglob("*.onnx"))
+                if not onnx_siblings:
+                    logger.warning(
+                        "No sibling ONNX file found in %s — cannot rebuild TRT "
+                        "engine. Falling back to ORT TensorRT-EP (slow: ~8 s init "
+                        "overhead per session).",
+                        model_path.parent,
+                    )
+                    return self._ort_trt_ep_fallback()
+                onnx_path = onnx_siblings[0]
+                rebuilt = model_path  # rebuild in-place
+                if _build_trt_engine_from_onnx(
+                    onnx_path, rebuilt, fixed_hw=self._input_hw
+                ):
+                    try:
+                        return _DirectTensorRTEngine(rebuilt)
+                    except Exception as build_exc:  # incl. ImportError
+                        logger.warning(
+                            "Rebuilt TRT engine at %s still fails: %s. "
+                            "Falling back to ORT TensorRT-EP.",
+                            rebuilt,
+                            build_exc,
+                        )
+                        return self._ort_trt_ep_fallback()
+                return self._ort_trt_ep_fallback()
+
+        if is_onnx:
+            # No .trt engine exists yet — attempt to build one beside the .onnx
+            engine_path = model_path.with_suffix(".trt")
+            if _build_trt_engine_from_onnx(
+                model_path, engine_path, fixed_hw=self._input_hw
+            ):
+                try:
+                    engine = _DirectTensorRTEngine(engine_path)
+                    # Update model_path so the next warmup / profile reflects it
+                    self.model_path = engine_path
+                    return engine
+                except Exception as exc:  # incl. ImportError when tensorrt is absent
+                    logger.warning(
+                        "Freshly built TRT engine at %s fails to deserialize: %s. "
+                        "Falling back to ORT TensorRT-EP.",
+                        engine_path,
+                        exc,
+                    )
+            return self._ort_trt_ep_fallback()
+
+        # Unknown suffix — best-effort ONNX session
+        return self._ort_trt_ep_fallback()
+
+    def _ort_trt_ep_fallback(self) -> "_DirectOnnxSession":
+        """Return an ORT session using the TensorRT ExecutionProvider.
+
+        This is the ~8 s per-session initialisation path.  Callers emit a
+        WARNING before calling this so the cost is visible in logs.
+        """
+        logger.warning(
+            "SLEAP pose backend falling back to ORT TensorRT-EP (ONNX Runtime "
+            "TensorRT ExecutionProvider). This incurs ~8 s of plan-cache "
+            "initialisation per session. To avoid this cost ensure a valid "
+            "native TRT engine is present beside the ONNX export, or that CUDA "
+            "and TensorRT are available for on-the-fly engine build."
+        )
+        # The model path may still be .onnx if we got here from the missing-engine
+        # branch; _resolve_export_model_path already returned it.  If we arrived
+        # from a stale .trt rebuild-fail, look for a sibling .onnx.
+        onnx_path = self.model_path
+        if onnx_path.suffix.lower() not in {".onnx"}:
+            siblings = sorted(self.model_path.parent.rglob("*.onnx"))
+            if siblings:
+                onnx_path = siblings[0]
+        return _DirectOnnxSession(
+            onnx_path, _resolved_from_canonical_export("tensorrt")
+        )
 
     @property
     def preferred_input_size(self) -> int:
@@ -844,7 +642,7 @@ class SleapExportedBackend:
     def predict_batch_cuda(self, crops: Sequence[Any]) -> List[PoseResult]:
         """GPU-native counterpart of :meth:`predict_batch`.
 
-        Accepts a sequence of ``C×H×W`` CUDA float32 tensors (BGR, ``[0, 255]``
+        Accepts a sequence of ``C×H×W`` CUDA float32 tensors (BGR, ``[0, 1]``
         range) produced by the NVDec→:func:`~hydra_suite.core.canonicalization.crop.gpu_canonical_crop`
         pipeline.
 
@@ -856,10 +654,19 @@ class SleapExportedBackend:
             return []
 
         if not isinstance(self._runner, _DirectTensorRTEngine):
-            # ONNX has a hard numpy boundary — fall back to the CPU path.
-            cpu_crops = [
-                c.permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy() for c in crops
-            ]
+            # ONNX has a hard numpy boundary — convert to uint8 [0,255] numpy and
+            # forward to predict_batch (whose _prepare_export_crop casts to uint8
+            # and then divides by 255). CRITICAL: the canonical crops are float32
+            # [0, 1], so a direct uint8 cast floors every pixel to 0 (all-black
+            # image → SLEAP returns zero-confidence keypoints). Scale by 255 first
+            # (only when in [0,1]; pass [0,255] through) — mirrors _to_uint8_image.
+            def _crop_to_u8(c):
+                t = c.float()
+                if float(t.max()) <= 1.0 + 1e-3:
+                    t = t * 255.0
+                return t.permute(1, 2, 0).clamp(0, 255).byte().cpu().numpy()
+
+            cpu_crops = [_crop_to_u8(c) for c in crops]
             return self.predict_batch(cpu_crops)
 
         self._last_profile = {}
@@ -1245,8 +1052,6 @@ class SleapServiceBackend:
         )
         self._service_started_here = False
         self._native_in_memory_supported: Optional[bool] = None
-        self._tmp_dir = tempfile.TemporaryDirectory(prefix="hydra_posekit_")
-        self._tmp_root = Path(self._tmp_dir.name)
         self._last_profile: Dict[str, float] = {}
 
     @property
@@ -1282,20 +1087,41 @@ class SleapServiceBackend:
                 self._native_in_memory_supported = False
         return bool(self._native_in_memory_supported)
 
+    @staticmethod
+    def _to_uint8_image(crop: np.ndarray) -> np.ndarray:
+        """Coerce a crop to uint8 [0, 255] for SLEAP.
+
+        The inference pipeline's canonical crops are float32 in [0, 1] (the crop
+        builder does ``.float() / 255.0`` so the classifier/CNN backends get
+        normalized input). SLEAP — both the shared-memory transport and the
+        temp-file PNG path — expects 8-bit images; casting a [0, 1] float crop
+        straight to uint8 floors every pixel to 0, producing a blank image with
+        no detectable instances (all-zero keypoints). Scale [0, 1] floats back to
+        [0, 255] before the uint8 cast; pass uint8 / [0, 255] inputs through.
+        """
+        a = np.asarray(crop)
+        if a.dtype == np.uint8:
+            return a
+        a = a.astype(np.float32, copy=False)
+        finite = a[np.isfinite(a)]
+        if finite.size and float(finite.max()) <= 1.0 + 1e-3:
+            a = a * 255.0
+        return np.clip(np.nan_to_num(a), 0.0, 255.0).astype(np.uint8)
+
     def predict_batch(self, crops: Sequence[np.ndarray]) -> List[PoseResult]:
         self._last_profile = {}
         if not crops:
             return []
-        if not self._native_in_memory_enabled():
-            return self._predict_batch_via_temp_files(crops)
-        try:
-            return self._predict_batch_via_shared_memory(crops)
-        except Exception:
-            logger.debug(
-                "Falling back to temporary-file SLEAP crop transport.",
-                exc_info=True,
-            )
-            return self._predict_batch_via_temp_files(crops)
+        # Normalize every crop to uint8 [0, 255] up front so both transports
+        # (shared-memory and temp-file) feed SLEAP 8-bit images regardless of the
+        # incoming dtype/range (see _to_uint8_image).
+        crops = [self._to_uint8_image(c) for c in crops]
+        # Pose golden rule: inference must never do a disk round-trip. Use the
+        # zero-copy shared-memory transport exclusively — raw uint8 arrays go
+        # straight to the service's warm in-process predictor with no PNG encode,
+        # no disk write/read, no decode. If shared memory fails, fail loud and let
+        # the exception propagate rather than silently retrying via disk.
+        return self._predict_batch_via_shared_memory(crops)
 
     def consume_last_profile(self) -> Dict[str, float]:
         """Return and clear the most recent SLEAP batch timing profile."""
@@ -1437,80 +1263,6 @@ class SleapServiceBackend:
 
         return outputs
 
-    def _predict_batch_via_temp_files(
-        self, crops: Sequence[np.ndarray]
-    ) -> List[PoseResult]:
-        from concurrent.futures import ThreadPoolExecutor
-
-        def _write_crop(args):
-            i, crop = args
-            p = self._tmp_root / f"crop_{i:06d}.png"
-            ok = cv2.imwrite(str(p), crop)
-            return p if ok else Path("__invalid__")
-
-        transport_start = time.perf_counter()
-        with ThreadPoolExecutor(
-            max_workers=min(4, len(crops)),
-            thread_name_prefix="sleap-crop-write",
-        ) as pool:
-            paths: List[Path] = list(pool.map(_write_crop, enumerate(crops)))
-        transport_s = time.perf_counter() - transport_start
-
-        valid_paths = [p for p in paths if p.exists()]
-        preds: Dict[str, List[Any]] = {}
-        if valid_paths:
-            service_call_start = time.perf_counter()
-            pred_map, err = self._infer.predict(
-                model_path=self.model_dir,
-                image_paths=valid_paths,
-                device="auto",
-                imgsz=640,
-                conf=1e-4,
-                batch=min(self.sleap_batch, max(1, len(valid_paths))),
-                backend="sleap",
-                sleap_env=self.sleap_env,
-                sleap_device=self.sleap_device,
-                sleap_batch=min(self.sleap_batch, max(1, len(valid_paths))),
-                sleap_max_instances=self.sleap_max_instances,
-                sleap_runtime_flavor=self.runtime_flavor,
-                sleap_exported_model_path=self.exported_model_path,
-                sleap_export_input_hw=self.export_input_hw,
-                cache_predictions=False,
-            )
-            service_call_s = time.perf_counter() - service_call_start
-            if pred_map is None:
-                raise RuntimeError(err or "SLEAP inference failed.")
-            preds = pred_map
-        else:
-            service_call_s = 0.0
-
-        outputs: List[PoseResult] = []
-        postprocess_start = time.perf_counter()
-        for p in paths:
-            if not p.exists():
-                outputs.append(empty_pose_result())
-                continue
-            pred = preds.get(str(p))
-            if pred is None:
-                pred = preds.get(str(p.resolve()))
-            if not pred:
-                outputs.append(empty_pose_result())
-                continue
-            arr = np.asarray(pred, dtype=np.float32)
-            if arr.ndim != 2 or arr.shape[1] != 3:
-                outputs.append(empty_pose_result())
-                continue
-            outputs.append(summarize_keypoints(arr, self.min_valid_conf))
-
-        self._finalize_profile(
-            transport_s,
-            service_call_s,
-            self._consume_service_metrics(),
-            time.perf_counter() - postprocess_start,
-        )
-
-        return outputs
-
     def close(self) -> None:
         if self._service_started_here:
             try:
@@ -1520,7 +1272,3 @@ class SleapServiceBackend:
                     "Failed to stop SLEAP service from backend close.", exc_info=True
                 )
             self._service_started_here = False
-        try:
-            self._tmp_dir.cleanup()
-        except Exception:
-            pass

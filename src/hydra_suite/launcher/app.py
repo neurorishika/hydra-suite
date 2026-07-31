@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -216,6 +216,7 @@ class AppCard(QWidget):
     _ICON_FRACTION = 0.85  # icon occupies this fraction of the card width
     _ICON_MIN = 80
     _ICON_MAX = 260
+    _LAUNCH_COOLDOWN_MS = 2000  # ignore repeat clicks (double-click) during launch
 
     def __init__(self, info: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -246,10 +247,16 @@ class AppCard(QWidget):
         layout.addWidget(desc)
 
     def _launch(self) -> None:
-        """Launch the app in a new process."""
+        """Launch the app in a new process.
+
+        Guards against accidental double-clicks: the button is disabled for a
+        short cooldown after each launch so a rapid second click cannot spawn a
+        duplicate instance.
+        """
         entry = self._info["entry"]  # e.g. "hydra_suite.trackerkit.app:main"
         module, _func = entry.rsplit(":", 1)
         env = os.environ.copy()
+        self._btn.setEnabled(False)
         try:
             subprocess.Popen(
                 [sys.executable, "-c", f"from {module} import {_func}; {_func}()"],
@@ -262,6 +269,8 @@ class AppCard(QWidget):
                 f"Failed to launch {self._info['name']}",
                 str(exc),
             )
+        # Re-enable after a cooldown so the card can launch another instance later.
+        QTimer.singleShot(self._LAUNCH_COOLDOWN_MS, lambda: self._btn.setEnabled(True))
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         """Scale the tool icon proportionally to the card width on resize."""

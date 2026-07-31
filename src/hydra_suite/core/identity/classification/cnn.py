@@ -8,9 +8,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
 
@@ -350,19 +353,25 @@ class CNNIdentityBackend:
         self,
         config: CNNIdentityConfig,
         model_path: str | None = None,
-        compute_runtime: str = "cpu",
+        resolved: "ResolvedBackend | None" = None,
     ) -> None:
         from hydra_suite.core.identity.classification.backend import ClassifierBackend
         from hydra_suite.core.identity.classification.errors import (
             ClassifierConfigError,
         )
+        from hydra_suite.runtime.resolver import ResolvedBackend
 
         self._config = config
         resolved_path = str(model_path or config.model_path or "")
         if not resolved_path:
             raise ClassifierConfigError("CNN identity backend requires a model_path")
         self._backend = ClassifierBackend(
-            resolved_path, compute_runtime=compute_runtime
+            resolved_path,
+            (
+                resolved
+                if resolved is not None
+                else ResolvedBackend("torch", "cpu", False)
+            ),
         )
         meta = self._backend.metadata
         if meta.is_multihead and config.scoring_mode not in (

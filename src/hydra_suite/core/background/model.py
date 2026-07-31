@@ -4,8 +4,8 @@ Functionally identical to the original implementation's background logic.
 """
 
 import logging
-import random
-from typing import Any, Dict, Optional
+from collections import deque
+from typing import Any, Deque, Dict, Optional
 
 import cv2
 import numpy as np
@@ -20,7 +20,10 @@ from hydra_suite.utils.gpu_utils import (
     prange,
     torch,
 )
-from hydra_suite.utils.image_processing import apply_image_adjustments
+from hydra_suite.utils.image_processing import (
+    apply_image_adjustments,
+    stabilize_lighting,
+)
 
 # Provide fallback decorators if Numba not available
 if not NUMBA_AVAILABLE:
@@ -187,6 +190,23 @@ class BackgroundModel:
         self.adaptive_background: Optional[np.ndarray] = None
         self.reference_intensity: Optional[float] = None
 
+        # Background-convergence latch. Replaces the old `tracking_stabilized`
+        # flag, which was fed in from the tracker (Hungarian assignment cost)
+        # and made detection depend on tracking state -- impossible to cache.
+        # The latch is monotonic: once set, never cleared.
+        self._stabilized: bool = False
+        self._converged_frames: int = 0
+
+        # Lighting-stabilization state, moved off the worker loop (it used to
+        # live as locals initialised at worker.py:967). Initial values match
+        # that line exactly: a deque(maxlen=50) -- stabilize_lighting appends to
+        # it unconditionally, so None would raise -- and a dict that
+        # stabilize_lighting mutates in place. Keeping the state on the model is
+        # what lets the batch path reproduce realtime, which is mandatory:
+        # ENABLE_LIGHTING_STABILIZATION is in the bg-sub cache key.
+        self._intensity_history: Deque[float] = deque(maxlen=50)
+        self._lighting_state: Dict[str, Any] = {}
+
         # GPU acceleration setup
         self.use_gpu = False
         self.gpu_type = None  # 'cuda', 'mps', or None
@@ -194,10 +214,74 @@ class BackgroundModel:
         self.torch_device = None
         self._setup_gpu_acceleration()
 
+    @property
+    def stabilized(self) -> bool:
+        """True once the lightest background has stopped growing.
+
+        Monotonic latch. Selects adaptive (True) over lightest (False) as the
+        subtraction background.
+        """
+        return self._stabilized
+
+    def configure_runtime(self, runtime) -> None:
+        """Let the caller's RuntimeContext drive GPU selection.
+
+        Previously the model self-selected CUDA > MPS > CPU from
+        ENABLE_GPU_BACKGROUND alone and never consulted runtime_tier, so a
+        cpu-tier run could silently execute CuPy kernels. The tier now wins.
+
+        Gated on `runtime.requested_gpu` rather than `runtime.device`:
+        `device` alone can't distinguish "cpu" from "gpu" tier on a non-CUDA
+        (e.g. Apple Silicon) host, where both resolve to the same
+        MPS-or-CPU value -- `requested_gpu` carries the tier decision
+        explicitly (see RuntimeContext).
+        """
+        self.use_gpu = False
+        self.gpu_type = None
+        self.gpu_device = None
+        self.torch_device = None
+
+        if not runtime.requested_gpu:
+            logger.info("bg-sub: cpu tier -- using Numba CPU path")
+            return
+
+        if runtime.cuda_mode and CUDA_AVAILABLE:
+            try:
+                self.gpu_device = cp.cuda.Device(self.params.get("GPU_DEVICE_ID", 0))
+                self.gpu_type = "cuda"
+                self.use_gpu = True
+                logger.info("bg-sub: CUDA (CuPy) path")
+                return
+            except Exception as e:
+                logger.warning("bg-sub: CUDA init failed (%s); falling back to CPU", e)
+                self.use_gpu = False
+                self.gpu_type = None
+                return
+
+        if runtime.device == "mps" and MPS_AVAILABLE:
+            try:
+                self.torch_device = torch.device("mps")
+                _ = torch.zeros(1, device=self.torch_device)
+                self.gpu_type = "mps"
+                self.use_gpu = True
+                logger.info("bg-sub: MPS (PyTorch) path")
+                return
+            except Exception as e:
+                logger.warning("bg-sub: MPS init failed (%s); falling back to CPU", e)
+                self.use_gpu = False
+                self.gpu_type = None
+                return
+
+        logger.info("bg-sub: no GPU available for tier -- using Numba CPU path")
+
     def _setup_gpu_acceleration(self) -> None:
         """
         Initialize GPU acceleration if available.
         Priority: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU fallback
+
+        NOTE: this is the legacy self-selection path, used by callers that
+        construct BackgroundModel without a RuntimeContext. Runner-driven
+        callers should use configure_runtime(), which lets runtime_tier win.
         """
         if not self.params.get("ENABLE_GPU_BACKGROUND", False):
             logger.info("GPU background processing disabled in config")
@@ -277,6 +361,46 @@ class BackgroundModel:
             return float(np.mean(pixels[mask]))
         return None
 
+    def apply_lighting_stabilization(
+        self, gray: np.ndarray, roi_mask: Optional[np.ndarray] = None
+    ) -> np.ndarray:
+        """Normalize frame intensity toward the primed reference.
+
+        Moved off the worker loop (worker.py:2286): this is bg-sub
+        preprocessing, and the model already owns `reference_intensity` -- the
+        very input stabilize_lighting consumes. Keeping the state here is what
+        lets the batch path reproduce realtime exactly; ENABLE_LIGHTING_STABILIZATION
+        is in the bg-sub cache key, so the two MUST agree.
+
+        Note on the third return value: stabilize_lighting returns
+        (stabilized_frame, updated_intensity_history, current_mean_intensity) --
+        the third is the frame's measured mean, NOT the lighting state. The
+        worker discards it as `_`, and so do we. `_lighting_state` is instead a
+        dict passed IN and mutated in place by stabilize_lighting, which is why
+        it is never reassigned from the return tuple.
+
+        Args:
+            gray: Grayscale frame, already RESIZE_FACTOR-scaled by the caller.
+            roi_mask: Binary mask in the SAME coordinate space as `gray`.
+
+        Returns:
+            The stabilized frame, or `gray` unchanged when the feature is off.
+        """
+        p = self.params
+        if not p.get("ENABLE_LIGHTING_STABILIZATION", True):
+            return gray
+        gray, self._intensity_history, _ = stabilize_lighting(
+            gray,
+            self.reference_intensity,
+            self._intensity_history,
+            p.get("LIGHTING_SMOOTH_FACTOR", 0.95),
+            roi_mask,
+            p.get("LIGHTING_MEDIAN_WINDOW", 5),
+            self._lighting_state,
+            self.use_gpu,
+        )
+        return gray
+
     def _fallback_reference_intensity(
         self, bg_temp: np.ndarray, roi_resized: Optional[np.ndarray]
     ) -> float:
@@ -305,7 +429,11 @@ class BackgroundModel:
         ROI_mask = p.get("ROI_MASK", None)
         resize_f = p.get("RESIZE_FACTOR", 1.0)
 
-        idxs = random.sample(range(total), count)
+        # Evenly-spaced rather than random: deterministic without needing a
+        # seed (which makes the detection cache key honest -- see
+        # core/inference/cache/keys.py) and strictly guarantees the temporal
+        # coverage random sampling only achieves on average.
+        idxs = [int(round(i)) for i in np.linspace(0, total - 1, count)]
         bg_temp = None
         intensity_samples = []
 
@@ -405,7 +533,6 @@ class BackgroundModel:
         self,
         gray: np.ndarray,
         roi_mask: Optional[np.ndarray],
-        tracking_stabilized: bool,
     ) -> Optional[np.ndarray]:
         """Update the background model and return the active subtraction background."""
         p = self.params
@@ -415,26 +542,75 @@ class BackgroundModel:
             return None  # Indicates first frame
 
         # Update full-frame background (ROI masking happens during detection)
-        self.lightest_background = np.maximum(
-            self.lightest_background, gray.astype(np.float32)
-        )
+        gray_f32 = gray.astype(np.float32)
+        previous_lightest = self.lightest_background
+        self.lightest_background = np.maximum(previous_lightest, gray_f32)
 
-        if (
-            p.get("ENABLE_ADAPTIVE_BACKGROUND", True)
-            and self.adaptive_background is not None
-        ):
+        self._update_convergence(previous_lightest)
+
+        adaptive_enabled = p.get("ENABLE_ADAPTIVE_BACKGROUND", True)
+        if adaptive_enabled and self.adaptive_background is not None:
             learning_rate = p.get("BACKGROUND_LEARNING_RATE", 0.001)
-            gray_f32 = gray.astype(np.float32)
-
             if self.use_gpu:
                 self._adaptive_update_gpu(gray_f32, learning_rate)
             else:
                 self._adaptive_update_cpu(gray_f32, learning_rate)
 
-        if tracking_stabilized:
+        # Only switch when adaptive updating is actually on. Otherwise
+        # adaptive_background is frozen at its primed value and switching to
+        # it would silently subtract against a stale snapshot.
+        if self._stabilized and adaptive_enabled:
             return cv2.convertScaleAbs(self.adaptive_background)
+        return cv2.convertScaleAbs(self.lightest_background)
+
+    def _update_convergence(self, previous_lightest: np.ndarray) -> None:
+        """Latch stabilization once the lightest background stops growing.
+
+        This is what the old tracking-derived `tracking_stabilized` flag was
+        really proxying for: "has the background been revealed?".
+        MIN_TRACKING_COUNTS answered that indirectly via assignment cost; the
+        background can answer it about itself, deterministically -- which is
+        what makes bg-sub detection cacheable.
+        """
+        if self._stabilized:
+            return  # monotonic: never un-latch
+
+        p = self.params
+        epsilon = float(p.get("BACKGROUND_CONVERGENCE_EPSILON", 1e-4) or 1e-4)
+        needed = int(p.get("BACKGROUND_CONVERGENCE_FRAMES", 30) or 30)
+        pixel_delta = float(p.get("BACKGROUND_CONVERGENCE_PIXEL_DELTA", 5.0) or 5.0)
+
+        # lightest_background is a running max, so growth is non-negative --
+        # no abs() needed. Count the FRACTION of pixels still being revealed
+        # rather than a mean delta: a mean is frame-size dependent and latches
+        # early at production resolutions (one animal on a 2048x2048 frame moves
+        # the mean ~0.007, far below any usable threshold), whereas a fraction is
+        # scale-invariant and robust to single hot pixels.
+        #
+        # PIXEL_DELTA is the NOISE GATE: it must exceed the sensor noise floor,
+        # or the running max never stops growing under ordinary sensor noise
+        # (every frame, noise pushes some pixels above the previous max) and the
+        # latch never fires. It sits far below a genuine animal reveal
+        # (~50-150 grey levels), which is what lets it discriminate noise from a
+        # real reveal. The default of 5.0 is comfortably in that gap; raise it
+        # on a noisier rig.
+        grew = (self.lightest_background - previous_lightest) > pixel_delta
+        frac = float(np.count_nonzero(grew)) / float(grew.size)
+
+        if frac < epsilon:
+            self._converged_frames += 1
         else:
-            return cv2.convertScaleAbs(self.lightest_background)
+            self._converged_frames = 0
+
+        if self._converged_frames >= needed:
+            self._stabilized = True
+            logger.info(
+                "Background converged (%.4f%% of pixels still growing < %.4f%% "
+                "for %d frames)",
+                frac * 100.0,
+                epsilon * 100.0,
+                needed,
+            )
 
     def _foreground_mask_gpu(
         self, gray: np.ndarray, background: np.ndarray

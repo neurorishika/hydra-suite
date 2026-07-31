@@ -8,6 +8,8 @@ import logging
 import subprocess
 from pathlib import Path
 
+from hydra_suite.utils.conda_utils import conda_subprocess_kwargs
+
 logger = logging.getLogger(__name__)
 
 HARD_CODED_CMD = [
@@ -61,6 +63,7 @@ def convert_project(
             capture_output=True,
             text=True,
             timeout=3600,
+            **(conda_subprocess_kwargs() if conda_env else {}),
         )
     except Exception as e:
         return False, f"Failed to run conversion: {e}"

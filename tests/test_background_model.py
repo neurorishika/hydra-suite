@@ -32,14 +32,9 @@ def test_update_adaptive_background_numba_kernel_behaviour() -> None:
     gray1 = np.array([[20, 30], [40, 50]], dtype=np.uint8)
 
     # First call initializes backgrounds.
-    assert (
-        model.update_and_get_background(gray0, roi_mask=None, tracking_stabilized=True)
-        is None
-    )
+    assert model.update_and_get_background(gray0, roi_mask=None) is None
 
-    out = model.update_and_get_background(
-        gray1, roi_mask=None, tracking_stabilized=True
-    )
+    out = model.update_and_get_background(gray1, roi_mask=None)
     expected = np.array([[11.0, 21.0], [31.0, 41.0]], dtype=np.float32)
     np.testing.assert_allclose(
         model.adaptive_background, expected, atol=1e-6, rtol=1e-6

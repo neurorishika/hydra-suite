@@ -22,6 +22,11 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+
+from hydra_suite.core.inference.api import load_pose_backend
+from hydra_suite.utils.conda_utils import popen_conda, run_conda
+
 
 class PoseInferenceService:
     """PoseInferenceService API surface documentation."""
@@ -284,6 +289,50 @@ class PoseInferenceService:
                 self.merge_cache(model_path, preds, backend=backend)
             return preds, ""
 
+        if backend == "vitpose":
+            if not model_path.exists() or not model_path.is_file():
+                return None, f"Weights not found: {model_path}"
+            if model_path.suffix != ".pt":
+                return None, f"Invalid weights file: {model_path}"
+
+            pose_backend = load_pose_backend(
+                backend_family="vitpose",
+                model_path=str(model_path),
+                compute_runtime=device,
+                keypoint_names=list(self.keypoint_names),
+                skeleton_edges=list(self.skeleton_edges),
+                batch_size=max(1, int(batch)),
+                vitpose_batch=max(1, int(batch)),
+            )
+            try:
+                images = _load_images_for_vitpose([Path(p) for p in image_paths])
+                results = pose_backend.predict_batch(images)
+            finally:
+                try:
+                    pose_backend.close()
+                except Exception:
+                    pass
+
+            preds: Dict[str, List[Tuple[float, float, float]]] = {}
+            num_kpts = len(self.keypoint_names)
+            for i, (path, pose) in enumerate(zip(image_paths, results)):
+                keypoints = getattr(pose, "keypoints", None)
+                if keypoints is None:
+                    preds[str(path)] = [(0.0, 0.0, 0.0)] * num_kpts
+                else:
+                    arr = np.asarray(keypoints, dtype=np.float32)
+                    preds[str(path)] = [
+                        (float(r[0]), float(r[1]), float(r[2])) for r in arr
+                    ]
+                if progress_cb:
+                    progress_cb(i + 1, len(image_paths))
+                if cancel_cb and cancel_cb():
+                    return None, "Canceled."
+
+            if cache_predictions:
+                self.merge_cache(model_path, preds, backend=backend)
+            return preds, ""
+
         if not model_path.exists() or not model_path.is_file():
             return None, f"Weights not found: {model_path}"
         if model_path.suffix != ".pt":
@@ -353,6 +402,26 @@ class PoseInferenceService:
         """Return whether native SLEAP in the service env accepts in-memory arrays."""
         health = cls.sleap_service_health()
         return bool(health.get("native_array_video_supported", False))
+
+
+def _load_images_for_vitpose(paths: List[Path]) -> List["np.ndarray"]:
+    """Decode images for ``ViTPoseBackend.predict_batch``.
+
+    Matches the production PoseKit predict path (``PosePredictWorker.run``,
+    ``posekit/gui/workers.py``): each image is read whole (single-instance
+    eval — no detection crop) as a BGR ``uint8`` ndarray via ``cv2.imread``,
+    since ``preprocess_crop`` (``core/identity/pose/vitpose/infer.py``)
+    expects ``crop_bgr`` and treats the full image extent as the box.
+    """
+    import cv2
+
+    images = []
+    for path in paths:
+        img = cv2.imread(str(path))
+        if img is None:
+            raise RuntimeError(f"Failed to read image: {path}")
+        images.append(img)
+    return images
 
 
 def _run_pose_predict_subprocess(
@@ -535,7 +604,7 @@ def _run_pose_predict_subprocess(
 
 
 _SLEAP_SERVICE_CODE = textwrap.dedent(r"""
-import base64,json,sys,threading,traceback,shutil,inspect,gc,subprocess,tempfile,time,uuid
+import base64,json,os,sys,threading,traceback,shutil,inspect,gc,subprocess,tempfile,time,uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from multiprocessing import shared_memory
 from pathlib import Path
@@ -570,6 +639,26 @@ _state = {
     'preprocess_config': None,
 }
 _log_path = None
+
+# Per-request gc.collect() on the (large, torch-backed) heap is expensive and the
+# HTTPServer is single-threaded, so every /infer call blocks on the previous
+# call's full-heap collection. Under per-frame streaming pose (~1 call/frame)
+# this dominated the gpu-tier pose cost (~46 ms/call, ~24 s over a 500-frame
+# clip -- 4x the actual inference). Non-cyclic torch garbage is reclaimed by
+# refcounting immediately; gc.collect() only reclaims reference cycles, so a
+# periodic sweep bounds any cyclic growth without paying the cost every call.
+# Cadence is env-tunable; set HYDRA_SLEAP_GC_EVERY=1 to restore per-request GC.
+try:
+    _GC_EVERY = max(1, int(os.environ.get('HYDRA_SLEAP_GC_EVERY', '50')))
+except Exception:
+    _GC_EVERY = 50
+_req_count = 0
+
+def _maybe_gc():
+    global _req_count
+    _req_count += 1
+    if _req_count % _GC_EVERY == 0:
+        gc.collect()
 
 def _log(msg):
     try:
@@ -844,6 +933,97 @@ def _predict_with_predictor(pred, labels, batch, max_instances):
                 except Exception:
                     pass
     return None
+
+def _build_prepared_batch(pred, image_arrays):
+    # Build a _run_inference_on_batch-ready batch directly from in-memory crop
+    # arrays -- no Video, no make_pipeline, no reader thread. Replicates the
+    # provider + _process_batch preprocessing (CHW, uint8, sizematcher, channel
+    # handling). Crops arrive in cv2/BGR order (the temp-file path writes them via
+    # cv2.imwrite, which sleap_io reads back as RGB), so swap BGR->RGB to match.
+    import torch
+    from sleap_nn.data.resizing import apply_sizematcher
+
+    pc = pred.preprocess_config
+    mh, mw = pc["max_height"], pc["max_width"]
+    ensure_rgb = bool(pc.get("ensure_rgb", True))
+    ensure_gray = bool(pc.get("ensure_grayscale", False))
+    imgs, fidxs, vidxs, org_szs, eff_scales = [], [], [], [], []
+    for i, arr in enumerate(image_arrays):
+        a = np.ascontiguousarray(arr)
+        if a.ndim == 2:
+            a = a[:, :, None]
+        if a.shape[2] == 3:
+            a = a[:, :, ::-1]  # BGR -> RGB (match cv2.imwrite -> sio path)
+        H, W = int(a.shape[0]), int(a.shape[1])
+        chw = np.transpose(a, (2, 0, 1))
+        t = torch.from_numpy(np.expand_dims(chw, 0).copy())  # (1, C, H, W) uint8
+        t, eff = apply_sizematcher(t, mh, mw)
+        if ensure_rgb and t.shape[-3] != 3:
+            t = t.repeat(1, 3, 1, 1)
+        elif ensure_gray and t.shape[-3] != 1:
+            import torchvision.transforms.functional as _TF
+
+            t = _TF.rgb_to_grayscale(t, num_output_channels=1)
+        imgs.append(t.unsqueeze(0))  # (1, 1, C, mh, mw)
+        org_szs.append(torch.Tensor([H, W]).unsqueeze(0).unsqueeze(0))  # (1, 1, 2)
+        eff_scales.append(torch.tensor(eff))
+        fidxs.append(i)
+        vidxs.append(0)
+    return imgs, fidxs, vidxs, org_szs, [], eff_scales
+
+
+def _extract_preds_direct(raw, images, num_kpts):
+    # Format raw _run_inference_on_batch output into the SAME structure as
+    # _extract_preds: {str(Path(image)): [(x, y, score)] * num_kpts}. The peaks in
+    # pred_instance_peaks are already final keypoint coordinates (sleap builds
+    # PredictedInstances from them with no further transform).
+    samples = []
+    for ex in raw:
+        pk = np.asarray(ex.get("pred_instance_peaks"))
+        pv = ex.get("pred_peak_values")
+        pv = np.asarray(pv) if pv is not None else None
+        if pk.ndim == 2:  # single (K, 2) -> add batch dim
+            pk = pk[None]
+            pv = None if pv is None else pv[None]
+        for b in range(pk.shape[0]):
+            samples.append((pk[b], None if pv is None else pv[b]))
+    preds = {}
+    for i, path in enumerate(images):
+        kp, vv = samples[i] if i < len(samples) else (None, None)
+        pts = []
+        for j in range(num_kpts):
+            if kp is not None and j < kp.shape[0]:
+                x, y = float(kp[j, 0]), float(kp[j, 1])
+                c = float(vv[j]) if (vv is not None and j < len(vv)) else 1.0
+            else:
+                x, y, c = 0.0, 0.0, 0.0
+            if not (np.isfinite(x) and np.isfinite(y)):
+                pts.append((0.0, 0.0, 0.0))
+            else:
+                pts.append((x, y, c if np.isfinite(c) else 1.0))
+        preds[str(Path(path))] = pts
+    return preds
+
+
+def _run_inference_direct(cfg, image_arrays, images, num_kpts):
+    # Warm in-process SLEAP inference on in-memory crops: no Video, no
+    # make_pipeline (reader thread), no CLI subprocess. ~1-6 ms/frame vs the CLI's
+    # ~6 s. Returns preds in the _extract_preds format, or None to signal the
+    # caller to fall back to the pipeline/CLI path.
+    if image_arrays is None:
+        return None
+    device = _normalize_device(cfg.get("device"))
+    pred = _load_predictor(cfg.get("model_dir"), device)
+    if pred is None:
+        return None
+    if getattr(pred, "inference_model", None) is None:
+        pred._initialize_inference_model()
+    # make_pipeline normally sets this; _run_inference_on_batch requires it.
+    pred.preprocess = True
+    batch = _build_prepared_batch(pred, image_arrays)
+    raw = list(pred._run_inference_on_batch(*batch))
+    return _extract_preds_direct(raw, images, num_kpts)
+
 
 def _run_inference(labels, model_dir, device, batch, max_instances):
     device = _normalize_device(device)
@@ -1237,36 +1417,6 @@ def _decode_image_payloads(payloads):
         image_ids.append(image_id)
         image_arrays.append(arr)
     return image_ids, image_arrays
-
-def _save_array_image(path, arr):
-    arr = np.asarray(arr, dtype=np.uint8)
-    if cv2 is not None:
-        if cv2.imwrite(str(path), arr):
-            return
-    if Image is not None:
-        if arr.ndim == 2:
-            image = Image.fromarray(arr)
-        elif arr.ndim == 3 and arr.shape[2] == 1:
-            image = Image.fromarray(arr[:, :, 0])
-        else:
-            image = Image.fromarray(arr[:, :, ::-1])
-        image.save(path)
-        return
-    raise RuntimeError(
-        "Unable to persist in-memory image payload. Install either opencv-python or pillow in the SLEAP env."
-    )
-
-def _materialize_image_arrays(image_ids, image_arrays, tmp_dir):
-    if len(image_ids) != len(image_arrays):
-        raise RuntimeError("In-memory SLEAP image ids and arrays length mismatch.")
-    root = Path(tmp_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    paths = []
-    for idx, arr in enumerate(image_arrays):
-        path = root / f"img_{idx:06d}.png"
-        _save_array_image(path, arr)
-        paths.append(str(path))
-    return paths
 
 def _prepare_export_crop(crop, input_hw, input_channels):
     arr = np.asarray(crop, dtype=np.uint8)
@@ -2021,25 +2171,63 @@ class Handler(BaseHTTPRequestHandler):
                         f"exported-runtime failed ({runtime_flavor}): {export_exc}; "
                         "falling back to native SLEAP runtime"
                     )
+            # FAST PATH (native runtime, in-memory crops): warm predictor +
+            # _run_inference_on_batch, no Video / make_pipeline / CLI. ~1-6 ms/frame
+            # vs the CLI's ~6 s. Falls through to the pipeline/CLI path on any error
+            # or empty result, so correctness never regresses.
+            if runtime_flavor not in ("onnx", "tensorrt"):
+                # Use the in-memory arrays if the client sent them (shared-memory
+                # transport); otherwise read the temp-file PNGs into arrays so the
+                # direct path applies regardless of transport. cv2.imread returns
+                # BGR, matching what _build_prepared_batch expects.
+                _direct_arrays = image_arrays
+                if _direct_arrays is None:
+                    try:
+                        import cv2 as _cv2
+
+                        _direct_arrays = []
+                        for _p in images:
+                            _im = _cv2.imread(str(_p))
+                            if _im is None:
+                                _direct_arrays = None
+                                break
+                            _direct_arrays.append(_im)
+                    except Exception:
+                        _direct_arrays = None
+            else:
+                _direct_arrays = None
+            if _direct_arrays is not None:
+                try:
+                    _direct_start = time.perf_counter()
+                    direct_preds = _run_inference_direct(
+                        cfg, _direct_arrays, images, max(1, len(names))
+                    )
+                    timings['service_inference_s'] = timings.get(
+                        'service_inference_s', 0.0
+                    ) + (time.perf_counter() - _direct_start)
+                    if direct_preds is not None and any(
+                        len(v) > 0 for v in direct_preds.values()
+                    ):
+                        _log(
+                            f"preds_nonempty="
+                            f"{sum(1 for v in direct_preds.values() if v)}/{len(images)}"
+                            f" runtime=direct"
+                        )
+                        self._json(200, {'ok': True, 'preds': direct_preds, 'timings_s': timings})
+                        return
+                    _log("direct path: no preds; falling back to pipeline/CLI")
+                except Exception as _direct_exc:
+                    _log(f"direct path failed ({_direct_exc}); falling back to pipeline/CLI")
             sk=_make_skeleton(names, edges)
             request_tmp_dir = None
             native_images = images
             if image_arrays is not None:
-                try:
-                    _video_start = time.perf_counter()
-                    video = _make_video(native_images, image_arrays=image_arrays)
-                    timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _video_start)
-                except Exception as image_array_exc:
-                    _log(
-                        f"native in-memory video construction failed: {image_array_exc}; falling back to temporary image files"
-                    )
-                    request_tmp_dir = Path(cfg.get('tmp_dir') or tempfile.gettempdir()) / f"req_{uuid.uuid4().hex}"
-                    _materialize_start = time.perf_counter()
-                    native_images = _materialize_image_arrays(images, image_arrays, request_tmp_dir)
-                    timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _materialize_start)
-                    _video_start = time.perf_counter()
-                    video = _make_video(native_images)
-                    timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _video_start)
+                # Pose golden rule: build the video from the in-memory arrays
+                # only. If construction fails, fail loud and let it propagate
+                # rather than materializing PNGs to disk.
+                _video_start = time.perf_counter()
+                video = _make_video(native_images, image_arrays=image_arrays)
+                timings['service_materialize_s'] = timings.get('service_materialize_s', 0.0) + (time.perf_counter() - _video_start)
             else:
                 _video_start = time.perf_counter()
                 video=_make_video(native_images)
@@ -2098,7 +2286,7 @@ class Handler(BaseHTTPRequestHandler):
                     shutil.rmtree(request_tmp_dir, ignore_errors=True)
             except Exception:
                 pass
-            gc.collect()
+            _maybe_gc()
     def log_message(self, format, *args):
         return
 
@@ -2249,7 +2437,7 @@ class _SleapHttpService:
         cfg_path, code_path, err = self._write_temp_files(port)
         if err:
             return False, err
-        self.proc = subprocess.Popen(
+        self.proc = popen_conda(
             [
                 "conda",
                 "run",
@@ -2394,7 +2582,7 @@ def _sleap_env_preflight(env_name: str) -> Tuple[bool, str]:
         return False, f"Failed to prepare SLEAP env preflight script: {exc}"
 
     try:
-        res = subprocess.run(
+        res = run_conda(
             ["conda", "run", "-n", env_name, "python", str(script_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -2636,7 +2824,7 @@ def _run_sleap_export_predict_subprocess(
     )
     req_path.write_text(json.dumps(req), encoding="utf-8")
 
-    proc = subprocess.Popen(
+    proc = popen_conda(
         [
             "conda",
             "run",
