@@ -1077,6 +1077,67 @@ def test_sliced_stage1_proposals_empty_stage1_yields_no_regions():
     assert planned == [[]]
 
 
+class _RecordingTiledDetectModel:
+    """Like ``_FakeTiledDetectModel`` but tolerates CHUNKED predict calls.
+
+    Returns one fake stage-1 result per input tile image (walking a flat
+    per-tile cursor across however many calls it takes) and records the size
+    of each ``predict`` batch, so a test can assert the stage-1 pass is chunked
+    rather than issued as one all-tiles call.
+    """
+
+    def __init__(self, per_tile_boxes_conf):
+        self._per_tile = per_tile_boxes_conf
+        self._cursor = 0
+        self.call_sizes: list[int] = []
+        self.imgsz = 30
+
+    def predict(self, images, **kwargs):
+        self.call_sizes.append(len(images))
+        out = []
+        for _ in images:
+            b, c = self._per_tile[self._cursor]
+            out.append(_FakeStage1TileResult(b, c))
+            self._cursor += 1
+        return out
+
+
+def test_sliced_stage1_proposals_chunks_stage1_predict_and_reassembles_frames():
+    """The stage-1 tile pass is issued in bounded chunks (peak-memory footgun,
+    Phase C follow-up), and chunked results still map back to the right frame."""
+    frames = [np.zeros((20, 40, 3), dtype=np.uint8) for _ in range(3)]
+    slice_cfg = _two_tile_slice_cfg()  # 2 tiles/frame, no full-frame pass
+    seq = _fake_seq_for_sliced_stage1(slice_cfg)
+    # Flattened tile order: f0t0, f0t1, f1t0, f1t1, f2t0, f2t1. Only frame 1's
+    # tile0 detects (frame-space box [15,5,25,15]); every other tile is empty.
+    per_tile = [
+        ([], []),
+        ([], []),
+        ([[15.0, 5.0, 25.0, 15.0]], [0.9]),
+        ([], []),
+        ([], []),
+        ([], []),
+    ]
+    detect_model = _RecordingTiledDetectModel(per_tile)
+    config = SimpleNamespace(sequential=seq, target_classes=[])
+    models = SimpleNamespace(detect_model=detect_model)
+    runtime = SimpleNamespace(device="cpu")
+
+    planned = SlicedStage1Proposals().plan(frames, models, config, runtime)
+
+    # chunk_size == min(tiles_per_frame=2, MAX_TILE_CHUNK): 6 tile images ->
+    # three predict calls of 2, never one all-tiles call.
+    assert detect_model.call_sizes == [2, 2, 2]
+    # Chunked stage-1 results still align to their source frame: only frame 1
+    # yields a region, and at the expected merged-crop offset.
+    assert len(planned) == 3
+    assert planned[0] == []
+    assert planned[2] == []
+    assert len(planned[1]) == 1
+    assert planned[1][0].affine.offset == (15.0, 5.0)
+    assert planned[1][0].frame_idx == 1
+
+
 def test_select_region_source_sliced_stage1_dispatch():
     enabled_cfg = SimpleNamespace(
         mode="sequential",

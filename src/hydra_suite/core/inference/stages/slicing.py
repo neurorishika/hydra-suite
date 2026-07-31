@@ -15,7 +15,6 @@ from hydra_suite.utils.slice_geometry import (  # noqa: F401 -- re-exported for 
 )
 
 from ..config import SliceConfig
-from ..result import OBBResult
 
 logger = logging.getLogger(__name__)
 
@@ -93,38 +92,6 @@ def plan_slices(
         slice_cfg.overlap_height_ratio,
         full_frame=bool(slice_cfg.perform_standard_pred),
         roi_mask=roi_mask,
-    )
-
-
-def _offset_result(res, x0: int, y0: int, frame_idx: int):
-    """Return a copy of ``res`` with all coordinates shifted by (x0, y0).
-
-    Retained (Task 6 kept this despite retiring its ``run_direct_sliced``
-    caller in favor of ``extract_with_transform``) because
-    ``detectkit/gui/prediction_preview.py::predict_sliced_obb_result`` -- the
-    executor-driven preview/AL sliced path, which has no ``RuntimeContext`` to
-    hand ``extract_with_transform`` -- still imports and calls this directly.
-    """
-    from .obb import _empty_obb_result
-
-    if res.num_detections == 0:
-        return _empty_obb_result(frame_idx)
-    centroids = res.centroids.copy()
-    centroids[:, 0] += x0
-    centroids[:, 1] += y0
-    corners = res.corners.copy()
-    corners[..., 0] += x0
-    corners[..., 1] += y0
-    return OBBResult(
-        frame_idx=frame_idx,
-        centroids=centroids,
-        angles=res.angles,
-        sizes=res.sizes,
-        shapes=res.shapes,
-        confidences=res.confidences,
-        corners=corners,
-        detection_ids=OBBResult.make_detection_ids(frame_idx, res.num_detections),
-        class_ids=res.class_ids_or_zeros,
     )
 
 

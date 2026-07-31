@@ -63,17 +63,31 @@ def test_predict_sliced_tiles_and_merges_empty(monkeypatch):
 
 def test_predict_sliced_offsets_detection_into_frame_space(monkeypatch):
     # A single detection in tile (256,256)-(512,512) must land near frame (300,300).
-    def _fake_extract(res, frame_idx=0, **kw):
+    # The preview now applies the tile->frame offset via extract_obb_result's own
+    # ``offset=`` argument (the retired ``_offset_result`` did this before), so the
+    # mock must honor ``offset`` exactly as the real extractor does.
+    def _fake_extract(res, frame_idx=0, offset=(0.0, 0.0), **kw):
+        ox, oy = float(offset[0]), float(offset[1])
         return (
             OBBResult(
                 frame_idx=frame_idx,
-                centroids=np.array([[44.0, 44.0]], np.float32),  # tile-local
+                centroids=np.array(
+                    [[44.0 + ox, 44.0 + oy]], np.float32
+                ),  # tile-local + offset
                 angles=np.array([0.0], np.float32),
                 sizes=np.array([100.0], np.float32),
                 shapes=np.array([[100.0, 1.0]], np.float32),
                 confidences=np.array([0.9], np.float32),
                 corners=np.array(
-                    [[[39, 39], [49, 39], [49, 49], [39, 49]]], np.float32
+                    [
+                        [
+                            [39 + ox, 39 + oy],
+                            [49 + ox, 39 + oy],
+                            [49 + ox, 49 + oy],
+                            [39 + ox, 49 + oy],
+                        ]
+                    ],
+                    np.float32,
                 ),
                 detection_ids=np.array([0], np.int64),
             )

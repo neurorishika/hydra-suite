@@ -24,18 +24,16 @@ from typing import Any
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.config import OBBConfig, OBBDirectConfig, SliceConfig
+from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.runtime_artifacts import load_obb_executor
-from hydra_suite.core.inference.stages.merge import (
-    band_membership,
-    merge_obb_detections,
-)
 from hydra_suite.core.inference.stages.obb import (
     build_crops,
     extract_obb_result,
     merge_obb_results,
+    merge_per_frame,
     resize_crops_for_stage2,
 )
-from hydra_suite.core.inference.stages.slicing import _offset_result
 from hydra_suite.utils.slice_geometry import plan_tiles, tile_size_for_mode
 
 logger = logging.getLogger(__name__)
@@ -48,6 +46,39 @@ _PREVIEW_IOU = 0.7
 #: ``YOLO_MAX_TARGETS`` (100) -- the executor's own default (20) is too low for
 #: busy multi-animal scenes and would silently hide real detections.
 _PREVIEW_MAX_DET = 100
+
+#: A CPU, numpy-universe ``RuntimeContext`` for the preview's shared-seam merge.
+#: The preview executor always returns CPU ultralytics ``Results`` (never
+#: on-device CUDA tensors), so ``tensor_on_cuda`` is False and ``merge_per_frame``
+#: runs the numpy universe; the forced cv2 merge backend never reads ``device``.
+_PREVIEW_RUNTIME = RuntimeContext(
+    cuda_mode=False, device="cpu", use_nvdec=False, tensor_on_cuda=False
+)
+
+
+def _preview_slice_merge_config(merge_threshold: float) -> OBBConfig:
+    """Minimal ``OBBConfig`` carrying only what ``merge_per_frame`` reads for the
+    preview's cross-tile OBB merge: the slice merge policy/metric/threshold/
+    backend and ``raw_detection_cap``.
+
+    Matches the preview's prior hand-rolled merge byte-for-byte -- ``greedy_nmm``
+    / ``ios`` / cv2, and no raw detection cap (``raw_detection_cap=0`` disables
+    it, so the preview keeps returning every merged detection).
+    """
+    return OBBConfig(
+        mode="direct",
+        direct=OBBDirectConfig(
+            model_path="",
+            slice=SliceConfig(
+                enabled=True,
+                merge_policy="greedy_nmm",
+                merge_metric="ios",
+                merge_threshold=float(merge_threshold),
+                merge_backend="cv2",
+            ),
+        ),
+        raw_detection_cap=0,
+    )
 
 
 class _SeqCropSpec:
@@ -275,22 +306,26 @@ def predict_sliced_obb_result(
         )
     results = executor.predict(tiles_img, conf=raw_floor, iou=float(iou), verbose=False)
 
-    parts = []
-    for (x0, y0, _x1, _y1), res in zip(plan.tiles, results):
-        local = extract_obb_result(res, frame_idx=0)
-        parts.append(_offset_result(local, max(0, x0), max(0, y0), 0))
-    concat = merge_obb_results(0, parts)
-    if concat.num_detections <= 1:
-        return concat
-    bands = band_membership(concat.corners, plan.tiles)
-    return merge_obb_detections(
-        concat,
-        policy="greedy_nmm",
-        metric="ios",
-        threshold=float(merge_threshold),
-        backend="cv2",
-        overlap_bands=bands,
-        runtime=None,
+    # Route extraction + cross-tile merge through the SAME production seam the
+    # ``Grid`` region source uses: ``extract_obb_result``'s native ``offset=``
+    # (retiring the preview's own ``_offset_result``) and the shared
+    # ``merge_per_frame`` overlap-band merge (retiring the preview's hand-rolled
+    # ``band_membership`` + ``merge_obb_detections`` block). The preview keeps
+    # its OWN ``executor.predict`` above -- it runs the executor's within-tile
+    # NMS (``iou=_PREVIEW_IOU``) because, unlike the tracking pipeline, there is
+    # no downstream filtering stage here to dedup within-tile duplicates.
+    parts = [
+        extract_obb_result(
+            res, frame_idx=0, offset=(float(max(0, x0)), float(max(0, y0)))
+        )
+        for (x0, y0, _x1, _y1), res in zip(plan.tiles, results)
+    ]
+    return merge_per_frame(
+        parts,
+        "overlap_band_nms",
+        plan,
+        _preview_slice_merge_config(merge_threshold),
+        _PREVIEW_RUNTIME,
     )
 
 

@@ -433,8 +433,9 @@ def _direct_cfg(enabled, **slice_kw):
 
 def test_sliced_cpu_obb_remaps_into_frame_space():
     # Asymmetric frame (h=300, w=500) so tiling differs on each axis: an X/Y-swap
-    # bug in `_offset_result` would produce a different (and thus detectable)
-    # result instead of silently passing on a symmetric grid.
+    # bug in the tile->frame remap (extract_obb_result's offset= in Grid.execute)
+    # would produce a different (and thus detectable) result instead of silently
+    # passing on a symmetric grid.
     frame = np.zeros((300, 500, 3), np.uint8)
     cfg = _direct_cfg(True, overlap_height_ratio=0.0, overlap_width_ratio=0.0)
     out = run_direct_sliced([frame], _FakeYOLO(), cfg, _FakeRuntime())

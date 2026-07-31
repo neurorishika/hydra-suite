@@ -495,7 +495,7 @@ class SlicedStage1Proposals(Stage1Proposals):
             build_crops,
             resize_crops_for_stage2,
         )
-        from .slicing import _build_tile_jobs, plan_slices
+        from .slicing import MAX_TILE_CHUNK, _build_tile_jobs, plan_slices
 
         seq = config.sequential
         slice_cfg = seq.stage1_slice
@@ -520,16 +520,28 @@ class SlicedStage1Proposals(Stage1Proposals):
         if seq.detect_image_size > 0:
             stage1_kwargs["imgsz"] = seq.detect_image_size
         # Same stage-1 predict kwargs as Stage1Proposals.plan, applied to the
-        # flattened tile-image list instead of the whole-frame list.
-        tile_results = model.predict(
-            images,
-            conf=seq.detect_confidence_threshold,
-            iou=1.0,
-            classes=config.target_classes or None,
-            verbose=False,
-            device=runtime.device,
-            **stage1_kwargs,
-        )
+        # flattened tile-image list instead of the whole-frame list -- but
+        # CHUNKED (mirrors Grid.execute / _predict_tiles, finding I2): issuing
+        # `frames x tiles_per_frame` tile images as ONE predict call multiplies
+        # the peak activation memory the user configured by the tile count with
+        # no cap. `chunk_size` is bounded by one frame's worth of tiles (and
+        # `MAX_TILE_CHUNK`), the same bound Grid uses; `predict` is
+        # order-preserving and stateless across the list, so chunking changes
+        # peak memory only, never the assembled results.
+        chunk_size = max(1, min(per_frame_count, MAX_TILE_CHUNK))
+        tile_results: list[Any] = []
+        for start in range(0, len(images), chunk_size):
+            tile_results.extend(
+                model.predict(
+                    images[start : start + chunk_size],
+                    conf=seq.detect_confidence_threshold,
+                    iou=1.0,
+                    classes=config.target_classes or None,
+                    verbose=False,
+                    device=runtime.device,
+                    **stage1_kwargs,
+                )
+            )
 
         per_frame: list[list[Region]] = []
         for frame_idx, frame in enumerate(frames):
