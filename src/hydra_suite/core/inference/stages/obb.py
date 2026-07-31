@@ -15,6 +15,7 @@ from ..config import OBBConfig
 from ..result import OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
 from ..runtime_artifacts import DirectExecutorAdapter, load_obb_executor
+from .regions import Affine
 
 logger = logging.getLogger(__name__)
 
@@ -549,91 +550,16 @@ def _run_direct(
             device=runtime.device,
         )
 
-    model_task = config.direct.model_task if config.direct else "obb"
-
-    if model_task == "detect":
-        fixed_angle_rad = math.radians(
-            config.direct.fixed_angle_deg if config.direct else 0.0
+    task = config.direct.model_task if config.direct else "obb"
+    out = []
+    for idx, res in enumerate(results):
+        extracted = extract_with_transform(
+            res, idx, task, Affine.IDENTITY, config, runtime
         )
-        # Zero-CPU-sync fast path under the native cuda runtime, mirroring
-        # "obb"'s own tensor_on_cuda branch below -- normalize/corners/
-        # finite-filtering is deferred to the shared materialize_tensors().
-        if runtime.tensor_on_cuda:
-            return [
-                _extract_raw_tensors_from_boxes(r, idx, fixed_angle_rad, runtime.device)
-                for idx, r in enumerate(results)
-            ]
-        return [
-            _apply_raw_detection_cap(
-                _extract_obb_from_boxes(
-                    r,
-                    idx,
-                    fixed_angle_rad,
-                    emit_native_geometry=config.emit_native_geometry,
-                ),
-                config.raw_detection_cap,
-            )
-            for idx, r in enumerate(results)
-        ]
-
-    if model_task == "segment":
-        # rotated_rect_from_masks does all the heavy per-pixel/per-angle work
-        # on-device with no internal .cpu() calls, so under the native cuda
-        # runtime segment gets the exact same zero-CPU-sync _RawOBBTensors
-        # fast path as "obb"/"detect" -- the sync is deferred to
-        # materialize_tensors(), same as every other detection source.
-        seg_num_angles = config.direct.seg_num_angles if config.direct else 24
-        seg_crop_size = config.direct.seg_crop_size if config.direct else 64
-        seg_pad_ratio = config.direct.seg_pad_ratio if config.direct else 0.15
-        seg_mask_threshold = config.direct.seg_mask_threshold if config.direct else 0.5
-        if runtime.tensor_on_cuda:
-            return [
-                _extract_raw_tensors_from_masks(
-                    r,
-                    idx,
-                    runtime.device,
-                    config.raw_detection_cap,
-                    num_angles=seg_num_angles,
-                    crop_size=seg_crop_size,
-                    pad_ratio=seg_pad_ratio,
-                    mask_threshold=seg_mask_threshold,
-                )
-                for idx, r in enumerate(results)
-            ]
-        return [
-            _apply_raw_detection_cap(
-                _extract_obb_from_masks(
-                    r,
-                    idx,
-                    config.raw_detection_cap,
-                    num_angles=seg_num_angles,
-                    crop_size=seg_crop_size,
-                    pad_ratio=seg_pad_ratio,
-                    mask_threshold=seg_mask_threshold,
-                    emit_native_geometry=config.emit_native_geometry,
-                ),
-                config.raw_detection_cap,
-            )
-            for idx, r in enumerate(results)
-        ]
-
-    # model_task == "obb": existing native-OBB behaviour, unchanged.
-    # Only native PyTorch "cuda" runtime leaves tensors on device.
-    # onnx_cuda and tensorrt: predict() returns CPU numpy regardless of GPU use.
-    if runtime.tensor_on_cuda:
-        return [
-            _extract_raw_tensors(r, idx, runtime.device)
-            for idx, r in enumerate(results)
-        ]
-    return [
-        _apply_raw_detection_cap(
-            extract_obb_result(
-                r, idx, emit_native_geometry=config.emit_native_geometry
-            ),
-            config.raw_detection_cap,
-        )
-        for idx, r in enumerate(results)
-    ]
+        if not runtime.tensor_on_cuda:
+            extracted = _apply_raw_detection_cap(extracted, config.raw_detection_cap)
+        out.append(extracted)
+    return out
 
 
 def _run_sequential(

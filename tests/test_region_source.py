@@ -252,6 +252,105 @@ def test_stage1_proposals_plan_empty_boxes():
     assert planned == [[]]
 
 
+# --- Task 5: _run_direct routes through extract_with_transform -------------
+
+
+class _FakeDirectModel:
+    """Stands in for an ultralytics YOLO model in direct mode."""
+
+    def __init__(self, results):
+        self._results = results
+        self.calls = []
+
+    def predict(self, frames, **kwargs):
+        self.calls.append((frames, kwargs))
+        return self._results
+
+
+def test_run_direct_routes_through_extract_with_transform(monkeypatch):
+    frames = [
+        np.zeros((10, 10, 3), dtype=np.uint8),
+        np.zeros((10, 10, 3), dtype=np.uint8),
+    ]
+    fake_results = [object(), object()]
+    model = _FakeDirectModel(fake_results)
+
+    config = SimpleNamespace(
+        direct=SimpleNamespace(
+            confidence_floor=1e-3,
+            model_task="obb",
+        ),
+        target_classes=[],
+        raw_detection_cap=5,
+        emit_native_geometry=False,
+    )
+    runtime = SimpleNamespace(tensor_on_cuda=False, device="cpu")
+
+    calls = []
+
+    def _fake_extract_with_transform(result, frame_idx, task, affine, cfg, rt):
+        calls.append((result, frame_idx, task, affine, cfg, rt))
+        return f"extracted-{frame_idx}"
+
+    cap_calls = []
+
+    def _fake_apply_cap(extracted, cap):
+        cap_calls.append((extracted, cap))
+        return f"capped-{extracted}"
+
+    monkeypatch.setattr(m, "extract_with_transform", _fake_extract_with_transform)
+    monkeypatch.setattr(m, "_apply_raw_detection_cap", _fake_apply_cap)
+    monkeypatch.setattr(m, "_frames_are_cuda_tensors", lambda frames: False)
+
+    out = m._run_direct(frames, model, config, runtime)
+
+    assert len(calls) == 2
+    for idx, call in enumerate(calls):
+        result, frame_idx, task, affine, cfg, rt = call
+        assert result is fake_results[idx]
+        assert frame_idx == idx
+        assert task == "obb"
+        assert affine == Affine.IDENTITY
+        assert cfg is config
+        assert rt is runtime
+
+    # numpy universe (tensor_on_cuda=False): every extracted result gets the
+    # outer raw-detection cap applied.
+    assert cap_calls == [
+        ("extracted-0", config.raw_detection_cap),
+        ("extracted-1", config.raw_detection_cap),
+    ]
+    assert out == ["capped-extracted-0", "capped-extracted-1"]
+
+
+def test_run_direct_raw_universe_skips_outer_cap(monkeypatch):
+    frames = [np.zeros((10, 10, 3), dtype=np.uint8)]
+    fake_results = [object()]
+    model = _FakeDirectModel(fake_results)
+
+    config = SimpleNamespace(
+        direct=SimpleNamespace(confidence_floor=1e-3, model_task="obb"),
+        target_classes=[],
+        raw_detection_cap=5,
+        emit_native_geometry=False,
+    )
+    runtime = SimpleNamespace(tensor_on_cuda=True, device="cuda")
+
+    monkeypatch.setattr(m, "extract_with_transform", lambda *a, **kw: "raw-extracted")
+    cap_calls = []
+    monkeypatch.setattr(
+        m,
+        "_apply_raw_detection_cap",
+        lambda extracted, cap: cap_calls.append((extracted, cap)),
+    )
+    monkeypatch.setattr(m, "_frames_are_cuda_tensors", lambda frames: False)
+
+    out = m._run_direct(frames, model, config, runtime)
+
+    assert cap_calls == []  # raw universe defers the cap to materialize_tensors
+    assert out == ["raw-extracted"]
+
+
 def test_select_region_source_dispatch():
     direct_cfg = SimpleNamespace(
         mode="direct", direct=SimpleNamespace(slice=SliceConfig(enabled=False))
