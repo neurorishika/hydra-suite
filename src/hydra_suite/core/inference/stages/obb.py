@@ -626,6 +626,15 @@ def _run_sequential(
                         config,
                         runtime,
                         seg_source=seq,
+                        # Spec S5.2 opt-in knob: sequential ALWAYS uses the
+                        # numpy extractors (matches A.5), independent of
+                        # affine shape/tier. A pixel-exact crop yields
+                        # scale == (1.0, 1.0) i.e. translate-only, which
+                        # would otherwise slip into the unproven raw path
+                        # on the gpu-native tier. Task 12 will flip this to
+                        # force_numpy=False once the raw-vs-numpy
+                        # sequential equivalence is proven on the harness.
+                        force_numpy=True,
                     )
                 )
         results.append(
@@ -765,18 +774,38 @@ def _translate_raw(raw: _RawOBBTensors, offset: tuple[float, float]) -> _RawOBBT
 
 
 def extract_with_transform(
-    result, frame_idx, task, affine, config, runtime, seg_source=None
+    result,
+    frame_idx,
+    task,
+    affine,
+    config,
+    runtime,
+    seg_source=None,
+    *,
+    force_numpy=False,
 ):
     """Single task x universe extraction seam. Applies `affine` in the matching universe.
 
-    numpy universe (cpu/mps/all gpu_fast, or any non-translate-only affine):
+    numpy universe (cpu/mps/all gpu_fast, any non-translate-only affine, or
+    ``force_numpy=True``):
         affine applied during extraction (offset+scale).
-    raw universe (gpu-native tensor_on_cuda AND translate-only affine):
+    raw universe (gpu-native tensor_on_cuda AND translate-only affine AND
+    NOT force_numpy):
         translate-only on-device (Task 3).
 
     Invariant: the raw universe is translate-only. A scaled affine (e.g.
     sequential stage-2, which resizes crops) forces the numpy branch even
     when tensor_on_cuda is True (Task 7 / spec S5.1-S5.2).
+
+    ``force_numpy`` is the spec S5.2 opt-in knob for sequential stage-2:
+    even a pixel-exact crop (stage2 crop size == stage2_image_size) yields
+    a translate-only affine (scale == (1.0, 1.0)), which would otherwise
+    slip into the raw branch on the gpu-native tier. Raw-vs-numpy sequential
+    extraction is not yet proven byte-identical (deferred to Task 12, gated
+    on the equivalence harness), so `_run_sequential` passes
+    `force_numpy=True` unconditionally to match A.5's always-numpy
+    behavior. Direct/grid/sliced callers pass no `force_numpy` (default
+    False), preserving their existing raw-on-gpu-native behavior.
 
     ``seg_source`` supplies the seg_num_angles/seg_crop_size/seg_pad_ratio/
     seg_mask_threshold params for the "segment" task; defaults to
@@ -786,7 +815,8 @@ def extract_with_transform(
     ox, oy = affine.offset
     sx, sy = affine.scale
     seg = seg_source if seg_source is not None else config.direct
-    if runtime.tensor_on_cuda and affine.is_translate_only:
+    if runtime.tensor_on_cuda and affine.is_translate_only and not force_numpy:
+        # Guaranteed translate-only by the `if` above; defensive check only.
         assert (
             affine.is_translate_only
         ), "raw universe must be translate-only (invariant)"

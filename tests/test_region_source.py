@@ -153,6 +153,50 @@ def test_extract_with_transform_raw_translate_only_stays_raw():
     assert not hasattr(out, "centroids")  # _RawOBBTensors, not OBBResult
 
 
+def test_extract_with_transform_force_numpy_overrides_raw_on_gpu_tier():
+    """Task 7 fix: sequential's force_numpy=True must force the numpy branch
+    EVEN for a pixel-exact crop (translate-only affine, scale==(1,1)) on the
+    gpu-native tier -- matching A.5's always-numpy sequential behavior.
+    Companion assertion: force_numpy=False (direct/grid default) with the
+    same translate-only affine + tensor_on_cuda=True still takes the raw
+    branch, so direct/grid behavior is unchanged.
+    """
+
+    class _Rt:
+        tensor_on_cuda = True
+        device = "cpu"  # avoid real CUDA allocation on non-CUDA test machines
+
+    class _Cfg:
+        class direct:
+            model_task = "obb"
+            fixed_angle_deg = 0.0
+
+        raw_detection_cap = 0
+        emit_native_geometry = False
+
+    class _FakeObb:
+        def __len__(self):
+            return 0
+
+    class _FakeResult:
+        obb = _FakeObb()
+
+    affine = Affine(offset=(5.0, 0.0), scale=(1.0, 1.0))
+    assert affine.is_translate_only
+
+    out_forced = m.extract_with_transform(
+        _FakeResult(), 0, "obb", affine, _Cfg, _Rt(), force_numpy=True
+    )
+    # numpy branch returns an OBBResult (has `.centroids`), not _RawOBBTensors.
+    assert hasattr(out_forced, "centroids")
+
+    out_default = m.extract_with_transform(
+        _FakeResult(), 0, "obb", affine, _Cfg, _Rt(), force_numpy=False
+    )
+    # raw branch preserved for direct/grid callers (default force_numpy=False).
+    assert not hasattr(out_default, "centroids")
+
+
 # --- Task 4: RegionSource planners ------------------------------------------
 
 
@@ -457,9 +501,18 @@ def test_run_sequential_routes_stage2_through_extract_with_transform(monkeypatch
     calls = []
 
     def _spy_extract_with_transform(
-        result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source=None
+        result,
+        frame_idx,
+        task,
+        affine,
+        cfg_arg,
+        rt_arg,
+        seg_source=None,
+        force_numpy=False,
     ):
-        calls.append((result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source))
+        calls.append(
+            (result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source, force_numpy)
+        )
         return m._empty_obb_result(frame_idx)
 
     monkeypatch.setattr(m, "extract_with_transform", _spy_extract_with_transform)
@@ -481,7 +534,7 @@ def test_run_sequential_routes_stage2_through_extract_with_transform(monkeypatch
     m._run_sequential([frame], models, cfg, runtime)
 
     assert len(calls) == 1
-    result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source = calls[0]
+    result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source, force_numpy = calls[0]
     assert frame_idx == 0
     assert task == "segment"
     assert affine.offset == (20.0, 30.0)
@@ -489,3 +542,6 @@ def test_run_sequential_routes_stage2_through_extract_with_transform(monkeypatch
     assert cfg_arg is cfg
     assert rt_arg is runtime
     assert seg_source is seq  # A2: seg params sourced from the sequential config
+    # Task 7 fix: sequential always forces numpy, even for this pixel-exact
+    # (translate-only) crop, so it never silently takes the raw gpu path.
+    assert force_numpy is True
