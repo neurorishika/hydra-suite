@@ -1,7 +1,10 @@
 # DetectKit Geometry Levels — Polygon-First Label Model — Design
 
 **Date:** 2026-07-24
-**Status:** Design approved; pending spec review → implementation plan
+**Status:** Partially shipped — Level A (polygon-first labels) and A.5 (sequential-segment
+enablement) are merged on `main`, as is the related Level C (inference region-source
+unification). **Only Level B (SAM2 escalation) remains.** Kept out of `done/` for that
+reason.
 **Scope:** DetectKit label model, source import/validation, training role matrix,
 X-AnyLabeling round-trip, TrackerKit active-learning export
 **Depends on:** SAHI sliced inference (`2026-07-23-sahi-sliced-inference-design.md`) merged.
