@@ -16,7 +16,7 @@ from hydra_suite.utils.slice_geometry import (  # noqa: F401 -- re-exported for 
 
 from ..config import SliceConfig
 from ..result import OBBResult
-from .obb import extract_with_transform
+from .obb import extract_with_transform, merge_per_frame
 from .regions import Affine
 
 logger = logging.getLogger(__name__)
@@ -223,38 +223,6 @@ def _predict_tiles(
     return results
 
 
-def _merge_frame_obb_results(parts, fi: int, plan: SlicePlan, config, runtime):
-    """Concatenate one frame's per-tile ``OBBResult``s and dedup across tiles."""
-    from .merge import band_membership, merge_obb_detections
-    from .obb import _apply_raw_detection_cap, merge_obb_results
-
-    concat = merge_obb_results(fi, parts)
-    # Cap BEFORE the merge (finding I3): this bounds the O(n^2) cv2 hull/IoU
-    # work to `cap` detections instead of `tiles x max_det`, and keeps this path
-    # selecting the SAME detections as the device-tensor path (which caps inside
-    # `materialize_tensors`). Cap again after merging so a nmm union that
-    # reduces the count still yields cap-ordered ids.
-    concat = _apply_raw_detection_cap(concat, config.raw_detection_cap)
-    if concat.num_detections <= 1:
-        return concat
-    slice_cfg = config.direct.slice
-    if slice_cfg.merge_backend == "gpu":
-        _log_gpu_merge_backend_downgrade_once()
-    bands = band_membership(concat.corners, plan.tiles)
-    merged = merge_obb_detections(
-        concat,
-        policy=slice_cfg.merge_policy,
-        metric=slice_cfg.merge_metric,
-        threshold=slice_cfg.merge_threshold,
-        # The gpu merge backend is reserved for the native-cuda (device tensor)
-        # path; every host-side path uses the cv2 oracle (logged above once).
-        backend="cv2",
-        overlap_bands=bands,
-        runtime=runtime,
-    )
-    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
-
-
 def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
     """Sliced-inference wrapper around the direct predict+extract path.
 
@@ -345,6 +313,6 @@ def run_direct_sliced(frames, model, config, runtime, roi_mask=None):
             )
         )
     return [
-        _merge_frame_obb_results(per_frame[fi], fi, plan, config, runtime)
+        merge_per_frame(per_frame[fi], "overlap_band_nms", plan, config, runtime)
         for fi in range(len(frames))
     ]

@@ -1356,6 +1356,168 @@ def merge_obb_results(frame_idx: int, parts: list[OBBResult]) -> OBBResult:
     )
 
 
+_MERGE_POLICIES = ("plain", "overlap_band_nms")
+
+
+def merge_per_frame(
+    parts: list,
+    merge_policy: str,
+    plan: Any,
+    config: OBBConfig,
+    runtime: RuntimeContext,
+) -> "OBBResult | _RawOBBTensors":
+    """Merge ONE frame's per-region results (``parts``) into a single result.
+
+    The single per-frame merge seam for every ``RegionSource`` (Task 8, phase
+    C): a 2x2 dispatch over
+
+      * **universe** -- numpy (``parts`` are ``OBBResult``) vs raw (``parts``
+        are ``_RawOBBTensors``). Detected from ``type(parts[0])`` -- raw parts
+        only exist when ``extract_with_transform``'s translate-only/
+        ``tensor_on_cuda`` branch produced them, so this always agrees with
+        ``runtime.tensor_on_cuda``.
+      * **merge_policy** -- ``"plain"`` (``WholeFrame``/``Stage1Proposals``:
+        regions are disjoint by construction, no cross-region dedup needed)
+        vs ``"overlap_band_nms"`` (``Grid``: tiles can double-detect near
+        shared borders, needs ``tiles_overlap``-gated NMS/NMM).
+
+    ``plan`` (a ``SlicePlan``) is required for ``"overlap_band_nms"`` (tile
+    geometry drives both the overlap gate and ``band_membership``) and unused
+    -- may be ``None`` -- for ``"plain"`` (whole-frame/stage-1 sources have no
+    tile plan).
+
+    ``parts`` must be non-empty. Every existing/future caller already
+    short-circuits to an empty result BEFORE reaching any merge when a frame
+    produced zero regions (``run_direct_sliced``/``assemble_raw_frames`` never
+    build an empty per-tile list for Grid; ``_run_direct``/``_run_sequential``
+    return ``_empty_obb_result`` directly for a frame with zero detections/
+    proposals rather than invoking a merge) -- there is no live call site that
+    needs an empty-``parts`` contract here.
+
+    Absorbs, byte-identically:
+      * numpy + overlap_band_nms  <- (retired) ``slicing._merge_frame_obb_results``
+      * raw + overlap_band_nms    <- ``slicing_cuda.assemble_raw_frames``'s
+        per-frame merge-or-passthrough decision
+    """
+    if merge_policy not in _MERGE_POLICIES:
+        raise ValueError(
+            f"Unknown merge_policy: {merge_policy!r} (expected one of {_MERGE_POLICIES})"
+        )
+    if not parts:
+        raise ValueError("merge_per_frame requires a non-empty `parts` list")
+
+    fi = parts[0].frame_idx
+    is_raw = isinstance(parts[0], _RawOBBTensors)
+
+    if merge_policy == "plain":
+        if is_raw:
+            from .slicing_cuda import _concat_raw
+
+            # No cap here: matches today's raw-universe precedent for a
+            # non-merged frame -- both `_run_direct`'s raw branch (which
+            # applies no cap at extraction time) and
+            # `assemble_raw_frames`'s non-overlapping passthrough (which
+            # returns the plain concat untouched). The cap is applied later,
+            # exactly once, wherever the raw tensors are eventually
+            # materialized (`materialize_tensors` always caps at the end).
+            return _concat_raw(parts, fi)
+        return _apply_raw_detection_cap(
+            merge_obb_results(fi, parts), config.raw_detection_cap
+        )
+
+    # merge_policy == "overlap_band_nms"
+    if is_raw:
+        return _merge_raw_overlap_band_nms(parts, fi, plan, config, runtime)
+    return _merge_numpy_overlap_band_nms(parts, fi, plan, config, runtime)
+
+
+def _merge_numpy_overlap_band_nms(
+    parts: list,
+    fi: int,
+    plan: Any,
+    config: OBBConfig,
+    runtime: RuntimeContext,
+) -> OBBResult:
+    """EXACT body of the retired ``slicing._merge_frame_obb_results``."""
+    from .merge import band_membership, merge_obb_detections
+
+    concat = merge_obb_results(fi, parts)
+    # Cap BEFORE the merge (finding I3): this bounds the O(n^2) cv2 hull/IoU
+    # work to `cap` detections instead of `tiles x max_det`, and keeps this
+    # path selecting the SAME detections as the device-tensor path (which
+    # caps inside `materialize_tensors`). Cap again after merging so a nmm
+    # union that reduces the count still yields cap-ordered ids.
+    concat = _apply_raw_detection_cap(concat, config.raw_detection_cap)
+    if concat.num_detections <= 1:
+        return concat
+    slice_cfg = config.direct.slice
+    if slice_cfg.merge_backend == "gpu":
+        from .slicing import _log_gpu_merge_backend_downgrade_once
+
+        _log_gpu_merge_backend_downgrade_once()
+    bands = band_membership(concat.corners, plan.tiles)
+    merged = merge_obb_detections(
+        concat,
+        policy=slice_cfg.merge_policy,
+        metric=slice_cfg.merge_metric,
+        threshold=slice_cfg.merge_threshold,
+        # The gpu merge backend is reserved for the native-cuda (device
+        # tensor) path; every host-side path uses the cv2 oracle (downgrade
+        # logged above once).
+        backend="cv2",
+        overlap_bands=bands,
+        runtime=runtime,
+    )
+    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
+
+
+def _merge_raw_overlap_band_nms(
+    parts: list,
+    fi: int,
+    plan: Any,
+    config: OBBConfig,
+    runtime: RuntimeContext,
+) -> "OBBResult | _RawOBBTensors":
+    """EXACT per-frame decision from the retired ``slicing_cuda.assemble_raw_frames``.
+
+    Whether cross-tile dedup is needed is decided by ``tiles_overlap(plan.tiles)``
+    -- a geometry predicate over the tile boxes, never by
+    ``slice_cfg.overlap_*_ratio`` (``get_slice_bboxes`` flushes the last tile
+    in each axis to the frame edge, so tiles genuinely overlap even at a
+    configured ratio of 0.0; gating on the config ratio silently double-counts
+    detections -- the exact bug Task 6 shipped and had to fix twice).
+
+    When no two planned tiles intersect, the frame's tiles are concatenated
+    and returned as a ``_RawOBBTensors`` with zero device syncs. Otherwise the
+    frame is materialized once (the only sync point) and merged, with the
+    merge restricted to overlap-band members (``overlap_bands``);
+    exclusive-region detections pass straight through.
+    """
+    from .merge import band_membership, merge_obb_detections
+    from .slicing import tiles_overlap
+    from .slicing_cuda import _concat_raw
+
+    concat = _concat_raw(parts, fi)
+    if not tiles_overlap(plan.tiles) or concat.xywhr.shape[0] <= 1:
+        return concat  # preserve _RawOBBTensors end-to-end
+    # Overlap possible: materialize for the cross-tile merge (this is the
+    # only sync point). materialize_tensors applies the raw detection cap,
+    # so the O(n^2) merge input is bounded exactly as on the host path.
+    materialized = materialize_tensors(concat, config.raw_detection_cap)
+    bands = band_membership(materialized.corners, plan.tiles)
+    slice_cfg = config.direct.slice
+    merged = merge_obb_detections(
+        materialized,
+        policy=slice_cfg.merge_policy,
+        metric=slice_cfg.merge_metric,
+        threshold=slice_cfg.merge_threshold,
+        backend=slice_cfg.merge_backend,
+        overlap_bands=bands,
+        runtime=runtime,
+    )
+    return _apply_raw_detection_cap(merged, config.raw_detection_cap)
+
+
 def _load_yolo(
     model_path: str,
     compute_runtime: str,

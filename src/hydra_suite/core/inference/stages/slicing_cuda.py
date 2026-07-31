@@ -2,13 +2,16 @@
 
 This module owns ONLY the ``runtime.tensor_on_cuda`` half of the sliced
 pipeline: turning per-tile ultralytics results into ``_RawOBBTensors`` without
-a device sync, remapping them into frame space by pure translation, and
-deciding when a cross-tile merge (the one sync point) is unavoidable.
+a device sync, and remapping them into frame space by pure translation. The
+per-frame merge-or-passthrough decision (whether a cross-tile merge -- the
+one sync point -- is unavoidable) is delegated to
+``obb.merge_per_frame(..., "overlap_band_nms", ...)`` (Task 8), which owns
+that decision for both the raw and numpy universes so the two never drift
+again the way they did before (overlap gate, cap ordering, merge backend --
+finding C1).
 
 Tiling, tile-job building, letterboxing and chunked prediction all live in
-``slicing.py`` and are shared by every path -- this file used to duplicate them
-and the two copies drifted (overlap gate, cap ordering, merge backend), which
-is what let finding C1 (tier dispatch keyed off the wrong flag) hide.
+``slicing.py`` and are shared by every path.
 
 ``torch`` is imported at module scope here, so ``slicing.py`` keeps importing
 this module lazily (function-level) -- CPU/MPS installs never pay for it.
@@ -18,7 +21,7 @@ from __future__ import annotations
 
 import torch
 
-from .slicing import SlicePlan, tiles_overlap
+from .slicing import SlicePlan
 
 
 def _concat_raw(parts, frame_idx: int):
@@ -64,28 +67,17 @@ def assemble_raw_frames(
 ):
     """Per-frame ``_RawOBBTensors`` (or merged ``OBBResult``) from tile results.
 
-    Whether cross-tile dedup is needed is decided by ``tiles_overlap(plan.tiles)``
-    -- a geometry predicate over the tile boxes, never by
-    ``slice_cfg.overlap_*_ratio`` (``get_slice_bboxes`` flushes the last tile in
-    each axis to the frame edge, so tiles genuinely overlap even at a
-    configured ratio of 0.0; gating on the config ratio silently double-counts
-    detections -- the exact bug Task 6 shipped and had to fix twice).
-
-    When no two planned tiles intersect, every frame's tiles are concatenated
-    and returned as a ``_RawOBBTensors`` with zero device syncs. Otherwise each
-    frame is materialized once (the only sync point) and merged, with the merge
-    restricted to overlap-band members (``overlap_bands``); exclusive-region
-    detections pass straight through.
+    Extracts each tile's raw device tensors (no device sync), remaps them into
+    frame space by pure translation, then delegates the per-frame
+    merge-or-passthrough decision to
+    ``obb.merge_per_frame(..., "overlap_band_nms", ...)`` -- see that
+    function's docstring (and ``_merge_raw_overlap_band_nms``) for the
+    ``tiles_overlap`` gate / materialize / cap-ordering contract this used to
+    implement inline.
     """
-    from .merge import band_membership, merge_obb_detections
-    from .obb import (
-        _apply_raw_detection_cap,
-        extract_with_transform,
-        materialize_tensors,
-    )
+    from .obb import extract_with_transform, merge_per_frame
     from .regions import Affine
 
-    slice_cfg = config.direct.slice
     per_frame: dict[int, list] = {fi: [] for fi in range(n_frames)}
     for (fi, x0, y0), res in zip(jobs, results):
         per_frame[fi].append(
@@ -99,27 +91,7 @@ def assemble_raw_frames(
             )
         )
 
-    any_overlap = tiles_overlap(plan.tiles)
-
-    out = []
-    for fi in range(n_frames):
-        concat = _concat_raw(per_frame[fi], fi)
-        if not any_overlap or concat.xywhr.shape[0] <= 1:
-            out.append(concat)  # preserve _RawOBBTensors end-to-end
-            continue
-        # Overlap possible: materialize for the cross-tile merge (this is the
-        # only sync point). materialize_tensors applies the raw detection cap,
-        # so the O(n^2) merge input is bounded exactly as on the host path.
-        materialized = materialize_tensors(concat, config.raw_detection_cap)
-        bands = band_membership(materialized.corners, plan.tiles)
-        merged = merge_obb_detections(
-            materialized,
-            policy=slice_cfg.merge_policy,
-            metric=slice_cfg.merge_metric,
-            threshold=slice_cfg.merge_threshold,
-            backend=slice_cfg.merge_backend,
-            overlap_bands=bands,
-            runtime=runtime,
-        )
-        out.append(_apply_raw_detection_cap(merged, config.raw_detection_cap))
-    return out
+    return [
+        merge_per_frame(per_frame[fi], "overlap_band_nms", plan, config, runtime)
+        for fi in range(n_frames)
+    ]

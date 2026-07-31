@@ -6,7 +6,9 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from hydra_suite.core.inference.config import SliceConfig
+from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages import obb as m
+from hydra_suite.core.inference.stages.obb import _RawOBBTensors
 from hydra_suite.core.inference.stages.regions import (
     Affine,
     Grid,
@@ -14,6 +16,7 @@ from hydra_suite.core.inference.stages.regions import (
     WholeFrame,
     select_region_source,
 )
+from hydra_suite.utils.slice_geometry import SlicePlan
 
 
 def test_affine_identity_and_translate_only():
@@ -545,3 +548,190 @@ def test_run_sequential_routes_stage2_through_extract_with_transform(monkeypatch
     # Task 7 fix: sequential always forces numpy, even for this pixel-exact
     # (translate-only) crop, so it never silently takes the raw gpu path.
     assert force_numpy is True
+
+
+# --- Task 8: merge_per_frame (numpy/raw x plain/overlap_band_nms) -----------
+
+
+def _make_obb_result(frame_idx, centroids, confidences=None, half=5.0):
+    centroids = np.asarray(centroids, dtype=np.float32).reshape(-1, 2)
+    n = centroids.shape[0]
+    if confidences is None:
+        confidences = np.full(n, 0.9, dtype=np.float32)
+    confidences = np.asarray(confidences, dtype=np.float32)
+    corners = np.zeros((n, 4, 2), dtype=np.float32)
+    for i, (cx, cy) in enumerate(centroids):
+        corners[i] = [
+            [cx - half, cy - half],
+            [cx + half, cy - half],
+            [cx + half, cy + half],
+            [cx - half, cy + half],
+        ]
+    return OBBResult(
+        frame_idx=frame_idx,
+        centroids=centroids,
+        angles=np.zeros(n, dtype=np.float32),
+        sizes=np.full(n, (2 * half) ** 2, dtype=np.float32),
+        shapes=np.stack([np.full(n, (2 * half) ** 2), np.ones(n)], axis=1).astype(
+            np.float32
+        ),
+        confidences=confidences,
+        corners=corners,
+        detection_ids=OBBResult.make_detection_ids(frame_idx, n),
+        class_ids=np.zeros(n, dtype=np.int64),
+    )
+
+
+def _make_raw(frame_idx, cx, cy, conf, w=10.0, h=10.0, angle=0.0):
+    return _RawOBBTensors(
+        frame_idx=frame_idx,
+        xywhr=torch.tensor([[cx, cy, w, h, angle]], dtype=torch.float32),
+        corners=torch.zeros((1, 4, 2), dtype=torch.float32),
+        conf=torch.tensor([conf], dtype=torch.float32),
+        cls=torch.tensor([0.0], dtype=torch.float32),
+    )
+
+
+def test_merge_per_frame_rejects_unknown_policy():
+    part = _make_obb_result(0, [(1.0, 1.0)])
+    with pytest.raises(ValueError):
+        m.merge_per_frame([part], "bogus", None, SimpleNamespace(), runtime=None)
+
+
+def test_merge_per_frame_rejects_empty_parts():
+    with pytest.raises(ValueError):
+        m.merge_per_frame([], "plain", None, SimpleNamespace(), runtime=None)
+
+
+def test_merge_per_frame_plain_numpy_concat_and_cap():
+    """numpy + plain == _apply_raw_detection_cap(merge_obb_results(...))."""
+    part_a = _make_obb_result(0, [(10.0, 10.0)], confidences=[0.5])
+    part_b = _make_obb_result(0, [(90.0, 90.0)], confidences=[0.9])
+    config = SimpleNamespace(raw_detection_cap=0)
+    out = m.merge_per_frame([part_a, part_b], "plain", None, config, runtime=None)
+    assert out.num_detections == 2
+    assert sorted(out.confidences.tolist()) == pytest.approx([0.5, 0.9])
+
+    # cap=1 truncates to the highest-confidence detection.
+    config_capped = SimpleNamespace(raw_detection_cap=1)
+    out_capped = m.merge_per_frame(
+        [part_a, part_b], "plain", None, config_capped, runtime=None
+    )
+    assert out_capped.num_detections == 1
+    assert out_capped.confidences[0] == pytest.approx(0.9)
+
+
+def test_merge_per_frame_plain_raw_concat_no_cap():
+    """raw + plain concatenates on-device with NO cap applied.
+
+    Matches today's precedent for a non-merged raw frame: `_run_direct`'s raw
+    branch applies no cap at extraction time, and
+    `assemble_raw_frames`'s non-overlapping passthrough returns the plain
+    concat untouched -- the cap is applied later, exactly once, wherever the
+    raw tensors are eventually materialized (`materialize_tensors` always
+    caps at the end).
+    """
+    part_a = _make_raw(2, 10.0, 10.0, 0.5)
+    part_b = _make_raw(2, 90.0, 90.0, 0.9)
+    # cap=1 would truncate if (incorrectly) applied here.
+    config = SimpleNamespace(raw_detection_cap=1)
+    out = m.merge_per_frame([part_a, part_b], "plain", None, config, runtime=None)
+    assert isinstance(out, _RawOBBTensors)
+    assert out.xywhr.shape[0] == 2
+    assert out.frame_idx == 2
+
+
+def _overlapping_two_tile_plan():
+    return SlicePlan(
+        tiles=[(0, 0, 64, 64), (32, 32, 96, 96)],
+        full_frame=False,
+        slice_wh=(64, 64),
+        frame_wh=(96, 96),
+    )
+
+
+def _disjoint_two_tile_plan():
+    return SlicePlan(
+        tiles=[(0, 0, 64, 64), (64, 0, 128, 64)],
+        full_frame=False,
+        slice_wh=(64, 64),
+        frame_wh=(128, 64),
+    )
+
+
+def _grid_slice_cfg(**kw):
+    kw.setdefault("merge_policy", "nmm")
+    kw.setdefault("merge_metric", "ios")
+    kw.setdefault("merge_threshold", 0.1)
+    kw.setdefault("merge_backend", "cv2")
+    return SliceConfig(enabled=True, **kw)
+
+
+def test_merge_per_frame_overlap_band_nms_numpy_dedups_cross_tile_duplicate():
+    """numpy + overlap_band_nms == retired `_merge_frame_obb_results`: always
+    attempts band-membership + merge (no `tiles_overlap` gate on this path),
+    so a genuine cross-tile duplicate touching >=2 tiles collapses to one."""
+    dup = (50.0, 50.0)
+    part_a = _make_obb_result(0, [dup], confidences=[0.6])
+    part_b = _make_obb_result(0, [dup], confidences=[0.9])
+    plan = _overlapping_two_tile_plan()
+    config = SimpleNamespace(
+        direct=SimpleNamespace(slice=_grid_slice_cfg()), raw_detection_cap=0
+    )
+    out = m.merge_per_frame(
+        [part_a, part_b], "overlap_band_nms", plan, config, runtime=None
+    )
+    assert out.num_detections == 1
+
+
+def test_merge_per_frame_overlap_band_nms_numpy_leaves_non_band_detections_alone():
+    """Two detections that never touch >=2 tiles are outside the overlap band
+    -- merge_obb_detections passes them straight through untouched."""
+    part_a = _make_obb_result(0, [(5.0, 5.0)], confidences=[0.6])
+    part_b = _make_obb_result(0, [(120.0, 5.0)], confidences=[0.9])
+    plan = _disjoint_two_tile_plan()
+    config = SimpleNamespace(
+        direct=SimpleNamespace(slice=_grid_slice_cfg()), raw_detection_cap=0
+    )
+    out = m.merge_per_frame(
+        [part_a, part_b], "overlap_band_nms", plan, config, runtime=None
+    )
+    assert out.num_detections == 2
+
+
+def test_merge_per_frame_overlap_band_nms_raw_skips_merge_when_tiles_disjoint():
+    """raw + overlap_band_nms: gated by `tiles_overlap(plan.tiles)` (geometry),
+    never `overlap_*_ratio`. Disjoint tiles -> plain on-device concat
+    passthrough, `_RawOBBTensors` preserved end-to-end, no cap applied."""
+    part_a = _make_raw(0, 10.0, 10.0, 0.5)
+    part_b = _make_raw(0, 90.0, 10.0, 0.9)
+    plan = _disjoint_two_tile_plan()
+    # cap=1 would truncate if the (incorrect) skip-branch capped.
+    config = SimpleNamespace(
+        direct=SimpleNamespace(slice=_grid_slice_cfg()), raw_detection_cap=1
+    )
+    out = m.merge_per_frame(
+        [part_a, part_b], "overlap_band_nms", plan, config, runtime=None
+    )
+    assert isinstance(out, _RawOBBTensors)
+    assert out.xywhr.shape[0] == 2
+
+
+def test_merge_per_frame_overlap_band_nms_raw_materializes_and_merges_when_tiles_overlap():
+    """raw + overlap_band_nms: overlapping tiles + a genuine cross-tile
+    duplicate -> materialize (the only sync point) + band NMS/NMM collapses
+    it to one, and the result is a materialized OBBResult (cv2 backend used
+    here since SliceConfig.merge_backend defaults to "cv2"; the "gpu" backend
+    is exercised on real CUDA hardware only)."""
+    dup = (50.0, 50.0)
+    part_a = _make_raw(0, dup[0], dup[1], 0.6)
+    part_b = _make_raw(0, dup[0], dup[1], 0.9)
+    plan = _overlapping_two_tile_plan()
+    config = SimpleNamespace(
+        direct=SimpleNamespace(slice=_grid_slice_cfg()), raw_detection_cap=0
+    )
+    out = m.merge_per_frame(
+        [part_a, part_b], "overlap_band_nms", plan, config, runtime=None
+    )
+    assert isinstance(out, OBBResult)  # materialized, no longer _RawOBBTensors
+    assert out.num_detections == 1
