@@ -76,6 +76,49 @@ def test_nmm_unions_truncated_pair_into_one_larger_box():
     assert out.confidences[0] == 0.8  # max conf
 
 
+def test_cv2_union_corners_match_expected_rotated_rectangle():
+    """cv2-backend analogue of ``test_gpu_backend_union_corners_match_expected...``.
+
+    Exactly the ``test_nmm_unions_truncated_pair...`` construction, asserted at
+    the CORNERS level rather than only on ``sizes``. That distinction is the
+    whole point: pairing a ``(w, h)`` pair with the wrong angle convention
+    rotates a non-square box 90 degrees while leaving its area -- and therefore
+    ``sizes`` -- exactly invariant, so a sizes-only assertion is blind to it.
+
+    For this union point set ``cv2.minAreaRect`` reports ``(w, h) = (40, 68)``
+    at -90 degrees, i.e. the ``w < h`` regime. Applying
+    ``_normalize_obb_geometry`` twice to that same raw pair (once inside
+    ``_union_obb``, once again in ``_assemble``) adds 90 degrees twice, landing
+    the reported angle on the MINOR axis and emitting a 68x40 box rotated 90
+    degrees from the true footprint.
+
+    Union of big (x[70,130], y[80,120]) and small (x[62,82], y[80,120]) is
+    exactly x[62,130], y[80,120]: center (96, 100), major 68 horizontal,
+    minor 40, angle 0.
+    """
+    from hydra_suite.core.inference.stages.obb import _corners_from_xywhr
+
+    big = _obb(100, 100, 60, 40, conf=0.8)
+    small = _obb(72, 100, 20, 40, conf=0.7)
+    out = merge_obb_detections(
+        _concat(big, small),
+        policy="greedy_nmm",
+        metric="ios",
+        threshold=0.5,
+        backend="cv2",
+    )
+    assert out.num_detections == 1
+    exp_corners = _corners_from_xywhr(
+        np.array([96.0], np.float32),
+        np.array([100.0], np.float32),
+        np.array([68.0], np.float32),
+        np.array([40.0], np.float32),
+        np.array([0.0], np.float32),
+    )
+    np.testing.assert_allclose(out.corners[0], exp_corners[0], atol=0.5)
+    np.testing.assert_allclose(float(out.angles[0]), 0.0, atol=1e-3)
+
+
 def test_iou_metric_does_not_merge_what_ios_merges():
     """Same straddling pair: IoS=0.60 merges, IoU=0.176 does not.
 

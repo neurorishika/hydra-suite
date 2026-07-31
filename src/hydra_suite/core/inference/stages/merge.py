@@ -79,20 +79,34 @@ def band_membership(
 def _union_obb(members: OBBResult, idxs: list[int], frame_idx: int) -> tuple:
     """Union the member corners into one OBB via cv2.minAreaRect.
 
-    Returns (cx, cy, w, h, angle_rad, conf, cls) renormalized through the shared
-    geometry pipeline so the merged box is indistinguishable from a native OBB.
+    Returns the RAW, self-consistent ``(cx, cy, w, h, angle_rad, conf, cls)``
+    straight off ``cv2.minAreaRect`` -- ``w`` is the extent along the
+    ``angle_rad`` axis and ``h`` the extent perpendicular to it, the same
+    convention ``_union_via_kernel`` (the gpu backend) returns.
+
+    It must NOT pre-canonicalize the angle here: ``_assemble`` feeds this exact
+    ``(w, h, angle)`` triple through ``_normalize_obb_geometry`` itself. Doing
+    it in both places applies the ``w < h`` +90-degree major-axis correction
+    TWICE, which lands the reported angle back on the MINOR axis and emits a box
+    rotated 90 degrees from the true footprint. Area is invariant under that
+    swap, so it is invisible to ``sizes`` and shows up only as visibly
+    cross-wise boxes on the sliced (SAHI) path -- and only for the subset of
+    detections that actually reach a multi-member union in a tile overlap band.
     """
     pts = members.corners[idxs].reshape(-1, 2).astype(np.float32)
     (cx, cy), (w, h), angle_deg = cv2.minAreaRect(pts)
-    ang, _, _ = _normalize_obb_geometry(
-        np.array([w], np.float32),
-        np.array([h], np.float32),
-        np.array([np.deg2rad(angle_deg)], np.float32),
-    )
     conf = float(members.confidences[idxs].max())
     top = idxs[int(np.argmax(members.confidences[idxs]))]
     cls = int(members.class_ids_or_zeros[top])
-    return float(cx), float(cy), float(w), float(h), float(ang[0]), conf, cls
+    return (
+        float(cx),
+        float(cy),
+        float(w),
+        float(h),
+        float(np.deg2rad(angle_deg)),
+        conf,
+        cls,
+    )
 
 
 def merge_obb_detections(

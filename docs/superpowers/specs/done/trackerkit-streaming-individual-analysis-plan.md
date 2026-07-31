@@ -1,6 +1,13 @@
 # TrackerKit Streaming Individual Analysis Plan
 
 Date: 2026-04-25
+Status: DELIVERED — the streaming substrate this plan called for shipped as the
+`InferenceRunner` pipeline (`specs/done/2026-04-26-inference-pipeline-redesign.md`).
+All five required design changes are in `main`: shared oriented payload
+(`core/inference/result.py`), GPU-native CNN batch API (`predict_batch_cuda`),
+reorientation split out of replay (`core/canonicalization/crop.py`), streaming as the
+default forward path (`core/inference/stages/`: obb → filtering → headtail → crops →
+cnn/pose), replay retained as fallback.
 
 Related docs:
 

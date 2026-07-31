@@ -98,7 +98,11 @@ def test_load_obb_executor_coreml_auto_export(tmp_path, monkeypatch):
 
     result = load_obb_executor(str(pt_file), "coreml", auto_export=True)
     assert calls["export"] == 1
-    assert isinstance(result, _FakeModel)
+    # The CoreML executor is now wrapped for batch-safety; it delegates to the
+    # loaded model, so identity checks go through the wrapper.
+    assert isinstance(result, ra._CoreMLBatchExecutor)
+    assert isinstance(result._model, _FakeModel)
+    assert result.names == {0: "ant"}  # attribute delegation
     mlpackage = tmp_path / "model.mlpackage"
     assert mlpackage.exists()
 
@@ -132,6 +136,49 @@ def test_load_obb_executor_coreml_imgsz_override(tmp_path, monkeypatch):
 
     load_obb_executor(str(pt_file), "coreml", auto_export=True, imgsz_override=128)
     assert calls["export_imgsz"] == [128]
+
+
+def test_coreml_batch_executor_dispatches_per_image():
+    """A CoreML ``YOLO(mlpackage)`` is static batch=1 (``AutoBackend`` ->
+    ``CoreMLBackend`` infers only ``im[0]``): a multi-image ``predict`` returns
+    one ``Results`` and then ``IndexError``s inside ultralytics'
+    ``stream_inference``. ``_CoreMLBatchExecutor`` must dispatch a batch one
+    image at a time and concatenate the results, while a single-image call
+    passes straight through (byte-identical to the working batch=1 path) and
+    all other attributes delegate to the wrapped model."""
+    from hydra_suite.core.inference.runtime_artifacts import _CoreMLBatchExecutor
+
+    class _FakeCoreMLYOLO:
+        task = "obb"
+        names = {0: "ant"}
+
+        def __init__(self):
+            self.batch_sizes = []
+
+        def predict(self, source, **kw):
+            assert isinstance(source, (list, tuple))
+            self.batch_sizes.append(len(source))
+            # Model the CoreML contract the wrapper exists to satisfy: the
+            # underlying executor must never be handed more than one image.
+            assert len(source) == 1, "CoreML executor only supports batch=1"
+            return [("R", source[0])]
+
+    fake = _FakeCoreMLYOLO()
+    ex = _CoreMLBatchExecutor(fake)
+
+    # Multi-image batch -> per-image dispatch, one Result per image, in order.
+    out = ex.predict(["a", "b", "c"], imgsz=128, verbose=False)
+    assert out == [("R", "a"), ("R", "b"), ("R", "c")]
+    assert fake.batch_sizes == [1, 1, 1]
+
+    # Attribute delegation (`.task` is read by _assert_task_matches_checkpoint).
+    assert ex.task == "obb"
+    assert ex.names == {0: "ant"}
+
+    # Single-image list passes straight through (one call, unchanged).
+    fake.batch_sizes.clear()
+    assert ex.predict(["z"]) == [("R", "z")]
+    assert fake.batch_sizes == [1]
 
 
 # ---------------------------------------------------------------------------

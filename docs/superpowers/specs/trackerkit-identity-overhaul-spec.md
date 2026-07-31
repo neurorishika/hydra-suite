@@ -1,7 +1,9 @@
 # TrackerKit Identity Overhaul Spec
 
 Date: 2026-04-26
-Status: Proposed
+Status: SUPERSEDED (not implemented) by
+`2026-07-22-identity-overhaul-consolidated-design.md`, which folds these ideas in.
+Kept here, not in `done/`, because the successor design is still open.
 
 Related docs:
 
