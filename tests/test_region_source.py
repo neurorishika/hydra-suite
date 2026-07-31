@@ -65,3 +65,36 @@ def test_extract_with_transform_numpy_detect(monkeypatch):
         res, 0, "detect", Affine(offset=(100.0, 0.0)), _Cfg, _Rt()
     )
     assert out.centroids[0][0] == pytest.approx(120.0)  # 20 + 100
+
+
+def test_translate_raw_offsets_only():
+    from hydra_suite.core.inference.stages.obb import _RawOBBTensors, _translate_raw
+
+    raw = _RawOBBTensors(
+        frame_idx=0,
+        xywhr=torch.tensor([[10.0, 20.0, 5.0, 6.0, 0.3]]),
+        corners=torch.zeros((1, 4, 2)),
+        conf=torch.tensor([0.9]),
+        cls=torch.tensor([0.0]),
+    )
+    out = _translate_raw(raw, (100.0, 200.0))
+    assert out.xywhr[0, 0].item() == pytest.approx(110.0)
+    assert out.xywhr[0, 1].item() == pytest.approx(220.0)
+    assert out.xywhr[0, 2].item() == pytest.approx(5.0)  # w unchanged
+
+
+def test_extract_with_transform_raw_rejects_scale():
+    class _Rt:
+        tensor_on_cuda = True
+        device = "cpu"
+
+    class _Cfg:
+        class direct:
+            model_task = "obb"
+
+        raw_detection_cap = 0
+
+    with pytest.raises((AssertionError, ValueError)):
+        m.extract_with_transform(
+            object(), 0, "obb", Affine(scale=(2.0, 1.0)), _Cfg, _Rt()
+        )

@@ -820,6 +820,33 @@ def _extract_class_ids(obb: Any, n: int) -> np.ndarray:
     return np.zeros(n, dtype=np.int64)
 
 
+def _translate_raw(raw: _RawOBBTensors, offset: tuple[float, float]) -> _RawOBBTensors:
+    """Pure on-device translation of a ``_RawOBBTensors`` by ``offset``.
+
+    Generalizes ``slicing_cuda._remap_raw`` to a float offset. NEVER scales --
+    the raw/cuda universe is translate-only (a non-identity ``scale`` implies
+    the numpy universe); only ``xywhr[:, :2]`` (cx, cy) and ``corners`` shift,
+    while ``xywhr[:, 2:5]`` (w, h, angle), ``conf`` and ``cls`` are untouched.
+    Zero offset (or an empty tensor) is a fast path that returns ``raw`` as-is.
+    """
+    ox, oy = offset
+    if raw.xywhr.shape[0] == 0 or (ox == 0.0 and oy == 0.0):
+        return raw
+    xywhr = raw.xywhr.clone()
+    xywhr[:, 0] += ox
+    xywhr[:, 1] += oy
+    corners = raw.corners.clone()
+    corners[..., 0] += ox
+    corners[..., 1] += oy
+    return _RawOBBTensors(
+        frame_idx=raw.frame_idx,
+        xywhr=xywhr,
+        corners=corners,
+        conf=raw.conf,
+        cls=raw.cls,
+    )
+
+
 def extract_with_transform(result, frame_idx, task, affine, config, runtime):
     """Single task x universe extraction seam. Applies `affine` in the matching universe.
 
@@ -829,7 +856,31 @@ def extract_with_transform(result, frame_idx, task, affine, config, runtime):
     ox, oy = affine.offset
     sx, sy = affine.scale
     if runtime.tensor_on_cuda:
-        raise NotImplementedError("raw universe: Task 3")
+        assert (
+            affine.is_translate_only
+        ), "raw universe must be translate-only (invariant)"
+        d = config.direct
+        if task == "detect":
+            raw = _extract_raw_tensors_from_boxes(
+                result,
+                frame_idx,
+                math.radians(d.fixed_angle_deg if d else 0.0),
+                runtime.device,
+            )
+        elif task == "segment":
+            raw = _extract_raw_tensors_from_masks(
+                result,
+                frame_idx,
+                runtime.device,
+                config.raw_detection_cap,
+                num_angles=d.seg_num_angles,
+                crop_size=d.seg_crop_size,
+                pad_ratio=d.seg_pad_ratio,
+                mask_threshold=d.seg_mask_threshold,
+            )
+        else:
+            raw = _extract_raw_tensors(result, frame_idx, runtime.device)
+        return _translate_raw(raw, affine.offset)
     d = config.direct
     if task == "detect":
         return _extract_obb_from_boxes(
