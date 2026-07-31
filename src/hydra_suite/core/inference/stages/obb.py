@@ -617,26 +617,17 @@ def _run_sequential(
                     if seq.stage2_image_size > 0
                     else (1.0, 1.0)
                 )
-                if seq.stage2_task == "segment":
-                    sub.append(
-                        _extract_obb_from_masks(
-                            r,
-                            frame_idx,
-                            config.raw_detection_cap,
-                            num_angles=seq.seg_num_angles,
-                            crop_size=seq.seg_crop_size,
-                            pad_ratio=seq.seg_pad_ratio,
-                            mask_threshold=seq.seg_mask_threshold,
-                            offset=offsets[i + j],
-                            scale=scale,
-                        )
+                sub.append(
+                    extract_with_transform(
+                        r,
+                        frame_idx,
+                        seq.stage2_task,
+                        Affine(offset=offsets[i + j], scale=scale),
+                        config,
+                        runtime,
+                        seg_source=seq,
                     )
-                else:
-                    sub.append(
-                        extract_obb_result(
-                            r, frame_idx, offset=offsets[i + j], scale=scale
-                        )
-                    )
+                )
         results.append(
             _apply_raw_detection_cap(
                 merge_obb_results(frame_idx, sub), config.raw_detection_cap
@@ -773,15 +764,29 @@ def _translate_raw(raw: _RawOBBTensors, offset: tuple[float, float]) -> _RawOBBT
     )
 
 
-def extract_with_transform(result, frame_idx, task, affine, config, runtime):
+def extract_with_transform(
+    result, frame_idx, task, affine, config, runtime, seg_source=None
+):
     """Single task x universe extraction seam. Applies `affine` in the matching universe.
 
-    numpy universe (cpu/mps/all gpu_fast): affine applied during extraction (offset+scale).
-    raw universe (gpu-native tensor_on_cuda): translate-only on-device (Task 3).
+    numpy universe (cpu/mps/all gpu_fast, or any non-translate-only affine):
+        affine applied during extraction (offset+scale).
+    raw universe (gpu-native tensor_on_cuda AND translate-only affine):
+        translate-only on-device (Task 3).
+
+    Invariant: the raw universe is translate-only. A scaled affine (e.g.
+    sequential stage-2, which resizes crops) forces the numpy branch even
+    when tensor_on_cuda is True (Task 7 / spec S5.1-S5.2).
+
+    ``seg_source`` supplies the seg_num_angles/seg_crop_size/seg_pad_ratio/
+    seg_mask_threshold params for the "segment" task; defaults to
+    ``config.direct`` (direct/grid callers), overridden with a sequential
+    config's own params for sequential stage-2 callers.
     """
     ox, oy = affine.offset
     sx, sy = affine.scale
-    if runtime.tensor_on_cuda:
+    seg = seg_source if seg_source is not None else config.direct
+    if runtime.tensor_on_cuda and affine.is_translate_only:
         assert (
             affine.is_translate_only
         ), "raw universe must be translate-only (invariant)"
@@ -799,10 +804,10 @@ def extract_with_transform(result, frame_idx, task, affine, config, runtime):
                 frame_idx,
                 runtime.device,
                 config.raw_detection_cap,
-                num_angles=d.seg_num_angles,
-                crop_size=d.seg_crop_size,
-                pad_ratio=d.seg_pad_ratio,
-                mask_threshold=d.seg_mask_threshold,
+                num_angles=seg.seg_num_angles,
+                crop_size=seg.seg_crop_size,
+                pad_ratio=seg.seg_pad_ratio,
+                mask_threshold=seg.seg_mask_threshold,
             )
         else:
             raw = _extract_raw_tensors(result, frame_idx, runtime.device)
@@ -822,10 +827,10 @@ def extract_with_transform(result, frame_idx, task, affine, config, runtime):
             result,
             frame_idx,
             config.raw_detection_cap,
-            num_angles=d.seg_num_angles,
-            crop_size=d.seg_crop_size,
-            pad_ratio=d.seg_pad_ratio,
-            mask_threshold=d.seg_mask_threshold,
+            num_angles=seg.seg_num_angles,
+            crop_size=seg.seg_crop_size,
+            pad_ratio=seg.seg_pad_ratio,
+            mask_threshold=seg.seg_mask_threshold,
             offset=(ox, oy),
             scale=(sx, sy),
             emit_native_geometry=config.emit_native_geometry,

@@ -92,21 +92,65 @@ def test_translate_raw_offsets_only():
     assert out.xywhr[0, 2].item() == pytest.approx(5.0)  # w unchanged
 
 
-def test_extract_with_transform_raw_rejects_scale():
+def test_extract_with_transform_scaled_affine_forces_numpy_under_cuda():
+    """Task 7 / A1: scale != 1 forces the numpy branch even when
+    tensor_on_cuda=True -- the raw universe is translate-only (invariant);
+    a scaled affine (e.g. sequential stage-2 crop resize) must NOT go raw.
+    Proven by NOT raising (the raw branch's defensive assert would fire on a
+    non-translate-only affine) and by the offset+scale actually being applied
+    via the numpy extractor.
+    """
+
     class _Rt:
         tensor_on_cuda = True
-        device = "cpu"
+        device = "cpu"  # avoid real CUDA allocation on non-CUDA test machines
+
+    class _Cfg:
+        class direct:
+            fixed_angle_deg = 0.0
+            seg_num_angles = 24
+            seg_crop_size = 64
+            seg_pad_ratio = 0.15
+            seg_mask_threshold = 0.5
+
+        raw_detection_cap = 0
+        emit_native_geometry = False
+
+    res = _FakeDetResult([[10.0, 20.0, 30.0, 60.0]], [0.9])  # cx=20,cy=40,w=20,h=40
+    out = m.extract_with_transform(
+        res, 0, "detect", Affine(offset=(0.0, 0.0), scale=(2.0, 1.0)), _Cfg, _Rt()
+    )
+    # A numpy OBBResult (has `.centroids`), NOT a `_RawOBBTensors` (no `.centroids`).
+    assert hasattr(out, "centroids")
+    assert out.centroids[0][0] == pytest.approx(40.0)  # cx=20 * scale.x=2
+
+
+def test_extract_with_transform_raw_translate_only_stays_raw():
+    """Companion: an actually translate-only affine under tensor_on_cuda=True
+    still takes the raw branch (A1 must not regress the existing raw path)."""
+
+    class _Rt:
+        tensor_on_cuda = True
+        device = "cpu"  # avoid real CUDA allocation on non-CUDA test machines
 
     class _Cfg:
         class direct:
             model_task = "obb"
+            fixed_angle_deg = 0.0
 
         raw_detection_cap = 0
 
-    with pytest.raises((AssertionError, ValueError)):
-        m.extract_with_transform(
-            object(), 0, "obb", Affine(scale=(2.0, 1.0)), _Cfg, _Rt()
-        )
+    class _FakeObb:
+        def __len__(self):
+            return 0
+
+    class _FakeResult:
+        obb = _FakeObb()
+
+    out = m.extract_with_transform(
+        _FakeResult(), 0, "obb", Affine(offset=(5.0, 5.0)), _Cfg, _Rt()
+    )
+    assert not hasattr(out, "centroids")  # _RawOBBTensors, not OBBResult
 
 
 # --- Task 4: RegionSource planners ------------------------------------------
@@ -363,3 +407,85 @@ def test_select_region_source_dispatch():
     assert isinstance(select_region_source(direct_cfg), WholeFrame)
     assert isinstance(select_region_source(sliced_cfg), Grid)
     assert isinstance(select_region_source(seq_cfg), Stage1Proposals)
+
+
+# --- Task 7: _run_sequential stage-2 routes through extract_with_transform --
+
+
+class _Seq2S1Boxes:
+    """Stage-1 boxes stand-in: one detection, enough for build_crops to run
+    (build_crops itself is monkeypatched below, so xyxy content is unused)."""
+
+    def __len__(self):
+        return 1
+
+    xyxy = torch.tensor([[10.0, 10.0, 30.0, 30.0]])
+
+
+class _Seq2S1Result:
+    boxes = _Seq2S1Boxes()
+
+
+class _Seq2FakeDetectModel:
+    def predict(self, *a, **kw):
+        return [_Seq2S1Result()]
+
+
+class _Seq2FakeStage2Model:
+    """Stage-2 stand-in: returns one dummy result object per crop."""
+
+    def predict(self, batch, **kw):
+        return [object() for _ in batch]
+
+
+def test_run_sequential_routes_stage2_through_extract_with_transform(monkeypatch):
+    """Task 7: _run_sequential's stage-2 dispatch calls extract_with_transform
+    (not the old inline if/else), passing seg_source=seq and the per-crop
+    offset/scale computed from the stage-1 crop geometry."""
+    from hydra_suite.core.inference.config import OBBConfig, OBBSequentialConfig
+    from hydra_suite.core.inference.runtime import RuntimeContext
+
+    seq = OBBSequentialConfig(
+        detect_model_path="d.pt",
+        obb_model_path="s.pt",
+        stage2_task="segment",
+        stage2_image_size=80,
+    )
+    cfg = OBBConfig(mode="sequential", sequential=seq)
+    runtime = RuntimeContext(cuda_mode=False, device="cpu", use_nvdec=False)
+
+    calls = []
+
+    def _spy_extract_with_transform(
+        result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source=None
+    ):
+        calls.append((result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source))
+        return m._empty_obb_result(frame_idx)
+
+    monkeypatch.setattr(m, "extract_with_transform", _spy_extract_with_transform)
+    # One 80x80 crop offset at (20, 30) -> matches _FakeSegResult-style geometry
+    # used elsewhere; scale (1.0, 1.0) since stage2_image_size == crop size.
+    monkeypatch.setattr(
+        m,
+        "build_crops",
+        lambda *a, **kw: ([np.zeros((80, 80, 3), np.uint8)], [(20.0, 30.0)]),
+    )
+
+    frame = np.zeros((200, 200, 3), np.uint8)
+    models = m.OBBModels(
+        mode="sequential",
+        detect_model=_Seq2FakeDetectModel(),
+        obb_model=_Seq2FakeStage2Model(),
+    )
+
+    m._run_sequential([frame], models, cfg, runtime)
+
+    assert len(calls) == 1
+    result, frame_idx, task, affine, cfg_arg, rt_arg, seg_source = calls[0]
+    assert frame_idx == 0
+    assert task == "segment"
+    assert affine.offset == (20.0, 30.0)
+    assert affine.scale == (1.0, 1.0)  # 80/80
+    assert cfg_arg is cfg
+    assert rt_arg is runtime
+    assert seg_source is seq  # A2: seg params sourced from the sequential config
