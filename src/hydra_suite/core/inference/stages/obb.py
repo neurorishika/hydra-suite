@@ -897,6 +897,8 @@ def _extract_obb_from_boxes(
     frame_idx: int,
     fixed_angle_rad: float,
     *,
+    offset: tuple[float, float] = (0.0, 0.0),
+    scale: tuple[float, float] = (1.0, 1.0),
     emit_native_geometry: bool = False,
 ) -> OBBResult:
     """Build an OBBResult from a plain (axis-aligned) detect model's boxes.
@@ -915,6 +917,12 @@ def _extract_obb_from_boxes(
     cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
     w_arr = xyxy[:, 2] - xyxy[:, 0]
     h_arr = xyxy[:, 3] - xyxy[:, 1]
+    ox, oy = offset
+    sx, sy = scale
+    cx = cx * sx + ox
+    cy = cy * sy + oy
+    w_arr = w_arr * sx
+    h_arr = h_arr * sy
     angle_arr = np.full(cx.shape, float(fixed_angle_rad), dtype=np.float32)
     angles_fixed, sizes, aspect = _normalize_obb_geometry(w_arr, h_arr, angle_arr)
     mask = _valid_detection_mask(cx, cy, w_arr, h_arr, angles_fixed, conf)
