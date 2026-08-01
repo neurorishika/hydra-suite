@@ -4506,75 +4506,36 @@ class TrackingOrchestrator:
 
     def _build_session_summary_lines(self) -> list[str]:
         """Build end-of-session summary lines for GUI and CLI consumers."""
-        lines = []
+        from hydra_suite.core.tracking.session_summary import (
+            build_session_summary_lines,
+        )
 
-        # --- Timing ---
-        if self._mw._session_wall_start is not None:
-            elapsed = time.time() - self._mw._session_wall_start
-            h = int(elapsed // 3600)
-            m = int((elapsed % 3600) // 60)
-            s = int(elapsed % 60)
-            elapsed_str = f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-            lines.append(f"Duration: {elapsed_str}")
-
-        # --- Frames / FPS ---
-        frames = self._mw._session_frames_processed
-        if frames > 0:
-            lines.append(f"Frames processed: {frames}")
-        fps_vals = [f for f in self._mw._session_fps_list if f and f > 0]
-        if fps_vals:
-            avg_fps = sum(fps_vals) / len(fps_vals)
-            lines.append(f"Average FPS: {avg_fps:.1f}")
-
-        # --- Video / CSV ---
-        video_path = self._panels.setup.file_line.text()
-        if video_path:
-            lines.append(f"Video: {os.path.basename(video_path)}")
+        config = self._mw._config_orch.build_config_dict()
         csv_path = (
             self._mw._session_final_csv_path or self._panels.setup.csv_line.text()
         )
-        if csv_path:
-            lines.append(f"Output CSV: {os.path.basename(csv_path)}")
-
-        # --- Trajectory / track count ---
+        traj_count = None
         if csv_path and os.path.exists(csv_path):
             try:
                 _df = pd.read_csv(csv_path, usecols=["TrajectoryID"])
-                n_trajs = int(_df["TrajectoryID"].nunique())
-                lines.append(f"Trajectories: {n_trajs}")
+                traj_count = int(_df["TrajectoryID"].nunique())
             except Exception:
-                pass
-
-        # --- Pipelines run ---
-        pipelines = []
-        if self._panels.postprocess.enable_postprocessing.isChecked():
-            pipelines.append("Post-processing")
-        if self._panels.tracking.chk_enable_backward.isChecked():
-            pipelines.append("Backward tracking")
-        if self._mw._is_individual_pipeline_enabled():
-            pipelines.append("Individual analysis")
-            if self._panels.identity.chk_enable_pose_extractor.isChecked():
-                pipelines.append("Pose extraction")
-        if pipelines:
-            lines.append("Pipelines: " + ", ".join(pipelines))
-
-        # --- Separator before optional sub-results ---
-        lines.append("")
-
-        # --- Dataset generation result ---
-        result = getattr(self._mw, "_session_result_dataset", None)
-        if result is not None:
-            if result.get("success"):
-                lines.append(
-                    f"\u2713 Dataset generated: {result['num_frames']} frame(s)"
-                    f"\n  Location: {result['dir']}"
-                )
-            else:
-                lines.append(
-                    f"\u2717 Dataset generation failed: {result.get('error', 'unknown error')}"
-                )
-
-        return lines
+                traj_count = None
+        wall = (
+            time.time() - self._mw._session_wall_start
+            if self._mw._session_wall_start is not None
+            else None
+        )
+        result = {
+            "wall_seconds": wall,
+            "frames_processed": self._mw._session_frames_processed,
+            "fps_list": list(self._mw._session_fps_list),
+            "video_path": self._panels.setup.file_line.text() or None,
+            "csv_path": csv_path or None,
+            "trajectory_count": traj_count,
+            "dataset": getattr(self._mw, "_session_result_dataset", None),
+        }
+        return build_session_summary_lines(config, result)
 
     def _clear_session_summary_state(self) -> None:
         """Reset per-session summary state after reporting the session."""
