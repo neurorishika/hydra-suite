@@ -2786,11 +2786,13 @@ class MainWindow(QMainWindow):
 
     def _is_pose_export_enabled(self) -> bool:
         """Return True when pose extraction export should be produced."""
-        if not hasattr(self, "_detection_panel"):
+        if not hasattr(self, "_config_orch"):
+            # Panels can query this during init_ui(), before _config_orch exists.
             return False
-        return self._detection_panel._is_yolo_detection_mode() and bool(
-            hasattr(self, "_identity_panel")
-            and self._identity_panel.chk_enable_pose_extractor.isChecked()
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.is_pose_export_enabled(
+            self._config_orch.build_config_dict()
         )
 
     def _build_pose_augmented_dataframe(self, final_csv_path):
