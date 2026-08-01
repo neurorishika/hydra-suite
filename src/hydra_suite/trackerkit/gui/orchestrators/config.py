@@ -1410,27 +1410,25 @@ class ConfigOrchestrator:
         )
         return path or None
 
-    def save_config(
-        self: object,
-        preset_mode: object = False,
-        preset_path: object = None,
+    def build_config_dict(
+        self,
+        preset_mode: bool = False,
         preset_name: object = None,
         preset_description: object = None,
-        prompt_if_exists: bool = True,
-    ) -> object:
-        """Save current configuration to JSON file.
+    ) -> dict:
+        """Assemble the config dict from current widget state.
+
+        Pure: touches no filesystem and shows no dialog.
 
         Args:
             preset_mode: If True, skip video paths, device settings, and ROI data (for organism presets)
-            preset_path: If provided, save directly to this path without prompting
             preset_name: Name for the preset (only used in preset_mode)
             preset_description: Description for the preset (only used in preset_mode)
-            prompt_if_exists: If False, overwrite default config path without interactive replace dialog.
 
         Returns:
-            bool: True if config was saved successfully, False if cancelled or failed
+            dict: the assembled config dict.
         """
-        from hydra_suite.trackerkit.gui.main_window import (
+        from hydra_suite.core.inference.model_paths import (
             get_yolo_model_metadata,
             make_model_path_relative,
             make_pose_model_path_relative,
@@ -1890,6 +1888,34 @@ class ConfigOrchestrator:
                 "suppress_foreign_obb_individual_dataset": self._panels.dataset.chk_suppress_foreign_obb_individual_dataset.isChecked(),
                 "suppress_foreign_obb_oriented_videos": self._panels.dataset.chk_suppress_foreign_obb_oriented_videos.isChecked(),
             }
+        )
+
+        return cfg
+
+    def save_config(
+        self: object,
+        preset_mode: object = False,
+        preset_path: object = None,
+        preset_name: object = None,
+        preset_description: object = None,
+        prompt_if_exists: bool = True,
+    ) -> object:
+        """Save current configuration to JSON file.
+
+        Args:
+            preset_mode: If True, skip video paths, device settings, and ROI data (for organism presets)
+            preset_path: If provided, save directly to this path without prompting
+            preset_name: Name for the preset (only used in preset_mode)
+            preset_description: Description for the preset (only used in preset_mode)
+            prompt_if_exists: If False, overwrite default config path without interactive replace dialog.
+
+        Returns:
+            bool: True if config was saved successfully, False if cancelled or failed
+        """
+        cfg = self.build_config_dict(
+            preset_mode=preset_mode,
+            preset_name=preset_name,
+            preset_description=preset_description,
         )
 
         # If preset mode with path provided, save directly
