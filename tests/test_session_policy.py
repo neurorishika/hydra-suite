@@ -50,6 +50,85 @@ def test_fly_obb_expected_values():
     assert sp.workflow_mode_key(cfg) == "realtime"
 
 
+# Independent, value-pinned oracle for the 5 predicates that delegate through the
+# *full* build_config_dict() (is_pose_export_enabled, is_pose_inference_enabled,
+# is_headtail_compute_enabled, should_export_final_media_videos,
+# should_run_interpolated_postpass). The offscreen-MainWindow agreement test below
+# compares sp.fn(build_config_dict()) against a GUI method that IS sp.fn(build_config_dict())
+# for these 5 -- that only proves determinism, not independent correctness. This table
+# was derived by reading each fixture's config semantics directly (not by running the
+# pure predicates), so it locks the key mapping against future regressions.
+#
+# should_export_final_media_videos is False for every current fixture (none enable
+# final_media_export_videos_enabled), so its True branch is exercised only by unit-level
+# logic elsewhere, not by this fixture table.
+ORACLE = {
+    "ant_pose_headtail": {
+        "is_pose_export_enabled": True,
+        "is_pose_inference_enabled": True,
+        "is_headtail_compute_enabled": True,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": True,
+    },
+    "ant_cnn_identity": {
+        "is_pose_export_enabled": True,
+        "is_pose_inference_enabled": True,
+        "is_headtail_compute_enabled": True,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": True,
+    },
+    "ant_obb_sleap": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
+    "ant_obb_sequential": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
+    "emi_obb_identity": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
+    "fly_obb": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
+    "worm_bgsub": {
+        "is_pose_export_enabled": False,
+        "is_pose_inference_enabled": False,
+        "is_headtail_compute_enabled": False,
+        "should_export_final_media_videos": False,
+        "should_run_interpolated_postpass": False,
+    },
+}
+
+
+@pytest.mark.parametrize("cfg_path", FIXTURES, ids=lambda p: p.stem)
+def test_full_dict_predicates_match_pinned_oracle(cfg_path):
+    """Independent oracle for the 5 predicates that delegate via build_config_dict().
+
+    Loads the raw fixture JSON directly (no MainWindow involved) and checks each
+    predicate against a hand-derived expected value, so a bug shared between the
+    predicate and any GUI delegate would still be caught here.
+    """
+    cfg = json.loads(cfg_path.read_text())
+    expected = ORACLE[cfg_path.stem]
+    for name, expected_value in expected.items():
+        assert getattr(sp, name)(cfg) is expected_value, f"{name} for {cfg_path.stem}"
+
+
 def test_build_trajectory_colors_pinned_values():
     assert sp.build_trajectory_colors(3) == [
         (102, 179, 92),
