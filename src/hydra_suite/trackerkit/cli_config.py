@@ -482,10 +482,9 @@ def build_tracking_parameters(
     if end_frame is not None:
         end_frame = int(end_frame)
 
-    rng = np.random.default_rng(42)
-    colors = [
-        tuple(color.tolist()) for color in rng.integers(0, 255, size=(max_targets, 3))
-    ]
+    from hydra_suite.core.tracking.session_policy import build_trajectory_colors
+
+    colors = build_trajectory_colors(max_targets)
     roi_mask = _build_roi_mask(
         cfg.get("roi_shapes") or [],
         width=video_probe.width,

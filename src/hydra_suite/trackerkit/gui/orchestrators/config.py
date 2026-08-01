@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
-import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -1951,8 +1950,9 @@ class ConfigOrchestrator:
         self._mw._commit_pending_setup_edits()
 
         N = self._panels.setup.spin_max_targets.value()
-        np.random.seed(42)
-        colors = [tuple(c.tolist()) for c in np.random.randint(0, 255, (N, 3))]
+        from hydra_suite.core.tracking.session_policy import build_trajectory_colors
+
+        colors = build_trajectory_colors(N)
 
         det_method = (
             "background_subtraction"
