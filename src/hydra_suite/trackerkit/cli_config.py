@@ -14,12 +14,12 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.model_paths import resolve_model_path
 from hydra_suite.runtime.resolver import (
     ResolvedBackend,
     RuntimeResolver,
     detect_platform,
 )
-from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
 

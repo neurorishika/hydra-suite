@@ -39,18 +39,18 @@ from PySide6.QtWidgets import (
 from hydra_suite.core.identity.dataset.oriented_video import (
     resolve_individual_dataset_dir,
 )
-from hydra_suite.trackerkit.config.schemas import TrackerConfig
-from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
-from hydra_suite.utils.geometry import wrap_angle_degs
-
-from . import model_utils as _model_utils
-from .model_utils import (
+from hydra_suite.core.inference import model_paths as _model_utils
+from hydra_suite.core.inference.model_paths import (
     _sanitize_model_token,
     get_yolo_model_metadata,
     get_yolo_model_repository_directory,
     make_pose_model_path_relative,
     resolve_pose_model_path,
 )
+from hydra_suite.trackerkit.config.schemas import TrackerConfig
+from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog  # noqa: F811
+from hydra_suite.utils.geometry import wrap_angle_degs
+
 from .widgets.collapsible import CollapsibleGroupBox
 from .widgets.help_label import CompactHelpLabel
 
