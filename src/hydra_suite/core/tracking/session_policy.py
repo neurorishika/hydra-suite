@@ -26,17 +26,10 @@ def is_pose_export_enabled(config: Mapping[str, Any]) -> bool:
     )
 
 
-def _pose_model_configured(config: Mapping[str, Any]) -> bool:
-    return any(
-        str(config.get(key, "") or "").strip()
-        for key in ("pose_yolo_model_dir", "pose_sleap_model_dir", "pose_model_dir")
-    )
-
-
 def is_pose_inference_enabled(config: Mapping[str, Any]) -> bool:
     if not is_pose_export_enabled(config):
         return False
-    return _pose_model_configured(config)
+    return bool(str(config.get("pose_model_dir", "") or "").strip())
 
 
 def is_headtail_compute_enabled(config: Mapping[str, Any]) -> bool:

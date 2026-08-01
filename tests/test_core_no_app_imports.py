@@ -11,6 +11,9 @@ APP_PACKAGES = (
     "hydra_suite.detectkit",
     "hydra_suite.filterkit",
     "hydra_suite.integrations",
+    "PySide6",
+    "PyQt5",
+    "PyQt6",
 )
 CORE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "hydra_suite" / "core"
 

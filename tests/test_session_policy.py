@@ -129,6 +129,39 @@ def test_full_dict_predicates_match_pinned_oracle(cfg_path):
         assert getattr(sp, name)(cfg) is expected_value, f"{name} for {cfg_path.stem}"
 
 
+def test_is_pose_inference_enabled_ignores_stale_inactive_backend_slot():
+    """A stale/leftover model path in a non-active backend slot must not enable pose.
+
+    build_config_dict() writes a per-backend slot for every backend (pose_yolo_model_dir,
+    pose_sleap_model_dir, pose_vitpose_model_dir) independently of which backend is
+    active; only pose_model_dir reflects the active backend's resolved path. A saved
+    config can therefore have a populated slot for an inactive backend while the active
+    backend's own slot (and pose_model_dir) is empty -- that must read as pose inference
+    disabled, not enabled.
+    """
+    cfg = {
+        "detection_method": "yolo_obb",
+        "enable_pose_extractor": True,
+        "pose_model_type": "sleap",
+        "pose_model_dir": "",
+        "pose_sleap_model_dir": "",
+        "pose_yolo_model_dir": "YOLO-pose/x.pt",
+    }
+    assert sp.is_pose_inference_enabled(cfg) is False
+
+
+def test_is_pose_inference_enabled_true_when_active_backend_model_set():
+    cfg = {
+        "detection_method": "yolo_obb",
+        "enable_pose_extractor": True,
+        "pose_model_type": "sleap",
+        "pose_model_dir": "pose/SLEAP/model",
+        "pose_sleap_model_dir": "",
+        "pose_yolo_model_dir": "YOLO-pose/x.pt",
+    }
+    assert sp.is_pose_inference_enabled(cfg) is True
+
+
 def test_build_trajectory_colors_pinned_values():
     assert sp.build_trajectory_colors(3) == [
         (102, 179, 92),
