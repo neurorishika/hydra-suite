@@ -12,7 +12,7 @@
 
 - **Commit as the configured git user; NO `Co-Authored-By` trailer.**
 - Run `make format` before each commit (autopep8 → black → isort). If `make format` is broken in the base env, run `black <files>` and `isort <files>` directly inside the `hydra-mps` env.
-- Tests run in the `hydra-mps` conda env (NOT `hydra-suite-mps`):
+- Tests run in the `hydra-mps` conda env (NOT `hydra-mps`):
   `conda run -n hydra-mps python -m pytest <path> -q --ignore=tests/test_identity_postprocess.py`
   (`tests/test_identity_postprocess.py` has a pre-existing collection error — always ignore it.)
 - After this slice, `grep -rnE "PySide6|QtCore|QThread|Signal|Slot|QMutex" src/hydra_suite/core/` must print **nothing**. The whole `core/` tree stays Qt-free.

@@ -32,10 +32,10 @@ skipped and labelled `SKIPPED` in the table — the script never crashes on them
 
 ## Prerequisites on `mehek`
 
-1. **Conda environment** — `hydra-suite-cuda` (CUDA 12 or 13 build):
+1. **Conda environment** — `hydra-cuda` (CUDA 12 or 13 build):
 
    ```bash
-   conda activate hydra-suite-cuda
+   conda activate hydra-cuda
    ```
 
 2. **Repo worktree checked out**:
@@ -132,7 +132,7 @@ skipped and labelled `SKIPPED` in the table — the script never crashes on them
 
 ```bash
 cd /path/to/multi-animal-tracker
-conda activate hydra-suite-cuda
+conda activate hydra-cuda
 
 PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE \
   python \
@@ -222,8 +222,8 @@ Before running on `mehek`, verify the script itself is sound on a local CPU box:
 
 ```bash
 # Activate the local CPU/MPS environment first, e.g.:
-#   conda activate hydra-suite          # CPU
-#   conda activate hydra-suite-mps      # Apple Silicon
+#   conda activate hydra          # CPU
+#   conda activate hydra-mps      # Apple Silicon
 
 # 1. --help exits 0
 PYTHONPATH=src KMP_DUPLICATE_LIB_OK=TRUE \

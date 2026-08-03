@@ -41,7 +41,7 @@ make install-dev
 make docs-install
 ```
 
-Environment names: `hydra-suite`, `hydra-suite-mps`, `hydra-suite-cuda`.
+Environment names: `hydra`, `hydra-mps`, `hydra-cuda`.
 
 ## Running Tests
 

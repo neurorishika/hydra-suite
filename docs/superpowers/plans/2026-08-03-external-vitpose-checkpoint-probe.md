@@ -17,7 +17,7 @@
 - Preprocessing normalisation is ImageNet: mean `(0.485, 0.456, 0.406)`, std `(0.229, 0.224, 0.225)`, on RGB in `[0, 1]`.
 - Checkpoints must load with `strict=True`. A strict-load failure is a real finding to report, not something to work around with `strict=False`.
 - Colours in the collaborator's configs are **RGB**; OpenCV draws **BGR**. Convert at the boundary, once, in the skeleton loader.
-- Environment: `conda activate hydra-suite-mps`; default inference device `mps`.
+- Environment: `conda activate hydra-mps`; default inference device `mps`.
 - Run `make format` before each commit. Files live in `tools/`, which formatters cover.
 
 ## Fixed Reference Data
@@ -1226,7 +1226,7 @@ Record the two SHA-256 values in the run notes (Step 8) so the exact artifacts t
 - [ ] **Step 6: Verify strict load against the real checkpoints**
 
 ```bash
-conda activate hydra-suite-mps
+conda activate hydra-mps
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
 python -c "
 from pathlib import Path
@@ -1258,7 +1258,7 @@ Re-run and confirm the load succeeds. If the blocked global is an mmcv/mmpose cl
 - [ ] **Step 7: Run the probe on both species**
 
 ```bash
-conda activate hydra-suite-mps
+conda activate hydra-mps
 cd /Users/neurorishika/Projects/Rockefeller/Kronauer/multi-animal-tracker
 python -m tools.vitpose.external_ckpt.cli --species ant \
   --ckpt /tmp/vitpose_external/ViTPose_base_ant9kp_256x256.pth \
