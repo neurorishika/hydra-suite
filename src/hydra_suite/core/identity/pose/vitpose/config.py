@@ -8,8 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-IMAGE_SIZE_WH: tuple[int, int] = (192, 256)
-HEATMAP_SIZE_WH: tuple[int, int] = (48, 64)
+from .geometry import DEFAULT_GEOMETRY
+
+# Retained as the DEFAULT geometry so existing callers and tests keep working.
+# Per-checkpoint geometry now flows through PoseGeometry; see geometry.py.
+IMAGE_SIZE_WH: tuple[int, int] = DEFAULT_GEOMETRY.image_size_wh
+HEATMAP_SIZE_WH: tuple[int, int] = DEFAULT_GEOMETRY.heatmap_size_wh
 PIXEL_STD: float = 200.0
 PADDING_FACTOR: float = 1.25
 IMAGENET_MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
