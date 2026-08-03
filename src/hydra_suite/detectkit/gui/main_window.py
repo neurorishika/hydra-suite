@@ -1695,10 +1695,35 @@ class DetectKitMainWindow(QMainWindow):
             )
             return
 
+        existing_names = {s.name for s in self._project.sources}
+        would_overwrite = [n for n in source_names if f"{n}_seg" in existing_names]
+        overwrite = False
+        if would_overwrite:
+            reply = QMessageBox.question(
+                self,
+                "Escalate to segment (SAM2)",
+                (
+                    "The following source(s) already have a derived segment "
+                    "source, which will be overwritten:\n\n"
+                    f"{', '.join(f'{n}_seg' for n in would_overwrite)}\n\n"
+                    "Any prior review of those derived sources will be lost. "
+                    "Continue and overwrite?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                source_names = [n for n in source_names if n not in would_overwrite]
+                if not source_names:
+                    return
+            else:
+                overwrite = True
+
         request = EscalationRequest(
             project=self._project,
             source_names=source_names,
             variant=dlg.selected_variant(),
+            overwrite=overwrite,
         )
 
         progress = QProgressDialog(
@@ -1726,10 +1751,19 @@ class DetectKitMainWindow(QMainWindow):
             derived = list(getattr(result, "derived", []) or [])
             primed = int(getattr(result, "primed", 0))
             fell_back = int(getattr(result, "fell_back", 0))
+            skipped = list(getattr(result, "skipped", []) or [])
             # The worker appended new sources onto the live project; persist + refresh.
             self._save_current_project()
             self._dataset_panel.refresh_sources(self._project)
             self._tools_panel.refresh_overview()
+            skipped_note = (
+                (
+                    "\n\nSkipped (already escalated, not overwritten): "
+                    + ", ".join(f"{name} ({reason})" for name, reason in skipped)
+                )
+                if skipped
+                else ""
+            )
             QMessageBox.information(
                 self,
                 "Escalate to segment (SAM2)",
@@ -1738,6 +1772,7 @@ class DetectKitMainWindow(QMainWindow):
                     f"{', '.join(derived) if derived else '(none)'}.\n\n"
                     f"{primed} instance(s) primed, {fell_back} fell back to the "
                     f"original box (review these first)."
+                    f"{skipped_note}"
                 ),
             )
 

@@ -24,7 +24,6 @@ class EscalateSam2Dialog(BaseDialog):
 
     def __init__(self, sources, parent=None) -> None:
         super().__init__("Escalate to segment (SAM2)", parent)
-        self._sources = sources
 
         layout = QVBoxLayout()
         layout.addWidget(QLabel("SAM2 version:"))

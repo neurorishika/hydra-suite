@@ -256,20 +256,39 @@ that intentionally sits **outside** the tier/`InferenceRunner` system. Prompt-ba
 point/box prompts and returns segmentation masks) do not fit the `predict(frame)` contract, which assumes
 static inference over a frame's detections; SAM2 is interactive and iterative.
 
+The shipped feature is an offline **batch "escalate-all"**, not an interactive per-detection tool: it
+reads the existing `obb`/`aabb` labels for one or more selected sources and auto-primes a segmentation
+mask for every detection, producing a new derived source that the user then reviews.
+
 **Workflow:**
 
-1. User selects a detection region (OBB) in DetectKit.
-2. "Escalate to Segment" dialog appears; user draws refinement prompts (points/boxes).
-3. `Sam2SegmentExecutor.from_variant(variant)` loads the SAM2 model (torch-only, auto-downloads weights from HF hub).
-4. Image → `set_image()`, prompts → `segment(box, points, negative_points)` → mask + IoU confidence.
-5. Mask polygon is extracted and persisted as a new label.
+1. User picks one or more eligible sources (level `obb`/`aabb`; already-`polygon` sources are shown
+   disabled) and a SAM2 variant in the "Escalate to Segment" dialog (`escalate_sam2_dialog.py`).
+2. `run_escalation()` (`detectkit/jobs/sam2_escalation.py`) runs in a `Sam2EscalationWorker(BaseWorker)`
+   **background `QThread`** — it does not run on the GUI thread. For each source, for every image: the
+   existing box label is read (`read_boxes_from_label`), a prompt is auto-built from it
+   (`build_prompts` — the box itself plus its center as a positive point, with other detections' centers
+   as negative points), and `Sam2SegmentExecutor.set_image()` / `segment(box, points, negative_points)`
+   returns a mask + IoU confidence. No user-drawn prompts are involved.
+3. `Sam2SegmentExecutor.from_variant(variant)` loads the SAM2 model (torch-only, auto-downloads weights
+   from the HF hub via `checkpoints.py`).
+4. Each mask is converted to a polygon (`mask_to_contour`); an empty/low-quality mask falls back to the
+   original box's rectangle as the polygon so no detection is ever dropped.
+5. Results are written to a **new derived source** named `<source>_seg` (`level="polygon"`,
+   `reviewed=False`) — the original source's images/labels are never touched. The user reviews the
+   derived source in X-AnyLabeling and marks it reviewed; unreviewed sources are excluded from training
+   merges. Re-running escalation over a source whose `<name>_seg` already exists is guarded: by default
+   it is skipped, and only overwritten in place (no duplicate source entries) if the user confirms.
 
 **Key properties:**
 
-- Runs directly in the GUI thread (non-blocking due to torch's responsiveness at inference resolution).
+- Runs in a background `QThread` (`Sam2EscalationWorker`, a `BaseWorker`), keeping the GUI responsive
+  during a run; progress/status are reported via the standard `BaseWorker` signals.
 - Model weights are auto-managed (variant catalog via `checkpoints.py`); weights download on first use.
-- No caching, no ONNX/TensorRT export (SAM2 is torch-only and interactive).
+- No caching, no ONNX/TensorRT export (SAM2 is torch-only).
 - No per-tier gating; runs on whatever torch device is available.
+- `sam2` is imported lazily, only inside `Sam2SegmentExecutor.from_variant` — importing the executor
+  module (or `sam2_escalation.py`) does not require `sam2` to be installed.
 
 ## Related Docs
 

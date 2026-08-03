@@ -23,6 +23,7 @@ class EscalationRequest:
     project: object  # has .project_dir and .sources (list[OBBSource])
     source_names: list[str]
     variant: str
+    overwrite: bool = False
 
 
 @dataclass
@@ -30,6 +31,9 @@ class EscalationResult:
     derived: list[str] = field(default_factory=list)
     primed: int = 0
     fell_back: int = 0
+    # (source_name, reason) pairs for sources skipped because a "<name>_seg"
+    # already exists and overwrite was not requested.
+    skipped: list[tuple[str, str]] = field(default_factory=list)
 
 
 class Sam2EscalationWorker(BaseWorker):
@@ -52,6 +56,7 @@ class Sam2EscalationWorker(BaseWorker):
         result = run_escalation(
             self._request,
             executor,
+            overwrite=self._request.overwrite,
             progress=lambda pct, msg: (
                 self.progress.emit(pct),
                 self.status.emit(msg),
@@ -72,9 +77,17 @@ def run_escalation(
     req: EscalationRequest,
     executor,
     *,
+    overwrite: bool = False,
     progress: Callable[[int, str], None] | None = None,
 ) -> EscalationResult:
-    """Escalate each named source to a new <name>_seg source (reviewed=False)."""
+    """Escalate each named source to a new <name>_seg source (reviewed=False).
+
+    Re-running escalation over a source whose "<name>_seg" already exists (as a
+    project source entry and/or an on-disk directory) is guarded: by default the
+    source is skipped (recorded in ``result.skipped``) rather than silently
+    clobbering a derived source the user may already have reviewed. Pass
+    ``overwrite=True`` to replace it in place (no duplicate source entries).
+    """
     result = EscalationResult()
     by_name = _sources_by_name(req.project)
     todo = [
@@ -88,6 +101,24 @@ def run_escalation(
         labels_dir = src_root / "labels"
         out_name = f"{src.name}_seg"
         out_root = Path(req.project.project_dir) / "sources" / out_name
+
+        existing = next((s for s in req.project.sources if s.name == out_name), None)
+        if (existing is not None or out_root.exists()) and not overwrite:
+            result.skipped.append(
+                (
+                    src.name,
+                    f"'{out_name}' already exists; re-run with overwrite to replace it.",
+                )
+            )
+            continue
+        if existing is not None:
+            # Replace in place: never leave a duplicate "<name>_seg" entry.
+            req.project.sources.remove(existing)
+        if overwrite and out_root.exists():
+            # Clean overwrite: drop stale files (e.g. images removed upstream)
+            # rather than merging with whatever was there before.
+            shutil.rmtree(out_root)
+
         (out_root / "images").mkdir(parents=True, exist_ok=True)
         (out_root / "labels").mkdir(parents=True, exist_ok=True)
 

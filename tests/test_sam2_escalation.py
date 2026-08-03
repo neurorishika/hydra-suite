@@ -57,6 +57,67 @@ def test_escalation_writes_reviewed_false_derived_source(tmp_path):
     assert (Path(new.path) / "images" / "a.jpg").exists()  # image copied
 
 
+def test_rerun_without_overwrite_skips_and_preserves_existing(tmp_path):
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    result = run_escalation(req, _FakeExec())
+    assert result.derived == ["orig_seg"]
+
+    derived_sources = [s for s in project.sources if s.name == "orig_seg"]
+    assert len(derived_sources) == 1
+    derived = derived_sources[0]
+    # Simulate the user having reviewed the derived source.
+    derived.reviewed = True
+    label_path = Path(derived.path) / "labels" / "a.txt"
+    original_label_text = label_path.read_text()
+
+    req2 = EscalationRequest(
+        project=project,
+        source_names=["orig"],
+        variant="sam2.1-hiera-base_plus",
+        overwrite=False,
+    )
+    result2 = run_escalation(req2, _FakeExec())
+
+    assert result2.derived == []
+    assert len(result2.skipped) == 1
+    assert result2.skipped[0][0] == "orig"
+
+    seg_sources = [s for s in project.sources if s.name == "orig_seg"]
+    assert len(seg_sources) == 1  # no duplicate entry
+    assert seg_sources[0] is derived
+    assert seg_sources[0].reviewed is True  # not clobbered
+    assert label_path.read_text() == original_label_text  # not clobbered
+
+
+def test_rerun_with_overwrite_replaces_in_place(tmp_path):
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project, source_names=["orig"], variant="sam2.1-hiera-base_plus"
+    )
+    run_escalation(req, _FakeExec())
+    derived = [s for s in project.sources if s.name == "orig_seg"][0]
+    derived.reviewed = True
+
+    req2 = EscalationRequest(
+        project=project,
+        source_names=["orig"],
+        variant="sam2.1-hiera-base_plus",
+        overwrite=True,
+    )
+    result2 = run_escalation(req2, _FakeExec(), overwrite=True)
+
+    assert result2.derived == ["orig_seg"]
+    assert result2.skipped == []
+    seg_sources = [s for s in project.sources if s.name == "orig_seg"]
+    assert len(seg_sources) == 1  # still exactly one entry, no duplicate
+    assert seg_sources[0].reviewed is False  # replaced in place, fresh state
+
+
 def test_worker_runs_with_injected_executor(tmp_path):
     from hydra_suite.detectkit.jobs.sam2_escalation import (
         EscalationRequest,
