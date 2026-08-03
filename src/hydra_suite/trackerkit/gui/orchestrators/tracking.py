@@ -1759,16 +1759,11 @@ class TrackingOrchestrator:
     def _handle_tracking_failed(self):
         """Show error dialog and finalize session when tracking did not finish normally."""
         logger.error("Tracking did not finish normally.")
-        if getattr(self._mw, "_headless_tracking_mode", False):
-            self._mw._headless_session_error = (
-                "An error occurred during tracking. Check logs for details."
-            )
-        else:
-            QMessageBox.warning(
-                self._mw,
-                "Tracking Failed",
-                "An error occurred during tracking. Check logs for details.",
-            )
+        QMessageBox.warning(
+            self._mw,
+            "Tracking Failed",
+            "An error occurred during tracking. Check logs for details.",
+        )
         if self._panels.setup.g_batch.isChecked():
             self._mw.current_batch_index = -1
             logger.info("Batch mode aborted due to error.")
@@ -1901,12 +1896,6 @@ class TrackingOrchestrator:
             return
         self._mw.progress_bar.setVisible(False)
         self._mw.progress_label.setVisible(False)
-        if getattr(self._mw, "_headless_tracking_mode", False):
-            self._mw._headless_session_error = (
-                f"Error during trajectory post-processing: {error_message}"
-            )
-            self._finalize_tracking_session_ui()
-            return
         QMessageBox.critical(
             self._mw,
             "Post-Processing Error",
@@ -3691,31 +3680,9 @@ class TrackingOrchestrator:
     def _show_session_summary(self):
         """Show a single end-of-session summary dialog listing completed processes."""
         lines = self._build_session_summary_lines()
-        error_message = str(
-            getattr(self._mw, "_headless_session_error", "") or ""
-        ).strip()
-        if error_message:
-            lines.extend(["", f"Error: {error_message}"])
 
         # Clean up state
         self._clear_session_summary_state()
-
-        if getattr(self._mw, "_headless_tracking_mode", False):
-            callback = getattr(self._mw, "_headless_tracking_callback", None)
-            if callable(callback):
-                callback(
-                    {
-                        "success": not bool(error_message),
-                        "lines": lines,
-                        "error": error_message or None,
-                        "video_path": self._panels.setup.file_line.text() or None,
-                        "csv_path": self._mw._session_final_csv_path
-                        or self._panels.setup.csv_line.text()
-                        or None,
-                    }
-                )
-            self._mw._headless_session_error = None
-            return
 
         QMessageBox.information(self._mw, "Tracking Complete", "\n".join(lines))
 

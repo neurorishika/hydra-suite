@@ -74,3 +74,24 @@ def test_cli_module_imports_no_qt():
         if mod and any(q in mod for q in ("PySide6", "QtCore", "QtWidgets", "QtGui")):
             offenders.append(f"{mod}:{node.lineno}")
     assert not offenders, "cli.py must be Qt-free: " + "; ".join(offenders)
+
+
+def test_gui_headless_hooks_deleted():
+    """No _headless_* references survive in the GUI after the bridge is gone."""
+    import re
+    from pathlib import Path
+
+    import hydra_suite.trackerkit.gui as gui_pkg
+
+    root = Path(gui_pkg.__file__).parent
+    pattern = re.compile(
+        r"_headless_tracking_mode|_headless_tracking_callback|_headless_session_error"
+    )
+    offenders = []
+    for py in root.rglob("*.py"):
+        for lineno, line in enumerate(py.read_text().splitlines(), start=1):
+            if pattern.search(line):
+                offenders.append(f"{py.relative_to(root)}:{lineno}")
+    assert not offenders, "GUI still references _headless_* hooks: " + "; ".join(
+        offenders
+    )
