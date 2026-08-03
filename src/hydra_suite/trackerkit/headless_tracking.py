@@ -5,11 +5,19 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import numpy as np
 import pandas as pd
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 
 from hydra_suite.core.post.processing import interpolate_trajectories
+from hydra_suite.core.tracking.session import (  # noqa: F401
+    csv_has_data_rows as _csv_has_data_rows,
+)
+from hydra_suite.core.tracking.session import (  # noqa: F401
+    detection_cache_has_detections as _detection_cache_has_detections,
+)
+from hydra_suite.core.tracking.session import (
+    enforce_nonempty_forward as _enforce_nonempty_forward,
+)
 from hydra_suite.data.csv_writer import CSVWriterThread
 from hydra_suite.trackerkit.cli_config import TrackerCliSession
 from hydra_suite.trackerkit.gui.workers.merge_worker import MergeWorker
@@ -118,62 +126,6 @@ def save_trajectories_to_csv(trajectories, output_path: str) -> bool:
     ]
     df_to_save[ordered_columns].to_csv(output_path, index=False)
     return True
-
-
-def _csv_has_data_rows(csv_path: str) -> bool:
-    """Return True if *csv_path* has at least one data row beyond the header.
-
-    O(1) in the file size -- reads only the header and the first data line.
-    """
-    try:
-        with open(csv_path, "r", encoding="utf-8") as fh:
-            fh.readline()  # header
-            return bool(fh.readline().strip())
-    except OSError:
-        return False
-
-
-def _detection_cache_has_detections(detection_cache_path: str) -> bool:
-    """Return True if the detection cache recorded at least one detection.
-
-    Reads the raw ``.npz`` directly (no full ``DetectionCache`` instantiation /
-    validation) and checks whether any per-frame ``frame_<N>_meas`` array is
-    non-empty. Returns False on any read error or a missing cache, so the
-    empty-output guard only fires when detections are *positively confirmed* --
-    it can never false-positive on a legitimately empty clip.
-    """
-    try:
-        with np.load(str(detection_cache_path), allow_pickle=True) as data:
-            for key in data.files:
-                if key.startswith("frame_") and key.endswith("_meas"):
-                    arr = data[key]
-                    if arr is not None and getattr(arr, "shape", (0,))[0] > 0:
-                        return True
-    except Exception:
-        return False
-    return False
-
-
-def _enforce_nonempty_forward(raw_csv_path: str, detection_cache_path: str) -> None:
-    """Fail loud if the forward pass emitted an empty CSV despite detections.
-
-    Invariant: if the detection cache contains detections, a *successful* forward
-    tracking pass MUST produce at least one tracked row. A completed run that
-    wrote a header-only CSV is a silent pipeline failure (e.g. a crashed
-    pose/identity stage or an OOM that still returned exit 0). Raising here turns
-    that into a loud abort instead of a valid-looking empty CSV that "falsely
-    passes" downstream comparison/benchmark tooling.
-    """
-    if _detection_cache_has_detections(detection_cache_path) and not _csv_has_data_rows(
-        raw_csv_path
-    ):
-        raise RuntimeError(
-            "Forward tracking produced ZERO tracked rows even though the detection "
-            "cache contains detections. This indicates a silent pipeline failure "
-            "(e.g. a crashed pose/identity stage or an out-of-memory abort). "
-            "Refusing to emit an empty tracking CSV. "
-            f"csv={raw_csv_path} detection_cache={detection_cache_path}"
-        )
 
 
 def _run_tracking_worker(
