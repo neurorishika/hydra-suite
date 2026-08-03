@@ -14,19 +14,16 @@ import math
 import cv2
 import numpy as np
 
-from .config import (
-    IMAGE_SIZE_WH,
-    IMAGENET_MEAN,
-    IMAGENET_STD,
-    PADDING_FACTOR,
-    PIXEL_STD,
-)
+from .config import IMAGENET_MEAN, IMAGENET_STD, PADDING_FACTOR, PIXEL_STD
+from .geometry import DEFAULT_GEOMETRY, PoseGeometry
 
 
-def box2cs(box_xywh: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def box2cs(
+    box_xywh: np.ndarray, geom: PoseGeometry = DEFAULT_GEOMETRY
+) -> tuple[np.ndarray, np.ndarray]:
     x, y, w, h = box_xywh[:4]
     center = np.array([x + w * 0.5, y + h * 0.5], dtype=np.float32)
-    aspect = IMAGE_SIZE_WH[0] / IMAGE_SIZE_WH[1]
+    aspect = geom.aspect
     if w > aspect * h:
         h = w / aspect
     elif w < aspect * h:
@@ -80,11 +77,12 @@ def affine_matrix(
     center: np.ndarray,
     scale: np.ndarray,
     rot: float = 0.0,
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
 ) -> np.ndarray:
     """The 2x3 UDP warp matrix top_down_affine applies. Exposed so tests can
     assert the UDP corner correspondence, which is invisible from the warped
     image alone."""
-    w, h = IMAGE_SIZE_WH
+    w, h = geom.image_size_wh
     return get_warp_matrix(
         rot,
         center * 2.0,
@@ -98,9 +96,10 @@ def top_down_affine(
     center: np.ndarray,
     scale: np.ndarray,
     rot: float = 0.0,
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
 ) -> np.ndarray:
-    w, h = IMAGE_SIZE_WH
-    trans = affine_matrix(center, scale, rot)
+    w, h = geom.image_size_wh
+    trans = affine_matrix(center, scale, rot, geom)
     return cv2.warpAffine(img, trans, (w, h), flags=cv2.INTER_LINEAR)
 
 

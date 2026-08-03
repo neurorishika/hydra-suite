@@ -76,3 +76,22 @@ def test_resize_round_trip_approximately_recovers_a_smooth_field():
     up = resize_pos_embed(pe, (gh, gw), (32, 24))
     back = resize_pos_embed(up, (32, 24), (gh, gw))
     assert torch.allclose(back, pe, atol=2e-2)
+
+
+def test_resized_weights_load_into_a_model_at_the_target_geometry():
+    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+
+    src = build_vitpose("B", "classic", num_keypoints=9)  # default 192x256
+    dst_geom = PoseGeometry((256, 256))
+    dst = build_vitpose("B", "classic", num_keypoints=9, geom=dst_geom)
+
+    state = dict(src.state_dict())
+    state["backbone.pos_embed"] = resize_pos_embed(
+        state["backbone.pos_embed"], (16, 12), dst_geom.patch_grid_hw
+    )
+    missing, unexpected = dst.load_state_dict(state, strict=False)
+    assert not missing and not unexpected
+
+    with torch.no_grad():
+        out = dst(torch.zeros(1, 3, 256, 256))
+    assert out.shape == (1, 9, 64, 64)

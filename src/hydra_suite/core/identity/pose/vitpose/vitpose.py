@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from .config import VARIANTS
+from .geometry import DEFAULT_GEOMETRY, PoseGeometry
 from .heads import build_head
 from .model import ViT
 
@@ -24,12 +25,22 @@ class ViTPose(nn.Module):
         return self.keypoint_head(self.backbone(x))
 
 
-def build_vitpose(variant: str, head: str, num_keypoints: int = 17) -> ViTPose:
+def build_vitpose(
+    variant: str,
+    head: str,
+    num_keypoints: int = 17,
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
+) -> ViTPose:
     if variant not in VARIANTS:
         raise ValueError(f"unknown variant {variant!r} (expected one of SBLH)")
     v = VARIANTS[variant]
-    backbone = ViT(embed_dim=v.embed_dim, depth=v.depth, num_heads=v.num_heads)
-    return ViTPose(backbone, build_head(head, v.embed_dim, num_keypoints))
+    backbone = ViT(
+        embed_dim=v.embed_dim,
+        depth=v.depth,
+        num_heads=v.num_heads,
+        img_size_hw=(geom.image_size_wh[1], geom.image_size_wh[0]),
+    )
+    return ViTPose(backbone, build_head(head, v.embed_dim, num_keypoints, geom))
 
 
 # out_channels for the 5 associate (non-COCO) datasets, in checkpoint order.
