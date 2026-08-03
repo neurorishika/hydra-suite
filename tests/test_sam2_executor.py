@@ -1,4 +1,7 @@
+import sys
+
 import numpy as np
+import pytest
 
 from hydra_suite.core.inference.sam2 import executor as ex
 
@@ -38,3 +41,19 @@ def test_segment_picks_highest_iou_mask():
     e.set_image(np.zeros((4, 4, 3), np.uint8))
     mask, iou = e.segment((0, 0, 4, 4), [(2, 2)], [(0, 0)])
     assert iou == 0.9 and mask.all()
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="torch device")
+def test_real_sam2_segment_smoke():
+    pytest.importorskip("sam2")
+    from hydra_suite.core.inference.sam2.checkpoints import DEFAULT_VARIANT
+    from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+
+    try:
+        ex_instance = Sam2SegmentExecutor.from_variant(DEFAULT_VARIANT)
+    except Exception as e:  # weights not downloaded in CI, etc.
+        pytest.skip(f"SAM2 weights unavailable: {e}")
+    img = (np.random.rand(256, 256, 3) * 255).astype("uint8")
+    ex_instance.set_image(img)
+    mask, iou = ex_instance.segment((50, 50, 200, 200), [(125, 125)], [])
+    assert mask.shape == (256, 256) and 0.0 <= iou <= 1.0

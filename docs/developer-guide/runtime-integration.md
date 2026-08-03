@@ -249,6 +249,28 @@ Fields:
 The CLI prints `DONE best_pck=<value> best_epoch=<n>` on completion and exits non-zero
 on validation/training failure.
 
+## SAM2 Escalation
+
+DetectKit's segmentation escalation uses a standalone `Sam2SegmentExecutor` (pipeline key: `sam2_segment`)
+that intentionally sits **outside** the tier/`InferenceRunner` system. Prompt-based models (SAM2 takes
+point/box prompts and returns segmentation masks) do not fit the `predict(frame)` contract, which assumes
+static inference over a frame's detections; SAM2 is interactive and iterative.
+
+**Workflow:**
+
+1. User selects a detection region (OBB) in DetectKit.
+2. "Escalate to Segment" dialog appears; user draws refinement prompts (points/boxes).
+3. `Sam2SegmentExecutor.from_variant(variant)` loads the SAM2 model (torch-only, auto-downloads weights from HF hub).
+4. Image → `set_image()`, prompts → `segment(box, points, negative_points)` → mask + IoU confidence.
+5. Mask polygon is extracted and persisted as a new label.
+
+**Key properties:**
+
+- Runs directly in the GUI thread (non-blocking due to torch's responsiveness at inference resolution).
+- Model weights are auto-managed (variant catalog via `checkpoints.py`); weights download on first use.
+- No caching, no ONNX/TensorRT export (SAM2 is torch-only and interactive).
+- No per-tier gating; runs on whatever torch device is available.
+
 ## Related Docs
 
 - [GPU Backends](gpu-backends.md)
