@@ -6,8 +6,18 @@ import math
 
 import numpy as np
 import pytest
+import torch
 
 from tools.vitpose.external_ckpt.crops import crop_matrix, select_samples, warp_crop
+from tools.vitpose.external_ckpt.model import (
+    HEATMAP_PX,
+    IMAGE_PX,
+    build_external_vitpose,
+    decode_default,
+    infer_num_keypoints,
+    load_external_checkpoint,
+    preprocess,
+)
 from tools.vitpose.external_ckpt.skeleton import builtin_skeleton
 
 
@@ -180,3 +190,101 @@ def test_select_samples_raises_when_no_active_rows(tmp_path):
     csv = _write_csv(tmp_path, [(0, 1, 2, 0.0, 1, "lost")])
     with pytest.raises(ValueError, match="no active"):
         select_samples(csv, n=4)
+
+
+def test_model_is_built_for_256_square_input():
+    model = build_external_vitpose(9)
+    assert model.backbone.pos_embed.shape == (1, 257, 768)
+    assert model.keypoint_head.final_layer.weight.shape == (9, 256, 1, 1)
+
+
+def test_model_forward_produces_64x64_heatmaps():
+    model = build_external_vitpose(9).eval()
+    with torch.no_grad():
+        out = model(torch.zeros(2, 3, IMAGE_PX, IMAGE_PX))
+    assert out.shape == (2, 9, HEATMAP_PX, HEATMAP_PX)
+
+
+def test_infer_num_keypoints_reads_final_layer():
+    model = build_external_vitpose(29)
+    assert infer_num_keypoints(model.state_dict()) == 29
+
+
+def test_load_external_checkpoint_round_trips_strictly(tmp_path):
+    model = build_external_vitpose(9)
+    ckpt = tmp_path / "fake.pth"
+    torch.save({"state_dict": model.state_dict()}, ckpt)
+    loaded, k = load_external_checkpoint(ckpt)
+    assert k == 9
+    for a, b in zip(model.state_dict().values(), loaded.state_dict().values()):
+        assert torch.equal(a, b)
+
+
+def test_load_external_checkpoint_rejects_unexpected_keys(tmp_path):
+    model = build_external_vitpose(9)
+    state = dict(model.state_dict())
+    state["backbone.bogus_key"] = torch.zeros(1)
+    ckpt = tmp_path / "bad.pth"
+    torch.save(state, ckpt)
+    with pytest.raises(RuntimeError, match="bogus_key"):
+        load_external_checkpoint(ckpt)
+
+
+def test_load_external_checkpoint_handles_mmpose_meta_with_numpy_scalars(tmp_path):
+    # Real collaborator checkpoints are mmpose blobs shaped
+    # {"meta": {...numpy scalars...}, "state_dict": ..., "optimizer": ...}.
+    # weights_only=True rejects numpy scalars in `meta` unless the loader
+    # allowlists them at import time -- this reproduces that shape.
+    model = build_external_vitpose(9)
+    ckpt = tmp_path / "mmpose_like.pth"
+    torch.save(
+        {
+            "meta": {"epoch": np.float64(1.5)},
+            "state_dict": model.state_dict(),
+        },
+        ckpt,
+    )
+    loaded, k = load_external_checkpoint(ckpt)
+    assert k == 9
+    assert isinstance(loaded, type(model))
+
+
+def test_preprocess_normalizes_rgb_with_imagenet_stats():
+    crop = np.zeros((IMAGE_PX, IMAGE_PX, 3), dtype=np.uint8)
+    crop[:, :, 2] = 255  # pure red in BGR
+    out = preprocess(crop)
+    assert out.shape == (3, IMAGE_PX, IMAGE_PX)
+    assert out.dtype == np.float32
+    # R channel: (1.0 - 0.485) / 0.229
+    assert out[0, 0, 0] == pytest.approx((1.0 - 0.485) / 0.229, abs=1e-4)
+    # G channel: (0.0 - 0.456) / 0.224
+    assert out[1, 0, 0] == pytest.approx((0.0 - 0.456) / 0.224, abs=1e-4)
+
+
+def test_decode_default_recovers_peak_scaled_to_crop_pixels():
+    hm = np.zeros((1, 1, HEATMAP_PX, HEATMAP_PX), dtype=np.float32)
+    hm[0, 0, 20, 10] = 5.0  # (row=20, col=10)
+    coords, conf = decode_default(hm)
+    stride = IMAGE_PX / HEATMAP_PX
+    assert coords.shape == (1, 1, 2)
+    assert coords[0, 0] == pytest.approx([10 * stride, 20 * stride], abs=1e-4)
+    assert conf[0, 0] == pytest.approx(5.0)
+
+
+def test_decode_default_applies_quarter_pixel_offset_toward_brighter_neighbor():
+    hm = np.zeros((1, 1, HEATMAP_PX, HEATMAP_PX), dtype=np.float32)
+    hm[0, 0, 20, 10] = 5.0
+    hm[0, 0, 20, 11] = 3.0  # brighter to the right than to the left
+    hm[0, 0, 21, 10] = 2.0  # brighter below than above
+    coords, _ = decode_default(hm)
+    stride = IMAGE_PX / HEATMAP_PX
+    assert coords[0, 0] == pytest.approx(
+        [(10 + 0.25) * stride, (20 + 0.25) * stride], abs=1e-4
+    )
+
+
+def test_decode_default_skips_offset_at_border():
+    hm = np.zeros((1, 1, HEATMAP_PX, HEATMAP_PX), dtype=np.float32)
+    hm[0, 0, 0, 0] = 5.0
+    coords, _ = decode_default(hm)
+    assert coords[0, 0] == pytest.approx([0.0, 0.0], abs=1e-6)
