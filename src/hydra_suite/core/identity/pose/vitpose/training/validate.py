@@ -3,8 +3,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ..config import HEATMAP_SIZE_WH
 from ..decode import decode_udp_cv2
+from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import transform_preds
 from .loss import JointsMSELoss
 
@@ -20,7 +20,13 @@ def pck_from_preds(pred_xy, gt_xyv, bbox, thresholds) -> dict:
     return out
 
 
-def run_validation(model, loader, device, thresholds=(0.05, 0.1)) -> dict:
+def run_validation(
+    model,
+    loader,
+    device,
+    thresholds=(0.05, 0.1),
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
+) -> dict:
     model.eval()
     crit = JointsMSELoss(True)
     total_loss, n = 0.0, 0
@@ -41,7 +47,7 @@ def run_validation(model, loader, device, thresholds=(0.05, 0.1)) -> dict:
                     coords[b],
                     batch["center"][b].numpy(),
                     batch["scale"][b].numpy(),
-                    HEATMAP_SIZE_WH,
+                    geom.heatmap_size_wh,
                 )
                 r = pck_from_preds(
                     pred,

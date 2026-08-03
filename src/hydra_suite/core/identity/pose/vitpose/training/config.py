@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from ..config import VARIANTS
+from ..geometry import PoseGeometry
 
 _FIELDS = {
     "init_checkpoint",
@@ -23,6 +24,7 @@ _FIELDS = {
     "val_fraction",
     "seed",
     "resume_from",
+    "input_size",
 }
 
 
@@ -44,6 +46,7 @@ class RunConfig:
     val_fraction: float = 0.2
     seed: int = 0
     resume_from: str | None = None
+    input_size: list[int] | None = None
 
     def to_json(self, path: Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
@@ -63,9 +66,19 @@ def validate_run_config(d: dict) -> RunConfig:
         )
     if int(d.get("num_keypoints", 0)) <= 0:
         raise ValueError("num_keypoints must be positive")
-    if int(d.get("epochs", 0)) <= 0:
+    if int(d.get("epochs", 40)) <= 0:
         raise ValueError("epochs must be positive")
     vf = float(d.get("val_fraction", 0.2))
     if not (0.0 < vf < 1.0):
         raise ValueError("val_fraction must be in (0, 1)")
+    size = d.get("input_size")
+    if size is not None:
+        if not isinstance(size, (list, tuple)) or len(size) != 2:
+            raise ValueError("input_size must be a two-element list [H, W]")
+        try:
+            PoseGeometry.from_hw(size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid input_size {size!r}: {exc}") from exc
+        d = dict(d)
+        d["input_size"] = [int(size[0]), int(size[1])]
     return RunConfig(**d)
