@@ -78,3 +78,25 @@ def test_precomputed_palette_uses_trajectory_colors_for_plain_tracks():
         colors, track_ids, color_keys
     )
     assert row_colors == [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+
+
+def test_media_export_palette_matches_unified_trajectory_colors():
+    """media_export must color plain tracks with the Slice-1 unified palette,
+    not a locally-generated one — this pins the GUI/CLI color-drift fix."""
+    from hydra_suite.core.tracking.session_policy import build_trajectory_colors
+
+    n = 5
+    colors = build_trajectory_colors(n)
+
+    # Reference values from the GUI's legacy RNG (np.random.seed(42)+randint).
+    np.random.seed(42)
+    expected = [tuple(int(v) for v in c) for c in np.random.randint(0, 255, (n, 3))]
+    assert colors == expected
+
+    df = pd.DataFrame({"TrajectoryID": [0, 1, 2, 3, 4]})
+    color_keys = media_export.build_video_track_color_key_array(df)
+    track_ids = df["TrajectoryID"].to_numpy(dtype=np.int32)
+    row_colors = media_export.build_precomputed_color_palette(
+        colors, track_ids, color_keys
+    )
+    assert row_colors == expected
