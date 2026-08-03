@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent Conventions
+
+- **Never use the `artifact-design` skill and never create Artifacts.** Present visual results as files in the repo/scratchpad (e.g. saved PNGs) or inline, not as hosted Artifact pages.
+
 ## Build & Environment Setup
 
 ### Quick Install (pip, CPU only)
