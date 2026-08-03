@@ -1,6 +1,9 @@
+import cv2
+import numpy as np
 import pandas as pd
 
 import hydra_suite.core.tracking.session as session_mod
+from hydra_suite.core.post import media_export as _mx
 from hydra_suite.core.tracking.session import SessionCallbacks, TrackingSessionCore
 
 
@@ -73,3 +76,55 @@ def test_annotated_video_stage_returns_path(monkeypatch, tmp_path):
     )
     out = svc._run_annotated_video(str(final_csv))
     assert out == str(tmp_path / "out.mp4")
+
+
+def _write_black_clip(path, n_frames=12, w=64, h=48, fps=12.0):
+    vw = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+    for _ in range(n_frames):
+        vw.write(np.zeros((h, w, 3), dtype=np.uint8))
+    vw.release()
+
+
+def test_media_parity_frame_count_matches_input(tmp_path):
+    """Media output is not covered by the CSV harness — assert the rendered
+    video exists, is non-empty, and has the same frame count as the input clip."""
+    src = tmp_path / "in.mp4"
+    out = tmp_path / "out.mp4"
+    _write_black_clip(src, n_frames=12)
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0] * 12,
+            "FrameID": list(range(12)),
+            "X": [30.0] * 12,
+            "Y": [24.0] * 12,
+            "Theta": [0.0] * 12,
+        }
+    )
+    result = _mx.render_annotated_video(
+        trajectories_df=df,
+        video_path=str(src),
+        output_path=str(out),
+        params={
+            "TRAJECTORY_COLORS": [(0, 255, 0)],
+            "REFERENCE_BODY_SIZE": 10.0,
+            "ADVANCED_CONFIG": {},
+            "POSE_MIN_KPT_CONF_VALID": 0.2,
+            "START_FRAME": 0,
+            "END_FRAME": None,
+        },
+        config={
+            "video_show_labels": True,
+            "video_show_orientation": True,
+            "video_show_trails": False,
+            "video_trail_duration": 1.0,
+            "video_marker_size": 0.3,
+            "video_text_scale": 0.5,
+            "video_arrow_length": 0.7,
+        },
+    )
+    assert result == str(out)
+    assert out.stat().st_size > 0
+    cap = cv2.VideoCapture(str(out))
+    n_out = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    assert n_out == 12
