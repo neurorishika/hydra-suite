@@ -66,7 +66,7 @@ def read_frames(video_path: Path, frame_ids: list[int]) -> dict[int, np.ndarray]
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--species", required=True, choices=sorted(SPECIES))
-    p.add_argument("--ckpt", type=Path, help="external .pth checkpoint")
+    p.add_argument("--ckpt", type=Path, required=True, help="external .pth checkpoint")
     p.add_argument("--video", type=Path, default=None)
     p.add_argument("--csv", type=Path, default=None)
     p.add_argument("--body-size", type=float, default=None, dest="body_size")

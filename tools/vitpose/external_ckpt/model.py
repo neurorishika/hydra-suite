@@ -31,6 +31,18 @@ from hydra_suite.core.identity.pose.vitpose.vitpose import ViTPose
 # Both spellings are allowlisted: real (older-numpy) mmpose checkpoints pickle
 # `numpy.core.multiarray.scalar`, while checkpoints written under this numpy
 # (2.x, e.g. in tests) pickle `numpy._core.multiarray.scalar`.
+#
+# This allowlist's safety depends on numpy's own object-dtype hardening:
+# `multiarray.scalar` together with `np.dtype` would be a remote-code-execution
+# gadget on sufficiently old numpy, where `scalar` given an object dtype ran
+# `pickle.loads` on its payload. numpy 2.x blocks that path, which is what makes
+# allowlisting these primitives (rather than falling back to weights_only=False)
+# safe here.
+#
+# The real collaborator checkpoints (older numpy) also pickle their scalar
+# dtype as a concrete `numpy.dtypes.*DType` class (e.g. Float64DType) rather
+# than only via `numpy.dtype` -- both forms are needed, confirmed empirically
+# by loading the real ~1GB checkpoints (removing this loop breaks that load).
 _SAFE_GLOBALS = [
     (_np_multiarray.scalar, "numpy.core.multiarray.scalar"),
     _np_multiarray.scalar,
@@ -40,7 +52,6 @@ for _name in ("Float64DType", "Float32DType", "Int64DType", "Int32DType", "BoolD
     _dtype = getattr(np.dtypes, _name, None)
     if _dtype is not None:
         _SAFE_GLOBALS.append(_dtype)
-torch.serialization.add_safe_globals(_SAFE_GLOBALS)
 
 IMAGE_PX = 256
 HEATMAP_PX = 64
@@ -71,6 +82,10 @@ def infer_num_keypoints(state: dict) -> int:
 
 def load_external_checkpoint(path: Path) -> tuple[ViTPose, int]:
     """Strict load. A strict failure is a finding, not something to silence."""
+    # Registered here (not at import time) so importing this module does not
+    # mutate global torch.serialization state for the whole process; safe to
+    # call repeatedly, add_safe_globals is idempotent.
+    torch.serialization.add_safe_globals(_SAFE_GLOBALS)
     blob = torch.load(str(path), map_location="cpu", weights_only=True)
     state = blob.get("state_dict", blob) if isinstance(blob, dict) else blob
     num_keypoints = infer_num_keypoints(state)

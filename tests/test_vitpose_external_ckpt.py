@@ -339,9 +339,27 @@ def test_contact_sheet_grid_dimensions():
 
 
 def test_contact_sheet_pads_ragged_last_row():
-    tiles = [np.zeros((256, 256, 3), dtype=np.uint8) for _ in range(10)]
-    sheet = contact_sheet(tiles, cols=4, pad=8)
-    assert sheet.shape == (3 * 256 + 4 * 8, 4 * 256 + 5 * 8, 3)
+    # 10 tiles into a 4-col grid -> 3 rows, last row has 2 real tiles + 2 empty
+    # slots. Fill tile i with value (i + 1) so each tile is distinguishable and
+    # slot placement (not just overall shape) is actually checkable.
+    tiles = [np.full((256, 256, 3), i + 1, dtype=np.uint8) for i in range(10)]
+    pad = 8
+    th, tw = 256, 256
+    sheet = contact_sheet(tiles, cols=4, pad=pad)
+    assert sheet.shape == (3 * th + 4 * pad, 4 * tw + 5 * pad, 3)
+
+    for i, tile in enumerate(tiles):
+        r, c = divmod(i, 4)
+        y = pad + r * (th + pad)
+        x = pad + c * (tw + pad)
+        assert np.array_equal(sheet[y : y + th, x : x + tw], tile)
+
+    # Last row (r=2) has only 2 tiles (indices 8, 9); columns 2 and 3 there
+    # must remain zero-padded, not leftover/garbage data.
+    for c in (2, 3):
+        y = pad + 2 * (th + pad)
+        x = pad + c * (tw + pad)
+        assert not sheet[y : y + th, x : x + tw].any()
 
 
 def test_label_tile_adds_a_banner_and_preserves_width():
@@ -372,7 +390,7 @@ def test_species_presets_carry_video_csv_and_body_size():
 
 
 def test_parser_defaults_match_the_agreed_probe_shape():
-    args = build_parser().parse_args(["--species", "ant"])
+    args = build_parser().parse_args(["--species", "ant", "--ckpt", "/tmp/dummy.pth"])
     assert args.n == 12
     assert args.scale == pytest.approx(2.0)
     assert args.device == "mps"
@@ -391,6 +409,10 @@ def test_read_frames_returns_requested_frames_in_order(tmp_path):
     assert sorted(frames) == [2, 9, 15]
     for fid, frame in frames.items():
         assert frame.shape == (64, 64, 3)
+        # The fixture encodes the frame index in the pixel value (i * 10), so
+        # a correct seek must return content close to that value even though
+        # the video is lossy-compressed (hence the tolerance).
+        assert frame.mean() == pytest.approx(fid * 10, abs=5)
 
 
 def test_read_frames_raises_on_unreadable_video(tmp_path):
