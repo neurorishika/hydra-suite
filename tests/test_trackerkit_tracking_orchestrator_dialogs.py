@@ -12,6 +12,7 @@ from hydra_suite.core.identity.classification.cnn import (
     CNNIdentityCache,
 )
 from hydra_suite.core.identity.properties.detected_cache import DetectedPropertiesCache
+from hydra_suite.core.post import media_export
 from hydra_suite.trackerkit.gui.orchestrators import config as config_module
 from hydra_suite.trackerkit.gui.orchestrators import tracking as tracking_module
 from hydra_suite.trackerkit.gui.orchestrators.config import ConfigOrchestrator
@@ -1354,28 +1355,25 @@ def test_load_video_trajectories_prefers_with_individual_then_legacy_alias(
 
 
 def test_format_video_track_label_prefers_unique_identity_key() -> None:
-    orchestrator, _main_window = _make_orchestrator()
-
-    assert orchestrator._format_video_track_label(7, "apriltag=12") == "Tag 12"
+    assert media_export.format_video_track_label(7, "apriltag=12") == "Tag 12"
     assert (
-        orchestrator._format_video_track_label(
+        media_export.format_video_track_label(
             7,
             "cnn:uid:color=red|cnn:uid:shape=circle",
         )
         == "red / circle"
     )
     assert (
-        orchestrator._format_video_track_label(
+        media_export.format_video_track_label(
             7,
             "cnn:uid=color:red+shape:circle",
         )
         == "red / circle"
     )
-    assert orchestrator._format_video_track_label(7, np.nan) == "ID7"
+    assert media_export.format_video_track_label(7, np.nan) == "ID7"
 
 
 def test_preextract_traj_arrays_uses_unique_identity_labels_when_available() -> None:
-    orchestrator, _main_window = _make_orchestrator()
     trajectories_df = pd.DataFrame(
         [
             {
@@ -1396,7 +1394,7 @@ def test_preextract_traj_arrays_uses_unique_identity_labels_when_available() -> 
         ]
     )
 
-    arrays = orchestrator._preextract_traj_arrays(
+    arrays = media_export.preextract_traj_arrays(
         trajectories_df,
         show_pose=False,
         pose_column_triplets=[],
@@ -1408,7 +1406,6 @@ def test_preextract_traj_arrays_uses_unique_identity_labels_when_available() -> 
 
 
 def test_build_video_track_color_key_array_prefers_identity_when_available() -> None:
-    orchestrator, _main_window = _make_orchestrator()
     trajectories_df = pd.DataFrame(
         [
             {
@@ -1428,7 +1425,7 @@ def test_build_video_track_color_key_array_prefers_identity_when_available() -> 
         ]
     )
 
-    color_keys = orchestrator._build_video_track_color_key_array(trajectories_df)
+    color_keys = media_export.build_video_track_color_key_array(trajectories_df)
 
     assert list(color_keys) == [
         "identity:apriltag=8",
@@ -1438,7 +1435,6 @@ def test_build_video_track_color_key_array_prefers_identity_when_available() -> 
 
 
 def test_build_precomputed_color_palette_reuses_identity_colors_across_tracks() -> None:
-    orchestrator, _main_window = _make_orchestrator()
     colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
     track_ids = np.asarray([3, 8, 2], dtype=np.int32)
     color_keys = np.asarray(
@@ -1446,7 +1442,7 @@ def test_build_precomputed_color_palette_reuses_identity_colors_across_tracks() 
         dtype=object,
     )
 
-    row_colors = orchestrator._build_precomputed_color_palette(
+    row_colors = media_export.build_precomputed_color_palette(
         colors,
         track_ids,
         color_keys,
