@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Callable
@@ -10,6 +11,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.post import dataset_export, media_export
 from hydra_suite.core.post.interpolated_crops import run_interpolated_crops
 from hydra_suite.core.post.merge import merge_trajectories, rescale_coordinates
 from hydra_suite.core.post.pose_merge import (
@@ -25,8 +27,14 @@ from hydra_suite.core.post.rich_export import (
     relink_and_export_rich_csv,
 )
 from hydra_suite.core.tracking.errors import TrackingSessionError
-from hydra_suite.core.tracking.session_policy import should_run_interpolated_postpass
+from hydra_suite.core.tracking.session_policy import (
+    should_export_final_canonical_images,
+    should_export_final_media_videos,
+    should_run_interpolated_postpass,
+)
 from hydra_suite.core.tracking.session_summary import build_session_summary_lines
+
+logger = logging.getLogger(__name__)
 
 
 def csv_has_data_rows(csv_path) -> bool:
@@ -327,6 +335,118 @@ class TrackingSessionCore:
             except Exception:
                 self.pose_state.interpolated_headtail_df = None
 
+    def _run_dataset_generation(self, final_csv_path):
+        """Generate an active-learning dataset inline; return its result dict or None."""
+        if not self.config.get("enable_dataset_generation", False):
+            return None
+        if self.callbacks.should_stop():
+            return None
+        video_path = self.video_path
+        if not video_path or not os.path.exists(video_path):
+            self.callbacks.warning(
+                "Dataset Generation Error", "Source video file not found."
+            )
+            return {"success": False, "error": "Source video file not found."}
+        csv_path = final_csv_path
+        if not csv_path or not os.path.exists(csv_path):
+            self.callbacks.warning(
+                "Dataset Generation Error", "Tracking CSV file not found."
+            )
+            return {"success": False, "error": "Tracking CSV file not found."}
+
+        output_dir = os.path.join(
+            os.path.dirname(video_path),
+            f"{os.path.splitext(os.path.basename(video_path))[0]}_datasets",
+            "active_learning",
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        class_name = (
+            str(self.config.get("dataset_class_name", "") or "").strip() or "object"
+        )
+
+        self.callbacks.stage_changed("dataset_generation")
+        return dataset_export.generate_active_learning_dataset(
+            video_path=video_path,
+            csv_path=csv_path,
+            detection_cache_path=self.paths.get("detection_cache_path"),
+            output_dir=output_dir,
+            dataset_name="",
+            class_name=class_name,
+            params=self.params,
+            max_frames=int(self.config.get("dataset_max_frames", 100)),
+            diversity_window=int(self.config.get("dataset_diversity_window", 30)),
+            include_context=bool(self.config.get("dataset_include_context", True)),
+            probabilistic=bool(self.config.get("dataset_probabilistic_sampling", True)),
+            progress=self.callbacks.progress,
+            should_stop=self.callbacks.should_stop,
+        )
+
+    def _run_final_media_export(self, final_csv_path):
+        """Export canonical stills / oriented per-track videos; return written media paths."""
+        if self.callbacks.should_stop():
+            return []
+        export_images = should_export_final_canonical_images(self.config)
+        export_videos = should_export_final_media_videos(self.config)
+        if not export_images and not export_videos:
+            return []
+        image_root = self.paths.get("individual_dataset_dir") if export_images else None
+        video_root = self.paths.get("final_media_video_dir") if export_videos else None
+
+        self.callbacks.stage_changed("final_media_export")
+        result = media_export.export_final_media(
+            final_csv_path=final_csv_path,
+            config=self.config,
+            video_path=self.video_path,
+            detection_cache_path=self.paths.get("detection_cache_path"),
+            interpolated_roi_npz_path=self.paths.get("interpolated_roi_npz_path"),
+            fps=self.paths.get("source_video_fps"),
+            image_root=image_root,
+            video_root=video_root,
+            export_images=export_images,
+            export_videos=export_videos,
+            padding_fraction=float(self.config.get("individual_crop_padding", 0.1)),
+            background_color=tuple(
+                self.config.get("individual_background_color", [0, 0, 0])
+            ),
+            progress=self.callbacks.progress,
+            should_stop=self.callbacks.should_stop,
+        )
+        if not result:
+            return []
+        media_paths = []
+        for key in ("output_dir", "image_output_dir"):
+            val = str(result.get(key, "")).strip()
+            if val:
+                media_paths.append(val)
+        return media_paths
+
+    def _run_annotated_video(self, final_csv_path):
+        """Render the annotated overlay video; return its path or None."""
+        if self.callbacks.should_stop():
+            return None
+        output_path = str(self.config.get("video_output_path", "") or "").strip()
+        if not (self.config.get("video_output_enabled", False) and output_path):
+            return None
+        trajectories_df, loaded_path = media_export.load_video_trajectories(
+            final_csv_path
+        )
+        if trajectories_df is None or trajectories_df.empty:
+            logger.warning(
+                "Skipping final video generation: no trajectories loaded from %s",
+                final_csv_path,
+            )
+            return None
+        self.callbacks.stage_changed("annotated_video")
+        return media_export.render_annotated_video(
+            trajectories_df=trajectories_df,
+            video_path=self.video_path,
+            output_path=output_path,
+            params=self.params,
+            config=self.config,
+            progress=self.callbacks.progress,
+            should_stop=self.callbacks.should_stop,
+        )
+
     def run_post_tracking(
         self, forward_trajectories, backward_trajectories=None
     ) -> SessionResult:
@@ -374,12 +494,24 @@ class TrackingSessionCore:
                 self._run_interp_crops(final_csv)
                 rich_path = self._relink_export_rich(final_csv) or rich_path
 
+            # --- Slice 3 export chain ---
+            dataset_result = None
+            media_paths: list[str] = []
+            if not self.callbacks.should_stop():
+                dataset_result = self._run_dataset_generation(final_csv)
+            if not self.callbacks.should_stop():
+                media_paths.extend(self._run_final_media_export(final_csv))
+            if not self.callbacks.should_stop():
+                annotated = self._run_annotated_video(final_csv)
+                if annotated:
+                    media_paths.append(annotated)
+
             result = SessionResult(
                 success=True,
                 final_csv_path=final_csv,
                 rich_export_path=rich_path,
-                media_paths=[],
-                dataset_result=None,
+                media_paths=media_paths,
+                dataset_result=dataset_result,
                 summary_lines=[],
                 error=None,
             )
