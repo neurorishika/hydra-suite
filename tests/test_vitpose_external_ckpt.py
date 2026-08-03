@@ -18,6 +18,12 @@ from tools.vitpose.external_ckpt.model import (
     load_external_checkpoint,
     preprocess,
 )
+from tools.vitpose.external_ckpt.render import (
+    confidence_table,
+    contact_sheet,
+    draw_pose,
+    label_tile,
+)
 from tools.vitpose.external_ckpt.skeleton import builtin_skeleton
 
 
@@ -288,3 +294,66 @@ def test_decode_default_skips_offset_at_border():
     hm[0, 0, 0, 0] = 5.0
     coords, _ = decode_default(hm)
     assert coords[0, 0] == pytest.approx([0.0, 0.0], abs=1e-6)
+
+
+def test_draw_pose_does_not_mutate_input_and_keeps_shape():
+    spec = builtin_skeleton("ant")
+    crop = np.zeros((256, 256, 3), dtype=np.uint8)
+    original = crop.copy()
+    coords = np.full((spec.num_keypoints, 2), 128.0, dtype=np.float32)
+    conf = np.ones(spec.num_keypoints, dtype=np.float32)
+    out = draw_pose(crop, coords, conf, spec)
+    assert out.shape == crop.shape
+    assert np.array_equal(crop, original)
+    assert out.any()
+
+
+def test_draw_pose_marks_pixels_near_a_confident_keypoint():
+    spec = builtin_skeleton("ant")
+    crop = np.zeros((256, 256, 3), dtype=np.uint8)
+    coords = np.zeros((spec.num_keypoints, 2), dtype=np.float32)
+    coords[:] = 200.0
+    coords[0] = (40.0, 60.0)
+    conf = np.zeros(spec.num_keypoints, dtype=np.float32)
+    conf[0] = 0.9
+    out = draw_pose(crop, coords, conf, spec)
+    assert out[55:66, 35:46].any()
+
+
+def test_draw_pose_skips_low_confidence_keypoints():
+    spec = builtin_skeleton("ant")
+    crop = np.zeros((256, 256, 3), dtype=np.uint8)
+    coords = np.full((spec.num_keypoints, 2), 128.0, dtype=np.float32)
+    conf = np.zeros(spec.num_keypoints, dtype=np.float32)
+    out = draw_pose(crop, coords, conf, spec, conf_thr=0.2)
+    assert not out.any()
+
+
+def test_contact_sheet_grid_dimensions():
+    tiles = [np.zeros((256, 256, 3), dtype=np.uint8) for _ in range(12)]
+    sheet = contact_sheet(tiles, cols=4, pad=8)
+    # 4 cols, 3 rows, 8px padding on every side and between tiles.
+    assert sheet.shape == (3 * 256 + 4 * 8, 4 * 256 + 5 * 8, 3)
+
+
+def test_contact_sheet_pads_ragged_last_row():
+    tiles = [np.zeros((256, 256, 3), dtype=np.uint8) for _ in range(10)]
+    sheet = contact_sheet(tiles, cols=4, pad=8)
+    assert sheet.shape == (3 * 256 + 4 * 8, 4 * 256 + 5 * 8, 3)
+
+
+def test_label_tile_adds_a_banner_and_preserves_width():
+    tile = np.zeros((256, 256, 3), dtype=np.uint8)
+    out = label_tile(tile, "f=100 t=3")
+    assert out.shape[1] == 256
+    assert out.shape[0] > 256
+    assert out[:20].any()
+
+
+def test_confidence_table_lists_every_keypoint_with_median():
+    spec = builtin_skeleton("ant")
+    conf = np.tile(np.linspace(0.1, 0.9, spec.num_keypoints, dtype=np.float32), (5, 1))
+    table = confidence_table(conf, spec)
+    for name in spec.keypoint_names:
+        assert name in table
+    assert "median" in table.lower()
