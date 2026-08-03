@@ -61,6 +61,14 @@ class EscalateSam2Dialog(BaseDialog):
             if self._list.item(i).flags() & Qt.ItemIsEnabled
         ]
 
+    def preselect_source(self, name: str) -> None:
+        """Check only the named source (used when launched from a role block)."""
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if not (item.flags() & Qt.ItemIsEnabled):
+                continue
+            item.setCheckState(Qt.Checked if item.text() == name else Qt.Unchecked)
+
     def selected_variant(self) -> str:
         return self._variant.currentText()
 
