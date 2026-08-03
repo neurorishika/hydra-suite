@@ -144,6 +144,13 @@ def generate_active_learning_dataset(
             params=params,
             include_context=include_context,
         )
+        if _stopped(should_stop):
+            return {
+                "success": False,
+                "cancelled": True,
+                "num_frames": len(selected_frames),
+                "dir": dataset_dir,
+            }
         _emit(progress, 100, "Dataset generation complete!")
         return {"success": True, "num_frames": len(selected_frames), "dir": dataset_dir}
     except Exception as e:

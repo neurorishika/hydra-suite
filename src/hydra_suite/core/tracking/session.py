@@ -219,9 +219,11 @@ class TrackingSessionCore:
     def _merge(self, forward, backward):
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
-            total_frames = 0
-        else:
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            raise TrackingSessionError(
+                f"Cannot open video for merge: {self.video_path}"
+            )
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
         return merge_trajectories(
             forward,
@@ -515,10 +517,19 @@ class TrackingSessionCore:
                 summary_lines=[],
                 error=None,
             )
+            try:
+                traj_count = int(
+                    pd.read_csv(final_csv, usecols=["TrajectoryID"])[
+                        "TrajectoryID"
+                    ].nunique()
+                )
+            except Exception:
+                traj_count = None
             summary_result = {
                 "video_path": self.video_path,
                 "csv_path": final_csv,
-                "dataset": None,
+                "trajectory_count": traj_count,
+                "dataset": dataset_result,
             }
             result.summary_lines = build_session_summary_lines(
                 self.config, summary_result

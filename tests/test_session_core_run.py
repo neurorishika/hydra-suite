@@ -1,5 +1,7 @@
 import pandas as pd
+import pytest
 
+from hydra_suite.core.tracking.errors import TrackingSessionError
 from hydra_suite.core.tracking.session import (
     SessionCallbacks,
     SessionResult,
@@ -51,6 +53,7 @@ def test_forward_only_writes_final_csv(tmp_path):
     assert result.media_paths == []
     assert result.dataset_result is None
     assert isinstance(result.summary_lines, list)
+    assert any("Trajectories:" in ln for ln in result.summary_lines)
 
 
 def test_should_stop_between_stages_yields_unsuccessful_result(tmp_path):
@@ -68,3 +71,33 @@ def test_should_stop_between_stages_yields_unsuccessful_result(tmp_path):
     )
     result = core.run_post_tracking(pd.read_csv(str(raw)))
     assert result.success is False
+
+
+def test_merge_raises_when_video_unreadable(tmp_path, monkeypatch):
+    raw = tmp_path / "clip.csv"
+    _write_raw_csv(str(raw))
+    core = TrackingSessionCore(
+        video_path=str(tmp_path / "does_not_exist.mp4"),
+        config=_config(),
+        params={"FPS": 30.0, "RESIZE_FACTOR": 1.0, "MIN_TRAJECTORY_LENGTH": 1},
+        paths={
+            "raw_csv_path": str(raw),
+            "detection_cache_path": str(tmp_path / "d.npz"),
+        },
+    )
+
+    class _StubCap:
+        def isOpened(self):
+            return False
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(
+        "hydra_suite.core.tracking.session.cv2.VideoCapture",
+        lambda *_a, **_k: _StubCap(),
+    )
+
+    df = pd.read_csv(str(raw))
+    with pytest.raises(TrackingSessionError):
+        core._merge(df, df)
