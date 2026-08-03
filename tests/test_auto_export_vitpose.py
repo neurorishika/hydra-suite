@@ -23,7 +23,7 @@ def _ckpt(tmp_path):
 def test_signature_includes_recipe_tag(tmp_path):
     p = _ckpt(tmp_path)
     sig = _vitpose_artifact_signature(str(p), "coreml")
-    assert "vitpose-v1" in sig
+    assert "vitpose-v2" in sig
     assert "coreml" in sig
 
 
