@@ -10,11 +10,16 @@ import logging
 import os
 import re
 
+import cv2
 import numpy as np
 import pandas as pd
 
 from hydra_suite.core.identity.properties.export import build_pose_keypoint_labels
-from hydra_suite.utils.pose_visualization import normalize_pose_render_min_conf
+from hydra_suite.utils.pose_visualization import (
+    is_renderable_pose_keypoint,
+    normalize_pose_render_min_conf,
+)
+from hydra_suite.utils.video_encoder import VideoEncoder
 
 logger = logging.getLogger(__name__)
 
@@ -476,3 +481,404 @@ def preextract_traj_arrays(
         _track_sorted_row_indices,
         _track_sorted_frame_vals,
     )
+
+
+def draw_trail_for_track(
+    frame,
+    track_id,
+    frame_idx,
+    color,
+    _xs,
+    _ys,
+    _track_sorted_frame_vals,
+    _track_sorted_row_indices,
+    trail_duration_frames,
+    marker_thickness,
+):
+    """Draw the fading trail for a single track on the given frame."""
+    if track_id not in _track_sorted_frame_vals:
+        return
+    _sfv = _track_sorted_frame_vals[track_id]
+    _sri = _track_sorted_row_indices[track_id]
+    _lo = int(np.searchsorted(_sfv, frame_idx - trail_duration_frames, side="left"))
+    _hi = int(np.searchsorted(_sfv, frame_idx, side="left"))
+    if _hi - _lo < 2:
+        return
+    _trail_xs = _xs[_sri[_lo:_hi]]
+    _trail_ys = _ys[_sri[_lo:_hi]]
+    _trail_fs = _sfv[_lo:_hi]
+    _trail_lw = max(1, marker_thickness // 2)
+    for _seg in range(_hi - _lo - 1):
+        _px1, _py1 = _trail_xs[_seg], _trail_ys[_seg]
+        _px2, _py2 = _trail_xs[_seg + 1], _trail_ys[_seg + 1]
+        if np.isnan(_px1) or np.isnan(_py1) or np.isnan(_px2) or np.isnan(_py2):
+            continue
+        _age = frame_idx - int(_trail_fs[_seg])
+        _alpha = 1.0 - (_age / trail_duration_frames)
+        cv2.line(
+            frame,
+            (int(_px1), int(_py1)),
+            (int(_px2), int(_py2)),
+            (int(color[0] * _alpha), int(color[1] * _alpha), int(color[2] * _alpha)),
+            _trail_lw,
+        )
+
+
+def draw_single_track_on_frame(
+    frame,
+    row_i,
+    track_id,
+    cx,
+    cy,
+    color,
+    draw_p,
+    _thetas,
+    _pose_kpts,
+    _label_texts,
+    pose_edges,
+):
+    """Draw circle, label, orientation arrow, and pose for a single track."""
+    marker_radius = draw_p["marker_radius"]
+    marker_thickness = draw_p["marker_thickness"]
+    cv2.circle(frame, (cx, cy), marker_radius, color, marker_thickness)
+    if draw_p["show_labels"]:
+        label_offset = int(marker_radius + 5)
+        cv2.putText(
+            frame,
+            str(_label_texts[row_i]),
+            (cx + label_offset, cy - label_offset),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            draw_p["text_size"],
+            color,
+            max(1, int(draw_p["text_scale"] * 2)),
+        )
+    if draw_p["show_orientation"]:
+        _theta = _thetas[row_i]
+        if not np.isnan(_theta):
+            cv2.arrowedLine(
+                frame,
+                (cx, cy),
+                (
+                    int(cx + draw_p["arrow_len"] * np.cos(_theta)),
+                    int(cy + draw_p["arrow_len"] * np.sin(_theta)),
+                ),
+                color,
+                marker_thickness,
+                tipLength=0.3,
+            )
+    if _pose_kpts is not None:
+        kpts_arr = _pose_kpts[:, row_i, :]
+        if np.any(np.isfinite(kpts_arr[:, 2])):
+            pose_color = (
+                color
+                if draw_p["pose_color_mode"] == "track"
+                else draw_p["pose_fixed_color"]
+            )
+            if pose_edges:
+                for e0, e1 in pose_edges:
+                    if e0 < 0 or e1 < 0 or e0 >= len(kpts_arr) or e1 >= len(kpts_arr):
+                        continue
+                    if not is_renderable_pose_keypoint(
+                        kpts_arr[e0, 0],
+                        kpts_arr[e0, 1],
+                        kpts_arr[e0, 2],
+                        draw_p["pose_min_conf"],
+                    ) or not is_renderable_pose_keypoint(
+                        kpts_arr[e1, 0],
+                        kpts_arr[e1, 1],
+                        kpts_arr[e1, 2],
+                        draw_p["pose_min_conf"],
+                    ):
+                        continue
+                    cv2.line(
+                        frame,
+                        (
+                            int(round(float(kpts_arr[e0, 0]))),
+                            int(round(float(kpts_arr[e0, 1]))),
+                        ),
+                        (
+                            int(round(float(kpts_arr[e1, 0]))),
+                            int(round(float(kpts_arr[e1, 1]))),
+                        ),
+                        pose_color,
+                        draw_p["pose_line_thickness"],
+                    )
+            for kpt in kpts_arr:
+                if not is_renderable_pose_keypoint(
+                    kpt[0], kpt[1], kpt[2], draw_p["pose_min_conf"]
+                ):
+                    continue
+                cv2.circle(
+                    frame,
+                    (int(round(float(kpt[0]))), int(round(float(kpt[1])))),
+                    draw_p["pose_point_radius"],
+                    pose_color,
+                    draw_p["pose_point_thickness"],
+                )
+
+
+def render_annotated_video_frames(
+    cap,
+    out,
+    start_frame,
+    total_frames,
+    draw_p,
+    pose_edges,
+    show_pose,
+    arrays,
+    progress=None,
+    should_stop=None,
+):
+    """Write annotated frames from cap into out. Return True if completed, False if cancelled."""
+    import queue as _queue
+    import threading as _threading
+
+    (
+        _frame_ids,
+        _track_ids,
+        _xs,
+        _ys,
+        _label_texts,
+        _thetas,
+        _pose_kpts,
+        traj_indices_by_frame,
+        _track_sorted_row_indices,
+        _track_sorted_frame_vals,
+        _row_colors,
+    ) = arrays
+    _write_q: _queue.Queue = _queue.Queue(maxsize=4)
+
+    def _writer_thread():
+        while True:
+            _item = _write_q.get()
+            if _item is None:
+                break
+            out.write(_item)
+
+    _writer = _threading.Thread(target=_writer_thread, daemon=True)
+    _writer.start()
+    cancelled = False
+
+    for rel_idx in range(total_frames):
+        if should_stop is not None and should_stop():
+            cancelled = True
+            break
+        frame_idx = start_frame + rel_idx
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_row_indices = traj_indices_by_frame.get(frame_idx, [])
+
+        if draw_p["show_trails"]:
+            for row_i in frame_row_indices:
+                track_id = int(_track_ids[row_i])
+                color = tuple(_row_colors[row_i])
+                draw_trail_for_track(
+                    frame,
+                    track_id,
+                    frame_idx,
+                    color,
+                    _xs,
+                    _ys,
+                    _track_sorted_frame_vals,
+                    _track_sorted_row_indices,
+                    draw_p["trail_duration_frames"],
+                    draw_p["marker_thickness"],
+                )
+
+        for row_i in frame_row_indices:
+            track_id = int(_track_ids[row_i])
+            cx_f, cy_f = _xs[row_i], _ys[row_i]
+            if np.isnan(cx_f) or np.isnan(cy_f):
+                continue
+            cx, cy = int(cx_f), int(cy_f)
+            color = tuple(_row_colors[row_i])
+            draw_single_track_on_frame(
+                frame,
+                row_i,
+                track_id,
+                cx,
+                cy,
+                color,
+                draw_p,
+                _thetas,
+                _pose_kpts if show_pose else None,
+                _label_texts,
+                pose_edges,
+            )
+
+        _write_q.put(frame)
+
+        if progress is not None and rel_idx % 30 == 0:
+            pct = int(((rel_idx + 1) / total_frames) * 100)
+            progress(pct, "Generating video...")
+
+    _write_q.put(None)
+    _writer.join()
+    return not cancelled
+
+
+def open_video_cap_and_writer(video_path, output_path):
+    """Open video capture and writer; return (cap, out, fps, total_video_frames) or None on error."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.error(f"Failed to open video: {video_path}")
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    try:
+        out = VideoEncoder(output_path, fps=fps, width=frame_width, height=frame_height)
+    except Exception:
+        logger.error(f"Failed to create output video: {output_path}")
+        cap.release()
+        return None
+    logger.info(f"Writing video: {frame_width}x{frame_height} @ {fps} FPS")
+    return cap, out, fps, total_video_frames
+
+
+def compute_video_frame_range(params, total_video_frames):
+    """Return (start_frame, end_frame, total_frames) clamped to video bounds."""
+    start_frame = int(params.get("START_FRAME", 0) or 0)
+    end_frame = params.get("END_FRAME", None)
+    if end_frame is None:
+        end_frame = total_video_frames - 1 if total_video_frames > 0 else 0
+    end_frame = int(end_frame)
+    if total_video_frames > 0:
+        start_frame = max(0, min(start_frame, total_video_frames - 1))
+        end_frame = max(start_frame, min(end_frame, total_video_frames - 1))
+    total_frames = max(0, end_frame - start_frame + 1)
+    logger.info(
+        f"Exporting tracked frame range: {start_frame}-{end_frame} ({total_frames} frames)"
+    )
+    return start_frame, end_frame, total_frames
+
+
+def load_video_trajectories(final_csv_path):
+    """Load best available trajectories for video generation (prefers rich export CSV)."""
+    from hydra_suite.core.post.rich_export import rich_export_path
+
+    if not final_csv_path:
+        return None, None
+    candidates = [
+        rich_export_path(final_csv_path),
+        rich_export_path(final_csv_path, legacy=True),
+        final_csv_path,
+    ]
+    candidate = next((path for path in candidates if os.path.exists(path)), None)
+    if not candidate:
+        return None, None
+    try:
+        return pd.read_csv(candidate), candidate
+    except Exception:
+        logger.exception("Failed to load video trajectories from: %s", candidate)
+        return None, None
+
+
+def render_annotated_video(
+    *,
+    trajectories_df,
+    video_path,
+    output_path,
+    params,
+    config,
+    progress=None,
+    should_stop=None,
+):
+    """Generate an annotated overlay video from post-processed trajectories.
+
+    Returns the output path on success, or None on failure/cancellation (partial
+    output file is deleted on cancellation so no half-written video survives)."""
+    logger.info("=" * 80)
+    logger.info("Generating video from post-processed trajectories...")
+    logger.info("=" * 80)
+
+    if trajectories_df is None or trajectories_df.empty:
+        return None
+    if not video_path or not output_path:
+        logger.error("Video input or output path not specified")
+        return None
+
+    opened = open_video_cap_and_writer(video_path, output_path)
+    if opened is None:
+        return None
+    cap, out, fps, total_video_frames = opened
+
+    start_frame, end_frame, total_frames = compute_video_frame_range(
+        params, total_video_frames
+    )
+    if total_frames <= 0:
+        logger.error("Invalid frame range for video generation.")
+        cap.release()
+        out.release()
+        return None
+
+    if start_frame > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    draw_p = build_video_draw_params(params, config, fps, trajectories_df)
+    pose_edges, pose_column_triplets, show_pose = get_pose_column_info(
+        params, draw_p["advanced_config"], trajectories_df
+    )
+    (
+        _frame_ids,
+        _track_ids,
+        _xs,
+        _ys,
+        _label_texts,
+        _thetas,
+        _pose_kpts,
+        traj_indices_by_frame,
+        _track_sorted_row_indices,
+        _track_sorted_frame_vals,
+    ) = preextract_traj_arrays(
+        trajectories_df, show_pose, pose_column_triplets, draw_p["show_trails"]
+    )
+    _color_keys = build_video_track_color_key_array(trajectories_df)
+    _row_colors = build_precomputed_color_palette(
+        draw_p["colors"], _track_ids, _color_keys
+    )
+
+    arrays = (
+        _frame_ids,
+        _track_ids,
+        _xs,
+        _ys,
+        _label_texts,
+        _thetas,
+        _pose_kpts,
+        traj_indices_by_frame,
+        _track_sorted_row_indices,
+        _track_sorted_frame_vals,
+        _row_colors,
+    )
+    completed = render_annotated_video_frames(
+        cap,
+        out,
+        start_frame,
+        total_frames,
+        draw_p,
+        pose_edges,
+        show_pose,
+        arrays,
+        progress=progress,
+        should_stop=should_stop,
+    )
+
+    cap.release()
+    out.release()
+
+    if not completed:
+        logger.info("Annotated video generation cancelled; removing partial output.")
+        try:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError:
+            logger.warning("Could not delete partial video: %s", output_path)
+        return None
+
+    logger.info(f"✓ Video saved to: {output_path}")
+    logger.info("=" * 80)
+    return output_path

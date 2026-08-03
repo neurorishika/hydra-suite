@@ -1,3 +1,6 @@
+import os
+
+import cv2
 import numpy as np
 import pandas as pd
 import pytest
@@ -151,3 +154,74 @@ def test_preextract_traj_arrays_indexes_by_frame():
     traj_indices_by_frame = arrays[7]
     assert traj_indices_by_frame[0] == [0]
     assert traj_indices_by_frame[1] == [1]
+
+
+def _write_black_clip(path, n_frames=10, w=64, h=48, fps=10.0):
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    vw = cv2.VideoWriter(str(path), fourcc, fps, (w, h))
+    for _ in range(n_frames):
+        vw.write(np.zeros((h, w, 3), dtype=np.uint8))
+    vw.release()
+
+
+def _simple_traj_df(n_frames=10):
+    return pd.DataFrame(
+        {
+            "TrajectoryID": [0] * n_frames,
+            "FrameID": list(range(n_frames)),
+            "X": [30.0] * n_frames,
+            "Y": [24.0] * n_frames,
+            "Theta": [0.0] * n_frames,
+        }
+    )
+
+
+def _render_params():
+    return {
+        "TRAJECTORY_COLORS": [(0, 255, 0)],
+        "REFERENCE_BODY_SIZE": 10.0,
+        "ADVANCED_CONFIG": {},
+        "POSE_MIN_KPT_CONF_VALID": 0.2,
+        "START_FRAME": 0,
+        "END_FRAME": None,
+    }
+
+
+def test_render_annotated_video_writes_output(tmp_path):
+    src = tmp_path / "in.mp4"
+    out = tmp_path / "out.mp4"
+    _write_black_clip(src, n_frames=10)
+    result = media_export.render_annotated_video(
+        trajectories_df=_simple_traj_df(10),
+        video_path=str(src),
+        output_path=str(out),
+        params=_render_params(),
+        config=_draw_config(),
+    )
+    assert result == str(out)
+    assert os.path.exists(out)
+    cap = cv2.VideoCapture(str(out))
+    assert int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) == 10
+    cap.release()
+
+
+def test_render_annotated_video_cancel_deletes_partial(tmp_path):
+    src = tmp_path / "in.mp4"
+    out = tmp_path / "out.mp4"
+    _write_black_clip(src, n_frames=30)
+    calls = {"n": 0}
+
+    def _stop():
+        calls["n"] += 1
+        return calls["n"] > 3  # stop after a few frames
+
+    result = media_export.render_annotated_video(
+        trajectories_df=_simple_traj_df(30),
+        video_path=str(src),
+        output_path=str(out),
+        params=_render_params(),
+        config=_draw_config(),
+        should_stop=_stop,
+    )
+    assert result is None
+    assert not os.path.exists(out)  # partial file removed
