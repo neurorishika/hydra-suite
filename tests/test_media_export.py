@@ -100,3 +100,54 @@ def test_media_export_palette_matches_unified_trajectory_colors():
         colors, track_ids, color_keys
     )
     assert row_colors == expected
+
+
+def _draw_config():
+    return {
+        "video_show_labels": True,
+        "video_show_orientation": True,
+        "video_show_trails": False,
+        "video_trail_duration": 1.0,
+        "video_marker_size": 0.3,
+        "video_text_scale": 0.5,
+        "video_arrow_length": 0.7,
+    }
+
+
+def test_build_video_draw_params_reads_config_keys():
+    params = {
+        "TRAJECTORY_COLORS": [(1, 2, 3)],
+        "REFERENCE_BODY_SIZE": 40.0,
+        "ADVANCED_CONFIG": {},
+        "POSE_MIN_KPT_CONF_VALID": 0.2,
+    }
+    df = pd.DataFrame({"TrajectoryID": [0], "X": [1.0], "Y": [2.0]})
+    draw_p = media_export.build_video_draw_params(params, _draw_config(), 30.0, df)
+    assert draw_p["show_labels"] is True
+    assert draw_p["show_trails"] is False
+    assert draw_p["marker_radius"] == int(0.3 * 40.0)
+    assert draw_p["arrow_len"] == int(0.7 * 40.0)
+    assert draw_p["colors"] == [(1, 2, 3)]
+
+
+def test_get_pose_column_info_false_without_pose_columns():
+    df = pd.DataFrame({"TrajectoryID": [0], "X": [1.0], "Y": [2.0]})
+    edges, triplets, show_pose = media_export.get_pose_column_info({}, {}, df)
+    assert show_pose is False
+    assert triplets == []
+
+
+def test_preextract_traj_arrays_indexes_by_frame():
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 0],
+            "FrameID": [0, 1],
+            "X": [1.0, 2.0],
+            "Y": [3.0, 4.0],
+            "Theta": [0.0, 0.1],
+        }
+    )
+    arrays = media_export.preextract_traj_arrays(df, False, [], False)
+    traj_indices_by_frame = arrays[7]
+    assert traj_indices_by_frame[0] == [0]
+    assert traj_indices_by_frame[1] == [1]
