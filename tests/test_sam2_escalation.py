@@ -55,3 +55,23 @@ def test_escalation_writes_reviewed_false_derived_source(tmp_path):
     label = Path(new.path) / "labels" / "a.txt"
     assert label.exists() and len(label.read_text().splitlines()) == 2
     assert (Path(new.path) / "images" / "a.jpg").exists()  # image copied
+
+
+def test_worker_runs_with_injected_executor(tmp_path):
+    from hydra_suite.detectkit.jobs.sam2_escalation import (
+        EscalationRequest,
+        Sam2EscalationWorker,
+    )
+
+    src = _make_source(tmp_path)
+    project = types.SimpleNamespace(project_dir=str(tmp_path), sources=[src])
+    req = EscalationRequest(
+        project=project,
+        source_names=["orig"],
+        variant="sam2.1-hiera-base_plus",
+    )
+    worker = Sam2EscalationWorker(req, executor=_FakeExec())
+    captured = {}
+    worker.result_ready.connect(lambda r: captured.update(derived=r.derived))
+    worker.execute()  # call directly (no thread) — BaseWorker pattern
+    assert captured["derived"] == ["orig_seg"]

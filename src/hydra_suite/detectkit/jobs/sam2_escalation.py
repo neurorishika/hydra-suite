@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Callable
 
 import cv2
+from PySide6.QtCore import Signal
 
 from hydra_suite.core.inference.sam2.masks import mask_to_contour
 from hydra_suite.detectkit.gui.models import OBBSource
 from hydra_suite.detectkit.jobs.al_worker import _write_geometry_label
+from hydra_suite.widgets.workers import BaseWorker
 
 from .sam2_prompts import build_prompts, read_boxes_from_label
 
@@ -28,6 +30,38 @@ class EscalationResult:
     derived: list[str] = field(default_factory=list)
     primed: int = 0
     fell_back: int = 0
+
+
+class Sam2EscalationWorker(BaseWorker):
+    """QThread wrapper around run_escalation (BaseWorker signals + result_ready)."""
+
+    result_ready = Signal(object)  # EscalationResult
+
+    def __init__(self, request: EscalationRequest, executor=None, parent=None) -> None:
+        super().__init__(parent)
+        self._request = request
+        self._executor = executor
+
+    def execute(self) -> None:
+        from hydra_suite.core.inference.sam2.executor import Sam2SegmentExecutor
+
+        executor = self._executor or Sam2SegmentExecutor.from_variant(
+            self._request.variant
+        )
+        self.status.emit(f"Escalating {len(self._request.source_names)} source(s)...")
+        result = run_escalation(
+            self._request,
+            executor,
+            progress=lambda pct, msg: (
+                self.progress.emit(pct),
+                self.status.emit(msg),
+            ),
+        )
+        self.status.emit(
+            f"Done: {result.primed} primed, {result.fell_back} fell back "
+            f"(review these first)."
+        )
+        self.result_ready.emit(result)
 
 
 def _sources_by_name(project) -> dict[str, OBBSource]:
