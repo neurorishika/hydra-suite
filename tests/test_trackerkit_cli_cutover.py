@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from hydra_suite.trackerkit.cli_config import TrackerCliSession, TrackerCliVideoProbe
 
 
@@ -95,3 +99,46 @@ def test_gui_headless_hooks_deleted():
     assert not offenders, "GUI still references _headless_* hooks: " + "; ".join(
         offenders
     )
+
+
+_REPO = Path(__file__).resolve().parents[1]
+_FX = _REPO / "tools/equivalence/fixtures"
+
+_BRIDGE_CLIPS = [
+    ("emi_obb_identity.mp4", "emi_obb_identity.json"),
+    ("ant_pose_headtail.mp4", "ant_pose_headtail.json"),
+    ("ant_obb_sleap.mp4", "ant_obb_sleap.json"),
+    ("ant_cnn_identity.mp4", "ant_cnn_identity.json"),
+]
+
+
+@pytest.mark.parametrize("clip_name,config_name", _BRIDGE_CLIPS)
+def test_previously_bridged_clips_run_direct_no_mainwindow(
+    clip_name, config_name, tmp_path, monkeypatch
+):
+    clip_src = _FX / "clips" / clip_name
+    config = _FX / "configs" / config_name
+    if not (clip_src.exists() and config.exists()):
+        pytest.skip(f"fixture missing: {clip_name}")
+
+    # Any attempt to construct MainWindow (the deleted bridge) is a hard failure.
+    def _boom(*_a, **_k):
+        raise AssertionError("MainWindow constructed - bridge path was taken")
+
+    mw_mod = pytest.importorskip("hydra_suite.trackerkit.gui.main_window")
+    monkeypatch.setattr(mw_mod, "MainWindow", _boom)
+
+    clip = tmp_path / clip_name
+    clip.write_bytes(clip_src.read_bytes())
+
+    from hydra_suite.trackerkit.cli import run_tracking_cli
+
+    code = run_tracking_cli([str(clip)], config_path=str(config))
+    assert code == 0
+
+    csvs = list(tmp_path.glob("*_forward_processed.csv")) + list(
+        tmp_path.glob("*_final.csv")
+    )
+    assert csvs, f"{clip_name}: no output CSV"
+    rows = sum(1 for _ in csvs[0].open())
+    assert rows > 1, f"{clip_name}: CSV has only {rows} line(s)"
