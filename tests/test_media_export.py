@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -41,3 +42,39 @@ def test_save_trajectories_to_csv_writes_ordered_columns(tmp_path):
 
 def test_save_trajectories_to_csv_none_returns_false(tmp_path):
     assert media_export.save_trajectories_to_csv(None, str(tmp_path / "x.csv")) is False
+
+
+def test_normalize_identity_key_treats_unknown_as_empty():
+    assert media_export.normalize_video_identity_color_key("unknown") == ""
+    assert media_export.normalize_video_identity_color_key(np.nan) == ""
+    assert media_export.normalize_video_identity_color_key(None) == ""
+    assert media_export.normalize_video_identity_color_key("apriltag=3") == "apriltag=3"
+
+
+def test_format_label_falls_back_to_track_id():
+    assert media_export.format_video_track_label(7, None) == "ID7"
+    assert media_export.format_video_track_label(7, "") == "ID7"
+
+
+def test_color_key_array_prefers_identity_then_trajectory():
+    df = pd.DataFrame(
+        {
+            "TrajectoryID": [0, 1],
+            "UniqueIdentityKey": ["apriltag=3", "unknown"],
+        }
+    )
+    keys = media_export.build_video_track_color_key_array(df)
+    assert keys[0] == "identity:apriltag=3"
+    assert keys[1] == "trajectory:1"
+
+
+def test_precomputed_palette_uses_trajectory_colors_for_plain_tracks():
+    colors = [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
+    track_ids = np.asarray([0, 1, 2], dtype=np.int32)
+    color_keys = np.asarray(
+        ["trajectory:0", "trajectory:1", "trajectory:2"], dtype=object
+    )
+    row_colors = media_export.build_precomputed_color_palette(
+        colors, track_ids, color_keys
+    )
+    assert row_colors == [(10, 20, 30), (40, 50, 60), (70, 80, 90)]
