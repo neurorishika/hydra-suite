@@ -42,3 +42,35 @@ def test_supports_direct_run_true_for_identity_sessions():
 
 def test_supports_direct_run_true_for_plain_session():
     assert _make_session().supports_direct_run() is True
+
+
+def test_cli_module_has_no_bridge_symbols():
+    import hydra_suite.trackerkit.cli as cli
+
+    for gone in (
+        "_suppress_message_boxes",
+        "_ensure_qapplication",
+        "_prepare_video_session",
+        "_run_one_tracking_session",
+        "_run_bridge_tracking_session",
+    ):
+        assert not hasattr(cli, gone), f"bridge symbol still present: {gone}"
+
+
+def test_cli_module_imports_no_qt():
+    import ast
+    from pathlib import Path
+
+    import hydra_suite.trackerkit.cli as cli
+
+    tree = ast.parse(Path(cli.__file__).read_text(), filename=cli.__file__)
+    offenders = []
+    for node in ast.walk(tree):
+        mod = None
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module
+        elif isinstance(node, ast.Import):
+            mod = ",".join(a.name for a in node.names)
+        if mod and any(q in mod for q in ("PySide6", "QtCore", "QtWidgets", "QtGui")):
+            offenders.append(f"{mod}:{node.lineno}")
+    assert not offenders, "cli.py must be Qt-free: " + "; ".join(offenders)
