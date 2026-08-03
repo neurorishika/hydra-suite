@@ -34,6 +34,9 @@ class OBBSource:
     source_kind: str = "detectkit"
     imported: bool = False
     level: str = "obb"  # GeometryLevel.label; "obb" for pre-migration sources
+    reviewed: bool = True  # False only for un-reviewed SAM2-primed derived sources
+    derived_from: str | None = None  # origin source name for derived sources
+    sam2_variant: str | None = None  # SAM2 version that primed a derived source
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary."""
@@ -45,6 +48,9 @@ class OBBSource:
             "source_kind": self.source_kind,
             "imported": self.imported,
             "level": self.level,
+            "reviewed": self.reviewed,
+            "derived_from": self.derived_from,
+            "sam2_variant": self.sam2_variant,
         }
 
     @staticmethod
@@ -58,6 +64,9 @@ class OBBSource:
             source_kind=str(d.get("source_kind", "detectkit") or "detectkit"),
             imported=bool(d.get("imported", False)),
             level=str(d.get("level", "obb") or "obb"),
+            reviewed=bool(d.get("reviewed", True)),
+            derived_from=(d.get("derived_from") or None),
+            sam2_variant=(d.get("sam2_variant") or None),
         )
 
 

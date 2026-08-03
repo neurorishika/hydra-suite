@@ -207,6 +207,20 @@ def _render_filtered_obb_label(
     return text, kept_class_ids
 
 
+def eligible_sources(sources):
+    """Drop reviewed=False sources from a training build, returning skip messages."""
+    kept, messages = [], []
+    for s in sources:
+        if getattr(s, "reviewed", True):
+            kept.append(s)
+        else:
+            messages.append(
+                f"Source '{s.name}' is unreviewed (SAM2-primed) — review it in "
+                f"X-AnyLabeling and Mark reviewed before it can be used for training."
+            )
+    return kept, messages
+
+
 def merge_obb_sources(
     sources: list[SourceDataset],
     output_root: str | Path,
@@ -224,6 +238,8 @@ def merge_obb_sources(
     )
     if remap_single_class:
         resolved_class_names = resolved_class_names[:1]
+
+    sources, skipped_sources = eligible_sources(sources)
 
     root = Path(output_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -320,6 +336,7 @@ def merge_obb_sources(
         "counts": split_counts,
         "source_items": dict(source_items),
         "duplicates_skipped": int(duplicate_skipped),
+        "skipped_sources": list(skipped_sources),
     }
     manifest_path = out_dir / "manifest.json"
     _write_manifest(manifest_path, manifest)
