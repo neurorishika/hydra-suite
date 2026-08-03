@@ -2,12 +2,31 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Callable
 
+import cv2
 import numpy as np
+import pandas as pd
 
+from hydra_suite.core.post.interpolated_crops import run_interpolated_crops
+from hydra_suite.core.post.merge import merge_trajectories, rescale_coordinates
+from hydra_suite.core.post.pose_merge import (
+    PoseSourceState,
+    resolve_current_tag_cache_path,
+)
+from hydra_suite.core.post.processing import (
+    interpolate_trajectories,
+    process_trajectories_from_csv,
+)
+from hydra_suite.core.post.rich_export import (
+    export_rich_csv,
+    relink_and_export_rich_csv,
+)
 from hydra_suite.core.tracking.errors import TrackingSessionError
+from hydra_suite.core.tracking.session_policy import should_run_interpolated_postpass
+from hydra_suite.core.tracking.session_summary import build_session_summary_lines
 
 
 def csv_has_data_rows(csv_path) -> bool:
@@ -66,6 +85,39 @@ def enforce_nonempty_forward(raw_csv_path, detection_cache_path) -> None:
         )
 
 
+def _save_trajectories_to_csv(trajectories, output_path: str) -> bool:
+    """Persist post-processed trajectories in the same shape as the GUI path.
+
+    Copied verbatim from ``trackerkit/headless_tracking.py::save_trajectories_to_csv``
+    so ``core/`` needs no app-layer import.
+    """
+    if trajectories is None:
+        return False
+    if not isinstance(trajectories, pd.DataFrame):
+        raise TypeError("Expected post-processed trajectories as a pandas DataFrame.")
+    if trajectories.empty:
+        return False
+
+    df_to_save = trajectories.copy()
+    for column in ["X", "Y", "FrameID"]:
+        if column in df_to_save.columns:
+            df_to_save[column] = pd.to_numeric(df_to_save[column], errors="coerce")
+            df_to_save[column] = df_to_save[column].round().astype("Int64")
+
+    df_to_save = df_to_save.drop(
+        columns=[
+            column for column in ["TrackID", "Index"] if column in df_to_save.columns
+        ],
+        errors="ignore",
+    )
+    base_columns = ["TrajectoryID", "X", "Y", "Theta", "FrameID"]
+    ordered_columns = base_columns + [
+        column for column in df_to_save.columns if column not in base_columns
+    ]
+    df_to_save[ordered_columns].to_csv(output_path, index=False)
+    return True
+
+
 def _noop1(_a) -> None:
     return None
 
@@ -107,8 +159,239 @@ class TrackingSessionCore:
         self.params = params
         self.paths = paths
         self.callbacks = callbacks if callbacks is not None else SessionCallbacks()
+        self.pose_state = PoseSourceState(
+            detection_cache_path=self.paths.get("detection_cache_path"),
+            individual_properties_cache_path=self.paths.get(
+                "individual_properties_cache_path"
+            ),
+            detected_properties_cache_path=self.paths.get(
+                "detected_properties_cache_path"
+            ),
+            detected_cnn_cache_paths=self.paths.get("detected_cnn_cache_paths"),
+        )
+
+    def _stopped_result(self) -> SessionResult:
+        return SessionResult(False, None, None, [], None, [], None)
+
+    def _postprocess_csv(self, csv_path):
+        if not self.config.get("enable_postprocessing"):
+            effective_params = dict(self.params)
+            effective_params["MIN_TRAJECTORY_LENGTH"] = 1
+            effective_params["MAX_VELOCITY_BREAK"] = float("inf")
+            effective_params["MAX_OCCLUSION_GAP"] = 0
+            effective_params["MAX_VELOCITY_ZSCORE"] = 0.0
+        else:
+            effective_params = self.params
+        processed, _ = process_trajectories_from_csv(csv_path, effective_params)
+        return processed
+
+    def _interpolate_and_scale(self, df):
+        interp_method = str(self.config.get("interpolation_method", "none")).lower()
+        if interp_method != "none":
+            max_gap = max(
+                1,
+                round(
+                    float(self.config["interpolation_max_gap_seconds"])
+                    * float(self.params["FPS"])
+                ),
+            )
+            df = interpolate_trajectories(
+                df,
+                method=interp_method,
+                max_gap=max_gap,
+                heading_flip_max_burst=int(self.config["heading_flip_max_burst"]),
+                directed_heading_posthoc=bool(
+                    self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+                ),
+            )
+        return rescale_coordinates(
+            df, resize_factor=float(self.params.get("RESIZE_FACTOR", 1.0))
+        )
+
+    def _merge(self, forward, backward):
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            total_frames = 0
+        else:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+        return merge_trajectories(
+            forward,
+            backward,
+            total_frames=total_frames,
+            params=self.params,
+            resize_factor=float(self.params.get("RESIZE_FACTOR", 1.0)),
+            interp_method=str(self.config.get("interpolation_method", "none")).lower(),
+            max_gap=max(
+                1,
+                round(
+                    float(self.config["interpolation_max_gap_seconds"])
+                    * float(self.params["FPS"])
+                ),
+            ),
+            tag_cache_path=resolve_current_tag_cache_path(
+                self.params, self.paths.get("detection_cache_path")
+            ),
+            heading_flip_max_burst=int(self.config["heading_flip_max_burst"]),
+            directed_heading_posthoc=bool(
+                self.params.get("DIRECTED_ORIENT_POSTHOC_CONSISTENCY", False)
+            ),
+            enable_profiling=bool(self.params.get("ENABLE_PROFILING", False)),
+            progress=self.callbacks.progress,
+            should_stop=self.callbacks.should_stop,
+        )
+
+    def _export_rich(self, final_csv):
+        return export_rich_csv(
+            final_csv,
+            self.pose_state,
+            params=self.params,
+            min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
+            ignore_keypoints=self.config.get("pose_ignore_keypoints"),
+        )
+
+    def _relink_export_rich(self, final_csv):
+        return relink_and_export_rich_csv(
+            final_csv,
+            self.pose_state,
+            params=self.params,
+            min_valid_conf=float(self.params.get("POSE_MIN_KPT_CONF_VALID", 0.2)),
+            ignore_keypoints=self.config.get("pose_ignore_keypoints"),
+        )
+
+    def _run_interp_crops(self, final_csv) -> None:
+        from hydra_suite.core.tracking import session_policy
+
+        if not session_policy.should_run_interpolated_postpass(self.config):
+            return
+
+        payload = run_interpolated_crops(
+            final_csv,
+            self.video_path,
+            self.pose_state.detection_cache_path,
+            self.params,
+            enable_profiling=bool(self.params.get("ENABLE_PROFILING", False)),
+            progress=self.callbacks.progress,
+            should_stop=self.callbacks.should_stop,
+        )
+
+        pose_csv = payload.get("pose_csv_path")
+        pose_rows = payload.get("pose_rows")
+        if pose_csv:
+            self.pose_state.interpolated_pose_csv_path = pose_csv
+            self.pose_state.interpolated_pose_df = None
+        elif pose_rows:
+            try:
+                self.pose_state.interpolated_pose_df = pd.DataFrame(pose_rows)
+                self.pose_state.interpolated_pose_csv_path = None
+            except Exception:
+                self.pose_state.interpolated_pose_df = None
+
+        tag_csv = payload.get("tag_csv_path")
+        tag_rows = payload.get("tag_rows")
+        if tag_csv:
+            self.pose_state.interpolated_tag_csv_path = tag_csv
+            self.pose_state.interpolated_tag_df = None
+        elif tag_rows:
+            try:
+                self.pose_state.interpolated_tag_df = pd.DataFrame(tag_rows)
+                self.pose_state.interpolated_tag_csv_path = None
+            except Exception:
+                self.pose_state.interpolated_tag_df = None
+
+        cnn_csv_paths = payload.get("cnn_csv_paths")
+        cnn_rows = payload.get("cnn_rows")
+        if cnn_csv_paths:
+            self.pose_state.interpolated_cnn_csv_paths = cnn_csv_paths
+            self.pose_state.interpolated_cnn_dfs = None
+        elif cnn_rows:
+            try:
+                self.pose_state.interpolated_cnn_dfs = {
+                    label: pd.DataFrame(rows)
+                    for label, rows in cnn_rows.items()
+                    if rows
+                }
+                self.pose_state.interpolated_cnn_csv_paths = {}
+            except Exception:
+                self.pose_state.interpolated_cnn_dfs = None
+
+        headtail_csv = payload.get("headtail_csv_path")
+        headtail_rows = payload.get("headtail_rows")
+        if headtail_csv:
+            self.pose_state.interpolated_headtail_csv_path = headtail_csv
+            self.pose_state.interpolated_headtail_df = None
+        elif headtail_rows:
+            try:
+                self.pose_state.interpolated_headtail_df = pd.DataFrame(headtail_rows)
+                self.pose_state.interpolated_headtail_csv_path = None
+            except Exception:
+                self.pose_state.interpolated_headtail_df = None
 
     def run_post_tracking(
         self, forward_trajectories, backward_trajectories=None
     ) -> SessionResult:
-        raise NotImplementedError  # wired in Task 8
+        cb = self.callbacks
+        try:
+            if cb.should_stop():
+                return self._stopped_result()
+
+            raw_csv = self.paths.get("raw_csv_path")
+            detection_cache = self.paths.get("detection_cache_path", "")
+            base, ext = os.path.splitext(raw_csv) if raw_csv else ("", ".csv")
+            backward_enabled = bool(self.config.get("enable_backward_tracking"))
+
+            cb.stage_changed("postprocess")
+            if raw_csv and detection_cache:
+                enforce_nonempty_forward(
+                    (f"{base}_forward{ext}" if backward_enabled else raw_csv),
+                    detection_cache,
+                )
+            forward_csv = f"{base}_forward{ext}" if backward_enabled else raw_csv
+            forward_processed = self._postprocess_csv(forward_csv)
+
+            if cb.should_stop():
+                return self._stopped_result()
+
+            if backward_enabled:
+                cb.stage_changed("backward_postprocess")
+                backward_processed = self._postprocess_csv(f"{base}_backward{ext}")
+                cb.stage_changed("merge")
+                final_df = self._merge(forward_processed, backward_processed)
+                final_csv = f"{base}_final{ext}"
+            else:
+                final_df = self._interpolate_and_scale(forward_processed)
+                final_csv = f"{base}_forward_processed{ext}"
+
+            if final_df is None or cb.should_stop():
+                return self._stopped_result()
+            _save_trajectories_to_csv(final_df, final_csv)
+
+            cb.stage_changed("rich_export")
+            rich_path = self._export_rich(final_csv)
+
+            if should_run_interpolated_postpass(self.config) and not cb.should_stop():
+                cb.stage_changed("interpolated_crops")
+                self._run_interp_crops(final_csv)
+                rich_path = self._relink_export_rich(final_csv) or rich_path
+
+            result = SessionResult(
+                success=True,
+                final_csv_path=final_csv,
+                rich_export_path=rich_path,
+                media_paths=[],
+                dataset_result=None,
+                summary_lines=[],
+                error=None,
+            )
+            summary_result = {
+                "video_path": self.video_path,
+                "csv_path": final_csv,
+                "dataset": None,
+            }
+            result.summary_lines = build_session_summary_lines(
+                self.config, summary_result
+            )
+            cb.stage_changed("done")
+            return result
+        except TrackingSessionError as e:
+            return SessionResult(False, None, None, [], None, [], str(e))
