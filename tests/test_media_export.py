@@ -225,3 +225,64 @@ def test_render_annotated_video_cancel_deletes_partial(tmp_path):
     )
     assert result is None
     assert not os.path.exists(out)  # partial file removed
+
+
+def test_export_final_media_returns_none_when_nothing_requested(tmp_path):
+    result = media_export.export_final_media(
+        final_csv_path=str(tmp_path / "final.csv"),
+        config={},
+        video_path=str(tmp_path / "in.mp4"),
+        detection_cache_path=str(tmp_path / "cache.npz"),
+        interpolated_roi_npz_path=None,
+        fps=30.0,
+        image_root=None,
+        video_root=None,
+        export_images=False,
+        export_videos=False,
+        padding_fraction=0.1,
+        background_color=(0, 0, 0),
+    )
+    assert result is None
+
+
+def test_export_final_media_delegates_to_exporter(tmp_path, monkeypatch):
+    captured = {}
+    # Create dummy files for the existence checks
+    (tmp_path / "final.csv").write_text("")
+    (tmp_path / "cache.npz").write_bytes(b"")
+
+    class _FakeResult:
+        def to_dict(self):
+            return {"exported_videos": 2, "exported_images": 0, "output_dir": "vids"}
+
+    class _FakeExporter:
+        def __init__(self, dataset_dir, final_csv_path, **kwargs):
+            captured["dataset_dir"] = str(dataset_dir)
+            captured["kwargs"] = kwargs
+
+        def export(self, progress_callback=None, should_stop=None):
+            return _FakeResult()
+
+    monkeypatch.setattr(media_export, "OrientedTrackVideoExporter", _FakeExporter)
+    result = media_export.export_final_media(
+        final_csv_path=str(tmp_path / "final.csv"),
+        config={
+            "individual_save_interval": 2,
+            "individual_output_format": "png",
+            "final_media_export_heading_flip_burst": 5,
+            "final_media_export_stabilization_window": 5,
+        },
+        video_path=str(tmp_path / "in.mp4"),
+        detection_cache_path=str(tmp_path / "cache.npz"),
+        interpolated_roi_npz_path=None,
+        fps=30.0,
+        image_root=None,
+        video_root=tmp_path / "vroot",
+        export_images=False,
+        export_videos=True,
+        padding_fraction=0.1,
+        background_color=(0, 0, 0),
+    )
+    assert result == {"exported_videos": 2, "exported_images": 0, "output_dir": "vids"}
+    assert captured["kwargs"]["export_videos"] is True
+    assert captured["kwargs"]["image_interval"] == 2

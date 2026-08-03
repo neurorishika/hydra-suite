@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
 from hydra_suite.core.identity.properties.export import build_pose_keypoint_labels
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
@@ -882,3 +883,94 @@ def render_annotated_video(
     logger.info(f"✓ Video saved to: {output_path}")
     logger.info("=" * 80)
     return output_path
+
+
+def export_final_media(
+    *,
+    final_csv_path,
+    config,
+    video_path,
+    detection_cache_path,
+    interpolated_roi_npz_path,
+    fps,
+    image_root,
+    video_root,
+    export_images,
+    export_videos,
+    padding_fraction,
+    background_color,
+    progress=None,
+    should_stop=None,
+):
+    """Export final canonical stills and/or orientation-fixed per-track videos.
+
+    Returns the exporter result dict, or None if nothing is requested or the
+    final CSV / detection cache is missing."""
+    if not export_images and not export_videos:
+        return None
+    if not final_csv_path or not os.path.exists(final_csv_path):
+        return None
+    if not detection_cache_path or not os.path.exists(detection_cache_path):
+        logger.warning(
+            "Skipping final canonical media export: no compatible detection cache is available."
+        )
+        return None
+    if export_images and image_root is None:
+        logger.warning(
+            "Skipping final canonical image export: no image output directory found."
+        )
+        export_images = False
+    if export_videos and video_root is None:
+        logger.warning(
+            "Skipping final media video export: no video output directory found."
+        )
+        export_videos = False
+    if not export_images and not export_videos:
+        return None
+
+    from pathlib import Path
+
+    export_root = video_root or image_root
+    image_output_dir = (
+        str((Path(image_root) / "images").expanduser()) if image_root else None
+    )
+
+    suppress_dataset = bool(
+        config.get("suppress_foreign_obb_individual_dataset", False)
+    )
+    suppress_videos = bool(config.get("suppress_foreign_obb_oriented_videos", False))
+    suppress_foreign_obb = suppress_videos if export_videos else suppress_dataset
+
+    exporter = OrientedTrackVideoExporter(
+        str(export_root),
+        final_csv_path,
+        video_path=video_path,
+        detection_cache_path=detection_cache_path,
+        interpolated_roi_npz_path=interpolated_roi_npz_path,
+        fps=fps,
+        padding_fraction=max(0.0, float(padding_fraction)),
+        background_color=tuple(int(c) for c in background_color),
+        suppress_foreign_obb=suppress_foreign_obb,
+        suppress_foreign_obb_images=suppress_dataset,
+        suppress_foreign_obb_videos=suppress_videos,
+        export_images=export_images,
+        image_output_dir=image_output_dir,
+        image_interval=int(config.get("individual_save_interval", 1)),
+        image_format=str(config.get("individual_output_format", "png")),
+        export_videos=export_videos,
+        fix_direction_flips=bool(
+            config.get("final_media_export_fix_direction_flips", False)
+        ),
+        heading_flip_max_burst=int(
+            config.get("final_media_export_heading_flip_burst", 5)
+        ),
+        enable_affine_stabilization=bool(
+            config.get("final_media_export_enable_affine_stabilization", False)
+        ),
+        stabilization_window=int(
+            config.get("final_media_export_stabilization_window", 5)
+        ),
+        output_subdir="",
+    )
+    result = exporter.export(progress_callback=progress, should_stop=should_stop)
+    return result.to_dict()
