@@ -101,12 +101,13 @@ class TrackerCliSession:
     enable_pose_extractor: bool
 
     def supports_direct_run(self) -> bool:
-        """Return whether the CLI can run this session without MainWindow."""
-        return not self.enable_pose_extractor and self.identity_method in {
-            "",
-            "none",
-            "none_disabled",
-        }
+        """Every session runs the direct Qt-free path (Slice 4 CLI cutover).
+
+        The hidden-MainWindow bridge was deleted once TrackingSessionCore
+        reached parity, so pose/identity sessions no longer need Qt. Kept as a
+        method (not deleted) so the CLI's call site stays stable.
+        """
+        return True
 
 
 def _cfg_get(cfg: Mapping[str, Any], new_key: str, *legacy_keys: str, default=None):
