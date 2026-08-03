@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 
+import cv2
 import numpy as np
 import pytest
 import torch
 
+from tools.vitpose.external_ckpt.cli import SPECIES, build_parser, read_frames
 from tools.vitpose.external_ckpt.crops import crop_matrix, select_samples, warp_crop
 from tools.vitpose.external_ckpt.model import (
     HEATMAP_PX,
@@ -357,3 +359,42 @@ def test_confidence_table_lists_every_keypoint_with_median():
     for name in spec.keypoint_names:
         assert name in table
     assert "median" in table.lower()
+
+
+def test_species_presets_carry_video_csv_and_body_size():
+    assert set(SPECIES) == {"ant", "fly"}
+    assert SPECIES["ant"].body_size_px == pytest.approx(76.81)
+    assert SPECIES["fly"].body_size_px == pytest.approx(104.14)
+    assert SPECIES["ant"].video.name == "ant.mp4"
+    assert SPECIES["fly"].video.name == "melanogaster.mp4"
+    assert SPECIES["ant"].csv.name == "ant_tracking_final.csv"
+    assert SPECIES["fly"].csv.name == "melanogaster_tracking_final.csv"
+
+
+def test_parser_defaults_match_the_agreed_probe_shape():
+    args = build_parser().parse_args(["--species", "ant"])
+    assert args.n == 12
+    assert args.scale == pytest.approx(2.0)
+    assert args.device == "mps"
+    assert args.out_px == 256
+
+
+def test_read_frames_returns_requested_frames_in_order(tmp_path):
+    path = tmp_path / "clip.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (64, 64))
+    for i in range(20):
+        frame = np.full((64, 64, 3), i * 10, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+
+    frames = read_frames(path, [2, 9, 15])
+    assert sorted(frames) == [2, 9, 15]
+    for fid, frame in frames.items():
+        assert frame.shape == (64, 64, 3)
+
+
+def test_read_frames_raises_on_unreadable_video(tmp_path):
+    bad = tmp_path / "nope.mp4"
+    bad.write_bytes(b"not a video")
+    with pytest.raises(RuntimeError, match="cannot open"):
+        read_frames(bad, [0])
