@@ -940,18 +940,12 @@ class TrackingOrchestrator:
             )
             logger.info("✓ Tracking session complete.")
 
-            # Show end-of-session summary. If the dataset worker is still running,
-            # defer the summary until it finishes so we can include its result.
-            if getattr(
-                self._mw, "_dataset_was_started", False
-            ) and self._mw._is_worker_running(self._mw.dataset_worker):
-                self._mw._show_summary_on_dataset_done = True
-            else:
-                self._show_session_summary()
+            # Show end-of-session summary now. (Deferring the summary until an
+            # in-flight dataset worker finished was handled by on_dataset_finished,
+            # which was retired with the deleted GUI post-tracking chain.)
+            self._show_session_summary()
         else:
             logger.info("✓ Video complete. Continuing batch...")
-            # Disable deferred summary for intermediate batch items so it doesn't block
-            self._mw._show_summary_on_dataset_done = False
 
         # --- Batch Mode Continuation ---
         if self._panels.setup.g_batch.isChecked() and self._mw.current_batch_index >= 0:
@@ -1489,7 +1483,6 @@ class TrackingOrchestrator:
         if not backward_mode:
             self._mw._session_result_dataset = None
             self._mw._dataset_was_started = False
-            self._mw._show_summary_on_dataset_done = False
             self._mw._session_wall_start = time.time()
             self._mw._session_final_csv_path = None
             self._mw._session_fps_list = []
@@ -1576,7 +1569,6 @@ class TrackingOrchestrator:
 
         self._mw._session_result_dataset = None
         self._mw._dataset_was_started = False
-        self._mw._show_summary_on_dataset_done = False
 
     def _show_session_summary(self):
         """Show a single end-of-session summary dialog listing completed processes."""

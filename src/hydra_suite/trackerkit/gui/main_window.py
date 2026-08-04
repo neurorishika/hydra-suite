@@ -382,7 +382,6 @@ class MainWindow(QMainWindow):
         # Per-session summary state (reset at the start of each forward tracking run)
         self._session_result_dataset = None
         self._dataset_was_started = False
-        self._show_summary_on_dataset_done = False
         self._session_wall_start = None
         self._session_final_csv_path = None
         self._session_fps_list = []
@@ -2639,52 +2638,6 @@ class MainWindow(QMainWindow):
         """on_new_frame method documentation."""
         self._tracking_orch.on_new_frame(rgb)
 
-    def _scale_trajectories_to_original_space(self, trajectories_df, resize_factor):
-        """Scale trajectory coordinates from resized space back to original video space."""
-        return self._tracking_orch._scale_trajectories_to_original_space(
-            trajectories_df, resize_factor
-        )
-
-    def save_trajectories_to_csv(
-        self: object, trajectories: object, output_path: object
-    ) -> object:
-        """Save processed trajectories to CSV.
-
-        Args:
-            trajectories: Either list of tuples (old format) or pandas DataFrame (new format with confidence)
-            output_path: Path to save CSV file
-        """
-        self._tracking_orch.save_trajectories_to_csv(trajectories, output_path)
-
-    def merge_and_save_trajectories(self: object) -> object:
-        """merge_and_save_trajectories method documentation."""
-        self._tracking_orch.merge_and_save_trajectories()
-
-    def on_merge_progress(self: object, value: object, message: object) -> object:
-        """Update progress bar during merge."""
-        self._tracking_orch.on_merge_progress(value, message)
-
-    def _store_interpolated_pose_result(self, pose_csv_path, pose_rows):
-        """Store interpolated pose results from CSV path or in-memory rows."""
-        self._tracking_orch._store_interpolated_pose_result(pose_csv_path, pose_rows)
-
-    def _store_interpolated_tag_result(self, tag_csv_path, tag_rows):
-        """Store interpolated AprilTag results from CSV path or in-memory rows."""
-        self._tracking_orch._store_interpolated_tag_result(tag_csv_path, tag_rows)
-
-    def _store_interpolated_cnn_result(self, cnn_csv_paths, cnn_rows):
-        """Store interpolated CNN identity results from CSV paths or in-memory rows."""
-        self._tracking_orch._store_interpolated_cnn_result(cnn_csv_paths, cnn_rows)
-
-    def _store_interpolated_headtail_result(self, headtail_csv_path, headtail_rows):
-        """Store interpolated head-tail results from CSV path or in-memory rows."""
-        self._tracking_orch._store_interpolated_headtail_result(
-            headtail_csv_path, headtail_rows
-        )
-
-    def _on_interpolated_crops_finished(self, result):
-        self._tracking_orch._on_interpolated_crops_finished(result)
-
     def _resolve_source_video_fps(self) -> float:
         """Return the source video FPS, falling back to the UI value."""
         fps = 0.0
@@ -2732,49 +2685,6 @@ class MainWindow(QMainWindow):
             return None
         return Path(output_dir).expanduser()
 
-    def _generate_final_media_export(self, final_csv_path):
-        """Export orientation-fixed videos for final trajectories."""
-        return self._tracking_orch._generate_final_media_export(final_csv_path)
-
-    def _start_pending_final_media_export(self, final_csv_path) -> bool:
-        """Start optional oriented track video export and hold the finish pipeline."""
-        return self._tracking_orch._start_pending_final_media_export(final_csv_path)
-
-    def _on_final_media_export_worker_thread_finished(self):
-        """Release completed oriented track video worker safely."""
-        self._tracking_orch._on_final_media_export_worker_thread_finished()
-
-    def _on_final_media_export_finished(self, result):
-        """Handle completion of oriented track video export."""
-        self._tracking_orch._on_final_media_export_finished(result)
-
-    def _on_final_media_export_error(self, error_message):
-        """Handle oriented track video export errors without aborting the session."""
-        self._tracking_orch._on_final_media_export_error(error_message)
-
-    def on_merge_error(self: object, error_message: object) -> object:
-        """Handle merge errors."""
-        self._tracking_orch.on_merge_error(error_message)
-
-    def on_merge_finished(self: object, resolved_trajectories: object) -> object:
-        """Handle completion of trajectory merging."""
-        self._tracking_orch.on_merge_finished(resolved_trajectories)
-
-    def _generate_video_from_trajectories(
-        self, trajectories_df, csv_path=None, finalize_on_complete=True
-    ):
-        """
-        Generate annotated video from post-processed trajectories.
-
-        Args:
-            trajectories_df: DataFrame with merged/interpolated trajectories
-            csv_path: Path to the CSV file (optional, for logging)
-            finalize_on_complete: If True, continue full finish pipeline after render.
-        """
-        self._tracking_orch._generate_video_from_trajectories(
-            trajectories_df, csv_path, finalize_on_complete
-        )
-
     def on_tracking_finished(
         self: object, finished_normally: object, fps_list: object, full_traj: object
     ) -> object:
@@ -2792,37 +2702,9 @@ class MainWindow(QMainWindow):
             self._config_orch.build_config_dict()
         )
 
-    def _build_pose_augmented_dataframe(self, final_csv_path):
-        """Load final CSV and merge available cached/interpolated pose columns."""
-        return self._tracking_orch._build_pose_augmented_dataframe(final_csv_path)
-
-    def _export_pose_augmented_csv(self, final_csv_path):
-        """Write a pose-augmented trajectories CSV next to the final CSV."""
-        self._tracking_orch._export_pose_augmented_csv(final_csv_path)
-
-    def _relink_final_pose_augmented_csv(self, final_csv_path):
-        """Rewrite final CSV IDs after pose-aware relinking and regenerate the rich export CSV."""
-        self._tracking_orch._relink_final_pose_augmented_csv(final_csv_path)
-
-    def _load_video_trajectories(self, final_csv_path):
-        """Load best available trajectories for video generation (prefers pose-augmented CSV)."""
-        return self._tracking_orch._load_video_trajectories(final_csv_path)
-
-    def _run_pending_video_generation_or_finalize(self):
-        """Run video generation if queued; otherwise finalize UI/session cleanup."""
-        self._tracking_orch._run_pending_video_generation_or_finalize()
-
-    def _finish_tracking_session(self, final_csv_path=None):
-        """Complete tracking session cleanup and UI updates."""
-        self._tracking_orch._finish_tracking_session(final_csv_path=final_csv_path)
-
     def _finalize_tracking_session_ui(self):
         """Finalize session cleanup and return UI to idle state."""
         self._tracking_orch._finalize_tracking_session_ui()
-
-    def _generate_interpolated_individual_crops(self, csv_path):
-        """Post-pass interpolation for occluded segments in individual dataset."""
-        self._tracking_orch._generate_interpolated_individual_crops(csv_path)
 
     def _interp_angle(self, theta_start, theta_end, t):
         deg0 = math.degrees(theta_start)
@@ -2923,26 +2805,6 @@ class MainWindow(QMainWindow):
 
     def _cleanup_session_logging(self):
         self._session_orch._cleanup_session_logging()
-
-    def _generate_training_dataset(self, override_csv_path=None):
-        """Generate training dataset from tracking results for active learning."""
-        self._tracking_orch._generate_training_dataset(
-            override_csv_path=override_csv_path
-        )
-
-    def on_dataset_progress(self: object, value: object, message: object) -> object:
-        """Update progress bar during dataset generation."""
-        self._tracking_orch.on_dataset_progress(value, message)
-
-    def on_dataset_finished(
-        self: object, dataset_dir: object, num_frames: object
-    ) -> object:
-        """Handle dataset generation completion."""
-        self._tracking_orch.on_dataset_finished(dataset_dir, num_frames)
-
-    def on_dataset_error(self: object, error_message: object) -> object:
-        """Handle dataset generation errors."""
-        self._tracking_orch.on_dataset_error(error_message)
 
     def _show_session_summary(self):
         """Show a single end-of-session summary dialog listing completed processes."""
