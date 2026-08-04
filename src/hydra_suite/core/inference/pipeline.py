@@ -361,7 +361,7 @@ class Pipeline:
                 background_color=background_color,
             )
             pose = run_pose_batch(
-                crop_batch, self.stages.pose_model, cfg.pose, self.runtime
+                crop_batch, self.stages.pose_model, cfg.pose, self.runtime, ar, mg
             )
 
         apriltag: dict[int, Any] | None = None
