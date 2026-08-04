@@ -56,7 +56,14 @@ def test_ensure_numpy_safe_globals_refuses_old_numpy(monkeypatch):
         ensure_numpy_safe_globals()
 
 
-def test_ensure_numpy_safe_globals_accepts_installed_numpy():
+def test_ensure_numpy_safe_globals_accepts_installed_numpy(tmp_path):
     # The installed numpy (2.3.5 at the time this test was written) must not
-    # raise -- this is the happy path the guard must not break.
+    # raise -- but a no-op function would also not raise, so assert the
+    # observable effect: a torch.load(weights_only=True) that would otherwise
+    # reject a numpy scalar in `meta` succeeds once the allowlist is applied.
     ensure_numpy_safe_globals()
+    p = tmp_path / "meta_with_numpy_scalar.pt"
+    torch.save({"meta": {"epoch": np.float64(1.5), "seed": np.int64(42)}}, p)
+    loaded = torch.load(p, map_location="cpu", weights_only=True)
+    assert loaded["meta"]["epoch"] == 1.5
+    assert loaded["meta"]["seed"] == 42

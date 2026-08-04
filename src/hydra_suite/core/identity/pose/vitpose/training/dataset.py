@@ -14,7 +14,10 @@ from .targets import generate_udp_gaussian
 
 # Kept for backward compatibility: some callers/tests reach for the
 # process-wide default stride directly. Per-instance geometry now lives on
-# CocoKeypointsDataset._feat_stride (see __init__).
+# CocoKeypointsDataset._feat_stride (see __init__). This constant's value is
+# bit-identical to its pre-branch value ([4.06383, 4.047619] for
+# DEFAULT_GEOMETRY's 192x256 / 48x64), since DEFAULT_GEOMETRY reproduces the
+# historical 192x256 constants exactly.
 FEAT_STRIDE = (np.array(DEFAULT_GEOMETRY.image_size_wh, np.float32) - 1.0) / (
     np.array(DEFAULT_GEOMETRY.heatmap_size_wh, np.float32) - 1.0
 )

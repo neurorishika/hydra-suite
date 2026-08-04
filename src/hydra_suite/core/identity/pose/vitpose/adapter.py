@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Sequence
 
 import torch
 
@@ -76,7 +76,7 @@ def _infer_variant(state: Dict[str, torch.Tensor]) -> str:
 
 
 def _infer_geometry(
-    state: Dict[str, torch.Tensor], stored_hw: object = None
+    state: Dict[str, torch.Tensor], stored_hw: Sequence[int] | None = None
 ) -> PoseGeometry:
     """Recover the checkpoint's input geometry.
 
@@ -90,7 +90,15 @@ def _infer_geometry(
             "checkpoint has no backbone.pos_embed; cannot infer geometry"
         )
     num_patches = int(pe.shape[1]) - 1
-    stored = PoseGeometry.from_hw(stored_hw) if stored_hw is not None else None
+    if stored_hw is not None:
+        try:
+            stored = PoseGeometry.from_hw(stored_hw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"invalid checkpoint input_size {stored_hw!r}: {exc}"
+            ) from exc
+    else:
+        stored = None
     gh, gw = resolve_patch_grid(num_patches, stored)
     if stored is not None:
         return stored

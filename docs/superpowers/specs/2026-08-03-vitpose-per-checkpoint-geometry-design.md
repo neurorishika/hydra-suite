@@ -177,17 +177,37 @@ right there unused. That is where inference hooks in.
 
 ## 5. Export signature
 
-`backends/vitpose.py:151-153` currently produces
-`vitpose-v1|{flavor}|opset17|fp32|{fingerprint}`. Geometry changes the exported graph,
-so it must be in the signature:
+`backends/vitpose.py:151-153` previously produced
+`vitpose-v1|{flavor}|opset17|fp32|{fingerprint}`. Geometry changes the exported graph, so
+a naive read of "the signature must discriminate on everything that changes the graph"
+suggests putting geometry in the signature directly:
 
 ```
 vitpose-v2|{flavor}|{H}x{W}|opset17|fp32|{fingerprint}
 ```
 
-The `v1 -> v2` recipe-tag bump invalidates every existing artifact once, which is the
-correct behaviour for a graph-shape change. Without this, a CoreML package compiled at
-192x256 could be silently reused for a 256x256 model — wrong numbers, no error.
+**As implemented, the signature does NOT carry geometry.** It is:
+
+```
+vitpose-v2|{flavor}|opset17|fp32|{fingerprint}
+```
+
+This was a deliberate decision, reviewed and upheld during implementation, not an
+oversight relative to the original plan above. The signature is computed on every cache
+probe, before the checkpoint is loaded — adding geometry to it would force a full
+`torch.load` of the (up to ~1 GB) checkpoint on every probe just to read `input_size`,
+for no discriminating power: geometry is a deterministic function of the checkpoint's
+bytes, and `path_fingerprint_token` (resolved path + `mtime_ns` + size) already
+identifies that exact file. Two different geometries can only come from two different
+checkpoint files, which the fingerprint already distinguishes.
+
+The `v1 -> v2` recipe-tag bump is retained and still does the invalidation work: it
+forces every pre-existing (v1-signed) artifact to rebuild exactly once, since v1
+artifacts were built from a process-wide-constant geometry assumption that no longer
+holds. Without that bump, a CoreML package compiled at 192x256 under the old recipe
+could be silently reused post-migration — wrong numbers, no error. After that one-time
+invalidation, the fingerprint alone keeps artifacts correctly scoped per checkpoint file
+without re-reading checkpoint bytes on every probe.
 
 `backends/vitpose.py:82` `preferred_input_size` returns
 `max(geometry.image_size_wh)` instead of the constant. It has no production call site
@@ -224,7 +244,11 @@ New:
   a model built at the target geometry forwards successfully after the resize.
 - Source-grid resolution: 257 -> 16x16, 193 -> 12x16, an ambiguous count raises.
 - `adapter` returns the right geometry for a stored value and for an inferred one.
-- Export signature contains the geometry and changes with it.
+- Export signature carries the `v1 -> v2` recipe-tag bump (so every pre-migration
+  artifact rebuilds once) but deliberately does NOT encode the geometry itself — see
+  Section 5's rationale. Tests assert the tag appears in an actually generated
+  signature, and that `export_onnx`/`export_coreml` honour a non-default `geom` kwarg
+  by asserting the exported graph's spatial input dims, independent of the signature.
 - `SimpleHead` emits `geom.heatmap_size_wh` at a non-default geometry.
 
 Unchanged: the ~25 existing test files that assert 256x192 / 64x48 continue to pass

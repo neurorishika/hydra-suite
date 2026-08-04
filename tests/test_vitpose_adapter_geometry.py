@@ -75,3 +75,21 @@ def test_meta_still_carries_variant_head_and_keypoints(tmp_path):
     path = _save(tmp_path, {"state_dict": model.state_dict()})
     _, meta = load_finetuned_checkpoint(path)
     assert (meta.variant, meta.head, meta.num_keypoints) == ("B", "classic", 9)
+
+
+def test_malformed_input_size_raises_value_error_not_type_error(tmp_path):
+    # A third-party checkpoint can carry a scalar (non-iterable) input_size.
+    # That must surface as a ValueError naming the offending field, not an
+    # opaque TypeError from PoseGeometry.from_hw trying to iterate an int.
+    model = build_vitpose("B", "classic", num_keypoints=9)
+    path = _save(
+        tmp_path,
+        {
+            "model_state": model.state_dict(),
+            "variant": "B",
+            "num_keypoints": 9,
+            "input_size": 5,
+        },
+    )
+    with pytest.raises(ValueError, match="5"):
+        load_finetuned_checkpoint(path)

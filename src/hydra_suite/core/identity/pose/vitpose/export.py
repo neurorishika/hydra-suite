@@ -225,13 +225,16 @@ def export_coreml(
     compute_units: str = "ALL",
     geom: PoseGeometry = DEFAULT_GEOMETRY,
 ) -> Path:
-    """Export ViTPose to a CoreML .mlpackage at a fixed (1, 3, 256, 192) input.
+    """Export ViTPose to a CoreML .mlpackage at a fixed (1, 3, H, W) input, where
+    (H, W) is whatever ``geom`` specifies (default 256x192).
 
     Batch stays 1, not dynamic: the OBB CoreML path pins batch=1 for a documented
     reason (core/inference/runtime_artifacts.py:293-299) -- dynamic batch combined
-    with spatial dims crashes the CoreML compiler. This model has the same fixed-
-    resolution constraint as export_onnx (pos_embed has no interpolation path), so
-    a fully-static input shape costs nothing extra here.
+    with spatial dims crashes the CoreML compiler. Like export_onnx, the spatial
+    shape is fixed per exported artifact, not globally: pos_embed.py does provide
+    an interpolation path for other resolutions, but constant-folding still bakes
+    the traced shape into the artifact, so a fully-static input shape costs
+    nothing extra here.
 
     Uses torch.jit.trace + coremltools' mlprogram conversion, mirroring the OBB
     export path's use of ultralytics' underlying trace-based CoreML conversion.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from hydra_suite.core.identity.pose.vitpose.geometry import (
@@ -79,5 +81,5 @@ def test_from_hw_rejects_wrong_length():
 
 def test_geometry_is_frozen():
     g = PoseGeometry((192, 256))
-    with pytest.raises(Exception):  # noqa: B017
+    with pytest.raises(dataclasses.FrozenInstanceError):
         g.image_size_wh = (256, 256)

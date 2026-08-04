@@ -96,6 +96,12 @@ def ensure_numpy_safe_globals() -> None:
     otherwise form. Raises rather than degrading silently -- loading these
     checkpoints becoming unavailable on old numpy is the correct posture.
     """
+    # `torch.serialization.add_safe_globals` mutates PROCESS-GLOBAL state: once
+    # any ViTPose loader calls this, the numpy allowlist applies to every later
+    # `torch.load(weights_only=True)` in that process -- including unrelated
+    # loaders such as the classifier stack. That is safe given the narrow,
+    # hardened primitives allowlisted above, but is a real global side effect,
+    # not one scoped to this module's own loaders.
     version = _numpy_version_tuple()
     if version < (2, 0):
         raise RuntimeError(
