@@ -531,6 +531,55 @@ def build_tracking_parameters(
         entry["model_path"] = resolve_model_path(entry.get("model_path", ""))
         cnn_classifiers.append(entry)
 
+    # Identity-in-tracking param block: faithfully replicate the bridge's
+    # derivation (gui/orchestrators/config.py:2400-2436). This block feeds
+    # the per-frame Hungarian assignment's Bayesian identity-cost term
+    # (core/assigners/hungarian.py:239, _apply_bayesian_identity_cost) and
+    # the identity-first slot rejoining (core/tracking/worker.py:2899-2910),
+    # both of which the CLI previously left at their permissive defaults
+    # (decoder off, hint scale 0) regardless of what the config asked for.
+    enable_postprocessing_flag = bool(
+        _cfg_get(cfg, "enable_postprocessing", default=True)
+    )
+    # bridge: config.py:1808 saves the raw checkbox; default mirrors the
+    # widget's initial checked state (tracking_panel.py:537).
+    enable_identity_in_tracking = bool(
+        _cfg_get(cfg, "enable_identity_in_tracking", default=True)
+    )
+    # bridge: config.py:2401-2404 ANDs the online-decoder checkbox (default
+    # unchecked, tracking_panel.py:568) with the master identity-in-tracking
+    # gate above.
+    enable_identity_online_decoder = enable_identity_in_tracking and bool(
+        _cfg_get(cfg, "enable_identity_online_decoder", default=False)
+    )
+    # bridge: config.py:722-727 -- a saved config with no
+    # "identity_postprocess_mode" key falls back to "Fragment Solver" (NOT
+    # the raw widget default), then config.py:2405-2409 gates the *value*
+    # emitted into params on the postprocessing master switch.
+    saved_identity_postprocess_mode = _cfg_get(
+        cfg, "identity_postprocess_mode", default=None
+    )
+    if saved_identity_postprocess_mode is None:
+        saved_identity_postprocess_mode = "Fragment Solver"
+    saved_identity_postprocess_mode = str(saved_identity_postprocess_mode)
+    identity_postprocess_mode = (
+        saved_identity_postprocess_mode if enable_postprocessing_flag else "None"
+    )
+    # bridge: config.py:2410-2414.
+    enable_identity_fragment_solver = (
+        enable_postprocessing_flag
+        and saved_identity_postprocess_mode == "Fragment Solver"
+    )
+    # bridge: config.py:1799/2116-2118 -- IDENTITY_METHOD is the canonical
+    # gated identity-method string persisted at save time by
+    # MainWindow._selected_identity_method(); replicate TrackerCliSession's
+    # own normalization of the same field (cli_config.py's
+    # load_tracker_cli_session) rather than re-deriving the GUI enable-gate
+    # logic (no live widgets exist headlessly).
+    identity_method = (
+        str(_cfg_get(cfg, "identity_method", default="none_disabled")).strip().lower()
+    )
+
     return {
         "ADVANCED_CONFIG": advanced,
         "DETECTION_METHOD": str(
@@ -636,9 +685,7 @@ def build_tracking_parameters(
         ),
         "MAX_DISTANCE_THRESHOLD": max_distance_multiplier * scaled_body_size,
         "MAX_DISTANCE_MULTIPLIER": max_distance_multiplier,
-        "ENABLE_POSTPROCESSING": bool(
-            _cfg_get(cfg, "enable_postprocessing", default=True)
-        ),
+        "ENABLE_POSTPROCESSING": enable_postprocessing_flag,
         "MIN_TRAJECTORY_LENGTH": min_trajectory_length,
         "MAX_VELOCITY_BREAK": max_velocity_break_pixels_per_frame,
         "MAX_OCCLUSION_GAP": max_occlusion_gap,
@@ -865,8 +912,47 @@ def build_tracking_parameters(
         ),
         "ENABLE_IDENTITY_ANALYSIS": individual_pipeline_enabled,
         "ENABLE_INDIVIDUAL_PIPELINE": individual_pipeline_enabled,
+        "IDENTITY_METHOD": identity_method,
         "USE_APRILTAGS": use_apriltags,
         "CNN_CLASSIFIERS": cnn_classifiers,
+        "CNN_CLASSIFIER_WINDOW": 10,
+        "ENABLE_IDENTITY_IN_TRACKING": enable_identity_in_tracking,
+        "ENABLE_IDENTITY_ONLINE_DECODER": enable_identity_online_decoder,
+        "IDENTITY_POSTPROCESS_MODE": identity_postprocess_mode,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": enable_identity_fragment_solver,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": float(
+            _cfg_get(cfg, "identity_weight", default=1.0)
+        ),
+        "IDENTITY_COMMIT_THRESHOLD": float(
+            _cfg_get(cfg, "identity_commit_threshold", default=0.85)
+        ),
+        "IDENTITY_DISPLAY_THRESHOLD": float(
+            _cfg_get(cfg, "identity_display_threshold", default=0.6)
+        ),
+        "IDENTITY_TRANSITION_EPSILON": float(
+            _cfg_get(cfg, "identity_transition_epsilon", default=0.02)
+        ),
+        "IDENTITY_UNKNOWN_PRIOR": float(
+            _cfg_get(cfg, "identity_unknown_prior", default=0.05)
+        ),
+        "IDENTITY_REJOIN_THRESHOLD": float(
+            _cfg_get(cfg, "identity_rejoin_threshold", default=0.5)
+        ),
+        "IDENTITY_SWAP_ENABLED": bool(
+            _cfg_get(cfg, "enable_identity_swap_correction", default=True)
+        ),
+        "IDENTITY_SWAP_MIN_FRAMES": int(
+            _cfg_get(cfg, "identity_swap_min_frames", default=8)
+        ),
+        "IDENTITY_SWAP_CONF_MARGIN": float(
+            advanced.get("identity_swap_conf_margin", 0.2)
+        ),
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": float(
+            advanced.get("identity_rejoin_velocity_budget", 1.5)
+        ),
+        "IDENTITY_REJOIN_DIST_FLOOR": advanced.get("identity_rejoin_dist_floor", None),
+        "APRILTAG_FAMILY": str(_cfg_get(cfg, "apriltag_family", default="tag36h11")),
+        "APRILTAG_DECIMATE": float(_cfg_get(cfg, "apriltag_decimate", default=1.0)),
         "ENABLE_CONFIDENCE_DENSITY_MAP": bool(
             _cfg_get(cfg, "enable_confidence_density_map", default=True)
         ),
