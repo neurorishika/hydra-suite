@@ -38,12 +38,21 @@ class SessionWorker(BaseWorker):
         self._params = params
         self._paths = paths
         self._stop_requested = False
+        self._stop_observed_logged = False
 
     def stop(self) -> None:
         self._stop_requested = True
 
     def _should_stop(self) -> bool:
-        return bool(self._stop_requested or self.isInterruptionRequested())
+        result = bool(self._stop_requested or self.isInterruptionRequested())
+        if result and not self._stop_observed_logged:
+            self._stop_observed_logged = True
+            logger.debug("SessionWorker._should_stop -> True (stop observed)")
+        return result
+
+    def _on_stage_changed(self, name: str) -> None:
+        logger.debug("SessionWorker stage: %s", name)
+        self.status.emit(str(name))
 
     def execute(self) -> None:
         # Import lazily so this module stays importable without pulling the
@@ -60,7 +69,7 @@ class SessionWorker(BaseWorker):
                 warning=lambda title, msg: self.warning_signal.emit(
                     str(title), str(msg)
                 ),
-                stage_changed=lambda name: self.status.emit(str(name)),
+                stage_changed=self._on_stage_changed,
                 should_stop=self._should_stop,
             )
             service = TrackingSessionCore(

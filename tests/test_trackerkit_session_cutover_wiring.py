@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -289,3 +290,46 @@ def test_start_tracking_on_video_resets_session_summary_lines(tmp_path, monkeypa
         orch.start_tracking_on_video("video.mp4", backward_mode=False)
 
     assert mw._session_summary_lines == []
+
+
+def test_start_tracking_on_video_backward_aborts_on_pending_stop(tmp_path, monkeypatch):
+    """Part A fix: a Stop requested during the forward->backward handoff must
+    abort the backward pass instead of silently resetting _stop_all_requested
+    and proceeding (the confirmed race in start_tracking_on_video)."""
+    orch, mw, raw = _orchestrator(tmp_path)
+    mw.tracking_worker = None
+    mw._stop_all_requested = True
+
+    setup_csv_writer = Mock()
+    monkeypatch.setattr(orch, "_setup_tracking_csv_writer", setup_csv_writer)
+
+    orch.start_tracking_on_video("video.mp4", backward_mode=True)
+
+    setup_csv_writer.assert_not_called()
+    assert mw._stop_all_requested is True
+
+
+def test_start_tracking_on_video_forward_resets_stop_all_requested(
+    tmp_path, monkeypatch
+):
+    """Forward runs must still clear _stop_all_requested for a fresh start."""
+    orch, mw, raw = _orchestrator(tmp_path)
+    mw.tracking_worker = None
+    mw._stop_all_requested = True
+    mw.is_playing = False
+
+    class _StopAfterReset(Exception):
+        pass
+
+    def _fake_setup_csv_writer(_backward_mode):
+        # By the time this is called, the run-start reset block has already
+        # executed, so raising here lets the test assert on the reset without
+        # driving the rest of the (heavy) tracking-launch pipeline.
+        raise _StopAfterReset
+
+    monkeypatch.setattr(orch, "_setup_tracking_csv_writer", _fake_setup_csv_writer)
+
+    with pytest.raises(_StopAfterReset):
+        orch.start_tracking_on_video("video.mp4", backward_mode=False)
+
+    assert mw._stop_all_requested is False

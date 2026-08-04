@@ -114,9 +114,14 @@ class TrackingOrchestrator:
         if worker is None:
             return
         try:
-            if not worker.isRunning():
-                return
+            running = worker.isRunning()
         except Exception:
+            logger.debug(
+                "requesting stop of %s (isRunning=<error checking>)", worker_name
+            )
+            return
+        logger.debug("requesting stop of %s (isRunning=%s)", worker_name, running)
+        if not running:
             return
 
         try:
@@ -197,6 +202,20 @@ class TrackingOrchestrator:
 
     def stop_tracking(self):
         """stop_tracking method documentation."""
+        session_worker = getattr(self._mw, "session_worker", None)
+        try:
+            session_worker_running = (
+                bool(session_worker.isRunning())
+                if session_worker is not None
+                else False
+            )
+        except Exception:
+            session_worker_running = False
+        logger.debug(
+            "stop_tracking() invoked: _stop_all_requested set True; "
+            "session_worker running=%s",
+            session_worker_running,
+        )
         self._mw._stop_all_requested = True
         self._mw._pending_pose_export_csv_path = None
         self._mw._pending_video_csv_path = None
@@ -1477,6 +1496,10 @@ class TrackingOrchestrator:
         """start_tracking_on_video method documentation."""
         if self._mw.tracking_worker and self._mw.tracking_worker.isRunning():
             return
+        # A stop requested during the forward->backward handoff must abort the
+        # backward pass (the flag is only reset for a fresh forward run, below).
+        if backward_mode and self._mw._stop_all_requested:
+            return
         if not self._panels.setup.csv_line.text().strip():
             QMessageBox.warning(
                 self._mw,
@@ -1485,8 +1508,8 @@ class TrackingOrchestrator:
                 "A default path is set automatically when you load a video.",
             )
             return
-        self._mw._stop_all_requested = False
         if not backward_mode:
+            self._mw._stop_all_requested = False
             self._mw._session_result_dataset = None
             self._mw._dataset_was_started = False
             self._mw._session_wall_start = time.time()
