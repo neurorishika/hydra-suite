@@ -14,7 +14,10 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from hydra_suite.core.inference.model_paths import resolve_model_path
+from hydra_suite.core.inference.model_paths import (
+    resolve_model_path,
+    resolve_pose_model_path,
+)
 from hydra_suite.runtime.resolver import (
     ResolvedBackend,
     RuntimeResolver,
@@ -149,6 +152,37 @@ def _coerce_int_list(raw_value: Any) -> list[int] | None:
 
 def _autopick_greedy(n_targets: int) -> bool:
     return int(n_targets) >= SOLVER_AUTOPICK_GREEDY_THRESHOLD
+
+
+def _coerce_pose_keypoint_tokens(raw_value: Any) -> list:
+    """Parse a pose keypoint group into name/index tokens.
+
+    Mirrors the bridge's ``MainWindow._parse_pose_keypoint_tokens`` (a
+    comma-separated-string-or-list parser that keeps numeric tokens as
+    ``int`` and everything else as a stripped ``str``). The CLI has no list
+    widgets to read a live selection from, so the config's stored
+    ``pose_*_keypoints`` list (already the bridge's own parsed/selected
+    output at save time) is re-parsed the same way to keep the token types
+    identical.
+    """
+    if not raw_value:
+        return []
+    if isinstance(raw_value, (list, tuple, set)):
+        values = list(raw_value)
+    else:
+        values = [token.strip() for token in str(raw_value).split(",") if token.strip()]
+    tokens: list = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            tokens.append(int(text))
+        except ValueError:
+            tokens.append(text)
+    return tokens
 
 
 def _default_advanced_config() -> dict[str, Any]:
@@ -580,6 +614,67 @@ def build_tracking_parameters(
         str(_cfg_get(cfg, "identity_method", default="none_disabled")).strip().lower()
     )
 
+    # Pose block: faithfully replicate the bridge's derivation
+    # (gui/orchestrators/config.py:2436-2460). ``ENABLE_POSE_EXTRACTOR`` uses
+    # the SAME pure predicate the bridge calls
+    # (MainWindow._is_pose_inference_enabled() ->
+    # session_orch._is_pose_inference_enabled() ->
+    # session_policy.is_pose_inference_enabled(build_config_dict())): gated on
+    # the individual/YOLO-OBB pipeline being enabled, the
+    # "enable_pose_extractor" flag, AND a non-empty "pose_model_dir" -- so a
+    # non-pose config (detection_method != yolo_obb, or the checkbox off, or
+    # no model configured) derives it falsy, exactly like the bridge. The CLI
+    # config dict already carries the same field shape as
+    # ConfigOrchestrator.build_config_dict() (both are the persisted
+    # snake_case JSON schema), so the predicate can run directly against
+    # ``cfg`` without reconstructing the bridge's widget-derived dict.
+    from hydra_suite.core.tracking.session_policy import is_pose_inference_enabled
+
+    pose_extractor_enabled = is_pose_inference_enabled(cfg)
+    pose_model_type = (
+        str(_cfg_get(cfg, "pose_model_type", default="yolo")).strip().lower()
+    )
+    if pose_model_type not in ("yolo", "sleap", "vitpose"):
+        pose_model_type = "yolo"
+    # bridge: config.py:2440-2449 resolves
+    # ``self._mw._pose_model_path_for_backend(active_backend)`` -- which, on
+    # config load (config.py:1161-1173), is the backend-specific
+    # "pose_<backend>_model_dir" field, falling back to the legacy
+    # "pose_model_dir" field only when the backend-specific field is empty.
+    # Replicate the same backend-specific-with-legacy-fallback lookup here.
+    pose_model_dir_raw = str(
+        _cfg_get(cfg, f"pose_{pose_model_type}_model_dir", default="")
+    ).strip()
+    if not pose_model_dir_raw:
+        pose_model_dir_raw = str(_cfg_get(cfg, "pose_model_dir", default="")).strip()
+    pose_model_dir = resolve_pose_model_path(
+        pose_model_dir_raw, backend=pose_model_type
+    )
+    # bridge: config.py:2458, MainWindow._selected_pose_sleap_env() falls
+    # back to "sleap" when the config value is empty or a placeholder
+    # "no sleap envs ..." combo-box entry.
+    pose_sleap_env = str(_cfg_get(cfg, "pose_sleap_env", default="sleap")).strip()
+    if not pose_sleap_env or pose_sleap_env.lower().startswith("no sleap envs"):
+        pose_sleap_env = "sleap"
+    # bridge: config.py:1216-1225 -- shared pose batch size loaded from
+    # "pose_batch_size", falling back through the legacy "pose_yolo_batch" /
+    # "pose_sleap_batch" fields, then the advanced-config default.
+    pose_batch_size = int(
+        _cfg_get(
+            cfg,
+            "pose_batch_size",
+            default=_cfg_get(
+                cfg,
+                "pose_yolo_batch",
+                default=_cfg_get(
+                    cfg,
+                    "pose_sleap_batch",
+                    default=advanced.get("pose_batch_size", 4),
+                ),
+            ),
+        )
+    )
+
     return {
         "ADVANCED_CONFIG": advanced,
         "DETECTION_METHOD": str(
@@ -596,6 +691,34 @@ def build_tracking_parameters(
         "YOLO_HEADTAIL_MODEL_PATH": yolo_headtail_path,
         "POSE_OVERRIDES_HEADTAIL": bool(
             _cfg_get(cfg, "pose_overrides_headtail", default=False)
+        ),
+        # Pose block: see the derivation block above build_tracking_parameters'
+        # return statement (mirrors gui/orchestrators/config.py:2436-2460).
+        "ENABLE_POSE_EXTRACTOR": pose_extractor_enabled,
+        "POSE_MODEL_TYPE": pose_model_type,
+        "POSE_MODEL_DIR": pose_model_dir,
+        "POSE_EXPORTED_MODEL_PATH": "",
+        "POSE_MIN_KPT_CONF_VALID": float(
+            _cfg_get(cfg, "pose_min_kpt_conf_valid", default=0.2)
+        ),
+        "POSE_SKELETON_FILE": str(_cfg_get(cfg, "pose_skeleton_file", default="")),
+        "POSE_IGNORE_KEYPOINTS": _coerce_pose_keypoint_tokens(
+            _cfg_get(cfg, "pose_ignore_keypoints", default=[])
+        ),
+        "POSE_DIRECTION_ANTERIOR_KEYPOINTS": _coerce_pose_keypoint_tokens(
+            _cfg_get(cfg, "pose_direction_anterior_keypoints", default=[])
+        ),
+        "POSE_DIRECTION_POSTERIOR_KEYPOINTS": _coerce_pose_keypoint_tokens(
+            _cfg_get(cfg, "pose_direction_posterior_keypoints", default=[])
+        ),
+        "POSE_YOLO_BATCH": pose_batch_size,
+        "POSE_BATCH_SIZE": pose_batch_size,
+        "POSE_SLEAP_ENV": pose_sleap_env,
+        "POSE_SLEAP_BATCH": int(
+            _cfg_get(cfg, "pose_sleap_batch", default=pose_batch_size)
+        ),
+        "POSE_SLEAP_MAX_INSTANCES": int(
+            _cfg_get(cfg, "pose_sleap_max_instances", default=1)
         ),
         "YOLO_SEQ_CROP_PAD_RATIO": float(
             _cfg_get(cfg, "yolo_seq_crop_pad_ratio", default=0.15)
