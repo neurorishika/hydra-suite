@@ -135,7 +135,16 @@ def test_detail_multiplier_scales_the_suggestion(tmp_path):
     assert measure_pose_geometry(paths, labels, K, detail=0.5).suggested_hw == [64, 64]
 
 
-def test_suggestions_are_always_multiples_of_thirty_two(tmp_path):
+def test_off_grid_raw_size_still_snaps_within_one_step(tmp_path):
+    """Behavioral, not vacuous: a raw reduction that lands off the 32-grid
+    must still snap onto it, and the snap must not move the suggestion by
+    more than one grid step (32px) from the raw measurement.
+
+    Fixture: box is 147x113 (raw, unclamped -- well under both the 384 cap
+    and the 64 floor), which is not a multiple of 32 on either side.
+    By hand: 147/32 = 4.59 -> round to 5 -> 160; 113/32 = 3.53 -> round to
+    4 -> 128.
+    """
     paths = []
     for i in range(3):
         p, labels = _write_frame(
@@ -143,7 +152,12 @@ def test_suggestions_are_always_multiples_of_thirty_two(tmp_path):
         )
         paths.append(p)
     stats = measure_pose_geometry(paths, labels, K)
+    assert stats.clamped is False
+    h, w = stats.suggested_hw
+    assert (h, w) == (128, 160)
     assert all(v % 32 == 0 for v in stats.suggested_hw)
+    assert abs(w - 147) <= 32
+    assert abs(h - 113) <= 32
 
 
 def test_very_large_animals_are_clamped_and_flagged(tmp_path):
@@ -156,6 +170,75 @@ def test_very_large_animals_are_clamped_and_flagged(tmp_path):
     stats = measure_pose_geometry(paths, labels, K)
     assert stats.clamped is True
     assert max(stats.suggested_hw) == MAX_SUGGESTED_SIZE
+
+
+def test_elongated_wide_and_oversized_dataset_preserves_aspect(tmp_path):
+    """The blocker fix: capping the pair (not each dimension independently)
+    must preserve the aspect ratio through the cap, not collapse it to a
+    square.
+
+    Fixture: box 900x450px (aspect 2.0, long side 900 > the 384 cap).
+    By hand via `_reduce_pair(900, 450)`: scale factor = 384/900 = 0.4267;
+    (900, 450) * 0.4267 = (384.0, 192.0); short side (192) is well above the
+    64 floor, so no floor override; both are already on-grid -> (384, 192).
+    suggested_hw = [H, W] = [192, 384].
+    """
+    paths = []
+    for i in range(3):
+        p, labels = _write_frame(
+            tmp_path, f"f{i}", (1000, 1000), [(50, 50, 950, 500, True)]
+        )
+        paths.append(p)
+    stats = measure_pose_geometry(paths, labels, K)
+    assert stats.median_aspect == pytest.approx(2.0)
+    assert stats.clamped is True
+    h, w = stats.suggested_hw
+    assert w > h
+    assert stats.suggested_hw == [192, 384]
+    assert (w / h) == pytest.approx(2.0)
+
+
+def test_elongated_tall_and_oversized_dataset_preserves_aspect(tmp_path):
+    """Mirror of the wide case: box 450x900px (aspect 0.5, long side 900).
+    By hand via `_reduce_pair(450, 900)`: symmetric to the wide case ->
+    (192, 384) for (w, h), i.e. suggested_hw = [384, 192].
+    """
+    paths = []
+    for i in range(3):
+        p, labels = _write_frame(
+            tmp_path, f"f{i}", (1000, 1000), [(50, 50, 500, 950, True)]
+        )
+        paths.append(p)
+    stats = measure_pose_geometry(paths, labels, K)
+    assert stats.median_aspect == pytest.approx(0.5)
+    assert stats.clamped is True
+    h, w = stats.suggested_hw
+    assert h > w
+    assert stats.suggested_hw == [384, 192]
+    assert (h / w) == pytest.approx(2.0)
+
+
+def test_extreme_aspect_below_floor_is_now_flagged_clamped(tmp_path):
+    """The floor case from the review: aspect 4.0, long side 128px. Under the
+    old per-dimension `_snap`, the height (32px raw) got floored to 64px
+    silently, with `clamped` left False even though the aspect was
+    distorted from 4.0 to 2.0. It must now report `clamped=True`.
+
+    By hand via `_reduce_pair(128, 32)`: long side 128 < the 384 cap, so no
+    cap-scaling; short side 32 < the 64 floor, so height is raised to 64
+    (width left at 128); both already on-grid -> (128, 64).
+    suggested_hw = [H, W] = [64, 128].
+    """
+    paths = []
+    for i in range(3):
+        p, labels = _write_frame(
+            tmp_path, f"f{i}", (200, 200), [(10, 10, 138, 42, True)]
+        )
+        paths.append(p)
+    stats = measure_pose_geometry(paths, labels, K)
+    assert stats.median_aspect == pytest.approx(4.0)
+    assert stats.suggested_hw == [64, 128]
+    assert stats.clamped is True
 
 
 def test_p90_is_reported_and_at_least_the_median(tmp_path):

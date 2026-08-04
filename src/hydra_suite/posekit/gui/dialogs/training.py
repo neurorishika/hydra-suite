@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -1619,6 +1620,10 @@ class TrainingRunnerDialog(QDialog):
         from hydra_suite.training.pose_geometry_measure import measure_pose_geometry
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        stats = None
+        value_error: Optional[ValueError] = None
+        unexpected_error: Optional[Exception] = None
+        unexpected_traceback: Optional[str] = None
         try:
             stats = measure_pose_geometry(
                 self.image_paths,
@@ -1627,23 +1632,47 @@ class TrainingRunnerDialog(QDialog):
                 detail=float(self.vitpose_detail_spin.value()),
             )
         except ValueError as exc:
-            self.vitpose_size_summary.setText(f"Could not measure: {exc}")
-            return
+            value_error = exc
         except Exception as exc:  # unexpected: surface it, do not guess a size
-            QMessageBox.warning(self, "Auto-size failed", str(exc))
-            return
+            # Captured HERE, inside the except clause: sys.exc_info() is only
+            # populated while the clause is active, so grabbing the traceback
+            # text after `finally` would silently yield "NoneType: None".
+            unexpected_error = exc
+            unexpected_traceback = traceback.format_exc()
         finally:
             QApplication.restoreOverrideCursor()
+
+        # QMessageBox is shown after the cursor is restored (not inside the
+        # `try`), so the modal doesn't pop up under the wait-cursor's nested
+        # event loop.
+        if value_error is not None:
+            self.vitpose_size_summary.setText(f"Could not measure: {value_error}")
+            return
+        if unexpected_error is not None:
+            self._append_log(unexpected_traceback)
+            QMessageBox.warning(self, "Auto-size failed", str(unexpected_error))
+            return
 
         h, w = stats.suggested_hw
         self.vitpose_h_spin.setValue(h)
         self.vitpose_w_spin.setValue(w)
-        note = " (clamped to the 384 cap)" if stats.clamped else ""
+        note = " (clamped: may not match the measured aspect)" if stats.clamped else ""
+        low_confidence = (
+            " Low confidence: fewer than 10 instances measured."
+            if stats.sample_count < 10
+            else ""
+        )
+        skipped_note = (
+            f"; {stats.frames_skipped} frame(s) skipped (unreadable/unusable)"
+            if stats.frames_skipped
+            else ""
+        )
         self.vitpose_size_summary.setText(
-            f"{stats.sample_count} instance(s) over {stats.frames_scanned} frame(s); "
+            f"{stats.sample_count} instance(s) over {stats.frames_scanned} frame(s)"
+            f"{skipped_note}; "
             f"median aspect {stats.median_aspect:.2f}, median long side "
             f"{stats.median_long_px:.0f}px, p90 {stats.p90_long_px:.0f}px "
-            f"-> {h}x{w}{note}"
+            f"-> {h}x{w}{note}.{low_confidence}"
         )
         self._append_log(
             f"[ViTPose] Auto-sized to {h}x{w} from {stats.sample_count} instance(s)"

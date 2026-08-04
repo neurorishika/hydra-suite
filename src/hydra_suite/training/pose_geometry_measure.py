@@ -9,6 +9,16 @@ Sizing targets the bare keypoint extent on purpose. Inference already pads by
 PADDING_FACTOR = 1.25 inside `box2cs` before warping, so the model sees more than
 the animal; the `detail` multiplier is for operator preference, not to compensate
 for that padding.
+
+Known divergence from the trainer: this estimator measures the visible-keypoint
+extent, but the trainer actually crops the label's STORED bbox, which PoseKit
+derives from those same keypoints plus an ISOTROPIC pad. The stored box is
+therefore both larger and closer to aspect 1 than what we measure here, so the
+suggestion this module produces runs slightly small and slightly more elongated
+than the crop the trainer will really use. The `detail` knob absorbs the scale
+part of that gap (make the suggestion bigger) but it cannot absorb the aspect
+part -- that would require measuring the stored bbox instead of the keypoint
+extent, which is a design decision reserved for the user, not fixed here.
 """
 
 from __future__ import annotations
@@ -19,7 +29,7 @@ from pathlib import Path
 from typing import List, Sequence, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 SIZE_MULTIPLE = 32
 MIN_SIZE = 64
@@ -39,18 +49,51 @@ class PoseSizeStats:
     median_long_px: float
     p90_long_px: float
     suggested_hw: List[int]  # [H, W]
-    clamped: bool
+    clamped: bool  # suggestion was constrained (cap and/or floor); may not
+    # match the measured aspect -- see `_reduce_pair`.
 
 
-def _snap(value: float) -> Tuple[int, bool]:
-    """Round to the nearest multiple of 32 and clamp; report whether capped."""
-    snapped = int(round(value / SIZE_MULTIPLE)) * SIZE_MULTIPLE
-    clamped = False
-    if snapped > MAX_SUGGESTED_SIZE:
-        snapped, clamped = MAX_SUGGESTED_SIZE, True
-    if snapped < MIN_SIZE:
-        snapped = MIN_SIZE
-    return snapped, clamped
+def _snap_to_grid(value: float) -> int:
+    """Round to the nearest multiple of 32 (never below one multiple)."""
+    return max(SIZE_MULTIPLE, int(round(value / SIZE_MULTIPLE)) * SIZE_MULTIPLE)
+
+
+def _reduce_pair(raw_w: float, raw_h: float) -> Tuple[int, int, bool]:
+    """Constrain a raw (width, height) pair to the size cap/floor and snap it.
+
+    The cap and the floor are applied to the PAIR, not to each dimension
+    independently -- clamping width and height separately discards the aspect
+    ratio exactly when it matters most (a 900x100px worm would collapse to a
+    384x384 square). Order of operations:
+
+      1. Scale the whole pair down (uniformly) so the long side respects
+         MAX_SUGGESTED_SIZE. This step always preserves the aspect ratio.
+      2. If the short side is still below MIN_SIZE after that scale, raise
+         just that side to MIN_SIZE. At an extreme aspect ratio (long side
+         already capped, short side still under the floor) both constraints
+         cannot be satisfied at once; the aspect genuinely cannot be
+         honoured here, and that is reported via `clamped`, not hidden.
+      3. Snap both sides to the nearest multiple of 32 last, so the final
+         suggestion stays on-grid.
+
+    `clamped` is True whenever step 1 scaled the pair down OR step 2 had to
+    override a side -- i.e. whenever the returned pair may not match the
+    measured aspect ratio.
+    """
+    long_side = max(raw_w, raw_h)
+    scale = MAX_SUGGESTED_SIZE / long_side if long_side > MAX_SUGGESTED_SIZE else 1.0
+    w = raw_w * scale
+    h = raw_h * scale
+    clamped = scale < 1.0
+
+    if w < MIN_SIZE:
+        w = MIN_SIZE
+        clamped = True
+    if h < MIN_SIZE:
+        h = MIN_SIZE
+        clamped = True
+
+    return _snap_to_grid(w), _snap_to_grid(h), clamped
 
 
 def _instance_extents(
@@ -129,7 +172,7 @@ def measure_pose_geometry(
             with Image.open(img_path) as im:
                 w_px, h_px = im.size
             text = label_path.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, ValueError, UnidentifiedImageError):
             skipped += 1
             continue
         extents = _instance_extents(text, num_keypoints, int(w_px), int(h_px))
@@ -162,8 +205,7 @@ def measure_pose_geometry(
     else:
         raw_h, raw_w = long_side, long_side * median_aspect
 
-    snapped_w, clamped_w = _snap(raw_w)
-    snapped_h, clamped_h = _snap(raw_h)
+    snapped_w, snapped_h, clamped = _reduce_pair(raw_w, raw_h)
     return PoseSizeStats(
         sample_count=len(widths),
         frames_scanned=scanned,
@@ -172,5 +214,5 @@ def measure_pose_geometry(
         median_long_px=median_long,
         p90_long_px=p90_long,
         suggested_hw=[snapped_h, snapped_w],
-        clamped=clamped_w or clamped_h,
+        clamped=clamped,
     )

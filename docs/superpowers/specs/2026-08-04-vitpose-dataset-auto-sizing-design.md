@@ -65,7 +65,8 @@ class PoseSizeStats:
     median_long_px: float
     p90_long_px: float
     suggested_hw: list[int]    # [H, W], multiples of 32, within [64, 384]
-    clamped: bool              # the raw suggestion exceeded the cap
+    clamped: bool              # suggestion was constrained (cap and/or floor);
+                                # may not match the measured aspect
 
 def measure_pose_geometry(
     image_paths: Sequence[Path],
@@ -104,9 +105,24 @@ def measure_pose_geometry(
    if median_aspect >= 1.0:   W, H = long, long / median_aspect
    else:                      H, W = long, long * median_aspect
    ```
-8. **Snap and clamp.** Round each dimension to the nearest multiple of 32 (ClassKit's
-   rule for rescaled values, `classkit/gui/dialogs/training.py:97-104`), then clamp to
-   `[64, 384]`. Set `clamped=True` if either dimension was capped.
+8. **Cap, floor, and snap the PAIR, ratio-preserving.** The cap and the floor are
+   applied to the (W, H) pair together, not to each dimension independently —
+   clamping width and height separately discards the aspect ratio exactly when it
+   matters most (e.g. a 900x100px worm would otherwise collapse to a 384x384
+   square suggestion).
+   1. Scale the whole pair down uniformly so the long side respects the 384 cap;
+      this step always preserves the aspect ratio.
+   2. If the short side is still below the 64 floor after that scale, raise just
+      that side to 64. At an extreme aspect ratio (long side already capped, short
+      side still under the floor) both constraints cannot be satisfied at once —
+      the aspect genuinely cannot be honoured, and that is reported, not hidden.
+   3. Snap both sides to the nearest multiple of 32 (ClassKit's rule for rescaled
+      values, `classkit/gui/dialogs/training.py:97-104`) last, so the output stays
+      on-grid.
+
+   `clamped` means "the suggestion was constrained and may not match the measured
+   aspect" — set when step 1 scaled the pair down, OR when step 2 had to override a
+   side.
 
 ### Why no extra padding factor
 
@@ -154,8 +170,11 @@ Contents:
 - **Detail** — `QDoubleSpinBox`, range `0.25`–`4.0`, step `0.25`, default `1.0`,
   suffix `x`. Mirrors ClassKit's `_auto_size_scale_spin`
   (`classkit/gui/dialogs/training.py:848-856`).
-- **Auto from dataset** — `QPushButton`. Disabled when the project has no labelled
-  frames.
+- **Auto from dataset** — `QPushButton`. Always enabled; a project with no labelled
+  frames yet is reported via the summary label ("Could not measure: no labelled
+  frames found under …") rather than silently greyed out. Explaining is more useful
+  than disabling: an operator staring at a disabled button gets no information about
+  why, while the summary text says exactly what is missing.
 - **Summary label** — after a measurement, reports sample count, median aspect,
   median and p90 long side, and says so explicitly when the suggestion was clamped.
   The p90 is the number that tells the operator whether the median is representative
