@@ -7,6 +7,8 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from .safe_globals import ensure_numpy_safe_globals
+
 
 class CheckpointKeyError(RuntimeError):
     """Raised when checkpoint keys do not match the model."""
@@ -15,6 +17,7 @@ class CheckpointKeyError(RuntimeError):
 def load_checkpoint(model: nn.Module, path: Path, strict: bool = True) -> None:
     # weights_only=True is mandatory: these checkpoints come from a third-party
     # re-host, and the default (False) unpickles arbitrary objects.
+    ensure_numpy_safe_globals()
     blob = torch.load(path, map_location="cpu", weights_only=True)
     state = blob["state_dict"] if "state_dict" in blob else blob
     missing, unexpected = model.load_state_dict(state, strict=False)

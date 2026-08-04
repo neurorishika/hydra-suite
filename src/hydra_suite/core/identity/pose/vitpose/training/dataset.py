@@ -8,12 +8,18 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from ..config import HEATMAP_SIZE_WH, IMAGE_SIZE_WH
+from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import affine_matrix, box2cs, normalize, top_down_affine
 from .targets import generate_udp_gaussian
 
-FEAT_STRIDE = (np.array(IMAGE_SIZE_WH, np.float32) - 1.0) / (
-    np.array(HEATMAP_SIZE_WH, np.float32) - 1.0
+# Kept for backward compatibility: some callers/tests reach for the
+# process-wide default stride directly. Per-instance geometry now lives on
+# CocoKeypointsDataset._feat_stride (see __init__). This constant's value is
+# bit-identical to its pre-branch value ([4.06383, 4.047619] for
+# DEFAULT_GEOMETRY's 192x256 / 48x64), since DEFAULT_GEOMETRY reproduces the
+# historical 192x256 constants exactly.
+FEAT_STRIDE = (np.array(DEFAULT_GEOMETRY.image_size_wh, np.float32) - 1.0) / (
+    np.array(DEFAULT_GEOMETRY.heatmap_size_wh, np.float32) - 1.0
 )
 
 # augmentation ranges (no flip, per spec)
@@ -38,13 +44,22 @@ def _warp_joints(joints_xy: np.ndarray, matrix: np.ndarray) -> np.ndarray:
 
 class CocoKeypointsDataset(Dataset):
     def __init__(
-        self, dataset_dir: Path, ids: list[int], sigma: float, augment: bool
+        self,
+        dataset_dir: Path,
+        ids: list[int],
+        sigma: float,
+        augment: bool,
+        geom: PoseGeometry = DEFAULT_GEOMETRY,
     ) -> None:
         self.dir = Path(dataset_dir)
         self.ids, self.index = load_coco_index(dataset_dir)
         self.ids = [i for i in ids if i in self.index]
         self.sigma = float(sigma)
         self.augment = bool(augment)
+        self.geom = geom
+        self._feat_stride = (np.array(geom.image_size_wh, np.float32) - 1.0) / (
+            np.array(geom.heatmap_size_wh, np.float32) - 1.0
+        )
 
     def __len__(self) -> int:
         return len(self.ids)
@@ -55,7 +70,7 @@ class CocoKeypointsDataset(Dataset):
             str(self.dir / "images" / img_meta["file_name"]), cv2.IMREAD_COLOR
         )
         kp = np.array(ann["keypoints"], np.float32).reshape(-1, 3)
-        center, scale = box2cs(np.array(ann["bbox"], np.float32))
+        center, scale = box2cs(np.array(ann["bbox"], np.float32), geom=self.geom)
 
         rot = 0.0
         if self.augment:
@@ -71,20 +86,20 @@ class CocoKeypointsDataset(Dataset):
                     )
                 )
 
-        warped = top_down_affine(img, center, scale, rot)
+        warped = top_down_affine(img, center, scale, rot, geom=self.geom)
         if self.augment:
             warped = _photometric(warped)
         image = torch.from_numpy(normalize(warped))
 
-        matrix = affine_matrix(center, scale, rot)
+        matrix = affine_matrix(center, scale, rot, geom=self.geom)
         joints_in = _warp_joints(kp[:, :2], matrix)  # input-crop space
-        joints_hm = joints_in / FEAT_STRIDE  # heatmap space
+        joints_hm = joints_in / self._feat_stride  # heatmap space
         vis = kp[:, 2]
         # Zero out visibility (for target/weight generation only) for joints
         # that warp outside the heatmap bounds under augmentation, so
         # JointsMSELoss does not train those channels toward "no keypoint
         # anywhere" on samples where the joint was actually present.
-        w_hm, h_hm = HEATMAP_SIZE_WH
+        w_hm, h_hm = self.geom.heatmap_size_wh
         in_bounds = (
             (joints_hm[:, 0] >= 0)
             & (joints_hm[:, 0] <= w_hm - 1)
@@ -93,7 +108,7 @@ class CocoKeypointsDataset(Dataset):
         )
         vis_eff = vis * in_bounds.astype(vis.dtype)
         target, weight = generate_udp_gaussian(
-            joints_hm, vis_eff, HEATMAP_SIZE_WH, self.sigma
+            joints_hm, vis_eff, self.geom.heatmap_size_wh, self.sigma
         )
 
         return {

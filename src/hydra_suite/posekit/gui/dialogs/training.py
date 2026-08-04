@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -323,6 +325,7 @@ class ViTPoseTrainingWorker(QObject):
         epochs,
         batch,
         device,
+        input_size=None,
     ):
         super().__init__()
         self.image_paths = list(image_paths)
@@ -338,6 +341,7 @@ class ViTPoseTrainingWorker(QObject):
         self.epochs = int(epochs)
         self.batch = int(batch)
         self.device = device
+        self.input_size = list(input_size) if input_size else None
         self._cancel = False
         self._proc = None
 
@@ -369,6 +373,7 @@ class ViTPoseTrainingWorker(QObject):
                 device=self.device,
                 epochs=self.epochs,
                 batch_size=self.batch,
+                input_size=self.input_size,
             )
             run_json = prepare_run(params, self.run_dir, self.cache_dir)
             cmd = build_training_command(run_json)
@@ -698,6 +703,42 @@ class TrainingRunnerDialog(QDialog):
         self.vitpose_checkpoint_combo.setEditable(True)
         self.vitpose_checkpoint_combo.addItems(list(CATALOG.keys()) + ["Browse…"])
         vitpose_layout.addRow("Init checkpoint", self.vitpose_checkpoint_combo)
+
+        # Input geometry. Spin ranges deliberately exceed the auto-suggestion
+        # cap of 384: the operator may type a larger value on purpose; the
+        # estimator just will not propose one.
+        self.vitpose_h_spin = QSpinBox()
+        self.vitpose_h_spin.setRange(64, 1024)
+        self.vitpose_h_spin.setSingleStep(32)
+        self.vitpose_h_spin.setValue(256)
+        self.vitpose_w_spin = QSpinBox()
+        self.vitpose_w_spin.setRange(64, 1024)
+        self.vitpose_w_spin.setSingleStep(32)
+        self.vitpose_w_spin.setValue(192)
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("H"))
+        size_row.addWidget(self.vitpose_h_spin)
+        size_row.addWidget(QLabel("W"))
+        size_row.addWidget(self.vitpose_w_spin)
+        vitpose_layout.addRow("Input size", size_row)
+
+        self.vitpose_detail_spin = QDoubleSpinBox()
+        self.vitpose_detail_spin.setRange(0.25, 4.0)
+        self.vitpose_detail_spin.setSingleStep(0.25)
+        self.vitpose_detail_spin.setValue(1.0)
+        self.vitpose_detail_spin.setSuffix("x")
+        self.vitpose_auto_btn = QPushButton("Auto from dataset")
+        self.vitpose_auto_btn.clicked.connect(self._auto_size_from_dataset)
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(QLabel("Detail"))
+        auto_row.addWidget(self.vitpose_detail_spin)
+        auto_row.addWidget(self.vitpose_auto_btn)
+        auto_row.addStretch(1)
+        vitpose_layout.addRow("", auto_row)
+
+        self.vitpose_size_summary = QLabel("")
+        self.vitpose_size_summary.setWordWrap(True)
+        vitpose_layout.addRow("", self.vitpose_size_summary)
 
         content_layout.addWidget(self.vitpose_group)
 
@@ -1153,6 +1194,15 @@ class TrainingRunnerDialog(QDialog):
             self.sleap_out_edit.setText(sleap_out)
         elif not self.sleap_out_edit.text().strip():
             self.sleap_out_edit.setText(str(self._default_sleap_out_path()))
+        self.vitpose_h_spin.setValue(
+            int(settings.get("vitpose_input_h", self.vitpose_h_spin.value()))
+        )
+        self.vitpose_w_spin.setValue(
+            int(settings.get("vitpose_input_w", self.vitpose_w_spin.value()))
+        )
+        self.vitpose_detail_spin.setValue(
+            float(settings.get("vitpose_detail", self.vitpose_detail_spin.value()))
+        )
 
     def _apply_latest_weights_default(self):
         if (
@@ -1389,6 +1439,9 @@ class TrainingRunnerDialog(QDialog):
                 "sleap_out_path": self.sleap_out_edit.text().strip(),
                 "sleap_embed": bool(self.cb_sleap_embed.isChecked()),
                 "sleap_include_aux": bool(self.cb_sleap_include_aux.isChecked()),
+                "vitpose_input_h": int(self.vitpose_h_spin.value()),
+                "vitpose_input_w": int(self.vitpose_w_spin.value()),
+                "vitpose_detail": float(self.vitpose_detail_spin.value()),
             },
         )
 
@@ -1557,6 +1610,75 @@ class TrainingRunnerDialog(QDialog):
         self.btn_stop.setEnabled(True)
         self.btn_open_eval.setEnabled(False)
 
+    def _auto_size_from_dataset(self):
+        """Measure the labelled data and propose an input geometry.
+
+        Synchronous under a wait cursor: this is a few hundred image-header
+        reads (not decodes), so a worker thread would add failure modes without
+        buying responsiveness.
+        """
+        from hydra_suite.training.pose_geometry_measure import measure_pose_geometry
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        stats = None
+        value_error: Optional[ValueError] = None
+        unexpected_error: Optional[Exception] = None
+        unexpected_traceback: Optional[str] = None
+        try:
+            stats = measure_pose_geometry(
+                self.image_paths,
+                self.project.labels_dir,
+                len(self.project.keypoint_names),
+                detail=float(self.vitpose_detail_spin.value()),
+            )
+        except ValueError as exc:
+            value_error = exc
+        except Exception as exc:  # unexpected: surface it, do not guess a size
+            # Captured HERE, inside the except clause: sys.exc_info() is only
+            # populated while the clause is active, so grabbing the traceback
+            # text after `finally` would silently yield "NoneType: None".
+            unexpected_error = exc
+            unexpected_traceback = traceback.format_exc()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        # QMessageBox is shown after the cursor is restored (not inside the
+        # `try`), so the modal doesn't pop up under the wait-cursor's nested
+        # event loop.
+        if value_error is not None:
+            self.vitpose_size_summary.setText(f"Could not measure: {value_error}")
+            return
+        if unexpected_error is not None:
+            self._append_log(unexpected_traceback)
+            QMessageBox.warning(self, "Auto-size failed", str(unexpected_error))
+            return
+
+        h, w = stats.suggested_hw
+        self.vitpose_h_spin.setValue(h)
+        self.vitpose_w_spin.setValue(w)
+        note = " (clamped: may not match the measured aspect)" if stats.clamped else ""
+        low_confidence = (
+            " Low confidence: fewer than 10 instances measured."
+            if stats.sample_count < 10
+            else ""
+        )
+        skipped_note = (
+            f"; {stats.frames_skipped} frame(s) skipped (unreadable/unusable)"
+            if stats.frames_skipped
+            else ""
+        )
+        self.vitpose_size_summary.setText(
+            f"{stats.sample_count} instance(s) over {stats.frames_scanned} frame(s)"
+            f"{skipped_note}; "
+            f"median aspect {stats.median_aspect:.2f}, median long side "
+            f"{stats.median_long_px:.0f}px, p90 {stats.p90_long_px:.0f}px "
+            f"-> {h}x{w}{note}.{low_confidence}"
+        )
+        self._append_log(
+            f"[ViTPose] Auto-sized to {h}x{w} from {stats.sample_count} instance(s)"
+            f"{note}"
+        )
+
     def _start_vitpose_training(self):
         labeled_count = len(
             list_labeled_indices(self.image_paths, self.project.labels_dir)
@@ -1613,6 +1735,10 @@ class TrainingRunnerDialog(QDialog):
             epochs=self.epochs_spin.value(),
             batch=self.batch_spin.value(),
             device=self.device_combo.currentText(),
+            input_size=[
+                int(self.vitpose_h_spin.value()),
+                int(self.vitpose_w_spin.value()),
+            ],
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)

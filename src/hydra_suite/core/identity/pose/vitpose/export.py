@@ -18,7 +18,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from .config import IMAGE_SIZE_WH
+from .geometry import DEFAULT_GEOMETRY, PoseGeometry
 
 
 class ExportError(RuntimeError):
@@ -53,13 +53,15 @@ def export_onnx(
     opset: int = 17,
     dynamic_batch: bool = True,
     dataset_index: int | None = None,
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
 ) -> Path:
-    """Export ViTPose to ONNX at a fixed 256x192 input.
+    """Export ViTPose to ONNX at a fixed input resolution.
 
-    Fixed resolution is not a limitation we chose: pos_embed is a (1, 193, D)
-    parameter with no interpolation path, and constant-folding bakes the
-    [:, 1:] + [:, :1] slice-add into a constant. 256x192 is the only shape
-    the checkpoints target.
+    Fixed resolution is not a limitation we chose: pos_embed.py provides an
+    interpolation path for other resolutions, but the shape is baked into the
+    exported graph regardless -- constant-folding bakes the [:, 1:] + [:, :1]
+    slice-add into a constant. The shape is fixed per exported artifact, not
+    globally: it is whatever ``geom`` specifies (default 256x192).
 
     opset 17, not 11: mmpose's exporter asserts opset_version == 11, but
     that is an mmpose-era constraint, not a model one.
@@ -74,7 +76,7 @@ def export_onnx(
             f"tolerates -- request opset={_MIN_OPSET} or higher."
         )
 
-    w, h = IMAGE_SIZE_WH
+    w, h = geom.image_size_wh
     dummy = torch.zeros(1, 3, h, w)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -221,14 +223,18 @@ def export_coreml(
     path: Path,
     *,
     compute_units: str = "ALL",
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
 ) -> Path:
-    """Export ViTPose to a CoreML .mlpackage at a fixed (1, 3, 256, 192) input.
+    """Export ViTPose to a CoreML .mlpackage at a fixed (1, 3, H, W) input, where
+    (H, W) is whatever ``geom`` specifies (default 256x192).
 
     Batch stays 1, not dynamic: the OBB CoreML path pins batch=1 for a documented
     reason (core/inference/runtime_artifacts.py:293-299) -- dynamic batch combined
-    with spatial dims crashes the CoreML compiler. This model has the same fixed-
-    resolution constraint as export_onnx (pos_embed has no interpolation path), so
-    a fully-static input shape costs nothing extra here.
+    with spatial dims crashes the CoreML compiler. Like export_onnx, the spatial
+    shape is fixed per exported artifact, not globally: pos_embed.py does provide
+    an interpolation path for other resolutions, but constant-folding still bakes
+    the traced shape into the artifact, so a fully-static input shape costs
+    nothing extra here.
 
     Uses torch.jit.trace + coremltools' mlprogram conversion, mirroring the OBB
     export path's use of ultralytics' underlying trace-based CoreML conversion.
@@ -237,7 +243,7 @@ def export_coreml(
 
     _require_eval_mode(model)
 
-    w, h = IMAGE_SIZE_WH
+    w, h = geom.image_size_wh
     dummy = torch.zeros(1, 3, h, w)
     path.parent.mkdir(parents=True, exist_ok=True)
 

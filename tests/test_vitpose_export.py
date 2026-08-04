@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from hydra_suite.core.identity.pose.vitpose.export import ExportError, export_onnx
+from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
 from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
 from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
 
@@ -61,6 +62,32 @@ def test_legacy_exporter_rejection_raises_export_error(tmp_path, monkeypatch):
     monkeypatch.setattr(export_mod.torch.onnx, "export", _raise_import_error)
     with pytest.raises(ExportError, match="legacy exporter"):
         export_onnx(m, tmp_path / "y.onnx")
+
+
+def test_export_onnx_default_geometry_input_is_256x192(tmp_path):
+    """No geom kwarg -> DEFAULT_GEOMETRY (256x192), matching the historical constant."""
+    import onnx
+
+    m = build_vitpose("S", "classic", num_keypoints=9).eval()
+    onnx_path = export_onnx(m, tmp_path / "default.onnx")
+    graph_input = onnx.load(str(onnx_path)).graph.input[0]
+    dims = [d.dim_value for d in graph_input.type.tensor_type.shape.dim]
+    # [batch, channels, H, W]; batch is a dynamic dim (dim_value == 0 there).
+    assert dims[2:] == [256, 192]
+
+
+def test_export_onnx_honours_a_non_default_geometry(tmp_path):
+    """A square geom kwarg must reshape the exported graph's spatial dims, not
+    silently keep exporting at the default 256x192."""
+    import onnx
+
+    m = build_vitpose(
+        "S", "classic", num_keypoints=9, geom=PoseGeometry((256, 256))
+    ).eval()
+    onnx_path = export_onnx(m, tmp_path / "square.onnx", geom=PoseGeometry((256, 256)))
+    graph_input = onnx.load(str(onnx_path)).graph.input[0]
+    dims = [d.dim_value for d in graph_input.type.tensor_type.shape.dim]
+    assert dims[2:] == [256, 256]
 
 
 @requires_weights

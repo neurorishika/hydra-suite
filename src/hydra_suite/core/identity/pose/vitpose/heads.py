@@ -1,7 +1,7 @@
 """ViTPose heatmap heads.
 
 Both are upstream's TopdownHeatmapSimpleHead; the config chooses between them.
-Input (B, D, 16, 12) -> output (B, K, 64, 48).
+Input (B, D, 16, 12) -> output (B, K, 64, 48) at the default geometry.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .config import HEATMAP_SIZE_WH
+from .geometry import DEFAULT_GEOMETRY, PoseGeometry
 
 
 class ClassicHead(nn.Module):
@@ -39,14 +39,20 @@ class SimpleHead(nn.Module):
     Upstream applies ReLU inside _transform_inputs, i.e. BEFORE the upsample.
     """
 
-    def __init__(self, embed_dim: int, num_keypoints: int) -> None:
+    def __init__(
+        self,
+        embed_dim: int,
+        num_keypoints: int,
+        geom: PoseGeometry = DEFAULT_GEOMETRY,
+    ) -> None:
         super().__init__()
         self.deconv_layers = nn.Identity()
         self.final_layer = nn.Conv2d(embed_dim, num_keypoints, 3, 1, 1)
+        self._heatmap_size_wh = geom.heatmap_size_wh
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.relu(x)
-        w, h = HEATMAP_SIZE_WH
+        w, h = self._heatmap_size_wh
         # Explicit size (not scale_factor): scale_factor traces to a Resize with
         # computed sizes and is the classic ONNX shape-mismatch source. Same
         # result here, exportable later. align_corners=False is upstream's.
@@ -54,9 +60,14 @@ class SimpleHead(nn.Module):
         return self.final_layer(self.deconv_layers(x))
 
 
-def build_head(kind: str, embed_dim: int, num_keypoints: int) -> nn.Module:
+def build_head(
+    kind: str,
+    embed_dim: int,
+    num_keypoints: int,
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
+) -> nn.Module:
     if kind == "classic":
         return ClassicHead(embed_dim, num_keypoints)
     if kind == "simple":
-        return SimpleHead(embed_dim, num_keypoints)
+        return SimpleHead(embed_dim, num_keypoints, geom)
     raise ValueError(f"unknown head kind: {kind!r} (expected 'classic'|'simple')")

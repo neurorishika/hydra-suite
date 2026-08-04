@@ -9,8 +9,9 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from ..config import HEATMAP_SIZE_WH, VARIANTS
+from ..config import VARIANTS
 from ..decode import decode_udp_cv2
+from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..transforms import transform_preds
 from .config import RunConfig
 from .dataset import CocoKeypointsDataset, load_coco_index
@@ -42,10 +43,20 @@ def train(cfg: RunConfig) -> dict:
     cfg.to_json(out_dir / "run.json")
     device = torch.device(cfg.device)
 
+    geom = (
+        PoseGeometry.from_hw(cfg.input_size)
+        if cfg.input_size is not None
+        else DEFAULT_GEOMETRY
+    )
+
     all_ids, _ = load_coco_index(Path(cfg.dataset_dir))
     train_ids, val_ids = _split(all_ids, cfg.val_fraction, cfg.seed)
-    train_ds = CocoKeypointsDataset(cfg.dataset_dir, train_ids, cfg.sigma, augment=True)
-    val_ds = CocoKeypointsDataset(cfg.dataset_dir, val_ids, cfg.sigma, augment=False)
+    train_ds = CocoKeypointsDataset(
+        cfg.dataset_dir, train_ids, cfg.sigma, augment=True, geom=geom
+    )
+    val_ds = CocoKeypointsDataset(
+        cfg.dataset_dir, val_ids, cfg.sigma, augment=False, geom=geom
+    )
     train_loader = DataLoader(
         train_ds, batch_size=cfg.batch_size, shuffle=True, num_workers=0
     )
@@ -53,8 +64,10 @@ def train(cfg: RunConfig) -> dict:
         val_ds, batch_size=cfg.batch_size, shuffle=False, num_workers=0
     )
 
-    model = build_finetune_model(cfg.variant, cfg.num_keypoints, cfg.drop_path)
-    load_finetune_init(model, Path(cfg.init_checkpoint))
+    model = build_finetune_model(
+        cfg.variant, cfg.num_keypoints, cfg.drop_path, geom=geom
+    )
+    load_finetune_init(model, Path(cfg.init_checkpoint), geom=geom)
     model.to(device)
 
     groups = build_param_groups(
@@ -110,7 +123,7 @@ def train(cfg: RunConfig) -> dict:
         sched.step()
         train_loss = running / max(n, 1)
 
-        val = run_validation(model, val_loader, device)
+        val = run_validation(model, val_loader, device, geom=geom)
         p05, p10 = val["pck"][0.05], val["pck"][0.1]
         print(
             f"EPOCH {epoch} train_loss={train_loss:.5f} val_loss={val['val_loss']:.5f} "
@@ -133,6 +146,7 @@ def train(cfg: RunConfig) -> dict:
             "optim_state": opt.state_dict(),
             "variant": cfg.variant,
             "num_keypoints": cfg.num_keypoints,
+            "input_size": geom.to_hw(),
             "epoch": epoch,
             "pck": p05,
             "sched_state": sched.state_dict(),
@@ -143,13 +157,19 @@ def train(cfg: RunConfig) -> dict:
             torch.save(ckpt, out_dir / "best.pt")
 
     _write_val_overlays(
-        model, val_ds, device, out_dir / "val_overlays", cfg.num_keypoints
+        model, val_ds, device, out_dir / "val_overlays", cfg.num_keypoints, geom=geom
     )
     return {"best_pck": best_pck, "best_epoch": best_epoch, "output_dir": str(out_dir)}
 
 
 def _write_val_overlays(
-    model, val_ds, device, dst: Path, k: int, limit: int = 6
+    model,
+    val_ds,
+    device,
+    dst: Path,
+    k: int,
+    limit: int = 6,
+    geom: PoseGeometry = DEFAULT_GEOMETRY,
 ) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     model.eval()
@@ -159,7 +179,7 @@ def _write_val_overlays(
             out = model(s["image"].unsqueeze(0).to(device)).cpu().numpy()
             coords, _ = decode_udp_cv2(out, kernel=11)
             pred = transform_preds(
-                coords[0], s["center"].numpy(), s["scale"].numpy(), HEATMAP_SIZE_WH
+                coords[0], s["center"].numpy(), s["scale"].numpy(), geom.heatmap_size_wh
             )
             img = cv2.imread(
                 str(val_ds.dir / "images" / val_ds.index[val_ds.ids[i]][1]["file_name"])

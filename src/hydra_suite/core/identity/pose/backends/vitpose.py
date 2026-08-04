@@ -20,7 +20,6 @@ from ..artifacts import (
 from ..types import PoseResult
 from ..utils import summarize_keypoints
 from ..vitpose.adapter import load_finetuned_checkpoint
-from ..vitpose.config import IMAGE_SIZE_WH
 from ..vitpose.export import build_tensorrt_engine, export_coreml, export_onnx
 from ..vitpose.infer import decode_and_project, preprocess_crop
 
@@ -52,6 +51,7 @@ class ViTPoseBackend:
         self._batch_size = int(batch_size)
         model, meta = load_finetuned_checkpoint(Path(model_path))
         self._meta = meta
+        self._geom = meta.geometry
         self._num_keypoints = meta.num_keypoints
         self.output_keypoint_names: List[str] = list(
             keypoint_names or [f"kp{i}" for i in range(meta.num_keypoints)]
@@ -79,7 +79,7 @@ class ViTPoseBackend:
 
     @property
     def preferred_input_size(self) -> int:
-        return IMAGE_SIZE_WH[1]  # 256 (H); the long side
+        return max(self._geom.image_size_wh)  # the long side
 
     def warmup(self) -> None:
         dummy = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -91,7 +91,7 @@ class ViTPoseBackend:
     def _forward_torch(self, batch_chw: np.ndarray) -> torch.Tensor:
         t = torch.from_numpy(batch_chw).to(self._device)
         with torch.no_grad():
-            return self._model(t)  # (B, K, 64, 48) on device
+            return self._model(t)  # (B, K, 64, 48) on device by default geometry
 
     def _forward(self, batch_chw: np.ndarray) -> torch.Tensor:
         if self._runner is not None:
@@ -127,14 +127,14 @@ class ViTPoseBackend:
             chunk = crops[start : start + self._batch_size]
             chws, centers, scales = [], [], []
             for crop in chunk:
-                chw, c, s = preprocess_crop(np.asarray(crop))
+                chw, c, s = preprocess_crop(np.asarray(crop), geom=self._geom)
                 chws.append(chw)
                 centers.append(c)
                 scales.append(s)
             batch = np.stack(chws, axis=0).astype(np.float32)
             heatmaps = self._forward(batch)
             coords, maxvals = decode_and_project(
-                heatmaps, np.stack(centers), np.stack(scales)
+                heatmaps, np.stack(centers), np.stack(scales), geom=self._geom
             )
             for i in range(len(chunk)):
                 kpts = np.concatenate([coords[i], maxvals[i]], axis=1)  # (K,3)
@@ -145,7 +145,12 @@ class ViTPoseBackend:
         self._model = None
 
 
-_VITPOSE_RECIPE_TAG = "vitpose-v1"
+# v2: input geometry became per-checkpoint, which changes the exported graph,
+# so every v1 artifact must be rebuilt once. The geometry itself is NOT in the
+# signature: it is a deterministic function of the checkpoint file, and
+# path_fingerprint_token already identifies that file. Adding it would force a
+# full torch.load on every cache probe for no discriminating power.
+_VITPOSE_RECIPE_TAG = "vitpose-v2"
 
 
 def _vitpose_artifact_signature(model_path: str, flavor: str) -> str:
@@ -174,13 +179,13 @@ def auto_export_vitpose_model(
     if artifact.exists() and artifact_meta_matches(artifact, signature):
         return str(artifact.resolve())
 
-    model, _meta = load_finetuned_checkpoint(model_path)
+    model, meta = load_finetuned_checkpoint(model_path)
     model.eval()
     if runtime_flavor == "coreml":
-        export_coreml(model, artifact)
+        export_coreml(model, artifact, geom=meta.geometry)
     elif runtime_flavor == "tensorrt":
         onnx_path = model_path.with_suffix(".onnx")
-        export_onnx(model, onnx_path)
+        export_onnx(model, onnx_path, geom=meta.geometry)
         build_tensorrt_engine(onnx_path, artifact, fp16=False)
     else:
         raise ValueError(f"auto_export_vitpose_model: bad flavor {runtime_flavor!r}")
