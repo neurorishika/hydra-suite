@@ -15,9 +15,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
+from hydra_suite.core.identity.pose.vitpose.safe_globals import (
+    ensure_numpy_safe_globals,
+)
 from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
 
 
@@ -44,3 +48,15 @@ def test_production_loader_reads_mmpose_shaped_checkpoint_with_numpy_scalars(tmp
     with torch.no_grad():
         out = model(torch.zeros(1, 3, 256, 192))
     assert out.shape == (1, 6, 64, 48)
+
+
+def test_ensure_numpy_safe_globals_refuses_old_numpy(monkeypatch):
+    monkeypatch.setattr(np, "__version__", "1.26.4")
+    with pytest.raises(RuntimeError, match="1.26.4"):
+        ensure_numpy_safe_globals()
+
+
+def test_ensure_numpy_safe_globals_accepts_installed_numpy():
+    # The installed numpy (2.3.5 at the time this test was written) must not
+    # raise -- this is the happy path the guard must not break.
+    ensure_numpy_safe_globals()
