@@ -121,7 +121,10 @@ def test_cli_session_ignores_orphaned_min_track_seconds_key(tmp_path):
     assert "MIN_TRACKING_COUNTS" not in session.params
 
 
-def test_cli_session_direct_run_support_is_gated_by_gui_owned_features(tmp_path):
+def test_cli_session_direct_run_always_supported_after_bridge_deletion(tmp_path):
+    """All tracker CLI sessions now support direct Qt-free execution.
+    The hidden-MainWindow bridge was deleted in Slice 4, so every session
+    runs the direct path via TrackingSessionCore in core/."""
     probe = TrackerCliVideoProbe(fps=20.0, total_frames=20, width=32, height=32)
 
     backward_session = load_tracker_cli_session(
@@ -146,8 +149,8 @@ def test_cli_session_direct_run_support_is_gated_by_gui_owned_features(tmp_path)
     )
 
     assert backward_session.supports_direct_run() is True
-    assert pose_session.supports_direct_run() is False
-    assert identity_session.supports_direct_run() is False
+    assert pose_session.supports_direct_run() is True
+    assert identity_session.supports_direct_run() is True
     assert simple_session.supports_direct_run() is True
 
 
