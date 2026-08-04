@@ -9,6 +9,7 @@ from ..geometry import DEFAULT_GEOMETRY, PoseGeometry
 from ..heads import build_head
 from ..model import ViT
 from ..pos_embed import grid_for_state, resize_pos_embed
+from ..safe_globals import ensure_numpy_safe_globals
 from ..vitpose import ViTPose
 from ..weights import CheckpointKeyError
 
@@ -46,6 +47,7 @@ def load_finetune_init(
     """Load a pretrained ViTPose checkpoint for fine-tuning: backbone (and head
     deconv) load strict; `keypoint_head.final_layer` is left freshly initialised
     so K can differ. Raises unless the ONLY missing keys are final_layer.*."""
+    ensure_numpy_safe_globals()
     blob = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     state = (
         blob["state_dict"] if isinstance(blob, dict) and "state_dict" in blob else blob

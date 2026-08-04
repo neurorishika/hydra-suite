@@ -23,6 +23,7 @@ import torch
 from .config import VARIANTS
 from .geometry import DEFAULT_GEOMETRY, PoseGeometry
 from .pos_embed import resolve_patch_grid
+from .safe_globals import ensure_numpy_safe_globals
 from .vitpose import ViTPose, build_vitpose
 from .weights import CheckpointKeyError
 
@@ -98,6 +99,7 @@ def _infer_geometry(
 
 def load_finetuned_checkpoint(path: Path) -> tuple[ViTPose, FinetuneMeta]:
     path = Path(path)
+    ensure_numpy_safe_globals()
     blob = torch.load(path, map_location="cpu", weights_only=True)
     state = _unwrap_state(blob)
     head = infer_head_from_state(state)
