@@ -99,7 +99,6 @@ class TrackingOrchestrator:
             self._mw._pending_pose_export_csv_path = None
             self._mw._pending_video_csv_path = None
             self._mw._pending_video_generation = False
-            self._mw._pending_finish_after_track_videos = False
 
         self.start_tracking(preview_mode=False)
 
@@ -199,8 +198,6 @@ class TrackingOrchestrator:
     def stop_tracking(self):
         """stop_tracking method documentation."""
         self._mw._stop_all_requested = True
-        self._mw._pending_finish_after_interp = False
-        self._mw._pending_finish_after_track_videos = False
         self._mw._pending_pose_export_csv_path = None
         self._mw._pending_video_csv_path = None
         self._mw._pending_video_generation = False
@@ -234,6 +231,11 @@ class TrackingOrchestrator:
             timeout_ms=10000,
             force_terminate=False,
         )
+        self._request_qthread_stop(
+            getattr(self._mw, "session_worker", None),
+            "SessionWorker",
+            timeout_ms=1200,
+        )
         self._stop_csv_writer()
 
         self._cleanup_thread_reference("_cache_builder_worker")
@@ -244,6 +246,7 @@ class TrackingOrchestrator:
         self._cleanup_thread_reference("final_media_export_worker")
         self._cleanup_thread_reference("preview_detection_worker")
         self._cleanup_thread_reference("tracking_worker")
+        self._cleanup_thread_reference("session_worker")
 
         self._mw.progress_bar.setVisible(False)
         self._mw.progress_label.setVisible(False)
@@ -857,6 +860,8 @@ class TrackingOrchestrator:
         return self._mw._config_orch.build_config_dict()
 
     def _on_session_progress(self, value: int, message: str) -> None:
+        if self._mw._stop_all_requested:
+            return
         # Mirror the progress-bar update the deleted post-workers did.
         self._mw.progress_bar.setVisible(True)
         self._mw.progress_bar.setValue(int(value))
@@ -864,6 +869,8 @@ class TrackingOrchestrator:
         self._mw.progress_label.setText(str(message))
 
     def _on_session_error(self, message: str) -> None:
+        if self._mw._stop_all_requested:
+            return
         QMessageBox.critical(
             self._mw,
             "Post-Processing Error",
@@ -873,6 +880,8 @@ class TrackingOrchestrator:
         self._finalize_tracking_session_ui()
 
     def _on_session_finished(self, result) -> None:
+        if self._mw._stop_all_requested:
+            return
         if not getattr(result, "success", False):
             QMessageBox.critical(
                 self._mw,
@@ -905,7 +914,6 @@ class TrackingOrchestrator:
         self._mw._pending_pose_export_csv_path = None
         self._mw._pending_video_csv_path = None
         self._mw._pending_video_generation = False
-        self._mw._pending_finish_after_track_videos = False
         self._mw.current_interpolated_pose_df = None
         self._mw.current_interpolated_roi_npz_path = None
         # Force-clear progress UI at terminal session state.
@@ -1071,7 +1079,6 @@ class TrackingOrchestrator:
         if self._mw.tracking_worker and self._mw.tracking_worker.isRunning():
             return
         self._mw._stop_all_requested = False
-        self._mw._pending_finish_after_interp = False
 
         # Stop video playback if active
         if self._mw.is_playing:
@@ -1479,7 +1486,6 @@ class TrackingOrchestrator:
             )
             return
         self._mw._stop_all_requested = False
-        self._mw._pending_finish_after_interp = False
         if not backward_mode:
             self._mw._session_result_dataset = None
             self._mw._dataset_was_started = False
@@ -1487,6 +1493,7 @@ class TrackingOrchestrator:
             self._mw._session_final_csv_path = None
             self._mw._session_fps_list = []
             self._mw._session_frames_processed = 0
+            self._mw._session_summary_lines = []
 
         if self._mw.is_playing:
             self._mw._stop_playback()

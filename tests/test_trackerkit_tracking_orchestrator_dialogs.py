@@ -136,6 +136,7 @@ def test_stop_tracking_stops_preview_detection_worker(monkeypatch) -> None:
         final_media_export_worker=object(),
         preview_detection_worker=object(),
         tracking_worker=object(),
+        session_worker=object(),
         progress_bar=FakeControl(),
         progress_label=FakeControl(),
         _set_ui_controls_enabled=lambda _enabled: None,
@@ -185,6 +186,8 @@ def test_stop_tracking_stops_preview_detection_worker(monkeypatch) -> None:
     assert "PreviewDetectionWorker" in stopped_workers
     assert "preview_detection_worker" in cleaned_workers
     assert "tracking_worker" in cleaned_workers
+    assert "SessionWorker" in stopped_workers
+    assert "session_worker" in cleaned_workers
 
 
 def test_load_config_uses_main_window_parent(monkeypatch) -> None:

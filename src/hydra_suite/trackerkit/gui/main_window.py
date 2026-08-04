@@ -348,7 +348,6 @@ class MainWindow(QMainWindow):
         self._pending_pose_export_csv_path = None
         self._pending_video_csv_path = None
         self._pending_video_generation = False
-        self._pending_finish_after_track_videos = False
 
         # Preview frame for live image adjustments
         self.preview_frame_original = None  # Original frame without adjustments
@@ -376,7 +375,6 @@ class MainWindow(QMainWindow):
         # UI interaction state
         self._video_interactions_enabled = True
         self._saved_widget_enabled_states = {}
-        self._pending_finish_after_interp = False
         self._stop_all_requested = False
 
         # Per-session summary state (reset at the start of each forward tracking run)
