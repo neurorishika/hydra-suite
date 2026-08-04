@@ -500,6 +500,37 @@ def build_tracking_parameters(
         )
     )
 
+    # Individual/identity pipeline gate: faithfully replicate the bridge's
+    # derivation (gui/orchestrators/config.py:1797-1798, 2385-2386), which
+    # delegates to MainWindow._is_individual_pipeline_enabled() ->
+    # session_policy.is_individual_pipeline_enabled({"detection_method": ...}).
+    # That predicate is purely a function of detection_method == "yolo_obb" --
+    # not of any identity/individual-analysis checkbox -- so reuse it directly
+    # from the same config-dict-shaped mapping the CLI already has.
+    from hydra_suite.core.tracking.session_policy import is_individual_pipeline_enabled
+
+    individual_pipeline_enabled = is_individual_pipeline_enabled(cfg)
+
+    # CNN_CLASSIFIERS / USE_APRILTAGS: the bridge reads these from
+    # MainWindow._identity_config() (detection_panel.py:_identity_config),
+    # which is gated by the identity-panel "enabled" checkbox and persisted
+    # verbatim into the saved config's "cnn_classifiers"/"use_apriltags"
+    # fields at save time (gui/orchestrators/config.py:1803-1805). The CLI has
+    # no live widgets, so the persisted config fields already encode that same
+    # gated state -- read them directly. Each CNN classifier's "model_path" is
+    # stored as an absolute path resolved from the user's models root at save
+    # time (identity_panel.py CnnClassifierRow.to_config); re-resolve it here
+    # via the same resolve_model_path() used for YOLO model paths above, so a
+    # relative/portable path in a hand-authored or fixture config still
+    # resolves to an existing file the way the bridge's absolute path would.
+    use_apriltags = bool(_cfg_get(cfg, "use_apriltags", default=False))
+    cnn_classifiers_raw = _cfg_get(cfg, "cnn_classifiers", default=[]) or []
+    cnn_classifiers = []
+    for entry in cnn_classifiers_raw:
+        entry = dict(entry)
+        entry["model_path"] = resolve_model_path(entry.get("model_path", ""))
+        cnn_classifiers.append(entry)
+
     return {
         "ADVANCED_CONFIG": advanced,
         "DETECTION_METHOD": str(
@@ -832,6 +863,10 @@ def build_tracking_parameters(
         "IDENTITY_GATES_TRAJECTORY_STRUCTURE": bool(
             _cfg_get(cfg, "identity_gates_trajectory_structure", default=True)
         ),
+        "ENABLE_IDENTITY_ANALYSIS": individual_pipeline_enabled,
+        "ENABLE_INDIVIDUAL_PIPELINE": individual_pipeline_enabled,
+        "USE_APRILTAGS": use_apriltags,
+        "CNN_CLASSIFIERS": cnn_classifiers,
         "ENABLE_CONFIDENCE_DENSITY_MAP": bool(
             _cfg_get(cfg, "enable_confidence_density_map", default=True)
         ),

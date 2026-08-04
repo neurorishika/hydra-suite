@@ -1,9 +1,12 @@
+import logging
+
 import pandas as pd
 
 from hydra_suite.core.post.merge import (
     convert_resolved_to_dataframe,
     merge_trajectories,
     rescale_coordinates,
+    resolve_tag_identities,
     write_csv_artifact,
 )
 
@@ -67,3 +70,14 @@ def test_write_csv_artifact_roundtrip(tmp_path):
     out = write_csv_artifact(str(p), ["k"], [{"k": 1}, {"k": 2}])
     assert out == str(p)
     assert p.read_text().splitlines()[0] == "k"
+
+
+def test_resolve_tag_identities_returns_unchanged_for_empty_string_cache_path(caplog):
+    # pose_merge.resolve_current_tag_cache_path returns "" (falsy, not None)
+    # when USE_APRILTAGS is falsy. That must short-circuit here without ever
+    # attempting to open the cache path (which would raise IsADirectoryError).
+    df = _traj(0, [1.0, 2.0])
+    with caplog.at_level(logging.WARNING):
+        out = resolve_tag_identities(df, tag_cache_path="", params={})
+    assert out is df
+    assert "Tag identity resolution failed" not in caplog.text

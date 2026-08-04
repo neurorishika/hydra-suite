@@ -44,7 +44,7 @@ def resolve_tag_identities(
     resolved_trajectories, *, tag_cache_path, params, progress=None
 ):
     """Apply AprilTag identity resolution if a tag cache is available."""
-    if not isinstance(resolved_trajectories, pd.DataFrame) or tag_cache_path is None:
+    if not isinstance(resolved_trajectories, pd.DataFrame) or not tag_cache_path:
         return resolved_trajectories
     try:
         from hydra_suite.core.post.tag_identity import detect_tag_swaps
