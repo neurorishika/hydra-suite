@@ -237,6 +237,16 @@ worth a migration — but are documented as dead.
   variants stop warping straight to model input and instead produce canonical
   crops that the consumer fits via Layer 2. Its unused `aspect_ratio` parameter
   goes away with the rewrite.
+
+  **This deliberately reverses an earlier optimisation.** The comment at
+  `crops.py:238-247` records that the single direct warp exists precisely to
+  avoid a double resample, which had flipped 1-2% of head-tail decisions. The
+  new design reinstates that double resample (Layer 1 warp, then Layer 2 fit),
+  because a shared canonical artifact is the whole point — a consumer that
+  warps straight from the frame is a second geometry implementation by
+  definition. The cost is accepted and paid for by retraining head-tail on
+  the new convention; it is the reason head-tail needs explicit measurement
+  rather than assumption (§5).
 - `stages/pose.py` — the slice-back hack `hwc[: ch, : cw]` (:269, and the
   equivalent at :402) is deleted. `M_inverse` becomes `M_total`'s inverse.
 - `stages/cnn.py`, `stages/headtail.py` — take a `CanonicalGeometry` instead of
