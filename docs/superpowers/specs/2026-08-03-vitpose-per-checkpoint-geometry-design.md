@@ -267,6 +267,11 @@ rather than a fresh one.
 
 # Slice 2 — auto-sizing from the dataset (notes)
 
+> **Superseded by** `docs/superpowers/specs/2026-08-04-vitpose-dataset-auto-sizing-design.md`,
+> which corrects two assumptions below: the measurement source is the PoseKit YOLO-pose label
+> store (the COCO dataset does not exist yet at dialog time), and the `measured_input_size`
+> manifest stamp was cut as unused surface.
+
 To be implemented on this same branch before merge. Recorded here so Slice 1's
 interfaces anticipate it.
 
