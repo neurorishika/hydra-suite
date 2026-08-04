@@ -25,6 +25,7 @@ from hydra_suite.core.identity.properties.export import DETECTED_HEADING_COLUMNS
 from hydra_suite.core.post import media_export as _media_export
 from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.orchestrators.config import _get_video_config_path
+from hydra_suite.trackerkit.gui.workers.session_worker import SessionWorker
 from hydra_suite.trackerkit.session_plan import resolve_video_plan
 from hydra_suite.trackerkit.tracking_cache import (
     plan_tracking_cache,
@@ -1816,11 +1817,82 @@ class TrackingOrchestrator:
         self._accumulate_session_fps(fps_list, is_backward_mode)
         is_backward_enabled = self._panels.tracking.chk_enable_backward.isChecked()
 
-        self._mw._postprocess_is_backward_mode = is_backward_mode
-        self._mw._postprocess_is_backward_enabled = is_backward_enabled
-        self._mw._postprocess_fps_list = fps_list
+        if is_backward_mode:
+            self._run_session_worker()
+        elif is_backward_enabled:
+            self.start_backward_tracking()
+        else:
+            self._run_session_worker()
 
-        self._start_postprocess_worker(is_backward_mode, is_backward_enabled)
+    def _run_session_worker(self) -> None:
+        """Drive all post-tracking through the Qt-free core service.
+
+        Both tracking passes have already written the raw CSV(s) to disk; the
+        service re-reads them and does postprocess/merge/rich-export/interp/
+        media/dataset — replacing the old _finish_tracking_session chain.
+        """
+        raw_csv_path = self._panels.setup.csv_line.text()
+        video_path = self._panels.setup.file_line.text()
+        paths = {
+            "raw_csv_path": raw_csv_path,
+            "detection_cache_path": getattr(
+                self._mw, "current_detection_cache_path", None
+            ),
+            "individual_properties_cache_path": getattr(
+                self._mw, "current_individual_properties_cache_path", None
+            ),
+            "detected_properties_cache_path": getattr(
+                self._mw, "current_detected_properties_cache_path", None
+            ),
+            "detected_cnn_cache_paths": getattr(
+                self._mw, "current_detected_cnn_cache_paths", None
+            ),
+        }
+        worker = SessionWorker(
+            video_path=video_path,
+            config=self._build_session_config(),
+            params=self._mw.get_parameters_dict(),
+            paths=paths,
+        )
+        self._mw.session_worker = worker
+        worker.progress_signal.connect(self._on_session_progress)
+        worker.warning_signal.connect(self.on_tracking_warning)
+        worker.error_signal.connect(self._on_session_error)
+        worker.finished_signal.connect(self._on_session_finished)
+        worker.start()
+
+    def _build_session_config(self):
+        """Return the GUI's canonical config dict for TrackingSessionCore."""
+        return self._mw._config_orch.build_config_dict()
+
+    def _on_session_progress(self, value: int, message: str) -> None:
+        # Mirror the progress-bar update the deleted post-workers did.
+        self._mw.progress_bar.setVisible(True)
+        self._mw.progress_bar.setValue(int(value))
+        self._mw.progress_label.setVisible(True)
+        self._mw.progress_label.setText(str(message))
+
+    def _on_session_error(self, message: str) -> None:
+        QMessageBox.critical(
+            self._mw,
+            "Post-Processing Error",
+            f"Error during trajectory post-processing:\n{message}",
+        )
+        logger.error("Session post-processing error: %s", message)
+        self._finalize_tracking_session_ui()
+
+    def _on_session_finished(self, result) -> None:
+        if not getattr(result, "success", False):
+            QMessageBox.critical(
+                self._mw,
+                "Post-Processing Error",
+                f"Error during trajectory post-processing:\n{result.error or 'unknown error'}",
+            )
+            self._finalize_tracking_session_ui()
+            return
+        self._mw._session_final_csv_path = result.final_csv_path
+        self._mw._session_summary_lines = list(result.summary_lines or [])
+        self._finalize_tracking_session_ui()
 
     def _start_postprocess_worker(self, is_backward_mode, is_backward_enabled):
         """Launch PostProcessWorker to clean raw trajectory CSV in the background."""
@@ -3679,7 +3751,7 @@ class TrackingOrchestrator:
 
     def _show_session_summary(self):
         """Show a single end-of-session summary dialog listing completed processes."""
-        lines = self._build_session_summary_lines()
+        lines = getattr(self._mw, "_session_summary_lines", [])
 
         # Clean up state
         self._clear_session_summary_state()
