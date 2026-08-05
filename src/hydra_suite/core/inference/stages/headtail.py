@@ -264,18 +264,26 @@ def run_headtail_batch(
     win), then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_headtail_result (DRY with run_headtail).
 
-    The GPU (NVDEC on-device) branch does NOT apply the Layer 2 fit -- it feeds
-    the canonical-canvas crop straight to ``predict_batch_cuda``, which resizes
-    on-device internally, matching the no-host-round-trip design of the other
-    on-device crop paths.
+    Both branches derive their fit from the SAME ``fit_to_model_input(geometry
+    .canvas_wh, (in_w, in_h))`` call, computed once here. The GPU (NVDEC
+    on-device) branch applies that fit on-device via ``apply_fit_gpu``
+    (``F.interpolate`` + zero-canvas paste) instead of the CPU's ``cv2``-based
+    ``apply_fit`` -- an anisotropic stretch here would silently feed the model
+    a DIFFERENT geometry than the CPU path (a model trained on letterboxed
+    crops fed non-letterboxed ones on CUDA), so both paths must letterbox
+    identically; only the resample kernel differs (grid_sample/interpolate
+    != cv2, so the acceptance gate is identity agreement, not byte-identity).
     """
     from .crops import frames_on_cuda
+
+    in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
+    fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
 
     if frames_on_cuda(runtime, frames):
         # Pure-GPU path (NVDEC): warp + forward on-device, no frame D->H copy.
         # floor-quantize to [0,255] 8-bit to match the cv2/uint8 reference regime
         # (grid_sample != cv2 -> identity-agreement gate, not byte-identity).
-        from .crops import extract_classifier_crops_batch_gpu
+        from .crops import apply_fit_gpu, extract_classifier_crops_batch_gpu
 
         batch = extract_classifier_crops_batch_gpu(
             frames, obb_results, geometry, runtime.device
@@ -284,8 +292,9 @@ def run_headtail_batch(
         if n_total:
             # NVDEC frames (the only CUDA frame source) are RGB -> input_is_bgr=False
             # so the model sees RGB, matching the CPU path's BGR->RGB flip.
+            fitted = apply_fit_gpu(batch.crops, fit)
             cuda_crops = [
-                (batch.crops[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
+                (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
             ]
             all_probs = model.backend.predict_batch_cuda(cuda_crops, input_is_bgr=False)
         else:
@@ -304,8 +313,6 @@ def run_headtail_batch(
                 batch.crops.permute(0, 2, 3, 1).cpu().numpy()
             )
             stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-            in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
-            fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
             np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in stacked]
             all_probs = model.backend.predict_batch(np_crops)
         else:

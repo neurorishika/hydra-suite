@@ -12,6 +12,7 @@ from hydra_suite.core.canonicalization.crop import (
     _apply_foreign_mask_canonical,
     gpu_canonical_crop_batch,
 )
+from hydra_suite.core.canonicalization.fit import FitResult
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     canonical_affine,
@@ -19,6 +20,40 @@ from hydra_suite.core.canonicalization.geometry import (
 
 from ..result import CropBatch, OBBResult
 from ..runtime import RuntimeContext
+
+
+def apply_fit_gpu(batch: torch.Tensor, fit: FitResult) -> torch.Tensor:
+    """On-device analogue of Layer 2's ``apply_fit``: the SAME isotropic
+    centred letterbox (one scale, both axes; zero pad) computed by ``fit``,
+    applied to a whole ``(N, C, H, W)`` batch with a single ``F.interpolate``
+    + zero-canvas paste instead of per-crop ``cv2.resize``.
+
+    This exists so the GPU (on-device, no-host-round-trip) crop path produces
+    the SAME crop geometry as the CPU path -- same scale, same offset, same
+    padded canvas size -- for a given ``fit`` (itself pure arithmetic over
+    ``geometry.canvas_wh`` and the model's input size, identical on both
+    paths). Only the resampling KERNEL differs: ``F.interpolate(...,
+    mode="bilinear")`` has no on-device equivalent of cv2's ``INTER_AREA``
+    downscale filter, so this is NOT bit-identical to ``apply_fit`` -- the
+    acceptance gate here is identity agreement, not byte-identity, matching
+    every other GPU/CPU crop divergence in this module (grid_sample != cv2).
+    """
+    import torch.nn.functional as F
+
+    n, c = batch.shape[0], batch.shape[1]
+    inner_w, inner_h = fit.inner_wh
+    model_w, model_h = fit.model_wh
+    resized = F.interpolate(
+        batch, size=(inner_h, inner_w), mode="bilinear", align_corners=False
+    )
+    if (inner_h, inner_w) == (model_h, model_w):
+        return resized
+    canvas = torch.zeros(
+        (n, c, model_h, model_w), dtype=batch.dtype, device=batch.device
+    )
+    ox, oy = fit.offset_xy
+    canvas[:, :, oy : oy + inner_h, ox : ox + inner_w] = resized
+    return canvas
 
 
 def _frame_to_chw_float(
