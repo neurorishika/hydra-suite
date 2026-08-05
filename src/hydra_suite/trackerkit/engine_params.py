@@ -140,12 +140,14 @@ def _autopick_greedy(n_targets: int) -> bool:
 
 
 def _coerce_pose_keypoint_tokens(raw_value: Any) -> list:
-    """Parse a pose keypoint group into name/index tokens.
+    """Parse a pose keypoint group into plain-string tokens.
 
-    Mirrors the bridge's ``MainWindow._parse_pose_keypoint_tokens`` (a
-    comma-separated-string-or-list parser that keeps numeric tokens as
-    ``int`` and everything else as a stripped ``str``). The CLI has no list
-    widgets to read a live selection from, so the config's stored
+    Mirrors the bridge's ``MainWindow._selected_pose_group_keypoints``
+    (``gui/main_window.py:1159-1167``), which returns
+    ``[item.text().strip() for item in list_widget.selectedItems() if
+    item.text().strip()]`` -- plain stripped strings, never int-coerced
+    (even for numeric-looking keypoint names). The CLI has no list widgets
+    to read a live selection from, so the config's stored
     ``pose_*_keypoints`` list (already the bridge's own parsed/selected
     output at save time) is re-parsed the same way to keep the token types
     identical.
@@ -163,10 +165,7 @@ def _coerce_pose_keypoint_tokens(raw_value: Any) -> list:
         text = str(value).strip()
         if not text:
             continue
-        try:
-            tokens.append(int(text))
-        except ValueError:
-            tokens.append(text)
+        tokens.append(text)
     return tokens
 
 
@@ -781,9 +780,11 @@ def build_engine_params(
         "POSE_YOLO_BATCH": pose_batch_size,
         "POSE_BATCH_SIZE": pose_batch_size,
         "POSE_SLEAP_ENV": pose_sleap_env,
-        "POSE_SLEAP_BATCH": int(
-            _cfg_get(cfg, "pose_sleap_batch", default=pose_batch_size)
-        ),
+        # bridge: config.py:2472-2475 -- POSE_YOLO_BATCH, POSE_BATCH_SIZE,
+        # and POSE_SLEAP_BATCH all come from the single
+        # spin_pose_batch.value() widget. Reuse pose_batch_size verbatim
+        # rather than re-reading a distinct "pose_sleap_batch" config field.
+        "POSE_SLEAP_BATCH": pose_batch_size,
         "POSE_SLEAP_MAX_INSTANCES": int(
             _cfg_get(cfg, "pose_sleap_max_instances", default=1)
         ),
