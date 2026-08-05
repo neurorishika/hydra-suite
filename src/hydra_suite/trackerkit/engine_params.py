@@ -793,6 +793,12 @@ def build_engine_params(
             _cfg_get(cfg, "assignment_margin_threshold", default=0.10)
         ),
         "MIN_FRAGMENT_FRAMES": int(_cfg_get(cfg, "min_fragment_frames", default=5)),
+        "MAX_BRIDGE_GAP_FRAMES": int(
+            _cfg_get(cfg, "max_bridge_gap_frames", default=30)
+        ),
+        "FRAGMENT_SPATIAL_VETO_THRESHOLD": float(
+            _cfg_get(cfg, "fragment_spatial_veto_threshold", default=0.05)
+        ),
         "PELT_MODEL": str(_cfg_get(cfg, "pelt_model", default="rbf")),
         "ENABLE_FRAGMENT_SCORING": bool(
             _cfg_get(cfg, "enable_fragment_scoring", default=True)
@@ -1019,6 +1025,10 @@ def build_engine_params(
         "IDENTITY_REJOIN_DIST_FLOOR": advanced.get("identity_rejoin_dist_floor", None),
         "APRILTAG_FAMILY": str(_cfg_get(cfg, "apriltag_family", default="tag36h11")),
         "APRILTAG_DECIMATE": float(_cfg_get(cfg, "apriltag_decimate", default=1.0)),
+        "COLOR_TAG_MODEL_PATH": str(_cfg_get(cfg, "color_tag_model_path", default="")),
+        "COLOR_TAG_CONFIDENCE": float(
+            _cfg_get(cfg, "color_tag_confidence", default=0.5)
+        ),
         "ENABLE_CONFIDENCE_DENSITY_MAP": bool(
             _cfg_get(cfg, "enable_confidence_density_map", default=True)
         ),

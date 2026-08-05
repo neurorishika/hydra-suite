@@ -894,6 +894,12 @@ class ConfigOrchestrator:
         self._panels.postprocess.chk_identity_gates_trajectory_structure.setChecked(
             get_cfg("identity_gates_trajectory_structure", default=True)
         )
+        self._panels.postprocess.spin_max_bridge_gap_frames.setValue(
+            int(get_cfg("max_bridge_gap_frames", default=30))
+        )
+        self._panels.postprocess.spin_fragment_spatial_veto_threshold.setValue(
+            float(get_cfg("fragment_spatial_veto_threshold", default=0.05))
+        )
 
     def _load_config_visualization(self, get_cfg):
         self._panels.postprocess.check_show_labels.setChecked(
@@ -1135,6 +1141,12 @@ class ConfigOrchestrator:
         self._panels.identity.combo_apriltag_family.setCurrentIndex(max(0, idx))
         self._panels.identity.spin_apriltag_decimate.setValue(
             float(get_cfg("apriltag_decimate", default=1.0))
+        )
+        self._panels.identity.line_color_tag_model.setText(
+            str(get_cfg("color_tag_model_path", default=""))
+        )
+        self._panels.identity.spin_color_tag_conf.setValue(
+            float(get_cfg("color_tag_confidence", default=0.5))
         )
 
         # Warn users who had a non-default cnn_classifier_crop_padding in their config
@@ -1725,6 +1737,8 @@ class ConfigOrchestrator:
                 "stitch_heading_gate_deg": self._panels.postprocess.spin_stitch_heading_gate_deg.value(),
                 "identity_disagree_min_run": self._panels.postprocess.spin_identity_disagree_min_run.value(),
                 "identity_gates_trajectory_structure": self._panels.postprocess.chk_identity_gates_trajectory_structure.isChecked(),
+                "max_bridge_gap_frames": self._panels.postprocess.spin_max_bridge_gap_frames.value(),
+                "fragment_spatial_veto_threshold": self._panels.postprocess.spin_fragment_spatial_veto_threshold.value(),
                 # === VIDEO VISUALIZATION ===
                 "video_show_labels": self._panels.postprocess.check_show_labels.isChecked(),
                 "video_show_orientation": self._panels.postprocess.check_show_orientation.isChecked(),
@@ -1823,6 +1837,8 @@ class ConfigOrchestrator:
             {
                 "apriltag_family": self._panels.identity.combo_apriltag_family.currentText(),
                 "apriltag_decimate": self._panels.identity.spin_apriltag_decimate.value(),
+                "color_tag_model_path": self._panels.identity.line_color_tag_model.text(),
+                "color_tag_confidence": self._panels.identity.spin_color_tag_conf.value(),
                 "enable_pose_extractor": self._panels.identity.chk_enable_pose_extractor.isChecked(),
                 "pose_model_type": self._panels.identity.combo_pose_model_type.currentText()
                 .strip()
