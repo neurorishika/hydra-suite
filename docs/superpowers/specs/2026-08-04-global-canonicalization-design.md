@@ -96,10 +96,18 @@ follows that:
   synthetic padding — the affine samples the source image. Only foreign-OBB
   masking synthesises fill, using the existing background colour.
 
-`reference_aspect_ratio` now sets the canvas **shape** only. It can no longer be
-*wrong*, only wasteful: a poorly matched value costs background pixels on the
-short axis. The misconfiguration failure mode that motivated this work
-disappears.
+`reference_aspect_ratio` now sets the canvas **shape** only. As far as *cropping*
+is concerned it can no longer be wrong, only wasteful: a poorly matched value
+costs background pixels on the short axis. The misconfiguration failure mode
+that motivated this work disappears.
+
+One coupling survives, and must not be forgotten: the same knob also centres the
+detection aspect-ratio filter (`config.py:641-644` derives `min/max_aspect_ratio`
+as `ref_ar × multiplier`). That filter is off by default
+(`default.json:46`), but an operator who retunes the AR for canvas efficiency
+*with filtering on* silently changes which detections survive. The knob is left
+shared and the coupling documented in the GUI tooltip; splitting it is a
+separate decision about detection filtering, not about crops.
 
 **Clipping.** An animal whose `major * margin` exceeds `canvas_w` (or whose
 `minor * margin` exceeds `canvas_h`) is clipped at the canvas edge. This is
@@ -108,18 +116,47 @@ fits. The system counts clipped detections and reports the count and the worst
 observed overflow ratio; it never rescales to compensate, because that would
 reintroduce per-animal scale.
 
+Margin is doing real work under this design, so it must be measurable and
+settable — today it is neither (defect D4). With `ar = 2.44` and
+`body_px = 20`, the median major axis is ~31px and `margin = 1.3` yields a 41px
+canvas, clipping anything beyond ~1.3× median length; covering a real colony
+likely needs a margin nearer 1.5. `detection_panel.py:1370` already computes and
+displays `stats["major"]["max"]`, so an **"Auto-Set Margin from max"** button
+beside the existing auto-set buttons is one line from the number it needs:
+
+```
+suggested_margin = stats["major"]["max"] / (REFERENCE_BODY_SIZE * sqrt(ar))
+```
+
+That is the mechanism by which "the operator sizes the crop" (Non-goals) is an
+actual workflow rather than an instruction to guess.
+
 ### Layer 2 — model fit: canonical crop → model input tensor
 
 ```
 fit    = min(model_w / canvas_w, model_h / canvas_h)     # isotropic
 inner  = (round(canvas_w * fit), round(canvas_h * fit))
-output = inner pasted centred into (model_w, model_h),
-         remainder filled with the configured background colour
+output = inner pasted centred into (model_w, model_h), remainder filled with 0
 ```
 
 Isotropic, centred, letterboxed. Called identically by inference and by training
 data loading, in every kit. This is what replaces
 `transforms.Resize((sz, sz))`.
+
+Layer 2 is not geometry alone. Because it is the *only* thing standing between a
+canonical crop and a model, it must pin every property that a second
+implementation could get wrong. All four are fixed by this spec:
+
+| Property | Value | Why this one |
+|---|---|---|
+| dtype / range | uint8 `[0, 255]` | What `cv2.imread` yields, and what three of four families' training reads. Enforced at the pose stage boundary as of `8900191d` |
+| channel order | BGR | Both pose backends and the classifier preprocessing assume it |
+| resampler | `cv2.INTER_LINEAR`, **antialias on downscale** | ClassKit training currently uses PIL `Resize` (antialiased) while inference uses `cv2`/`F.interpolate` (not). A fixed canvas makes downscaling more common, so the mismatch has to be resolved, not inherited |
+| pad fill | **zeros** | Pose already pads zeros at both ends (`vitpose/transforms.py` default `BORDER_CONSTANT`; SLEAP's zero canvas). A background-colour default adopted only by inference would regress a currently-clean path |
+
+The pad fill is deliberately *not* the foreign-mask background colour. Those are
+different jobs: one hides a neighbouring animal inside the crop, the other fills
+canvas outside the source image.
 
 Layer 2 applies to any source image, not only Layer 1 output — it needs only the
 source dimensions. So a ClassKit project containing the operator's own images,
@@ -284,28 +321,56 @@ worth a migration — but are documented as dead.
   suggestion now describes the model input shape, which is what Layer 2 fits
   into.
 
-### Provenance sidecar
+### Provenance: dataset side
 
-`generator.py` and `oriented_video.py` write `.canonical.json` beside each
-exported crop directory:
+**No new sidecar file.** `generator.py:776-791` already writes
+`<run_dir>/metadata.json` with a `parameters` block carrying
+`padding_fraction` — the very knob that becomes the canonical margin. Its only
+reader is `canonicalization/dataset.py`, the module this spec deletes. The
+canonical geometry goes into that existing block:
 
 ```json
-{
-  "canvas_wh": [64, 26],
-  "margin": 1.5,
-  "aspect_ratio": 2.44,
-  "reference_body_px": 20.0,
-  "resize_factor": 1.0,
-  "clipped_count": 3,
-  "worst_overflow_ratio": 1.08,
-  "hydra_suite_version": "..."
+"parameters": {
+  "canonical": {
+    "canvas_wh": [64, 26],
+    "margin": 1.5,
+    "aspect_ratio": 2.44,
+    "reference_body_px": 20.0,
+    "resize_factor": 1.0,
+    "clipped_count": 3,
+    "worst_overflow_ratio": 1.08,
+    "schema_version": 1
+  }
 }
 ```
 
-Consumers (ClassKit, PoseKit) read it to confirm a dataset's geometry and to
-warn when mixing datasets built under different geometry. A dataset without a
-sidecar is treated as unknown-provenance and fitted by Layer 2 on its raw
-dimensions — correct behaviour for the operator's own images.
+This avoids inventing a new file next to an existing one, and sidesteps a real
+inconsistency: the repo uses two incompatible sidecar naming conventions —
+`.slice_meta.json` and `.runtime_meta.json` **append** to the full filename,
+while `.v2meta.json` **replaces** the suffix. `oriented_video.py`, which writes
+no JSON today, gains the same block in its own export metadata.
+
+A dataset without the block is unknown-provenance: fitted by Layer 2 on its raw
+dimensions, which is the correct behaviour for an operator's own images.
+
+### Provenance: model side
+
+The dataset stamp alone is not enough. This spec mandates retraining every
+model, and after that a checkpoint would carry **no record of the convention it
+was trained under** — precisely the "a consumer quietly keeping its own resize"
+risk in §6. The repo already has the pattern to copy: `.slice_meta.json` is
+written at publish (`training/model_publish.py:786-800`), read back through
+`core/inference/slice_meta.py`, and mirrored into registry metadata
+(`model_publish.py:823-826`).
+
+The canonical geometry is stamped the same way, so a model whose geometry does
+not match the session's is detected at load rather than producing quietly
+degraded output. This also hands the deferred model-registry unification
+(`2026-07-29-model-registry-unification-design.md`) one more field flowing
+through a mechanism it already models as `ModelRegistryEntry.extra`.
+
+Out of scope, owned by that registry spec: `TrainingRole` has no pose member, so
+ViTPose still cannot be published or registered. Do not add picker surface here.
 
 ### Config defects swept in the same change
 
@@ -313,10 +378,46 @@ dimensions — correct behaviour for the operator's own images.
 |---|---|---|
 | D1 | `crops_worker.py:306` reads `REFERENCE_ASPECT_RATIO` (uppercase), a key nothing writes, so the interpolated-crop head-tail analyzer always uses the 2.0 fallback | Read the geometry object |
 | D2 | `cli_config.py:299` defaults `reference_aspect_ratio` to 4.0 where every other site defaults to 2.0 | Single default, 2.0 |
-| D3 | `extract_classifier_crops` accepts an unused `aspect_ratio` | Removed with the rewrite |
+| D3 | `extract_classifier_crops` (`crops.py:231`) **and** `extract_classifier_crops_gpu` (`:430`) accept an unused `aspect_ratio` | Both removed with the rewrite |
+| D4 | `config.py:812` reads `yolo_headtail_canonical_margin` — a key **nothing in `src/` writes** — so the inference margin is permanently 1.3 and not settable. The crop exporter reads `INDIVIDUAL_CROP_PADDING` (`generator.py:93`, default 0.1 → margin 1.1), which *is* GUI-wired. Training exports and inference crops use different margins today | One margin knob, wired from both builders. This is load-bearing: §1 makes margin the operator's dial for clipping |
+| D5 | `ClassifierMetadata.input_size` is documented `(H, W)` (`backend.py:47`) but read as `(W, H)` at `stages/cnn.py:55`, `stages/headtail.py:84`, `crops.py:261/367/450/487`, `headtail.py:522/599/753`; `native_sizes` rows are written transposed to match | Fix with the Layer 2 wiring — see below |
 
-All three are symptoms of the geometry being computed in more than one place;
-they cannot recur once it is computed in one.
+D5 is currently harmless *only* because two anisotropic stretches cancel. An
+isotropic Layer 2 breaks that cancellation, so every non-square classifier would
+be silently mis-shaped. Tiny head-tail models default to `[64, 128]`, so
+non-square is already the norm there. **This must land in the same change as
+Layer 2, not before or after.**
+
+All of D1–D5 are symptoms of geometry being computed in more than one place;
+they cannot recur once it is computed in one. D2 additionally needs its
+*mechanism* removed: `cli_config._default_advanced_config()` (21 keys) and
+`gui/orchestrators/config._load_advanced_config()` (25 keys) are duplicate
+tables that have already diverged, and neither contains
+`reference_aspect_ratio` — which is why the CLI had to invent a default. The two
+collapse into one module-level constant.
+
+### YOLO-classify does not fit the contract
+
+`_forward_yolo` (`backend.py:950`) hands raw crops to Ultralytics, which applies
+`Resize(shortest_edge)` + `CenterCrop` at inference and
+`RandomResizedCrop(scale=0.08-1.0)` at training. A 128×64 canonical crop is
+upscaled and centre-cropped to 224×224, discarding half the animal's length, and
+`ClassifierMetadata.input_size` is ignored entirely.
+
+The byte-identical train/inference test (§4) is therefore **not writable** for
+this family as it stands. Resolution: pre-fit to a square via Layer 2 before
+`_forward_yolo`, so Ultralytics' centre-crop becomes a no-op. If that proves
+unreliable, declare YOLO-classify unsupported for canonical crops rather than
+leaving a hole in the guard.
+
+### Non-square classifier inputs
+
+`CustomCNNParams.input_size` (`training/contracts.py:104`) is a single `int`,
+stamped as `(sz, sz)` (`runner.py:1170, 1195, 1832, 1855`). Layer 2 cannot
+produce a train/inference-identical tensor for the torchvision/TIMM backbone
+until this widens to an `(H, W)` pair. The tiny path already has
+`input_width`/`input_height`. This is its own task, not a detail of the
+`Resize` swap.
 
 ---
 
