@@ -9,29 +9,25 @@ def test_normalize_returns_h_w():
     assert _normalize_input_size([64, 128]) == (64, 128)
 
 
-def test_crop_target_uses_width_second():
-    """extract_classifier_crops must produce (H, W) == metadata.input_size."""
-    from hydra_suite.core.inference.result import OBBResult
-    from hydra_suite.core.inference.stages.crops import extract_classifier_crops
+def test_model_fit_honours_h_w_order():
+    """A crop fitted to a non-square ``input_size`` lands at exactly (H, W).
 
-    corners = np.array(
-        [[10.0, 10.0], [42.0, 10.0], [42.0, 26.0], [10.0, 26.0]], dtype=np.float32
-    )
-    obb = OBBResult(
-        frame_idx=0,
-        centroids=np.array([[26.0, 18.0]], dtype=np.float32),
-        angles=np.array([0.0], dtype=np.float32),
-        sizes=np.array([512.0], dtype=np.float32),
-        shapes=np.array([[512.0, 2.0]], dtype=np.float32),
-        confidences=np.array([0.9], dtype=np.float32),
-        corners=np.stack([corners]),
-        detection_ids=np.array([0], dtype=np.int64),
-    )
-    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    This used to assert the shape of ``extract_classifier_crops`` directly,
+    which warped straight to the model input.  Under global canonicalization
+    that function returns a CANONICAL crop and the model-input shape is Layer
+    2's job, so the (H, W) contract is asserted where it now lives.  Getting
+    the order wrong here transposes every non-square classifier input, and
+    tiny head-tail models default to a non-square [64, 128].
+    """
+    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
 
-    input_size = (64, 128)  # (H, W) -- deliberately non-square
-    crops = extract_classifier_crops(frame, obb, input_size, 2.0, 1.3)
-    assert crops[0].shape[:2] == input_size
+    in_h, in_w = (64, 128)  # (H, W) -- deliberately non-square
+    crop = np.zeros((26, 60, 3), dtype=np.uint8)  # a canonical crop (H, W, C)
+
+    fit = fit_to_model_input((crop.shape[1], crop.shape[0]), (in_w, in_h))
+    out = apply_fit(crop, fit)
+
+    assert out.shape[:2] == (in_h, in_w)
 
 
 def test_custom_cnn_params_accept_a_pair():
