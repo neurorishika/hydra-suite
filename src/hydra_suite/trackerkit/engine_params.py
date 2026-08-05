@@ -90,6 +90,13 @@ class RuntimeContext:
     frame_width: int | None
     frame_height: int | None
     roi_mask: "np.ndarray | None" = None
+    # START_FRAME / END_FRAME overrides. The GUI emits these straight off its
+    # spin boxes (config.py) regardless of whether the controls are disabled
+    # (during a tracking/backward pass), so it supplies them here to preserve
+    # that exact value. The CLI leaves them ``None`` -> the builder falls back
+    # to the config-derived range (unchanged CLI behaviour).
+    start_frame: int | None = None
+    end_frame: int | None = None
     dataset_output_dir: str | None = None
     final_media_video_output_dir: str | None = None
     individual_dataset_output_dir: str | None = None
@@ -513,10 +520,16 @@ def build_engine_params(
         if runtime.total_frames is not None
         else None
     )
-    start_frame = int(_cfg_get(cfg, "start_frame", default=start_frame_default))
-    end_frame = _cfg_get(cfg, "end_frame", default=end_frame_default)
-    if end_frame is not None:
-        end_frame = int(end_frame)
+    if runtime.start_frame is not None:
+        start_frame = int(runtime.start_frame)
+    else:
+        start_frame = int(_cfg_get(cfg, "start_frame", default=start_frame_default))
+    if runtime.end_frame is not None:
+        end_frame = int(runtime.end_frame)
+    else:
+        end_frame = _cfg_get(cfg, "end_frame", default=end_frame_default)
+        if end_frame is not None:
+            end_frame = int(end_frame)
 
     from hydra_suite.core.tracking.session_policy import build_trajectory_colors
 
@@ -708,7 +721,7 @@ def build_engine_params(
     )
     final_media_export_videos_enabled = should_export_final_media_videos(cfg)
 
-    return {
+    params: dict[str, Any] = {
         "ADVANCED_CONFIG": advanced,
         "DETECTION_METHOD": str(
             _cfg_get(cfg, "detection_method", default="background_subtraction")
@@ -1302,3 +1315,32 @@ def build_engine_params(
         # Profiling toggle (bridge: config.py:2544).
         "ENABLE_PROFILING": bool(_cfg_get(cfg, "enable_profiling", default=False)),
     }
+
+    # Runtime-overlay output-dir / cache keys. These depend on the live
+    # video/session (not the config), so they travel on the RuntimeContext.
+    # The GUI supplies them (its ``get_parameters_dict`` has always emitted
+    # them); the CLI leaves the fields ``None`` and does NOT emit these keys --
+    # byte-identical to today's CLI, whose consumers read them via ``.get(...)``
+    # (absent == None). Each is emitted only when the caller supplied it.
+    _overlay_dirs = {
+        "DATASET_OUTPUT_DIR": runtime.dataset_output_dir,
+        "FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR": runtime.final_media_video_output_dir,
+        "INDIVIDUAL_DATASET_OUTPUT_DIR": runtime.individual_dataset_output_dir,
+        "INDIVIDUAL_DATASET_NAME": runtime.individual_dataset_name,
+        "INDIVIDUAL_PROPERTIES_CACHE_PATH": runtime.individual_properties_cache_path,
+    }
+    caller_supplied_output_context = any(
+        value is not None for value in _overlay_dirs.values()
+    )
+    for key, value in _overlay_dirs.items():
+        if value is not None:
+            params[key] = value
+    # INDIVIDUAL_DATASET_RUN_ID: the GUI ALWAYS emits this key (its value is
+    # ``None`` until a run starts), so emit it whenever the caller supplied the
+    # live output-context fields (i.e. the GUI). The CLI leaves them all
+    # ``None`` and does not emit the key -- byte-identical to today's CLI; its
+    # sole consumer (dataset generator ``.get(...)``) treats absent == None.
+    if caller_supplied_output_context:
+        params["INDIVIDUAL_DATASET_RUN_ID"] = runtime.individual_dataset_run_id
+
+    return params
