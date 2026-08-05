@@ -554,7 +554,7 @@ def extract_and_classify_batch(
     per_frame_corners: List[List[np.ndarray]],
     canvas_w: Optional[int] = None,
     canvas_h: Optional[int] = None,
-    padding_fraction: float = 0.1,
+    padding_fraction: Optional[float] = None,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     suppress_foreign: bool = True,
     per_frame_all_corners: Optional[List[List[np.ndarray]]] = None,
@@ -588,6 +588,22 @@ def extract_and_classify_batch(
         Nested list ``[frame][detection]`` of ``CanonicalCropResult | None``.
     """
     canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
+    # A geometry already carries the margin. Accepting a padding_fraction
+    # alongside it would let a caller believe they had set a padding that the
+    # geometry path silently ignores -- the same silent-mismatch class this
+    # module exists to remove, so it is an error rather than a preference.
+    if geometry is not None:
+        implied = geometry.margin - 1.0
+        if padding_fraction is not None and abs(padding_fraction - implied) > 1e-9:
+            raise ValueError(
+                f"padding_fraction={padding_fraction} disagrees with "
+                f"geometry.margin={geometry.margin} (implies {implied}). "
+                "Pass the geometry alone."
+            )
+        padding_fraction = implied
+    elif padding_fraction is None:
+        padding_fraction = 0.1
+
     results: List[List[Optional[CanonicalCropResult]]] = []
 
     for fi, frame in enumerate(frames):
