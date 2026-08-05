@@ -17,6 +17,7 @@ from ..artifacts import (
     path_fingerprint_token,
     write_artifact_meta,
 )
+from ..crop_dtype import to_uint8_image
 from ..types import PoseResult
 from ..utils import summarize_keypoints
 from ..vitpose.adapter import load_finetuned_checkpoint
@@ -127,7 +128,10 @@ class ViTPoseBackend:
             chunk = crops[start : start + self._batch_size]
             chws, centers, scales = [], [], []
             for crop in chunk:
-                chw, c, s = preprocess_crop(np.asarray(crop), geom=self._geom)
+                # Canonical crops arrive float32 [0, 1]; preprocess_crop divides
+                # by 255 again. Normalise to uint8 first — the same conversion
+                # predict_batch_cuda already applies before delegating here.
+                chw, c, s = preprocess_crop(to_uint8_image(crop), geom=self._geom)
                 chws.append(chw)
                 centers.append(c)
                 scales.append(s)

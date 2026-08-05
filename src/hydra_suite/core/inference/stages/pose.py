@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from hydra_suite.core.identity.pose.crop_dtype import to_uint8_image
+
 from ..config import PoseConfig
 from ..result import CropBatch, OBBResult, PoseResult
 from ..runtime import RuntimeContext, resolved_backend_for
@@ -271,7 +273,7 @@ def run_pose(
                 m_inv = cv2.invertAffineTransform(m_align)
             except Exception:
                 m_inv = None
-        np_crops.append(np.ascontiguousarray(hwc))
+        np_crops.append(np.ascontiguousarray(to_uint8_image(hwc)))
         affines.append(m_inv)
 
     raw_results = model.backend.predict_batch(np_crops)
@@ -408,7 +410,7 @@ def run_pose_batch(
                     m_inv = None
 
         if not on_cuda:
-            np_crops.append(np.ascontiguousarray(hwc))
+            np_crops.append(np.ascontiguousarray(to_uint8_image(hwc)))
         affines_all.append(m_inv)
 
     if on_cuda:
