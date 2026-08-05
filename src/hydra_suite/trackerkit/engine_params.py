@@ -290,6 +290,57 @@ def build_engine_params(
             default=advanced.get("max_aspect_ratio_multiplier", 2.0),
         )
     )
+    # Mirror the GUI's ADVANCED_CONFIG assembly (config.py:2085-2112): the
+    # bridge overlays the live detection-batch + video-pose overlay widgets
+    # onto ``advanced_config`` before handing it to the engine. The CLI never
+    # did this, so ADVANCED_CONFIG carried only the raw disk keys. Source each
+    # from the persisted config field (build_config_dict serializes them).
+    advanced["detection_batch_size"] = int(
+        _cfg_get(
+            cfg,
+            "detection_batch_size",
+            default=advanced.get("detection_batch_size", 1),
+        )
+    )
+    advanced["video_show_pose"] = bool(
+        _cfg_get(cfg, "video_show_pose", default=advanced.get("video_show_pose", False))
+    )
+    advanced["video_pose_point_radius"] = int(
+        _cfg_get(
+            cfg,
+            "video_pose_point_radius",
+            default=advanced.get("video_pose_point_radius", 3),
+        )
+    )
+    advanced["video_pose_point_thickness"] = int(
+        _cfg_get(
+            cfg,
+            "video_pose_point_thickness",
+            default=advanced.get("video_pose_point_thickness", -1),
+        )
+    )
+    advanced["video_pose_line_thickness"] = int(
+        _cfg_get(
+            cfg,
+            "video_pose_line_thickness",
+            default=advanced.get("video_pose_line_thickness", 2),
+        )
+    )
+    advanced["video_pose_color_mode"] = str(
+        _cfg_get(
+            cfg,
+            "video_pose_color_mode",
+            default=advanced.get("video_pose_color_mode", "track"),
+        )
+    )
+    advanced["video_pose_color"] = [
+        int(component)
+        for component in _cfg_get(
+            cfg,
+            "video_pose_color",
+            default=advanced.get("video_pose_color", [255, 255, 255]),
+        )
+    ]
 
     fps = float(_cfg_get(cfg, "fps", default=runtime.fps) or runtime.fps or 30.0)
     max_targets = int(_cfg_get(cfg, "max_targets", default=4))
@@ -415,8 +466,26 @@ def build_engine_params(
     yolo_crop_obb_path = resolve_model_path(
         _cfg_get(cfg, "yolo_crop_obb_model_path", "yolo_model_path", default="")
     )
+    # The GUI resolves the head-tail model via
+    # ``identity._get_selected_yolo_headtail_model_path()``
+    # (identity_panel.py:1532-1536), which returns "" when the "Enable
+    # Head-Tail Orientation" group (``g_headtail``) is unchecked and only
+    # otherwise returns the configured path. build_config_dict persists that
+    # checkbox as ``enable_headtail_orientation`` (config.py:1574); the loader
+    # default when the key is absent is ``bool(configured path)``
+    # (config.py:436-443). Reproduce that gate so a config with a configured
+    # head-tail model but the group disabled emits "" (and leaves
+    # DIRECTED_ORIENT_POSTHOC_CONSISTENCY off), exactly like the GUI.
+    yolo_headtail_configured = _cfg_get(cfg, "yolo_headtail_model_path", default="")
+    headtail_orientation_enabled = bool(
+        _cfg_get(
+            cfg,
+            "enable_headtail_orientation",
+            default=bool(str(yolo_headtail_configured or "").strip()),
+        )
+    )
     yolo_headtail_path = resolve_model_path(
-        _cfg_get(cfg, "yolo_headtail_model_path", default="")
+        yolo_headtail_configured if headtail_orientation_enabled else ""
     )
     yolo_path = yolo_direct_path if yolo_mode == "direct" else yolo_crop_obb_path
 
@@ -612,6 +681,34 @@ def build_engine_params(
         )
     )
 
+    # Legacy singular CNN classifier params (bridge: config.py:2408-2415 +
+    # 2548-2549). The GUI emits a hard-coded empty label/path + fixed
+    # confidence, then back-fills CNN_CLASSIFIER_MODEL_PATH from
+    # COLOR_TAG_MODEL_PATH when empty, and reads the batch size off the first
+    # configured CNN classifier (falling back to 64). Reproduce verbatim.
+    color_tag_model_path = str(_cfg_get(cfg, "color_tag_model_path", default=""))
+    cnn_classifier_model_path = color_tag_model_path
+    cnn_classifier_batch_size = int(
+        cnn_classifiers[0].get("batch_size", 64) if cnn_classifiers else 64
+    )
+
+    # Final-media / canonical-still export gates (bridge: config.py:2127-2129,
+    # 2487-2490). ENABLE_INDIVIDUAL_DATASET/IMAGE_SAVE are hard-coded False in
+    # the GUI params dict. EXPORT_FINAL_CANONICAL_IMAGES equals the GUI's
+    # ``_is_individual_image_save_enabled()`` -- build_config_dict persists that
+    # exact value into ``export_final_canonical_images`` (config.py:1876), so
+    # read it back directly. FINAL_MEDIA_EXPORT_VIDEOS_ENABLED is the GUI's
+    # ``_should_export_final_media_videos()`` -- the pure session_policy
+    # predicate over the persisted config (config.py:989-991).
+    from hydra_suite.core.tracking.session_policy import (
+        should_export_final_media_videos,
+    )
+
+    export_final_canonical_images = bool(
+        _cfg_get(cfg, "export_final_canonical_images", default=False)
+    )
+    final_media_export_videos_enabled = should_export_final_media_videos(cfg)
+
     return {
         "ADVANCED_CONFIG": advanced,
         "DETECTION_METHOD": str(
@@ -622,6 +719,39 @@ def build_engine_params(
         "END_FRAME": end_frame,
         "YOLO_MODEL_PATH": yolo_path,
         "YOLO_OBB_MODE": yolo_mode,
+        # OBB direct-task + fixed-angle knobs (bridge: config.py:2161-2173).
+        "YOLO_OBB_DIRECT_TASK": str(
+            _cfg_get(cfg, "yolo_obb_direct_task", default="obb")
+        ),
+        "YOLO_OBB_FIXED_ANGLE_DEG": float(
+            _cfg_get(cfg, "yolo_fixed_angle_deg", default=0.0)
+        ),
+        # Segment-as-OBB rotated-rect kernel knobs (advanced-config only; read
+        # only when YOLO_OBB_DIRECT_TASK == "segment"). Bridge reads them from
+        # advanced_config with these defaults (config.py:2168-2173).
+        "YOLO_OBB_SEG_NUM_ANGLES": advanced.get("obb_seg_num_angles", 24),
+        "YOLO_OBB_SEG_CROP_SIZE": advanced.get("obb_seg_crop_size", 64),
+        "YOLO_OBB_SEG_PAD_RATIO": advanced.get("obb_seg_pad_ratio", 0.15),
+        "YOLO_OBB_SEG_MASK_THRESHOLD": advanced.get("obb_seg_mask_threshold", 0.5),
+        # SAHI slicing knobs (bridge: config.py:2174-2191). SLICE_ENABLED /
+        # SLICE_GEOMETRY_MODE are persisted config fields; the rest live in
+        # advanced_config with these defaults.
+        "SLICE_ENABLED": bool(_cfg_get(cfg, "slice_enabled", default=False)),
+        "SLICE_GEOMETRY_MODE": str(
+            _cfg_get(cfg, "slice_geometry_mode", default="auto_model")
+        ),
+        "SLICE_OVERLAP": advanced.get("slice_overlap", 0.2),
+        "SLICE_HEIGHT": advanced.get("slice_height", 0),
+        "SLICE_WIDTH": advanced.get("slice_width", 0),
+        "SLICE_OBJECT_TILE_FRACTION": advanced.get("slice_object_tile_fraction", 0.15),
+        "SLICE_TRAINED_BODY_PX": advanced.get("slice_trained_body_px", 0.0),
+        "SLICE_MERGE_POLICY": advanced.get("slice_merge_policy", "greedy_nmm"),
+        "SLICE_MERGE_METRIC": advanced.get("slice_merge_metric", "ios"),
+        "SLICE_MERGE_THRESHOLD": advanced.get("slice_merge_threshold", 0.5),
+        "SLICE_MERGE_BACKEND": advanced.get("slice_merge_backend", "cv2"),
+        "SLICE_PERFORM_STANDARD_PRED": advanced.get(
+            "slice_perform_standard_pred", False
+        ),
         "YOLO_OBB_DIRECT_MODEL_PATH": yolo_direct_path,
         "YOLO_DETECT_MODEL_PATH": yolo_detect_path,
         "YOLO_CROP_OBB_MODEL_PATH": yolo_crop_obb_path,
@@ -818,15 +948,11 @@ def build_engine_params(
             _cfg_get(cfg, "trajectory_history_seconds", default=2.0)
         ),
         "BACKGROUND_PRIME_FRAMES": bg_prime_frames,
-        "BACKGROUND_CONVERGENCE_EPSILON": float(
-            _cfg_get(cfg, "background_convergence_epsilon", default=1e-4)
-        ),
-        "BACKGROUND_CONVERGENCE_FRAMES": int(
-            _cfg_get(cfg, "background_convergence_frames", default=30)
-        ),
-        "BACKGROUND_CONVERGENCE_PIXEL_DELTA": float(
-            _cfg_get(cfg, "background_convergence_pixel_delta", default=5.0)
-        ),
+        # NB: BACKGROUND_CONVERGENCE_EPSILON/FRAMES/PIXEL_DELTA are intentionally
+        # NOT emitted -- the GUI reference (get_parameters_dict) never emits
+        # them, so the engine falls back to its own defaults (1e-4 / 30 / 5.0,
+        # core/background/model.py:579-581 and core/inference/config.py:285-291),
+        # which equal the values the CLI used to emit -> behaviour-identical.
         "ENABLE_LIGHTING_STABILIZATION": bool(
             _cfg_get(cfg, "enable_lighting_stabilization", default=True)
         ),
@@ -897,8 +1023,10 @@ def build_engine_params(
         "MAX_ORIENT_DELTA_STOPPED": float(
             _cfg_get(cfg, "max_orientation_delta_stopped", default=20.0)
         ),
+        # bridge: config.py:2308-2310 -- a directed heading source is active
+        # when a head-tail model is selected OR pose extraction is enabled.
         "DIRECTED_ORIENT_POSTHOC_CONSISTENCY": bool(
-            str(yolo_headtail_path or "").strip()
+            str(yolo_headtail_path or "").strip() or pose_extractor_enabled
         ),
         "LOST_THRESHOLD_FRAMES": lost_threshold_frames,
         "W_POSITION": float(_cfg_get(cfg, "weight_position", default=0.8)),
@@ -1068,4 +1196,108 @@ def build_engine_params(
         "EXPORT_CONFIDENCE_DENSITY_VIDEO": bool(
             _cfg_get(cfg, "export_confidence_density_video", default=False)
         ),
+        # --- Dataset generation (bridge: config.py:2367-2399). Active-learning
+        # export knobs; inert for tracking. DATASET_NAME/CONF_THRESHOLD are
+        # hard-coded in the GUI; the YOLO conf/iou come from advanced_config;
+        # the rest are persisted config fields.
+        "ENABLE_DATASET_GENERATION": bool(
+            _cfg_get(cfg, "enable_dataset_generation", default=False)
+        ),
+        "DATASET_NAME": "",
+        "DATASET_CLASS_NAME": str(_cfg_get(cfg, "dataset_class_name", default="")),
+        "DATASET_MAX_FRAMES": int(_cfg_get(cfg, "dataset_max_frames", default=50)),
+        "DATASET_CONF_THRESHOLD": 0.5,
+        "DATASET_MIN_SELECTION_SCORE": float(
+            _cfg_get(cfg, "dataset_min_selection_score", default=0.0)
+        ),
+        "DATASET_AL_PRESET": str(
+            _cfg_get(cfg, "dataset_al_preset", default="tracker_default")
+        ),
+        "DATASET_YOLO_CONFIDENCE_THRESHOLD": advanced.get(
+            "dataset_yolo_confidence_threshold", 0.05
+        ),
+        "DATASET_YOLO_IOU_THRESHOLD": advanced.get("dataset_yolo_iou_threshold", 0.5),
+        "DATASET_DIVERSITY_WINDOW": int(
+            _cfg_get(cfg, "dataset_diversity_window", default=10)
+        ),
+        "DATASET_INCLUDE_CONTEXT": bool(
+            _cfg_get(cfg, "dataset_include_context", default=False)
+        ),
+        "DATASET_PROBABILISTIC_SAMPLING": bool(
+            _cfg_get(cfg, "dataset_probabilistic_sampling", default=True)
+        ),
+        # Active-learning metric selectors (bridge: config.py:2394-2399).
+        "METRIC_LOW_CONFIDENCE": bool(
+            _cfg_get(cfg, "metric_low_confidence", default=True)
+        ),
+        "METRIC_COUNT_MISMATCH": bool(
+            _cfg_get(cfg, "metric_count_mismatch", default=True)
+        ),
+        "METRIC_FRAGMENTED_DETECTIONS": bool(
+            _cfg_get(cfg, "metric_fragmented_detections", default=True)
+        ),
+        "METRIC_HIGH_ASSIGNMENT_COST": bool(
+            _cfg_get(cfg, "metric_high_assignment_cost", default=True)
+        ),
+        "METRIC_TRACK_LOSS": bool(_cfg_get(cfg, "metric_track_loss", default=True)),
+        "METRIC_HIGH_UNCERTAINTY": bool(
+            _cfg_get(cfg, "metric_high_uncertainty", default=True)
+        ),
+        # Legacy singular CNN classifier params (bridge: config.py:2408-2415,
+        # 2548-2549). See derivation block above the return statement.
+        "CNN_CLASSIFIER_MODEL_PATH": cnn_classifier_model_path,
+        "CNN_CLASSIFIER_CONFIDENCE": 0.5,
+        "CNN_CLASSIFIER_LABEL": "",
+        "CNN_CLASSIFIER_BATCH_SIZE": cnn_classifier_batch_size,
+        # Final media / individual-crop export (bridge: config.py:2486-2533).
+        # ENABLE_INDIVIDUAL_DATASET/IMAGE_SAVE are hard-coded False in the GUI
+        # params dict; the export gates + individual-crop knobs come from the
+        # persisted config fields (or the session_policy predicate).
+        "ENABLE_INDIVIDUAL_DATASET": False,
+        "ENABLE_INDIVIDUAL_IMAGE_SAVE": False,
+        "EXPORT_FINAL_CANONICAL_IMAGES": export_final_canonical_images,
+        "FINAL_MEDIA_EXPORT_VIDEOS_ENABLED": final_media_export_videos_enabled,
+        "FINAL_MEDIA_EXPORT_FIX_DIRECTION_FLIPS": bool(
+            _cfg_get(cfg, "final_media_export_fix_direction_flips", default=False)
+        ),
+        "FINAL_MEDIA_EXPORT_HEADING_FLIP_MAX_BURST": int(
+            _cfg_get(cfg, "final_media_export_heading_flip_burst", default=5)
+        ),
+        "FINAL_MEDIA_EXPORT_ENABLE_AFFINE_STABILIZATION": bool(
+            _cfg_get(
+                cfg, "final_media_export_enable_affine_stabilization", default=False
+            )
+        ),
+        "FINAL_MEDIA_EXPORT_STABILIZATION_WINDOW": int(
+            _cfg_get(cfg, "final_media_export_stabilization_window", default=5)
+        ),
+        "INDIVIDUAL_OUTPUT_FORMAT": str(
+            _cfg_get(cfg, "individual_output_format", default="png")
+        ),
+        "INDIVIDUAL_SAVE_INTERVAL": int(
+            _cfg_get(cfg, "individual_save_interval", default=1)
+        ),
+        "INDIVIDUAL_INTERPOLATE_OCCLUSIONS": bool(
+            _cfg_get(cfg, "individual_interpolate_occlusions", default=True)
+        ),
+        "INDIVIDUAL_CROP_PADDING": float(
+            _cfg_get(cfg, "individual_crop_padding", default=0.1)
+        ),
+        "INDIVIDUAL_BACKGROUND_COLOR": [
+            int(component)
+            for component in _cfg_get(
+                cfg, "individual_background_color", default=[0, 0, 0]
+            )
+        ],
+        "SUPPRESS_FOREIGN_OBB_REGIONS": bool(
+            _cfg_get(cfg, "suppress_foreign_obb_regions", default=False)
+        ),
+        "SUPPRESS_FOREIGN_OBB_DATASET": bool(
+            _cfg_get(cfg, "suppress_foreign_obb_individual_dataset", default=False)
+        ),
+        "SUPPRESS_FOREIGN_OBB_ORIENTED_VIDEO": bool(
+            _cfg_get(cfg, "suppress_foreign_obb_oriented_videos", default=False)
+        ),
+        # Profiling toggle (bridge: config.py:2544).
+        "ENABLE_PROFILING": bool(_cfg_get(cfg, "enable_profiling", default=False)),
     }
