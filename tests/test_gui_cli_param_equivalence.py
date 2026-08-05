@@ -80,6 +80,15 @@ DISPLAY_ONLY_KEYS = {
 # Bucket 4: runtime-overlay keys supplied via RuntimeContext (video/session
 # facts, not config-derived) — excluded because this oracle intentionally
 # builds a synthetic RuntimeContext with None/placeholder values for these.
+#
+# START_FRAME / END_FRAME are the frame-processing range: a video/session fact,
+# not a config-derived value. The GUI reads them off the live spin boxes
+# (config.py:2157-2158), which — with no video loaded in this oracle — read 0,
+# while the shared builder derives END_FRAME from the runtime/probe total-frame
+# count. Both denote "process the whole clip"; in a real GUI run the spin boxes
+# are seeded from the loaded video's frame count, so Task 6's gui_runtime_context
+# supplies them from the GUI just like the CLI supplies them from its probe. They
+# are therefore treated as runtime overlay, not compared here.
 RUNTIME_OVERLAY_KEYS = {
     "ROI_MASK",
     "INDIVIDUAL_PROPERTIES_CACHE_PATH",
@@ -88,6 +97,8 @@ RUNTIME_OVERLAY_KEYS = {
     "FINAL_MEDIA_EXPORT_VIDEO_OUTPUT_DIR",
     "INDIVIDUAL_DATASET_OUTPUT_DIR",
     "INDIVIDUAL_DATASET_NAME",
+    "START_FRAME",
+    "END_FRAME",
 }
 
 
@@ -174,7 +185,16 @@ def test_shared_builder_reproduces_gui_reference(main_window, clip):
     reference = orch.get_parameters_dict()
     cfg = orch.build_config_dict()
     rt = gui_runtime_context(main_window)
-    shared = build_engine_params(cfg, runtime=rt)
+    # Feed the builder the SAME advanced-config source the GUI uses
+    # (``self._mw.advanced_config``) so ADVANCED_CONFIG is compared
+    # apples-to-apples: both start from the identical base dict and overlay the
+    # identical derived keys. Letting the builder default to
+    # load_advanced_tracker_config() would pull in the on-disk advanced file,
+    # which the GUI does not consult here (the oracle stubs _load_advanced_config
+    # to {}).
+    shared = build_engine_params(
+        cfg, runtime=rt, advanced_config=main_window.advanced_config
+    )
     diffs = _compare(reference, shared)
     assert not diffs, f"{clip}: {len(diffs)} keys diverge: {sorted(diffs)}"
 
@@ -197,7 +217,9 @@ def test_dump_keydiff_baseline(main_window):
         reference = orch.get_parameters_dict()
         cfg = orch.build_config_dict()
         rt = gui_runtime_context(main_window)
-        shared = build_engine_params(cfg, runtime=rt)
+        shared = build_engine_params(
+            cfg, runtime=rt, advanced_config=main_window.advanced_config
+        )
         diffs = _compare(reference, shared)
 
         gui_only = sorted(k for k in diffs if k not in shared)
