@@ -896,6 +896,17 @@ per-image metadata path they implemented is subsumed by Layer 1 + Layer 2."
 - Consumes: `CanonicalGeometry`, `canonical_affine` (Task 1); `fit_to_model_input`, `apply_fit`, `fit_affine` (Task 2); corrected `(H, W)` reads (Task 3); `InferenceConfig.canonical` (Task 4)
 - Produces: `InferenceConfig.canonical: CanonicalGeometry` replacing `canonical_aspect_ratio` and `canonical_margin`. Every crop entry point takes `geometry: CanonicalGeometry` instead of `(aspect_ratio, margin)` floats and returns uniformly shaped crops.
 
+**Dispatch this task in two halves, committed and reviewed separately** — it is
+the largest diff in the plan and a ten-file review is a poor gate:
+
+- **6a** — `crops.py` alone: all nine entry points onto `CanonicalGeometry`,
+  the batch-max pad deleted, both unused `aspect_ratio` parameters removed.
+  Commit; review; then proceed.
+- **6b** — the consumers: `pose.py`, `cnn.py`, `headtail.py`, `config.py`,
+  `cache/keys.py`, `pipeline.py`, `api.py`, `runner.py`, `streaming_payload.py`.
+
+The tests in Step 1 belong to 6b; 6a is gated by the updated existing crop tests.
+
 Deletions this task must make, because a fixed canvas renders them meaningless:
 the batch-max zero-pad in `_extract_canonical_cpu` (`crops.py:215-227`), the
 slice-back in `run_pose_batch` (`pose.py:269` and `:402`), and the unused
