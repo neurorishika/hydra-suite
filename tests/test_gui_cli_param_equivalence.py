@@ -9,11 +9,11 @@ asserts that ``build_engine_params(build_config_dict(), runtime=...)``
 reproduces the GUI reference key-for-key on every key that isn't purely
 cosmetic/runtime-overlay.
 
-This test is EXPECTED TO FAIL today (~50+ inert keys + a handful of
-params-only leaks diverge between the two derivations) — it is marked
-``xfail(strict=True)`` so CI stays green while Tasks 3-6 of the shared
-engine-param-builder program drive it to PASS. The xfail must be removed in
-Task 6 once ``build_engine_params`` fully subsumes ``get_parameters_dict``.
+As of Task 6 this test PASSES: ``get_parameters_dict()`` was collapsed into a
+thin wrapper over ``build_engine_params`` + a GUI-only display/runtime overlay,
+so the two derivations agree on every non-display / non-runtime-overlay key by
+construction. It is the durable anti-drift guard for the GUI/CLI param
+unification (the Task-2 oracle that was RED through Tasks 3-5 and is now GREEN).
 
 A second, always-passing diagnostic test dumps the per-clip diverging-key
 sets (GUI-only / shared-only / value-mismatch) to
@@ -174,10 +174,6 @@ def _compare(reference: dict, shared: dict) -> dict:
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="shared builder incomplete until get_parameters_dict rewrite (Task 6)",
-)
 @pytest.mark.parametrize("clip", CLIPS)
 def test_shared_builder_reproduces_gui_reference(main_window, clip):
     load_gate_config_into(main_window, clip)
