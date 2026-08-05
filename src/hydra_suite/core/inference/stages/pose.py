@@ -7,6 +7,15 @@ from typing import Any
 import numpy as np
 import torch
 
+from hydra_suite.core.canonicalization.fit import (
+    apply_fit,
+    fit_affine,
+    fit_to_model_input,
+)
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+)
 from hydra_suite.core.identity.pose.crop_dtype import to_uint8_image
 
 from ..config import PoseConfig
@@ -15,11 +24,38 @@ from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
-# Crop geometry used to build the shared canonical crops (mirrors the runner's
-# headtail aspect/margin defaults). Used to recover each detection's native crop
-# extent and the affine that maps crop coords back to the frame.
-_CANONICAL_ASPECT_RATIO = 2.0
-_CANONICAL_MARGIN = 1.3
+# Fallback canonical geometry for callers that omit ``geometry`` (matches the
+# project-wide default `InferenceConfig.canonical` built from
+# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults -- mirrors the old
+# module-level _CANONICAL_ASPECT_RATIO/_CANONICAL_MARGIN constants this
+# replaces).
+_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+
+
+def _model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[int, int]:
+    """The pose backend's fixed (W, H) input, or ``geometry``'s own canvas.
+
+    Backends with no fixed input size (fully convolutional, e.g. native SLEAP's
+    ``preferred_input_size == 0``) get an identity fit: feed the canonical crop
+    unchanged and let the backend's own preprocessing handle it, matching the
+    legacy "native-extent crop, backend resizes" behaviour for those backends.
+    """
+    try:
+        dim = int(getattr(model.backend, "preferred_input_size", 0) or 0)
+    except (TypeError, ValueError):
+        dim = 0
+    if dim > 0:
+        return (dim, dim)
+    return geometry.canvas_wh
+
+
+def _compose_affine(m2: np.ndarray, m1: np.ndarray) -> np.ndarray:
+    """Compose two 2x3 affines: result = m2 . m1 (apply m1 first, then m2)."""
+    a = np.eye(3, dtype=np.float64)
+    a[:2, :] = np.asarray(m2, dtype=np.float64)
+    b = np.eye(3, dtype=np.float64)
+    b[:2, :] = np.asarray(m1, dtype=np.float64)
+    return (a @ b)[:2, :].astype(np.float64)
 
 
 def _warmup_backend(backend: Any) -> None:
@@ -222,32 +258,27 @@ def run_pose(
     model: PoseModel,
     config: PoseConfig,
     runtime: RuntimeContext,
-    aspect_ratio: float = _CANONICAL_ASPECT_RATIO,
-    margin: float = _CANONICAL_MARGIN,
+    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
 ) -> PoseResult:
     """Run pose estimation on canonical crops. Returns (D, K, 3) keypoints + valid_mask.
 
-    Two corrections vs the naive path, both verified against the legacy pipeline:
+    ``crops`` is on ``geometry``'s fixed canvas (Layer 1: rotation + translation
+    only). Each crop is fit to the model's expected input via Layer 2
+    (``fit_to_model_input`` / ``apply_fit``); the inverse affine that maps
+    predicted keypoints back to image coordinates is the composite of both
+    transforms: ``m_total = fit_affine(fit) . m_align``. With a fixed canvas
+    there is no per-detection native extent to slice back to (unlike the old
+    batch-max-padded crops this replaces) -- every crop is already the shared
+    canvas size, so it is used whole.
 
-    1. The shared ``crops`` tensor is padded to a single per-batch max size so it
-       can stack as one tensor (head-tail / CNN need that). Feeding those padded
-       crops to SLEAP put each ant in a corner of an oversized canvas; the
-       sizematcher then shrank it and the single-instance model produced
-       scattered / missing keypoints. We recover each detection's NATIVE crop
-       (padding is bottom/right zeros) so SLEAP sees the ant filling the frame.
-
-    2. Keypoints are returned in IMAGE coordinates (not crop coordinates) by
-       inverting the per-detection canonical affine — matching legacy, whose
-       pose cache stores image-space keypoints. Downstream heading/identity then
-       work in the global frame.
+    Keypoints are returned in IMAGE coordinates (not crop coordinates) by
+    inverting ``m_total`` — matching legacy, whose pose cache stores
+    image-space keypoints. Downstream heading/identity then work in the global
+    frame.
     """
     import cv2
 
-    from hydra_suite.core.canonicalization.crop import (
-        compute_alignment_affine,
-        compute_native_crop_dimensions,
-        invert_keypoints,
-    )
+    from hydra_suite.core.canonicalization.crop import invert_keypoints
 
     n = obb_result.num_detections
     empty = PoseResult(
@@ -257,23 +288,29 @@ def run_pose(
     if crops.shape[0] == 0 or n == 0:
         return empty
 
-    pad = max(0.0, float(margin) - 1.0)
+    model_wh = _model_input_wh(model, geometry)
+    fit = fit_to_model_input(geometry.canvas_wh, model_wh)
+    fit_m = fit_affine(fit)
+
     np_crops: list[np.ndarray] = []
     affines: list[np.ndarray | None] = []
     for i in range(crops.shape[0]):
         hwc = crops[i].permute(1, 2, 0).cpu().numpy()
+        hwc_u8 = to_uint8_image(hwc)
         corners = obb_result.corners[i] if i < n else None
         m_inv = None
         if corners is not None:
             try:
-                cw, ch = compute_native_crop_dimensions(corners, aspect_ratio, pad)
-                # Recover the native crop region (padding is bottom/right).
-                hwc = hwc[: int(ch), : int(cw)]
-                m_align, _ = compute_alignment_affine(corners, int(cw), int(ch), pad)
-                m_inv = cv2.invertAffineTransform(m_align)
+                m_align, _theta, _clipped = canonical_affine(corners, geometry)
+                m_total = _compose_affine(fit_m, m_align)
+                m_inv = cv2.invertAffineTransform(m_total)
             except Exception:
                 m_inv = None
-        np_crops.append(np.ascontiguousarray(to_uint8_image(hwc)))
+        try:
+            hwc_u8 = apply_fit(hwc_u8, fit)
+        except Exception:
+            pass
+        np_crops.append(np.ascontiguousarray(hwc_u8))
         affines.append(m_inv)
 
     raw_results = model.backend.predict_batch(np_crops)
@@ -333,57 +370,42 @@ def run_pose_batch(
     model: PoseModel,
     config: PoseConfig,
     runtime: RuntimeContext,
-    aspect_ratio: float = _CANONICAL_ASPECT_RATIO,
-    margin: float = _CANONICAL_MARGIN,
+    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
 ) -> "dict[int, PoseResult]":
     """Run pose estimation over a CropBatch; return one PoseResult per frame.
 
-    Runs the backend ONCE over all crops in batch (cross-frame perf win), then
-    splits results per frame via batch.select_frame. Uses batch.native_sizes to
-    undo per-crop padding exactly as run_pose does. Delegates per-detection
-    assembly to _assemble_pose_result (DRY with run_pose).
+    ``batch.crops`` is already on ``geometry``'s fixed canvas -- unlike the old
+    batch-max-padded crops, there is no per-detection native extent to slice
+    back to, so every crop is used whole (CPU path fit to the model input via
+    Layer 2, same as run_pose). Runs the backend ONCE over all crops in batch
+    (cross-frame perf win), then splits results per frame via
+    batch.select_frame. Delegates per-detection assembly to
+    _assemble_pose_result (DRY with run_pose).
 
-    Calls predict_batch_cuda when batch.crops.is_cuda and backend supports it.
+    Calls predict_batch_cuda when batch.crops.is_cuda and backend supports it;
+    that branch feeds the canonical-canvas crop straight through (no Layer 2
+    fit), matching the no-host-round-trip on-device crop paths elsewhere.
     """
     import cv2
 
-    from hydra_suite.core.canonicalization.crop import (
-        compute_alignment_affine,
-        compute_native_crop_dimensions,
-        invert_keypoints,
-    )
+    from hydra_suite.core.canonicalization.crop import invert_keypoints
 
-    pad = max(0.0, float(margin) - 1.0)
     n_total = batch.crops.shape[0]
     on_cuda = batch.crops.is_cuda and hasattr(model.backend, "predict_batch_cuda")
 
+    model_wh = _model_input_wh(model, geometry)
+    fit = fit_to_model_input(geometry.canvas_wh, model_wh)
+    fit_m = fit_affine(fit)
+
     np_crops: list[np.ndarray] = []
-    # CUDA: must slice to native extent (see run_pose docstring) — validate on mehek.
-    # Mirror the CPU native-slice but keep tensors on-device (C×H×W) so the model
-    # sees the ant filling the frame, consistent with the native-computed m_inv.
     cuda_crops: list[Any] = []
     affines_all: list[np.ndarray | None] = []
 
     for i in range(n_total):
-        # Native extent for this crop (padding is bottom/right zeros).
-        if i < len(batch.native_sizes):
-            native_h, native_w = int(batch.native_sizes[i, 0]), int(
-                batch.native_sizes[i, 1]
-            )
-        else:
-            native_h, native_w = (
-                int(batch.crops.shape[2]),
-                int(batch.crops.shape[3]),
-            )
-
         if on_cuda:
-            # Slice the device tensor (C, H, W) to its native extent — no
-            # host round-trip. predict_batch_cuda accepts a list of C×H×W
-            # CUDA tensors (see SleapExportedBackend.predict_batch_cuda).
-            cuda_crops.append(batch.crops[i, :, :native_h, :native_w])
+            cuda_crops.append(batch.crops[i])
         else:
             hwc = batch.crops[i].permute(1, 2, 0).cpu().numpy()
-            hwc = hwc[:native_h, :native_w]
 
         # Compute inverse affine for this crop using its OBB corners
         frame_idx = int(batch.frame_index[i])
@@ -401,21 +423,25 @@ def run_pose_batch(
             ):
                 corners = obb.corners[local_idx]
                 try:
-                    cw, ch = compute_native_crop_dimensions(corners, aspect_ratio, pad)
-                    m_align, _ = compute_alignment_affine(
-                        corners, int(cw), int(ch), pad
-                    )
-                    m_inv = cv2.invertAffineTransform(m_align)
+                    m_align, _theta, _clipped = canonical_affine(corners, geometry)
+                    if on_cuda:
+                        m_inv = cv2.invertAffineTransform(m_align)
+                    else:
+                        m_total = _compose_affine(fit_m, m_align)
+                        m_inv = cv2.invertAffineTransform(m_total)
                 except Exception:
                     m_inv = None
 
         if not on_cuda:
-            np_crops.append(np.ascontiguousarray(to_uint8_image(hwc)))
+            hwc_u8 = to_uint8_image(hwc)
+            try:
+                hwc_u8 = apply_fit(hwc_u8, fit)
+            except Exception:
+                pass
+            np_crops.append(np.ascontiguousarray(hwc_u8))
         affines_all.append(m_inv)
 
     if on_cuda:
-        # Feed NATIVE-sized device crops (not the window-padded batch.crops) so
-        # the model input matches the native-extent m_inv back-projection.
         raw_results = model.backend.predict_batch_cuda(cuda_crops)
     else:
         raw_results = model.backend.predict_batch(np_crops) if np_crops else []

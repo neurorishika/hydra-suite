@@ -8,11 +8,19 @@ from typing import Any
 import numpy as np
 import torch
 
+from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
 from ..config import HeadTailConfig
 from ..result import HeadTailResult, OBBResult
 from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
+
+# Fallback canonical geometry for callers that omit ``geometry`` (matches the
+# project-wide default `InferenceConfig.canonical` built from
+# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults).
+_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 _DIRECTION_OFFSET: dict[str, float] = {
     "right": 0.0,
@@ -96,14 +104,14 @@ def run_headtail(
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
-    aspect_ratio: float = 2.0,
-    margin: float = 1.3,
+    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
 ) -> HeadTailResult:
     """Classify head-tail orientation per detection. No I/O, no mode branching.
 
-    Crops are warped directly from the frame to the classifier input size
-    (extract_classifier_crops), bit-identical to the legacy head-tail path, so
-    direction decisions match legacy at the classifier boundary.
+    Crops are warped onto the shared canonical canvas (extract_classifier_crops,
+    Layer 1), then fit to the classifier's exact input size via Layer 2
+    (``fit_to_model_input`` / ``apply_fit``) so direction decisions match the
+    classifier boundary every other crop-consuming stage now shares.
 
     Per Correction 15: canonical_affines is None — affines belong to the crops
     stage, not headtail. Downstream consumers must check for None and recompute
@@ -121,9 +129,10 @@ def run_headtail(
 
     from .crops import extract_classifier_crops
 
-    np_crops = extract_classifier_crops(
-        frame, obb_result, model.input_size, aspect_ratio, margin
-    )
+    canon_crops = extract_classifier_crops(frame, obb_result, geometry)
+    in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
+    fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
+    np_crops = [apply_fit(c, fit) for c in canon_crops]
 
     all_probs = model.backend.predict_batch(np_crops)
 
@@ -244,16 +253,21 @@ def run_headtail_batch(
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
-    aspect_ratio: float = 2.0,
-    margin: float = 1.3,
+    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
 ) -> "dict[int, HeadTailResult]":
     """Run head-tail classification over a window; return one HeadTailResult per frame.
 
-    Builds classifier crops internally via extract_classifier_crops_batch (single
-    warpAffine to model.input_size, BGR uint8 — bit-identical to the per-frame
-    run_headtail path). Runs the backend ONCE over all crops (cross-frame perf win),
-    then splits per frame via batch.select_frame. Assembly delegates to
+    Builds classifier crops internally via extract_classifier_crops_batch (the
+    shared canonical canvas, BGR uint8 -- bit-identical to the per-frame
+    run_headtail path), then fits each to the model input via Layer 2 exactly
+    like run_headtail. Runs the backend ONCE over all crops (cross-frame perf
+    win), then splits per frame via batch.select_frame. Assembly delegates to
     _assemble_headtail_result (DRY with run_headtail).
+
+    The GPU (NVDEC on-device) branch does NOT apply the Layer 2 fit -- it feeds
+    the canonical-canvas crop straight to ``predict_batch_cuda``, which resizes
+    on-device internally, matching the no-host-round-trip design of the other
+    on-device crop paths.
     """
     from .crops import frames_on_cuda
 
@@ -264,7 +278,7 @@ def run_headtail_batch(
         from .crops import extract_classifier_crops_batch_gpu
 
         batch = extract_classifier_crops_batch_gpu(
-            frames, obb_results, model.input_size, aspect_ratio, margin, runtime.device
+            frames, obb_results, geometry, runtime.device
         )
         n_total = batch.crops.shape[0]
         if n_total:
@@ -279,9 +293,7 @@ def run_headtail_batch(
     else:
         from .crops import extract_classifier_crops_batch
 
-        batch = extract_classifier_crops_batch(
-            frames, obb_results, model.input_size, aspect_ratio, margin
-        )
+        batch = extract_classifier_crops_batch(frames, obb_results, geometry)
         # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for
         # predict_batch. Single batched host transfer + vectorized uint8
         # quantization -- byte-identical to the former per-crop `.cpu().numpy()`
@@ -292,7 +304,9 @@ def run_headtail_batch(
                 batch.crops.permute(0, 2, 3, 1).cpu().numpy()
             )
             stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-            np_crops: list[np.ndarray] = list(stacked)
+            in_h, in_w = model.input_size  # ClassifierMetadata documents (H, W)
+            fit = fit_to_model_input(geometry.canvas_wh, (in_w, in_h))
+            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in stacked]
             all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []

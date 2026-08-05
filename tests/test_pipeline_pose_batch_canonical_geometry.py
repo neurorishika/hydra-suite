@@ -2,23 +2,23 @@
 build those crops.
 
 ``Pipeline._process_obb_results`` (in ``core/inference/pipeline.py``) builds
-pose crops via ``extract_canonical_crops_batch(..., ar, mg, ...)`` where
-``ar``/``mg`` come from ``cfg.headtail.canonical_aspect_ratio`` /
-``canonical_margin``. It must pass the SAME ``ar``/``mg`` to
-``run_pose_batch(...)`` so the native-crop-dimension recovery and the inverse
-affine used to map keypoints back to frame coordinates agree with how the
-crops were built. If the two calls disagree (e.g. ``run_pose_batch`` silently
-falls back to its own defaults), keypoints are decoded against the wrong
-crop geometry and are displaced from their true frame position.
+pose crops via ``extract_canonical_crops_batch(..., geometry, ...)`` where
+``geometry`` comes from ``cfg.canonical`` -- the single project-wide canonical
+geometry shared by head-tail, CNN, and pose. It must pass that SAME geometry
+object to ``run_pose_batch(...)`` so the inverse affine used to map keypoints
+back to frame coordinates agrees with how the crops were built. If the two
+calls disagree (e.g. ``run_pose_batch`` silently falls back to its own
+default geometry), keypoints are decoded against the wrong crop geometry and
+are displaced from their true frame position.
 
 This test drives ``Pipeline._process_window`` end-to-end (no real models —
 OBB/crop/pose stage functions are monkeypatched in the ``pipeline`` module,
 following the same pattern as ``tests/test_inference_depth_invariance.py`` /
-``tests/helpers/tiny_clip.py``) with a configured ``canonical_aspect_ratio``
-of 2.45 and ``canonical_margin`` of 1.5 — deliberately NOT the module-level
-defaults (2.0 / 1.3) baked into ``run_pose_batch``'s signature — and asserts
-the aspect ratio / margin actually observed by ``extract_canonical_crops_batch``
-equals the aspect ratio / margin actually observed by ``run_pose_batch``.
+``tests/helpers/tiny_clip.py``) with a configured ``canonical`` geometry of
+aspect ratio 2.45 / margin 1.5 — deliberately NOT the default aspect/margin
+(2.0 / 1.3) — and asserts the geometry object actually observed by
+``extract_canonical_crops_batch`` is the same object observed by
+``run_pose_batch``.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.cache.writer import CacheWriter
 from hydra_suite.core.inference.config import (
     HeadTailConfig,
@@ -42,8 +43,7 @@ from hydra_suite.core.inference.result import CropBatch, OBBResult, PoseResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.pose import PoseModel
 
-_CONFIGURED_AR = 2.45
-_CONFIGURED_MG = 1.5
+_CONFIGURED_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.45, 1.5)
 
 
 def _make_obb(frame_idx: int, n: int = 1) -> OBBResult:
@@ -74,19 +74,15 @@ def _build_pipeline(captured: dict) -> tuple[Pipeline, BatchWindow]:
             confidence_threshold=0.1,
             iou_threshold=1.0,
         ),
-        # headtail_model stays None (below) so run_headtail_batch never runs,
-        # but cfg.headtail is still consulted by pipeline.py to derive ar/mg.
-        headtail=HeadTailConfig(
-            model_path="/stub_ht.pt",
-            canonical_aspect_ratio=_CONFIGURED_AR,
-            canonical_margin=_CONFIGURED_MG,
-        ),
+        # headtail_model stays None (below) so run_headtail_batch never runs.
+        headtail=HeadTailConfig(model_path="/stub_ht.pt"),
         cnn_phases=[],
         pose=PoseConfig(
             backend="yolo",
             yolo=PoseYOLOConfig(model_path="/stub_pose.pt"),
             skeleton_file="",
         ),
+        canonical=_CONFIGURED_GEOMETRY,
         detection_batch_size=2,
         runtime_tier="cpu",
     )
@@ -94,7 +90,7 @@ def _build_pipeline(captured: dict) -> tuple[Pipeline, BatchWindow]:
     stages = PipelineStages(
         config=cfg,
         obb_models=MagicMock(),
-        headtail_model=None,  # skip HT stage entirely; only cfg.headtail matters here
+        headtail_model=None,  # skip HT stage entirely
         cnn_models=[],
         pose_model=PoseModel(backend=MagicMock(), n_keypoints=1, keypoint_names=["a"]),
         apriltag_model=None,
@@ -110,9 +106,8 @@ def _build_pipeline(captured: dict) -> tuple[Pipeline, BatchWindow]:
 
 
 def _capturing_extract_canonical_crops_batch(captured):
-    def _fn(frames, obb_results, aspect_ratio, margin, runtime, **kwargs):
-        captured["crop_ar"] = aspect_ratio
-        captured["crop_mg"] = margin
+    def _fn(frames, obb_results, geometry, runtime, **kwargs):
+        captured["crop_geometry"] = geometry
         n_total = sum(o.num_detections for o in obb_results)
         det_ids = (
             np.concatenate([o.detection_ids for o in obb_results])
@@ -141,9 +136,8 @@ def _capturing_extract_canonical_crops_batch(captured):
 
 
 def _capturing_run_pose_batch(captured):
-    def _fn(crop_batch, model, config, runtime, aspect_ratio=2.0, margin=1.3, **kwargs):
-        captured["pose_ar"] = aspect_ratio
-        captured["pose_mg"] = margin
+    def _fn(crop_batch, model, config, runtime, geometry=None, **kwargs):
+        captured["pose_geometry"] = geometry
         results: dict[int, PoseResult] = {}
         for frame_idx, obb in crop_batch.obb_by_frame.items():
             n = obb.num_detections
@@ -157,12 +151,13 @@ def _capturing_run_pose_batch(captured):
 
 
 def test_pose_batch_crop_geometry_matches_build_geometry():
-    """The ar/mg used to BUILD pose crops must equal the ar/mg used to RECOVER them.
+    """The geometry used to BUILD pose crops must equal the geometry used to
+    RECOVER them (invert keypoints back to frame coordinates).
 
-    Before the fix, ``run_pose_batch`` is called without forwarding ``ar``/``mg``,
-    so it silently falls back to its own defaults (2.0 / 1.3) even though the
-    crops were built at the configured 2.45 / 1.5 — this assertion catches that
-    mismatch directly.
+    Before the fix, ``run_pose_batch`` is called without forwarding
+    ``geometry``, so it silently falls back to its own default even though the
+    crops were built at the configured aspect 2.45 / margin 1.5 -- this
+    assertion catches that mismatch directly.
     """
     captured: dict = {}
     pipe, window = _build_pipeline(captured)
@@ -180,20 +175,16 @@ def test_pose_batch_crop_geometry_matches_build_geometry():
     ):
         pipe._process_window(window)
 
-    assert "crop_ar" in captured and "pose_ar" in captured, (
+    assert "crop_geometry" in captured and "pose_geometry" in captured, (
         "extract_canonical_crops_batch / run_pose_batch were not both called "
         f"(captured={captured})"
     )
-    assert captured["crop_ar"] == _CONFIGURED_AR, (
-        "sanity: crop-build aspect ratio should reflect the configured "
-        f"canonical_aspect_ratio; got {captured['crop_ar']}"
+    assert captured["crop_geometry"] is _CONFIGURED_GEOMETRY, (
+        "sanity: crop-build geometry should be the configured cfg.canonical; "
+        f"got {captured['crop_geometry']}"
     )
-    assert captured["crop_ar"] == captured["pose_ar"], (
-        "pose-batch recovery aspect ratio must match the crop-build aspect "
-        f"ratio: built with {captured['crop_ar']}, recovered with "
-        f"{captured['pose_ar']}"
-    )
-    assert captured["crop_mg"] == captured["pose_mg"], (
-        "pose-batch recovery margin must match the crop-build margin: "
-        f"built with {captured['crop_mg']}, recovered with {captured['pose_mg']}"
+    assert captured["crop_geometry"] is captured["pose_geometry"], (
+        "pose-batch recovery geometry must be the SAME object as the "
+        f"crop-build geometry: built with {captured['crop_geometry']}, "
+        f"recovered with {captured['pose_geometry']}"
     )

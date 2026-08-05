@@ -166,7 +166,9 @@ def _make_stub_headtail(frame_idx: int, detection_ids: np.ndarray) -> HeadTailRe
     )
 
 
-def _fake_run_headtail_batch(frames, obb_results, model, config, runtime, ar, mg):
+def _fake_run_headtail_batch(
+    frames, obb_results, model, config, runtime, geometry=None
+):
     """Deterministic run_headtail_batch stub.
 
     Keyed by frame_idx via the OBBResult list (parallel to frames). Output is a
@@ -199,7 +201,7 @@ def _make_stub_cnn(frame_idx: int, detection_ids: np.ndarray, label: str) -> CNN
     return CNNResult(label=label, predictions=preds)
 
 
-def _fake_run_cnn_batch(frames, obb_results, model, config, runtime, ar, mg):
+def _fake_run_cnn_batch(frames, obb_results, model, config, runtime, geometry=None):
     """Deterministic run_cnn_batch stub.
 
     Returns one CNNResult per frame, keyed by frame_idx. The label is taken from
@@ -228,7 +230,7 @@ def _make_stub_pose(frame_idx: int, n_dets: int, n_kpts: int) -> PoseResult:
 
 
 def _fake_extract_canonical_crops_batch(
-    frames, obb_results, canonical_aspect_ratio, canonical_margin, runtime, **kwargs
+    frames, obb_results, geometry, runtime, **kwargs
 ):
     """Stub for extract_canonical_crops_batch: returns a minimal CropBatch.
 
@@ -263,19 +265,17 @@ def _fake_extract_canonical_crops_batch(
     )
 
 
-def _fake_run_pose_batch(
-    crop_batch, model, config, runtime, aspect_ratio=2.0, margin=1.3, **kwargs
-):
+def _fake_run_pose_batch(crop_batch, model, config, runtime, geometry=None, **kwargs):
     """Deterministic run_pose_batch stub.
 
     Derives frame indices from crop_batch.obb_by_frame (populated by the fake
     extract_canonical_crops_batch). Returns one PoseResult per frame keyed by
     frame_idx, seeded by frame_idx so mis-splits produce different hashes.
 
-    Accepts (and ignores) ``aspect_ratio``/``margin`` positionally: the real
-    ``run_pose_batch`` receives these from the pipeline (see
-    ``core/inference/pipeline.py``), so the stub signature must accept them
-    too or the patched call raises ``TypeError`` for extra positional args.
+    Accepts (and ignores) ``geometry`` positionally: the real ``run_pose_batch``
+    receives it from the pipeline (see ``core/inference/pipeline.py``), so the
+    stub signature must accept it too or the patched call raises ``TypeError``
+    for an extra positional arg.
     """
     n_kpts = getattr(model, "n_keypoints", _N_KEYPOINTS)
     results: dict[int, PoseResult] = {}

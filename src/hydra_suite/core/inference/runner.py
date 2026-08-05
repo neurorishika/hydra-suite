@@ -300,7 +300,7 @@ def _open_caches(
         headtail=(
             HeadTailCacheHandle(
                 path=cache_dir / "headtail.npz",
-                key=_k(headtail_cache_key(config.headtail)),
+                key=_k(headtail_cache_key(config.headtail, config.canonical)),
             )
             if config.headtail is not None
             else None
@@ -308,7 +308,7 @@ def _open_caches(
         cnn=[
             CNNCacheHandle(
                 path=cache_dir / f"cnn_{c.label}.npz",
-                key=_k(cnn_cache_key(c)),
+                key=_k(cnn_cache_key(c, config.canonical)),
                 label=c.label,
             )
             for c in config.cnn_phases
@@ -316,7 +316,7 @@ def _open_caches(
         pose=(
             PoseCacheHandle(
                 path=cache_dir / "pose.npz",
-                key=_k(pose_cache_key(config.pose)),
+                key=_k(pose_cache_key(config.pose, config.canonical)),
             )
             if config.pose is not None
             else None
@@ -662,10 +662,7 @@ class InferenceRunner:
                 empty_result.bg_u8 = self._models.bgsub.last_bg_u8
             return empty_result
 
-        ar = (
-            self.config.headtail.canonical_aspect_ratio if self.config.headtail else 2.0
-        )
-        mg = self.config.headtail.canonical_margin if self.config.headtail else 1.3
+        geometry = self.config.canonical
         # Canonical (native-extent) crops are now only consumed by the pose stage;
         # head-tail / CNN warp directly from the frame. Skip the extraction
         # entirely when there is no pose model (e.g. OBB-only / identity clips).
@@ -683,8 +680,7 @@ class InferenceRunner:
             extract_canonical_crops(
                 frame,
                 filtered_obb,
-                ar,
-                mg,
+                geometry,
                 self.runtime,
                 suppress_foreign=suppress_foreign,
                 background_color=background_color,
@@ -714,13 +710,12 @@ class InferenceRunner:
                 self._models.headtail,
                 self.config.headtail,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
 
         def _do_cnn() -> list[CNNResult]:
             return [
-                run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, ar, mg)
+                run_cnn(frame, filtered_obb, mdl, cfg, self.runtime, geometry)
                 for cfg, mdl in zip(self.config.cnn_phases, self._models.cnn)
             ]
 
@@ -733,8 +728,7 @@ class InferenceRunner:
                 self._models.pose,
                 self.config.pose,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
 
         def _do_at() -> AprilTagResult | None:

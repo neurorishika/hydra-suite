@@ -160,6 +160,8 @@ def predict_pose_for_image(
     """
     import numpy as np
 
+    from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
     from .config import InferenceConfig, OBBConfig, OBBDirectConfig
     from .result import OBBResult
     from .runtime import RuntimeContext
@@ -200,11 +202,18 @@ def predict_pose_for_image(
         detection_ids=OBBResult.make_detection_ids(0, 1),
     )
 
-    ar = 2.0
-    mg = 1.3
+    # A single one-shot image has no project-wide reference body size, so the
+    # canvas is simply the whole image (margin=1.0): the synthetic OBB already
+    # spans (0, 0)-(w, h), so this crop preserves it exactly rather than
+    # forcing it through an unrelated aspect ratio.
+    geometry = CanonicalGeometry(
+        canvas_wh=(max(1, int(w)), max(1, int(h))),
+        margin=1.0,
+        aspect_ratio=float(w) / float(h or 1),
+    )
     model = load_pose_model(pose_config, runtime)
     try:
-        crops = extract_canonical_crops(image, synthetic_obb, ar, mg, runtime)
-        return run_pose(crops, synthetic_obb, model, pose_config, runtime, ar, mg)
+        crops = extract_canonical_crops(image, synthetic_obb, geometry, runtime)
+        return run_pose(crops, synthetic_obb, model, pose_config, runtime, geometry)
     finally:
         del model

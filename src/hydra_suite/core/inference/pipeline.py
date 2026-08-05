@@ -263,8 +263,7 @@ class Pipeline:
         frames = window.frames
         frame_indices = window.frame_indices
 
-        ar = cfg.headtail.canonical_aspect_ratio if cfg.headtail else 2.0
-        mg = cfg.headtail.canonical_margin if cfg.headtail else 1.3
+        geometry = cfg.canonical
 
         # Consumer-side stream-sync: wait on the producer's handoff events for the
         # SAME tensor objects before the first device read (no-op on CPU/MPS).
@@ -323,8 +322,7 @@ class Pipeline:
                 self.stages.headtail_model,
                 cfg.headtail,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
 
         cnns_by_frame: dict[int, list] = {idx: [] for idx in filtered_by_frame}
@@ -336,8 +334,7 @@ class Pipeline:
                 mdl,
                 cfg_cnn,
                 self.runtime,
-                ar,
-                mg,
+                geometry,
             )
             cnn_per_phase.append(phase)
             for idx, result in phase.items():
@@ -354,14 +351,13 @@ class Pipeline:
             crop_batch = extract_canonical_crops_batch(
                 nonempty_frames,
                 nonempty_obbs,
-                ar,
-                mg,
+                geometry,
                 self.runtime,
                 suppress_foreign=suppress_foreign,
                 background_color=background_color,
             )
             pose = run_pose_batch(
-                crop_batch, self.stages.pose_model, cfg.pose, self.runtime, ar, mg
+                crop_batch, self.stages.pose_model, cfg.pose, self.runtime, geometry
             )
 
         apriltag: dict[int, Any] | None = None

@@ -1,3 +1,4 @@
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.cache.keys import pose_cache_key
 from hydra_suite.core.inference.config import PoseConfig, PoseViTPoseConfig
 
@@ -20,7 +21,7 @@ def test_cache_key_vitpose_branch(tmp_path):
         backend="vitpose",
         vitpose=PoseViTPoseConfig(model_path=str(p)),
     )
-    key = pose_cache_key(cfg)
+    key = pose_cache_key(cfg, CanonicalGeometry.from_reference(20.0, 2.0, 1.3))
     assert key.model_path == str(p)
 
 
