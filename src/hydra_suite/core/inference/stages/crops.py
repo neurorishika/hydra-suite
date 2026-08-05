@@ -243,8 +243,8 @@ def extract_classifier_crops(
     INTER_LINEAR + BORDER_REPLICATE. This avoids the double resample of going
     through the shared native-extent crop tensor + a second (torch) interpolate,
     which left ~1-2% of head-tail direction decisions flipping vs legacy near the
-    classifier's decision boundary. ``target_size`` is the model's (out_w, out_h)
-    using legacy's index convention (input_size[0], input_size[1]).
+    classifier's decision boundary. ``target_size`` is the model's ``(H, W)``
+    (``ClassifierMetadata.input_size`` order).
     """
     if isinstance(frame, torch.Tensor):
         arr = frame.cpu().numpy()
@@ -258,7 +258,7 @@ def extract_classifier_crops(
             )
     else:
         arr = frame
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = int(target_size[0]), int(target_size[1])
     pad = max(0.0, float(margin) - 1.0)
     n_ch = arr.shape[2] if arr.ndim == 3 else 1
     crops: list[np.ndarray] = []
@@ -361,10 +361,10 @@ def extract_classifier_crops_batch(
     For each frame calls extract_classifier_crops (single warpAffine to model
     input size, BGR uint8), then stacks results in detection-id order. HT and
     CNN models may have different input sizes, so each calls this independently.
-    target_size is (out_w, out_h) per legacy convention (index 0 = width).
+    target_size is (H, W) (``ClassifierMetadata.input_size`` order).
     native_sizes rows are [out_h, out_w], reflecting the classifier crop dimensions.
     """
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = int(target_size[0]), int(target_size[1])
     crops_list: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
     frame_idx_list: list[np.ndarray] = []
@@ -437,17 +437,18 @@ def extract_classifier_crops_gpu(
 ) -> "torch.Tensor":
     """GPU-native analogue of :func:`extract_classifier_crops`.
 
-    Warps each OBB directly to the classifier input size ``(out_w, out_h)`` with a
-    single batched ``grid_sample`` on-device, using the SAME alignment affine the
-    CPU path feeds to ``cv2.warpAffine`` (``compute_alignment_affine(corners,
-    out_w, out_h, pad)`` — note ``aspect_ratio`` is unused here, matching the CPU
-    entry point). Returns ``(N, C, out_h, out_w)`` float32 on ``device`` in the
-    same BGR, ``[0, 1]`` convention as ``extract_classifier_crops_batch``'s tensor
-    (``crops.py`` ``/255`` path). Used only when the frame is a CUDA tensor (NVDEC
-    path); ``grid_sample`` != ``cv2`` bit-for-bit, so the CUDA pipeline's
-    acceptance gate is identity agreement, not byte-identity (see the design spec).
+    Warps each OBB directly to the classifier input size ``target_size = (H, W)``
+    (``ClassifierMetadata.input_size`` order) with a single batched ``grid_sample``
+    on-device, using the SAME alignment affine the CPU path feeds to
+    ``cv2.warpAffine`` (``compute_alignment_affine(corners, out_w, out_h, pad)`` —
+    note ``aspect_ratio`` is unused here, matching the CPU entry point). Returns
+    ``(N, C, out_h, out_w)`` float32 on ``device`` in the same BGR, ``[0, 1]``
+    convention as ``extract_classifier_crops_batch``'s tensor (``crops.py``
+    ``/255`` path). Used only when the frame is a CUDA tensor (NVDEC path);
+    ``grid_sample`` != ``cv2`` bit-for-bit, so the CUDA pipeline's acceptance
+    gate is identity agreement, not byte-identity (see the design spec).
     """
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = int(target_size[0]), int(target_size[1])
     frame = _frame_to_chw_float(frame, device)
 
     n = obb_result.num_detections
@@ -482,9 +483,9 @@ def extract_classifier_crops_batch_gpu(
     Per-frame :func:`extract_classifier_crops_gpu`, concatenated into a
     :class:`CropBatch` whose ``crops`` tensor stays on ``device`` (no host
     round-trip). Field layout is identical to the CPU batch builder so downstream
-    ``select_frame`` / assembly is unchanged. ``target_size`` is ``(out_w, out_h)``.
+    ``select_frame`` / assembly is unchanged. ``target_size`` is ``(H, W)``.
     """
-    out_w, out_h = int(target_size[0]), int(target_size[1])
+    out_h, out_w = int(target_size[0]), int(target_size[1])
     crops_list: list[torch.Tensor] = []
     det_ids: list[np.ndarray] = []
     frame_idx_list: list[np.ndarray] = []

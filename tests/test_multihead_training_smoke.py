@@ -67,7 +67,7 @@ def test_train_shared_trunk_smoke(tmp_path):
             epochs=1,
             batch=2,
             lr=1e-3,
-            input_size=32,
+            input_size=(32, 32),
             label_smoothing=0.1,
             trainable_layers=0,
         ),

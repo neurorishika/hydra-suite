@@ -50,9 +50,10 @@ def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
             "ONNX classifier, or run on the cpu tier."
         )
     meta = backend.metadata
+    in_h, in_w = meta.input_size  # ClassifierMetadata documents (H, W)
     return CNNModel(
         backend=backend,
-        input_size=(meta.input_size[0], meta.input_size[1]),
+        input_size=(in_h, in_w),
         factor_names=list(meta.factor_names),
         factor_class_names=[list(cn) for cn in meta.class_names_per_factor],
     )

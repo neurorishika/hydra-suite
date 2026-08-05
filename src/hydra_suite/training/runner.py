@@ -1061,7 +1061,7 @@ def _run_torchvision_training_loop(
 
     import torch
 
-    sz = params.input_size
+    in_h, in_w = params.input_size  # (H, W)
     best_val_acc = None
     best_epoch = 0
     patience_count = 0
@@ -1167,7 +1167,7 @@ def _run_torchvision_training_loop(
                     backbone=backbone,
                     class_names=class_names,
                     factor_names=[],
-                    input_size=(sz, sz),
+                    input_size=(in_h, in_w),
                     best_val_acc=best_val_acc,
                     history=history,
                     trainable_layers=params.trainable_layers,
@@ -1192,7 +1192,7 @@ def _run_torchvision_training_loop(
             backbone=backbone,
             class_names=class_names,
             factor_names=[],
-            input_size=(sz, sz),
+            input_size=(in_h, in_w),
             best_val_acc=None,
             history=history,
             trainable_layers=params.trainable_layers,
@@ -1288,13 +1288,13 @@ def _train_custom_classify(
     weights_dir.mkdir(parents=True, exist_ok=True)
 
     dataset_dir = Path(spec.derived_dataset_dir)
-    sz = params.input_size
+    resize_hw = tuple(params.input_size)  # (H, W)
 
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(
         monochrome=bool(getattr(profile, "monochrome", False))
     )
-    train_transforms = [transforms.Resize((sz, sz))]
+    train_transforms = [transforms.Resize(resize_hw)]
     if profile.fliplr > 0:
         train_transforms.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1334,7 +1334,7 @@ def _train_custom_classify(
     train_tf = transforms.Compose(train_transforms)
     val_tf = transforms.Compose(
         [
-            transforms.Resize((sz, sz)),
+            transforms.Resize(resize_hw),
             *(
                 [transforms.Grayscale(num_output_channels=3)]
                 if getattr(profile, "monochrome", False)
@@ -1628,11 +1628,11 @@ def _train_multihead_shared_classify(
     weights_dir.mkdir(parents=True, exist_ok=True)
     best_ckpt_path = weights_dir / "best.pth"
 
-    sz = int(params.input_size)
+    resize_hw = tuple(params.input_size)  # (H, W)
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(monochrome=bool(profile.monochrome))
 
-    train_tf_steps = [transforms.Resize((sz, sz))]
+    train_tf_steps = [transforms.Resize(resize_hw)]
     if profile.fliplr > 0:
         train_tf_steps.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1661,7 +1661,7 @@ def _train_multihead_shared_classify(
     train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
     train_tf = transforms.Compose(train_tf_steps)
     val_tf = transforms.Compose(
-        [transforms.Resize((sz, sz))]
+        [transforms.Resize(resize_hw)]
         + ([transforms.Grayscale(num_output_channels=3)] if profile.monochrome else [])
         + [transforms.ToTensor(), transforms.Normalize(mean, std)]
     )
@@ -1720,7 +1720,7 @@ def _train_multihead_shared_classify(
         trainable_layers=int(params.trainable_layers),
         head_hidden_dim=int(params.head_hidden_dim),
         head_dropout=float(params.head_dropout),
-        input_size=sz,
+        input_size=resize_hw,
     )
     model.to(device)
 
@@ -1829,7 +1829,7 @@ def _train_multihead_shared_classify(
                     class_names=[],
                     factor_names=list(factor_names),
                     class_names_per_factor=[list(c) for c in cnpf],
-                    input_size=(sz, sz),
+                    input_size=resize_hw,
                     best_val_acc=best_val_acc,
                     history=history,
                     trainable_layers=int(params.trainable_layers),
@@ -1852,7 +1852,7 @@ def _train_multihead_shared_classify(
             class_names=[],
             factor_names=list(factor_names),
             class_names_per_factor=[list(c) for c in cnpf],
-            input_size=(sz, sz),
+            input_size=resize_hw,
             best_val_acc=None,
             history=history,
             trainable_layers=int(params.trainable_layers),

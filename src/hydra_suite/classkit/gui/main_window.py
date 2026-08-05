@@ -7278,6 +7278,9 @@ class MainWindow(QMainWindow):
             augmentation_profile=aug,
         )
         if mode in ("flat_custom", "multihead_custom", "multihead_custom_shared"):
+            # The GUI only exposes a single square input-size spinbox; expand
+            # it to the (H, W) pair CustomCNNParams.input_size now requires.
+            _custom_sz = int(settings.get("custom_input_size", 224) or 224)
             spec = dataclasses.replace(
                 spec,
                 custom_params=CustomCNNParams(
@@ -7291,7 +7294,7 @@ class MainWindow(QMainWindow):
                     gradual_unfreeze_interval=settings.get(
                         "custom_gradual_unfreeze_interval", 5
                     ),
-                    input_size=settings.get("custom_input_size", 224),
+                    input_size=(_custom_sz, _custom_sz),
                     epochs=settings.get("epochs", 50),
                     batch=settings.get("batch", 32),
                     lr=settings.get("lr", 1e-3),

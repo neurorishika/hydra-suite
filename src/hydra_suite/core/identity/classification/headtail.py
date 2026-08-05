@@ -519,8 +519,8 @@ class HeadTailAnalyzer:
         )
 
         if self._input_size is not None and len(self._input_size) == 2:
-            out_w = max(8, int(self._input_size[0]))
-            out_h = max(8, int(self._input_size[1]))
+            out_h = max(8, int(self._input_size[0]))
+            out_w = max(8, int(self._input_size[1]))
         else:
             out_w = 128
             out_h = max(8, int(round(128 / self._ref_ar)))
@@ -596,7 +596,7 @@ class HeadTailAnalyzer:
         )
 
         if self._input_size is not None and len(self._input_size) == 2:
-            out_w, out_h = max(8, int(self._input_size[0])), max(
+            out_h, out_w = max(8, int(self._input_size[0])), max(
                 8, int(self._input_size[1])
             )
         else:
@@ -750,7 +750,7 @@ class HeadTailAnalyzer:
         )
 
         if self._input_size is not None and len(self._input_size) == 2:
-            out_w, out_h = max(8, int(self._input_size[0])), max(
+            out_h, out_w = max(8, int(self._input_size[0])), max(
                 8, int(self._input_size[1])
             )
         else:

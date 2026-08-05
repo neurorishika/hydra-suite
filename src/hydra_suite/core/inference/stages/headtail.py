@@ -81,7 +81,8 @@ def load_headtail_model(
             "crops through predict_batch_cuda (no silent CPU fallback). Use a "
             "native-torch / ONNX classifier, or run on the cpu tier."
         )
-    input_size = (meta.input_size[0], meta.input_size[1])
+    in_h, in_w = meta.input_size  # ClassifierMetadata documents (H, W)
+    input_size = (in_h, in_w)
     return HeadTailModel(
         backend=backend,
         input_size=input_size,
