@@ -21,6 +21,10 @@ from hydra_suite.core.canonicalization.crop import (
     extract_canonical_crop,
     invert_keypoints,
 )
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+)
 
 # ---------------------------------------------------------------------------
 # compute_crop_dimensions
@@ -425,3 +429,70 @@ class TestExtractAndClassifyBatch:
         for fr in results:
             assert len(fr) == 1
             assert fr[0] is not None
+
+
+# ---------------------------------------------------------------------------
+# Layer 1 (CanonicalGeometry) paths -- additive alongside the legacy
+# (canvas_w, canvas_h) ints. See task-5 brief: these functions keep both
+# calling conventions; only compute_crop_dimensions / compute_native_crop_
+# dimensions / compute_native_scale_affine / compute_alignment_affine stay
+# frozen (Task 7 retires them once nothing imports them).
+# ---------------------------------------------------------------------------
+
+
+class TestGeometryPaths:
+    def test_all_crops_from_one_geometry_share_dimensions(self):
+        g = CanonicalGeometry.from_reference(20.0, 2.44, 1.5)
+        frame = np.zeros((200, 200, 3), dtype=np.uint8)
+        shapes = set()
+        for major, minor, theta_deg in [(20, 8, 0.0), (45, 30, 68.8), (12, 10, 166.2)]:
+            corners = _make_obb(100.0, 100.0, major, minor, theta_deg)
+            m, _, _ = canonical_affine(corners, g)
+            shapes.add(extract_canonical_crop(frame, m, geometry=g).shape)
+        assert len(shapes) == 1
+
+    def test_extract_canonical_crop_geometry_matches_equivalent_ints(self):
+        g = CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
+        frame = np.random.randint(0, 255, (300, 400, 3), dtype=np.uint8)
+        corners = _make_obb(200, 150, 80, 40, 0)
+        m, _, _ = canonical_affine(corners, g)
+        crop_geo = extract_canonical_crop(frame, m, geometry=g)
+        crop_ints = extract_canonical_crop(frame, m, g.canvas_w, g.canvas_h)
+        np.testing.assert_array_equal(crop_geo, crop_ints)
+
+    def test_extract_canonical_crop_mismatched_dims_raises(self):
+        g = CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
+        frame = np.zeros((200, 200, 3), dtype=np.uint8)
+        corners = _make_obb(100, 100, 80, 40, 0)
+        m, _, _ = canonical_affine(corners, g)
+        with pytest.raises(ValueError, match="disagrees"):
+            extract_canonical_crop(frame, m, g.canvas_w + 2, g.canvas_h, geometry=g)
+
+    def test_extract_canonical_crop_missing_dims_raises(self):
+        frame = np.zeros((200, 200, 3), dtype=np.uint8)
+        corners = _make_obb(100, 100, 80, 40, 0)
+        M, _ = compute_alignment_affine(corners, 128, 64, 0.0)
+        with pytest.raises(ValueError):
+            extract_canonical_crop(frame, M)
+
+    def test_apply_headtail_rotation_geometry(self):
+        g = CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
+        corners = _make_obb(200, 150, 80, 40, 0)
+        m, _, _ = canonical_affine(corners, g)
+        crop = np.random.randint(0, 255, (g.canvas_h, g.canvas_w, 3), dtype=np.uint8)
+        rotated, M_can, M_inv, offset = apply_headtail_rotation(
+            crop, m, "left", geometry=g
+        )
+        assert rotated.shape == (g.canvas_h, g.canvas_w, 3)
+        assert abs(offset - math.pi) < 0.01
+        assert M_can.shape == (2, 3)
+        assert M_inv.shape == (2, 3)
+
+    def test_extract_and_classify_batch_geometry(self):
+        g = CanonicalGeometry.from_reference(20.0, 2.0, 1.5)
+        frame = np.random.randint(0, 255, (300, 400, 3), dtype=np.uint8)
+        corners = _make_obb(200, 150, 80, 40, 15)
+        results = extract_and_classify_batch([frame], [[corners]], geometry=g)
+        r = results[0][0]
+        assert isinstance(r, CanonicalCropResult)
+        assert r.crop.shape == (g.canvas_h, g.canvas_w, 3)

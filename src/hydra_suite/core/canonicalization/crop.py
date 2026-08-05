@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 import cv2
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +47,41 @@ class CanonicalCropResult:
     M_inverse: np.ndarray  # (2, 3) pseudo-inverse: canonical → frame
     heading_rad: float  # directed heading (radians, 0 = right)
     directed: bool  # True if heading is reliable
+
+
+# ---------------------------------------------------------------------------
+# Layer 1 geometry resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_canvas(
+    canvas_w: Optional[int],
+    canvas_h: Optional[int],
+    geometry: Optional[CanonicalGeometry],
+) -> Tuple[int, int]:
+    """Reconcile the legacy ``(canvas_w, canvas_h)`` ints with a ``geometry``.
+
+    Either ``(canvas_w, canvas_h)`` or ``geometry`` must be supplied. If both
+    are supplied they must agree -- a caller that passes a geometry must not
+    also be able to silently smuggle in mismatched dimensions.
+    """
+    if geometry is not None:
+        gw, gh = geometry.canvas_w, geometry.canvas_h
+        if canvas_w is not None and int(canvas_w) != gw:
+            raise ValueError(
+                f"canvas_w={canvas_w} disagrees with geometry.canvas_w={gw}"
+            )
+        if canvas_h is not None and int(canvas_h) != gh:
+            raise ValueError(
+                f"canvas_h={canvas_h} disagrees with geometry.canvas_h={gh}"
+            )
+        return gw, gh
+    if canvas_w is None or canvas_h is None:
+        raise ValueError(
+            "extract_canonical_crop requires either geometry or both "
+            "canvas_w and canvas_h"
+        )
+    return int(canvas_w), int(canvas_h)
 
 
 # ---------------------------------------------------------------------------
@@ -200,11 +240,13 @@ def compute_alignment_affine(
 def extract_canonical_crop(
     frame: np.ndarray,
     M_align: np.ndarray,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     foreign_corners: Optional[List[np.ndarray]] = None,
     own_corners: Optional[np.ndarray] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> np.ndarray:
     """Apply M_align to extract a rotation-normalised crop.
 
@@ -212,7 +254,12 @@ def extract_canonical_crop(
     (the current detection's own OBB, frame coordinates), when given,
     excludes any overlap with foreign OBBs so the current animal's own body
     is never masked out — see ``_apply_foreign_mask_canonical``.
+
+    Either ``(canvas_w, canvas_h)`` or ``geometry`` (Layer 1's
+    :class:`~hydra_suite.core.canonicalization.geometry.CanonicalGeometry`)
+    must be given. If both are given they must agree.
     """
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     crop = cv2.warpAffine(
         frame,
         M_align,
@@ -232,8 +279,10 @@ def extract_canonical_crop(
 def gpu_canonical_crop(
     frame_chw: "torch.Tensor",
     M_align: np.ndarray,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> "torch.Tensor":
     """GPU-native affine warp replicating ``extract_canonical_crop``.
 
@@ -252,7 +301,10 @@ def gpu_canonical_crop(
     M_align:
         ``(2, 3)`` float64/float32 numpy array from ``compute_alignment_affine``.
     canvas_w, canvas_h:
-        Output canvas dimensions in pixels.
+        Output canvas dimensions in pixels. Either these or ``geometry`` must
+        be given; if both are given they must agree.
+    geometry:
+        Layer 1 :class:`CanonicalGeometry`, alternative to ``canvas_w``/``canvas_h``.
 
     Returns
     -------
@@ -264,6 +316,7 @@ def gpu_canonical_crop(
     import torch
     import torch.nn.functional as F
 
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     C, H_in, W_in = frame_chw.shape
 
     # Invert M_align (forward src→dst) to get dst→src mapping required by
@@ -316,8 +369,10 @@ def gpu_canonical_crop(
 def gpu_canonical_crop_batch(
     frame_chw: "torch.Tensor",
     M_aligns: list,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> "torch.Tensor":
     """Batch version of :func:`gpu_canonical_crop` for N crops from *one* frame.
 
@@ -334,7 +389,10 @@ def gpu_canonical_crop_batch(
         List of N ``(2, 3)`` numpy float64/float32 arrays from
         :func:`compute_alignment_affine`, one per detection.
     canvas_w, canvas_h:
-        Output canvas dimensions (same for every crop).
+        Output canvas dimensions (same for every crop). Either these or
+        ``geometry`` must be given; if both are given they must agree.
+    geometry:
+        Layer 1 :class:`CanonicalGeometry`, alternative to ``canvas_w``/``canvas_h``.
 
     Returns
     -------
@@ -345,6 +403,7 @@ def gpu_canonical_crop_batch(
     import torch
     import torch.nn.functional as F
 
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     N = len(M_aligns)
     if N == 0:
         C = frame_chw.shape[0]
@@ -406,9 +465,11 @@ def apply_headtail_rotation(
     crop: np.ndarray,
     M_align: np.ndarray,
     direction: str,
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
     treat_updown_as_unknown: bool = True,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
     """Rotate crop so head faces right based on head-tail classification.
 
@@ -421,10 +482,14 @@ def apply_headtail_rotation(
         canvas_h: Original canvas height.
         treat_updown_as_unknown: If True, treat ``'up'``/``'down'`` as
             ``'unknown'`` (no rotation applied).
+        geometry: Layer 1 :class:`CanonicalGeometry`, alternative to
+            ``canvas_w``/``canvas_h``. Either these or ``geometry`` must be
+            given; if both are given they must agree.
 
     Returns:
         (rotated_crop, M_canonical, M_inverse, orientation_offset_rad)
     """
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     if treat_updown_as_unknown and direction in ("up", "down"):
         direction = "unknown"
 
@@ -487,12 +552,14 @@ def invert_keypoints(
 def extract_and_classify_batch(
     frames: List[np.ndarray],
     per_frame_corners: List[List[np.ndarray]],
-    canvas_w: int,
-    canvas_h: int,
+    canvas_w: Optional[int] = None,
+    canvas_h: Optional[int] = None,
     padding_fraction: float = 0.1,
     bg_color: Tuple[int, int, int] = (0, 0, 0),
     suppress_foreign: bool = True,
     per_frame_all_corners: Optional[List[List[np.ndarray]]] = None,
+    *,
+    geometry: Optional[CanonicalGeometry] = None,
 ) -> List[List[Optional[CanonicalCropResult]]]:
     """Full canonical pipeline for a batch of frames (without head-tail).
 
@@ -506,15 +573,21 @@ def extract_and_classify_batch(
         per_frame_corners: Per-frame list of OBB corner arrays.
         canvas_w: Canonical crop width.
         canvas_h: Canonical crop height.
-        padding_fraction: OBB expansion factor.
+        padding_fraction: OBB expansion factor. Ignored when ``geometry`` is
+            given — the geometry's own ``margin`` is used instead so the
+            transform stays rigid (Layer 1 contract).
         bg_color: Background fill colour.
         suppress_foreign: Whether to mask foreign OBB regions.
         per_frame_all_corners: Per-frame list of *all* OBB corners for
             foreign-OBB masking.  If None, ``per_frame_corners`` is used.
+        geometry: Layer 1 :class:`CanonicalGeometry`, alternative to
+            ``canvas_w``/``canvas_h``. Either these or ``geometry`` must be
+            given; if both are given they must agree.
 
     Returns:
         Nested list ``[frame][detection]`` of ``CanonicalCropResult | None``.
     """
+    canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
     results: List[List[Optional[CanonicalCropResult]]] = []
 
     for fi, frame in enumerate(frames):
@@ -526,9 +599,12 @@ def extract_and_classify_batch(
 
         for di, corners in enumerate(corners_list):
             try:
-                M_align, axis_theta = compute_alignment_affine(
-                    corners, canvas_w, canvas_h, padding_fraction
-                )
+                if geometry is not None:
+                    M_align, axis_theta, _clipped = canonical_affine(corners, geometry)
+                else:
+                    M_align, axis_theta = compute_alignment_affine(
+                        corners, canvas_w, canvas_h, padding_fraction
+                    )
             except ValueError:
                 frame_results.append(None)
                 continue
