@@ -13,10 +13,6 @@ from hydra_suite.core.canonicalization.crop import (
     _compose_affine,
     _rotation_matrix,
     apply_headtail_rotation,
-    compute_alignment_affine,
-    compute_crop_dimensions,
-    compute_native_crop_dimensions,
-    compute_native_scale_affine,
     extract_and_classify_batch,
     extract_canonical_crop,
     invert_keypoints,
@@ -27,41 +23,7 @@ from hydra_suite.core.canonicalization.geometry import (
 )
 
 # ---------------------------------------------------------------------------
-# compute_crop_dimensions
-# ---------------------------------------------------------------------------
-
-
-class TestComputeCropDimensions:
-    def test_basic(self):
-        w, h = compute_crop_dimensions(128, 2.0)
-        assert w == 128
-        assert h == 64
-
-    def test_aspect_ratio_1(self):
-        w, h = compute_crop_dimensions(256, 1.0)
-        assert w == 256
-        assert h == 256
-
-    def test_aspect_ratio_3(self):
-        w, h = compute_crop_dimensions(300, 3.0)
-        assert w == 300
-        assert h == 100
-
-    def test_minimum_clamping(self):
-        # very small long edge
-        w, h = compute_crop_dimensions(4, 2.0)
-        assert w == 8  # clamped
-        assert h == 8  # clamped (4/2=2 → 8 clamped)
-
-    def test_ar_less_than_one_clamped(self):
-        # AR < 1 is clamped to 1
-        w, h = compute_crop_dimensions(100, 0.5)
-        assert w == 100
-        assert h == 100  # ar clamped to 1.0
-
-
-# ---------------------------------------------------------------------------
-# compute_alignment_affine
+# shared OBB fixture
 # ---------------------------------------------------------------------------
 
 
@@ -80,141 +42,14 @@ def _make_obb(cx, cy, w, h, angle_deg=0.0):
     return np.array(corners, dtype=np.float32)
 
 
-# ---------------------------------------------------------------------------
-# compute_native_crop_dimensions
-# ---------------------------------------------------------------------------
-
-
-class TestComputeNativeCropDimensions:
-    def test_basic_native_scale(self):
-        # OBB 200×100 px, AR 2.0, no padding
-        corners = _make_obb(300, 300, 200, 100, 0)
-        cw, ch = compute_native_crop_dimensions(corners, 2.0, 0.0)
-        # Long edge ≈ 200, short = 200/2 = 100, both rounded to even
-        assert cw == 200
-        assert ch == 100
-
-    def test_with_padding(self):
-        corners = _make_obb(300, 300, 200, 100, 0)
-        cw, ch = compute_native_crop_dimensions(corners, 2.0, 0.1)
-        # 200*1.1 = 220.00…03 in float64 → ceil-even rounds to 222
-        assert cw == 222
-        assert ch == 112  # 222/2=111 → ceil-even → 112
-
-    def test_rotated_obb_same_dimensions(self):
-        corners_0 = _make_obb(300, 300, 200, 100, 0)
-        corners_45 = _make_obb(300, 300, 200, 100, 45)
-        cw_0, ch_0 = compute_native_crop_dimensions(corners_0, 2.0, 0.1)
-        cw_45, ch_45 = compute_native_crop_dimensions(corners_45, 2.0, 0.1)
-        assert cw_0 == cw_45
-        assert ch_0 == ch_45
-
-    def test_different_sizes_different_crops(self):
-        small = _make_obb(100, 100, 100, 50, 0)
-        large = _make_obb(100, 100, 400, 200, 0)
-        cw_s, ch_s = compute_native_crop_dimensions(small, 2.0, 0.0)
-        cw_l, ch_l = compute_native_crop_dimensions(large, 2.0, 0.0)
-        assert cw_l > cw_s
-        assert ch_l > ch_s
-        # AR should be the same
-        assert abs(cw_s / ch_s - cw_l / ch_l) < 0.1
-
-    def test_even_rounding(self):
-        # OBB 201×101 → should round to even
-        corners = _make_obb(100, 100, 201, 101, 0)
-        cw, ch = compute_native_crop_dimensions(corners, 2.0, 0.0)
-        assert cw % 2 == 0
-        assert ch % 2 == 0
-
-    def test_minimum_clamped(self):
-        # Tiny OBB
-        corners = _make_obb(10, 10, 3, 2, 0)
-        cw, ch = compute_native_crop_dimensions(corners, 2.0, 0.0)
-        assert cw >= 8
-        assert ch >= 8
-
-
-# ---------------------------------------------------------------------------
-# compute_native_scale_affine
-# ---------------------------------------------------------------------------
-
-
-class TestComputeNativeScaleAffine:
-    def test_returns_correct_shape(self):
-        corners = _make_obb(300, 300, 200, 100, 0)
-        M, cw, ch, theta = compute_native_scale_affine(corners, 2.0, 0.1)
-        assert M.shape == (2, 3)
-        assert cw == 222  # 200*1.1=220.00…03 → ceil-even 222
-        assert ch == 112  # 222/2=111.00…01 → ceil-even 112
-
-    def test_centroid_maps_to_canvas_centre(self):
-        corners = _make_obb(300, 300, 200, 100, 30)
-        M, cw, ch, theta = compute_native_scale_affine(corners, 2.0, 0.0)
-        cx = np.mean(corners[:, 0])
-        cy = np.mean(corners[:, 1])
-        pt = M @ np.array([cx, cy, 1.0])
-        assert abs(pt[0] - cw / 2.0) < 2.0
-        assert abs(pt[1] - ch / 2.0) < 2.0
-
-    def test_crop_extraction_at_native_scale(self):
-        frame = np.random.randint(0, 255, (600, 800, 3), dtype=np.uint8)
-        corners = _make_obb(400, 300, 200, 100, 15)
-        M, cw, ch, _ = compute_native_scale_affine(corners, 2.0, 0.1)
-        crop = extract_canonical_crop(frame, M, cw, ch)
-        assert crop.shape == (ch, cw, 3)
-        assert crop.dtype == np.uint8
-
-    def test_consistent_ar_across_sizes(self):
-        for size_mult in [0.5, 1.0, 2.0, 3.0]:
-            w = int(200 * size_mult)
-            h = int(100 * size_mult)
-            corners = _make_obb(400, 400, w, h, 0)
-            M, cw, ch, _ = compute_native_scale_affine(corners, 2.0, 0.0)
-            ar = cw / ch
-            assert abs(ar - 2.0) < 0.15  # consistent AR
-
-
-class TestComputeAlignmentAffine:
-    def test_axis_aligned(self):
-        corners = _make_obb(100, 100, 80, 40, 0)
-        M, angle = compute_alignment_affine(corners, 128, 64, 0.0)
-        assert M.shape == (2, 3)
-        assert abs(angle) < 0.01  # axis-aligned → ~0
-
-    def test_rotated(self):
-        corners = _make_obb(200, 200, 80, 40, 45)
-        M, angle = compute_alignment_affine(corners, 128, 64, 0.0)
-        assert M.shape == (2, 3)
-        assert abs(angle - math.radians(45)) < 0.1
-
-    def test_degenerate_raises(self):
-        # all four corners at the same point
-        corners = np.array([[10, 10], [10, 10], [10, 10], [10, 10]], dtype=np.float32)
-        with pytest.raises(ValueError, match="Degenerate"):
-            compute_alignment_affine(corners, 128, 64, 0.0)
-
-    def test_centroid_maps_to_canvas_centre(self):
-        corners = _make_obb(150, 80, 60, 30, 20)
-        M, _ = compute_alignment_affine(corners, 128, 64, 0.0)
-        # centroid of OBB in frame space
-        cx = np.mean(corners[:, 0])
-        cy = np.mean(corners[:, 1])
-        # map centroid through M
-        pt = M @ np.array([cx, cy, 1.0])
-        assert abs(pt[0] - 64) < 2.0  # near canvas centre x
-        assert abs(pt[1] - 32) < 2.0  # near canvas centre y
-
-
-# ---------------------------------------------------------------------------
-# extract_canonical_crop
-# ---------------------------------------------------------------------------
+_G128 = CanonicalGeometry(canvas_wh=(128, 64), margin=1.1, aspect_ratio=2.0)
 
 
 class TestExtractCanonicalCrop:
     def test_basic_crop(self):
         frame = np.random.randint(0, 255, (300, 400, 3), dtype=np.uint8)
         corners = _make_obb(200, 150, 80, 40, 0)
-        M, _ = compute_alignment_affine(corners, 128, 64, 0.1)
+        M, _, _ = canonical_affine(corners, _G128)
         crop = extract_canonical_crop(frame, M, 128, 64)
         assert crop.shape == (64, 128, 3)
         assert crop.dtype == np.uint8
@@ -223,7 +58,7 @@ class TestExtractCanonicalCrop:
         frame = np.full((300, 400, 3), 128, dtype=np.uint8)
         corners = _make_obb(200, 150, 80, 40, 0)
         foreign = [_make_obb(240, 150, 30, 20, 0)]
-        M, _ = compute_alignment_affine(corners, 128, 64, 0.1)
+        M, _, _ = canonical_affine(corners, _G128)
         crop = extract_canonical_crop(
             frame, M, 128, 64, bg_color=(0, 0, 0), foreign_corners=foreign
         )
@@ -241,7 +76,7 @@ class TestApplyHeadtailRotation:
     def _make_crop_and_align(self):
         crop = np.random.randint(0, 255, (64, 128, 3), dtype=np.uint8)
         corners = _make_obb(200, 150, 80, 40, 0)
-        M_align, _ = compute_alignment_affine(corners, 128, 64, 0.1)
+        M_align, _, _ = canonical_affine(corners, _G128)
         return crop, M_align
 
     def test_right_noop(self):
@@ -324,7 +159,7 @@ class TestInvertKeypoints:
 
     def test_round_trip(self):
         corners = _make_obb(200, 150, 80, 40, 30)
-        M_align, _ = compute_alignment_affine(corners, 128, 64, 0.1)
+        M_align, _, _ = canonical_affine(corners, _G128)
         M_inv = cv2.invertAffineTransform(M_align)
 
         # A known point in frame space
@@ -434,8 +269,7 @@ class TestExtractAndClassifyBatch:
 # ---------------------------------------------------------------------------
 # Layer 1 (CanonicalGeometry) paths -- additive alongside the legacy
 # (canvas_w, canvas_h) ints. See task-5 brief: these functions keep both
-# calling conventions; only compute_crop_dimensions / compute_native_crop_
-# dimensions / compute_native_scale_affine / compute_alignment_affine stay
+# calling conventions; the four legacy dimension/affine helpers are retired
 # frozen (Task 7 retires them once nothing imports them).
 # ---------------------------------------------------------------------------
 
@@ -471,7 +305,7 @@ class TestGeometryPaths:
     def test_extract_canonical_crop_missing_dims_raises(self):
         frame = np.zeros((200, 200, 3), dtype=np.uint8)
         corners = _make_obb(100, 100, 80, 40, 0)
-        M, _ = compute_alignment_affine(corners, 128, 64, 0.0)
+        M, _, _ = canonical_affine(corners, _G128)
         with pytest.raises(ValueError):
             extract_canonical_crop(frame, M)
 
