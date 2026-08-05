@@ -1327,10 +1327,35 @@ call. For training, pass the pre-fitted dataset to the Ultralytics CLI and set
 `scale=1.0` so `RandomResizedCrop` degenerates to a centre crop of the whole
 already-square image.
 
-If Ultralytics' transform still alters the pre-fitted image (verify by
-comparing a round-trip), stop and report BLOCKED rather than proceeding: the
-fallback is to declare YOLO-classify unsupported for canonical crops, which is
-a decision for the operator, not the implementer.
+**If Ultralytics still alters the pre-fitted image, that is accepted, not a
+blocker.** YOLO-classify remains a supported but **known-lossy** path: the
+pre-fit gets it as close as the vendor's pipeline allows, and the geometry
+guarantee explicitly does not extend to it. Do not stop, and do not declare it
+unsupported. Instead:
+
+1. Measure what survives — round-trip a pre-fitted image through the vendor
+   transform and record the actual difference, so the loss is quantified rather
+   than assumed.
+2. Exempt the family from the byte-identity guard with an explicit reason, never
+   a silent gap:
+
+```python
+@pytest.mark.xfail(
+    reason="YOLO-classify runs ultralytics' own Resize+CenterCrop; the canonical "
+    "geometry guarantee does not extend to it. Known-lossy by decision, "
+    "2026-08-05. Follow-up: replace or bypass the vendor transform.",
+    strict=False,
+)
+def test_yolo_classify_train_matches_inference():
+    ...
+```
+
+3. Log a one-line warning when a YOLO-classify backend loads, naming the
+   limitation, so an operator choosing it knows what they are choosing.
+4. Record the follow-up in the "Deliberately out of scope" section.
+
+The two tests in Step 1 still apply: pre-fitting must happen, and must produce a
+square. Only the *train/inference byte-identity* property is waived.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1601,6 +1626,17 @@ git commit -m "docs(specs): record the global-canonicalization re-baseline on MP
 ## Retraining (operator, after merge)
 
 Every model was trained on old-convention crops: head-tail, CNN identity, ViTPose, SLEAP. Head-tail warrants explicit measurement rather than assumption — `stages/crops.py:238-247` records that merely adding a resample step flipped 1-2% of direction decisions, and head-tail sits upstream of tracking identity. After retraining, measure direction agreement against the current model on a held-out clip and report it, rather than inferring health from tracking output.
+
+## Follow-up work this plan creates
+
+**YOLO-classify geometry.** Task 9 leaves it a supported but known-lossy path:
+pre-fitted as close as Ultralytics allows, with the byte-identity guarantee
+explicitly not extending to it. The follow-up is to replace or bypass the vendor
+transform — either by calling the underlying model directly with an
+already-preprocessed tensor, or by exporting it to a runtime we preprocess for —
+so it rejoins the single geometry contract. Decided 2026-08-05; deliberately
+deferred until global canonicalization has landed, so the two changes can be
+attributed separately.
 
 ## Deliberately out of scope
 
