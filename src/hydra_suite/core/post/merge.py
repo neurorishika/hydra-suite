@@ -139,7 +139,9 @@ def merge_trajectories(
         return None
     profiler.phase_start("post_resolve")
     _emit(30, "Resolving trajectory conflicts...")
-    resolved = resolve_trajectories(forward_prepared, backward_prepared, params=params)
+    resolved = resolve_trajectories(
+        forward_prepared, backward_prepared, params=params, should_stop=should_stop
+    )
     profiler.phase_end("post_resolve")
 
     if _stop():

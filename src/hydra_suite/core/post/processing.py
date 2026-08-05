@@ -732,7 +732,9 @@ def _clean_and_reassign_trajectories(result_df, min_len):
         return pd.DataFrame(), 0
 
 
-def process_trajectories_from_csv(csv_path: object, params: object) -> object:
+def process_trajectories_from_csv(
+    csv_path: object, params: object, *, should_stop=None
+) -> object:
     """
     Cleans and refines trajectory data from CSV file, preserving all columns including confidence metrics.
 
@@ -745,6 +747,9 @@ def process_trajectories_from_csv(csv_path: object, params: object) -> object:
     Args:
         csv_path (str): Path to the raw CSV file from tracking
         params (dict): The dictionary of tracking parameters.
+        should_stop (callable, optional): Polled at the top of the heavy
+            per-trajectory loop; if it returns True the loop exits early and
+            whatever has been accumulated so far is returned.
 
     Returns:
         tuple: (final_trajectories_df, statistics_dict)
@@ -801,6 +806,8 @@ def process_trajectories_from_csv(csv_path: object, params: object) -> object:
     new_traj_id = 0
 
     for traj_id in df["TrajectoryID"].unique():
+        if should_stop is not None and should_stop():
+            break
         traj_df = (
             df[df["TrajectoryID"] == traj_id]
             .sort_values("FrameID")
@@ -846,7 +853,9 @@ def process_trajectories_from_csv(csv_path: object, params: object) -> object:
     return result_df, stats
 
 
-def process_trajectories(trajectories_full: object, params: object) -> object:
+def process_trajectories(
+    trajectories_full: object, params: object, *, should_stop=None
+) -> object:
     """
     Cleans and refines raw trajectory data.
 
@@ -858,6 +867,9 @@ def process_trajectories(trajectories_full: object, params: object) -> object:
     Args:
         trajectories_full (list of lists): The raw trajectory data from the tracker.
         params (dict): The dictionary of tracking parameters.
+        should_stop (callable, optional): Polled at the top of the heavy
+            per-trajectory loop; if it returns True the loop exits early and
+            whatever has been accumulated so far is returned.
 
     Returns:
         tuple: (final_trajectories, statistics_dict)
@@ -910,6 +922,8 @@ def process_trajectories(trajectories_full: object, params: object) -> object:
 
     cleaned_segments = []
     for traj_id in df["TrajectoryID"].unique():
+        if should_stop is not None and should_stop():
+            break
         traj_df = (
             df[df["TrajectoryID"] == traj_id]
             .sort_values("FrameID")
@@ -1091,7 +1105,11 @@ def _reassign_trajectory_ids(result_trajectories):
 
 
 def resolve_trajectories(
-    forward_trajs: object, backward_trajs: object, params: object = None
+    forward_trajs: object,
+    backward_trajs: object,
+    params: object = None,
+    *,
+    should_stop=None,
 ) -> object:
     """
     Merges forward and backward trajectories using conservative consensus-based merging.
@@ -1212,7 +1230,10 @@ def resolve_trajectories(
     # This can happen when a forward trajectory matches multiple backward trajectories,
     # and the "unused" ones cover the same physical location
     result_trajectories = _remove_spatially_redundant_trajectories(
-        result_trajectories, AGREEMENT_DISTANCE, MIN_OVERLAP_FRAMES
+        result_trajectories,
+        AGREEMENT_DISTANCE,
+        MIN_OVERLAP_FRAMES,
+        should_stop=should_stop,
     )
 
     # CRITICAL: Merge overlapping trajectories that agree spatially
@@ -1224,6 +1245,7 @@ def resolve_trajectories(
         MIN_LENGTH,
         identity_disagree_min_run=IDENTITY_DISAGREE_MIN_RUN,
         identity_drives_splits=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
+        should_stop=should_stop,
     )
 
     # NEW: Stitch consecutive fragments that are spatially close
@@ -1250,6 +1272,7 @@ def resolve_trajectories(
         single_option_margin=_single_option_margin,
         density_tighten_factor=_density_tighten_factor,
         identity_gates_stitching=IDENTITY_GATES_TRAJECTORY_STRUCTURE,
+        should_stop=should_stop,
     )
 
     # FINAL DEDUPLICATION: Run a second redundancy pass after all merging and stitching.
@@ -1258,7 +1281,10 @@ def resolve_trajectories(
     # lengthen trajectories, making some surviving fragments newly redundant (>70%).
     # This pass catches any duplicates that slipped through the first pass.
     result_trajectories = _remove_spatially_redundant_trajectories(
-        result_trajectories, AGREEMENT_DISTANCE, MIN_OVERLAP_FRAMES
+        result_trajectories,
+        AGREEMENT_DISTANCE,
+        MIN_OVERLAP_FRAMES,
+        should_stop=should_stop,
     )
 
     # FINAL CLEANING: Now that stitching is done, remove trajectories that are still too short
@@ -1845,7 +1871,7 @@ def _trim_or_remove_trajectory(
 
 
 def _remove_spatially_redundant_trajectories(
-    trajectories, agreement_distance, min_overlap
+    trajectories, agreement_distance, min_overlap, *, should_stop=None
 ):
     """
     Remove trajectories that are spatially redundant (covered by another trajectory).
@@ -1884,6 +1910,8 @@ def _remove_spatially_redundant_trajectories(
     trimmed_replacements = {}  # idx -> trimmed DataFrame (or None to remove)
 
     for i, (idx_a, a_by_frame, _) in enumerate(traj_arrays):
+        if should_stop is not None and should_stop():
+            break
         if idx_a in redundant_indices:
             continue
 
@@ -2459,6 +2487,8 @@ def _merge_overlapping_agreeing_trajectories(
     min_length,
     identity_disagree_min_run=5,
     identity_drives_splits: bool = True,
+    *,
+    should_stop=None,
 ):
     """
     Merge trajectories that overlap in time and agree spatially or share DetectionIDs.
@@ -2485,6 +2515,8 @@ def _merge_overlapping_agreeing_trajectories(
     iteration = 0
 
     while iteration < max_iterations:
+        if should_stop is not None and should_stop():
+            break
         iteration += 1
         merged_any = False
         used = set()
@@ -2965,6 +2997,7 @@ def _stitch_broken_trajectory_fragments(
     density_tighten_factor: float = 0.5,
     min_motion_speed: float = 1e-3,
     identity_gates_stitching: bool = True,
+    should_stop=None,
 ):
     """Stitch consecutive fragments that are likely the same track.
 
@@ -2985,6 +3018,8 @@ def _stitch_broken_trajectory_fragments(
     density_radius = float(agreement_distance) * float(density_radius_multiplier)
 
     for iteration in range(1, max_iterations + 1):
+        if should_stop is not None and should_stop():
+            break
         merged_any = False
         used: set[int] = set()
         new_trajectories: list[pd.DataFrame] = []

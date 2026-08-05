@@ -190,7 +190,9 @@ class TrackingSessionCore:
             effective_params["MAX_VELOCITY_ZSCORE"] = 0.0
         else:
             effective_params = self.params
-        processed, _ = process_trajectories_from_csv(csv_path, effective_params)
+        processed, _ = process_trajectories_from_csv(
+            csv_path, effective_params, should_stop=self.callbacks.should_stop
+        )
         return processed
 
     def _interpolate_and_scale(self, df):
