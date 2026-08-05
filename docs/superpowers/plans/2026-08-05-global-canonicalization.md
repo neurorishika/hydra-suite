@@ -805,7 +805,25 @@ invent a 4.0 aspect-ratio default in the first place."
 - Consumes: `CanonicalGeometry`, `canonical_affine`, `invert_affine` (Task 1)
 - Produces: `extract_canonical_crop(frame, m_align, geometry, foreign_corners=None, own_corners=None, bg_color=(0,0,0))`; `gpu_canonical_crop(frame_chw, m_align, geometry)`; `gpu_canonical_crop_batch(frame_chw, m_aligns, geometry)`; `apply_headtail_rotation(crop, m_align, direction, geometry)`; `invert_keypoints` unchanged.
 
-Deleted: `compute_crop_dimensions`, `compute_native_crop_dimensions`, `compute_native_scale_affine`, `compute_alignment_affine`. Canvas dimensions are no longer a function of the detection, so a function that computes them from corners has no meaning.
+**Task 5 is ADDITIVE. Delete nothing from `crop.py` in this task.**
+
+`compute_crop_dimensions`, `compute_native_crop_dimensions`,
+`compute_native_scale_affine` and `compute_alignment_affine` have **40 call
+sites across 8 files** (`stages/crops.py` 15, `stages/pose.py` 8,
+`identity/classification/headtail.py` 6, `identity/dataset/generator.py` 4,
+`canonicalization/__init__.py` 4, `stages/headtail.py` 1, `stages/obb.py` 1,
+`gui/workers/crops_worker.py` 1). Removing them here would leave the tree
+broken until Task 7 finishes, which destroys the per-task delta gate — every
+intermediate commit must be independently testable.
+
+So: add the geometry-based API alongside the old functions, leave the old ones
+untouched and still exported, and let Tasks 6 and 7 migrate their callers.
+**Task 7 deletes them, once nothing imports them.** Task 7's final step greps
+for each name and fails if any reference survives outside `crop.py`.
+
+`canonicalization/dataset.py` is the exception and IS deleted here: it has no
+production callers at all (only `tests/test_canonicalization.py` and
+`tests/test_canonicalization_flexible.py`), so removing it breaks nothing.
 
 - [ ] **Step 1: Update `tests/test_canonical_crop.py` to the new contract**
 
@@ -1039,7 +1057,41 @@ which hashed None forever, is removed."
 - Modify: `src/hydra_suite/core/identity/dataset/generator.py:75, 92-93, 152, 323-350, 434-448, 495-525, 776-791`
 - Modify: `src/hydra_suite/core/identity/dataset/oriented_video.py:180, 207, 668, 883, 1198-1220`
 - Modify: `src/hydra_suite/trackerkit/gui/workers/crops_worker.py:306, 657, 1456`
-- Test: `tests/test_canonical_dataset_provenance.py`
+- Modify: `src/hydra_suite/core/canonicalization/crop.py` and `__init__.py` — **delete the legacy functions here**, now that nothing imports them
+- Test: `tests/test_canonical_dataset_provenance.py`, `tests/test_legacy_crop_api_is_gone.py`
+
+**Task 7 closes out the deprecation Task 5 opened.** Its final step deletes
+`compute_crop_dimensions`, `compute_native_crop_dimensions`,
+`compute_native_scale_affine` and `compute_alignment_affine`, and adds a guard
+so they cannot creep back:
+
+```python
+# tests/test_legacy_crop_api_is_gone.py
+from pathlib import Path
+
+import pytest
+
+RETIRED = [
+    "compute_crop_dimensions",
+    "compute_native_crop_dimensions",
+    "compute_native_scale_affine",
+    "compute_alignment_affine",
+]
+
+
+@pytest.mark.parametrize("name", RETIRED)
+def test_no_source_file_references_the_retired_api(name):
+    src = Path(__file__).resolve().parents[1] / "src" / "hydra_suite"
+    hits = [
+        str(p.relative_to(src))
+        for p in src.rglob("*.py")
+        if name in p.read_text(encoding="utf-8")
+    ]
+    assert hits == [], f"{name} still referenced in {hits}"
+```
+
+If any caller still references them when you reach this step, migrate that
+caller — do not re-export a shim to make the test pass.
 
 **Interfaces:**
 - Consumes: `CanonicalGeometry`, `canonical_affine`, `extract_canonical_crop` (Tasks 1, 5); Layer 2 (Task 2)
