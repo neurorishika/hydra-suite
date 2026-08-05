@@ -15,9 +15,16 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
+
+# Fallback canonical geometry for callers that construct an analyzer without an
+# explicit ``geometry`` (matches the project-wide default built from
+# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults -- mirrors
+# core.inference.stages.headtail._DEFAULT_CANONICAL_GEOMETRY).
+_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 HEADTAIL_CANONICAL_LABELS: frozenset[str] = frozenset(
     {"up", "down", "left", "right", "unknown"}
@@ -137,6 +144,7 @@ class HeadTailAnalyzer:
         batch_size: int = 64,
         reference_aspect_ratio: float = 2.0,
         canonical_margin: float = 1.3,
+        geometry: Optional[CanonicalGeometry] = None,
         predict_device: Optional[str] = None,
     ) -> None:
         """Construct a HeadTailAnalyzer from a classifier artifact path.
@@ -144,15 +152,26 @@ class HeadTailAnalyzer:
         Takes a :class:`ResolvedBackend` (the single Gen-2 runtime vocabulary);
         when omitted, defaults to native torch on CPU.
 
+        ``geometry`` is the project-wide Layer 1 :class:`CanonicalGeometry`
+        (one fixed canvas shared by every crop-consuming stage). Callers
+        should pass it explicitly; when omitted, a geometry is built from
+        ``reference_aspect_ratio``/``canonical_margin`` with a default
+        reference body size, for backward-compatible construction only --
+        there is no per-analyzer canvas any more.
+
         Raises:
             HeadTailFormatError: model is multi-head or labels are not a subset
                 of the canonical head-tail set.
         """
         self._conf_threshold = float(conf_threshold)
         self._batch_size = max(1, int(batch_size))
-        self._ref_ar = max(1.0, reference_aspect_ratio)
-        self._padding_fraction = max(0.0, canonical_margin - 1.0)
-        self._canonical_margin = float(canonical_margin)
+        self._geometry: CanonicalGeometry = (
+            geometry
+            if geometry is not None
+            else CanonicalGeometry.from_reference(
+                20.0, reference_aspect_ratio, canonical_margin
+            )
+        )
         self._predict_device = predict_device
         self._resolved: ResolvedBackend = (
             resolved if resolved is not None else ResolvedBackend("torch", "cpu", False)
@@ -513,18 +532,15 @@ class HeadTailAnalyzer:
         """
         import torch
 
-        from hydra_suite.core.canonicalization.crop import (
-            compute_alignment_affine,
-            gpu_canonical_crop_batch,
-        )
+        from hydra_suite.core.canonicalization.crop import gpu_canonical_crop_batch
+        from hydra_suite.core.canonicalization.fit import fit_to_model_input
+        from hydra_suite.core.canonicalization.geometry import canonical_affine
+        from hydra_suite.core.inference.stages.crops import apply_fit_gpu
 
+        fit = None
         if self._input_size is not None and len(self._input_size) == 2:
-            out_h = max(8, int(self._input_size[0]))
-            out_w = max(8, int(self._input_size[1]))
-        else:
-            out_w = 128
-            out_h = max(8, int(round(128 / self._ref_ar)))
-            out_h = out_h + (out_h % 2)
+            in_h, in_w = int(self._input_size[0]), int(self._input_size[1])
+            fit = fit_to_model_input(self._geometry.canvas_wh, (in_w, in_h))
 
         all_crops: list = []
         all_meta: List[Tuple[int, int, float, np.ndarray]] = []
@@ -549,8 +565,8 @@ class HeadTailAnalyzer:
             meta_frame: list = []
             for di, corners in enumerate(corners_list):
                 try:
-                    M_align, axis_theta = compute_alignment_affine(
-                        corners, out_w, out_h, self._padding_fraction
+                    M_align, axis_theta, _clipped = canonical_affine(
+                        corners, self._geometry
                     )
                 except ValueError:
                     continue
@@ -560,11 +576,20 @@ class HeadTailAnalyzer:
             if not M_aligns_frame:
                 continue
 
-            # ONE batched warp for all detections in this frame.
+            # ONE batched warp for all detections in this frame (Layer 1).
             try:
-                crops_batch = gpu_canonical_crop_batch(t, M_aligns_frame, out_w, out_h)
+                crops_batch = gpu_canonical_crop_batch(
+                    t, M_aligns_frame, geometry=self._geometry
+                )
             except Exception:
                 continue
+
+            # Layer 2: fit the shared canvas to the model input on-device, so
+            # this GPU path produces the SAME geometry as the CPU path -- a
+            # backend that resizes internally (predict_batch_cuda) does an
+            # anisotropic stretch, not a letterbox.
+            if fit is not None:
+                crops_batch = apply_fit_gpu(crops_batch, fit)
 
             for i, crop in enumerate(crops_batch.unbind(0)):
                 if crop.numel() > 0:
@@ -590,24 +615,13 @@ class HeadTailAnalyzer:
         """
         import torch
 
-        from hydra_suite.core.canonicalization.crop import (
-            compute_alignment_affine,
-            gpu_canonical_crop,
-        )
-
-        if self._input_size is not None and len(self._input_size) == 2:
-            out_h, out_w = max(8, int(self._input_size[0])), max(
-                8, int(self._input_size[1])
-            )
-        else:
-            out_w = 128
-            out_h = max(8, int(round(128 / self._ref_ar)))
-            out_h = out_h + (out_h % 2)
+        from hydra_suite.core.canonicalization.crop import gpu_canonical_crop
+        from hydra_suite.core.canonicalization.fit import fit_to_model_input
+        from hydra_suite.core.canonicalization.geometry import canonical_affine
+        from hydra_suite.core.inference.stages.crops import apply_fit_gpu
 
         try:
-            M_align, axis_theta = compute_alignment_affine(
-                corners, out_w, out_h, self._padding_fraction
-            )
+            M_align, axis_theta, _clipped = canonical_affine(corners, self._geometry)
         except ValueError:
             return None
 
@@ -623,12 +637,21 @@ class HeadTailAnalyzer:
         # t is now (C, H, W) float32 CUDA
 
         try:
-            crop_cuda = gpu_canonical_crop(t, M_align, out_w, out_h)
+            crop_cuda = gpu_canonical_crop(t, M_align, geometry=self._geometry)
         except Exception:
             return None
 
         if crop_cuda is None or crop_cuda.numel() == 0:
             return None
+
+        # Layer 2: fit the shared canvas to the model input on-device (mirrors
+        # _collect_canonical_crops_cuda -- device-dependent geometry is a
+        # defect, not an optimisation).
+        if self._input_size is not None and len(self._input_size) == 2:
+            in_h, in_w = int(self._input_size[0]), int(self._input_size[1])
+            fit = fit_to_model_input(self._geometry.canvas_wh, (in_w, in_h))
+            crop_cuda = apply_fit_gpu(crop_cuda.unsqueeze(0), fit).squeeze(0)
+
         return crop_cuda, axis_theta, M_align
 
     def _effective_infer_batch_size(self) -> int:
@@ -744,30 +767,25 @@ class HeadTailAnalyzer:
     # ------------------------------------------------------------------
 
     def _canonicalize_obb(self, frame, corners):
-        from hydra_suite.core.canonicalization.crop import (
-            compute_alignment_affine,
-            extract_canonical_crop,
-        )
-
-        if self._input_size is not None and len(self._input_size) == 2:
-            out_h, out_w = max(8, int(self._input_size[0])), max(
-                8, int(self._input_size[1])
-            )
-        else:
-            out_w = 128
-            out_h = max(8, int(round(128 / self._ref_ar)))
-            out_h = out_h + (out_h % 2)
+        from hydra_suite.core.canonicalization.crop import extract_canonical_crop
+        from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+        from hydra_suite.core.canonicalization.geometry import canonical_affine
 
         try:
-            M_align, axis_theta = compute_alignment_affine(
-                corners, out_w, out_h, self._padding_fraction
-            )
+            M_align, axis_theta, _clipped = canonical_affine(corners, self._geometry)
         except ValueError:
             return None
 
-        crop = extract_canonical_crop(frame, M_align, out_w, out_h)
+        crop = extract_canonical_crop(frame, M_align, geometry=self._geometry)
         if crop is None or crop.size == 0:
             return None
+
+        # Layer 2: fit the shared canvas to the model's exact input size.
+        if self._input_size is not None and len(self._input_size) == 2:
+            in_h, in_w = int(self._input_size[0]), int(self._input_size[1])
+            fit = fit_to_model_input(self._geometry.canvas_wh, (in_w, in_h))
+            crop = apply_fit(crop, fit)
+
         return crop, axis_theta, M_align
 
     # ------------------------------------------------------------------

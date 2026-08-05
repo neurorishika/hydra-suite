@@ -228,7 +228,7 @@ def _label_to_heading_offset(label: str) -> float | None:
 def _signed_major_axis_from_corners(corners: np.ndarray) -> np.ndarray | None:
     """Return per-detection major-axis angle from OBB corners, in [-pi, pi].
 
-    Mirrors ``compute_alignment_affine`` in core.canonicalization.crop: picks
+    Mirrors ``canonical_affine`` in core.canonicalization.geometry: picks
     the longer of the first two edges (c[1]-c[0] vs c[2]-c[1]) and returns
     ``atan2(major_vec_y, major_vec_x)``. NaN for degenerate boxes.
     """

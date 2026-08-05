@@ -4,6 +4,7 @@ import importlib
 
 import pandas as pd
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import ResolvedBackend
 from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
 
@@ -49,8 +50,7 @@ def test_interpolated_worker_skips_backend_init_when_no_eligible_gaps(
             True,
             1.0,
             1.0,
-            2.0,
-            0.1,
+            CanonicalGeometry.from_reference(20.0, 2.0, 1.3),
         ),
     )
     monkeypatch.setattr(

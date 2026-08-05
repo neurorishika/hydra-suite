@@ -284,6 +284,26 @@ class InterpolatedCropsWorker(BaseWorker):
             logger.warning("Interpolated CNN identity analysis disabled: %s", exc)
         return cnn_backends, cnn_labels
 
+    def _canonical_geometry(self):
+        """Project-wide Layer 1 canonical crop geometry (one fixed canvas).
+
+        Mirrors ``core.inference.config``'s derivation: ``REFERENCE_BODY_SIZE``
+        times ``RESIZE_FACTOR`` for the reference body extent, and
+        ``ADVANCED_CONFIG`` (lowercase keys) for the species aspect ratio and
+        crop margin -- the same knobs every other canonical-crop consumer
+        reads. There is no per-worker canvas; every crop site in this file
+        shares this one geometry.
+        """
+        from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+
+        adv = self.params.get("ADVANCED_CONFIG", {}) or {}
+        return CanonicalGeometry.from_reference(
+            reference_body_px=float(self.params.get("REFERENCE_BODY_SIZE", 20.0))
+            * float(self.params.get("RESIZE_FACTOR", 1.0)),
+            aspect_ratio=float(adv.get("reference_aspect_ratio", 2.0)),
+            margin=float(adv.get("canonical_margin", 1.3)),
+        )
+
     def _init_headtail_analyzer(self):
         """Initialize head-tail direction analyzer. Returns analyzer or None.
 
@@ -302,11 +322,7 @@ class InterpolatedCropsWorker(BaseWorker):
             resolved=self._resolve_backend("head_tail"),
             conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
             batch_size=max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64))),
-            reference_aspect_ratio=float(
-                self.params.get("ADVANCED_CONFIG", {}).get(
-                    "reference_aspect_ratio", 2.0
-                )
-            ),
+            geometry=self._canonical_geometry(),
         )
         if not analyzer.is_available:
             analyzer.close()
@@ -907,20 +923,17 @@ class InterpolatedCropsWorker(BaseWorker):
         )
         return SparseFramePrefetcher(cap, needed_frames, buffer_size=4)
 
-    def _compute_frame_corners_and_affines(
-        self, tasks, _compute_native_scale, _canonical_ref_ar, _canonical_padding
-    ):
+    def _compute_frame_corners_and_affines(self, tasks, geometry):
+        from hydra_suite.core.canonicalization.geometry import canonical_affine
         from hydra_suite.core.identity.geometry import ellipse_to_obb_corners as _e2obb
 
         corners = [_e2obb(t["cx"], t["cy"], t["w"], t["h"], t["theta"]) for t in tasks]
         affines = []
         for _c in corners:
             try:
-                _M, _cw, _ch, _ = _compute_native_scale(
-                    _c, _canonical_ref_ar, _canonical_padding
-                )
-                affines.append((_M, _cw, _ch))
-            except (ValueError, Exception):
+                _M, _theta, _clipped = canonical_affine(_c, geometry)
+                affines.append((_M, geometry.canvas_w, geometry.canvas_h))
+            except ValueError:
                 affines.append(None)
         return corners, affines
 
@@ -1140,9 +1153,7 @@ class InterpolatedCropsWorker(BaseWorker):
         frame_tasks,
         gen,
         save_interpolated_outputs,
-        _compute_native_scale,
-        _canonical_ref_ar,
-        _canonical_padding,
+        geometry,
         _extract_canonical,
         pose_backend,
         cnn_backends,
@@ -1168,7 +1179,7 @@ class InterpolatedCropsWorker(BaseWorker):
         profiler,
     ):
         _frame_all_corners, _frame_affines = self._compute_frame_corners_and_affines(
-            frame_tasks[f], _compute_native_scale, _canonical_ref_ar, _canonical_padding
+            frame_tasks[f], geometry
         )
         for task_idx, task in enumerate(frame_tasks[f]):
             interp_saved = self._process_single_task(
@@ -1256,9 +1267,7 @@ class InterpolatedCropsWorker(BaseWorker):
         cap,
         gen,
         save_interpolated_outputs,
-        _compute_native_scale,
-        _canonical_ref_ar,
-        _canonical_padding,
+        geometry,
         _extract_canonical,
         pose_backend,
         cnn_backends,
@@ -1306,9 +1315,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 frame_tasks,
                 gen,
                 save_interpolated_outputs,
-                _compute_native_scale,
-                _canonical_ref_ar,
-                _canonical_padding,
+                geometry,
                 _extract_canonical,
                 pose_backend,
                 cnn_backends,
@@ -1418,8 +1425,7 @@ class InterpolatedCropsWorker(BaseWorker):
         )
         gen.enabled = cache_interpolated_artifacts
 
-        _canonical_ref_ar = gen._canonical_ref_ar
-        _canonical_padding = gen._canonical_padding
+        geometry = self._canonical_geometry()
 
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
@@ -1448,15 +1454,11 @@ class InterpolatedCropsWorker(BaseWorker):
             cache_interpolated_artifacts,
             position_scale,
             size_scale,
-            _canonical_ref_ar,
-            _canonical_padding,
+            geometry,
         )
 
     def execute(self):
         """Generate interpolated crops for occluded trajectory gaps."""
-        from hydra_suite.core.canonicalization.crop import (
-            compute_native_scale_affine as _compute_native_scale,
-        )
         from hydra_suite.core.canonicalization.crop import (
             extract_canonical_crop as _extract_canonical,
         )
@@ -1489,8 +1491,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 cache_interpolated_artifacts,
                 position_scale,
                 size_scale,
-                _canonical_ref_ar,
-                _canonical_padding,
+                geometry,
             ) = setup
 
             interp_saved = 0
@@ -1542,9 +1543,7 @@ class InterpolatedCropsWorker(BaseWorker):
                     cap,
                     gen,
                     save_interpolated_outputs,
-                    _compute_native_scale,
-                    _canonical_ref_ar,
-                    _canonical_padding,
+                    geometry,
                     _extract_canonical,
                     pose_backend,
                     cnn_backends,
