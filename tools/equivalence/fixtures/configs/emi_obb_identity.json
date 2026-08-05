@@ -42,7 +42,7 @@
   "yolo_detect_model_path": "",
   "yolo_crop_obb_model_path": "",
   "yolo_headtail_model_path": "classification/orientation/20260429-104937_efficientnet_b0_obiroi_train1.pth",
-  "enable_headtail_orientation": false,
+  "enable_headtail_orientation": true,
   "pose_overrides_headtail": false,
   "yolo_seq_crop_pad_ratio": 0.1,
   "yolo_seq_min_crop_size_px": 64,
