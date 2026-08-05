@@ -36,6 +36,7 @@ class FinalMediaExportWorker(BaseWorker):
         enable_affine_stabilization=False,
         stabilization_window=5,
         output_subdir="oriented_videos",
+        geometry=None,
     ):
         super().__init__()
         self.final_csv_path = final_csv_path
@@ -59,6 +60,7 @@ class FinalMediaExportWorker(BaseWorker):
         self.enable_affine_stabilization = enable_affine_stabilization
         self.stabilization_window = stabilization_window
         self.output_subdir = output_subdir
+        self.geometry = geometry
         self._stop_requested = False
 
     def stop(self):
@@ -93,6 +95,7 @@ class FinalMediaExportWorker(BaseWorker):
                 enable_affine_stabilization=self.enable_affine_stabilization,
                 stabilization_window=self.stabilization_window,
                 output_subdir=self.output_subdir,
+                geometry=self.geometry,
             )
             result = exporter.export(
                 progress_callback=self.progress_signal.emit,

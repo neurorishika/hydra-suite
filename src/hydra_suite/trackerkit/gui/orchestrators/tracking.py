@@ -1362,6 +1362,13 @@ class TrackingOrchestrator:
                 if hasattr(self._mw, "_identity_panel")
                 else 0.1
             )
+            from hydra_suite.trackerkit.canonical_geometry import (
+                canonical_geometry_from_params,
+            )
+
+            canonical_geometry = canonical_geometry_from_params(
+                self._mw.get_parameters_dict()
+            )
             self._mw.final_media_export_worker = FinalMediaExportWorker(
                 final_csv_path,
                 str(export_root),
@@ -1396,6 +1403,7 @@ class TrackingOrchestrator:
                 ),
                 self._panels.dataset.spin_oriented_video_stabilization_window.value(),
                 output_subdir="",
+                geometry=canonical_geometry,
             )
             self._mw.final_media_export_worker.progress_signal.connect(
                 self._mw.on_progress_update

@@ -229,14 +229,30 @@ class OrientedTrackVideoExporter:
         # driven by this exporter's own ``padding_fraction`` knob (1 +
         # padding) -- the closest equivalent of the retired per-detection
         # "own aspect" canvas this class used to compute.
-        self._geometry: CanonicalGeometry = (
-            geometry
-            or CanonicalGeometry.from_reference(
+        if geometry is not None:
+            self._geometry: CanonicalGeometry = geometry
+        else:
+            self._geometry = CanonicalGeometry.from_reference(
                 reference_body_px=_DEFAULT_REFERENCE_BODY_PX,
                 aspect_ratio=_DEFAULT_REFERENCE_ASPECT_RATIO,
                 margin=1.0 + self.padding_fraction,
             )
-        )
+            # No caller-supplied geometry: this canvas is NOT guaranteed to
+            # match the project's actual REFERENCE_BODY_SIZE/ADVANCED_CONFIG
+            # geometry (the one inference, head-tail, and the crop-dataset
+            # exporter all use). Log loudly rather than silently diverging --
+            # see trackerkit.canonical_geometry for the wired GUI path.
+            logger.warning(
+                "OrientedTrackVideoExporter: no project geometry supplied -- "
+                "falling back to canvas_wh=%s, margin=%.3f, aspect_ratio=%.3f "
+                "(reference_body_px=%.3f). This may diverge from the "
+                "project's actual canonical geometry; pass geometry= to "
+                "avoid a silent mismatch.",
+                self._geometry.canvas_wh,
+                self._geometry.margin,
+                self._geometry.aspect_ratio,
+                _DEFAULT_REFERENCE_BODY_PX,
+            )
         self._clipped_count = 0
         self._worst_overflow_ratio = 0.0
         self.background_color = self._normalize_background_color(background_color)

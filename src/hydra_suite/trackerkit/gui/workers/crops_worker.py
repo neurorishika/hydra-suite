@@ -287,22 +287,16 @@ class InterpolatedCropsWorker(BaseWorker):
     def _canonical_geometry(self):
         """Project-wide Layer 1 canonical crop geometry (one fixed canvas).
 
-        Mirrors ``core.inference.config``'s derivation: ``REFERENCE_BODY_SIZE``
-        times ``RESIZE_FACTOR`` for the reference body extent, and
-        ``ADVANCED_CONFIG`` (lowercase keys) for the species aspect ratio and
-        crop margin -- the same knobs every other canonical-crop consumer
-        reads. There is no per-worker canvas; every crop site in this file
-        shares this one geometry.
+        There is no per-worker canvas; every crop site in this file shares
+        this one geometry. See ``trackerkit.canonical_geometry`` for the
+        derivation -- every TrackerKit consumer shares that one function
+        rather than re-deriving it.
         """
-        from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-
-        adv = self.params.get("ADVANCED_CONFIG", {}) or {}
-        return CanonicalGeometry.from_reference(
-            reference_body_px=float(self.params.get("REFERENCE_BODY_SIZE", 20.0))
-            * float(self.params.get("RESIZE_FACTOR", 1.0)),
-            aspect_ratio=float(adv.get("reference_aspect_ratio", 2.0)),
-            margin=float(adv.get("canonical_margin", 1.3)),
+        from hydra_suite.trackerkit.canonical_geometry import (
+            canonical_geometry_from_params,
         )
+
+        return canonical_geometry_from_params(self.params)
 
     def _init_headtail_analyzer(self):
         """Initialize head-tail direction analyzer. Returns analyzer or None.
