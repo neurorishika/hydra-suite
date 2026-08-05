@@ -22,7 +22,7 @@
 - **`REFERENCE_BODY_SIZE` is not redefined.** Its meaning (median per-detection geometric mean of major and minor), its auto-set formula, and all existing consumers stay exactly as they are. The crop path only reads it.
 - **No new user-facing config knobs.** Canvas geometry derives from `REFERENCE_BODY_SIZE`, `RESIZE_FACTOR`, `reference_aspect_ratio`, and the canonical margin.
 - **Dependency direction:** `core/` must never import from an app layer (`trackerkit`, `posekit`, `classkit`, `detectkit`, `refinekit`, `filterkit`) or from `integrations/`.
-- **Formatting:** run `make commit-prep` (black + isort) before each commit. Pre-commit hooks run automatically.
+- **Formatting:** run `make format` (autopep8 + black + isort; note CLAUDE.md documents a `make commit-prep` target that does not exist in the Makefile) before each commit. Pre-commit hooks run automatically.
 - **Commit style:** conventional commits. Do **not** add a `Co-Authored-By: Claude` trailer.
 - **This change is intentionally not equivalent.** Never "fix" a canonicalization difference to make the equivalence harness pass. The harness is used to re-baseline (Task 12).
 
@@ -304,7 +304,7 @@ Expected: PASS, 9 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add src/hydra_suite/core/canonicalization/geometry.py tests/test_canonical_geometry.py
 git commit -m "feat(canonicalization): rigid fixed-canvas Layer 1 geometry"
 ```
@@ -501,7 +501,7 @@ Expected: PASS, 11 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add src/hydra_suite/core/canonicalization/fit.py tests/test_canonical_fit.py
 git commit -m "feat(canonicalization): isotropic letterbox Layer 2 with a pinned contract"
 ```
@@ -626,7 +626,7 @@ Expected: no failure names absent from the baseline.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "fix(identity): read classifier input_size as (H, W) everywhere
 
@@ -778,7 +778,7 @@ Expected: PASS, 4 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "fix(trackerkit): make the canonical margin settable; one advanced-config table
 
@@ -867,7 +867,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "refactor(canonicalization): crop.py onto Layer 1; delete the dead metadata canonicalizer
 
@@ -1019,7 +1019,7 @@ Expected: no failure names absent from the baseline.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "refactor(inference): every crop path onto the shared canonical geometry
 
@@ -1118,7 +1118,7 @@ Run the delta gate: `-k "headtail or dataset or oriented or generator"`.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "refactor(identity): head-tail, crop export and oriented video onto Layer 1
 
@@ -1251,7 +1251,7 @@ Expected: PASS, 8 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "feat(training): one fit shared by training and inference in every kit
 
@@ -1365,7 +1365,7 @@ Expected: PASS, 2 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "fix(identity): pre-fit YOLO-classify crops so ultralytics cannot re-crop them"
 ```
@@ -1447,7 +1447,7 @@ Expected: PASS, 3 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "feat(training): stamp canonical geometry on published models
 
@@ -1531,7 +1531,7 @@ Expected: PASS, 2 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-make commit-prep
+make format
 git add -A
 git commit -m "chore(config): retire the dead identity_crop_* keys; guard the surface"
 ```
