@@ -9,7 +9,10 @@ import numpy as np
 import pytest
 import torch
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
+
+_GEOM = CanonicalGeometry(canvas_wh=(128, 128), margin=1.3, aspect_ratio=2.0)
 
 
 def _toy_obb(n=3, frame_idx=0):
@@ -39,7 +42,7 @@ def test_gpu_classifier_crop_shape_device():
     frame = (
         torch.randint(0, 256, (3, 200, 300), dtype=torch.uint8).float().div(255).to(dev)
     )
-    crops = extract_classifier_crops_gpu(frame, _toy_obb(3), (128, 128), 2.0, 1.3, dev)
+    crops = extract_classifier_crops_gpu(frame, _toy_obb(3), _GEOM, dev)
     assert crops.shape == (3, 3, 128, 128)
     assert str(crops.device).startswith(dev)
     assert crops.dtype == torch.float32
@@ -59,7 +62,7 @@ def test_gpu_classifier_crop_empty():
         corners=np.zeros((0, 4, 2), np.float32),
         detection_ids=np.zeros(0, np.int64),
     )
-    crops = extract_classifier_crops_gpu(frame, empty, (128, 128), 2.0, 1.3, "cpu")
+    crops = extract_classifier_crops_gpu(frame, empty, _GEOM, "cpu")
     assert crops.shape == (0, 3, 128, 128)
 
 
@@ -72,10 +75,10 @@ def test_gpu_vs_cpu_classifier_crop_close():
 
     frame = np.random.default_rng(0).integers(0, 256, (200, 300, 3), np.uint8)
     obb = _toy_obb(3)
-    cpu = extract_classifier_crops(frame, obb, (128, 128), 2.0, 1.3)  # list HWC uint8
+    cpu = extract_classifier_crops(frame, obb, _GEOM)  # list HWC uint8
     cpu_t = np.stack([c.astype(np.float32) / 255.0 for c in cpu])  # (N,H,W,C)
     ft = torch.from_numpy(frame.transpose(2, 0, 1)).float().div(255.0)
-    gpu = extract_classifier_crops_gpu(ft, obb, (128, 128), 2.0, 1.3, "cpu")
+    gpu = extract_classifier_crops_gpu(ft, obb, _GEOM, "cpu")
     gpu_hwc = gpu.permute(0, 2, 3, 1).numpy()
     assert gpu_hwc.shape == cpu_t.shape
     assert float(np.abs(gpu_hwc - cpu_t).mean()) < 0.03  # < ~8/255 mean abs
@@ -313,7 +316,7 @@ def test_gpu_classifier_crop_hwc_nvdec_layout():
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     hwc = torch.randint(0, 256, (200, 300, 3), dtype=torch.uint8).to(dev)  # (H, W, 3)
-    crops = extract_classifier_crops_gpu(hwc, _toy_obb(3), (128, 128), 2.0, 1.3, dev)
+    crops = extract_classifier_crops_gpu(hwc, _toy_obb(3), _GEOM, dev)
     assert crops.shape == (3, 3, 128, 128)  # 3 crops, 3 channels
     assert crops.dtype == torch.float32
 
