@@ -2435,6 +2435,12 @@ class ConfigOrchestrator:
             "INDIVIDUAL_PROPERTIES_CACHE_PATH": str(
                 self._mw.current_individual_properties_cache_path or ""
             ).strip(),
+            # Gates the three confidence columns the worker appends per row.
+            # Must match the header built in _setup_tracking_csv_writer from the
+            # same checkbox, or rows carry more values than the header declares.
+            "SAVE_CONFIDENCE_METRICS": bool(
+                self._panels.setup.check_save_confidence.isChecked()
+            ),
             # Final media export parameters
             "ENABLE_INDIVIDUAL_DATASET": False,
             "ENABLE_INDIVIDUAL_IMAGE_SAVE": False,

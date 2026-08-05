@@ -608,6 +608,12 @@ def build_tracking_parameters(
         "ENABLE_POSTPROCESSING": bool(
             _cfg_get(cfg, "enable_postprocessing", default=True)
         ),
+        # Gates the three confidence columns the worker appends per row. Must
+        # match the header built from `save_confidence_metrics`, or the CSV rows
+        # carry more values than the header declares columns.
+        "SAVE_CONFIDENCE_METRICS": bool(
+            _cfg_get(cfg, "save_confidence_metrics", default=True)
+        ),
         "MIN_TRAJECTORY_LENGTH": min_trajectory_length,
         "MAX_VELOCITY_BREAK": max_velocity_break_pixels_per_frame,
         "MAX_OCCLUSION_GAP": max_occlusion_gap,
