@@ -1969,6 +1969,33 @@ class MainWindow(QMainWindow):
             f"Aspect ratio filtering (if enabled) will use this as the centre.",
         )
 
+    def _auto_set_margin_from_detection(self):
+        """Auto-set canonical margin so the largest detected major axis fits.
+
+        The canonical canvas long edge is
+        ``REFERENCE_BODY_SIZE * sqrt(reference_aspect_ratio) * margin``, i.e.
+        ``body_px * sqrt(ar)`` is the canonical major axis at margin=1.0. The
+        suggested margin scales that up to the largest observed major axis,
+        then rounds up to the nearest 0.05 so the suggestion never under-covers.
+        """
+        if self.detected_sizes is None:
+            return
+        stats = self.detected_sizes["stats"]
+        body = self._detection_panel.spin_reference_body_size.value()
+        ar = self._detection_panel.spin_reference_aspect_ratio.value()
+        suggested = stats["major"]["max"] / max(1e-6, body * math.sqrt(ar))
+        margin = min(3.0, math.ceil(suggested * 20.0) / 20.0)
+        self._detection_panel.spin_canonical_margin.setValue(margin)
+        QMessageBox.information(
+            self,
+            "Canonical Margin Updated",
+            f"Canonical margin set to {margin:.2f}\n"
+            f"(sized to the largest detected major axis, "
+            f"{stats['major']['max']:.1f} px, of {self.detected_sizes['count']} detections)\n\n"
+            f"The canonical crop canvas will now be large enough that the\n"
+            f"largest observed animal is not clipped.",
+        )
+
     def _validate_yolo_model_requirements(self, params: dict, mode_label: str) -> bool:
         """Validate YOLO mode-specific model requirements before starting runs."""
         return self._tracking_orch._validate_yolo_model_requirements(params, mode_label)

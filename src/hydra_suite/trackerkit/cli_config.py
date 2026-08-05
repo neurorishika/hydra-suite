@@ -19,6 +19,7 @@ from hydra_suite.runtime.resolver import (
     RuntimeResolver,
     detect_platform,
 )
+from hydra_suite.trackerkit.advanced_defaults import default_advanced_config
 from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
@@ -151,28 +152,13 @@ def _autopick_greedy(n_targets: int) -> bool:
 
 
 def _default_advanced_config() -> dict[str, Any]:
-    return {
-        "roi_crop_warning_threshold": 0.6,
-        "roi_crop_auto_suggest": True,
-        "roi_crop_remind_every_session": False,
-        "roi_crop_padding_fraction": 0.05,
-        "video_crop_codec": "libx264",
-        "video_crop_crf": 18,
-        "video_crop_preset": "medium",
-        "mps_memory_fraction": 0.3,
-        "cuda_memory_fraction": 0.7,
-        "tensorrt_build_workspace_gb": 4.0,
-        "tensorrt_build_batch_size": None,
-        "yolo_headtail_detect_conf_threshold": 0.25,
-        "headtail_batch_size": 64,
-        "realtime_visualization_emit_stride": 1,
-        "visualization_emit_stride": 1,
-        "dataset_yolo_confidence_threshold": 0.05,
-        "dataset_yolo_iou_threshold": 0.5,
-        "identity_swap_conf_margin": 0.2,
-        "identity_rejoin_velocity_budget": 1.5,
-        "identity_rejoin_dist_floor": None,
-    }
+    """Defaults for the CLI advanced-config loader.
+
+    Shared with the GUI loader (``gui/orchestrators/config.py``) via
+    ``advanced_defaults.DEFAULT_ADVANCED_CONFIG`` -- see that module for the
+    full key accounting.
+    """
+    return default_advanced_config()
 
 
 def load_advanced_tracker_config() -> dict[str, Any]:
@@ -296,7 +282,14 @@ def build_tracking_parameters(
         _cfg_get(
             cfg,
             "reference_aspect_ratio",
-            default=advanced.get("reference_aspect_ratio", 4.0),
+            default=advanced.get("reference_aspect_ratio", 2.0),
+        )
+    )
+    advanced["canonical_margin"] = float(
+        _cfg_get(
+            cfg,
+            "canonical_margin",
+            default=advanced.get("canonical_margin", 1.3),
         )
     )
     advanced["enable_aspect_ratio_filtering"] = bool(

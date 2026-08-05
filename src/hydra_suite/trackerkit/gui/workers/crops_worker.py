@@ -303,7 +303,9 @@ class InterpolatedCropsWorker(BaseWorker):
             conf_threshold=float(self.params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
             batch_size=max(1, int(self.params.get("HEADTAIL_BATCH_SIZE", 64))),
             reference_aspect_ratio=float(
-                self.params.get("REFERENCE_ASPECT_RATIO", 2.0)
+                self.params.get("ADVANCED_CONFIG", {}).get(
+                    "reference_aspect_ratio", 2.0
+                )
             ),
         )
         if not analyzer.is_available:

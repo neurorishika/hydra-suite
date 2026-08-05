@@ -6,6 +6,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import RuntimeTier
 
 
@@ -790,6 +791,19 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", "") or "").strip()
     headtail_cfg = None
     if headtail_model_path and os.path.exists(headtail_model_path):
+        # Build the canonical geometry once so the head-tail crop shape
+        # (aspect ratio, margin) is exactly the same normalized shape the
+        # rest of the pipeline's fixed canvas uses -- CanonicalGeometry
+        # clamps aspect_ratio/margin to >= 1.0, so this is also the single
+        # place that guards against a degenerate (< 1.0) advanced-config
+        # value silently reaching the classifier.
+        _adv = params.get("ADVANCED_CONFIG", {}) or {}
+        canonical = CanonicalGeometry.from_reference(
+            reference_body_px=float(params.get("REFERENCE_BODY_SIZE", 20.0))
+            * float(params.get("RESIZE_FACTOR", 1.0)),
+            aspect_ratio=float(_adv.get("reference_aspect_ratio", 2.0)),
+            margin=float(_adv.get("canonical_margin", 1.3)),
+        )
         headtail_cfg = HeadTailConfig(
             model_path=headtail_model_path,
             confidence_threshold=float(params.get("YOLO_HEADTAIL_CONF_THRESHOLD", 0.5)),
@@ -804,14 +818,8 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 )
             ),
             batch_size=int(params.get("HEADTAIL_BATCH_SIZE", 64)),
-            canonical_aspect_ratio=float(
-                params.get("ADVANCED_CONFIG", {}).get("reference_aspect_ratio", 2.0)
-            ),
-            canonical_margin=float(
-                params.get("ADVANCED_CONFIG", {}).get(
-                    "yolo_headtail_canonical_margin", 1.3
-                )
-            ),
+            canonical_aspect_ratio=canonical.aspect_ratio,
+            canonical_margin=canonical.margin,
         )
 
     # CNN phases
