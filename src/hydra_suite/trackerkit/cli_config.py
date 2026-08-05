@@ -14,12 +14,15 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
+from hydra_suite.core.inference.model_paths import (
+    resolve_model_path,
+    resolve_pose_model_path,
+)
 from hydra_suite.runtime.resolver import (
     ResolvedBackend,
     RuntimeResolver,
     detect_platform,
 )
-from hydra_suite.trackerkit.gui.model_utils import resolve_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +104,13 @@ class TrackerCliSession:
     enable_pose_extractor: bool
 
     def supports_direct_run(self) -> bool:
-        """Return whether the CLI can run this session without MainWindow."""
-        return not self.enable_pose_extractor and self.identity_method in {
-            "",
-            "none",
-            "none_disabled",
-        }
+        """Every session runs the direct Qt-free path (Slice 4 CLI cutover).
+
+        The hidden-MainWindow bridge was deleted once TrackingSessionCore
+        reached parity, so pose/identity sessions no longer need Qt. Kept as a
+        method (not deleted) so the CLI's call site stays stable.
+        """
+        return True
 
 
 def _cfg_get(cfg: Mapping[str, Any], new_key: str, *legacy_keys: str, default=None):
@@ -148,6 +152,37 @@ def _coerce_int_list(raw_value: Any) -> list[int] | None:
 
 def _autopick_greedy(n_targets: int) -> bool:
     return int(n_targets) >= SOLVER_AUTOPICK_GREEDY_THRESHOLD
+
+
+def _coerce_pose_keypoint_tokens(raw_value: Any) -> list:
+    """Parse a pose keypoint group into name/index tokens.
+
+    Mirrors the bridge's ``MainWindow._parse_pose_keypoint_tokens`` (a
+    comma-separated-string-or-list parser that keeps numeric tokens as
+    ``int`` and everything else as a stripped ``str``). The CLI has no list
+    widgets to read a live selection from, so the config's stored
+    ``pose_*_keypoints`` list (already the bridge's own parsed/selected
+    output at save time) is re-parsed the same way to keep the token types
+    identical.
+    """
+    if not raw_value:
+        return []
+    if isinstance(raw_value, (list, tuple, set)):
+        values = list(raw_value)
+    else:
+        values = [token.strip() for token in str(raw_value).split(",") if token.strip()]
+    tokens: list = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            tokens.append(int(text))
+        except ValueError:
+            tokens.append(text)
+    return tokens
 
 
 def _default_advanced_config() -> dict[str, Any]:
@@ -482,10 +517,9 @@ def build_tracking_parameters(
     if end_frame is not None:
         end_frame = int(end_frame)
 
-    rng = np.random.default_rng(42)
-    colors = [
-        tuple(color.tolist()) for color in rng.integers(0, 255, size=(max_targets, 3))
-    ]
+    from hydra_suite.core.tracking.session_policy import build_trajectory_colors
+
+    colors = build_trajectory_colors(max_targets)
     roi_mask = _build_roi_mask(
         cfg.get("roi_shapes") or [],
         width=video_probe.width,
@@ -497,6 +531,147 @@ def build_tracking_parameters(
     enable_spatial = bool(
         _cfg_get(
             cfg, "enable_spatial_optimization", default=_autopick_greedy(max_targets)
+        )
+    )
+
+    # Individual/identity pipeline gate: faithfully replicate the bridge's
+    # derivation (gui/orchestrators/config.py:1797-1798, 2385-2386), which
+    # delegates to MainWindow._is_individual_pipeline_enabled() ->
+    # session_policy.is_individual_pipeline_enabled({"detection_method": ...}).
+    # That predicate is purely a function of detection_method == "yolo_obb" --
+    # not of any identity/individual-analysis checkbox -- so reuse it directly
+    # from the same config-dict-shaped mapping the CLI already has.
+    from hydra_suite.core.tracking.session_policy import is_individual_pipeline_enabled
+
+    individual_pipeline_enabled = is_individual_pipeline_enabled(cfg)
+
+    # CNN_CLASSIFIERS / USE_APRILTAGS: the bridge reads these from
+    # MainWindow._identity_config() (detection_panel.py:_identity_config),
+    # which is gated by the identity-panel "enabled" checkbox and persisted
+    # verbatim into the saved config's "cnn_classifiers"/"use_apriltags"
+    # fields at save time (gui/orchestrators/config.py:1803-1805). The CLI has
+    # no live widgets, so the persisted config fields already encode that same
+    # gated state -- read them directly. Each CNN classifier's "model_path" is
+    # stored as an absolute path resolved from the user's models root at save
+    # time (identity_panel.py CnnClassifierRow.to_config); re-resolve it here
+    # via the same resolve_model_path() used for YOLO model paths above, so a
+    # relative/portable path in a hand-authored or fixture config still
+    # resolves to an existing file the way the bridge's absolute path would.
+    use_apriltags = bool(_cfg_get(cfg, "use_apriltags", default=False))
+    cnn_classifiers_raw = _cfg_get(cfg, "cnn_classifiers", default=[]) or []
+    cnn_classifiers = []
+    for entry in cnn_classifiers_raw:
+        entry = dict(entry)
+        entry["model_path"] = resolve_model_path(entry.get("model_path", ""))
+        cnn_classifiers.append(entry)
+
+    # Identity-in-tracking param block: faithfully replicate the bridge's
+    # derivation (gui/orchestrators/config.py:2400-2436). This block feeds
+    # the per-frame Hungarian assignment's Bayesian identity-cost term
+    # (core/assigners/hungarian.py:239, _apply_bayesian_identity_cost) and
+    # the identity-first slot rejoining (core/tracking/worker.py:2899-2910),
+    # both of which the CLI previously left at their permissive defaults
+    # (decoder off, hint scale 0) regardless of what the config asked for.
+    enable_postprocessing_flag = bool(
+        _cfg_get(cfg, "enable_postprocessing", default=True)
+    )
+    # bridge: config.py:1808 saves the raw checkbox; default mirrors the
+    # widget's initial checked state (tracking_panel.py:537).
+    enable_identity_in_tracking = bool(
+        _cfg_get(cfg, "enable_identity_in_tracking", default=True)
+    )
+    # bridge: config.py:2401-2404 ANDs the online-decoder checkbox (default
+    # unchecked, tracking_panel.py:568) with the master identity-in-tracking
+    # gate above.
+    enable_identity_online_decoder = enable_identity_in_tracking and bool(
+        _cfg_get(cfg, "enable_identity_online_decoder", default=False)
+    )
+    # bridge: config.py:722-727 -- a saved config with no
+    # "identity_postprocess_mode" key falls back to "Fragment Solver" (NOT
+    # the raw widget default), then config.py:2405-2409 gates the *value*
+    # emitted into params on the postprocessing master switch.
+    saved_identity_postprocess_mode = _cfg_get(
+        cfg, "identity_postprocess_mode", default=None
+    )
+    if saved_identity_postprocess_mode is None:
+        saved_identity_postprocess_mode = "Fragment Solver"
+    saved_identity_postprocess_mode = str(saved_identity_postprocess_mode)
+    identity_postprocess_mode = (
+        saved_identity_postprocess_mode if enable_postprocessing_flag else "None"
+    )
+    # bridge: config.py:2410-2414.
+    enable_identity_fragment_solver = (
+        enable_postprocessing_flag
+        and saved_identity_postprocess_mode == "Fragment Solver"
+    )
+    # bridge: config.py:1799/2116-2118 -- IDENTITY_METHOD is the canonical
+    # gated identity-method string persisted at save time by
+    # MainWindow._selected_identity_method(); replicate TrackerCliSession's
+    # own normalization of the same field (cli_config.py's
+    # load_tracker_cli_session) rather than re-deriving the GUI enable-gate
+    # logic (no live widgets exist headlessly).
+    identity_method = (
+        str(_cfg_get(cfg, "identity_method", default="none_disabled")).strip().lower()
+    )
+
+    # Pose block: faithfully replicate the bridge's derivation
+    # (gui/orchestrators/config.py:2436-2460). ``ENABLE_POSE_EXTRACTOR`` uses
+    # the SAME pure predicate the bridge calls
+    # (MainWindow._is_pose_inference_enabled() ->
+    # session_orch._is_pose_inference_enabled() ->
+    # session_policy.is_pose_inference_enabled(build_config_dict())): gated on
+    # the individual/YOLO-OBB pipeline being enabled, the
+    # "enable_pose_extractor" flag, AND a non-empty "pose_model_dir" -- so a
+    # non-pose config (detection_method != yolo_obb, or the checkbox off, or
+    # no model configured) derives it falsy, exactly like the bridge. The CLI
+    # config dict already carries the same field shape as
+    # ConfigOrchestrator.build_config_dict() (both are the persisted
+    # snake_case JSON schema), so the predicate can run directly against
+    # ``cfg`` without reconstructing the bridge's widget-derived dict.
+    from hydra_suite.core.tracking.session_policy import is_pose_inference_enabled
+
+    pose_extractor_enabled = is_pose_inference_enabled(cfg)
+    pose_model_type = (
+        str(_cfg_get(cfg, "pose_model_type", default="yolo")).strip().lower()
+    )
+    if pose_model_type not in ("yolo", "sleap", "vitpose"):
+        pose_model_type = "yolo"
+    # bridge: config.py:2440-2449 resolves
+    # ``self._mw._pose_model_path_for_backend(active_backend)`` -- which, on
+    # config load (config.py:1161-1173), is the backend-specific
+    # "pose_<backend>_model_dir" field, falling back to the legacy
+    # "pose_model_dir" field only when the backend-specific field is empty.
+    # Replicate the same backend-specific-with-legacy-fallback lookup here.
+    pose_model_dir_raw = str(
+        _cfg_get(cfg, f"pose_{pose_model_type}_model_dir", default="")
+    ).strip()
+    if not pose_model_dir_raw:
+        pose_model_dir_raw = str(_cfg_get(cfg, "pose_model_dir", default="")).strip()
+    pose_model_dir = resolve_pose_model_path(
+        pose_model_dir_raw, backend=pose_model_type
+    )
+    # bridge: config.py:2458, MainWindow._selected_pose_sleap_env() falls
+    # back to "sleap" when the config value is empty or a placeholder
+    # "no sleap envs ..." combo-box entry.
+    pose_sleap_env = str(_cfg_get(cfg, "pose_sleap_env", default="sleap")).strip()
+    if not pose_sleap_env or pose_sleap_env.lower().startswith("no sleap envs"):
+        pose_sleap_env = "sleap"
+    # bridge: config.py:1216-1225 -- shared pose batch size loaded from
+    # "pose_batch_size", falling back through the legacy "pose_yolo_batch" /
+    # "pose_sleap_batch" fields, then the advanced-config default.
+    pose_batch_size = int(
+        _cfg_get(
+            cfg,
+            "pose_batch_size",
+            default=_cfg_get(
+                cfg,
+                "pose_yolo_batch",
+                default=_cfg_get(
+                    cfg,
+                    "pose_sleap_batch",
+                    default=advanced.get("pose_batch_size", 4),
+                ),
+            ),
         )
     )
 
@@ -516,6 +691,34 @@ def build_tracking_parameters(
         "YOLO_HEADTAIL_MODEL_PATH": yolo_headtail_path,
         "POSE_OVERRIDES_HEADTAIL": bool(
             _cfg_get(cfg, "pose_overrides_headtail", default=False)
+        ),
+        # Pose block: see the derivation block above build_tracking_parameters'
+        # return statement (mirrors gui/orchestrators/config.py:2436-2460).
+        "ENABLE_POSE_EXTRACTOR": pose_extractor_enabled,
+        "POSE_MODEL_TYPE": pose_model_type,
+        "POSE_MODEL_DIR": pose_model_dir,
+        "POSE_EXPORTED_MODEL_PATH": "",
+        "POSE_MIN_KPT_CONF_VALID": float(
+            _cfg_get(cfg, "pose_min_kpt_conf_valid", default=0.2)
+        ),
+        "POSE_SKELETON_FILE": str(_cfg_get(cfg, "pose_skeleton_file", default="")),
+        "POSE_IGNORE_KEYPOINTS": _coerce_pose_keypoint_tokens(
+            _cfg_get(cfg, "pose_ignore_keypoints", default=[])
+        ),
+        "POSE_DIRECTION_ANTERIOR_KEYPOINTS": _coerce_pose_keypoint_tokens(
+            _cfg_get(cfg, "pose_direction_anterior_keypoints", default=[])
+        ),
+        "POSE_DIRECTION_POSTERIOR_KEYPOINTS": _coerce_pose_keypoint_tokens(
+            _cfg_get(cfg, "pose_direction_posterior_keypoints", default=[])
+        ),
+        "POSE_YOLO_BATCH": pose_batch_size,
+        "POSE_BATCH_SIZE": pose_batch_size,
+        "POSE_SLEAP_ENV": pose_sleap_env,
+        "POSE_SLEAP_BATCH": int(
+            _cfg_get(cfg, "pose_sleap_batch", default=pose_batch_size)
+        ),
+        "POSE_SLEAP_MAX_INSTANCES": int(
+            _cfg_get(cfg, "pose_sleap_max_instances", default=1)
         ),
         "YOLO_SEQ_CROP_PAD_RATIO": float(
             _cfg_get(cfg, "yolo_seq_crop_pad_ratio", default=0.15)
@@ -605,9 +808,7 @@ def build_tracking_parameters(
         ),
         "MAX_DISTANCE_THRESHOLD": max_distance_multiplier * scaled_body_size,
         "MAX_DISTANCE_MULTIPLIER": max_distance_multiplier,
-        "ENABLE_POSTPROCESSING": bool(
-            _cfg_get(cfg, "enable_postprocessing", default=True)
-        ),
+        "ENABLE_POSTPROCESSING": enable_postprocessing_flag,
         # Gates the three confidence columns the worker appends per row. Must
         # match the header built from `save_confidence_metrics`, or the CSV rows
         # carry more values than the header declares columns.
@@ -838,6 +1039,49 @@ def build_tracking_parameters(
         "IDENTITY_GATES_TRAJECTORY_STRUCTURE": bool(
             _cfg_get(cfg, "identity_gates_trajectory_structure", default=True)
         ),
+        "ENABLE_IDENTITY_ANALYSIS": individual_pipeline_enabled,
+        "ENABLE_INDIVIDUAL_PIPELINE": individual_pipeline_enabled,
+        "IDENTITY_METHOD": identity_method,
+        "USE_APRILTAGS": use_apriltags,
+        "CNN_CLASSIFIERS": cnn_classifiers,
+        "CNN_CLASSIFIER_WINDOW": 10,
+        "ENABLE_IDENTITY_IN_TRACKING": enable_identity_in_tracking,
+        "ENABLE_IDENTITY_ONLINE_DECODER": enable_identity_online_decoder,
+        "IDENTITY_POSTPROCESS_MODE": identity_postprocess_mode,
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": enable_identity_fragment_solver,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": float(
+            _cfg_get(cfg, "identity_weight", default=1.0)
+        ),
+        "IDENTITY_COMMIT_THRESHOLD": float(
+            _cfg_get(cfg, "identity_commit_threshold", default=0.85)
+        ),
+        "IDENTITY_DISPLAY_THRESHOLD": float(
+            _cfg_get(cfg, "identity_display_threshold", default=0.6)
+        ),
+        "IDENTITY_TRANSITION_EPSILON": float(
+            _cfg_get(cfg, "identity_transition_epsilon", default=0.02)
+        ),
+        "IDENTITY_UNKNOWN_PRIOR": float(
+            _cfg_get(cfg, "identity_unknown_prior", default=0.05)
+        ),
+        "IDENTITY_REJOIN_THRESHOLD": float(
+            _cfg_get(cfg, "identity_rejoin_threshold", default=0.5)
+        ),
+        "IDENTITY_SWAP_ENABLED": bool(
+            _cfg_get(cfg, "enable_identity_swap_correction", default=True)
+        ),
+        "IDENTITY_SWAP_MIN_FRAMES": int(
+            _cfg_get(cfg, "identity_swap_min_frames", default=8)
+        ),
+        "IDENTITY_SWAP_CONF_MARGIN": float(
+            advanced.get("identity_swap_conf_margin", 0.2)
+        ),
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": float(
+            advanced.get("identity_rejoin_velocity_budget", 1.5)
+        ),
+        "IDENTITY_REJOIN_DIST_FLOOR": advanced.get("identity_rejoin_dist_floor", None),
+        "APRILTAG_FAMILY": str(_cfg_get(cfg, "apriltag_family", default="tag36h11")),
+        "APRILTAG_DECIMATE": float(_cfg_get(cfg, "apriltag_decimate", default=1.0)),
         "ENABLE_CONFIDENCE_DENSITY_MAP": bool(
             _cfg_get(cfg, "enable_confidence_density_map", default=True)
         ),

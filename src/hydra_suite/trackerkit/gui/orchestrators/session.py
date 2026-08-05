@@ -895,34 +895,45 @@ class SessionOrchestrator:
 
     def _is_pose_inference_enabled(self) -> bool:
         """Return whether pose inference is actively enabled for the run."""
-        if not (
-            self._is_individual_pipeline_enabled()
-            and hasattr(self._mw, "_identity_panel")
-            and self._mw._identity_panel.chk_enable_pose_extractor.isChecked()
-        ):
-            return False
-        backend = (
-            self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.is_pose_inference_enabled(
+            self._mw._config_orch.build_config_dict()
         )
-        return bool(str(self._mw._pose_model_path_for_backend(backend) or "").strip())
 
     def _is_headtail_compute_enabled(self) -> bool:
         """Return whether head-tail analysis is actively configured for the run."""
-        if not (
-            self._is_individual_pipeline_enabled()
-            and hasattr(self._mw, "_identity_panel")
-            and self._mw._identity_panel.g_headtail.isChecked()
-        ):
-            return False
-        return bool(
-            str(
-                self._mw._identity_panel._get_selected_yolo_headtail_model_path() or ""
-            ).strip()
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.is_headtail_compute_enabled(
+            self._mw._config_orch.build_config_dict()
         )
 
     def _is_individual_pipeline_enabled(self) -> bool:
-        """Return effective runtime state for individual analysis pipeline."""
-        return self._mw._is_yolo_detection_mode()
+        """Return effective runtime state for individual analysis pipeline.
+
+        NOTE: intentionally does NOT delegate through
+        ``ConfigOrchestrator.build_config_dict()`` — that method itself calls
+        this predicate (via ``self._mw._is_individual_pipeline_enabled()``) to
+        populate ``enable_identity_analysis``/``enable_individual_pipeline``,
+        so doing so would recurse infinitely. Build the minimal input the pure
+        predicate needs directly from the detection widget instead.
+        """
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.is_individual_pipeline_enabled(
+            {"detection_method": self._detection_method_value()}
+        )
+
+    def _detection_method_value(self) -> str:
+        """Return the config-dict-shaped detection_method string from the widget."""
+        if not hasattr(self._mw, "_detection_panel"):
+            return "background_subtraction"
+        return (
+            "background_subtraction"
+            if self._mw._detection_panel.combo_detection_method.currentIndex() == 0
+            else "yolo_obb"
+        )
 
     def _is_realtime_tracking_mode_enabled(self) -> bool:
         """Return True when the setup tab requests streaming realtime workflow."""
@@ -931,18 +942,40 @@ class SessionOrchestrator:
         return bool(self._mw._setup_panel.chk_realtime_mode.isChecked())
 
     def _workflow_mode_key(self) -> str:
-        """Return the normalized workflow mode key for runtime parameters."""
-        return (
-            "realtime" if self._is_realtime_tracking_mode_enabled() else "non_realtime"
+        """Return the normalized workflow mode key for runtime parameters.
+
+        NOTE: intentionally does NOT delegate through
+        ``ConfigOrchestrator.build_config_dict()`` — that method itself calls
+        this predicate (via ``self._mw._session_orch._workflow_mode_key()``)
+        to populate ``tracking_workflow_mode``, so doing so would recurse
+        infinitely. Build the minimal input directly from the widget instead.
+        """
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.workflow_mode_key(
+            {"realtime_tracking_mode": self._is_realtime_tracking_mode_enabled()}
         )
 
     def _should_export_final_canonical_images(self) -> bool:
-        """Return effective runtime state for final canonical still export."""
+        """Return effective runtime state for final canonical still export.
+
+        NOTE: intentionally does NOT delegate through
+        ``ConfigOrchestrator.build_config_dict()`` — that method itself calls
+        this predicate (via ``self._mw._is_individual_image_save_enabled()``,
+        an alias defined below) to populate
+        ``export_final_canonical_images``/``enable_individual_dataset``, so
+        doing so would recurse infinitely. Build the minimal input directly
+        from the relevant widgets instead.
+        """
         if not hasattr(self._mw, "_dataset_panel"):
             return False
-        return bool(
-            self._mw._dataset_panel.chk_enable_individual_dataset.isChecked()
-            and self._is_individual_pipeline_enabled()
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.should_export_final_canonical_images(
+            {
+                "enable_individual_dataset": self._mw._dataset_panel.chk_enable_individual_dataset.isChecked(),
+                "detection_method": self._detection_method_value(),
+            }
         )
 
     def _is_individual_image_save_enabled(self) -> bool:
@@ -951,11 +984,10 @@ class SessionOrchestrator:
 
     def _should_export_final_media_videos(self) -> bool:
         """Return True when final per-track videos should be exported."""
-        if not hasattr(self._mw, "_dataset_panel"):
-            return False
-        return bool(
-            self._mw._dataset_panel.chk_generate_individual_track_videos.isChecked()
-            and self._is_individual_pipeline_enabled()
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.should_export_final_media_videos(
+            self._mw._config_orch.build_config_dict()
         )
 
     def _should_run_interpolated_postpass(self) -> bool:
@@ -967,16 +999,10 @@ class SessionOrchestrator:
         - pose export is enabled (to fill occluded-frame pose rows in final CSV), or
         - final media video export is enabled (to cache interpolated ROI geometry).
         """
-        if not hasattr(self._mw, "_identity_panel"):
-            return False
-        if not self._mw._identity_panel.chk_individual_interpolate.isChecked():
-            return False
-        if not self._is_individual_pipeline_enabled():
-            return False
-        return bool(
-            self._should_export_final_canonical_images()
-            or self._mw._is_pose_export_enabled()
-            or self._should_export_final_media_videos()
+        from hydra_suite.core.tracking import session_policy
+
+        return session_policy.should_run_interpolated_postpass(
+            self._mw._config_orch.build_config_dict()
         )
 
     # =========================================================================

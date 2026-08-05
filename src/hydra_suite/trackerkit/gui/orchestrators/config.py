@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
-import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -27,8 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from hydra_suite.core.inference.config import migrate_runtime_to_tier
-from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
-from hydra_suite.trackerkit.gui.model_utils import (
+from hydra_suite.core.inference.model_paths import (
     _normalize_usage_role,
     _sanitize_model_token,
     get_pose_models_directory,
@@ -39,6 +37,7 @@ from hydra_suite.trackerkit.gui.model_utils import (
     register_yolo_model,
     remove_model_from_repository,
 )
+from hydra_suite.trackerkit.cli_config import legacy_detection_runtime_fields
 from hydra_suite.trackerkit.gui.panels.tracking_panel import (
     DENSITY_BINARIZE_THRESHOLD_CONST,
     DENSITY_DOWNSAMPLE_FACTOR_CONST,
@@ -383,7 +382,7 @@ class ConfigOrchestrator:
         )
         yolo_headtail_model = get_cfg("yolo_headtail_model_path", default="")
 
-        from hydra_suite.trackerkit.gui.main_window import resolve_model_path
+        from hydra_suite.core.inference.model_paths import resolve_model_path
 
         resolved_yolo_direct = resolve_model_path(yolo_direct_model)
         resolved_yolo_detect = resolve_model_path(yolo_detect_model)
@@ -1410,27 +1409,25 @@ class ConfigOrchestrator:
         )
         return path or None
 
-    def save_config(
-        self: object,
-        preset_mode: object = False,
-        preset_path: object = None,
+    def build_config_dict(
+        self,
+        preset_mode: bool = False,
         preset_name: object = None,
         preset_description: object = None,
-        prompt_if_exists: bool = True,
-    ) -> object:
-        """Save current configuration to JSON file.
+    ) -> dict:
+        """Assemble the config dict from current widget state.
+
+        Pure: touches no filesystem and shows no dialog.
 
         Args:
             preset_mode: If True, skip video paths, device settings, and ROI data (for organism presets)
-            preset_path: If provided, save directly to this path without prompting
             preset_name: Name for the preset (only used in preset_mode)
             preset_description: Description for the preset (only used in preset_mode)
-            prompt_if_exists: If False, overwrite default config path without interactive replace dialog.
 
         Returns:
-            bool: True if config was saved successfully, False if cancelled or failed
+            dict: the assembled config dict.
         """
-        from hydra_suite.trackerkit.gui.main_window import (
+        from hydra_suite.core.inference.model_paths import (
             get_yolo_model_metadata,
             make_model_path_relative,
             make_pose_model_path_relative,
@@ -1892,6 +1889,34 @@ class ConfigOrchestrator:
             }
         )
 
+        return cfg
+
+    def save_config(
+        self: object,
+        preset_mode: object = False,
+        preset_path: object = None,
+        preset_name: object = None,
+        preset_description: object = None,
+        prompt_if_exists: bool = True,
+    ) -> object:
+        """Save current configuration to JSON file.
+
+        Args:
+            preset_mode: If True, skip video paths, device settings, and ROI data (for organism presets)
+            preset_path: If provided, save directly to this path without prompting
+            preset_name: Name for the preset (only used in preset_mode)
+            preset_description: Description for the preset (only used in preset_mode)
+            prompt_if_exists: If False, overwrite default config path without interactive replace dialog.
+
+        Returns:
+            bool: True if config was saved successfully, False if cancelled or failed
+        """
+        cfg = self.build_config_dict(
+            preset_mode=preset_mode,
+            preset_name=preset_name,
+            preset_description=preset_description,
+        )
+
         # If preset mode with path provided, save directly
         if preset_mode and preset_path:
             os.makedirs(os.path.dirname(preset_path), exist_ok=True)
@@ -1925,8 +1950,9 @@ class ConfigOrchestrator:
         self._mw._commit_pending_setup_edits()
 
         N = self._panels.setup.spin_max_targets.value()
-        np.random.seed(42)
-        colors = [tuple(c.tolist()) for c in np.random.randint(0, 255, (N, 3))]
+        from hydra_suite.core.tracking.session_policy import build_trajectory_colors
+
+        colors = build_trajectory_colors(N)
 
         det_method = (
             "background_subtraction"
@@ -4145,7 +4171,7 @@ class ConfigOrchestrator:
 
     def _handle_add_new_pose_model(self):
         """Browse for a pose model, import it if outside repo, refresh combo, and select it."""
-        from hydra_suite.trackerkit.gui.model_utils import (
+        from hydra_suite.core.inference.model_paths import (
             get_pose_models_directory,
             make_pose_model_path_relative,
         )
@@ -4166,7 +4192,7 @@ class ConfigOrchestrator:
                 self._set_model_selection_for_selector(combo, prev_data)
                 combo.blockSignals(False)
 
-        from hydra_suite.trackerkit.gui.model_utils import resolve_pose_model_path
+        from hydra_suite.core.inference.model_paths import resolve_pose_model_path
 
         backend = (
             self._mw._identity_panel.combo_pose_model_type.currentText().strip().lower()
@@ -4283,7 +4309,7 @@ class ConfigOrchestrator:
         import shutil as _shutil
         from pathlib import Path as _Path
 
-        from hydra_suite.trackerkit.gui.model_utils import (
+        from hydra_suite.core.inference.model_paths import (
             get_pose_models_directory,
             make_pose_model_path_relative,
         )
