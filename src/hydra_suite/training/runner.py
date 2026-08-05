@@ -1290,11 +1290,20 @@ def _train_custom_classify(
     dataset_dir = Path(spec.derived_dataset_dir)
     resize_hw = tuple(params.input_size)  # (H, W)
 
+    from hydra_suite.training.canonical_transform import (
+        CanonicalFitTransform,
+        bgr_to_rgb_pil,
+        cv2_bgr_loader,
+    )
+
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(
         monochrome=bool(getattr(profile, "monochrome", False))
     )
-    train_transforms = [transforms.Resize(resize_hw)]
+    train_transforms = [
+        CanonicalFitTransform(resize_hw),
+        transforms.Lambda(bgr_to_rgb_pil),
+    ]
     if profile.fliplr > 0:
         train_transforms.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1334,7 +1343,8 @@ def _train_custom_classify(
     train_tf = transforms.Compose(train_transforms)
     val_tf = transforms.Compose(
         [
-            transforms.Resize(resize_hw),
+            CanonicalFitTransform(resize_hw),
+            transforms.Lambda(bgr_to_rgb_pil),
             *(
                 [transforms.Grayscale(num_output_channels=3)]
                 if getattr(profile, "monochrome", False)
@@ -1352,13 +1362,17 @@ def _train_custom_classify(
     shared_class_to_idx = _build_class_to_idx(dataset_dir)
     class_names = sorted(shared_class_to_idx.keys())
 
-    train_ds = datasets.ImageFolder(str(dataset_dir / "train"), transform=train_tf)
+    train_ds = datasets.ImageFolder(
+        str(dataset_dir / "train"), transform=train_tf, loader=cv2_bgr_loader
+    )
     val_dir = dataset_dir / "val"
     has_validation = val_dir.exists() and any(
         path.is_file() for path in val_dir.rglob("*")
     )
     val_ds = (
-        datasets.ImageFolder(str(val_dir), transform=val_tf) if has_validation else None
+        datasets.ImageFolder(str(val_dir), transform=val_tf, loader=cv2_bgr_loader)
+        if has_validation
+        else None
     )
 
     for ds in [train_ds] + ([val_ds] if val_ds else []):
@@ -1632,7 +1646,15 @@ def _train_multihead_shared_classify(
     profile = spec.augmentation_profile
     mean, std = get_classifier_normalization_stats(monochrome=bool(profile.monochrome))
 
-    train_tf_steps = [transforms.Resize(resize_hw)]
+    from hydra_suite.training.canonical_transform import (
+        CanonicalFitTransform,
+        bgr_to_rgb_pil,
+    )
+
+    train_tf_steps = [
+        CanonicalFitTransform(resize_hw),
+        transforms.Lambda(bgr_to_rgb_pil),
+    ]
     if profile.fliplr > 0:
         train_tf_steps.append(transforms.RandomHorizontalFlip(p=profile.fliplr))
     if profile.flipud > 0:
@@ -1661,7 +1683,7 @@ def _train_multihead_shared_classify(
     train_tf_steps += [transforms.ToTensor(), transforms.Normalize(mean, std)]
     train_tf = transforms.Compose(train_tf_steps)
     val_tf = transforms.Compose(
-        [transforms.Resize(resize_hw)]
+        [CanonicalFitTransform(resize_hw), transforms.Lambda(bgr_to_rgb_pil)]
         + ([transforms.Grayscale(num_output_channels=3)] if profile.monochrome else [])
         + [transforms.ToTensor(), transforms.Normalize(mean, std)]
     )
