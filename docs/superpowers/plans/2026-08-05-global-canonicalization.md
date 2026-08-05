@@ -1512,19 +1512,41 @@ This change is **intentionally not equivalent**. The harness is used to record a
 
 - [ ] **Step 1: Capture the delta gate on both trees**
 
+The whole suite cannot run in one process (modal-dialog hangs and a SIGABRT), so
+the gate runs as the same `-k` selection on both trees. Use this selection, which
+covers every area this plan touches:
+
 ```bash
-# baseline
-cd <repo-root> && python -m pytest tests/ -q -p no:randomly \
-  --ignore=tests/test_identity_postprocess.py > /tmp/gate_main.txt 2>&1
+SEL="pose or crop or cli_config or headless or inference or canonical or vitpose or sleap or classifier or training or dataset or oriented or margin"
+export KMP_DUPLICATE_LIB_OK=TRUE
+
+# baseline: current main
+cd <repo-root> && PYTHONPATH=$PWD/src python -m pytest tests/ -q -p no:randomly \
+  --ignore=tests/test_identity_postprocess.py -k "$SEL" > /tmp/gate_main.txt 2>&1
+
 # branch
-cd .worktrees/feat-global-canonicalization && python -m pytest tests/ -q -p no:randomly \
-  --ignore=tests/test_identity_postprocess.py > /tmp/gate_branch.txt 2>&1
+cd .worktrees/feat-global-canonicalization && PYTHONPATH=$PWD/src python -m pytest tests/ \
+  -q -p no:randomly --ignore=tests/test_identity_postprocess.py -k "$SEL" \
+  > /tmp/gate_branch.txt 2>&1
+
 grep '^FAILED' /tmp/gate_main.txt   | sed 's/ - .*//' | sort > /tmp/f_main.txt
 grep '^FAILED' /tmp/gate_branch.txt | sed 's/ - .*//' | sort > /tmp/f_branch.txt
 comm -23 /tmp/f_branch.txt /tmp/f_main.txt   # must be empty
 ```
 
 Expected: empty. Any name here is a regression, not a re-baseline.
+
+Capture the baseline **fresh from current `main`** at the start of execution, not
+from an earlier run — `main` has moved since this plan was written (`e6882c0e`
+added the pose crop-dtype fix and two test files). Baselines age.
+
+Then sweep the files the `-k` selection misses, per file, to catch collateral:
+
+```bash
+for f in tests/test_main_window_config_persistence.py tests/test_detectkit_main_window.py; do
+  PYTHONPATH=$PWD/src python -m pytest "$f" -q -p no:randomly 2>&1 | tail -3
+done
+```
 
 - [ ] **Step 2: Fetch fixtures and run the matrix on MPS**
 
