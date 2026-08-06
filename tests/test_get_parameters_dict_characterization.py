@@ -1,27 +1,40 @@
 """Characterization gate for the ``get_parameters_dict()`` collapse (Task 6).
 
-Before ``get_parameters_dict()`` is rewritten from its ~580-line widget scrape
-into a thin wrapper over the shared ``build_engine_params`` + a GUI-only
-overlay, this test snapshots its FULL output (every key -- tracking, display,
-and runtime-overlay) for the ``fly_obb`` and ``ant_cnn_identity`` gate configs
-loaded into a real, offscreen ``MainWindow``. After the rewrite the same call
-must reproduce the snapshot key-for-key -- proving the collapse is
-behaviour-preserving for the live GUI, including the display + runtime keys the
-Task-2 oracle intentionally excludes.
+``get_parameters_dict()`` is a thin wrapper over the shared
+``build_engine_params`` + a GUI-only display overlay + a GUI-only runtime
+overlay (``_gui_display_overlay`` / ``_gui_runtime_context`` in
+``trackerkit/gui/orchestrators/config.py``). The Task-2 param-equality oracle
+(``tests/test_gui_cli_param_equivalence.py``) proves the GUI and CLI agree on
+*tracking* params, but it intentionally EXCLUDES the display keys (``SHOW_*``,
+``zoom_factor``, ``VISUALIZATION_FREE_MODE``, ``TRACKING_REALTIME_MODE``,
+``TRACKING_WORKFLOW_MODE``, ``TRAJECTORY_COLORS``) and the runtime-overlay
+keys (``ROI_MASK``, ``START_FRAME``, ``END_FRAME``, the output-dir/cache-path
+keys) that only the GUI wrapper produces.
 
-The snapshot (golden) is a pickle written to a FIXED temp path on first run and
-compared on every subsequent run. It is intentionally NOT committed: several
-keys (``YOLO_DEVICE`` / ``ENABLE_TENSORRT`` / ``ENABLE_GPU_BACKGROUND``) are
-host-resolver-dependent, so a committed golden would be platform-locked. The
-gate is meaningful within one dev session on one host: capture with the
-pre-rewrite code, then re-run against the post-rewrite code. On a fresh host
-(temp wiped) the first run writes the golden and passes as a no-op -- the
-durable anti-drift guard is the Task-2 oracle, not this file.
+This test closes that gap: it snapshots the FULL ``get_parameters_dict()``
+output -- every key, including the ones the oracle excludes -- for the
+``fly_obb`` and ``ant_cnn_identity`` gate configs loaded into a real,
+offscreen ``MainWindow``, and compares against a COMMITTED golden captured
+from known-correct (behavior-preserving, gate-verified) code. A future edit
+to either overlay -- or to ``build_engine_params`` -- that changes any
+non-excluded key's value will fail this test.
+
+Host-dependent keys are dropped from the golden rather than pinned:
+
+* ``ROI_MASK`` is an ndarray-or-None; both sides are normalized to
+  ``None`` or ``{"__ndarray_shape__": [...]}`` before comparing (see
+  ``_normalize_roi_mask``).
+* Model-path keys whose value embeds this machine's absolute
+  ``HYDRA_DATA_DIR``/home-relative model path are dropped entirely -- see
+  ``HOST_DEPENDENT_DROPPED_KEYS`` below. These were determined empirically
+  (see fix report) by diffing a live capture against the string "contains an
+  absolute path" predicate; every other key (all tracking keys, ALL display
+  keys, START_FRAME/END_FRAME, POSE_*, identity keys, the output-dir keys
+  which are empty strings for these fixtures) is kept and asserted verbatim.
 """
 
+import json
 import os
-import pickle
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -37,14 +50,22 @@ from hydra_suite.trackerkit.gui.main_window import MainWindow  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_CONFIG_DIR = REPO_ROOT / "tools" / "equivalence" / "fixtures" / "configs"
-
-# Fixed (not per-run) temp path so the golden survives between the pre-rewrite
-# capture and the post-rewrite comparison within one dev session.
-GOLDEN_PATH = (
-    Path(tempfile.gettempdir()) / "hydra_get_params_characterization_golden.pkl"
-)
+GOLDEN_DIR = Path(__file__).resolve().parent / "data" / "get_parameters_dict_golden"
 
 CLIPS = ["fly_obb", "ant_cnn_identity"]
+
+# Keys dropped from the golden because their VALUE embeds an absolute,
+# machine-specific filesystem path (the resolved model file under
+# HYDRA_DATA_DIR / the platformdirs models directory). Determined empirically
+# by capturing get_parameters_dict() on a live host and flagging every string
+# value containing the repo root or home directory prefix. Every other key,
+# including all other model-identifying keys, is committed to the golden.
+HOST_DEPENDENT_DROPPED_KEYS = {
+    "YOLO_MODEL_PATH",
+    "YOLO_OBB_DIRECT_MODEL_PATH",
+    "YOLO_HEADTAIL_MODEL_PATH",
+    "POSE_MODEL_DIR",
+}
 
 
 @pytest.fixture(scope="module")
@@ -80,6 +101,34 @@ def _capture_all_params(main_window: MainWindow) -> dict:
     return out
 
 
+def _normalize_roi_mask(value):
+    if value is None:
+        return None
+    if isinstance(value, dict) and "__ndarray_shape__" in value:
+        # Already-normalized golden value (loaded from JSON).
+        return tuple(value["__ndarray_shape__"])
+    arr = np.asarray(value)
+    return tuple(arr.shape)
+
+
+def _normalize_params(params: dict) -> dict:
+    """Drop host-dependent keys and normalize ``ROI_MASK`` for comparison.
+
+    Also round-trips every remaining value through JSON so tuple/list
+    differences between the live (in-memory) candidate and the
+    JSON-deserialized golden don't produce spurious mismatches.
+    """
+    normalized = {}
+    for key, value in params.items():
+        if key in HOST_DEPENDENT_DROPPED_KEYS:
+            continue
+        if key == "ROI_MASK":
+            normalized[key] = _normalize_roi_mask(value)
+            continue
+        normalized[key] = json.loads(json.dumps(value, default=str))
+    return normalized
+
+
 def _assert_params_equal(clip: str, reference: dict, candidate: dict) -> None:
     ref_keys = set(reference)
     cand_keys = set(candidate)
@@ -92,34 +141,29 @@ def _assert_params_equal(clip: str, reference: dict, candidate: dict) -> None:
     for key in sorted(ref_keys):
         ref_val = reference[key]
         cand_val = candidate[key]
-        if isinstance(ref_val, np.ndarray) or isinstance(cand_val, np.ndarray):
-            if not np.array_equal(np.asarray(ref_val), np.asarray(cand_val)):
-                mismatches.append((key, ref_val, cand_val))
-        elif ref_val != cand_val:
+        if ref_val != cand_val:
             mismatches.append((key, ref_val, cand_val))
     assert not mismatches, f"{clip}: {len(mismatches)} keys diverged: " + "; ".join(
         f"{k}: ref={r!r} cand={c!r}" for k, r, c in mismatches
     )
 
 
-def test_get_parameters_dict_matches_characterization_snapshot(main_window):
-    """Post-rewrite ``get_parameters_dict()`` must equal the pre-rewrite golden.
+def test_get_parameters_dict_matches_committed_golden(main_window):
+    """``get_parameters_dict()`` must equal the committed golden, key-for-key.
 
-    First run (golden absent) captures + writes the golden and passes. Every
-    later run compares the live output against the golden, key-for-key.
+    The golden is captured from known-correct, gate-verified behavior (see
+    the fix report referenced in the module docstring) and committed under
+    ``tests/data/get_parameters_dict_golden/``. This test never skips: a
+    missing golden file is a hard failure, not a "first run, capture and
+    pass" no-op, so it durably guards the display + runtime overlay keys the
+    Task-2 params-equality oracle excludes.
     """
     candidate = _capture_all_params(main_window)
 
-    if not GOLDEN_PATH.exists():
-        GOLDEN_PATH.write_bytes(pickle.dumps(candidate))
-        pytest.skip(
-            f"characterization golden written to {GOLDEN_PATH} "
-            "(first run captures baseline behaviour)"
-        )
-
-    # Safe: the golden is written by this same test (self-generated, fixed
-    # local temp path), never an untrusted/external source.
-    reference = pickle.loads(GOLDEN_PATH.read_bytes())
     for clip in CLIPS:
-        assert clip in reference, f"golden missing clip {clip}; delete {GOLDEN_PATH}"
-        _assert_params_equal(clip, reference[clip], candidate[clip])
+        golden_path = GOLDEN_DIR / f"{clip}.json"
+        assert golden_path.is_file(), f"missing committed golden: {golden_path}"
+        reference = json.loads(golden_path.read_text())
+        ref_norm = _normalize_params(reference)
+        cand_norm = _normalize_params(candidate[clip])
+        _assert_params_equal(clip, ref_norm, cand_norm)
