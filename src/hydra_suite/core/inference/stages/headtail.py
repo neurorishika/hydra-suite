@@ -257,7 +257,7 @@ def run_headtail_batch(
 ) -> "dict[int, HeadTailResult]":
     """Run head-tail classification over a window; return one HeadTailResult per frame.
 
-    Builds classifier crops internally via extract_classifier_crops_batch (the
+    Builds classifier crops internally via extract_classifier_crops_batch_np (the
     shared canonical canvas, BGR uint8 -- bit-identical to the per-frame
     run_headtail path), then fits each to the model input via Layer 2 exactly
     like run_headtail. Runs the backend ONCE over all crops (cross-frame perf

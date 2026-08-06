@@ -141,7 +141,7 @@ def run_cnn_batch(
 ) -> "dict[int, CNNResult]":
     """Run CNN classifier over a window; return one CNNResult per frame.
 
-    Builds classifier crops internally via extract_classifier_crops_batch (the
+    Builds classifier crops internally via extract_classifier_crops_batch_np (the
     shared canonical canvas, BGR uint8 -- bit-identical to the per-frame run_cnn
     path), then fits each to the model input via Layer 2 exactly like run_cnn.
     Runs the backend ONCE over all crops (cross-frame perf win), then splits
