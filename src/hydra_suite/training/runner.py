@@ -358,6 +358,10 @@ def _build_tiny_dataset_class(input_w, input_h):
     import torch
     from torch.utils.data import Dataset
 
+    from hydra_suite.training.canonical_transform import CanonicalFitTransform
+
+    fit_transform = CanonicalFitTransform((input_h, input_w))
+
     class TinyDataset(Dataset):
         """Image dataset that loads crops, applies optional augmentation, and normalizes for TinyClassifier training."""
 
@@ -380,9 +384,7 @@ def _build_tiny_dataset_class(input_w, input_h):
                 img, self.augment, self.profile, rng=getattr(self, "_rng", None)
             )
             if img.shape[1] != input_w or img.shape[0] != input_h:
-                img = cv2.resize(
-                    img, (input_w, input_h), interpolation=cv2.INTER_LINEAR
-                )
+                img = fit_transform(img)
             x = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 255.0
             y = torch.tensor(label, dtype=torch.long)
             return x, y
