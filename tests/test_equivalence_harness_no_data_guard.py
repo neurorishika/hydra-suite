@@ -62,3 +62,46 @@ def test_real_identical_data_still_passes(tmp_path):
     res = _run(a, b)
     assert "EQUIVALENT ✅" in res.stdout
     assert res.returncode == 0
+
+
+def _cmp_case(tmp_path, make_a: bool, make_b: bool) -> subprocess.CompletedProcess:
+    """Drive run_matrix.sh's cmp() in isolation for the three existence cases."""
+    a, b = tmp_path / "a.csv", tmp_path / "b.csv"
+    if make_a:
+        a.write_text(HEADER + ROW)
+    if make_b:
+        b.write_text(HEADER + ROW)
+    script = f"""
+    set -uo pipefail
+    WT={HARNESS.parent}
+    FAILED_CLIPS=()
+    note_failure() {{ FAILED_CLIPS+=("$1: $2"); }}
+    has_rows() {{ [ -f "$1" ] || return 1; [ "$(wc -l < "$1")" -gt 1 ] || return 1; }}
+    {_CMP_BODY}
+    cmp "{a}" "{b}" "TEST" "clip"
+    echo "FAILURES=${{#FAILED_CLIPS[@]}}"
+    """
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+
+_CMP_BODY = (
+    (HARNESS / "run_matrix.sh")
+    .read_text()
+    .split("cmp() {  # a b title clip", 1)[1]
+    .split("\n# Performance gate", 1)[0]
+)
+_CMP_BODY = "cmp() {  # a b title clip" + _CMP_BODY
+
+
+def test_absent_on_both_sides_is_not_a_failure(tmp_path):
+    """A clip config that emits no forward CSV must not be flagged."""
+    res = _cmp_case(tmp_path, make_a=False, make_b=False)
+    assert "FAILURES=0" in res.stdout, res.stdout
+    assert "not produced by either tree" in res.stdout
+
+
+def test_absent_on_one_side_is_a_failure(tmp_path):
+    """Trees disagreeing about what they produced IS a real difference."""
+    res = _cmp_case(tmp_path, make_a=True, make_b=False)
+    assert "FAILURES=1" in res.stdout, res.stdout
+    assert "MISSING ON ONE SIDE ONLY" in res.stdout

@@ -129,9 +129,18 @@ has_rows() {  # path
 
 cmp() {  # a b title clip
   echo "--- $3 ---"
+  # Not every clip config produces every CSV kind: a clip with streaming
+  # individual analysis (e.g. ant_pose_headtail) writes only *_final.csv and
+  # *_final_with_individual.csv, never an intermediate *_forward.csv. Absent on
+  # BOTH sides is that config property and is not a failure. Absent on ONE side
+  # means the trees disagree about what they produced, which is.
+  if ! [ -f "$1" ] && ! [ -f "$2" ]; then
+    echo "  (not produced by either tree for this clip -- config does not emit it)"
+    return
+  fi
   if ! [ -f "$1" ] || ! [ -f "$2" ]; then
-    echo "  ❌ MISSING CSV: $1 or $2"
-    note_failure "${4:-?}" "$3 -- missing CSV (the run did not complete)"
+    echo "  ❌ MISSING ON ONE SIDE ONLY: exists=$([ -f "$1" ] && echo a || echo b), missing=$([ -f "$1" ] && echo b || echo a)"
+    note_failure "${4:-?}" "$3 -- CSV produced by one tree but not the other"
     return
   fi
   if ! has_rows "$1" || ! has_rows "$2"; then
