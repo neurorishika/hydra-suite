@@ -931,7 +931,16 @@ class ClassifierBackend:
             if crop is None or crop.size == 0:
                 batch[i] = 0.0
                 continue
-            resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
+            if crop.shape[0] == h and crop.shape[1] == w:
+                # Every pipeline caller now hands us a crop already fitted to
+                # the model input by Layer 2 (fit_to_model_input/apply_fit), so
+                # this resize is a same-size copy. cv2's INTER_LINEAR is the
+                # exact identity at scale 1, so skipping it is byte-identical
+                # (test_classifier_preprocess_same_size_resize_is_identity)
+                # and saves a full model-input-sized resample per crop.
+                resized = crop
+            else:
+                resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
             rgb = resized[:, :, ::-1]
             if self._metadata.monochrome:
                 gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)

@@ -64,6 +64,11 @@ def apply_fit(image: np.ndarray, fit: FitResult) -> np.ndarray:
         resized = resized[:, :, None]
 
     mw, mh = fit.model_wh
+    if fit.inner_wh == (mw, mh):
+        # Letterbox with zero padding on both axes: the paste below would cover
+        # the whole canvas, so the canvas is exactly ``resized``. Skipping the
+        # allocation + copy is byte-identical, not an approximation.
+        return resized
     canvas = np.zeros((mh, mw, channels), dtype=np.uint8)
     ox, oy = fit.offset_xy
     canvas[oy : oy + fit.inner_wh[1], ox : ox + fit.inner_wh[0]] = resized
