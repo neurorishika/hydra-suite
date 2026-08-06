@@ -592,6 +592,14 @@ class ClassifierBackend:
                 )
                 self._model = self._loader.load(self._model_path, loader_target)
                 self._active_execution_backend = "native"
+                if self._metadata.arch == "yolo":
+                    logger.warning(
+                        "ClassifierBackend: %s is a YOLO-classify model -- ultralytics "
+                        "applies its own Resize+CenterCrop on top of the Layer 2 "
+                        "pre-fit, so this family is a known-lossy, supported path "
+                        "(operator decision, 2026-08-05).",
+                        self._model_path,
+                    )
                 # Warm up native CUDA models immediately to trigger PyTorch/cuDNN
                 # kernel JIT compilation now rather than stalling Phase-1 batch 1
                 # for ~45 s on Ada/Hopper GPUs (e.g. EfficientNet-B0 head-tail).
@@ -948,7 +956,31 @@ class ClassifierBackend:
         return logits
 
     def _forward_yolo(self, crops: list[np.ndarray]) -> np.ndarray:
-        results = self._model(crops, verbose=False)
+        """Run the ultralytics YOLO-classify head on ``crops``.
+
+        Pre-fits every crop to ``self._metadata.input_size`` via the Layer 2
+        isotropic centred letterbox (same primitive as every other family)
+        BEFORE handing it to ultralytics. A square input makes ultralytics'
+        own ``Resize(shortest_edge)`` + ``CenterCrop(size)`` a no-op --
+        shortest edge == longest edge, so the centre crop cannot remove
+        anything. This does not make YOLO-classify byte-identical to the
+        rest of the pipeline: ultralytics still applies its own transform
+        on top of the pre-fit, so this family remains a known-lossy,
+        supported path (operator decision, 2026-08-05; see the load-time
+        warning and test_yolo_classify_canonical_fit.py).
+        """
+        from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
+        in_h, in_w = self._metadata.input_size
+        fitted: list[np.ndarray] = []
+        for crop in crops:
+            if crop is None or crop.size == 0:
+                fitted.append(np.zeros((in_h, in_w, 3), dtype=np.uint8))
+                continue
+            src_h, src_w = crop.shape[:2]
+            fit = fit_to_model_input((src_w, src_h), (in_w, in_h))
+            fitted.append(apply_fit(crop, fit))
+        results = self._model(fitted, verbose=False)
         probs = np.array([r.probs.data.cpu().numpy() for r in results])
         return np.log(np.clip(probs, 1e-9, 1.0))
 

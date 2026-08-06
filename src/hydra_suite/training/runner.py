@@ -108,12 +108,69 @@ def _resolve_ultralytics_data_arg(spec: TrainingRunSpec, task: str) -> str:
     return str(spec.derived_dataset_dir)
 
 
+def _prefit_yolo_classify_dataset(
+    dataset_dir: Path, imgsz: int, dest_dir: Path
+) -> Path:
+    """Pre-fit a YOLO-classify ImageFolder dataset onto a square canvas.
+
+    Mirrors ``dataset_dir``'s ``<split>/<class>/`` layout into ``dest_dir``
+    with every image passed through the Layer 2 isotropic centred letterbox
+    (``CanonicalFitTransform``) at ``(imgsz, imgsz)``. Ultralytics' own
+    ``Resize(shortest_edge)`` + ``CenterCrop(size)`` then sees a square image
+    with shortest edge == longest edge, so the centre crop is a no-op -- the
+    same guarantee ``_forward_yolo`` (core/identity/classification/backend.py)
+    gives at inference time. YOLO-classify remains a known-lossy family
+    (operator decision, 2026-08-05): this closes the gap as far as the
+    vendor's own pipeline allows, it does not eliminate it. Idempotent --
+    skipped when ``dest_dir`` already exists.
+    """
+    import cv2
+
+    from .canonical_transform import CanonicalFitTransform, cv2_bgr_loader
+
+    if dest_dir.exists():
+        return dest_dir
+    transform = CanonicalFitTransform((int(imgsz), int(imgsz)))
+    for split_dir in sorted(p for p in dataset_dir.iterdir() if p.is_dir()):
+        for cls_dir in sorted(p for p in split_dir.iterdir() if p.is_dir()):
+            out_cls_dir = dest_dir / split_dir.name / cls_dir.name
+            out_cls_dir.mkdir(parents=True, exist_ok=True)
+            for img_path in sorted(cls_dir.iterdir()):
+                if not img_path.is_file():
+                    continue
+                try:
+                    img = cv2_bgr_loader(img_path)
+                except Exception:
+                    continue
+                cv2.imwrite(str(out_cls_dir / img_path.name), transform(img))
+    return dest_dir
+
+
 def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> list[str]:
     """Build deterministic Ultralytics train command for a role."""
 
     task = _ultralytics_task_for_role(spec.role)
     run_dir = Path(run_dir).expanduser().resolve()
     data_arg = _resolve_ultralytics_data_arg(spec, task)
+
+    classify_scale_override: float | None = None
+    if task == "classify":
+        prefit_dir = run_dir / "prefit_dataset"
+        _prefit_yolo_classify_dataset(
+            Path(spec.derived_dataset_dir).expanduser(),
+            int(spec.hyperparams.imgsz),
+            prefit_dir,
+        )
+        data_arg = str(prefit_dir)
+        # Ultralytics computes RandomResizedCrop's internal scale range as
+        # (1.0 - args.scale, 1.0) (ultralytics.data.dataset.ClassificationDataset).
+        # scale=0.0 -> internal (1.0, 1.0): RandomResizedCrop always samples the
+        # full source area, so on an already-square pre-fitted image it
+        # degenerates to a no-op crop. Measured round-trip: max abs pixel diff
+        # 0/255 with scale=0.0 vs ~250/255 with the naively-plausible scale=1.0
+        # (which instead widens the crop range to (0.0, 1.0) -- maximally
+        # lossy). See task-9-report.md for the measurement.
+        classify_scale_override = 0.0
 
     args = [
         task,
@@ -140,6 +197,11 @@ def build_ultralytics_command(spec: TrainingRunSpec, run_dir: str | Path) -> lis
             args.append(f"{k}={v}")
     if spec.resume_from:
         args.append("resume=True")
+    if classify_scale_override is not None:
+        # RandomResizedCrop(scale=...) degenerates to a centre crop of the
+        # whole already-square pre-fitted image. Appended last so it wins
+        # over any `scale=` the augmentation profile set above.
+        args.append(f"scale={classify_scale_override}")
 
     yolo_exe = shutil.which("yolo")
     if yolo_exe:
