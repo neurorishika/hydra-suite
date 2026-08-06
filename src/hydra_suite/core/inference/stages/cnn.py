@@ -187,14 +187,14 @@ def run_cnn_batch(
         else:
             all_probs = []
     else:
-        from .crops import extract_classifier_crops_batch_np
+        from .crops import apply_fit_batch, extract_classifier_crops_batch_np
 
         # HWC uint8 BGR crops straight from the warp -- no float32 tensor round
         # trip (it was exactly value-preserving, so removing it is
         # byte-identical; see NumpyCropBatch).
         batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
         if batch.crops:
-            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in batch.crops]
+            np_crops: list[np.ndarray] = apply_fit_batch(batch.crops, fit)
             all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []

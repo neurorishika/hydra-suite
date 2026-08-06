@@ -74,6 +74,44 @@ def test_small_batch_stays_serial_and_matches():
         assert np.array_equal(a, b)
 
 
+def _classifier_crops(arr, obb, threads):
+    os.environ["HYDRA_CROP_WARP_THREADS"] = str(threads)
+    try:
+        return crops_mod.extract_classifier_crops(arr, obb, _GEOMETRY)
+    finally:
+        os.environ.pop("HYDRA_CROP_WARP_THREADS", None)
+
+
+def test_parallel_classifier_warp_is_byte_identical_to_serial():
+    arr = np.random.default_rng(11).integers(0, 256, (260, 640, 3), dtype=np.uint8)
+    obb = _make_obb(12)
+    serial = _classifier_crops(arr, obb, threads=1)
+    parallel = _classifier_crops(arr, obb, threads=4)
+    assert len(serial) == len(parallel) == 12
+    for i, (a, b) in enumerate(zip(serial, parallel)):
+        assert a.dtype == b.dtype == np.uint8
+        assert np.array_equal(a, b), f"classifier crop {i} differs serial vs parallel"
+
+
+def test_apply_fit_batch_is_byte_identical_to_serial_apply_fit():
+    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
+    rng = np.random.default_rng(13)
+    crops = [rng.integers(0, 256, (32, 64, 3), dtype=np.uint8) for _ in range(12)]
+    fit = fit_to_model_input((64, 32), (224, 224))
+    reference = [apply_fit(c, fit) for c in crops]
+
+    for threads in (1, 4):
+        os.environ["HYDRA_CROP_WARP_THREADS"] = str(threads)
+        try:
+            got = crops_mod.apply_fit_batch(crops, fit)
+        finally:
+            os.environ.pop("HYDRA_CROP_WARP_THREADS", None)
+        assert len(got) == len(reference)
+        for i, (a, b) in enumerate(zip(reference, got)):
+            assert np.array_equal(a, b), f"fit {i} differs at threads={threads}"
+
+
 def test_threads_env_of_one_disables_pool():
     os.environ["HYDRA_CROP_WARP_THREADS"] = "1"
     try:

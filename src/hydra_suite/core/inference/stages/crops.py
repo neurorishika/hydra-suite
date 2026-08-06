@@ -274,14 +274,14 @@ def extract_classifier_crops(
         arr = frame
     out_h, out_w = geometry.canvas_h, geometry.canvas_w
     n_ch = arr.shape[2] if arr.ndim == 3 else 1
-    crops: list[np.ndarray] = []
-    for i in range(obb_result.num_detections):
+    n = obb_result.num_detections
+
+    def _one(i: int) -> np.ndarray:
         corners = obb_result.corners[i]
         try:
             m_align, _theta, _clipped = canonical_affine(corners, geometry)
         except ValueError:
-            crops.append(np.zeros((out_h, out_w, n_ch), dtype=np.uint8))
-            continue
+            return np.zeros((out_h, out_w, n_ch), dtype=np.uint8)
         crop = cv2.warpAffine(
             arr,
             m_align,
@@ -290,8 +290,16 @@ def extract_classifier_crops(
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=0,
         )
-        crops.append(np.ascontiguousarray(crop))
-    return crops
+        return np.ascontiguousarray(crop)
+
+    # Same embarrassingly-parallel warp batch as the pose path
+    # (``_warp_crops_for_obb``): independent output buffers, shared read-only
+    # frame, GIL released inside cv2 — and ``pool.map`` preserves order, so
+    # this is byte-identical to the serial loop.
+    pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
+    if pool is not None:
+        return list(pool.map(_one, range(n)))
+    return [_one(i) for i in range(n)]
 
 
 def _warp_canonical_crop(
@@ -451,6 +459,24 @@ def extract_classifier_crops_batch_np(
         obb_by_frame={o.frame_idx: o for o in obb_results},
         native_sizes=np.concatenate(native_sizes_list),
     )
+
+
+def apply_fit_batch(crops: list, fit: FitResult) -> list:
+    """Layer 2 over a whole window's crops, across the shared warp pool.
+
+    ``apply_fit`` is one ``cv2.resize`` plus a zero-canvas paste per crop, all
+    independent and all releasing the GIL inside cv2 — the same shape of work
+    as the crop warp above. ``pool.map`` preserves order, and each call writes
+    its own output buffer, so this is byte-identical to
+    ``[apply_fit(c, fit) for c in crops]``.
+    """
+    from hydra_suite.core.canonicalization.fit import apply_fit
+
+    n = len(crops)
+    pool = _get_warp_pool(_crop_warp_threads()) if n >= _WARP_MIN_PARALLEL else None
+    if pool is None:
+        return [apply_fit(c, fit) for c in crops]
+    return list(pool.map(lambda c: apply_fit(c, fit), crops))
 
 
 def frames_on_cuda(runtime, frames) -> bool:

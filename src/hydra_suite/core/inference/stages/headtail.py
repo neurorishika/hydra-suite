@@ -300,7 +300,7 @@ def run_headtail_batch(
         else:
             all_probs = []
     else:
-        from .crops import extract_classifier_crops_batch_np
+        from .crops import apply_fit_batch, extract_classifier_crops_batch_np
 
         # ``batch.crops`` is already the list of HWC uint8 BGR canonical crops
         # predict_batch wants, so there is no float32 tensor round trip here:
@@ -309,7 +309,7 @@ def run_headtail_batch(
         # (four full-batch float32 passes per window).
         batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
         if batch.crops:
-            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in batch.crops]
+            np_crops: list[np.ndarray] = apply_fit_batch(batch.crops, fit)
             all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []
