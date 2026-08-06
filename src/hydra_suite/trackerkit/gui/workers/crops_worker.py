@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from PySide6.QtCore import Signal
 
+from hydra_suite.core.canonicalization.geometry import ClippingStats
 from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
 from hydra_suite.core.identity.properties.export import (
     POSE_SUMMARY_COLUMNS,
@@ -53,6 +54,11 @@ class InterpolatedCropsWorker(BaseWorker):
         self.enable_profiling = enable_profiling
         self.profile_export_path = profile_export_path
         self._stop_requested = False
+        # F1 guard: run-scoped counter for canonical-crop overflow, mirroring
+        # InferenceRunner/Pipeline's clipping_stats (core/tracking/worker.py's
+        # end-of-run summary). This is the GUI's only other canonical_affine
+        # call site, so it needs the same signal.
+        self.clipping_stats = ClippingStats()
 
     def stop(self):
         """Request cooperative cancellation."""
@@ -981,6 +987,7 @@ class InterpolatedCropsWorker(BaseWorker):
         for _c in corners:
             try:
                 _M, _theta, _clipped = canonical_affine(_c, geometry)
+                self.clipping_stats.record(_c, geometry)
                 affines.append((_M, geometry.canvas_w, geometry.canvas_h))
             except ValueError:
                 affines.append(None)
@@ -1646,6 +1653,14 @@ class InterpolatedCropsWorker(BaseWorker):
                 gen.finalize()
 
             profiler.phase_end("interp_finalize")
+
+            # F1 guard: report canonical-crop clipping, if any -- mirrors
+            # TrackingWorker's end-of-run clipping_stats summary (core/tracking/
+            # worker.py). This is the GUI's only other canonical_affine call site.
+            _clip_msg = self.clipping_stats.summary()
+            if _clip_msg:
+                logger.warning("Canonicalization clipping summary: %s", _clip_msg)
+
             profiler.log_final_summary()
             if self.profile_export_path:
                 profiler.export_summary(self.profile_export_path)

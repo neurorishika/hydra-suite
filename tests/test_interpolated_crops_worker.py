@@ -309,3 +309,30 @@ def test_crops_worker_has_no_divergent_flavor_ladder() -> None:
         "YoloNativeBackend",
     ):
         assert banned not in src, f"divergent pose ladder token still present: {banned}"
+
+
+def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
+    """GAP 1: the GUI interpolated-crops path shares the same run-scoped
+    ClippingStats accumulator/reporting pattern as InferenceRunner/Pipeline
+    (core/tracking/worker.py's end-of-run summary), instead of discarding the
+    ``clipped`` flag returned by ``canonical_affine``.
+    """
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+
+    worker = InterpolatedCropsWorker("tracks.csv", "source.mp4", "cache.npz", {})
+    assert worker.clipping_stats.clipped_count == 0
+    assert worker.clipping_stats.total_count == 0
+
+    # A task whose OBB is far larger than the canonical canvas overflows it.
+    clipped_task = {"cx": 0.0, "cy": 0.0, "w": 500.0, "h": 250.0, "theta": 0.0}
+    # A task sized to the reference body fits comfortably within the canvas.
+    fitting_task = {"cx": 0.0, "cy": 0.0, "w": 20.0, "h": 10.0, "theta": 0.0}
+
+    worker._compute_frame_corners_and_affines([clipped_task, fitting_task], geometry)
+
+    assert worker.clipping_stats.total_count == 2
+    assert worker.clipping_stats.clipped_count == 1
+    assert worker.clipping_stats.worst_overflow_ratio > 1.0
+    summary = worker.clipping_stats.summary()
+    assert summary is not None
+    assert "1/2" in summary
