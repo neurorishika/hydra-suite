@@ -128,10 +128,21 @@ def _publish_training_artifacts(
         "canonical_geometry": None,
     }
 
+    # The imgsz a role actually trained at (default 640) is the only sane
+    # fallback for YOLO-classify artifacts with no .v2meta.json sidecar --
+    # without it, classifier_metadata_for_artifact silently stamps a
+    # hardcoded [224, 224] regardless of what the model was trained at.
+    fallback_input_size = (
+        int(spec.hyperparams.imgsz),
+        int(spec.hyperparams.imgsz),
+    )
+
     if len(artifact_paths) == 1 or spec.role not in _MULTIHEAD_CLASSIFIER_ROLES:
         classifier_meta = None
         try:
-            classifier_meta = classifier_metadata_for_artifact(artifact_paths[0])
+            classifier_meta = classifier_metadata_for_artifact(
+                artifact_paths[0], fallback_input_size=fallback_input_size
+            )
         except Exception:
             classifier_meta = None
         if (
@@ -163,7 +174,9 @@ def _publish_training_artifacts(
     bundle_confidence_threshold: float | None = recommended_confidence_threshold
 
     for index, artifact_path in enumerate(artifact_paths):
-        classifier_meta = classifier_metadata_for_artifact(artifact_path)
+        classifier_meta = classifier_metadata_for_artifact(
+            artifact_path, fallback_input_size=fallback_input_size
+        )
         if (
             isinstance(classifier_meta, dict)
             and recommended_confidence_threshold is not None
