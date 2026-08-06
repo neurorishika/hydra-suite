@@ -574,14 +574,14 @@ class InterpolatedCropsWorker(BaseWorker):
             fit_to_model_input,
         )
         from hydra_suite.core.inference.stages.pose import (
-            _compose_affine,
-            _model_input_wh,
+            compose_affine,
+            model_input_wh,
         )
 
         class _BackendHolder:
             backend = pose_backend
 
-        model_wh = _model_input_wh(_BackendHolder, geometry)
+        model_wh = model_input_wh(_BackendHolder, geometry)
         fit = fit_to_model_input(geometry.canvas_wh, model_wh)
         fit_m = fit_affine(fit)
 
@@ -620,7 +620,7 @@ class InterpolatedCropsWorker(BaseWorker):
                     gkpts = np.asarray(keypoints, dtype=np.float32).copy()
                     _M_align = crop_info.get("M_forward")
                     if _M_align is not None and crop_info.get("canonical"):
-                        _m_total = _compose_affine(fit_m, _M_align)
+                        _m_total = compose_affine(fit_m, _M_align)
                         _M_inv = cv2.invertAffineTransform(_m_total.astype(np.float32))
                         gkpts = _invert_kpts(gkpts, _M_inv).astype(np.float32)
                     else:

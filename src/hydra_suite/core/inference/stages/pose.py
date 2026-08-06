@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
-def _model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[int, int]:
+def model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[int, int]:
     """The pose backend's fixed (W, H) input, or ``geometry``'s own canvas.
 
     Backends with a true non-square input (e.g. ViTPose 192x256, SLEAP-exported
@@ -62,7 +62,7 @@ def _model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[in
     return geometry.canvas_wh
 
 
-def _compose_affine(m2: np.ndarray, m1: np.ndarray) -> np.ndarray:
+def compose_affine(m2: np.ndarray, m1: np.ndarray) -> np.ndarray:
     """Compose two 2x3 affines: result = m2 . m1 (apply m1 first, then m2)."""
     a = np.eye(3, dtype=np.float64)
     a[:2, :] = np.asarray(m2, dtype=np.float64)
@@ -301,7 +301,7 @@ def run_pose(
     if crops.shape[0] == 0 or n == 0:
         return empty
 
-    model_wh = _model_input_wh(model, geometry)
+    model_wh = model_input_wh(model, geometry)
     fit = fit_to_model_input(geometry.canvas_wh, model_wh)
     fit_m = fit_affine(fit)
 
@@ -315,7 +315,7 @@ def run_pose(
         if corners is not None:
             try:
                 m_align, _theta, _clipped = canonical_affine(corners, geometry)
-                m_total = _compose_affine(fit_m, m_align)
+                m_total = compose_affine(fit_m, m_align)
                 m_inv = cv2.invertAffineTransform(m_total)
             except Exception:
                 m_inv = None
@@ -406,7 +406,7 @@ def run_pose_batch(
     n_total = batch.crops.shape[0]
     on_cuda = batch.crops.is_cuda and hasattr(model.backend, "predict_batch_cuda")
 
-    model_wh = _model_input_wh(model, geometry)
+    model_wh = model_input_wh(model, geometry)
     fit = fit_to_model_input(geometry.canvas_wh, model_wh)
     fit_m = fit_affine(fit)
 
@@ -440,7 +440,7 @@ def run_pose_batch(
                     if on_cuda:
                         m_inv = cv2.invertAffineTransform(m_align)
                     else:
-                        m_total = _compose_affine(fit_m, m_align)
+                        m_total = compose_affine(fit_m, m_align)
                         m_inv = cv2.invertAffineTransform(m_total)
                 except Exception:
                     m_inv = None
