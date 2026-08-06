@@ -112,6 +112,20 @@ def _publish_training_artifacts(
             dict(training_params) if isinstance(training_params, dict) else None
         ),
         "slice_geometry": _slice_geometry_for_publish(spec),
+        # Deliberately None, not a gap: every role this function currently
+        # publishes for (OBB_DIRECT, DETECT_DIRECT, SEGMENT_DIRECT,
+        # SEQ_DETECT, SEQ_CROP_OBB, SEQ_CROP_SEGMENT -- the only roles
+        # dataset_builders.prepare_role_dataset supports) trains on full
+        # frames/SAHI tiles or a legacy pad-ratio/enforce-square crop
+        # (derive_crop_obb_dataset_from_obb), never the Layer 1
+        # CanonicalGeometry fixed-canvas crop. There is no canonical
+        # geometry for these models to be stamped with -- stamping one
+        # would misrepresent what the model actually consumes at inference.
+        # ClassKit's canonical-crop classify roles publish through
+        # classkit/gui/main_window.py::_publish_training_results instead,
+        # which DOES pass a real canonical_geometry when the training
+        # images' import provenance recovers one.
+        "canonical_geometry": None,
     }
 
     if len(artifact_paths) == 1 or spec.role not in _MULTIHEAD_CLASSIFIER_ROLES:

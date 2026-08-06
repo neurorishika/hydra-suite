@@ -7577,6 +7577,9 @@ class MainWindow(QMainWindow):
             publish_trained_model,
             write_classifier_multihead_manifest,
         )
+        from ..core.data.canonical_provenance import (
+            canonical_geometry_for_training_images,
+        )
 
         fallback_input_size: tuple[int, int] | None = None
         if "yolo" in mode:
@@ -7585,6 +7588,20 @@ class MainWindow(QMainWindow):
             size = int(settings.get("custom_input_size", 224) or 224)
             fallback_input_size = (size, size)
         fallback_monochrome = bool(settings.get("monochrome", False))
+
+        # These crops ARE canonical-crop-trained (classify roles consume the
+        # Layer 1 fixed-canvas crop) -- unlike OBB/detect roles, which train
+        # on full frames/tiles and never pass a geometry (see
+        # training/service.py::_publish_training_artifacts). Recover the
+        # geometry every training image's import source agrees on, if any;
+        # ClassKit does not itself capture provenance at ingestion, so mixed
+        # or unrecorded sources correctly yield None (visibly unstamped)
+        # rather than a guessed geometry.
+        training_image_paths = list(getattr(dialog, "_image_paths", None) or [])
+        canonical_geometry = canonical_geometry_for_training_images(
+            training_image_paths,
+            getattr(self, "_image_metadata_by_path", None) or {},
+        )
 
         role_val = role_map.get(mode, "classify_flat_custom")
         role = TrainingRole(role_val)
@@ -7631,6 +7648,7 @@ class MainWindow(QMainWindow):
                         scheme.factors[fi].name if (multi_head and scheme) else None
                     ),
                     classifier_v2_meta=classifier_v2_meta,
+                    canonical_geometry=canonical_geometry,
                 )
                 published_paths.append(Path(published_path))
                 input_size_list = classifier_v2_meta.get("input_size") or [224, 224]
