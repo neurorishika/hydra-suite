@@ -70,7 +70,19 @@ class CocoKeypointsDataset(Dataset):
             str(self.dir / "images" / img_meta["file_name"]), cv2.IMREAD_COLOR
         )
         kp = np.array(ann["keypoints"], np.float32).reshape(-1, 3)
-        center, scale = box2cs(np.array(ann["bbox"], np.float32), geom=self.geom)
+        # PoseKit images are one-animal canonical crops (single annotation per
+        # image; see posekit/gui/main_window.py save_current, which writes one
+        # class + keypoint set per frame). The tight per-annotation COCO bbox
+        # (compute_bbox_from_kpts, ~3% pad around keypoints) is therefore NOT
+        # the crop the model should be centered on at inference time — that's
+        # the crop's full extent (infer.py::preprocess_crop uses (0, 0, w, h)).
+        # Use the same full-extent box here so box2cs (aspect fix + PADDING_FACTOR)
+        # lands on an identical fraction-of-input at train and inference time.
+        # ann["bbox"] is left untouched below for PCK normalization (validate.py),
+        # which legitimately wants the tight animal extent, not the crop extent.
+        img_h, img_w = img.shape[:2]
+        full_box_xywh = np.array([0.0, 0.0, float(img_w), float(img_h)], np.float32)
+        center, scale = box2cs(full_box_xywh, geom=self.geom)
 
         rot = 0.0
         if self.augment:
