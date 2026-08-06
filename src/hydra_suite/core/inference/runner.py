@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import ClippingStats
+
 from .cache.keys import (
     apriltag_cache_key,
     bgsub_detection_cache_key,
@@ -505,6 +507,12 @@ class InferenceRunner:
         # False when opened read-only by load_frame. close() only flushes when
         # writable, so a backward (read) pass never overwrites the forward cache.
         self._caches_writable = False
+        # Run-scoped: counts detections clipped by the fixed canonical canvas
+        # and the worst overflow_ratio seen, across the life of this runner
+        # (one tracking pass). See ClippingStats; surfaced by the caller (e.g.
+        # TrackingWorker) in its end-of-run summary alongside the other
+        # tracking-loop counters.
+        self.clipping_stats = ClippingStats()
 
     @property
     def obb_class_names(self) -> "dict[int, str] | None":
@@ -663,6 +671,20 @@ class InferenceRunner:
             return empty_result
 
         geometry = self.config.canonical
+        # F1 guard: every detection that will be canonicalized by ANY consumer
+        # (headtail, cnn, pose all warp through this one geometry -- see the
+        # comment below) gets its overflow_ratio recorded here, once, in the
+        # single place that already has both `filtered_obb` and `geometry` in
+        # scope -- rather than duplicating this at each of the many internal
+        # canonical_affine call sites (which would double-count a detection
+        # once per consumer stage).
+        if (
+            self._models.headtail is not None
+            or self._models.cnn
+            or self._models.pose is not None
+        ):
+            for _corners in filtered_obb.corners:
+                self.clipping_stats.record(_corners, geometry)
         # Canonical (native-extent) crops are now only consumed by the pose stage;
         # head-tail / CNN warp directly from the frame. Skip the extraction
         # entirely when there is no pose model (e.g. OBB-only / identity clips).
@@ -937,7 +959,13 @@ class InferenceRunner:
         # layout is byte-identical to the synchronous depth=1 writer.
         async_mode = self.config.pipeline_depth >= 2
         writer = CacheWriter(handles, self.config.cnn_phases, async_mode=async_mode)
-        return Pipeline(stages, self.runtime, writer, depth=self.config.pipeline_depth)
+        return Pipeline(
+            stages,
+            self.runtime,
+            writer,
+            depth=self.config.pipeline_depth,
+            clipping_stats=self.clipping_stats,
+        )
 
     def run_batch_pass(
         self,

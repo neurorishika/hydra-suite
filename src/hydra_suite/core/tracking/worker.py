@@ -4144,6 +4144,19 @@ class TrackingEngineCore:
                 int(pose_direction_fallback_count),
             )
 
+        # F1 guard: report canonical-crop clipping, if any. Whichever
+        # InferenceRunner(s) actually ran this pass (yolo_obb -> inference_runner,
+        # bgsub -> bgsub_runner) carry a run-scoped ClippingStats; combine both
+        # since a config could in principle exercise either path.
+        _clip_msgs = []
+        for _runner in (inference_runner, bgsub_runner):
+            if _runner is not None:
+                _msg = _runner.clipping_stats.summary()
+                if _msg:
+                    _clip_msgs.append(_msg)
+        for _msg in _clip_msgs:
+            logger.warning("Canonicalization clipping summary: %s", _msg)
+
         # --- Profiling: final summary and JSON export ---
         profiler.phase_end("cleanup")
         profiler.log_final_summary()

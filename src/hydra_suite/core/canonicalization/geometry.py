@@ -96,6 +96,47 @@ def overflow_ratio(corners: np.ndarray, geometry: CanonicalGeometry) -> float:
     )
 
 
+@dataclass
+class ClippingStats:
+    """Run-scoped accumulator for canonical-crop overflow (Layer 1 §6 guard).
+
+    ``canonical_affine`` computes a per-detection ``clipped`` bool (padded OBB
+    exceeds the canvas), but every inference/tracking call site historically
+    discarded it. This is the counterpart the tracking path is missing: one
+    instance lives for the life of an ``InferenceRunner`` (one tracking pass);
+    ``record`` is called once per detection that goes through canonicalization,
+    and the run summary reports ``clipped_count``/``worst_overflow_ratio`` so a
+    too-small margin produces a visible signal instead of a silently truncated
+    animal.
+    """
+
+    clipped_count: int = 0
+    total_count: int = 0
+    worst_overflow_ratio: float = 0.0
+
+    def record(self, corners: np.ndarray, geometry: CanonicalGeometry) -> float:
+        """Update the running tally for one detection; returns its overflow_ratio."""
+        ratio = overflow_ratio(corners, geometry)
+        self.total_count += 1
+        if ratio > self.worst_overflow_ratio:
+            self.worst_overflow_ratio = ratio
+        if ratio > 1.0:
+            self.clipped_count += 1
+        return ratio
+
+    def summary(self) -> "str | None":
+        """One-line human-readable summary, or None when nothing was clipped."""
+        if self.clipped_count == 0:
+            return None
+        return (
+            f"{self.clipped_count}/{self.total_count} canonicalized detections "
+            f"were CLIPPED by the fixed canvas (worst overflow_ratio="
+            f"{self.worst_overflow_ratio:.3f}). Increase the canonical margin or "
+            "canvas size if this is unexpected -- clipped detections lose data at "
+            "the crop edge for every downstream consumer (pose, classifiers)."
+        )
+
+
 def canonical_affine(
     corners: np.ndarray,
     geometry: CanonicalGeometry,

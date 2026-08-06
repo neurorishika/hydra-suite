@@ -47,6 +47,8 @@ from typing import Any, Callable, Iterable, Iterator
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import ClippingStats
+
 from .result import FrameResult, OBBResult
 from .stages.apriltag import run_apriltag
 from .stages.bgsub import run_bgsub_batch
@@ -142,9 +144,17 @@ class Pipeline:
         *,
         depth: int = 1,
         queue_bound: int | None = None,
+        clipping_stats: "ClippingStats | None" = None,
     ) -> None:
         if depth < 1:
             raise ValueError(f"pipeline depth must be >= 1, got {depth}")
+        # F1 guard: run-scoped clipped-detection counter (see ClippingStats).
+        # Owned by the caller (InferenceRunner) when given so the realtime and
+        # batch passes share one running tally; a fresh instance otherwise so
+        # constructing a Pipeline directly (tests) never needs to supply one.
+        self.clipping_stats = (
+            clipping_stats if clipping_stats is not None else ClippingStats()
+        )
         # depth=1 -> synchronous (no threads). depth>=2 -> producer/consumer
         # with a single in-order consumer and a bounded prefetch queue. Increasing
         # depth deepens the prefetch (the OBB producer may run up to ``depth-1``
@@ -312,6 +322,20 @@ class Pipeline:
 
         if not nonempty_obbs:
             return []
+
+        # F1 guard: record overflow_ratio once per detection here -- the one
+        # place that already has every non-empty frame's OBBs and `geometry`
+        # in scope, before any of the (possibly several) downstream consumer
+        # stages re-derive canonical_affine for the same corners. Mirrors
+        # InferenceRunner's realtime insertion point.
+        if (
+            self.stages.headtail_model is not None
+            or self.stages.cnn_models
+            or self.stages.pose_model is not None
+        ):
+            for _obb in nonempty_obbs:
+                for _corners in _obb.corners:
+                    self.clipping_stats.record(_corners, geometry)
 
         # --- downstream batch stages over the non-empty frames -------------
         headtail: dict[int, Any] | None = None
