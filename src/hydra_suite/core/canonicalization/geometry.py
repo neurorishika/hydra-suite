@@ -76,6 +76,29 @@ class CanonicalGeometry:
         )
 
 
+def canonical_geometry_from_params(params: Any) -> CanonicalGeometry:
+    """Build the project-wide Layer 1 geometry from a tracking parameters dict.
+
+    Mirrors ``core.inference.config``'s ``CanonicalGeometry.from_reference``
+    call exactly: ``REFERENCE_BODY_SIZE * RESIZE_FACTOR`` for the reference
+    body extent, and ``ADVANCED_CONFIG.reference_aspect_ratio`` /
+    ``ADVANCED_CONFIG.canonical_margin`` for the species aspect ratio and crop
+    margin -- the same knobs every other canonical-crop consumer reads.
+
+    This lives in ``core`` rather than in an app package so that Qt-free core
+    consumers (``core/post/interpolated_crops.py``,
+    ``core/tracking/session.py``) can share the one derivation with the
+    TrackerKit GUI without ``core`` importing from an app layer.
+    """
+    adv = params.get("ADVANCED_CONFIG", {}) or {}
+    return CanonicalGeometry.from_reference(
+        reference_body_px=float(params.get("REFERENCE_BODY_SIZE", 20.0))
+        * float(params.get("RESIZE_FACTOR", 1.0)),
+        aspect_ratio=float(adv.get("reference_aspect_ratio", 2.0)),
+        margin=float(adv.get("canonical_margin", 1.3)),
+    )
+
+
 def _axes(corners: np.ndarray) -> tuple[np.ndarray, float, float, float, float]:
     c = np.asarray(corners, dtype=np.float64).reshape(4, 2)
     e01 = float(np.linalg.norm(c[1] - c[0]))

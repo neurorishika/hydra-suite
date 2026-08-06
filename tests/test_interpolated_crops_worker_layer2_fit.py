@@ -1,4 +1,4 @@
-"""Regression guard (Deviation B): the interpolated-crops worker must pre-fit
+"""Regression guard (Deviation B): the interpolated-crops pipeline must pre-fit
 every Layer 1 canonical crop through Layer 2 (``fit_to_model_input`` /
 ``apply_fit``) before handing it to a pose or CNN backend -- exactly like
 ``core/inference/stages/pose.py`` / ``core/inference/stages/cnn.py`` do for
@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
+from hydra_suite.core.post import interpolated_crops as ic
 
 
 class _NoopProfiler:
@@ -60,8 +60,7 @@ def test_flush_pose_batch_hands_backend_the_models_input_size_not_the_canvas():
     pending_crops = [_canonical_crop()]
     interp_pose_rows: list = []
 
-    worker = InterpolatedCropsWorker("t.csv", "v.mp4", "c.npz", {})
-    worker._flush_pose_batch(
+    ic._flush_pose_batch(
         FakePoseBackend(),
         pending_crops,
         entries,
@@ -97,7 +96,7 @@ def test_flush_cnn_batch_hands_backend_the_models_input_size_not_the_canvas():
     pending_cnn_entries = [{"task": {"frame_id": 0, "traj_id": 1}}]
     interp_cnn_rows: dict = {"cnn": []}
 
-    InterpolatedCropsWorker._flush_cnn_batch(
+    ic._flush_cnn_batch(
         [FakeCNNBackend()],
         ["cnn"],
         pending_cnn_crops,
@@ -159,8 +158,7 @@ def test_flush_pose_batch_composes_layer2_fit_with_layer1_affine_for_backproject
     pending_crops = [_canonical_crop()]
     interp_pose_rows: list = []
 
-    worker = InterpolatedCropsWorker("t.csv", "v.mp4", "c.npz", {})
-    worker._flush_pose_batch(
+    ic._flush_pose_batch(
         FakePoseBackend(),
         pending_crops,
         entries,

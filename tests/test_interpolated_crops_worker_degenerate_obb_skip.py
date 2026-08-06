@@ -1,4 +1,4 @@
-"""GAP 3 regression: the interpolated-crops worker's pose/CNN fallback path
+"""GAP 3 regression: the interpolated-crops pipeline's pose/CNN fallback path
 for a degenerate OBB (``canonical_affine`` raises -- zero-length edge, see
 ``core/canonicalization/geometry.py::_axes``) must skip the detection loudly
 instead of feeding a wrongly-scaled, un-canonicalized masked crop to the
@@ -20,8 +20,8 @@ import logging
 
 import numpy as np
 
-from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.trackerkit.gui.workers.crops_worker import InterpolatedCropsWorker
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry, ClippingStats
+from hydra_suite.core.post import interpolated_crops as ic
 
 _GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
@@ -33,8 +33,6 @@ def _degenerate_corners() -> np.ndarray:
 
 
 def test_extract_pose_crop_skips_degenerate_obb_instead_of_masked_fallback(caplog):
-    worker = InterpolatedCropsWorker("tracks.csv", "source.mp4", "cache.npz", {})
-
     class _UnusedGen:
         background_color = (0, 0, 0)
 
@@ -48,7 +46,7 @@ def test_extract_pose_crop_skips_degenerate_obb_instead_of_masked_fallback(caplo
         raise AssertionError("Layer 1 extraction must not run when _aff is None")
 
     with caplog.at_level(logging.WARNING):
-        pose_crop, pose_crop_info = worker._extract_pose_crop(
+        pose_crop, pose_crop_info = ic._extract_pose_crop(
             task_idx=0,
             frame=np.zeros((10, 10, 3), dtype=np.uint8),
             _frame_all_corners=[_degenerate_corners()],
@@ -69,7 +67,6 @@ def test_process_single_task_adds_nothing_to_pending_batches_for_degenerate_obb(
     reach pending_crops/pending_cnn_crops at all (nothing to fit, nothing to
     predict on), rather than arriving as an un-fit, wrongly-scaled crop.
     """
-    worker = InterpolatedCropsWorker("tracks.csv", "source.mp4", "cache.npz", {})
 
     class _FakeGen:
         background_color = (0, 0, 0)
@@ -79,7 +76,7 @@ def test_process_single_task_adds_nothing_to_pending_batches_for_degenerate_obb(
 
         def _extract_obb_masked_crop(self, *args, **kwargs):
             # The old fallback: a real (but un-canonicalized, arbitrary-aspect)
-            # crop. If this worker still called it for a degenerate OBB, the
+            # crop. If this pipeline still called it for a degenerate OBB, the
             # crop below would flow into pending_crops/pending_cnn_crops --
             # exactly the wrongly-scaled-crop bug this test guards against.
             return (
@@ -99,8 +96,8 @@ def test_process_single_task_adds_nothing_to_pending_batches_for_degenerate_obb(
         "interp_index": 0,
         "interp_total": 1,
     }
-    frame_corners, frame_affines = worker._compute_frame_corners_and_affines(
-        [task], _GEOMETRY
+    frame_corners, frame_affines = ic._compute_frame_corners_and_affines(
+        [task], _GEOMETRY, ClippingStats()
     )
     assert frame_affines == [None]  # degenerate OBB -> canonical_affine raised
 
@@ -112,7 +109,7 @@ def test_process_single_task_adds_nothing_to_pending_batches_for_degenerate_obb(
     def _unused_extract_canonical(*args, **kwargs):
         raise AssertionError("must not extract Layer 1 crop for a degenerate OBB")
 
-    worker._process_single_task(
+    ic._process_single_task(
         task,
         0,
         np.zeros((10, 10, 3), dtype=np.uint8),
