@@ -98,6 +98,23 @@ class IndividualDatasetGenerator:
         self._canonical_ref_ar = float(_adv.get("reference_aspect_ratio", 2.0))
         self._canonical_padding = float(params.get("INDIVIDUAL_CROP_PADDING", 0.1))
         self._canonical_enabled = self._canonical_ref_ar > 0
+        if not self._canonical_enabled:
+            # A zero (or negative) reference_aspect_ratio silently disables the
+            # project-wide Layer 1 canonical crop and falls back to the legacy
+            # per-detection AABB path below (see process_frame), producing
+            # non-canonical training crops. That fallback must never be quiet:
+            # an operator who didn't intend to disable canonicalization needs
+            # to see why their exported crops don't match every other
+            # consumer's canvas.
+            logger.warning(
+                "IndividualDatasetGenerator: ADVANCED_CONFIG.reference_aspect_ratio="
+                "%s (<= 0) -- canonical crop extraction is DISABLED for this "
+                "export. Falling back to the legacy per-detection AABB crop path, "
+                "which does NOT share the project-wide canonical canvas used by "
+                "every other crop consumer (pose, classifiers, tracking). Set "
+                "reference_aspect_ratio > 0 if this was not intentional.",
+                self._canonical_ref_ar,
+            )
         self._geometry: CanonicalGeometry = CanonicalGeometry.from_reference(
             reference_body_px=float(params.get("REFERENCE_BODY_SIZE", 20.0))
             * float(params.get("RESIZE_FACTOR", 1.0)),

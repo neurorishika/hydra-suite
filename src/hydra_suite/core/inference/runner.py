@@ -5,11 +5,14 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from hydra_suite.core.canonicalization.geometry import ClippingStats
+
+if TYPE_CHECKING:
+    from .config import PoseConfig
 
 from .cache.keys import (
     apriltag_cache_key,
@@ -212,6 +215,36 @@ def _load_obb_for_config(
     return load_obb_models(config.obb, runtime, batch_size=batch_size)
 
 
+def _pose_config_model_path(pose_config: PoseConfig) -> str:
+    """The active backend's checkpoint path for ``pose_config``, or "" if unset."""
+    if pose_config.backend == "yolo" and pose_config.yolo is not None:
+        return pose_config.yolo.model_path
+    if pose_config.backend == "sleap" and pose_config.sleap is not None:
+        return pose_config.sleap.model_path
+    if pose_config.backend == "vitpose" and pose_config.vitpose is not None:
+        return pose_config.vitpose.model_path
+    return ""
+
+
+def _warn_geometry_mismatch(model_path: str, session_geometry) -> None:
+    """F2 guard: log ``warn_on_geometry_mismatch``'s message, if any.
+
+    ``warn_on_geometry_mismatch`` (core/inference/canonical_meta.py) had no
+    production caller before this -- the model-side provenance stamp existed
+    but nothing ever consulted it, so a model trained under a different
+    canonical geometry than the current session loaded silently. Called once
+    per model at load time, here, the single place every stage's model path
+    and the session's ``CanonicalGeometry`` are both already in scope.
+    """
+    if not model_path:
+        return
+    from .canonical_meta import warn_on_geometry_mismatch
+
+    message = warn_on_geometry_mismatch(model_path, session_geometry)
+    if message:
+        logger.warning(message)
+
+
 def _load_all_models(
     config: InferenceConfig,
     runtime: RuntimeContext,
@@ -261,8 +294,19 @@ def _load_all_models(
         if config.headtail is not None
         else None
     )
+    if config.headtail is not None:
+        _warn_geometry_mismatch(config.headtail.model_path, config.canonical)
+
     cnn = [load_cnn_model(c, runtime) for c in config.cnn_phases]
+    for _cnn_cfg in config.cnn_phases:
+        _warn_geometry_mismatch(_cnn_cfg.model_path, config.canonical)
+
     pose = load_pose_model(config.pose, runtime) if config.pose is not None else None
+    if config.pose is not None:
+        _pose_model_path = _pose_config_model_path(config.pose)
+        if _pose_model_path:
+            _warn_geometry_mismatch(_pose_model_path, config.canonical)
+
     apriltag = load_apriltag_model(config.apriltag) if config.apriltag.enabled else None
     return _AllModels(
         obb=obb,
