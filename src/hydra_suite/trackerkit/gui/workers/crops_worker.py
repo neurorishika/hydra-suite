@@ -553,14 +553,54 @@ class InterpolatedCropsWorker(BaseWorker):
         pose_kpt_source_names,
         pose_kpt_labels,
         profiler,
+        geometry,
     ):
-        """Run pose inference on accumulated crops and append results."""
+        """Run pose inference on accumulated crops and append results.
+
+        Pre-fits every canonical (Layer 1) crop through Layer 2
+        (``fit_to_model_input`` / ``apply_fit``) before handing it to the
+        backend -- the SAME call shape ``core/inference/stages/pose.py``
+        uses, so this worker's tracked-frame and interpolated-frame
+        keypoints agree on content scale (Deviation B fix). Non-canonical
+        (fallback masked-crop) entries are left unfit, matching their
+        pre-existing crop_bbox-offset back-projection.
+        """
         from hydra_suite.core.canonicalization.crop import (
             invert_keypoints as _invert_kpts,
         )
+        from hydra_suite.core.canonicalization.fit import (
+            apply_fit,
+            fit_affine,
+            fit_to_model_input,
+        )
+        from hydra_suite.core.inference.stages.pose import (
+            _compose_affine,
+            _model_input_wh,
+        )
+
+        class _BackendHolder:
+            backend = pose_backend
+
+        model_wh = _model_input_wh(_BackendHolder, geometry)
+        fit = fit_to_model_input(geometry.canvas_wh, model_wh)
+        fit_m = fit_affine(fit)
+
+        fitted_crops = []
+        for _crop, _entry in zip(pending_crops, pending_entries):
+            _crop_info = _entry.get("crop_info") or {}
+            if _crop_info.get("canonical"):
+                try:
+                    fitted_crops.append(apply_fit(_crop, fit))
+                    continue
+                except Exception:
+                    logger.debug(
+                        "Interp pose Layer 2 fit failed; feeding raw crop.",
+                        exc_info=True,
+                    )
+            fitted_crops.append(_crop)
 
         profiler.tick("interp_pose_inference")
-        pose_results = pose_backend.predict_batch(pending_crops)
+        pose_results = pose_backend.predict_batch(fitted_crops)
         profiler.tock("interp_pose_inference")
         for pidx, entry in enumerate(pending_entries):
             pose_out = pose_results[pidx] if pidx < len(pose_results) else None
@@ -578,8 +618,10 @@ class InterpolatedCropsWorker(BaseWorker):
                 crop_info = entry.get("crop_info") or {}
                 if keypoints is not None and len(keypoints) > 0:
                     gkpts = np.asarray(keypoints, dtype=np.float32).copy()
-                    _M_inv = crop_info.get("M_inverse")
-                    if _M_inv is not None and crop_info.get("canonical"):
+                    _M_align = crop_info.get("M_forward")
+                    if _M_align is not None and crop_info.get("canonical"):
+                        _m_total = _compose_affine(fit_m, _M_align)
+                        _M_inv = cv2.invertAffineTransform(_m_total.astype(np.float32))
                         gkpts = _invert_kpts(gkpts, _M_inv).astype(np.float32)
                     else:
                         crop_bbox = crop_info.get("crop_bbox")
@@ -614,13 +656,26 @@ class InterpolatedCropsWorker(BaseWorker):
         pending_cnn_entries,
         interp_cnn_rows,
         profiler,
+        geometry,
     ):
-        """Run CNN identity inference on accumulated crops and append results."""
+        """Run CNN identity inference on accumulated crops and append results.
+
+        Pre-fits the shared Layer 1 canonical crops through Layer 2
+        (``fit_to_model_input`` / ``apply_fit``) per classifier, exactly as
+        ``core/inference/stages/cnn.py`` does -- each classifier may have a
+        different input size, so the fit is computed and applied fresh for
+        every backend rather than shared across them (Deviation B fix).
+        """
+        from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
         profiler.tick("interp_cnn_inference")
         for _bi, _cnn_be in enumerate(cnn_backends):
             _cnn_label = cnn_labels[_bi]
             try:
-                _cnn_preds = _cnn_be.predict_batch(pending_cnn_crops)
+                _in_h, _in_w = _cnn_be.metadata.input_size  # documents (H, W)
+                _fit = fit_to_model_input(geometry.canvas_wh, (_in_w, _in_h))
+                _fitted_cnn_crops = [apply_fit(_c, _fit) for _c in pending_cnn_crops]
+                _cnn_preds = _cnn_be.predict_batch(_fitted_cnn_crops)
                 for _pi, _pred in enumerate(_cnn_preds):
                     if _pi >= len(pending_cnn_entries):
                         break
@@ -1051,6 +1106,10 @@ class InterpolatedCropsWorker(BaseWorker):
                 pose_crop_info = {
                     "crop_size": (_cw_pose, _ch_pose),
                     "M_inverse": _M_inv,
+                    # Layer 1 forward affine (image -> canonical canvas). Kept
+                    # so the Layer 2 (model-fit) affine can be composed onto it
+                    # at flush time -- see `_flush_pose_batch`.
+                    "M_forward": np.asarray(_M_pose, dtype=np.float64),
                     "canonical": True,
                 }
             else:
@@ -1231,6 +1290,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 pose_kpt_source_names,
                 pose_kpt_labels,
                 profiler,
+                geometry,
             )
 
         if (
@@ -1245,6 +1305,7 @@ class InterpolatedCropsWorker(BaseWorker):
                 _pending_cnn_entries,
                 interp_cnn_rows,
                 profiler,
+                geometry,
             )
 
         if idx % 25 == 0 or idx == total_frames:
