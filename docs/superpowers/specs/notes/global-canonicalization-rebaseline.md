@@ -124,10 +124,42 @@ path was never live on the tracking path before this branch (`worker.py` assigns
 `raw_canonical_affines = None` in all six dispatch branches), so every existing
 ClassKit crop dataset came from the legacy AABB path.
 
-## Outstanding
+## CUDA results (mehek, RTX 6000 Ada, idle GPU)
 
-- CUDA matrix on mehek: running at time of writing, branch `b3bec1f0` vs
-  `e6882c0e`. Results to be appended.
+Branch `027220f8` vs `e6882c0e`, `hydra-cuda`. Every row count real
+(1501-12501); determinism exact on all seven targets.
+
+| clip | crop consumer | determinism | equivalence | perf |
+|---|---|---|---|---|
+| `fly_obb` | none (control) | EQUIVALENT | **EQUIVALENT** | 1.00x |
+| `worm_bgsub` | none (control) | EQUIVALENT | **EQUIVALENT** | 1.00x |
+| `emi_obb_identity` | head-tail + identity | EQUIVALENT | DIFFERENCES | 0.99x |
+| `ant_pose_headtail` | head-tail + pose | EQUIVALENT | DIFFERENCES | 1.01x |
+| `ant_obb_sleap` | SLEAP pose | EQUIVALENT | DIFFERENCES | 1.00x |
+| `ant_obb_sequential` | head-tail | EQUIVALENT | DIFFERENCES | 0.99x |
+| `ant_cnn_identity` | head-tail + CNN identity | EQUIVALENT | DIFFERENCES | 1.00x |
+
+**Both controls byte-identical on BOTH platforms** — the blast radius is
+confined to crop consumers, cross-platform.
+
+**Performance is flat: 0.99x-1.01x on an idle dedicated GPU.** This is the
+trustworthy performance number; the MPS wall-clock spread was the machine, as
+the profiler concluded.
+
+A first CUDA attempt (2026-08-06, before the harness fix) hit CUDA OOM on three
+clips because the box was running ~23 unrelated SLEAP processes holding ~46 of
+47 GiB. Those clips produced header-only CSVs and the harness reported all three
+as **EQUIVALENT** — see `tools/equivalence/compare.py` and the fix in
+`027220f8`. The re-run above used the fixed harness.
+
+Two clips were flagged by the new guard; neither is a branch defect:
+- `ant_obb_sequential` — a false alarm in my own inspection, not the harness:
+  it reuses the `ant_obb_sleap` video, so its CSVs carry that stem.
+- `ant_pose_headtail` — emits no `_tracking_forward.csv` on CUDA, **on the
+  baseline tree too**. The guard refused to compare rather than inventing a
+  verdict. Worth investigating separately as a clip/runtime property.
+
+## Outstanding
 - Clipping reporting covers the core tracking loop but not the GUI
   interpolated-crops path.
 - Re-running old exports will diverge at crop edges (`BORDER_REPLICATE` removed).
