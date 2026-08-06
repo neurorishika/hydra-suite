@@ -13,6 +13,7 @@ synchronously.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -27,13 +28,48 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 REPO = Path(__file__).resolve().parents[1]
-FLY_CLIP = REPO / "tools/equivalence/fixtures/clips/fly_obb.mp4"
-FLY_CONFIG = REPO / "tools/equivalence/fixtures/configs/fly_obb.json"
+FIXTURE_CLIPS_DIR = REPO / "tools/equivalence/fixtures/clips"
+FIXTURE_CONFIGS_DIR = REPO / "tools/equivalence/fixtures/configs"
+# Fixture configs are portable (pose_skeleton_file left blank); the equivalence
+# runner injects a skeleton at run time (see tools/equivalence/runner.py
+# build_config). Mirror that here for clips whose pose model needs keypoint
+# names -- per tools/equivalence/fixtures/make_manifest.py's clip->skeleton map.
+SKELETON_FILE = REPO / "tools/equivalence/fixtures/ooceraea_biroi.json"
+CLIP_SKELETONS = {
+    "ant_cnn_identity": SKELETON_FILE,
+    "ant_pose_headtail": SKELETON_FILE,
+}
 
-pytestmark = pytest.mark.skipif(
-    not (FLY_CLIP.exists() and FLY_CONFIG.exists()),
-    reason="fly_obb fixture missing (run tools/equivalence/fixtures/fetch_fixtures.sh)",
-)
+# Clips covered end-to-end (GUI post-tracking path == CLI path):
+#   - fly_obb: OBB detection, no identity/pose (baseline smoke clip)
+#   - ant_cnn_identity: CNN identity classification + SLEAP pose (headtail)
+#   - ant_pose_headtail: SLEAP pose path, orientation from pose
+# Both ant_* clips need the `sleap` conda env (the SLEAP service spawns
+# `conda run -n sleap`).
+CLIPS = ["fly_obb", "ant_cnn_identity", "ant_pose_headtail"]
+
+
+def _clip_paths(name: str) -> tuple[Path, Path]:
+    return (FIXTURE_CLIPS_DIR / f"{name}.mp4", FIXTURE_CONFIGS_DIR / f"{name}.json")
+
+
+def _materialize_config(name: str, config_path: Path, tmp_path: Path) -> Path:
+    """Return a config path with pose_skeleton_file filled in, if needed.
+
+    Fixture configs are intentionally portable (blank pose_skeleton_file); a
+    concrete skeleton is normally supplied at run time (see
+    tools/equivalence/runner.py). Write a materialized copy for clips that
+    need it so pose keypoint_names resolve; pass the original path through
+    unchanged otherwise.
+    """
+    skeleton = CLIP_SKELETONS.get(name)
+    if skeleton is None:
+        return config_path
+    cfg = json.loads(config_path.read_text())
+    cfg["pose_skeleton_file"] = str(skeleton)
+    out_path = tmp_path / f"{name}_config.json"
+    out_path.write_text(json.dumps(cfg))
+    return out_path
 
 
 @pytest.fixture(scope="module")
@@ -41,7 +77,16 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def test_gui_run_session_worker_matches_cli(qapp, tmp_path):
+@pytest.mark.parametrize("clip_name", CLIPS)
+def test_gui_run_session_worker_matches_cli(qapp, tmp_path, clip_name):
+    clip_path, config_path = _clip_paths(clip_name)
+    if not (clip_path.exists() and config_path.exists()):
+        pytest.skip(
+            f"{clip_name} fixture missing "
+            "(run tools/equivalence/fixtures/fetch_fixtures.sh)"
+        )
+    config_path = _materialize_config(clip_name, config_path, tmp_path)
+
     from hydra_suite.trackerkit.cli import run_tracking_cli
     from hydra_suite.trackerkit.cli_config import load_tracker_cli_session
     from hydra_suite.trackerkit.gui.orchestrators.tracking import TrackingOrchestrator
@@ -50,32 +95,32 @@ def test_gui_run_session_worker_matches_cli(qapp, tmp_path):
     #    forward/backward CSVs and detection cache the GUI path re-reads).
     cli_dir = tmp_path / "cli"
     cli_dir.mkdir()
-    cli_clip = cli_dir / "fly_obb.mp4"
-    shutil.copy(FLY_CLIP, cli_clip)
-    assert run_tracking_cli([str(cli_clip)], config_path=str(FLY_CONFIG)) == 0
+    cli_clip = cli_dir / f"{clip_name}.mp4"
+    shutil.copy(clip_path, cli_clip)
+    assert run_tracking_cli([str(cli_clip)], config_path=str(config_path)) == 0
     cli_final = next(cli_dir.glob("*_tracking_final.csv"))
     cli_forward_raw = next(cli_dir.glob("*_tracking_forward.csv"))
     cli_backward_raw = next(cli_dir.glob("*_tracking_backward.csv"))
 
     # 2) GUI post-tracking over the SAME raw CSVs the CLI produced (backward
-    #    tracking is enabled in fly_obb.json, so both the "_forward" and
+    #    tracking is enabled in these configs, so both the "_forward" and
     #    "_backward" raw CSVs -- not just a single raw CSV -- must exist next
     #    to the GUI's raw_csv_path base, since TrackingSessionCore derives
     #    those two paths from `paths["raw_csv_path"]` itself).
     gui_dir = tmp_path / "gui"
     gui_dir.mkdir()
-    gui_raw = gui_dir / "fly_obb_tracking.csv"
-    shutil.copy(cli_forward_raw, gui_dir / "fly_obb_tracking_forward.csv")
-    shutil.copy(cli_backward_raw, gui_dir / "fly_obb_tracking_backward.csv")
+    gui_raw = gui_dir / f"{clip_name}_tracking.csv"
+    shutil.copy(cli_forward_raw, gui_dir / f"{clip_name}_tracking_forward.csv")
+    shutil.copy(cli_backward_raw, gui_dir / f"{clip_name}_tracking_backward.csv")
 
     # Derive `config`/`params` EXACTLY the way the CLI did: same function,
     # same video path (so the video-probe-derived FPS/frame-count params
     # match), same config file. This is the crux reconciliation -- a raw
-    # `json.loads(FLY_CONFIG)` config dict is fine for `config` (it *is*
+    # `json.loads(config_path)` config dict is fine for `config` (it *is*
     # what `load_tracker_cli_config` returns), but `params` MUST be the
     # `build_tracking_parameters` derivation, not the raw config dict, or
     # the post-processing stages read wrong keys/units and diverge.
-    cli_session = load_tracker_cli_session(str(cli_clip), config_path=str(FLY_CONFIG))
+    cli_session = load_tracker_cli_session(str(cli_clip), config_path=str(config_path))
     config = cli_session.config
     params = cli_session.params
 
