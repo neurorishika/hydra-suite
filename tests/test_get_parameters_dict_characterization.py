@@ -67,6 +67,22 @@ HOST_DEPENDENT_DROPPED_KEYS = {
     "POSE_MODEL_DIR",
 }
 
+# Keys whose VALUE is derived by the runtime resolver from the detected
+# platform/accelerator (mps vs cuda vs cpu), NOT from the GUI param wrapper.
+# The golden was captured on the hydra-mps host; these would legitimately
+# differ on a CUDA/CPU box or CI, so they are excluded to keep the golden
+# host-portable. The resolver logic that produces them is covered by the
+# runtime/resolver tests, not by this GUI-wrapper characterization guard.
+RESOLVER_DEPENDENT_DROPPED_KEYS = {
+    "YOLO_DEVICE",
+    "ENABLE_GPU_BACKGROUND",
+    "ENABLE_TENSORRT",
+    "ENABLE_ONNX_RUNTIME",
+    "TENSORRT_MAX_BATCH_SIZE",
+}
+
+DROPPED_KEYS = HOST_DEPENDENT_DROPPED_KEYS | RESOLVER_DEPENDENT_DROPPED_KEYS
+
 
 @pytest.fixture(scope="module")
 def qapp() -> QApplication:
@@ -120,7 +136,7 @@ def _normalize_params(params: dict) -> dict:
     """
     normalized = {}
     for key, value in params.items():
-        if key in HOST_DEPENDENT_DROPPED_KEYS:
+        if key in DROPPED_KEYS:
             continue
         if key == "ROI_MASK":
             normalized[key] = _normalize_roi_mask(value)
