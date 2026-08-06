@@ -35,11 +35,24 @@ _DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 def _model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[int, int]:
     """The pose backend's fixed (W, H) input, or ``geometry``'s own canvas.
 
+    Backends with a true non-square input (e.g. ViTPose 192x256, SLEAP-exported
+    fixed HxW) expose ``preferred_input_wh`` and that is used directly -- no
+    collapsing to a square, which would otherwise force a second, redundant
+    letterbox inside the backend's own preprocessing.
+
     Backends with no fixed input size (fully convolutional, e.g. native SLEAP's
     ``preferred_input_size == 0``) get an identity fit: feed the canonical crop
     unchanged and let the backend's own preprocessing handle it, matching the
     legacy "native-extent crop, backend resizes" behaviour for those backends.
     """
+    wh = getattr(model.backend, "preferred_input_wh", None)
+    if wh is not None:
+        try:
+            w, h = int(wh[0]), int(wh[1])
+        except (TypeError, ValueError, IndexError):
+            w, h = 0, 0
+        if w > 0 and h > 0:
+            return (w, h)
     try:
         dim = int(getattr(model.backend, "preferred_input_size", 0) or 0)
     except (TypeError, ValueError):

@@ -481,6 +481,14 @@ class SleapExportedBackend:
     def preferred_input_size(self) -> int:
         return int(max(self._input_hw or (0, 0))) if self._input_hw else 0
 
+    @property
+    def preferred_input_wh(self) -> Optional[Tuple[int, int]]:
+        """The model's true fixed (W, H) input, derived from ``_input_hw`` (H, W)."""
+        if not self._input_hw:
+            return None
+        h, w = self._input_hw
+        return (int(w), int(h))
+
     def warmup(self) -> None:
         try:
             dummy = np.zeros((32, 32, 3), dtype=np.uint8)

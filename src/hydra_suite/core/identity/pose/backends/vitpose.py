@@ -82,6 +82,12 @@ class ViTPoseBackend:
     def preferred_input_size(self) -> int:
         return max(self._geom.image_size_wh)  # the long side
 
+    @property
+    def preferred_input_wh(self) -> tuple[int, int] | None:
+        """The model's true fixed (W, H) input, e.g. (192, 256)."""
+        w, h = self._geom.image_size_wh
+        return (int(w), int(h))
+
     def warmup(self) -> None:
         dummy = np.zeros((32, 32, 3), dtype=np.uint8)
         try:
