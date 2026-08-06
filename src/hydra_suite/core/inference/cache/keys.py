@@ -248,9 +248,12 @@ def pose_cache_key(config: PoseConfig, geometry: CanonicalGeometry) -> CacheKey:
     else:
         assert config.sleap is not None
         path = config.sleap.model_path
+    # background_color was dropped from PoseConfig: it was always (0, 0, 0)
+    # (never populated by from_parameters), so removing it does not change
+    # any hash produced by any existing config in practice.
     config_hash = _sha(
         f"{config.crop_padding}|{config.suppress_foreign_regions}"
-        f"|{config.background_color}|{canonical_geometry_key(geometry)}"
+        f"|{canonical_geometry_key(geometry)}"
     )
     return CacheKey(
         schema_version=CACHE_SCHEMA_VERSION,

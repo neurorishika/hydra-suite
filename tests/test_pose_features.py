@@ -387,12 +387,14 @@ def _square_corners(x0, y0, size):
 
 def test_apply_foreign_obb_mask_no_list_returns_crop():
     crop = np.ones((50, 50, 3), dtype=np.uint8) * 200
-    result = apply_foreign_obb_mask(crop, 0, 0, [])
+    result = apply_foreign_obb_mask(crop, 0, 0, [], background_color=0)
     assert np.array_equal(result, crop)
 
 
 def test_apply_foreign_obb_mask_none_crop_returns_none():
-    result = apply_foreign_obb_mask(None, 0, 0, [_square_corners(0, 0, 10)])
+    result = apply_foreign_obb_mask(
+        None, 0, 0, [_square_corners(0, 0, 10)], background_color=0
+    )
     assert result is None
 
 

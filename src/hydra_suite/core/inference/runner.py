@@ -673,9 +673,10 @@ class InferenceRunner:
         suppress_foreign = (
             pose_cfg.suppress_foreign_regions if pose_cfg is not None else False
         )
-        background_color = (
-            pose_cfg.background_color if pose_cfg is not None else (0, 0, 0)
-        )
+        # PoseConfig.background_color was deleted: it was never populated by
+        # from_parameters (always (0, 0, 0)), a dead second home for the fill
+        # colour. Zero is now the one honest fill value everywhere.
+        background_color = (0, 0, 0)
         canonical_crops = (
             extract_canonical_crops(
                 frame,

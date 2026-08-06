@@ -1225,7 +1225,8 @@ class OrientedTrackVideoExporter:
             task.affine,
             (task.out_w, task.out_h),
             flags=getattr(cv2, "INTER_LINEAR", 1),
-            borderMode=cv2.BORDER_REPLICATE,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
         if warped is None or warped.size == 0:
             return None

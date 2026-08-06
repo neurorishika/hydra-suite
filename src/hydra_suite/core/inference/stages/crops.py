@@ -287,7 +287,8 @@ def extract_classifier_crops(
             m_align,
             (out_w, out_h),
             flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
         crops.append(np.ascontiguousarray(crop))
     return crops
@@ -314,7 +315,8 @@ def _warp_canonical_crop(
         m_align,
         (geometry.canvas_w, geometry.canvas_h),
         flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
     )
 
 

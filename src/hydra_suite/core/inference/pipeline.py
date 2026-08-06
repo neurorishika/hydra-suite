@@ -345,9 +345,11 @@ class Pipeline:
             suppress_foreign = (
                 cfg.pose.suppress_foreign_regions if cfg.pose is not None else False
             )
-            background_color = (
-                cfg.pose.background_color if cfg.pose is not None else (0, 0, 0)
-            )
+            # PoseConfig.background_color was deleted: it was never populated
+            # by from_parameters (always (0, 0, 0)), a dead second home for
+            # the fill colour. Zero is now the one honest fill value
+            # everywhere.
+            background_color = (0, 0, 0)
             crop_batch = extract_canonical_crops_batch(
                 nonempty_frames,
                 nonempty_obbs,

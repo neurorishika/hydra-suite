@@ -367,7 +367,6 @@ class PoseConfig:
     vitpose: PoseViTPoseConfig | None = None
     crop_padding: float = 0.1
     suppress_foreign_regions: bool = True
-    background_color: tuple[int, int, int] = (0, 0, 0)
     anterior_keypoints: list[str] = field(default_factory=list)
     posterior_keypoints: list[str] = field(default_factory=list)
     ignore_keypoints: list[str] = field(default_factory=list)
@@ -505,9 +504,10 @@ def _dict_to_config(d: dict[str, Any]) -> InferenceConfig:
         yolo_d = pose_d.pop("yolo", None)
         sleap_d = pose_d.pop("sleap", None)
         vitpose_d = pose_d.pop("vitpose", None)
-        bg = pose_d.get("background_color")
-        if isinstance(bg, list):
-            pose_d["background_color"] = tuple(bg)
+        # Dropped field (was always (0, 0, 0); never populated by
+        # from_parameters). Pop so stale serialized configs from before this
+        # change don't fail PoseConfig(**pose_d) with an unexpected kwarg.
+        pose_d.pop("background_color", None)
         pose = PoseConfig(
             **pose_d,
             yolo=PoseYOLOConfig(**yolo_d) if yolo_d else None,

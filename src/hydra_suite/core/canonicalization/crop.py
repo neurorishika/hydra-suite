@@ -117,7 +117,8 @@ def extract_canonical_crop(
         M_align,
         (canvas_w, canvas_h),
         flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REPLICATE,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
     )
 
     if foreign_corners:
@@ -144,7 +145,9 @@ def gpu_canonical_crop(
     mapping frame pixel coords to canvas pixel
     coords.  The function inverts it on CPU (negligible), builds a normalised
     ``F.affine_grid`` theta, and uses ``F.grid_sample`` with bilinear
-    interpolation and border replication — matching the cv2 default behaviour.
+    interpolation and zero padding — matching ``extract_canonical_crop``'s
+    ``cv2.BORDER_CONSTANT`` (value 0) so out-of-frame canvas pixels mean
+    "no data" on both CPU and GPU.
 
     Parameters
     ----------
@@ -213,7 +216,7 @@ def gpu_canonical_crop(
             frame_chw.unsqueeze(0),
             grid,
             mode="bilinear",
-            padding_mode="border",
+            padding_mode="zeros",
             align_corners=True,
         )
         return crop.squeeze(0)  # (C, canvas_h, canvas_w)
@@ -308,7 +311,7 @@ def gpu_canonical_crop_batch(
             frame_expanded.contiguous(),
             grid,
             mode="bilinear",
-            padding_mode="border",
+            padding_mode="zeros",
             align_corners=True,
         )  # (N, C, canvas_h, canvas_w)
         return crops
