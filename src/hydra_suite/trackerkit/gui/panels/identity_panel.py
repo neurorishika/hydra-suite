@@ -243,7 +243,9 @@ class IdentityPanel(QWidget):
         self.btn_background_color = QPushButton()
         self.btn_background_color.setMaximumWidth(60)
         self.btn_background_color.setMinimumHeight(30)
-        self.btn_background_color.setToolTip("Click to choose background color")
+        self.btn_background_color.setToolTip(
+            "Colour used to mask overlapping animals inside crops (canvas padding is always black)"
+        )
         self.btn_background_color.clicked.connect(
             self._main_window._select_individual_background_color
         )
