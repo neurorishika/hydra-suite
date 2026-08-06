@@ -9,6 +9,10 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
+from hydra_suite.training.canonical_transform import (
+    CanonicalFitTransform,
+    bgr_to_rgb_pil,
+)
 from hydra_suite.training.multihead_dataset import MultiFactorImageFolder
 
 
@@ -24,7 +28,13 @@ def test_dataset_yields_per_factor_label_tuples(tmp_path):
         for i in range(2):
             _write_image(root / cls / f"{cls}_{i}.png")
 
-    tf = transforms.Compose([transforms.Resize((8, 8)), transforms.ToTensor()])
+    tf = transforms.Compose(
+        [
+            CanonicalFitTransform((8, 8)),
+            transforms.Lambda(bgr_to_rgb_pil),
+            transforms.ToTensor(),
+        ]
+    )
     ds = MultiFactorImageFolder(
         str(root),
         class_names_per_factor=[["red", "yellow"], ["blue", "green"]],
@@ -41,7 +51,13 @@ def test_dataset_yields_per_factor_label_tuples(tmp_path):
 def test_dataset_rejects_unknown_factor_label(tmp_path):
     root = tmp_path / "train"
     _write_image(root / "purple__blue" / "x.png")  # purple not declared
-    tf = transforms.Compose([transforms.Resize((8, 8)), transforms.ToTensor()])
+    tf = transforms.Compose(
+        [
+            CanonicalFitTransform((8, 8)),
+            transforms.Lambda(bgr_to_rgb_pil),
+            transforms.ToTensor(),
+        ]
+    )
     try:
         MultiFactorImageFolder(
             str(root),
@@ -58,7 +74,13 @@ def test_dataset_rejects_unknown_factor_label(tmp_path):
 def test_dataset_rejects_wrong_factor_count(tmp_path):
     root = tmp_path / "train"
     _write_image(root / "red" / "x.png")  # only one factor in folder name
-    tf = transforms.Compose([transforms.Resize((8, 8)), transforms.ToTensor()])
+    tf = transforms.Compose(
+        [
+            CanonicalFitTransform((8, 8)),
+            transforms.Lambda(bgr_to_rgb_pil),
+            transforms.ToTensor(),
+        ]
+    )
     try:
         MultiFactorImageFolder(
             str(root),

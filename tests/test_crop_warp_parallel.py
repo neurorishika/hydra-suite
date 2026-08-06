@@ -10,8 +10,11 @@ import os
 
 import numpy as np
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.stages import crops as crops_mod
+
+_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.1)
 
 
 def _make_obb(n: int, frame_idx: int = 0) -> OBBResult:
@@ -45,9 +48,7 @@ def _make_obb(n: int, frame_idx: int = 0) -> OBBResult:
 def _warp(arr, obb, threads):
     os.environ["HYDRA_CROP_WARP_THREADS"] = str(threads)
     try:
-        return crops_mod._warp_crops_for_obb(
-            arr, obb, aspect_ratio=2.0, padding_fraction=0.1
-        )
+        return crops_mod._warp_crops_for_obb(arr, obb, _GEOMETRY)
     finally:
         os.environ.pop("HYDRA_CROP_WARP_THREADS", None)
 
