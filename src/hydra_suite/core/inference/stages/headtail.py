@@ -300,20 +300,16 @@ def run_headtail_batch(
         else:
             all_probs = []
     else:
-        from .crops import extract_classifier_crops_batch
+        from .crops import extract_classifier_crops_batch_np
 
-        batch = extract_classifier_crops_batch(frames, obb_results, geometry)
-        # batch.crops is NCHW float [0,1]; convert back to HWC uint8 for
-        # predict_batch. Single batched host transfer + vectorized uint8
-        # quantization -- byte-identical to the former per-crop `.cpu().numpy()`
-        # loop (same values), one D->H copy instead of N.
-        n_total = batch.crops.shape[0]
-        if n_total:
-            hwc_all = np.ascontiguousarray(
-                batch.crops.permute(0, 2, 3, 1).cpu().numpy()
-            )
-            stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in stacked]
+        # ``batch.crops`` is already the list of HWC uint8 BGR canonical crops
+        # predict_batch wants, so there is no float32 tensor round trip here:
+        # the old ``stack -> /255 -> permute -> cpu -> *255 -> clip -> astype``
+        # detour was exactly value-preserving and therefore pure overhead
+        # (four full-batch float32 passes per window).
+        batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        if batch.crops:
+            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in batch.crops]
             all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []

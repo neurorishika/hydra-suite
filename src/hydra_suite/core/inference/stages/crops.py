@@ -18,7 +18,7 @@ from hydra_suite.core.canonicalization.geometry import (
     canonical_affine,
 )
 
-from ..result import CropBatch, OBBResult
+from ..result import CropBatch, NumpyCropBatch, OBBResult
 from ..runtime import RuntimeContext
 
 
@@ -394,6 +394,58 @@ def extract_classifier_crops_batch(
 
     return CropBatch(
         crops=torch.cat(crops_list, dim=0),
+        detection_ids=np.concatenate(det_ids),
+        frame_index=np.concatenate(frame_idx_list),
+        obb_by_frame={o.frame_idx: o for o in obb_results},
+        native_sizes=np.concatenate(native_sizes_list),
+    )
+
+
+def extract_classifier_crops_batch_np(
+    frames: list,
+    obb_results: list[OBBResult],
+    geometry: CanonicalGeometry,
+) -> NumpyCropBatch:
+    """uint8 sibling of :func:`extract_classifier_crops_batch`.
+
+    Same crops, same row order, same metadata — but the HWC uint8 BGR arrays
+    ``extract_classifier_crops`` already produced are handed through as-is
+    instead of being stacked into a ``(N, C, H, W)`` float32 ``[0, 1]`` torch
+    tensor that the only CPU consumer immediately quantises back to uint8.
+    That round trip is value-preserving (see :class:`NumpyCropBatch`), so this
+    is byte-identical to ``extract_classifier_crops_batch`` followed by the
+    ``permute/cpu/*255/clip/astype`` unpack, minus ~4 full-batch float32
+    passes and two N-crop allocations per window.
+    """
+    out_h, out_w = geometry.canvas_h, geometry.canvas_w
+    crops: list[np.ndarray] = []
+    det_ids: list[np.ndarray] = []
+    frame_idx_list: list[np.ndarray] = []
+    native_sizes_list: list[np.ndarray] = []
+
+    for frame, obb in zip(frames, obb_results):
+        if obb.detection_ids.shape[0] == 0:
+            continue
+        crops.extend(extract_classifier_crops(frame, obb, geometry))
+        det_ids.append(obb.detection_ids)
+        frame_idx_list.append(
+            np.full(obb.detection_ids.shape[0], obb.frame_idx, np.int64)
+        )
+        native_sizes_list.append(
+            np.full((obb.detection_ids.shape[0], 2), [out_h, out_w], np.int64)
+        )
+
+    if not crops:
+        return NumpyCropBatch(
+            [],
+            np.zeros(0, np.int64),
+            np.zeros(0, np.int64),
+            {o.frame_idx: o for o in obb_results},
+            np.zeros((0, 2), np.int64),
+        )
+
+    return NumpyCropBatch(
+        crops=crops,
         detection_ids=np.concatenate(det_ids),
         frame_index=np.concatenate(frame_idx_list),
         obb_by_frame={o.frame_idx: o for o in obb_results},

@@ -264,6 +264,10 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
         def select_frame(self, f):
             return np.array([0])
 
+    class _FakeNumpyBatch(_FakeBatch):
+        # CPU branch consumes uint8 HWC crops (NumpyCropBatch), not a tensor.
+        crops = [np.zeros((8, 8, 3), np.uint8)]
+
     monkeypatch.setattr(
         crops_mod,
         "extract_classifier_crops_batch_gpu",
@@ -271,8 +275,8 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     )
     monkeypatch.setattr(
         crops_mod,
-        "extract_classifier_crops_batch",
-        lambda *a, **k: (used.__setitem__("cpu", True) or _FakeBatch()),
+        "extract_classifier_crops_batch_np",
+        lambda *a, **k: (used.__setitem__("cpu", True) or _FakeNumpyBatch()),
     )
 
     class _Backend:

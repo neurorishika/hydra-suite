@@ -187,20 +187,14 @@ def run_cnn_batch(
         else:
             all_probs = []
     else:
-        from .crops import extract_classifier_crops_batch
+        from .crops import extract_classifier_crops_batch_np
 
-        batch = extract_classifier_crops_batch(frames, obb_results, geometry)
-        n_total = batch.crops.shape[0]
-        if n_total:
-            # Single batched host transfer + vectorized uint8 quantization. This
-            # is byte-identical to the former per-crop `.cpu().numpy()` loop (same
-            # values) but performs ONE device->host copy instead of N, cutting the
-            # per-crop sync overhead on dense frames.
-            hwc_all = np.ascontiguousarray(
-                batch.crops.permute(0, 2, 3, 1).cpu().numpy()
-            )
-            stacked = (hwc_all * 255.0).clip(0, 255).astype(np.uint8)
-            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in stacked]
+        # HWC uint8 BGR crops straight from the warp -- no float32 tensor round
+        # trip (it was exactly value-preserving, so removing it is
+        # byte-identical; see NumpyCropBatch).
+        batch = extract_classifier_crops_batch_np(frames, obb_results, geometry)
+        if batch.crops:
+            np_crops: list[np.ndarray] = [apply_fit(c, fit) for c in batch.crops]
             all_probs = model.backend.predict_batch(np_crops)
         else:
             all_probs = []
