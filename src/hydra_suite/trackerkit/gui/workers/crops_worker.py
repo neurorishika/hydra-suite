@@ -567,9 +567,13 @@ class InterpolatedCropsWorker(BaseWorker):
         (``fit_to_model_input`` / ``apply_fit``) before handing it to the
         backend -- the SAME call shape ``core/inference/stages/pose.py``
         uses, so this worker's tracked-frame and interpolated-frame
-        keypoints agree on content scale (Deviation B fix). Non-canonical
-        (fallback masked-crop) entries are left unfit, matching their
-        pre-existing crop_bbox-offset back-projection.
+        keypoints agree on content scale (Deviation B fix). Every entry here
+        is Layer 1 canonical by construction: ``_extract_pose_crop`` skips
+        (rather than produces) a crop for the degenerate-OBB case where no
+        rigid Layer 1 transform exists, so there is no non-canonical entry
+        left to special-case. The ``canonical`` check + raw-crop append below
+        stays only as a defensive fallback for an ``apply_fit`` failure on an
+        otherwise-canonical crop, not a geometry escape hatch.
         """
         from hydra_suite.core.canonicalization.crop import (
             invert_keypoints as _invert_kpts,
@@ -1092,41 +1096,53 @@ class InterpolatedCropsWorker(BaseWorker):
         gen,
         _extract_canonical,
     ):
-        pose_crop = None
-        pose_crop_info = None
+        """Extract the pose/CNN crop for one task via Layer 1 canonicalization.
+
+        ``_aff`` is None exactly when ``canonical_affine`` raised
+        (``core/canonicalization/geometry.py::_axes`` -- a degenerate OBB
+        with a zero-length edge). There is no rigid Layer 1 transform for a
+        degenerate box, and the un-canonicalized ``_extract_obb_masked_crop``
+        fallback this used to feed the backend produces an arbitrary
+        axis-aligned aspect ratio that Layer 2's ``fit_to_model_input``
+        cannot be honestly computed for (it assumes the source is the fixed
+        canonical canvas) -- feeding it anyway would hand the backend a
+        wrongly-scaled crop, exactly the defect class this branch removes.
+        A genuinely degenerate OBB has no salvageable animal geometry to
+        recover either way, so this loudly skips the detection instead.
+        """
+        if _aff is None:
+            logger.warning(
+                "Interp pose/CNN: skipping task_idx=%s -- degenerate OBB has no "
+                "Layer 1 canonical transform (canonical_affine raised); the old "
+                "masked-crop fallback fed the backend an un-canonicalized, "
+                "wrongly-scaled crop instead of skipping.",
+                task_idx,
+            )
+            return None, None
         try:
             _other_corners = [
                 c for ci, c in enumerate(_frame_all_corners) if ci != task_idx
             ]
-            if _aff is not None:
-                _M_pose, _cw_pose, _ch_pose = _aff
-                _foreign = _other_corners if _other_corners else None
-                pose_crop = _extract_canonical(
-                    frame,
-                    _M_pose,
-                    _cw_pose,
-                    _ch_pose,
-                    bg_color=gen.background_color,
-                    foreign_corners=_foreign,
-                )
-                _M_inv = cv2.invertAffineTransform(_M_pose).astype(np.float32)
-                pose_crop_info = {
-                    "crop_size": (_cw_pose, _ch_pose),
-                    "M_inverse": _M_inv,
-                    # Layer 1 forward affine (image -> canonical canvas). Kept
-                    # so the Layer 2 (model-fit) affine can be composed onto it
-                    # at flush time -- see `_flush_pose_batch`.
-                    "M_forward": np.asarray(_M_pose, dtype=np.float64),
-                    "canonical": True,
-                }
-            else:
-                pose_crop, pose_crop_info = gen._extract_obb_masked_crop(
-                    frame,
-                    corners,
-                    frame.shape[0],
-                    frame.shape[1],
-                    other_corners_list=(_other_corners if _other_corners else None),
-                )
+            _M_pose, _cw_pose, _ch_pose = _aff
+            _foreign = _other_corners if _other_corners else None
+            pose_crop = _extract_canonical(
+                frame,
+                _M_pose,
+                _cw_pose,
+                _ch_pose,
+                bg_color=gen.background_color,
+                foreign_corners=_foreign,
+            )
+            _M_inv = cv2.invertAffineTransform(_M_pose).astype(np.float32)
+            pose_crop_info = {
+                "crop_size": (_cw_pose, _ch_pose),
+                "M_inverse": _M_inv,
+                # Layer 1 forward affine (image -> canonical canvas). Kept
+                # so the Layer 2 (model-fit) affine can be composed onto it
+                # at flush time -- see `_flush_pose_batch`.
+                "M_forward": np.asarray(_M_pose, dtype=np.float64),
+                "canonical": True,
+            }
         except Exception:
             pose_crop = None
             pose_crop_info = None
