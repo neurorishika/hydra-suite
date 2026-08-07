@@ -66,7 +66,6 @@ def apply_fit(image: np.ndarray, fit: FitResult) -> np.ndarray:
         )
     if arr.ndim == 2:
         arr = arr[:, :, None]
-    channels = arr.shape[2]
 
     chw = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1).float()
     out_chw = letterbox_fit(chw, fit.model_wh)
@@ -78,8 +77,6 @@ def apply_fit(image: np.ndarray, fit: FitResult) -> np.ndarray:
         .contiguous()
         .numpy()
     )
-    if channels == 1 and canvas.ndim == 2:
-        canvas = canvas[:, :, None]
     return canvas
 
 

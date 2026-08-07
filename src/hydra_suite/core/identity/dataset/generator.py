@@ -239,12 +239,7 @@ class IndividualDatasetGenerator:
                 break
             crop, filepath, fmt, quality = item
             try:
-                if fmt == "jpg":
-                    cv2.imwrite(
-                        str(filepath), crop, [cv2.IMWRITE_JPEG_QUALITY, quality]
-                    )
-                else:
-                    cv2.imwrite(str(filepath), crop)
+                cv2.imwrite(str(filepath), crop)
             except Exception as exc:
                 logger.warning("Async crop write failed (%s): %s", filepath, exc)
 
