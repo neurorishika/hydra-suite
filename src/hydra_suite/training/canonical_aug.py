@@ -57,8 +57,39 @@ class CanonicalAug:
         self.seed = seed
         self.p_degrade = float(p_degrade)
         self._rng = np.random.default_rng(seed)
+        self._worker_checked = False
+
+    def _maybe_decorrelate_worker(self) -> None:
+        """Give each DataLoader worker an independent augmentation stream.
+
+        When a ``DataLoader`` uses ``num_workers > 0`` it forks/pickles this
+        instance into each worker, so every worker inherits the SAME seeded
+        ``_rng`` state and would draw identical augmentations -- reducing
+        effective augmentation diversity. On the first call inside a worker we
+        re-seed once, mixing the worker id in: a seeded ``CanonicalAug`` stays
+        fully reproducible but decorrelated across workers, while an unseeded
+        one draws fresh OS entropy per worker. A directly constructed instance
+        (no worker context, e.g. tests) is left untouched, preserving the
+        same-seed determinism contract.
+        """
+        if self._worker_checked:
+            return
+        self._worker_checked = True
+        try:
+            import torch.utils.data as _tud
+
+            info = _tud.get_worker_info()
+        except Exception:
+            info = None
+        if info is None:
+            return
+        if self.seed is None:
+            self._rng = np.random.default_rng()
+        else:
+            self._rng = np.random.default_rng([int(self.seed), int(info.id)])
 
     def __call__(self, img: np.ndarray) -> np.ndarray:
+        self._maybe_decorrelate_worker()
         arr = np.asarray(img)
         if arr.dtype != np.uint8:
             arr = arr.astype(np.uint8)
