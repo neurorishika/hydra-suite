@@ -5,6 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Agent Conventions
 
 - **Never use the `artifact-design` skill and never create Artifacts.** Present visual results as files in the repo/scratchpad (e.g. saved PNGs) or inline, not as hosted Artifact pages.
+- **Isolation:** always do implementation/execution work in a **git worktree branched from local HEAD** (`git worktree add .worktrees/<name> -b <branch> HEAD`), never a fresh-from-origin worktree — local `main` is usually ahead of `origin/main`. Prefer worktrees over in-place feature branches.
+- **Verification:** run tests/equivalence on `hydra-mps` on this box; run CUDA checks on `hydra-cuda` at `rutalab@mehek.taild08eb9.ts.net`.
+- **Before any heavy run** (equivalence harness, training, inference): kill dead/stale **sleap/hydra** processes first. **Never** interfere with a running process that is not sleap/hydra.
 
 ## Build & Environment Setup
 
