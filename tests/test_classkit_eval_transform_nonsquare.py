@@ -76,3 +76,46 @@ def test_build_transform_square_int_input_size_still_square():
         for var, cell in zip(fit_step.__code__.co_freevars, fit_step.__closure__)
     }
     assert closure["fit_transform"].model_hw == (8, 8)
+
+
+def test_load_custom_cnn_checkpoint_forwards_true_hw_to_eval_worker():
+    """Fix-round-1 finding: `_load_custom_cnn_checkpoint` (the eval-on-labeled-data
+    path -- `_after_load` -> `_evaluate_model_on_labeled`) used to truncate a
+    non-square `ckpt["input_size"]` to `input_size[0]` before constructing the
+    TorchvisionInferenceWorker, so non-square eval never happened end-to-end even
+    though `_build_transform` itself was fixed. It must now forward the full
+    (H, W) tuple through `_run_torchvision_inference` unchanged.
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    main_window_module = pytest.importorskip("hydra_suite.classkit.gui.main_window")
+    MainWindow = main_window_module.MainWindow
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = MainWindow()
+    try:
+        captured = {}
+
+        def _fake_run_torchvision_inference(self, model_path, class_names, **kwargs):
+            captured["input_size"] = kwargs.get("input_size")
+
+        window._run_torchvision_inference = _fake_run_torchvision_inference.__get__(
+            window
+        )
+
+        input_h, input_w = 64, 128
+        ckpt = {
+            "arch": "resnet18",
+            "class_names": ["left", "right"],
+            "input_size": [input_h, input_w],
+        }
+        window._load_custom_cnn_checkpoint(Path("/tmp/fake_model.pth"), ckpt)
+
+        assert captured["input_size"] == (input_h, input_w)
+        assert captured["input_size"] != input_h  # not truncated to a bare int
+    finally:
+        window.close()
+        window.deleteLater()
+        app.processEvents()

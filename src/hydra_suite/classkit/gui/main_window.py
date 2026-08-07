@@ -7532,7 +7532,11 @@ class MainWindow(QMainWindow):
                 )
                 if _arch != "tinyclassifier":
                     _sz = _ckpt.get("input_size", (224, 224))
-                    _sz = _sz[0] if isinstance(_sz, (list, tuple)) else int(_sz)
+                    _sz = (
+                        (int(_sz[0]), int(_sz[1]))
+                        if isinstance(_sz, (list, tuple))
+                        else int(_sz)
+                    )
                     self._run_torchvision_inference(
                         Path(artifact),
                         class_names=_class_names,
@@ -8562,7 +8566,9 @@ class MainWindow(QMainWindow):
         ckpt_names = ckpt.get("class_names")
         input_size = ckpt.get("input_size", (224, 224))
         size = (
-            input_size[0] if isinstance(input_size, (list, tuple)) else int(input_size)
+            (int(input_size[0]), int(input_size[1]))
+            if isinstance(input_size, (list, tuple))
+            else int(input_size)
         )
         arch = (
             ckpt.get("arch", "tinyclassifier")
@@ -9362,7 +9368,7 @@ class MainWindow(QMainWindow):
         self,
         model_path: Path,
         class_names: list,
-        input_size: int = 224,
+        input_size: int | tuple[int, int] = 224,
         on_success=None,
         force_monochrome: bool = False,
         prediction_confidence_threshold: float | None = None,
@@ -9552,7 +9558,7 @@ class MainWindow(QMainWindow):
                     else (224, 224)
                 )
                 input_size = (
-                    raw_size[0]
+                    (int(raw_size[0]), int(raw_size[1]))
                     if isinstance(raw_size, (list, tuple))
                     else int(raw_size)
                 )
@@ -9852,7 +9858,7 @@ class MainWindow(QMainWindow):
                     else (224, 224)
                 )
                 size = (
-                    raw_size[0]
+                    (int(raw_size[0]), int(raw_size[1]))
                     if isinstance(raw_size, (list, tuple))
                     else int(raw_size)
                 )
