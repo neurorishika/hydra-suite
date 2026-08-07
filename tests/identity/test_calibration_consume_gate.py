@@ -6,8 +6,10 @@ first factor's stored temperature when params omit an explicit override;
 params always win when they do specify one.
 """
 
+import pytest
 import torch
 
+from hydra_suite.core.individual.classification.errors import CalibrationRequiredError
 from hydra_suite.core.inference.config import (
     _resolve_cnn_temperature,
     build_inference_config_from_params,
@@ -101,3 +103,86 @@ def test_resolve_cnn_temperature_reads_first_factor(tmp_path):
     p = tmp_path / "calibrated.pth"
     _save_checkpoint(str(p), calibration_temperature=[1.7])
     assert _resolve_cnn_temperature({}, str(p)) == 1.7
+
+
+# ── Task 7: mandatory-calibration gate ──────────────────────────────────────
+
+
+def _gate_params(cnn_cfg_dict: dict, **overrides) -> dict:
+    params = _minimal_params(cnn_cfg_dict)
+    params.update(overrides)
+    return params
+
+
+def test_gate_raises_when_required_and_unique_identifier_uncalibrated(tmp_path):
+    p = tmp_path / "uncalibrated.pth"
+    _save_checkpoint(str(p), calibration_temperature=None)
+
+    params = _gate_params(
+        {"model_path": str(p), "label": "cnn_identity", "unique_identifier": True},
+        IDENTITY_CALIBRATION_REQUIRED=True,
+    )
+
+    with pytest.raises(CalibrationRequiredError, match="(?i)recalibrate"):
+        build_inference_config_from_params(params)
+
+
+def test_gate_no_raise_when_required_and_unique_identifier_calibrated(tmp_path):
+    p = tmp_path / "calibrated.pth"
+    _save_checkpoint(str(p), calibration_temperature=[1.7])
+
+    params = _gate_params(
+        {"model_path": str(p), "label": "cnn_identity", "unique_identifier": True},
+        IDENTITY_CALIBRATION_REQUIRED=True,
+    )
+
+    cfg = build_inference_config_from_params(params)
+    assert len(cfg.cnn_phases) == 1
+
+
+def test_gate_never_raises_when_not_required(tmp_path):
+    p = tmp_path / "uncalibrated.pth"
+    _save_checkpoint(str(p), calibration_temperature=None)
+
+    params = _gate_params(
+        {"model_path": str(p), "label": "cnn_identity", "unique_identifier": True},
+        IDENTITY_CALIBRATION_REQUIRED=False,
+    )
+    cfg = build_inference_config_from_params(params)
+    assert len(cfg.cnn_phases) == 1
+
+    # Absent entirely behaves the same as explicit False.
+    params_absent = _minimal_params(
+        {"model_path": str(p), "label": "cnn_identity", "unique_identifier": True}
+    )
+    cfg2 = build_inference_config_from_params(params_absent)
+    assert len(cfg2.cnn_phases) == 1
+
+
+def test_gate_override_downgrades_to_warning(tmp_path, caplog):
+    p = tmp_path / "uncalibrated.pth"
+    _save_checkpoint(str(p), calibration_temperature=None)
+
+    params = _gate_params(
+        {"model_path": str(p), "label": "cnn_identity", "unique_identifier": True},
+        IDENTITY_CALIBRATION_REQUIRED=True,
+        IDENTITY_CALIBRATION_OVERRIDE=True,
+    )
+
+    with caplog.at_level("WARNING"):
+        cfg = build_inference_config_from_params(params)
+
+    assert len(cfg.cnn_phases) == 1
+    assert any("recalibrate" in rec.message.lower() for rec in caplog.records)
+
+
+def test_gate_skips_non_unique_identifier_models(tmp_path):
+    p = tmp_path / "uncalibrated.pth"
+    _save_checkpoint(str(p), calibration_temperature=None)
+
+    params = _gate_params(
+        {"model_path": str(p), "label": "cnn_identity", "unique_identifier": False},
+        IDENTITY_CALIBRATION_REQUIRED=True,
+    )
+    cfg = build_inference_config_from_params(params)
+    assert len(cfg.cnn_phases) == 1

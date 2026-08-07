@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from dataclasses import asdict, dataclass, field
@@ -10,7 +11,10 @@ from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     canonical_geometry_from_params,
 )
+from hydra_suite.core.individual.classification.errors import CalibrationRequiredError
 from hydra_suite.runtime.resolver import RuntimeTier
+
+logger = logging.getLogger(__name__)
 
 
 class InferenceConfigError(ValueError):
@@ -646,6 +650,54 @@ def _resolve_cnn_temperature(cnn_cfg_dict: dict, model_path: str) -> float:
     return 1.0
 
 
+def _gate_calibration(params: dict) -> None:
+    """Mandatory-calibration gate for ``unique_identifier`` CNN models.
+
+    A no-op unless ``params["IDENTITY_CALIBRATION_REQUIRED"]`` is set. When it
+    is, every ``CNN_CLASSIFIERS`` entry marked ``unique_identifier`` is
+    checked via a metadata-only parse (no weight load -- ``current_signature``
+    is intentionally left ``None``, so ``calibration_status`` can only report
+    ``"calibrated"``/``"uncalibrated"``, never ``"stale"``; staleness is a
+    display concern handled elsewhere). An uncalibrated model raises
+    ``CalibrationRequiredError`` naming the recalibrate action, unless
+    ``params["IDENTITY_CALIBRATION_OVERRIDE"]`` is set, in which case the same
+    message is logged as a warning instead.
+    """
+    if not params.get("IDENTITY_CALIBRATION_REQUIRED"):
+        return
+    override = bool(params.get("IDENTITY_CALIBRATION_OVERRIDE"))
+    for cnn_cfg_dict in params.get("CNN_CLASSIFIERS", []):
+        if not bool(cnn_cfg_dict.get("unique_identifier", False)):
+            continue
+        model_path = str(cnn_cfg_dict.get("model_path", "")).strip()
+        if not model_path or not os.path.exists(model_path):
+            continue
+        try:
+            from hydra_suite.core.individual.classification.backend import (
+                _select_loader,
+                calibration_status,
+            )
+
+            meta = _select_loader(model_path).parse_metadata(model_path)
+            status = calibration_status(meta, None)
+        except Exception:
+            # A read failure means we cannot prove calibration -- treat it as
+            # uncalibrated rather than silently letting an unverifiable model
+            # through the gate.
+            status = "uncalibrated"
+        if status == "uncalibrated":
+            message = (
+                f"Identity model {model_path!r} is uncalibrated but calibration "
+                "is required (IDENTITY_CALIBRATION_REQUIRED). Please recalibrate "
+                "it via ClassKit -> Recalibrate model... before tracking, or set "
+                "IDENTITY_CALIBRATION_OVERRIDE to downgrade this to a warning."
+            )
+            if override:
+                logger.warning(message)
+            else:
+                raise CalibrationRequiredError(message)
+
+
 def build_inference_config_from_params(params: dict) -> InferenceConfig:
     """Build an InferenceConfig from a tracking-worker params dict.
 
@@ -896,6 +948,8 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
                 ),
             )
         )
+
+    _gate_calibration(params)
 
     # Pose — supports both YOLO-pose and SLEAP backends.
     pose_cfg = None
