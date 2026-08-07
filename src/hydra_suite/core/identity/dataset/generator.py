@@ -131,8 +131,27 @@ class IndividualDatasetGenerator:
         # Save interval (use detections as-is, just control frequency)
         self.save_every_n_frames = params.get("INDIVIDUAL_SAVE_INTERVAL", 1)
 
-        # Output format
-        self.output_format = params.get("INDIVIDUAL_OUTPUT_FORMAT", "png")  # png or jpg
+        # Output format — crop-dataset export is MODEL INPUT (training data
+        # for the identity/pose/classification pipelines), and it must be
+        # pixel-identical to the uncompressed canonical crop used at
+        # inference time. JPEG's DCT recompression introduces lossy
+        # quantization artifacts that a canonical crop extracted straight
+        # from the source frame at inference never sees, silently breaking
+        # train/infer consistency. So this exporter only accepts lossless
+        # formats (default: png); jpg/jpeg is rejected outright. The
+        # human-facing oriented-video exporter (oriented_video.py) is not
+        # model input and is unaffected by this restriction.
+        self.output_format = params.get("INDIVIDUAL_OUTPUT_FORMAT", "png")
+        if str(self.output_format).lower() in ("jpg", "jpeg"):
+            raise ValueError(
+                "IndividualDatasetGenerator: INDIVIDUAL_OUTPUT_FORMAT="
+                f"{self.output_format!r} is not allowed. Crop-dataset export "
+                "is MODEL INPUT for training and must match the lossless, "
+                "uncompressed canonical crop used at inference time -- JPEG "
+                "recompression introduces DCT quantization loss that breaks "
+                "train/infer consistency. Use a lossless format (e.g. 'png') "
+                "instead."
+            )
         self.jpg_quality = params.get("INDIVIDUAL_JPG_QUALITY", 100)
 
         # Statistics
