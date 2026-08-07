@@ -1,16 +1,28 @@
 """Regression guard (Deviation C): `model_input_wh` must use a backend's true
 (W, H) input via `preferred_input_wh`, not collapse it to a square via the
-scalar `preferred_input_size` (== max(W, H)).
+scalar `preferred_input_size` (== max(W, H)) -- UNLESS the backend owns its
+own Layer-2 fit internally (`does_own_letterbox`), in which case it must get
+the IDENTITY fit (`geometry.canvas_wh`) instead (F3).
 
-Bug: `model_input_wh` in `core/inference/stages/pose.py` only read the scalar
-`preferred_input_size` and returned `(dim, dim)`. For a 192x256 ViTPose model
-or a fixed-HxW SLEAP-exported model, that fits the canonical crop into a
-SQUARE, which then gets letterboxed AGAIN inside the backend's own
-preprocessing -- a wholly redundant resample that also loses resolution.
+Bug (original, Deviation C): `model_input_wh` in
+`core/inference/stages/pose.py` only read the scalar `preferred_input_size`
+and returned `(dim, dim)`. For a 192x256 ViTPose model or a fixed-HxW
+SLEAP-exported model, that fits the canonical crop into a SQUARE, which then
+gets letterboxed AGAIN inside the backend's own preprocessing -- a wholly
+redundant resample that also loses resolution.
 
-Fix: backends with a fixed input expose `preferred_input_wh` (true (W, H));
-`model_input_wh` uses it directly when present. Backends with no fixed input
-(SLEAP service, `preferred_input_size == 0`) must keep getting the identity
+Bug (F3, follow-up): even after fixing the square collapse, ViTPose's own
+`preprocess_crop` (box2cs/top_down_affine) ALREADY performs the canvas ->
+192x256 fit internally, so returning `preferred_input_wh` for ViTPose still
+forces a second, redundant resample on the non-CUDA branch that diverges from
+the CUDA branch (raw canvas) and from training. Fix: a `does_own_letterbox`
+flag on the backend (True for ViTPose) makes `model_input_wh` return the
+identity fit (`geometry.canvas_wh`) instead of `preferred_input_wh`.
+
+SLEAP-exported does NOT own its letterbox (its own preprocessing expects an
+already-fitted crop), so it keeps getting its true non-square
+`preferred_input_wh` directly -- no collapsing to a square. Backends with no
+fixed input (SLEAP service, `preferred_input_size == 0`) keep the identity
 fit -- `model_input_wh` returns `geometry.canvas_wh` for them, unchanged.
 """
 
@@ -44,17 +56,28 @@ def _write_vitpose_ckpt(tmp_path, wh):
     return path
 
 
-def test_vitposemodel_input_wh_is_true_non_square(tmp_path):
+def test_vitposemodel_input_wh_is_the_identity_fit_not_the_true_non_square_size(
+    tmp_path,
+):
+    """F3: ViTPose owns its own Layer-2 fit (box2cs/top_down_affine already
+    resamples canvas -> 192x256 inside the backend), so `model_input_wh` must
+    hand back the IDENTITY fit (`geometry.canvas_wh`), not
+    `preferred_input_wh` -- doing the latter would be a second, redundant
+    resample. `preferred_input_wh` itself is still true non-square (192, 256)
+    -- it's just no longer what `model_input_wh` returns for this backend.
+    """
     ckpt = _write_vitpose_ckpt(tmp_path, (192, 256))
     backend = ViTPoseBackend(str(ckpt), device="cpu")
+    assert backend.does_own_letterbox is True
+    assert backend.preferred_input_wh == (192, 256)
     model = PoseModel(
         backend=backend, n_keypoints=9, keypoint_names=[f"k{i}" for i in range(9)]
     )
 
     wh = model_input_wh(model, _GEOMETRY)
 
-    assert wh == (192, 256)
-    assert wh[0] != wh[1]  # NOT collapsed to a square
+    assert wh == _GEOMETRY.canvas_wh
+    assert wh != (192, 256)
 
 
 def test_sleap_exportedmodel_input_wh_is_true_non_square():

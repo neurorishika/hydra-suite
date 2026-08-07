@@ -55,6 +55,16 @@ def test_backend_adopts_the_checkpoint_geometry(tmp_path):
     assert backend.preferred_input_size == 256
 
 
+def test_backend_declares_it_owns_its_own_letterbox(tmp_path):
+    """F3: ViTPose's own preprocess_crop (box2cs/top_down_affine) already
+    performs the Layer-2 fit, so `model_input_wh` must skip
+    `preferred_input_wh` and hand back the identity fit for this backend --
+    see test_pose_model_input_wh_non_square.py and test_vitpose_identity_fit.py.
+    """
+    backend = ViTPoseBackend(str(_write_square_ckpt(tmp_path)), device="cpu")
+    assert backend.does_own_letterbox is True
+
+
 def test_backend_predicts_end_to_end_at_a_square_geometry(tmp_path):
     import numpy as np
 
