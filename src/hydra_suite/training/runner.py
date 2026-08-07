@@ -648,14 +648,30 @@ def _run_tiny_validation(model, val_loader, device, ignore_index=None):
 def _calibrate_and_pack(
     model, val_loader, device, *, num_factors: int = 1, split_logits=None
 ) -> dict:
-    """Fit calibration on the (best) model + val loader; return save kwargs (or {} if no val)."""
+    """Fit calibration on the (best) model + val loader; return save kwargs (or {} if no val).
+
+    Calibration is best-effort: an empty/degenerate val loader or any other
+    fit failure must never sink an otherwise fully-trained run, so any
+    exception here degrades to "uncalibrated but saved" ({}) rather than
+    propagating.
+    """
     if val_loader is None:
         return {}
     from hydra_suite.training.calibration_fit import fit_calibration_from_val
 
-    res = fit_calibration_from_val(
-        model, val_loader, device, split_logits=split_logits, num_factors=num_factors
-    )
+    try:
+        res = fit_calibration_from_val(
+            model,
+            val_loader,
+            device,
+            split_logits=split_logits,
+            num_factors=num_factors,
+        )
+    except Exception as exc:  # calibration is best-effort; never lose the trained model
+        logger.warning(
+            "Calibration fit failed (%s); saving model without calibration.", exc
+        )
+        return {}
     logger.info(
         "Calibration fit: T=%s  ECE %s -> %s",
         [round(t, 3) for t in res.temperatures],

@@ -145,6 +145,26 @@ def _build_recalibration_val_loader(model_path: str, val_dir: str, raw_ckpt: dic
         val_ds = datasets.ImageFolder(
             str(val_dir), transform=val_tf, loader=cv2_bgr_loader
         )
+        # ImageFolder indexes classes by sorted folder name, independent of the
+        # checkpoint's stored class order. If val_dir's class set/order doesn't
+        # match the checkpoint's, labels silently misalign against the model's
+        # logit order and calibration fits a WRONG temperature with no error.
+        # class_names_per_factor[0] is authoritative for flat checkpoints (see
+        # save_torchvision_checkpoint); fall back to "class_names" if absent.
+        cnpf_flat = raw_ckpt.get("class_names_per_factor") or []
+        stored_classes = list(
+            cnpf_flat[0] if cnpf_flat else raw_ckpt.get("class_names") or []
+        )
+        if stored_classes and list(val_ds.classes) != stored_classes:
+            raise ValueError(
+                f"{val_dir!r}: val_dir classes {list(val_ds.classes)!r} do not "
+                f"match the checkpoint's class order {stored_classes!r} -- "
+                "torchvision.datasets.ImageFolder indexes classes by sorted "
+                "folder name, so a mismatched/missing class here would "
+                "silently misalign labels against the model's logits and fit "
+                "a wrong calibration temperature. Fix val_dir to contain "
+                "exactly the checkpoint's classes."
+            )
 
     val_loader = DataLoader(val_ds, batch_size=16, shuffle=False, num_workers=0)
     return val_loader, num_factors, split_logits

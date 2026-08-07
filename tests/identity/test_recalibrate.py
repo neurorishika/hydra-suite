@@ -11,6 +11,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from hydra_suite.core.individual.classification.backend import (
     ClassifierBackend,
@@ -103,3 +104,19 @@ def test_recalibrate_artifact_does_not_change_weights(tmp_path):
     after = torch.load(str(model_path), map_location="cpu", weights_only=False)
     for k, v in before_state.items():
         assert torch.equal(v, after["model_state_dict"][k])
+
+
+def test_recalibrate_artifact_flat_class_mismatch_raises(tmp_path):
+    # val_dir is missing the "bee" class the checkpoint was trained with.
+    # torchvision.datasets.ImageFolder would silently reindex "ant" -> 0
+    # (dense sorted order), which happens to match here, so instead we use a
+    # val_dir with an EXTRA/renamed class so ImageFolder's sorted class list
+    # provably differs from the checkpoint's stored class order.
+    model_path = _make_tiny_checkpoint(tmp_path)  # class_names = ["ant", "bee"]
+
+    val_dir = tmp_path / "val"
+    _write_images(val_dir / "ant", 6, seed=0)
+    _write_images(val_dir / "wasp", 6, seed=1)  # "bee" renamed/missing -> "wasp"
+
+    with pytest.raises(ValueError, match="do not match"):
+        recalibrate_artifact(str(model_path), str(val_dir))
