@@ -6,7 +6,10 @@ import os
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_geometry_from_params,
+)
 from hydra_suite.runtime.resolver import RuntimeTier
 
 
@@ -399,8 +402,13 @@ def _default_canonical_geometry() -> CanonicalGeometry:
     Used whenever a config is built without an explicit ``canonical`` (e.g.
     hand-built ``InferenceConfig``s in tests, or `_dict_to_config` reading an
     older on-disk JSON that predates this field).
+
+    Routes through ``canonical_geometry_from_params`` with an empty params
+    dict so the magic defaults (``REFERENCE_BODY_SIZE=20.0``,
+    ``reference_aspect_ratio=2.0``, ``canonical_margin=1.3``) live in exactly
+    one place: that helper's own defaults.
     """
-    return CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    return canonical_geometry_from_params({})
 
 
 @dataclass
@@ -675,13 +683,9 @@ def build_inference_config_from_params(params: dict) -> InferenceConfig:
     # which of those stages end up configured below. CanonicalGeometry clamps
     # aspect_ratio/margin to >= 1.0, so this is also the single place that
     # guards against a degenerate (< 1.0) advanced-config value silently
-    # reaching any classifier.
-    canonical = CanonicalGeometry.from_reference(
-        reference_body_px=float(params.get("REFERENCE_BODY_SIZE", 20.0))
-        * float(params.get("RESIZE_FACTOR", 1.0)),
-        aspect_ratio=float(_adv.get("reference_aspect_ratio", 2.0)),
-        margin=float(_adv.get("canonical_margin", 1.3)),
-    )
+    # reaching any classifier. Delegates to ``canonical_geometry_from_params``
+    # so this is not a second copy of that derivation.
+    canonical = canonical_geometry_from_params(params)
 
     if obb_mode == "sequential":
         detect_path = str(params.get("YOLO_DETECT_MODEL_PATH", "") or "")
