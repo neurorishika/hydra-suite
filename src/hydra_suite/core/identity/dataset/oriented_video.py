@@ -763,12 +763,17 @@ class OrientedTrackVideoExporter:
                 theta = self._smooth_angle_series(theta, window)
 
             for idx, task in enumerate(tasks):
+                # record=False: this re-derives the affine for a task whose
+                # detection was already recorded once in _build_task (see
+                # docstring on _canonical_affine_for_task) -- it must not
+                # double-count the same detection in self._clipping_stats.
                 affine, out_w, out_h = self._canonical_affine_for_task(
                     float(center_x[idx]),
                     float(center_y[idx]),
                     max(1.0, float(width[idx])),
                     max(1.0, float(height[idx])),
                     float(theta[idx]),
+                    record=False,
                 )
                 task.center_x = float(center_x[idx])
                 task.center_y = float(center_y[idx])
@@ -1301,6 +1306,8 @@ class OrientedTrackVideoExporter:
         box_w: float,
         box_h: float,
         theta: float,
+        *,
+        record: bool = True,
     ) -> tuple[np.ndarray, int, int]:
         """Layer 1 canonical affine for one task, against the session geometry.
 
@@ -1308,6 +1315,14 @@ class OrientedTrackVideoExporter:
         canvas: every task now maps onto the one fixed canvas (self._geometry)
         that every other canonical-crop consumer shares, and clipping against
         that fixed canvas is counted rather than compensated.
+
+        ``record`` controls whether this call feeds ``self._clipping_stats``.
+        Each detection must be recorded exactly once: the initial
+        ``_build_task`` call (one per detection) records; a later
+        ``_apply_track_postprocessing`` re-derivation of the SAME task (after
+        heading-flip fixing / affine stabilization smoothing) must pass
+        ``record=False`` so the guard's total_count/clipped_count don't
+        double-count when those optional knobs are enabled.
         """
         corners = ellipse_to_obb_corners(center_x, center_y, box_w, box_h, theta)
         canvas_w, canvas_h = self._geometry.canvas_w, self._geometry.canvas_h
@@ -1326,7 +1341,8 @@ class OrientedTrackVideoExporter:
             )
             return m_align, canvas_w, canvas_h
 
-        self._clipping_stats.record(corners, self._geometry)
+        if record:
+            self._clipping_stats.record(corners, self._geometry)
         return m_align, canvas_w, canvas_h
 
     @staticmethod
