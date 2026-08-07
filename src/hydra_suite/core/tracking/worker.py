@@ -1829,83 +1829,22 @@ class TrackingEngineCore:
         _identity_in_tracking_enabled = bool(p.get("ENABLE_IDENTITY_IN_TRACKING", True))
         if individual_pipeline_enabled and _identity_in_tracking_enabled:
             try:
-                # Collect all known label candidates from CNN + tag configurations.
-                # For multihead (multi-factor) classifiers, build composite catalog
-                # entries from the cartesian product of factor class names so the
-                # uniqueness constraint operates on whole-individual identities rather
-                # than single-factor labels.
-                import itertools as _itertools
-
+                # Resolve the identity domain (CNN + tag configuration) into a
+                # structured catalog spec, then build the runtime catalog from it.
                 from hydra_suite.core.individual.identity.catalog import IdentityCatalog
                 from hydra_suite.core.individual.identity.online import (
                     OnlineIdentityDecoder,
                 )
+                from hydra_suite.core.individual.identity.resolve import (
+                    resolve_catalog_spec,
+                )
 
-                _known_labels_set: list[str] = []
-                for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
-                    if not bool(_cnn_cfg.get("unique_identifier", False)):
-                        continue
-                    # Resolve per-factor class names: prefer stored field, else read model file.
-                    _cnpf_cfg: list[list[str]] = (
-                        _cnn_cfg.get("class_names_per_factor") or []
-                    )
-                    if not _cnpf_cfg:
-                        # Try to read from the model file.
-                        try:
-                            import json as _json
-
-                            _mp = str(_cnn_cfg.get("model_path", ""))
-                            if _mp and os.path.exists(_mp):
-                                with open(_mp) as _mf:
-                                    _mmeta = _json.load(_mf)
-                                _cnpf_cfg = _mmeta.get("class_names_per_factor") or []
-                                if not _cnpf_cfg:
-                                    _flat = _mmeta.get("class_names") or []
-                                    if _flat:
-                                        _cnpf_cfg = [_flat]
-                                if not _cnpf_cfg:
-                                    for _fe in _mmeta.get("factor_models") or []:
-                                        _fl = _fe.get("class_names") or []
-                                        if _fl:
-                                            _cnpf_cfg.append(_fl)
-                        except Exception:
-                            pass
-
-                    _non_empty = [fl for fl in _cnpf_cfg if fl]
-                    if len(_non_empty) > 1:
-                        # Multi-factor: composite labels (cartesian product).
-                        for _combo in _itertools.product(*_non_empty):
-                            _composite = "_".join(str(c) for c in _combo if c)
-                            if _composite and _composite not in _known_labels_set:
-                                _known_labels_set.append(_composite)
-                    else:
-                        # Single factor or flat labels list.
-                        _clf_labels: list[str] = []
-                        for _fl in _non_empty:
-                            _clf_labels.extend([str(l) for l in _fl if l])
-                        if not _clf_labels:
-                            _clf_labels = [
-                                str(l) for l in (_cnn_cfg.get("labels", []) or []) if l
-                            ]
-                        for _lbl in _clf_labels:
-                            if _lbl and _lbl not in _known_labels_set:
-                                _known_labels_set.append(_lbl)
-                # Tag identities may also be provided via TAG_IDENTITY_LABELS.
-                # Only accept tag labels that match CNN-derived classes when CNN
-                # is configured — this blocks garbage composites (e.g. phase
-                # names) from polluting the identity catalog and assignment.
-                _cnn_derived = set(_known_labels_set)
-                for _lbl in p.get("TAG_IDENTITY_LABELS", []):
-                    _s = str(_lbl).strip() if _lbl else ""
-                    if not _s:
-                        continue
-                    if _cnn_derived and _s not in _cnn_derived:
-                        continue
-                    if _s not in _known_labels_set:
-                        _known_labels_set.append(_s)
-
-                if _known_labels_set:
-                    _identity_catalog = IdentityCatalog.from_labels(_known_labels_set)
+                _catalog_spec = resolve_catalog_spec(
+                    p.get("CNN_CLASSIFIERS", []),
+                    p.get("TAG_IDENTITY_LABELS", []),
+                )
+                if _catalog_spec.entries:
+                    _identity_catalog = IdentityCatalog.from_spec(_catalog_spec)
                     _identity_online_decoder = OnlineIdentityDecoder(
                         _identity_catalog, p
                     )
