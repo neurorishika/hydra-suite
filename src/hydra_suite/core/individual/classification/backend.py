@@ -23,7 +23,7 @@ from hydra_suite.core.individual.classification.errors import (
 )
 from hydra_suite.runtime.resolver import ResolvedBackend
 
-__all__ = ["ClassifierMetadata", "ClassifierBackend"]
+__all__ = ["ClassifierMetadata", "ClassifierBackend", "calibration_status"]
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,13 @@ class ClassifierMetadata:
             confidence cutoff for collapsing uncertain predictions to unknown.
         source_path: Absolute path the artifact was loaded from (for display
             and ONNX-derivation peer location).
+        calibration_temperature: Optional per-factor temperature-scaling
+            values fit during training (one per factor).
+        calibration_signature: Optional signature identifying the trained
+            weights the calibration temperature was fit against; used to
+            detect staleness after fine-tuning.
+        calibration_ece: Optional per-factor expected-calibration-error
+            values recorded alongside the fitted temperature.
     """
 
     arch: str
@@ -66,6 +73,9 @@ class ClassifierMetadata:
     monochrome: bool
     recommended_confidence_threshold: float | None
     source_path: str
+    calibration_temperature: tuple[float, ...] | None = None
+    calibration_signature: str | None = None
+    calibration_ece: tuple[float, ...] | None = None
 
 
 def _normalize_recommended_confidence_threshold(raw: Any) -> float | None:
@@ -77,6 +87,43 @@ def _normalize_recommended_confidence_threshold(raw: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return min(1.0, max(0.0, value))
+
+
+def _normalize_calibration_temperature(raw: Any) -> tuple[float, ...] | None:
+    """Canonicalize a calibration temperature/ECE list to a float tuple.
+
+    Accepts a scalar or an iterable of scalars (one per factor). Returns
+    ``None`` for missing, empty, or unparseable values.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        raw = [raw]
+    try:
+        vals = tuple(float(x) for x in raw)
+    except (TypeError, ValueError):
+        return None
+    return vals or None
+
+
+def calibration_status(
+    meta: "ClassifierMetadata", current_signature: str | None
+) -> str:
+    """Classify an artifact's calibration state.
+
+    ``"uncalibrated"`` when no temperature is stored; ``"stale"`` when a
+    temperature is stored but the stored signature no longer matches
+    ``current_signature`` (and a current signature is known); ``"calibrated"``
+    otherwise.
+    """
+    if not meta.calibration_temperature:
+        return "uncalibrated"
+    if (
+        current_signature is not None
+        and meta.calibration_signature != current_signature
+    ):
+        return "stale"
+    return "calibrated"
 
 
 def _normalize_input_size(raw: Any) -> tuple[int, int]:
@@ -183,6 +230,13 @@ class _TinyLoader:
                 ckpt.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            calibration_temperature=_normalize_calibration_temperature(
+                ckpt.get("calibration_temperature")
+            ),
+            calibration_signature=(ckpt.get("calibration_signature") or None),
+            calibration_ece=_normalize_calibration_temperature(
+                ckpt.get("calibration_ece")
+            ),
         )
 
     @staticmethod
@@ -241,6 +295,13 @@ class _YoloFlatLoader:
                 sidecar.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            calibration_temperature=_normalize_calibration_temperature(
+                sidecar.get("calibration_temperature")
+            ),
+            calibration_signature=(sidecar.get("calibration_signature") or None),
+            calibration_ece=_normalize_calibration_temperature(
+                sidecar.get("calibration_ece")
+            ),
         )
 
     @staticmethod
@@ -273,6 +334,13 @@ class _TorchvisionLoader:
                 ckpt.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            calibration_temperature=_normalize_calibration_temperature(
+                ckpt.get("calibration_temperature")
+            ),
+            calibration_signature=(ckpt.get("calibration_signature") or None),
+            calibration_ece=_normalize_calibration_temperature(
+                ckpt.get("calibration_ece")
+            ),
         )
 
     @staticmethod
@@ -359,6 +427,13 @@ class _ClassifierMultiheadBundleLoader:
                 data.get("recommended_confidence_threshold")
             ),
             source_path=path,
+            calibration_temperature=_normalize_calibration_temperature(
+                data.get("calibration_temperature")
+            ),
+            calibration_signature=(data.get("calibration_signature") or None),
+            calibration_ece=_normalize_calibration_temperature(
+                data.get("calibration_ece")
+            ),
         )
 
     @staticmethod
