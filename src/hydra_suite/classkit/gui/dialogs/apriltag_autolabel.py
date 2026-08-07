@@ -176,7 +176,7 @@ class AprilTagAutoLabelDialog(QDialog):
 
     def get_config(self):
         """Return an AprilTagConfig built from the dialog's current settings."""
-        from hydra_suite.core.identity.classification.apriltag import AprilTagConfig
+        from hydra_suite.core.individual.classification.apriltag import AprilTagConfig
 
         n = self._unsharp_kernel_spin.value()
         return AprilTagConfig(

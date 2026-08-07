@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     _VITPOSE_RECIPE_TAG,
     ViTPoseBackend,
     _vitpose_artifact_signature,
 )
-from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 

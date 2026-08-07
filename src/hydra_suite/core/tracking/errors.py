@@ -1,6 +1,6 @@
 """Error types for the Qt-free tracking session service.
 
-Follows the ``core/identity/classification/errors.py`` precedent: the service
+Follows the ``core/individual/classification/errors.py`` precedent: the service
 raises a concrete type on fatal failure so the caller (GUI or CLI) decides
 presentation instead of the service reaching for a widget.
 """

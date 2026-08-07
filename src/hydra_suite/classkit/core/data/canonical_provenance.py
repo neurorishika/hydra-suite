@@ -4,7 +4,7 @@ ClassKit ingests already-cropped images (``core/data/source_import.py`` records
 each image's ``source_root`` -- the folder it was imported from -- in its
 per-image metadata). When that folder still carries a ``metadata.json`` with
 Layer 1 canonical-crop provenance (written by the identity dataset generator /
-oriented-video exporter -- see ``core.identity.dataset.naming.read_canonical_provenance``),
+oriented-video exporter -- see ``core.individual.dataset.naming.read_canonical_provenance``),
 this module recovers the geometry so a published classifier can be stamped
 with what it actually trained on, instead of every model staying silently
 unstamped.
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.core.identity.dataset.naming import read_canonical_provenance
+from hydra_suite.core.individual.dataset.naming import read_canonical_provenance
 
 
 def canonical_geometry_for_training_images(

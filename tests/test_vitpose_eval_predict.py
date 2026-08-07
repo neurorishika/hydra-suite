@@ -4,8 +4,8 @@ Verifies the preds-dict contract used by the PoseKit evaluation dashboard
 (``evaluation.py::_score_one_frame``): ``{str(image_path): [(x, y, conf), ...]}``
 with exactly ``num_kpts`` entries per image.
 
-The real ``ViTPoseBackend.predict_batch`` (core/identity/pose/backends/vitpose.py)
-returns a list of ``PoseResult`` (core/identity/pose/types.py), each carrying a
+The real ``ViTPoseBackend.predict_batch`` (core/individual/pose/backends/vitpose.py)
+returns a list of ``PoseResult`` (core/individual/pose/types.py), each carrying a
 ``keypoints`` ndarray of shape (K, 3) -- not a raw ndarray. The fake backend here
 mirrors that exact return shape so the test exercises the real dict-shape
 contract rather than an invented one.
@@ -14,7 +14,7 @@ contract rather than an invented one.
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.pose.types import PoseResult
+from hydra_suite.core.individual.pose.types import PoseResult
 from hydra_suite.integrations.sleap.service import PoseInferenceService
 
 

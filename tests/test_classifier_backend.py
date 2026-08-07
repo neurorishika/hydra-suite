@@ -10,7 +10,7 @@ from hydra_suite.runtime.resolver import ResolvedBackend
 
 def test_error_hierarchy_importable():
     """ClassifierError hierarchy exports from the errors module with correct inheritance."""
-    from hydra_suite.core.identity.classification.errors import (
+    from hydra_suite.core.individual.classification.errors import (
         ClassifierConfigError,
         ClassifierError,
         ClassifierFormatError,
@@ -30,7 +30,7 @@ def test_error_hierarchy_importable():
 
 def test_classifier_metadata_fields():
     """ClassifierMetadata is frozen and exposes canonical fields."""
-    from hydra_suite.core.identity.classification.backend import ClassifierMetadata
+    from hydra_suite.core.individual.classification.backend import ClassifierMetadata
 
     meta = ClassifierMetadata(
         arch="tinyclassifier",
@@ -56,7 +56,7 @@ def test_classifier_metadata_fields():
 
 def test_backend_parses_tiny_flat_metadata(tiny_flat_headtail):
     """ClassifierBackend exposes metadata for a v2 tiny flat checkpoint without loading weights."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(tiny_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
@@ -74,7 +74,7 @@ def test_backend_parses_tiny_flat_metadata(tiny_flat_headtail):
 
 def test_backend_tiny_flat_predict_batch_shape(tiny_flat_headtail):
     """predict_batch returns per-crop per-factor probability vectors with correct shape."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(tiny_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
@@ -95,7 +95,7 @@ def test_backend_tiny_preprocess_matches_training_path(tiny_flat_headtail):
     """Tiny backend preprocessing matches the tiny training/inference path."""
     import cv2
 
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     crop = np.zeros((24, 40, 3), dtype=np.uint8)
     crop[..., 0] = 25
@@ -116,7 +116,7 @@ def test_backend_tiny_preprocess_matches_training_path(tiny_flat_headtail):
 
 def test_backend_non_square_input_size_roundtrip(tiny_flat_nonsquare):
     """[H, W] serialization in checkpoint is preserved as (H, W) in memory."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(tiny_flat_nonsquare), resolved=ResolvedBackend("torch", "cpu", False)
@@ -132,7 +132,7 @@ def test_backend_non_square_input_size_roundtrip(tiny_flat_nonsquare):
 def test_backend_parses_yolo_flat_metadata(yolo_flat_headtail):
     """YOLO classify .pt exposes 5-class flat metadata via backend."""
     pytest.importorskip("ultralytics")
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(yolo_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
@@ -154,7 +154,7 @@ def test_backend_parses_yolo_flat_metadata(yolo_flat_headtail):
 
 def test_backend_yolo_flat_predict_batch_shape(yolo_flat_headtail):
     pytest.importorskip("ultralytics")
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(yolo_flat_headtail), resolved=ResolvedBackend("torch", "cpu", False)
@@ -175,7 +175,7 @@ def test_backend_yolo_flat_sidecar_metadata(tmp_path, yolo_flat_headtail):
     import json
     import shutil
 
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     model_path = tmp_path / "artifact.pt"
     shutil.copy2(str(yolo_flat_headtail), str(model_path))
@@ -205,7 +205,7 @@ def test_backend_yolo_flat_sidecar_metadata(tmp_path, yolo_flat_headtail):
 
 def test_backend_torchvision_flat_metadata_and_inference(torchvision_flat_identity):
     """ClassifierBackend loads a torchvision flat v2 checkpoint and returns per-factor probs."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(torchvision_flat_identity), resolved=ResolvedBackend("torch", "cpu", False)
@@ -229,8 +229,8 @@ def test_backend_parses_legacy_flat_torchvision_metadata(
     legacy_torchvision_flat_headtail,
 ):
     """ClassifierBackend rejects pre-v2 flat torchvision checkpoints."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
-    from hydra_suite.core.identity.classification.errors import ClassifierFormatError
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.errors import ClassifierFormatError
 
     with pytest.raises(ClassifierFormatError):
         ClassifierBackend(
@@ -241,7 +241,7 @@ def test_backend_parses_legacy_flat_torchvision_metadata(
 
 def test_backend_tiny_multi_metadata_and_inference(tiny_multi_identity):
     """ClassifierBackend parses multi-head metadata and splits logits per factor."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(tiny_multi_identity), resolved=ResolvedBackend("torch", "cpu", False)
@@ -266,7 +266,7 @@ def test_backend_tiny_multi_metadata_and_inference(tiny_multi_identity):
 def test_backend_yolo_multihead_bundle(yolo_multihead_bundle):
     """ClassifierBackend loads .multihead.json manifests and runs each YOLO per factor."""
     pytest.importorskip("ultralytics")
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(yolo_multihead_bundle), resolved=ResolvedBackend("torch", "cpu", False)
@@ -291,7 +291,7 @@ def test_backend_generic_classifier_multihead_bundle(
 ):
     import shutil
 
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.training.model_publish import write_classifier_multihead_manifest
 
     factor_a = tmp_path / "color.pth"
@@ -338,7 +338,7 @@ def test_backend_generic_multihead_bundle_dedupes_duplicate_factor_names(
     import json
     import shutil
 
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     factor_a = tmp_path / "color.pth"
     factor_b = tmp_path / "heading.pth"
@@ -388,8 +388,8 @@ def test_backend_generic_multihead_bundle_preserves_onnx_runtime(
 ):
     import shutil
 
-    import hydra_suite.core.identity.classification.backend as backend_module
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    import hydra_suite.core.individual.classification.backend as backend_module
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.training.model_publish import write_classifier_multihead_manifest
 
     factor_a = tmp_path / "color.pth"
@@ -459,8 +459,8 @@ def test_backend_generic_multihead_bundle_preserves_onnx_runtime(
 def test_backend_yolo_multihead_bundle_preserves_export_runtime(
     yolo_multihead_bundle, monkeypatch
 ):
-    import hydra_suite.core.identity.classification.backend as backend_module
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    import hydra_suite.core.individual.classification.backend as backend_module
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     class FakeFactorBackend:
         def __init__(self, probs):
@@ -507,8 +507,8 @@ def test_backend_yolo_multihead_bundle_preserves_export_runtime(
 def test_backend_falls_back_to_native_torch_when_onnx_accelerator_missing(
     tiny_flat_headtail, monkeypatch
 ):
-    import hydra_suite.core.identity.classification.backend as backend_module
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    import hydra_suite.core.individual.classification.backend as backend_module
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     observed: dict[str, object] = {}
 
@@ -558,7 +558,7 @@ def test_backend_tiny_monochrome_preprocess_matches_training_path(
     """Tiny monochrome checkpoints grayscale inputs without ImageNet normalization."""
     import cv2
 
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     backend = ClassifierBackend(
         str(tiny_flat_monochrome), ResolvedBackend("torch", "cpu", False)

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.identity.classification.apriltag import AprilTagConfig
+from hydra_suite.core.individual.classification.apriltag import AprilTagConfig
 from hydra_suite.utils.file_dialogs import HydraFileDialog as QFileDialog
 from hydra_suite.widgets.dialogs import BaseDialog
 

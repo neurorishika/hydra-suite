@@ -4,7 +4,7 @@
 
 **Goal:** Move the final media export (annotated video + canonical crops/oriented videos) and active-learning dataset generation out of the GUI orchestrator into the Qt-free `TrackingSessionCore`, so the service reaches full parity with the hidden-`MainWindow` bridge and fills `SessionResult.media_paths` and `SessionResult.dataset_result`.
 
-**Architecture:** Extract the ~1100 lines of drawing/render helpers from `trackerkit/gui/orchestrators/tracking.py` into pure functions in `core/post/media_export.py` (annotated video — Part 3b) and `core/post/dataset_export.py` (active-learning dataset — Part 3a); delegate canonical crops/oriented videos to the already-Qt-free `OrientedTrackVideoExporter` (`core/identity/dataset/oriented_video.py`). Add three inline stages to `TrackingSessionCore` (`core/tracking/session.py`, from Slice 2) that gate on the Slice-1 policy predicates, drive cooperative cancellation via `callbacks.should_stop()`, and announce `callbacks.stage_changed(name)`. The GUI's per-stage `QThread` workers are repointed to call the new core functions so behavior is byte-identical while the logic lives in `core/`. Split into **Part 3a** (canonical crops + oriented videos + dataset — mostly wiring around existing cores) and **Part 3b** (annotated-overlay-video extraction — the real code move), each independently gated so a reviewer can accept one without the other.
+**Architecture:** Extract the ~1100 lines of drawing/render helpers from `trackerkit/gui/orchestrators/tracking.py` into pure functions in `core/post/media_export.py` (annotated video — Part 3b) and `core/post/dataset_export.py` (active-learning dataset — Part 3a); delegate canonical crops/oriented videos to the already-Qt-free `OrientedTrackVideoExporter` (`core/individual/dataset/oriented_video.py`). Add three inline stages to `TrackingSessionCore` (`core/tracking/session.py`, from Slice 2) that gate on the Slice-1 policy predicates, drive cooperative cancellation via `callbacks.should_stop()`, and announce `callbacks.stage_changed(name)`. The GUI's per-stage `QThread` workers are repointed to call the new core functions so behavior is byte-identical while the logic lives in `core/`. Split into **Part 3a** (canonical crops + oriented videos + dataset — mostly wiring around existing cores) and **Part 3b** (annotated-overlay-video extraction — the real code move), each independently gated so a reviewer can accept one without the other.
 
 **Tech Stack:** Python 3, NumPy, pandas, OpenCV (`cv2`), plain `threading`/`queue` (NOT Qt), the existing `OrientedTrackVideoExporter` + `data.dataset_generation` cores, `hydra_suite.utils.video_encoder.VideoEncoder`, pytest, the `tools/equivalence/` harness. No new dependencies.
 
@@ -194,8 +194,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
-from hydra_suite.core.identity.properties.export import build_pose_keypoint_labels
+from hydra_suite.core.individual.dataset.oriented_video import OrientedTrackVideoExporter
+from hydra_suite.core.individual.properties.export import build_pose_keypoint_labels
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,
@@ -1251,7 +1251,7 @@ git commit -m "feat(post): add annotated-video render entry point with cancellat
 
 ## Task 6 (3a): Canonical crops / oriented videos — `export_final_media`
 
-Wraps the already-Qt-free `OrientedTrackVideoExporter` (`core/identity/dataset/oriented_video.py`). The GUI's `FinalMediaExportWorker` is a thin `BaseWorker` around this exporter (`video_worker.py:71-105`); this task lifts the construction + gating into a pure function so the service can call the exporter without the worker.
+Wraps the already-Qt-free `OrientedTrackVideoExporter` (`core/individual/dataset/oriented_video.py`). The GUI's `FinalMediaExportWorker` is a thin `BaseWorker` around this exporter (`video_worker.py:71-105`); this task lifts the construction + gating into a pure function so the service can call the exporter without the worker.
 
 **Files:**
 - Modify: `src/hydra_suite/core/post/media_export.py`
@@ -2183,7 +2183,7 @@ Expected: EMPTY. Slice 3 complete — the service now does everything the bridge
 - `stage_changed(name)` between stages → Task 8.
 - Qt-free core guard + equivalence gate + media-parity → Task 10.
 
-**Placeholder scan:** no "TBD"/"similar to above"/"handle edge cases". Every code step contains real, transcribed source. The one deliberately-abstracted dependency (`self.paths.*` fields from Slice 2) is named explicitly with a fallback instruction in Task 8. Unlike an earlier draft, the dataset stage calls the **verified** `export_dataset` + `FrameQualityScorer` loop, not a nonexistent `data.dataset_generation.generate_active_learning_dataset` single function; and `build_pose_keypoint_labels` is imported from its real home `core.identity.properties.export`, not `utils.pose_visualization`.
+**Placeholder scan:** no "TBD"/"similar to above"/"handle edge cases". Every code step contains real, transcribed source. The one deliberately-abstracted dependency (`self.paths.*` fields from Slice 2) is named explicitly with a fallback instruction in Task 8. Unlike an earlier draft, the dataset stage calls the **verified** `export_dataset` + `FrameQualityScorer` loop, not a nonexistent `data.dataset_generation.generate_active_learning_dataset` single function; and `build_pose_keypoint_labels` is imported from its real home `core.individual.properties.export`, not `utils.pose_visualization`.
 
 **Type consistency:** `render_annotated_video` returns `str | None` (consumed by `_run_annotated_video`); `export_final_media` returns `dict | None` (keys `output_dir`/`image_output_dir` consumed in `_run_final_media_export`); `generate_active_learning_dataset` returns `{"success", "num_frames", "dir"}` / `{"success": False, "error"}` / `{"success": False, "cancelled": True}` (consumed identically in `_run_dataset_generation` and `dataset_worker.execute`); `render_annotated_video_frames` returns `bool` (consumed by `render_annotated_video`). Function names match across producer/consumer tasks.
 

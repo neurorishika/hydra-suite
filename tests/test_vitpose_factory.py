@@ -1,9 +1,9 @@
 import torch
 
-from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def test_factory_builds_vitpose(tmp_path):

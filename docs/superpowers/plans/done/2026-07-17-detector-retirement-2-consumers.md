@@ -193,7 +193,7 @@ git commit -m "refactor(data): dataset dimension extraction via InferenceRunner.
 ### Task 2: Pose-backend consolidation — DEFERRED to a post-retirement pose workstream
 
 **Do NOT execute this task as part of the detector retirement.** Pose-backend construction lives in
-`core/identity/pose` (`YoloNativeBackend`, `create_pose_backend_from_config`) — a *different* package from
+`core/individual/pose` (`YoloNativeBackend`, `create_pose_backend_from_config`) — a *different* package from
 `core/detectors`, so consolidating it is **not** required to retire `core/detectors`. During execution a
 verify-first check found that the original plan (route the GUI onto `stages/pose.load_pose_model`) would
 **silently change SLEAP behavior for CUDA users**, so this task was pulled out.
@@ -211,7 +211,7 @@ pipeline**, with tier→backend resolution:
 - **GPU-Fast tier** (`tensorrt`) → `SleapExportBackend` (`SleapExportedBackend`).
 - **CPU tier** → torch CPU via `SleapServiceBackend`.
 - `SleapServiceBackend` must **never** do a disk round-trip (in-memory / shared-memory transport only;
-  remove the temp-file PNG fallback in `core/identity/pose/backends/sleap.py`).
+  remove the temp-file PNG fallback in `core/individual/pose/backends/sleap.py`).
 
 **Gap analysis vs current code** (what the pose workstream must change): the canonical `load_pose_model`
 already matches GPU (`native`/cuda → service) and GPU-Fast (`tensorrt` → exported). It must be changed so

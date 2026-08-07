@@ -10,8 +10,8 @@ import logging
 
 import numpy as np
 
-from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
-from hydra_suite.core.identity.dataset.oriented_video import (
+from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
+from hydra_suite.core.individual.dataset.oriented_video import (
     FrameBundle,
     OrientedTrackVideoExporter,
 )

@@ -2057,7 +2057,7 @@ git commit -m "feat(inference): add crops stage with GPU affine and CPU warpAffi
 - Create: `src/hydra_suite/core/inference/stages/headtail.py`
 - Create: `tests/test_inference_stages_headtail.py`
 
-Uses existing `ClassifierBackend` from `src/hydra_suite/core/identity/classification/backend.py`. The label→heading mapping (right=0, left=π, up=−π/2, down=+π/2) is preserved from `src/hydra_suite/core/identity/classification/headtail.py`.
+Uses existing `ClassifierBackend` from `src/hydra_suite/core/individual/classification/backend.py`. The label→heading mapping (right=0, left=π, up=−π/2, down=+π/2) is preserved from `src/hydra_suite/core/individual/classification/headtail.py`.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2198,7 +2198,7 @@ class HeadTailModel:
 
 
 def load_headtail_model(config: HeadTailConfig, runtime: RuntimeContext) -> HeadTailModel:
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     backend = ClassifierBackend(config.model_path, config.compute_runtime)
     meta = backend.metadata
     input_size = (meta.input_size[0], meta.input_size[1])
@@ -2431,7 +2431,7 @@ class CNNModel:
 
 
 def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     backend = ClassifierBackend(config.model_path, config.compute_runtime)
     meta = backend.metadata
     factor_names = [f"factor_{i}" for i in range(len(meta.class_names))]
@@ -2505,7 +2505,7 @@ git commit -m "feat(inference): add CNN stage with flat and multi-head support"
 - Create: `src/hydra_suite/core/inference/stages/pose.py`
 - Create: `tests/test_inference_stages_pose.py`
 
-Wraps `YoloNativeBackend` from `src/hydra_suite/core/identity/pose/backends/yolo.py` and `SleapExportedBackend` from `sleap.py`. Backend selection is driven by `PoseConfig.backend`. Keypoints are mapped back to image coordinates by adding the crop offset.
+Wraps `YoloNativeBackend` from `src/hydra_suite/core/individual/pose/backends/yolo.py` and `SleapExportedBackend` from `sleap.py`. Backend selection is driven by `PoseConfig.backend`. Keypoints are mapped back to image coordinates by adding the crop offset.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -2624,7 +2624,7 @@ class PoseModel:
 def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
     if config.backend == "yolo":
         assert config.yolo is not None
-        from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
+        from hydra_suite.core.individual.pose.backends.yolo import YoloNativeBackend
         device = ("cuda:0" if config.yolo.compute_runtime in ("cuda", "onnx_cuda", "tensorrt")
                   else ("mps" if config.yolo.compute_runtime == "mps" else "cpu"))
         skeleton = _load_skeleton(config.skeleton_file)
@@ -2643,7 +2643,7 @@ def load_pose_model(config: PoseConfig, runtime: RuntimeContext) -> PoseModel:
                          keypoint_names=skeleton.get("keypoints", []))
     else:
         assert config.sleap is not None
-        from hydra_suite.core.identity.pose.backends.sleap import SleapExportedBackend
+        from hydra_suite.core.individual.pose.backends.sleap import SleapExportedBackend
         skeleton = _load_skeleton(config.skeleton_file)
         backend = SleapExportedBackend(model_path=config.sleap.model_path)
         n_kpts = len(skeleton.get("keypoints", []))
@@ -2724,7 +2724,7 @@ git commit -m "feat(inference): add pose stage wrapping YOLO and SLEAP backends"
 - Create: `src/hydra_suite/core/inference/stages/apriltag.py`
 - Create: `tests/test_inference_stages_apriltag.py`
 
-Wraps the composite-strip detection logic from `src/hydra_suite/core/identity/classification/apriltag.py`. Preprocessing (unsharp mask, contrast) is applied per crop before detection.
+Wraps the composite-strip detection logic from `src/hydra_suite/core/individual/classification/apriltag.py`. Preprocessing (unsharp mask, contrast) is applied per crop before detection.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -4708,7 +4708,7 @@ git commit -m "test(inference): add batch pass and load_frame tests for Inferenc
 - Modify: `src/hydra_suite/core/tracking/identity/__init__.py`
 - Test: `tests/test_identity_evidence_builder.py`
 
-**Note on existing files:** `core/identity/evidence.py` already exists and is kept as-is (see spec Code Provenance). The new file is `core/tracking/identity/evidence.py` — a different package. Do not modify `core/identity/evidence.py`.
+**Note on existing files:** `core/individual/evidence.py` already exists and is kept as-is (see spec Code Provenance). The new file is `core/tracking/identity/evidence.py` — a different package. Do not modify `core/individual/evidence.py`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5359,16 +5359,16 @@ git rm src/hydra_suite/core/tracking/evidence_emitter.py
 git rm src/hydra_suite/core/detectors/yolo_detector.py
 git rm src/hydra_suite/core/detectors/factory.py
 git rm src/hydra_suite/core/detectors/detection_filter.py
-git rm src/hydra_suite/core/identity/classification/cnn.py
-git rm src/hydra_suite/core/identity/classification/headtail.py
-git rm src/hydra_suite/core/identity/pose/api.py
-git rm src/hydra_suite/core/identity/pose/backends/yolo.py
-git rm src/hydra_suite/core/identity/pose/backends/sleap.py
-git rm src/hydra_suite/core/identity/pose/backends/sleap_utils.py
+git rm src/hydra_suite/core/individual/classification/cnn.py
+git rm src/hydra_suite/core/individual/classification/headtail.py
+git rm src/hydra_suite/core/individual/pose/api.py
+git rm src/hydra_suite/core/individual/pose/backends/yolo.py
+git rm src/hydra_suite/core/individual/pose/backends/sleap.py
+git rm src/hydra_suite/core/individual/pose/backends/sleap_utils.py
 git rm src/hydra_suite/data/detection_cache.py
 git rm src/hydra_suite/data/tag_observation_cache.py
-git rm src/hydra_suite/core/identity/properties/cache.py
-git rm src/hydra_suite/core/identity/properties/detected_cache.py
+git rm src/hydra_suite/core/individual/properties/cache.py
+git rm src/hydra_suite/core/individual/properties/detected_cache.py
 ```
 
 - [ ] **Step 4: Fix any broken imports caused by deletions**
@@ -6852,7 +6852,7 @@ for det_evidence in frame_evidence.detections:
             )
 ```
 
-The `update_cnn` and `update_apriltag` methods exist in `core/identity/online.py` today (kept as-is) — the legacy worker calls them via slightly different argument names. This correction documents the new call shape and ensures `class_names` is forwarded so the decoder can do its own catalog remap (avoiding a re-derivation inside the builder).
+The `update_cnn` and `update_apriltag` methods exist in `core/individual/online.py` today (kept as-is) — the legacy worker calls them via slightly different argument names. This correction documents the new call shape and ensures `class_names` is forwarded so the decoder can do its own catalog remap (avoiding a re-derivation inside the builder).
 
 **Add a test** to `tests/test_worker_inference_integration.py`:
 
@@ -6868,21 +6868,21 @@ def test_online_decoder_receives_full_calibrated_distribution(tmp_path):
 
 ---
 
-### Correction 18 — New Task 17b: Rewire `core/identity/pose/features.py` to read from new `PoseCache`
+### Correction 18 — New Task 17b: Rewire `core/individual/pose/features.py` to read from new `PoseCache`
 
 `features.py` is "kept as-is" but currently calls `pose_props_cache.get_frame(frame_idx)` and reads `frame["detection_ids"]` and `frame["pose_keypoints"]` — both come from the deleted `IndividualPropertiesCache`. The new `PoseCache` returns a `PoseResult` dataclass with different shape.
 
 **Insert this task between Task 17 and Task 18.** Apply BEFORE Task 18's deletion step.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/features.py`
+- Modify: `src/hydra_suite/core/individual/pose/features.py`
 - Create: `tests/test_pose_features_with_new_cache.py`
 
 - [ ] **Step 1: Identify the call sites in `features.py`**
 
 ```bash
 grep -n "pose_props_cache\|get_frame\|pose_keypoints\|detection_ids" \
-    src/hydra_suite/core/identity/pose/features.py
+    src/hydra_suite/core/individual/pose/features.py
 ```
 
 Expected: at least one call site in `build_pose_detection_keypoint_map`.
@@ -6933,32 +6933,32 @@ python -m pytest tests/test_pose_features_with_new_cache.py -v
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/features.py tests/test_pose_features_with_new_cache.py
+git add src/hydra_suite/core/individual/pose/features.py tests/test_pose_features_with_new_cache.py
 git commit -m "refactor(pose): rewire features.py to read from new PoseCache + DetectionCache"
 ```
 
 ---
 
-### Correction 19 — New Task 17c: Rewire `core/identity/properties/export.py`
+### Correction 19 — New Task 17c: Rewire `core/individual/properties/export.py`
 
 `export.py` (kept as-is) imports `CNNIdentityCache` and `DetectedPropertiesCache` from deleted modules. The CSV-export pipeline that produces wide-format identity columns will crash at import.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/properties/export.py`
+- Modify: `src/hydra_suite/core/individual/properties/export.py`
 - Create: `tests/test_properties_export_with_new_caches.py`
 
 - [ ] **Step 1: Identify the imports**
 
 ```bash
-grep -n "from hydra_suite.core.identity.classification.cnn\|from .detected_cache\|from .cache" \
-    src/hydra_suite/core/identity/properties/export.py
+grep -n "from hydra_suite.core.individual.classification.cnn\|from .detected_cache\|from .cache" \
+    src/hydra_suite/core/individual/properties/export.py
 ```
 
 - [ ] **Step 2: Replace with new-cache imports**
 
 ```python
 # Old:
-# from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
+# from hydra_suite.core.individual.classification.cnn import CNNIdentityCache
 # from .detected_cache import DetectedPropertiesCache
 # from .cache import IndividualPropertiesCache
 
@@ -6974,12 +6974,12 @@ The export functions read per-frame predictions and emit CSV columns. The new `C
 
 ---
 
-### Correction 20 — New Task 17d: Rewire `core/identity/dataset/oriented_video.py`
+### Correction 20 — New Task 17d: Rewire `core/individual/dataset/oriented_video.py`
 
 The training-dataset generator imports `DetectionCache` from `hydra_suite.data.detection_cache` (deleted) to read OBB crops for dataset building.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/dataset/oriented_video.py`
+- Modify: `src/hydra_suite/core/individual/dataset/oriented_video.py`
 
 - [ ] **Step 1: Replace the import**
 
@@ -7056,7 +7056,7 @@ Find every `DetectionFilter(...).filter(raw)` call and replace with `apply_detec
 
 ### Correction 22 — New Task 17f: Add public helper for `posekit/gui/workers.py`
 
-`posekit/gui/workers.py` does a lazy import of `build_runtime_config` and `create_pose_backend_from_config` from deleted `core/identity/pose/api.py` to do single-image pose prediction in PoseKit's labeling UI. The spec only addresses TrackerKit's `worker.py`; PoseKit is otherwise out of scope.
+`posekit/gui/workers.py` does a lazy import of `build_runtime_config` and `create_pose_backend_from_config` from deleted `core/individual/pose/api.py` to do single-image pose prediction in PoseKit's labeling UI. The spec only addresses TrackerKit's `worker.py`; PoseKit is otherwise out of scope.
 
 **Files:**
 - Modify: `src/hydra_suite/core/inference/api.py` (add helper)
@@ -7096,7 +7096,7 @@ def predict_pose_for_image(image, pose_config: PoseConfig) -> "PoseResult":
 ```python
 # In posekit/gui/workers.py, replace the lazy import:
 # Old:
-# from hydra_suite.core.identity.pose.api import build_runtime_config, create_pose_backend_from_config
+# from hydra_suite.core.individual.pose.api import build_runtime_config, create_pose_backend_from_config
 
 # New:
 from hydra_suite.core.inference.api import predict_pose_for_image
@@ -7214,9 +7214,9 @@ This step is mandatory and goes BEFORE Task 18's `git rm` step. Without it, `pyt
 
 **Files (all modified, none created):**
 - `src/hydra_suite/core/detectors/__init__.py`
-- `src/hydra_suite/core/identity/classification/__init__.py`
-- `src/hydra_suite/core/identity/pose/__init__.py`
-- `src/hydra_suite/core/identity/properties/__init__.py`
+- `src/hydra_suite/core/individual/classification/__init__.py`
+- `src/hydra_suite/core/individual/pose/__init__.py`
+- `src/hydra_suite/core/individual/properties/__init__.py`
 - `src/hydra_suite/data/__init__.py`
 
 - [ ] **Step 1: `core/detectors/__init__.py`**
@@ -7237,15 +7237,15 @@ from .bg_optimizer import optimize_background
 
 If a downstream consumer needs `DetectionFilter`, point them to `hydra_suite.core.inference.api.apply_detection_filter` (added in Correction 21).
 
-- [ ] **Step 2: `core/identity/classification/__init__.py`**
+- [ ] **Step 2: `core/individual/classification/__init__.py`**
 
 Drop `CNNIdentityBackend`, `CNNIdentityCache`, `CNNIdentityConfig`, `ClassPrediction`, `TrackCNNHistory`, `apply_cnn_identity_cost`, `HeadTailAnalyzer`. Keep `ClassifierBackend` (from `backend.py`), `apriltag` exports, `errors`.
 
-- [ ] **Step 3: `core/identity/pose/__init__.py`**
+- [ ] **Step 3: `core/individual/pose/__init__.py`**
 
 Drop `YoloNativeBackend`, `SleapServiceBackend`, `auto_export_yolo_model`, `auto_export_sleap_model`, `build_runtime_config`, `create_pose_backend_from_config`. Keep `quality`, `artifacts`, `types`.
 
-- [ ] **Step 4: `core/identity/properties/__init__.py`**
+- [ ] **Step 4: `core/individual/properties/__init__.py`**
 
 Drop `IndividualPropertiesCache`, `DetectedPropertiesCache`. The new pose cache is internal to `core/inference/cache/pose.py` — do not re-export.
 
@@ -7273,9 +7273,9 @@ Expected: no `ImportError` from any entry point. Run the full test suite to conf
 
 ```bash
 git add src/hydra_suite/core/detectors/__init__.py \
-        src/hydra_suite/core/identity/classification/__init__.py \
-        src/hydra_suite/core/identity/pose/__init__.py \
-        src/hydra_suite/core/identity/properties/__init__.py \
+        src/hydra_suite/core/individual/classification/__init__.py \
+        src/hydra_suite/core/individual/pose/__init__.py \
+        src/hydra_suite/core/individual/properties/__init__.py \
         src/hydra_suite/data/__init__.py
 git commit -m "refactor(inference): drop deleted symbols from __init__.py re-exports"
 ```
@@ -7294,14 +7294,14 @@ Test files importing deleted modules:
 |---|---|---|
 | `tests/test_detection_cache.py` | `data.detection_cache` | Rewrite to test `core/inference/cache/detection.py` instead — most assertions still apply (npz round-trip, key invalidation). Move to `tests/test_inference_cache_detection.py`. |
 | `tests/test_tag_observation_cache.py` | `data.tag_observation_cache` | Same: rewrite against `core/inference/cache/apriltag.py`. |
-| `tests/test_individual_properties_cache.py` | `core/identity/properties/cache.py` | Rewrite against `core/inference/cache/pose.py`. |
+| `tests/test_individual_properties_cache.py` | `core/individual/properties/cache.py` | Rewrite against `core/inference/cache/pose.py`. |
 | `tests/test_pose_pipeline.py` | `core/tracking/pose_pipeline.py` (deleted) | Delete. The pose pipeline is replaced by `runner.py` IndividualWorker; coverage moves to `tests/test_inference_runner_batch.py`. |
 | `tests/test_tag_features.py` | `core/tracking/tag_features.py` (deleted) | Delete. Tag-evidence logic moved to `tests/test_identity_evidence_builder.py`. |
 
 - [ ] **Step 3.6: Search for any straggler test imports**
 
 ```bash
-grep -rn "from hydra_suite.core.tracking.\(detection_phase\|precompute\|pose_pipeline\|live_features\|cnn_features\|tag_features\|evidence_emitter\)\|from hydra_suite.core.detectors.\(yolo_detector\|factory\|detection_filter\)\|from hydra_suite.core.identity.classification.\(cnn\|headtail\)\|from hydra_suite.core.identity.pose.\(api\|backends\)\|from hydra_suite.data.\(detection_cache\|tag_observation_cache\)\|from hydra_suite.core.identity.properties.\(cache\|detected_cache\)" tests/
+grep -rn "from hydra_suite.core.tracking.\(detection_phase\|precompute\|pose_pipeline\|live_features\|cnn_features\|tag_features\|evidence_emitter\)\|from hydra_suite.core.detectors.\(yolo_detector\|factory\|detection_filter\)\|from hydra_suite.core.individual.classification.\(cnn\|headtail\)\|from hydra_suite.core.individual.pose.\(api\|backends\)\|from hydra_suite.data.\(detection_cache\|tag_observation_cache\)\|from hydra_suite.core.individual.properties.\(cache\|detected_cache\)" tests/
 ```
 
 Expected: no matches. Any straggler should be migrated or deleted.
@@ -7334,9 +7334,9 @@ done
 for mod in \
     hydra_suite.core.tracking.optimizer \
     hydra_suite.core.tracking.optimizer_workers \
-    hydra_suite.core.identity.properties.export \
-    hydra_suite.core.identity.dataset.oriented_video \
-    hydra_suite.core.identity.pose.features \
+    hydra_suite.core.individual.properties.export \
+    hydra_suite.core.individual.dataset.oriented_video \
+    hydra_suite.core.individual.pose.features \
     hydra_suite.posekit.gui.workers \
     hydra_suite.core.tracking.streaming_payload; do
     python -c "import $mod" || echo "FAIL: $mod"
@@ -7345,10 +7345,10 @@ done
 # 4. Final scan for any remaining importers of soon-to-be-deleted modules
 grep -rn "from hydra_suite.core.tracking.\(detection_phase\|precompute\|pose_pipeline\|live_features\|cnn_features\|tag_features\|evidence_emitter\)" src/
 grep -rn "from hydra_suite.core.detectors.\(yolo_detector\|factory\|detection_filter\)" src/
-grep -rn "from hydra_suite.core.identity.classification.\(cnn\|headtail\)" src/
-grep -rn "from hydra_suite.core.identity.pose.\(api\|backends\)" src/
+grep -rn "from hydra_suite.core.individual.classification.\(cnn\|headtail\)" src/
+grep -rn "from hydra_suite.core.individual.pose.\(api\|backends\)" src/
 grep -rn "from hydra_suite.data.\(detection_cache\|tag_observation_cache\)" src/
-grep -rn "from hydra_suite.core.identity.properties.\(cache\|detected_cache\)" src/
+grep -rn "from hydra_suite.core.individual.properties.\(cache\|detected_cache\)" src/
 ```
 
 Expected: every command exits cleanly. Any `FAIL: …` output or non-empty `grep` result must be resolved before proceeding to the `git rm` step.

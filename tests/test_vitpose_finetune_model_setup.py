@@ -1,12 +1,12 @@
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model,
     load_finetune_init,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import CheckpointKeyError
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import CheckpointKeyError
 
 
 def test_build_shapes_and_droppath():

@@ -15,7 +15,7 @@ from hydra_suite.runtime.resolver import ResolvedBackend
     reason="needs torchvision pretrained weights",
 )
 def test_backend_metadata_and_predict_for_shared_trunk(tmp_path):
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.training.multihead_torchvision_model import (
         build_multihead_torchvision_classifier,
     )

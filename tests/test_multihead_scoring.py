@@ -16,7 +16,7 @@ import pytest
     ],
 )
 def test_cost_atomic(track, det, expected):
-    from hydra_suite.core.identity.classification.cnn import cost_atomic
+    from hydra_suite.core.individual.classification.cnn import cost_atomic
 
     got = cost_atomic(track, det, match_bonus=0.5, mismatch_penalty=1.0)
     assert got == expected
@@ -34,7 +34,7 @@ def test_cost_atomic(track, det, expected):
     ],
 )
 def test_cost_per_head_average(track, det, expected):
-    from hydra_suite.core.identity.classification.cnn import cost_per_head_average
+    from hydra_suite.core.individual.classification.cnn import cost_per_head_average
 
     got = cost_per_head_average(
         track, det, match_bonus=0.5, mismatch_penalty=1.0, K=len(track)

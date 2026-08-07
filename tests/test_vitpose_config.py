@@ -1,4 +1,4 @@
-from hydra_suite.core.identity.pose.vitpose.config import (
+from hydra_suite.core.individual.pose.vitpose.config import (
     EXPERT_DATASETS,
     HEATMAP_SIZE_WH,
     IMAGE_SIZE_WH,

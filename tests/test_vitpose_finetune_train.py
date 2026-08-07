@@ -5,8 +5,8 @@ import cv2
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.training.config import RunConfig
-from hydra_suite.core.identity.pose.vitpose.training.train import train
+from hydra_suite.core.individual.pose.vitpose.training.config import RunConfig
+from hydra_suite.core.individual.pose.vitpose.training.train import train
 
 
 def _tiny_dataset(root: Path, n=8, k=3):
@@ -55,7 +55,7 @@ def test_tiny_overfit_drives_metrics(tmp_path):
     ds = tmp_path / "ds"
     _tiny_dataset(ds)
     # a random-init "pretrained" checkpoint so the loader path is exercised
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
     pre = tmp_path / "pre.pth"
     torch.save({"state_dict": build_vitpose("S", "classic", 17).state_dict()}, pre)
@@ -94,7 +94,7 @@ def test_resume_restores_lr_scheduler_and_metrics_header(tmp_path):
     # resume into a fresh output_dir still writes a metrics.csv header.
     ds = tmp_path / "ds"
     _tiny_dataset(ds)
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
     pre = tmp_path / "pre.pth"
     torch.save({"state_dict": build_vitpose("S", "classic", 3).state_dict()}, pre)
@@ -166,7 +166,7 @@ def test_fresh_rerun_overwrites_stale_metrics_csv(tmp_path):
     # headerless file with duplicate epoch numbers).
     ds = tmp_path / "ds"
     _tiny_dataset(ds)
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
     pre = tmp_path / "pre.pth"
     torch.save({"state_dict": build_vitpose("S", "classic", 3).state_dict()}, pre)

@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.config import (
+from hydra_suite.core.individual.pose.vitpose.config import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     PADDING_FACTOR,
     PIXEL_STD,
 )
-from hydra_suite.core.identity.pose.vitpose.transforms import (
+from hydra_suite.core.individual.pose.vitpose.transforms import (
     affine_matrix,
     box2cs,
     get_warp_matrix,
@@ -55,7 +55,7 @@ def test_warp_uses_size_minus_one_for_udp():
     pixel off and this fails outright (tolerance 1e-4, not the ~1.5px slack
     needed to tolerate pixel-quantization noise in a warped-image test).
     """
-    from hydra_suite.core.identity.pose.vitpose.config import IMAGE_SIZE_WH
+    from hydra_suite.core.individual.pose.vitpose.config import IMAGE_SIZE_WH
 
     center = np.array([200.0, 200.0])
     scale = np.array([400.0, 400.0]) / PIXEL_STD
@@ -109,7 +109,7 @@ def test_warp_matrix_udp_corner_correspondence():
     checks it lands at exactly (w-1, h-1), not (w, h). A missing "-1" would
     fail this by a full pixel with no quantization noise to hide behind.
     """
-    from hydra_suite.core.identity.pose.vitpose.config import IMAGE_SIZE_WH
+    from hydra_suite.core.individual.pose.vitpose.config import IMAGE_SIZE_WH
 
     center = np.array([200.0, 200.0])
     scale = np.array([400.0, 400.0]) / PIXEL_STD

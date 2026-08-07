@@ -12,7 +12,7 @@ from hydra_suite.runtime.resolver import ResolvedBackend
 
 
 def test_cnn_identity_config_defaults():
-    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+    from hydra_suite.core.individual.classification.cnn import CNNIdentityConfig
 
     cfg = CNNIdentityConfig()
     assert cfg.model_path == ""
@@ -26,7 +26,7 @@ def test_cnn_identity_config_defaults():
 
 
 def test_cnn_identity_config_custom():
-    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+    from hydra_suite.core.individual.classification.cnn import CNNIdentityConfig
 
     cfg = CNNIdentityConfig(model_path="/tmp/model.pth", confidence=0.8, window=5)
     assert cfg.model_path == "/tmp/model.pth"
@@ -40,7 +40,7 @@ def test_cnn_identity_config_custom():
 
 
 def test_class_prediction_fields():
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     p = ClassPrediction(
         det_index=2,
@@ -54,7 +54,7 @@ def test_class_prediction_fields():
 
 
 def test_class_prediction_none_class_name():
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     p = ClassPrediction(
         det_index=1,
@@ -72,7 +72,7 @@ def test_class_prediction_none_class_name():
 
 
 def test_cnn_identity_cache_roundtrip(tmp_path):
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         ClassPrediction,
         CNNIdentityCache,
     )
@@ -103,7 +103,7 @@ def test_cnn_identity_cache_roundtrip(tmp_path):
 
 
 def test_cnn_identity_cache_exists(tmp_path):
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         ClassPrediction,
         CNNIdentityCache,
     )
@@ -127,7 +127,7 @@ def test_cnn_identity_cache_exists(tmp_path):
 
 
 def test_cnn_identity_cache_empty_frame(tmp_path):
-    from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
+    from hydra_suite.core.individual.classification.cnn import CNNIdentityCache
 
     cache_path = tmp_path / "cnn_identity.npz"
     cache = CNNIdentityCache(str(cache_path))
@@ -139,7 +139,7 @@ def test_cnn_identity_cache_empty_frame(tmp_path):
 
 
 def test_cnn_identity_cache_missing_frame_returns_empty(tmp_path):
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         ClassPrediction,
         CNNIdentityCache,
     )
@@ -170,7 +170,7 @@ def test_backend_predict_batch_cardinality(tiny_flat_headtail):
     """predict_batch() must return exactly one ClassPrediction per input crop."""
     import numpy as np
 
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )
@@ -194,7 +194,7 @@ def test_backend_below_confidence_returns_none_class(tiny_flat_headtail):
     """Predictions below confidence threshold return class_name=None."""
     import numpy as np
 
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )
@@ -292,7 +292,7 @@ def test_registry_entry_format_after_import(tmp_path):
 
 def test_class_prediction_multi_factor_shape():
     """ClassPrediction exposes factor_names, class_names, confidences as tuples."""
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     p = ClassPrediction(
         det_index=0,
@@ -308,7 +308,7 @@ def test_class_prediction_multi_factor_shape():
 
 def test_class_prediction_flat_convenience_accessors():
     """Flat (K=1) predictions expose class_name / confidence shortcuts."""
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     p = ClassPrediction(
         det_index=3,
@@ -330,7 +330,7 @@ def test_class_prediction_flat_convenience_accessors():
 
 
 def test_class_prediction_flat_accessors_error_on_multi_factor():
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     p = ClassPrediction(
         det_index=0,
@@ -345,14 +345,14 @@ def test_class_prediction_flat_accessors_error_on_multi_factor():
 
 
 def test_cnn_identity_config_scoring_mode_default():
-    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+    from hydra_suite.core.individual.classification.cnn import CNNIdentityConfig
 
     cfg = CNNIdentityConfig()
     assert cfg.scoring_mode == "atomic"
 
 
 def test_cnn_identity_config_accepts_per_head_average():
-    from hydra_suite.core.identity.classification.cnn import CNNIdentityConfig
+    from hydra_suite.core.individual.classification.cnn import CNNIdentityConfig
 
     cfg = CNNIdentityConfig(scoring_mode="per_head_average")
     assert cfg.scoring_mode == "per_head_average"
@@ -365,7 +365,7 @@ def test_cnn_identity_config_accepts_per_head_average():
 
 def test_cnn_identity_backend_flat_predict(tiny_flat_headtail):
     """CNNIdentityBackend returns one ClassPrediction per crop for a flat tiny model."""
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )
@@ -390,7 +390,7 @@ def test_cnn_identity_backend_flat_predict(tiny_flat_headtail):
 
 
 def test_cnn_identity_backend_multihead_predict(tiny_multi_identity):
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )
@@ -420,11 +420,11 @@ def test_cnn_identity_backend_multihead_predict(tiny_multi_identity):
 def test_cnn_identity_backend_rejects_multihead_without_scoring_mode(
     tiny_multi_identity,
 ):
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )
-    from hydra_suite.core.identity.classification.errors import ClassifierConfigError
+    from hydra_suite.core.individual.classification.errors import ClassifierConfigError
 
     # Default scoring_mode == "atomic" is permissible for flat; for multi-head the
     # registry would have stored the mode explicitly. Construct with an explicit
@@ -440,7 +440,7 @@ def test_cnn_identity_backend_rejects_multihead_without_scoring_mode(
 
 def test_cnn_identity_backend_per_factor_threshold(tiny_multi_identity):
     """Per-factor confidence threshold: a below-threshold head reports None."""
-    from hydra_suite.core.identity.classification.cnn import (
+    from hydra_suite.core.individual.classification.cnn import (
         CNNIdentityBackend,
         CNNIdentityConfig,
     )

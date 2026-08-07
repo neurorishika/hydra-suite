@@ -19,10 +19,10 @@ import numpy as np
 import numpy.core.multiarray as _np_multiarray
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.config import VARIANTS
-from hydra_suite.core.identity.pose.vitpose.heads import ClassicHead
-from hydra_suite.core.identity.pose.vitpose.model import ViT
-from hydra_suite.core.identity.pose.vitpose.vitpose import ViTPose
+from hydra_suite.core.individual.pose.vitpose.config import VARIANTS
+from hydra_suite.core.individual.pose.vitpose.heads import ClassicHead
+from hydra_suite.core.individual.pose.vitpose.model import ViT
+from hydra_suite.core.individual.pose.vitpose.vitpose import ViTPose
 
 # mmpose checkpoints carry numpy scalars in `meta`, which weights_only=True
 # rejects. Allowlist exactly those numpy primitives -- never weights_only=False,

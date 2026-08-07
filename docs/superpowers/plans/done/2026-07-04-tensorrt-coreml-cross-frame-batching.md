@@ -681,7 +681,7 @@ git commit -m "feat(inference): thread detection_batch_size/stage2_batch_size in
 ### Task 3: Fix CoreML classifier per-crop-loop throughput bug
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py:871-895` (`_forward_coreml`)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py:871-895` (`_forward_coreml`)
 - Test: `tests/test_classifier_coreml_backend.py`
 
 **Interfaces:**
@@ -787,7 +787,7 @@ Expected: all PASS. On this machine (Apple Silicon with `coremltools` installed 
 
 ```bash
 cd .worktrees/inference-pipeline-redesign
-git add src/hydra_suite/core/identity/classification/backend.py tests/test_classifier_coreml_backend.py
+git add src/hydra_suite/core/individual/classification/backend.py tests/test_classifier_coreml_backend.py
 git commit -m "fix(identity): batch CoreML classifier predict() calls instead of looping per-crop"
 ```
 

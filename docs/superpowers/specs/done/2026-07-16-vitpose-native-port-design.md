@@ -44,7 +44,7 @@ Explicitly out of scope, deferred to Specs 2–4:
 Self-contained leaf subpackage:
 
 ```
-src/hydra_suite/core/identity/pose/vitpose/
+src/hydra_suite/core/individual/pose/vitpose/
 ├── __init__.py
 ├── config.py       # variant table
 ├── model.py        # ViT backbone, blocks, attention, MoE FFN

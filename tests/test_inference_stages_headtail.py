@@ -80,7 +80,7 @@ def test_label_to_heading_unrecognized_token_returns_none():
 def _patch_backend(monkeypatch, *, is_multihead, labels, factor_names=("direction",)):
     """Patch ClassifierBackend used by load_headtail_model with a fake whose
     metadata reports the given multi-head flag and labels."""
-    import hydra_suite.core.identity.classification.backend as backend_mod
+    import hydra_suite.core.individual.classification.backend as backend_mod
 
     meta = MagicMock()
     meta.is_multihead = is_multihead
@@ -100,7 +100,7 @@ def _patch_backend(monkeypatch, *, is_multihead, labels, factor_names=("directio
 
 def test_load_headtail_rejects_multihead(monkeypatch):
     # H7: a multi-head artifact must raise rather than silently use factor 0.
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
     from hydra_suite.core.inference.stages.headtail import load_headtail_model
 
     fake_backend = _patch_backend(
@@ -131,7 +131,7 @@ def test_load_headtail_normalizes_labels(monkeypatch):
 
 def test_load_headtail_rejects_noncanonical_labels(monkeypatch):
     # H7: labels outside the canonical head-tail set fail loudly at load.
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
     from hydra_suite.core.inference.stages.headtail import load_headtail_model
 
     _patch_backend(

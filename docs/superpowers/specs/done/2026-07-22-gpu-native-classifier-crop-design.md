@@ -3,7 +3,7 @@
 **Date:** 2026-07-22
 **Status:** SHIPPED — merged on `main` via `feature/gpu-native-classifier-crop`
 (`grid_sample` crop path in `core/inference/stages/crops.py`, `predict_batch_cuda` in
-`core/identity/classification/`). Plan: `plans/done/2026-07-22-gpu-native-classifier-crop-implementation.md`.
+`core/individual/classification/`). Plan: `plans/done/2026-07-22-gpu-native-classifier-crop-implementation.md`.
 **Author:** Rishika Mohanta
 **Related memory:** `project_runtime_gen2_core_done`, `project_pose_runtime_golden_rule`
 

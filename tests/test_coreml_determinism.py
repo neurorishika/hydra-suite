@@ -105,7 +105,7 @@ def test_coreml_classifier_is_deterministic_run_to_run():
     resolved=ResolvedBackend("coreml", "mps", False), runs predict_batch twice on the same 8 fixed
     crops, and asserts np.array_equal on all per-factor probability vectors.
     """
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     rng = np.random.default_rng(42)
     crops = [rng.integers(0, 256, (96, 96, 3), dtype=np.uint8) for _ in range(8)]

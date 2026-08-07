@@ -131,7 +131,7 @@ Consistent with existing practice: `core/` already imports `data/` and `training
 export and dataset stages need. `core/` imports nothing from any app layer today and must not
 start.
 
-Self-contained stage functions land in `core/post/` and `core/identity/`, next to the code they
+Self-contained stage functions land in `core/post/` and `core/individual/`, next to the code they
 already call.
 
 ### Prerequisite move
@@ -171,7 +171,7 @@ other merges will have shifted them.
 | Merge + post-process chaining: `_handle_forward_tracking_done` (2414), `_handle_backward_tracking_done` (2497), `on_tracking_finished` (2619), `_start_postprocess_worker` (2672), `on_postprocess_finished` (2716), `on_postprocess_error` (2738), `merge_and_save_trajectories` (850), `on_merge_progress` (961), `on_merge_error` (1541), `on_merge_finished` (1567), `_finish_tracking_session` (3469) | `tracking.py` (interleaved) | coupled → service methods | `TrackingSessionCore` |
 | `MergeWorker` merge logic | `gui/workers/merge_worker.py:1-140` | pure functions | `core/post/merge.py` |
 | Pose source merge + quality post-pass: `_check_pose_export_sources`, `_merge_pose_sources_into_df`, `_apply_pose_quality_postprocessing` | `tracking.py:2759-3124` | pure functions (DataFrame in, DataFrame out) | `core/post/pose_merge.py` |
-| Identity post-pass: `_apply_identity_postprocessing_to_df` | `tracking.py:3137-3262` | pure function | `core/identity/postprocess_df.py` |
+| Identity post-pass: `_apply_identity_postprocessing_to_df` | `tracking.py:3137-3262` | pure function | `core/individual/postprocess_df.py` |
 | Rich export: `_build_rich_export_dataframe`, `_export_rich_csv`, `_relink_and_export_rich_csv`, `_write_rich_export_csv`, `_drop_empty_rich_export_columns`, `_rich_export_path`, `_remove_legacy_rich_exports` | `tracking.py:87-137`, `3263-3417` | pure functions | `core/post/rich_export.py` |
 | Interpolated crops: `_generate_interpolated_individual_crops` (3611), `_store_interpolated_{pose,tag,cnn,headtail}_result` (979-1038), `_log_interpolated_postpass_summary` (1039), `_count_augmented_pose_rows` (1083), `_count_interpolated_cnn_rows` (1096), `_on_interpolated_crops_finished` (1217) | `tracking.py` (interleaved) | coupled → service methods | `TrackingSessionCore` |
 | Final media export: `_generate_final_media_export` (1284), `_start_pending_final_media_export` (1418), `_on_final_media_export_finished` (1441), `_on_final_media_export_error` (1521), `_get_video_draw_params` (1604), `_get_pose_column_info` (1674), `_preextract_traj_arrays` (1737), label/color builders (1802-2011), `_draw_*` (2012-2154), `_render_annotated_video_frames` (2155), `_open_video_cap_and_writer` (2251), `_compute_video_frame_range` (2272), `_generate_video_from_trajectories` (2288), `_load_video_trajectories` (3418), `_run_pending_video_generation_or_finalize` (3436), `_scale_trajectories_to_original_space` (743), `save_trajectories_to_csv` (772) | `tracking.py` (interleaved) | pure functions + one export entry point | `core/post/media_export.py` |
@@ -238,7 +238,7 @@ Today failure is reported three ways: `QMessageBox.critical` (GUI),
 service collapses these into one model:
 
 - **Fatal** — raise `TrackingSessionError` (new, `core/tracking/errors.py`, following the
-  `core/identity/classification/errors.py` precedent). The service aborts; the caller decides
+  `core/individual/classification/errors.py` precedent). The service aborts; the caller decides
   presentation. GUI shows `QMessageBox.critical`; CLI logs and returns exit 1.
 - **Non-fatal** — `callbacks.warning(title, message)`. Every `QMessageBox.information`/`.warning`
   site maps here. GUI shows a box; CLI logs at WARNING.

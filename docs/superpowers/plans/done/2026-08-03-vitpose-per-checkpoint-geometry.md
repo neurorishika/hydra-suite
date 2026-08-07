@@ -16,7 +16,7 @@ Spec: `docs/superpowers/specs/2026-08-03-vitpose-per-checkpoint-geometry-design.
 - **Every new `geom` parameter is keyword-with-default, added at the END of the signature.** This preserves all existing positional call sites. Never insert a parameter in the middle.
 - Geometry dimensions must be positive multiples of **32** (patch-16 needs 16; 32 matches ClassKit's existing snapping convention and keeps the heatmap divisible by 8).
 - `heatmap_size_wh` is **always** `(W // 4, H // 4)` — derived, never stored, never passed separately.
-- Serialized key is `input_size` with value `[H, W]` (height first), matching `core/identity/classification/backend.py:82-97`. Internally geometry is `(W, H)`. Convert only in `to_hw`/`from_hw`.
+- Serialized key is `input_size` with value `[H, W]` (height first), matching `core/individual/classification/backend.py:82-97`. Internally geometry is `(W, H)`. Convert only in `to_hw`/`from_hw`.
 - Ambiguity is an error, never a guess. A wrong patch grid produces a plausible model that is silently wrong everywhere.
 - Do not touch `types.py` or the yolo/sleap backends.
 - Environment for every command:
@@ -31,15 +31,15 @@ Spec: `docs/superpowers/specs/2026-08-03-vitpose-per-checkpoint-geometry-design.
 
 Spec §5 says to put the geometry into `_vitpose_artifact_signature`. **Do not do this.** The signature is computed *before* the checkpoint is loaded, on every cache probe — so including geometry would force a 1 GB `torch.load` merely to decide whether a cached artifact is still valid.
 
-It is also unnecessary. Geometry is now a deterministic function of the checkpoint file, and `path_fingerprint_token` (mtime + size, `core/identity/pose/artifacts.py:69-77`) already identifies that file. Fingerprint therefore implies geometry, and geometry adds no discriminating power.
+It is also unnecessary. Geometry is now a deterministic function of the checkpoint file, and `path_fingerprint_token` (mtime + size, `core/individual/pose/artifacts.py:69-77`) already identifies that file. Fingerprint therefore implies geometry, and geometry adds no discriminating power.
 
 The recipe-tag bump `vitpose-v1` -> `vitpose-v2` is still required and still in the plan, because the exporter's behaviour changes and every existing artifact must be rebuilt once. Task 5 records this reasoning in a code comment.
 
 ## File Structure
 
 **Created:**
-- `src/hydra_suite/core/identity/pose/vitpose/geometry.py` — the `PoseGeometry` value object and `DEFAULT_GEOMETRY`. Pure; no torch, no cv2.
-- `src/hydra_suite/core/identity/pose/vitpose/pos_embed.py` — patch-grid resolution and bicubic `pos_embed` resizing. Torch only.
+- `src/hydra_suite/core/individual/pose/vitpose/geometry.py` — the `PoseGeometry` value object and `DEFAULT_GEOMETRY`. Pure; no torch, no cv2.
+- `src/hydra_suite/core/individual/pose/vitpose/pos_embed.py` — patch-grid resolution and bicubic `pos_embed` resizing. Torch only.
 - `tests/test_vitpose_geometry.py`, `tests/test_vitpose_pos_embed.py`, `tests/test_vitpose_geometry_threading.py`, `tests/test_vitpose_external_geometry_e2e.py`
 
 **Modified:** `vitpose/config.py`, `transforms.py`, `infer.py`, `heads.py`, `vitpose.py`, `adapter.py`, `export.py`, `backends/vitpose.py`, `training/{config,dataset,validate,train,model_setup}.py`
@@ -49,8 +49,8 @@ The recipe-tag bump `vitpose-v1` -> `vitpose-v2` is still required and still in 
 ### Task 1: The `PoseGeometry` value object
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/geometry.py`
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/config.py:11-12`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/geometry.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/config.py:11-12`
 - Test: `tests/test_vitpose_geometry.py`
 
 **Interfaces:**
@@ -68,7 +68,7 @@ from __future__ import annotations
 
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.geometry import (
+from hydra_suite.core.individual.pose.vitpose.geometry import (
     DEFAULT_GEOMETRY,
     PoseGeometry,
 )
@@ -148,7 +148,7 @@ def test_geometry_is_frozen():
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_vitpose_geometry.py -v`
-Expected: collection error — `ModuleNotFoundError: No module named 'hydra_suite.core.identity.pose.vitpose.geometry'`.
+Expected: collection error — `ModuleNotFoundError: No module named 'hydra_suite.core.individual.pose.vitpose.geometry'`.
 
 - [ ] **Step 3: Implement `geometry.py`**
 
@@ -247,7 +247,7 @@ Expected: all pass.
 
 - [ ] **Step 5: Derive the legacy constants from the default**
 
-In `src/hydra_suite/core/identity/pose/vitpose/config.py`, replace lines 11-12:
+In `src/hydra_suite/core/individual/pose/vitpose/config.py`, replace lines 11-12:
 
 ```python
 IMAGE_SIZE_WH: tuple[int, int] = (192, 256)
@@ -276,7 +276,7 @@ Expected: all pass, including `tests/test_vitpose_config.py::` asserting `IMAGE_
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/pose/vitpose/geometry.py src/hydra_suite/core/identity/pose/vitpose/config.py tests/test_vitpose_geometry.py
+git add src/hydra_suite/core/individual/pose/vitpose/geometry.py src/hydra_suite/core/individual/pose/vitpose/config.py tests/test_vitpose_geometry.py
 git commit -m "feat(pose): PoseGeometry value object; derive legacy size constants"
 ```
 
@@ -287,7 +287,7 @@ git commit -m "feat(pose): PoseGeometry value object; derive legacy size constan
 This removes the hard blocker: `load_finetune_init` currently cannot load a checkpoint whose `pos_embed` token count differs from the model's, so fine-tuning at a new size is impossible today.
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/pos_embed.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/pos_embed.py`
 - Test: `tests/test_vitpose_pos_embed.py`
 
 **Interfaces:**
@@ -306,8 +306,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
-from hydra_suite.core.identity.pose.vitpose.pos_embed import (
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.pos_embed import (
     resize_pos_embed,
     resolve_patch_grid,
 )
@@ -380,7 +380,7 @@ def test_resize_round_trip_approximately_recovers_a_smooth_field():
 
 
 def test_resized_weights_load_into_a_model_at_the_target_geometry():
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
     src = build_vitpose("B", "classic", num_keypoints=9)  # default 192x256
     dst_geom = PoseGeometry((256, 256))
@@ -519,7 +519,7 @@ Expected: all pass EXCEPT `test_resized_weights_load_into_a_model_at_the_target_
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/pose/vitpose/pos_embed.py tests/test_vitpose_pos_embed.py
+git add src/hydra_suite/core/individual/pose/vitpose/pos_embed.py tests/test_vitpose_pos_embed.py
 git commit -m "feat(pose): patch-grid recovery and bicubic pos_embed resizing"
 ```
 
@@ -553,14 +553,14 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.geometry import (
+from hydra_suite.core.individual.pose.vitpose.geometry import (
     DEFAULT_GEOMETRY,
     PoseGeometry,
 )
-from hydra_suite.core.identity.pose.vitpose.heads import build_head
-from hydra_suite.core.identity.pose.vitpose.infer import preprocess_crop
-from hydra_suite.core.identity.pose.vitpose.transforms import box2cs, top_down_affine
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.heads import build_head
+from hydra_suite.core.individual.pose.vitpose.infer import preprocess_crop
+from hydra_suite.core.individual.pose.vitpose.transforms import box2cs, top_down_affine
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 
@@ -806,7 +806,7 @@ Expected: all pass, unmodified.
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/pose/vitpose/ tests/test_vitpose_geometry_threading.py
+git add src/hydra_suite/core/individual/pose/vitpose/ tests/test_vitpose_geometry_threading.py
 git commit -m "feat(pose): thread PoseGeometry through transforms, infer, heads, builder"
 ```
 
@@ -834,12 +834,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
-from hydra_suite.core.identity.pose.vitpose.geometry import (
+from hydra_suite.core.individual.pose.vitpose.adapter import load_finetuned_checkpoint
+from hydra_suite.core.individual.pose.vitpose.geometry import (
     DEFAULT_GEOMETRY,
     PoseGeometry,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 
@@ -990,7 +990,7 @@ Expected: all pass, including the pre-existing adapter tests unmodified.
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/pose/vitpose/adapter.py tests/test_vitpose_adapter_geometry.py
+git add src/hydra_suite/core/individual/pose/vitpose/adapter.py tests/test_vitpose_adapter_geometry.py
 git commit -m "feat(pose): recover per-checkpoint geometry in the ViTPose adapter"
 ```
 
@@ -1018,13 +1018,13 @@ from __future__ import annotations
 
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     _VITPOSE_RECIPE_TAG,
     _vitpose_artifact_signature,
     ViTPoseBackend,
 )
-from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 
@@ -1160,7 +1160,7 @@ Expected: all pass. `tests/test_vitpose_backend_native.py:28` asserts `preferred
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/pose/vitpose/export.py src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_vitpose_backend_geometry.py
+git add src/hydra_suite/core/individual/pose/vitpose/export.py src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_vitpose_backend_geometry.py
 git commit -m "feat(pose): per-checkpoint geometry in the ViTPose backend and exporters"
 ```
 
@@ -1192,16 +1192,16 @@ from __future__ import annotations
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.geometry import (
+from hydra_suite.core.individual.pose.vitpose.geometry import (
     DEFAULT_GEOMETRY,
     PoseGeometry,
 )
-from hydra_suite.core.identity.pose.vitpose.training.config import validate_run_config
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.vitpose.training.config import validate_run_config
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model,
     load_finetune_init,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 
@@ -1419,7 +1419,7 @@ Expected: all pass, with no existing test edited.
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/pose/vitpose/training/ tests/test_vitpose_training_geometry.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/ tests/test_vitpose_training_geometry.py
 git commit -m "feat(pose): per-checkpoint geometry through the ViTPose training path"
 ```
 
@@ -1464,10 +1464,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_external_checkpoint_loads_with_square_geometry():
-    from hydra_suite.core.identity.pose.vitpose.adapter import (
+    from hydra_suite.core.individual.pose.vitpose.adapter import (
         load_finetuned_checkpoint,
     )
-    from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
+    from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
 
     model, meta = load_finetuned_checkpoint(CKPT)
     assert meta.geometry == PoseGeometry((256, 256))
@@ -1489,7 +1489,7 @@ def test_production_loader_rebuilds_the_same_model_as_the_probe():
     tensor isolates what this slice actually changed -- checkpoint loading and
     model construction -- from those deliberate differences.
     """
-    from hydra_suite.core.identity.pose.vitpose.adapter import (
+    from hydra_suite.core.individual.pose.vitpose.adapter import (
         load_finetuned_checkpoint,
     )
     from tools.vitpose.external_ckpt.model import load_external_checkpoint, preprocess
@@ -1510,10 +1510,10 @@ def test_production_loader_rebuilds_the_same_model_as_the_probe():
 
 
 def test_production_preprocess_uses_the_checkpoint_geometry():
-    from hydra_suite.core.identity.pose.vitpose.adapter import (
+    from hydra_suite.core.individual.pose.vitpose.adapter import (
         load_finetuned_checkpoint,
     )
-    from hydra_suite.core.identity.pose.vitpose.infer import preprocess_crop
+    from hydra_suite.core.individual.pose.vitpose.infer import preprocess_crop
 
     _, meta = load_finetuned_checkpoint(CKPT)
     chw, _, _ = preprocess_crop(np.zeros((120, 120, 3), dtype=np.uint8), geom=meta.geometry)

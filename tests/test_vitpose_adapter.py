@@ -3,12 +3,12 @@ from pathlib import Path
 
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.adapter import (
+from hydra_suite.core.individual.pose.vitpose.adapter import (
     FinetuneMeta,
     infer_head_from_state,
     load_finetuned_checkpoint,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _save_training_ckpt(tmp_path: Path, variant: str, head: str, k: int) -> Path:

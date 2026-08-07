@@ -22,8 +22,8 @@ def test_resolver_vitpose_pose_gpu_fast_cuda():
 def test_load_pose_model_vitpose_native_cpu(tmp_path):
     import torch
 
-    from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
     from hydra_suite.core.inference.config import PoseConfig, PoseViTPoseConfig
     from hydra_suite.core.inference.runtime import RuntimeContext
     from hydra_suite.core.inference.stages.pose import load_pose_model

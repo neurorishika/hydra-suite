@@ -569,7 +569,7 @@ In `PoseInferenceService.predict`, add after the `sleap` block (before the yolo 
             return preds, ""
 ```
 
-Add the module-level helper `_load_images_for_vitpose(paths)` (decode each image to an RGB uint8 ndarray via PIL/numpy, matching what `ViTPoseBackend.predict_batch` expects — confirm the expected input format from `core/identity/pose/backends/vitpose.py` and `_build_pose_backend`). Import `load_pose_backend` at the top of `service.py` (lazy import inside the branch if a top-level import risks a cycle). Confirm the actual `load_pose_backend` signature/kwargs against `core/inference/api.py:41` and adjust the call to match exactly (the audit shows `family`, `model_path`, `compute_runtime`, `vitpose_batch`).
+Add the module-level helper `_load_images_for_vitpose(paths)` (decode each image to an RGB uint8 ndarray via PIL/numpy, matching what `ViTPoseBackend.predict_batch` expects — confirm the expected input format from `core/individual/pose/backends/vitpose.py` and `_build_pose_backend`). Import `load_pose_backend` at the top of `service.py` (lazy import inside the branch if a top-level import risks a cycle). Confirm the actual `load_pose_backend` signature/kwargs against `core/inference/api.py:41` and adjust the call to match exactly (the audit shows `family`, `model_path`, `compute_runtime`, `vitpose_batch`).
 
 - [ ] **Step 5: Wire the dialog**
 
@@ -745,7 +745,7 @@ Three small core-consistency items from the audit, grouped because each is a few
 **Files:**
 - Modify: `src/hydra_suite/trackerkit/.../crops_worker.py:156`
 - Modify: `src/hydra_suite/core/inference/config.py` (`PoseViTPoseConfig`, add `auto_export: bool = True`) and `core/inference/api.py:182-188` (respect it)
-- Modify: `src/hydra_suite/core/identity/pose/backends/vitpose.py:3` (docstring)
+- Modify: `src/hydra_suite/core/individual/pose/backends/vitpose.py:3` (docstring)
 - Test: `tests/test_vitpose_autoexport_gate.py` (create); extend stage assertion in `tests/test_vitpose_trackerkit_wiring.py` if appropriate
 
 **Interfaces:**
@@ -788,7 +788,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/test_vitpose_autoexport_gate.py src/hydra_suite/core/inference/config.py src/hydra_suite/core/inference/api.py src/hydra_suite/trackerkit/gui/crops_worker.py src/hydra_suite/core/identity/pose/backends/vitpose.py
+git add tests/test_vitpose_autoexport_gate.py src/hydra_suite/core/inference/config.py src/hydra_suite/core/inference/api.py src/hydra_suite/trackerkit/gui/crops_worker.py src/hydra_suite/core/individual/pose/backends/vitpose.py
 git commit -m "chore(vitpose): vitpose_pose stage, auto_export gate, docstring refresh"
 ```
 
@@ -854,7 +854,7 @@ ViTPose is functional but undocumented: `grep vitpose docs/` (ex-superpowers) re
 - Modify: `docs/user-guide/compute-runtimes.md:15-16` (add ViTPose to the pose inference list)
 - Modify: `docs/reference/ui-components-posekit.md:81` (backend selection includes ViTPose)
 - Modify: `README.md` and `CLAUDE.md` (mention ViTPose where pose backends are enumerated)
-- Modify: `docs/developer-guide/` (document the `python -m hydra_suite.core.identity.pose.vitpose.training --config run.json` CLI + the `RunConfig` schema fields from `training/config.py`)
+- Modify: `docs/developer-guide/` (document the `python -m hydra_suite.core.individual.pose.vitpose.training --config run.json` CLI + the `RunConfig` schema fields from `training/config.py`)
 - Test: `tests/test_vitpose_docs_present.py` (create — a lightweight doc-coverage guard)
 
 **Interfaces:**

@@ -5,7 +5,7 @@
 **Worktree:** `.worktrees/vitpose-finetune` (branch `vitpose-finetune`, off `main`).
 **Parent roadmap:** `docs/superpowers/specs/2026-07-16-vitpose-backend-roadmap.md` (Spec 4 section).
 **Depends on:** Spec 1 (native ViTPose port), merged to `main`. The leaf package
-`core/identity/pose/vitpose/` (model, transforms, decode, weights loader,
+`core/individual/pose/vitpose/` (model, transforms, decode, weights loader,
 `build_vitpose`) is the substrate this spec builds on.
 **Explicitly does NOT depend on:** Spec 2 (runtime layer) or Spec 3 (inference
 backend registry). This spec stops at a validated checkpoint; using that
@@ -62,7 +62,7 @@ governing constraints are (a) the Spec-1 leaf imports nothing from `hydra_suite`
 
 | Layer | Location | Responsibility | May import |
 |---|---|---|---|
-| **Payload** | `core/identity/pose/vitpose/training/` (new subpackage of the leaf) | model setup, target encoding, loss, train loop, validation, CLI. Runs in the subprocess. | leaf siblings (`..model`, `..transforms`, `..decode`, `..weights`) + torch/numpy/cv2. **Nothing from `hydra_suite`.** |
+| **Payload** | `core/individual/pose/vitpose/training/` (new subpackage of the leaf) | model setup, target encoding, loss, train loop, validation, CLI. Runs in the subprocess. | leaf siblings (`..model`, `..transforms`, `..decode`, `..weights`) + torch/numpy/cv2. **Nothing from `hydra_suite`.** |
 | **Orchestration** | `posekit/core/vitpose_training.py` + `posekit/core/vitpose_checkpoints.py` (new, non-Qt) | build COCO dataset, resolve/download base checkpoint, write+validate `run.json`, build the subprocess command, parse progress lines. | `posekit/core` (dataset builder) + the leaf. **No Qt.** |
 | **UI** | `ViTPoseTrainingWorker` in `posekit/gui/dialogs/training.py` (extend existing dialog) | `Popen` the command in-env, stream stdout → log pane, SIGTERM on cancel, drive progress bar. | Qt + orchestration. |
 
@@ -82,7 +82,7 @@ shifts from "deployable inference model" to "self-contained ViTPose package
 must never load the training loop or its cv2-augmentation surface. `training/` is
 imported only when referenced explicitly or run as `python -m …vitpose.training`.
 
-### Why orchestration is NOT in `core/identity/pose/backends/`
+### Why orchestration is NOT in `core/individual/pose/backends/`
 
 `backends/{sleap,yolo}.py` are the **inference + auto-export** layer
 (`SleapExportedBackend`, `YoloNativeBackend`, `auto_export_*`). They hold **zero
@@ -109,7 +109,7 @@ The boundary between orchestration and payload is exactly two files:
 Nothing else crosses the boundary. The payload never imports PoseKit and is
 independently runnable and testable.
 
-## Payload components (`core/identity/pose/vitpose/training/`)
+## Payload components (`core/individual/pose/vitpose/training/`)
 
 Each file is small and single-purpose:
 
@@ -238,7 +238,7 @@ skeleton-model fields in PoseKit.
 
 ## Interfaces this spec produces (for later specs)
 
-- `python -m hydra_suite.core.identity.pose.vitpose.training --config run.json`
+- `python -m hydra_suite.core.individual.pose.vitpose.training --config run.json`
   — the fine-tuning entry point; emits `best.pt` in the run dir.
 - `posekit.core.vitpose_checkpoints.resolve_checkpoint(name_or_path) -> Path`
   and the catalog — reusable by Spec 3's inference backend if it wants to offer

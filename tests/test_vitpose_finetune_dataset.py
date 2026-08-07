@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.training.dataset import (
+from hydra_suite.core.individual.pose.vitpose.training.dataset import (
     FEAT_STRIDE,
     CocoKeypointsDataset,
     load_coco_index,
@@ -59,8 +59,8 @@ def test_getitem_shapes(tmp_path):
 def test_target_peak_matches_decoded_gt(tmp_path):
     # With no augmentation, decoding the GT heatmap and mapping back through
     # transform_preds must recover the annotated keypoints (sub-pixel).
-    from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_cv2
-    from hydra_suite.core.identity.pose.vitpose.transforms import transform_preds
+    from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_cv2
+    from hydra_suite.core.individual.pose.vitpose.transforms import transform_preds
 
     ds_dir = _make_ds(tmp_path)
     ids, _ = load_coco_index(ds_dir)

@@ -373,7 +373,7 @@ git commit -m "feat(inference): derive runtime context + per-stage backends from
 
 **Files:**
 - Modify: `src/hydra_suite/core/inference/stages/obb.py` and `runtime_artifacts.py` (gate TRT auto-export on `tier == gpu_fast` + resolver; fall back to native-CUDA when export/build fails)
-- Modify: `src/hydra_suite/core/identity/classification/backend.py` (fast tier → derive+run ONNX/TRT peer; on failure fall back to native CUDA — the `_should_fallback_to_native_runtime` path already exists, extend it)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py` (fast tier → derive+run ONNX/TRT peer; on failure fall back to native CUDA — the `_should_fallback_to_native_runtime` path already exists, extend it)
 - Test: `tests/test_gpu_fast_fallback.py`
 
 **Interfaces:**
@@ -389,7 +389,7 @@ import pytest
 
 
 def test_classifier_gpu_fast_falls_back_to_native_when_export_fails(monkeypatch, caplog):
-    from hydra_suite.core.identity.classification import backend as bmod
+    from hydra_suite.core.individual.classification import backend as bmod
 
     be = bmod.ClassifierBackend.__new__(bmod.ClassifierBackend)
     be._compute_runtime = "tensorrt"  # gpu_fast resolves classifier to TRT on cuda
@@ -441,7 +441,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/classification/backend.py src/hydra_suite/core/inference/stages/obb.py src/hydra_suite/core/inference/runtime_artifacts.py tests/test_gpu_fast_fallback.py
+git add src/hydra_suite/core/individual/classification/backend.py src/hydra_suite/core/inference/stages/obb.py src/hydra_suite/core/inference/runtime_artifacts.py tests/test_gpu_fast_fallback.py
 git commit -m "feat(inference): best-effort native-GPU fallback for GPU-Fast tier"
 ```
 

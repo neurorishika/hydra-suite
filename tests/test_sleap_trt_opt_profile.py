@@ -12,7 +12,7 @@ min/opt/max shapes for the dynamic batch dim before building.
 import sys
 import types
 
-from hydra_suite.core.identity.pose.backends.sleap import (
+from hydra_suite.core.individual.pose.backends.sleap import (
     _TRT_PROFILE_MAX_BATCH,
     _build_trt_engine_from_onnx,
 )

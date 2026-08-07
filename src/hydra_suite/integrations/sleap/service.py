@@ -410,7 +410,7 @@ def _load_images_for_vitpose(paths: List[Path]) -> List["np.ndarray"]:
     Matches the production PoseKit predict path (``PosePredictWorker.run``,
     ``posekit/gui/workers.py``): each image is read whole (single-instance
     eval — no detection crop) as a BGR ``uint8`` ndarray via ``cv2.imread``,
-    since ``preprocess_crop`` (``core/identity/pose/vitpose/infer.py``)
+    since ``preprocess_crop`` (``core/individual/pose/vitpose/infer.py``)
     expects ``crop_bgr`` and treats the full image extent as the box.
     """
     import cv2

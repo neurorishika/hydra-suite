@@ -224,7 +224,7 @@ def test_extract_canonical_crops_hwc_nvdec_layout():
 
 
 def _fake_bundle(monkeypatch, active_backend="native"):
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     class _FakeFactor:
         _active_execution_backend = active_backend
@@ -251,7 +251,7 @@ def test_forward_multi_cuda_shape_matches_numpy(monkeypatch):
 
 
 def _supports_helper(active_backend):
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     class _F:
         _active_execution_backend = active_backend
@@ -304,7 +304,7 @@ def test_predict_batch_cuda_uses_gpu_forward_for_capable_bundle(monkeypatch):
 
 
 def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
     from hydra_suite.core.inference.stages import cnn as cnn_stage
 
     class _NoCudaBackend:
@@ -330,7 +330,7 @@ def test_load_cnn_strict_raises_without_cuda_forward(monkeypatch, tmp_path):
 
 def test_load_cnn_no_raise_when_not_cuda_mode(monkeypatch, tmp_path):
     # On MPS/CPU (cuda_mode False), a non-CUDA classifier loads fine.
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
     from hydra_suite.core.inference.stages import cnn as cnn_stage
 
     class _Backend:
@@ -458,7 +458,7 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
 
 def test_predict_batch_cuda_fallback_forwards_input_is_bgr(monkeypatch):
     """When a factor lacks CUDA forward, the numpy fallback must NOT re-flip RGB."""
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     be = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
     be._model_path = "x.multihead.json"

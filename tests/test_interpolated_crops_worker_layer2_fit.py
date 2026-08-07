@@ -117,7 +117,7 @@ def test_flush_pose_batch_composes_layer2_fit_with_layer1_affine_for_backproject
     not applied/ignored inconsistently.
     """
     from hydra_suite.core.canonicalization.fit import fit_affine, fit_to_model_input
-    from hydra_suite.core.identity.pose.types import PoseResult as BackendPoseResult
+    from hydra_suite.core.individual.pose.types import PoseResult as BackendPoseResult
 
     model_wh = (96, 64)
     fit = fit_to_model_input(_GEOMETRY.canvas_wh, model_wh)

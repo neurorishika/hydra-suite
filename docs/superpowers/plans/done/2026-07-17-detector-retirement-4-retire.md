@@ -397,7 +397,7 @@ git commit -m "test: cover InferenceRunner init modes; record parity gate"
 
 The brief's only still-live asks were the `api.py` pose helper (done in Plan 1 Task 4) and pose-backend deletions (Plan 2 Task 2). Confirm:
 ```bash
-grep -rn "core/identity/pose/api\|create_pose_backend_from_config" src/ | grep -v "test"
+grep -rn "core/individual/pose/api\|create_pose_backend_from_config" src/ | grep -v "test"
 ```
 Verify no remaining dependence blocks the brief's closure; note any leftover for a follow-up.
 

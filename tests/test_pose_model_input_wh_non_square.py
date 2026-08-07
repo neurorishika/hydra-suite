@@ -31,10 +31,10 @@ from __future__ import annotations
 import torch
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.core.identity.pose.backends.sleap import SleapExportedBackend
-from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.backends.sleap import SleapExportedBackend
+from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 from hydra_suite.core.inference.stages.pose import PoseModel, model_input_wh
 
 _GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)

@@ -6,7 +6,7 @@ import dataclasses
 
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.geometry import (
+from hydra_suite.core.individual.pose.vitpose.geometry import (
     DEFAULT_GEOMETRY,
     PoseGeometry,
 )

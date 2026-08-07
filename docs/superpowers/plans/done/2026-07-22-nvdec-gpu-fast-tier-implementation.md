@@ -30,7 +30,7 @@
 | `src/hydra_suite/core/inference/stages/crops.py` | Classifier GPU-crop gate | `frames_on_cuda` keys off `requested_gpu`, not `tensor_on_cuda` |
 | `src/hydra_suite/core/inference/stages/cnn.py` | CNN load + batch | Strict load-check gate `tensor_on_cuda` → `cuda_mode` |
 | `src/hydra_suite/core/inference/stages/headtail.py` | Head/tail load + batch | Strict load-check gate `tensor_on_cuda` → `cuda_mode` |
-| `src/hydra_suite/core/identity/classification/backend.py` | Classifier forward | Numpy fallback in `predict_batch_cuda` must forward `input_is_bgr` (defensive) |
+| `src/hydra_suite/core/individual/classification/backend.py` | Classifier forward | Numpy fallback in `predict_batch_cuda` must forward `input_is_bgr` (defensive) |
 | `src/hydra_suite/core/inference/sources.py` | Frame-source selection | Promote reader-selection log to `info` (acceptance visibility) |
 | `tests/test_nvdec_gpu_fast_tier.py` | New unit tests | Create: NVDEC tiering, OBB CUDA-frame routing, reader-log |
 | `tests/test_gpu_classifier_crop.py` | Existing crop/forward tests | Update gate references (`tensor_on_cuda` → `requested_gpu`/`cuda_mode`) |
@@ -228,7 +228,7 @@ git status
 **Files:**
 - Modify: `src/hydra_suite/core/inference/stages/cnn.py:44-53` (strict check)
 - Modify: `src/hydra_suite/core/inference/stages/headtail.py:76-88` (strict check)
-- Modify: `src/hydra_suite/core/identity/classification/backend.py:1218-1223` and `:1237-1243` (numpy fallback `input_is_bgr`)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py:1218-1223` and `:1237-1243` (numpy fallback `input_is_bgr`)
 - Test: `tests/test_gpu_classifier_crop.py:167` and `:192` (update the two strict-check tests)
 
 **Interfaces:**
@@ -303,7 +303,7 @@ and update the surrounding `raise RuntimeError(...)` message to match cnn.py's w
 
 - [ ] **Step 5: Fix the numpy-fallback channel order**
 
-In `src/hydra_suite/core/identity/classification/backend.py`, the factor-bundle fallback (`:1218-1223`), change:
+In `src/hydra_suite/core/individual/classification/backend.py`, the factor-bundle fallback (`:1218-1223`), change:
 
 ```python
             return self.predict_batch(numpy_crops)
@@ -330,7 +330,7 @@ In `tests/test_gpu_classifier_crop.py`, add:
 ```python
 def test_predict_batch_cuda_fallback_forwards_input_is_bgr(monkeypatch):
     """When a factor lacks CUDA forward, the numpy fallback must NOT re-flip RGB."""
-    from hydra_suite.core.identity.classification import backend as bk
+    from hydra_suite.core.individual.classification import backend as bk
 
     be = bk.ClassifierBackend.__new__(bk.ClassifierBackend)
     be._model_path = "x.multihead.json"

@@ -25,7 +25,7 @@ fine-tune ViTPose (best.pt)  →  select "ViTPose" in PoseKit inference
 
 The tracking plan landed Tasks 1–9 + parity:
 
-- **`ViTPoseBackend`** (`core/identity/pose/backends/vitpose.py`) — Protocol impl,
+- **`ViTPoseBackend`** (`core/individual/pose/backends/vitpose.py`) — Protocol impl,
   native + TensorRT + CoreML, `predict_batch(crops) -> List[PoseResult]`.
 - **Checkpoint adapter** (`vitpose/adapter.py`) — `load_finetuned_checkpoint`
   auto-infers variant/head/num_keypoints from a `best.pt`.

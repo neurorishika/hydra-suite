@@ -14,4 +14,4 @@
 
 ::: hydra_suite.core.post.processing
 
-::: hydra_suite.core.identity
+::: hydra_suite.core.individual

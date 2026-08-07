@@ -41,7 +41,7 @@ The current implementation already has useful hooks, but the uncertainty-preserv
 
 - `src/hydra_suite/core/tracking/worker.py` reads per-frame tag and CNN outputs during tracking.
 - `src/hydra_suite/core/tracking/tag_features.py` keeps a rolling majority-vote tag history per track slot.
-- `src/hydra_suite/core/identity/classification/cnn.py` exposes `TrackCNNHistory`, which stores tuples of hard classes and confidences, then reduces them to majority identities.
+- `src/hydra_suite/core/individual/classification/cnn.py` exposes `TrackCNNHistory`, which stores tuples of hard classes and confidences, then reduces them to majority identities.
 - `src/hydra_suite/core/tracking/cnn_features.py` converts cached predictions plus track history into `detection_classes` and `track_identities` for the assigner.
 - `src/hydra_suite/core/assigners/hungarian.py` only sees hard identity overlays as additive match and mismatch bonuses in the geometric cost matrix.
 
@@ -53,8 +53,8 @@ The current implementation already has useful hooks, but the uncertainty-preserv
 
 ### Evidence persistence
 
-- `src/hydra_suite/core/identity/classification/cnn.py` persists only top class names and top confidences per factor in `CNNIdentityCache`.
-- `src/hydra_suite/core/identity/properties/export.py` exports only flattened `CNN_<label>_Class` and `CNN_<label>_Conf` columns.
+- `src/hydra_suite/core/individual/classification/cnn.py` persists only top class names and top confidences per factor in `CNNIdentityCache`.
+- `src/hydra_suite/core/individual/properties/export.py` exports only flattened `CNN_<label>_Class` and `CNN_<label>_Conf` columns.
 - The current pipeline does not persist calibrated posterior vectors over the full identity catalog, so offline post-processing cannot recover information that was already discarded.
 
 ### Slot lifecycle
@@ -113,7 +113,7 @@ Introduce a canonical identity catalog that all sources map into.
 
 Proposed module:
 
-- `src/hydra_suite/core/identity/catalog.py`
+- `src/hydra_suite/core/individual/catalog.py`
 
 Proposed responsibilities:
 
@@ -144,8 +144,8 @@ Introduce one common evidence contract that every source emits.
 
 Proposed modules:
 
-- `src/hydra_suite/core/identity/evidence.py`
-- `src/hydra_suite/core/identity/cache.py`
+- `src/hydra_suite/core/individual/evidence.py`
+- `src/hydra_suite/core/individual/cache.py`
 
 Proposed data model:
 
@@ -182,7 +182,7 @@ Add a new online decoder layer that runs after geometry assignment and before fi
 
 Proposed module:
 
-- `src/hydra_suite/core/identity/online.py`
+- `src/hydra_suite/core/individual/online.py`
 
 Proposed data model:
 
@@ -251,8 +251,8 @@ Add a probabilistic offline decoder that consumes the same evidence cache and fi
 
 Proposed modules:
 
-- `src/hydra_suite/core/identity/offline.py`
-- `src/hydra_suite/core/identity/fragments.py`
+- `src/hydra_suite/core/individual/offline.py`
+- `src/hydra_suite/core/individual/fragments.py`
 
 Proposed API:
 
@@ -320,17 +320,17 @@ Later rollout rule:
 
 ### New modules
 
-- `src/hydra_suite/core/identity/catalog.py`
-- `src/hydra_suite/core/identity/evidence.py`
-- `src/hydra_suite/core/identity/cache.py`
-- `src/hydra_suite/core/identity/online.py`
-- `src/hydra_suite/core/identity/offline.py`
-- `src/hydra_suite/core/identity/fragments.py`
-- `src/hydra_suite/core/identity/calibration.py`
+- `src/hydra_suite/core/individual/catalog.py`
+- `src/hydra_suite/core/individual/evidence.py`
+- `src/hydra_suite/core/individual/cache.py`
+- `src/hydra_suite/core/individual/online.py`
+- `src/hydra_suite/core/individual/offline.py`
+- `src/hydra_suite/core/individual/fragments.py`
+- `src/hydra_suite/core/individual/calibration.py`
 
 ### Existing files to change
 
-#### `src/hydra_suite/core/identity/classification/cnn.py`
+#### `src/hydra_suite/core/individual/classification/cnn.py`
 
 - Add a posterior-producing path that returns calibrated probabilities over classes, not only top-1 names and confidences.
 - Preserve multihead posterior information until the mapping into the identity catalog is complete.
@@ -375,7 +375,7 @@ Later rollout rule:
 - Run the offline decoder after rich evidence assembly.
 - Continue emitting label-friendly summary columns for video export and CSV export.
 
-#### `src/hydra_suite/core/identity/properties/export.py`
+#### `src/hydra_suite/core/individual/properties/export.py`
 
 - Continue exporting current summary columns.
 - Add new summary fields for decoded identity, commitment state, entropy, and margins.

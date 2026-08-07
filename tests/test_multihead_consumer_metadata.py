@@ -21,7 +21,7 @@ _TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
     reason="needs torchvision pretrained weights",
 )
 def test_import_dialog_metadata_payload_shape(tmp_path):
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.training.multihead_torchvision_model import (
         build_multihead_torchvision_classifier,
     )
@@ -117,7 +117,7 @@ def test_headtail_rejects_shared_trunk_classifier(tmp_path):
 
     # HeadTailAnalyzer requires a flat metadata; instantiating it on a
     # multi-head checkpoint must raise (preserving the legacy invariant).
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     try:
         HeadTailAnalyzer(

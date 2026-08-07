@@ -13,8 +13,10 @@ import re
 
 import pandas as pd
 
-from hydra_suite.core.identity.postprocess_df import apply_identity_postprocessing_to_df
-from hydra_suite.core.identity.properties.export import DETECTED_HEADING_COLUMNS
+from hydra_suite.core.individual.postprocess_df import (
+    apply_identity_postprocessing_to_df,
+)
+from hydra_suite.core.individual.properties.export import DETECTED_HEADING_COLUMNS
 from hydra_suite.core.post.pose_merge import (
     apply_pose_quality_postprocessing,
     check_pose_export_sources,

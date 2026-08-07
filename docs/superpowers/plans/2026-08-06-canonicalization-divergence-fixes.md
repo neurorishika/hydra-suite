@@ -32,11 +32,11 @@
 - **Modify** `src/hydra_suite/core/inference/stages/crops.py` — collapse cpu/gpu twins; drop `apply_fit_gpu`.
 - **Modify** `src/hydra_suite/core/inference/stages/{cnn,headtail,pose}.py` — required `geometry`; ViTPose identity fit.
 - **Modify** `src/hydra_suite/training/canonical_transform.py` — torch `letterbox_fit`.
-- **Modify** `src/hydra_suite/core/identity/classification/backend.py` — `predict_batch(input_is_bgr=...)` (F2).
-- **Modify** `src/hydra_suite/core/identity/pose/backends/vitpose.py` — `does_own_letterbox` (F3).
+- **Modify** `src/hydra_suite/core/individual/classification/backend.py` — `predict_batch(input_is_bgr=...)` (F2).
+- **Modify** `src/hydra_suite/core/individual/pose/backends/vitpose.py` — `does_own_letterbox` (F3).
 - **Modify** `src/hydra_suite/core/post/interpolated_crops.py` — skip on fit failure (F6).
 - **Modify** `src/hydra_suite/core/inference/config.py` + `core/canonicalization/geometry.py` — single geometry derivation (F7a).
-- **Modify** `src/hydra_suite/core/identity/dataset/{generator,oriented_video}.py` — shared ClippingStats + lossless export (F4/F5).
+- **Modify** `src/hydra_suite/core/individual/dataset/{generator,oriented_video}.py` — shared ClippingStats + lossless export (F4/F5).
 - **Modify** `src/hydra_suite/classkit/jobs/task_workers.py` — non-square eval transform (F7c).
 - **Modify** `src/hydra_suite/resources/configs/default.json` (+ presets) — `canonical_margin`, `reference_body_size` (F7d).
 
@@ -304,7 +304,7 @@ git commit -m "feat(training): CanonicalFitTransform uses the torch seam (train=
 ### Task 5: Make `geometry` required (F7b — delete fallback geometries)
 
 **Files:**
-- Modify: `src/hydra_suite/core/inference/stages/{cnn,headtail,pose}.py`, `src/hydra_suite/core/identity/classification/headtail.py`
+- Modify: `src/hydra_suite/core/inference/stages/{cnn,headtail,pose}.py`, `src/hydra_suite/core/individual/classification/headtail.py`
 - Test: `tests/test_canonical_geometry_required.py` (new)
 
 **Interfaces:**
@@ -342,7 +342,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/inference/stages/cnn.py src/hydra_suite/core/inference/stages/headtail.py src/hydra_suite/core/inference/stages/pose.py src/hydra_suite/core/identity/classification/headtail.py tests/test_canonical_geometry_required.py
+git add src/hydra_suite/core/inference/stages/cnn.py src/hydra_suite/core/inference/stages/headtail.py src/hydra_suite/core/inference/stages/pose.py src/hydra_suite/core/individual/classification/headtail.py tests/test_canonical_geometry_required.py
 git commit -m "fix(inference): require geometry on crop stages; delete fallback geometries (F7b)"
 ```
 
@@ -397,7 +397,7 @@ git commit -m "refactor(canonicalization): single params->geometry derivation (F
 ### Task 7: Fix the CUDA classifier fallback crash (F2)
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py` (`predict_batch`, ~1338)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py` (`predict_batch`, ~1338)
 - Test: `tests/test_classifier_predict_batch_bgr.py` (new)
 
 **Interfaces:**
@@ -408,7 +408,7 @@ git commit -m "refactor(canonicalization): single params->geometry derivation (F
 ```python
 # tests/test_classifier_predict_batch_bgr.py
 import inspect
-from hydra_suite.core.identity.classification import backend
+from hydra_suite.core.individual.classification import backend
 def test_predict_batch_accepts_input_is_bgr():
     sig = inspect.signature(backend.ClassifierBackend.predict_batch)  # actual class name
     assert "input_is_bgr" in sig.parameters
@@ -431,7 +431,7 @@ Expected: PASS. (A functional both-branches test is added in Task 14 where a stu
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/classification/backend.py tests/test_classifier_predict_batch_bgr.py
+git add src/hydra_suite/core/individual/classification/backend.py tests/test_classifier_predict_batch_bgr.py
 git commit -m "fix(classification): predict_batch accepts input_is_bgr; unblock CUDA fallback (F2)"
 ```
 
@@ -538,7 +538,7 @@ Run the equivalence matrix (CLAUDE.md fast path) on MPS and CUDA. Expected: `fly
 
 **Files:**
 - Modify: `src/hydra_suite/core/inference/stages/pose.py` (`model_input_wh`, `run_pose`, `run_pose_batch`)
-- Modify: `src/hydra_suite/core/identity/pose/backends/vitpose.py`
+- Modify: `src/hydra_suite/core/individual/pose/backends/vitpose.py`
 - Test: `tests/test_pose_model_input_wh_non_square.py` (rewrite), `tests/test_vitpose_backend_geometry.py` (rewrite), `tests/test_vitpose_identity_fit.py` (new)
 
 **Interfaces:**
@@ -577,7 +577,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/inference/stages/pose.py src/hydra_suite/core/identity/pose/backends/vitpose.py tests/test_vitpose_identity_fit.py tests/test_pose_model_input_wh_non_square.py tests/test_vitpose_backend_geometry.py
+git add src/hydra_suite/core/inference/stages/pose.py src/hydra_suite/core/individual/pose/backends/vitpose.py tests/test_vitpose_identity_fit.py tests/test_pose_model_input_wh_non_square.py tests/test_vitpose_backend_geometry.py
 git commit -m "fix(pose): ViTPose takes identity Layer-2 fit on all devices (F3)"
 ```
 
@@ -590,7 +590,7 @@ git commit -m "fix(pose): ViTPose takes identity Layer-2 fit on all devices (F3)
 ### Task 11: Export clip guard surfacing (F4)
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/dataset/generator.py`, `oriented_video.py`
+- Modify: `src/hydra_suite/core/individual/dataset/generator.py`, `oriented_video.py`
 - Test: `tests/test_export_clipping_surfaced.py` (new)
 
 **Interfaces:**
@@ -602,7 +602,7 @@ git commit -m "fix(pose): ViTPose takes identity Layer-2 fit on all devices (F3)
 ```python
 # tests/test_export_clipping_surfaced.py
 import logging
-from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
+from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
 def test_overflowing_obb_warns(caplog, tmp_path):
     # configure a geometry whose canvas is smaller than the OBB so overflow_ratio>1,
     # export one detection, assert a "CLIPPED" warning is emitted at finalize()
@@ -628,7 +628,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/dataset/generator.py src/hydra_suite/core/identity/dataset/oriented_video.py tests/test_export_clipping_surfaced.py
+git add src/hydra_suite/core/individual/dataset/generator.py src/hydra_suite/core/individual/dataset/oriented_video.py tests/test_export_clipping_surfaced.py
 git commit -m "fix(dataset): surface canonical-crop clipping on export via ClippingStats (F4)"
 ```
 
@@ -637,7 +637,7 @@ git commit -m "fix(dataset): surface canonical-crop clipping on export via Clipp
 ### Task 12: Lossless-only crop-dataset export (F5)
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/dataset/generator.py` (output-format handling ~137, 224–229)
+- Modify: `src/hydra_suite/core/individual/dataset/generator.py` (output-format handling ~137, 224–229)
 - Test: `tests/test_crop_export_lossless.py` (new)
 
 - [ ] **Step 1: Write the failing test**
@@ -645,7 +645,7 @@ git commit -m "fix(dataset): surface canonical-crop clipping on export via Clipp
 ```python
 # tests/test_crop_export_lossless.py
 import pytest
-from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
+from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
 def test_crop_export_rejects_jpg():
     with pytest.raises((ValueError, AssertionError)):
         IndividualDatasetGenerator(..., image_format="jpg")  # crop dataset is model input
@@ -668,7 +668,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/dataset/generator.py tests/test_crop_export_lossless.py
+git add src/hydra_suite/core/individual/dataset/generator.py tests/test_crop_export_lossless.py
 git commit -m "fix(dataset): crop-dataset export is lossless-only (F5)"
 ```
 

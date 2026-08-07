@@ -1,6 +1,6 @@
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.training.config import (
+from hydra_suite.core.individual.pose.vitpose.training.config import (
     RunConfig,
     validate_run_config,
 )

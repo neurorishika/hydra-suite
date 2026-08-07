@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.core.identity.dataset.naming import read_canonical_provenance
-from hydra_suite.core.identity.dataset.oriented_video import (
+from hydra_suite.core.individual.dataset.naming import read_canonical_provenance
+from hydra_suite.core.individual.dataset.oriented_video import (
     OrientedTrackVideoExporter,
     resolve_individual_dataset_dir,
     resolve_oriented_track_video_dir,

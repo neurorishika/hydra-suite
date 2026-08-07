@@ -18,8 +18,8 @@ import json
 import cv2
 import numpy as np
 
-from hydra_suite.core.identity.pose.vitpose.infer import preprocess_crop
-from hydra_suite.core.identity.pose.vitpose.training.dataset import (
+from hydra_suite.core.individual.pose.vitpose.infer import preprocess_crop
+from hydra_suite.core.individual.pose.vitpose.training.dataset import (
     CocoKeypointsDataset,
     load_coco_index,
 )

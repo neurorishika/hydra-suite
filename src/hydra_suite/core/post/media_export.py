@@ -14,8 +14,10 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
-from hydra_suite.core.identity.properties.export import build_pose_keypoint_labels
+from hydra_suite.core.individual.dataset.oriented_video import (
+    OrientedTrackVideoExporter,
+)
+from hydra_suite.core.individual.properties.export import build_pose_keypoint_labels
 from hydra_suite.utils.pose_visualization import (
     is_renderable_pose_keypoint,
     normalize_pose_render_min_conf,

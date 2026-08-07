@@ -1,5 +1,5 @@
 def test_fragment_solver_imports():
-    from hydra_suite.core.identity.fragment_solver import (
+    from hydra_suite.core.individual.identity.offline import (
         detect_identity_changepoints,
         run_fragment_solver,
         solve_global_assignment,
@@ -14,8 +14,8 @@ def test_fragment_solver_imports():
 
 import pandas as pd
 
-from hydra_suite.core.identity.catalog import IdentityCatalog
-from hydra_suite.core.identity.fragment_solver import detect_identity_changepoints
+from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+from hydra_suite.core.individual.identity.offline import detect_identity_changepoints
 
 
 def _make_catalog():
@@ -77,7 +77,7 @@ def test_changepoint_no_cnn_columns_returns_empty():
     assert result == {}, "no CNN columns should produce empty changepoint dict"
 
 
-from hydra_suite.core.identity.fragment_solver import solve_global_assignment
+from hydra_suite.core.individual.identity.offline import solve_global_assignment
 
 
 def _make_two_trajectory_df():
@@ -224,7 +224,7 @@ def test_solve_global_assignment_reconstructs_multihead_label_probabilities():
     assert result.iloc[0]["IdentityAssignedLabel"] == "red_left"
 
 
-from hydra_suite.core.identity.fragment_solver import run_fragment_solver
+from hydra_suite.core.individual.identity.offline import run_fragment_solver
 
 
 def test_run_fragment_solver_returns_dataframe():
@@ -267,7 +267,9 @@ def test_run_fragment_solver_pelt_enabled_splits_trajectory():
     assert (result["OriginalTrajectoryID"] == 1).all()
 
 
-from hydra_suite.core.identity.fragment_solver import split_trajectories_at_changepoints
+from hydra_suite.core.individual.identity.offline import (
+    split_trajectories_at_changepoints,
+)
 
 
 def test_split_trajectories_produces_two_ids_on_changepoint():
@@ -419,7 +421,7 @@ def test_long_consistent_track_beats_short_confident_fragment():
 
 import numpy as np
 
-from hydra_suite.core.identity.fragment_solver import (
+from hydra_suite.core.individual.identity.offline import (
     _build_traj_summaries,
     _fragment_stability,
     _iterative_assign,

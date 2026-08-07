@@ -94,7 +94,7 @@ enforcement) so it integrates cleanly with the mixed-annotation codebase.
 To tighten incrementally:
 
 ```bash
-mypy src/hydra_suite/core/identity/ --strict
+mypy src/hydra_suite/core/individual/ --strict
 ```
 
 Type errors in `legacy/` are excluded via `pyproject.toml`

@@ -4,13 +4,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hydra_suite.core.identity.classification.cnn import (
+from hydra_suite.core.individual.classification.cnn import (
     ClassPrediction,
     CNNIdentityCache,
 )
-from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
-from hydra_suite.core.identity.properties.detected_cache import DetectedPropertiesCache
-from hydra_suite.core.identity.properties.export import (
+from hydra_suite.core.individual.properties.cache import IndividualPropertiesCache
+from hydra_suite.core.individual.properties.detected_cache import (
+    DetectedPropertiesCache,
+)
+from hydra_suite.core.individual.properties.export import (
     DETECTED_HEADING_COLUMNS,
     POSE_SUMMARY_COLUMNS,
     augment_trajectories_with_detected_apriltag_cache,

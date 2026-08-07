@@ -6,7 +6,7 @@ that cannot directly depend on the internal stages module.
 Correction 21: apply_detection_filter shim for optimizer.py and optimizer_workers.py
 Correction 22: predict_pose_for_image helper and create_pose_backend_from_config
   shim for posekit/gui/workers.py.
-  create_pose_backend_from_config re-exports from core/identity/pose/api.py
+  create_pose_backend_from_config re-exports from core/individual/pose/api.py
   while it exists; once that module is deleted the implementation will move
   here. (Task 8: build_runtime_config was deleted from pose/api.py — it had
   zero real callers left — so its shim here was removed too.)
@@ -19,9 +19,9 @@ from .result import OBBResult
 from .stages.filtering import filter_detections
 
 # Correction 22: stable re-export so posekit/gui/workers.py does not need to
-# import from the soon-to-be-deleted core/identity/pose/api module.
+# import from the soon-to-be-deleted core/individual/pose/api module.
 try:
-    from hydra_suite.core.identity.pose.api import (  # noqa: F401
+    from hydra_suite.core.individual.pose.api import (  # noqa: F401
         create_pose_backend_from_config,
     )
 except ImportError:

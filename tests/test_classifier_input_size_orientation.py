@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from hydra_suite.core.identity.classification.backend import _normalize_input_size
+from hydra_suite.core.individual.classification.backend import _normalize_input_size
 
 
 def test_normalize_returns_h_w():

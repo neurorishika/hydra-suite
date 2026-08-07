@@ -15,8 +15,8 @@ import pytest
 
 pytest.importorskip("coremltools")
 
-from hydra_suite.core.identity.classification import backend as bmod  # noqa: E402
-from hydra_suite.core.identity.classification.backend import (  # noqa: E402
+from hydra_suite.core.individual.classification import backend as bmod  # noqa: E402
+from hydra_suite.core.individual.classification.backend import (  # noqa: E402
     ClassifierBackend,
 )
 from hydra_suite.runtime.resolver import ResolvedBackend  # noqa: E402

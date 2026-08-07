@@ -118,7 +118,7 @@ def _prefit_yolo_classify_dataset(
     (``CanonicalFitTransform``) at ``(imgsz, imgsz)``. Ultralytics' own
     ``Resize(shortest_edge)`` + ``CenterCrop(size)`` then sees a square image
     with shortest edge == longest edge, so the centre crop is a no-op -- the
-    same guarantee ``_forward_yolo`` (core/identity/classification/backend.py)
+    same guarantee ``_forward_yolo`` (core/individual/classification/backend.py)
     gives at inference time. YOLO-classify remains a known-lossy family
     (operator decision, 2026-08-05): this closes the gap as far as the
     vendor's own pipeline allows, it does not eliminate it. Idempotent --

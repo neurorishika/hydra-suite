@@ -92,9 +92,11 @@ def test_interpolated_worker_uses_split_cnn_and_headtail_runtimes(
     monkeypatch,
     tmp_path,
 ) -> None:
-    cnn_module = importlib.import_module("hydra_suite.core.identity.classification.cnn")
+    cnn_module = importlib.import_module(
+        "hydra_suite.core.individual.classification.cnn"
+    )
     headtail_module = importlib.import_module(
-        "hydra_suite.core.identity.classification.headtail"
+        "hydra_suite.core.individual.classification.headtail"
     )
 
     cnn_model = tmp_path / "cnn_model.pth"
@@ -165,7 +167,7 @@ def test_init_pose_backend_yolo_delegates_to_load_pose_backend(
     """Golden rule: the YOLO pose branch routes through the shared
     ``core/inference/api.load_pose_backend`` shim (patched here in the
     pipeline's module) instead of duplicating the runtime-flavor ladder."""
-    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
+    pose_utils = importlib.import_module("hydra_suite.core.individual.pose.utils")
 
     monkeypatch.setattr(
         pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0", "kpt1"], [])
@@ -226,7 +228,7 @@ def test_init_pose_backend_sleap_delegates_to_load_pose_backend(
     ``load_pose_backend`` shim and threads SLEAP settings (env, max_instances)
     through -- the tier -> flavor decision lives in ``load_pose_model``, not
     here, so this asserts delegation + settings, not the resolved flavor."""
-    pose_utils = importlib.import_module("hydra_suite.core.identity.pose.utils")
+    pose_utils = importlib.import_module("hydra_suite.core.individual.pose.utils")
 
     monkeypatch.setattr(
         pose_utils, "load_skeleton_from_json", lambda _p: (["kpt0"], [(0, 1)])

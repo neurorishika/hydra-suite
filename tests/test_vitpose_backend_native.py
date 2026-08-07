@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _ckpt(tmp_path: Path, k: int = 4) -> Path:

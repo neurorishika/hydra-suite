@@ -34,7 +34,7 @@ from hydra_suite.core.canonicalization.crop import (
     compute_alignment_affine,
     compute_native_crop_dimensions,
 )
-from hydra_suite.core.identity.pose.backends.sleap import SleapServiceBackend
+from hydra_suite.core.individual.pose.backends.sleap import SleapServiceBackend
 
 AR, MARGIN = 2.0, 1.3
 PAD = max(0.0, MARGIN - 1.0)

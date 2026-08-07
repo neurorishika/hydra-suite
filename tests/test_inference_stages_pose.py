@@ -69,7 +69,7 @@ def _mock_pose_result(n_kpts: int = 4, conf: float = 0.8):
     Both the YOLO and SLEAP backends return this canonical type from
     predict_batch (NOT an ultralytics Results object).
     """
-    from hydra_suite.core.identity.pose.types import PoseResult as BackendPoseResult
+    from hydra_suite.core.individual.pose.types import PoseResult as BackendPoseResult
 
     kpts = np.zeros((n_kpts, 3), dtype=np.float32)
     kpts[:, 2] = conf
@@ -127,7 +127,7 @@ def test_load_pose_model_reads_canonical_skeleton_keys(tmp_path, monkeypatch):
         )
     )
 
-    import hydra_suite.core.identity.pose.backends.yolo as yolo_mod
+    import hydra_suite.core.individual.pose.backends.yolo as yolo_mod
 
     captured = {}
 
@@ -154,7 +154,7 @@ def test_load_pose_model_sleap_gpu_tier_uses_native_cuda(tmp_path, monkeypatch):
     service backend -- matching every other stage's "gpu = native torch"
     semantics -- instead of silently reaching for the gpu_fast (onnx) path.
     """
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
 
     captured = {}
 
@@ -181,7 +181,7 @@ def test_load_pose_model_sleap_gpu_tier_uses_native_cuda(tmp_path, monkeypatch):
 
 def test_load_pose_model_sleap_gpu_fast_tier_uses_tensorrt(tmp_path, monkeypatch):
     """gpu_fast tier keeps using the exported (TensorRT) SLEAP backend."""
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
 
     captured = {}
 

@@ -7,12 +7,12 @@ import math
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import (
     build_detection_direction_overrides,
     normalize_theta,
     resolve_detection_tracking_theta,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     build_pose_detection_keypoint_map,
     compute_detection_pose_features,
     compute_pose_geometry_from_keypoints,

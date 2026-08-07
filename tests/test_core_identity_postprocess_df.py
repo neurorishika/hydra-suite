@@ -1,6 +1,8 @@
 import pandas as pd
 
-from hydra_suite.core.identity.postprocess_df import apply_identity_postprocessing_to_df
+from hydra_suite.core.individual.postprocess_df import (
+    apply_identity_postprocessing_to_df,
+)
 
 
 def test_empty_df_passthrough():
