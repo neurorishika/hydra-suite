@@ -163,3 +163,33 @@ Two clips were flagged by the new guard; neither is a branch defect:
 - Clipping reporting covers the core tracking loop but not the GUI
   interpolated-crops path.
 - Re-running old exports will diverge at crop edges (`BORDER_REPLICATE` removed).
+
+
+## Post-merge verification (against merged `main` 4f63d2f6)
+
+After merging main's shared engine-param builder into this branch
+(commit `c305214f`), both platforms were re-verified against the NEW
+merge-base. The earlier numbers in this document predate that merge.
+
+| | MPS | CUDA |
+|---|---|---|
+| `fly_obb` (control) | EQUIVALENT, 1.00x | EQUIVALENT, 1.00x |
+| `worm_bgsub` (control) | EQUIVALENT, 0.87x | EQUIVALENT, 0.99x |
+| crop clips (5) | DIFFERENCES, 1.00-1.17x | DIFFERENCES, 1.00-1.01x |
+| determinism | exact, all clips | exact, all clips |
+| untrustworthy flags | none | none |
+
+Test delta vs merged `main`: **zero regressions**, and the branch FIXES four
+`test_interpolated_crops_worker.py` failures that main shipped broken (its
+Qt-free extraction left them calling worker methods it had removed). 1627
+passing vs main's 1544.
+
+Three defects existed only in the UNION of the two branches, and only the merge
+could surface them:
+1. `core/post/interpolated_crops.py` (new on main) consumed the four legacy
+   canvas helpers this branch deleted -- the merged tree did not import.
+2. The 4.0 phantom `reference_aspect_ratio` default survived main's param
+   unification and would have shipped a third time.
+3. The oriented-video geometry threading was dropped when main relocated that
+   construction to `session.py`, leaving the exporter on a default geometry
+   silently diverging from the session's.
