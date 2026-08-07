@@ -1,7 +1,7 @@
 # Identity Overhaul — Consolidated Design
 
 Date: 2026-07-22
-Status: Proposed
+Status: In progress — Phase 0 shipped (merge `7abd18a8`, 2026-08-07); Phases 1–7 open.
 Supersedes: `trackerkit-identity-overhaul-spec.md` (2026-04-26)
 
 Related docs:
@@ -290,7 +290,7 @@ Safety net: the equivalence harness (positions byte-identical when identity infl
 
 Each phase is independently shippable and gated.
 
-- **Phase 0 — Directory reorganization (pure move).** Slot subfolders under `core/individual/` per the mapping above; rewrite imports across `src/` and `tests/`; fold `fragment_solver.py` location into `identity/offline.py` (rename only, no logic change yet). Behavior-preserving; full test suite green before and after. Its own commit for clean bisect.
+- **Phase 0 — Directory reorganization (pure move). ✅ DONE (merge `7abd18a8`, 2026-08-07).** Slot subfolders under `core/individual/` per the mapping above; rewrite imports across `src/` and `tests/`; fold `fragment_solver.py` location into `identity/offline.py` (rename only, no logic change yet). Behavior-preserving; full test suite green before and after. Its own commit for clean bisect. _Shipped as two commits: `core/identity`→`core/individual` rename (`f7dc7351`) + identity slotting (`54599ad3`); verified byte-identical (equivalence smoke EQUIVALENT, pos p99=0 / θ max=0)._
 - **Phase 1 — Typed config + persisted catalog.** Introduce `IdentityConfig`, `IdentityCatalogSpec`, structured factor keys; migrate `get_parameters_dict()` to derive from it. No behavior change. Catalog resolved once, persisted.
 - **Phase 2 — Calibration workflow (ClassKit integration).** Wire `TemperatureScaling.fit` into the `run_training` CNN path (fit on the retained `<dataset>/val` split, per factor); store T + weight-hash signature in the artifact metadata (checkpoint / `.v2meta.json` / `.multihead.json`) and surface via `ClassifierMetadata`; make `CNNConfig.calibration_temperature` fall back to artifact metadata. Add the ClassKit **Recalibrate** action and the CNN-import-dialog calibration status. Mandatory-calibration gate + runtime robustness knobs. Report ECE before/after.
 - **Phase 3 — Evidence as inference artifact.** `IdentityEvidenceStage` in `InferenceRunner` (batch + realtime); single factor→catalog mapping using true per-factor softmax; remove tracking-time emitter. Evidence cache written before tracking (non-realtime).
