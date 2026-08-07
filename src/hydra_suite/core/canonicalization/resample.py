@@ -79,15 +79,16 @@ def canonical_warp(
         theta, dtype=torch.float32, device=frame_chw.device
     ).unsqueeze(0)
 
-    grid = F.affine_grid(theta_t, (1, c, canvas_h, canvas_w), align_corners=True)
-    crop = F.grid_sample(
-        frame_chw.unsqueeze(0).float(),
-        grid,
-        mode="bilinear",
-        padding_mode="zeros",
-        align_corners=True,
-    )
-    return crop.squeeze(0)
+    with torch.inference_mode():
+        grid = F.affine_grid(theta_t, (1, c, canvas_h, canvas_w), align_corners=True)
+        crop = F.grid_sample(
+            frame_chw.unsqueeze(0).float(),
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+        return crop.squeeze(0)
 
 
 def canonical_warp_batch(
@@ -117,16 +118,17 @@ def canonical_warp_batch(
 
     thetas_t = torch.as_tensor(thetas_np, dtype=torch.float32, device=frame_chw.device)
 
-    grid = F.affine_grid(thetas_t, (n, c, canvas_h, canvas_w), align_corners=True)
-    frame_expanded = frame_chw.unsqueeze(0).expand(n, -1, -1, -1).float()
-    crops = F.grid_sample(
-        frame_expanded.contiguous(),
-        grid,
-        mode="bilinear",
-        padding_mode="zeros",
-        align_corners=True,
-    )
-    return crops
+    with torch.inference_mode():
+        grid = F.affine_grid(thetas_t, (n, c, canvas_h, canvas_w), align_corners=True)
+        frame_expanded = frame_chw.unsqueeze(0).expand(n, -1, -1, -1).float()
+        crops = F.grid_sample(
+            frame_expanded.contiguous(),
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )
+        return crops
 
 
 def letterbox_fit(
@@ -148,13 +150,14 @@ def letterbox_fit(
     fit = fit_to_model_input((sw, sh), model_wh)
     iw, ih = fit.inner_wh
     mw, mh = fit.model_wh
-    resized = F.interpolate(
-        x, size=(ih, iw), mode="bilinear", align_corners=False, antialias=True
-    )
-    if (ih, iw) == (mh, mw):
-        out = resized
-    else:
-        out = x.new_zeros((n, c, mh, mw))
-        ox, oy = fit.offset_xy
-        out[:, :, oy : oy + ih, ox : ox + iw] = resized
+    with torch.inference_mode():
+        resized = F.interpolate(
+            x, size=(ih, iw), mode="bilinear", align_corners=False, antialias=True
+        )
+        if (ih, iw) == (mh, mw):
+            out = resized
+        else:
+            out = x.new_zeros((n, c, mh, mw))
+            ox, oy = fit.offset_xy
+            out[:, :, oy : oy + ih, ox : ox + iw] = resized
     return out.squeeze(0) if single else out
