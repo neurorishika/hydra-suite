@@ -654,6 +654,9 @@ def _save_tiny_checkpoint(
     dropout: float,
     best_val_acc,
     history,
+    calibration_temperature: list | None = None,
+    calibration_signature: str | None = None,
+    calibration_ece: list | None = None,
 ) -> None:
     """Save a TinyClassifier checkpoint in the v2 classifier-artifact format.
 
@@ -684,6 +687,15 @@ def _save_tiny_checkpoint(
         "best_val_acc": (float(best_val_acc) if best_val_acc is not None else None),
         "history": history if history is not None else [],
         "model_state_dict": model.state_dict(),
+        "calibration_temperature": (
+            list(calibration_temperature)
+            if calibration_temperature is not None
+            else None
+        ),
+        "calibration_signature": calibration_signature,
+        "calibration_ece": (
+            list(calibration_ece) if calibration_ece is not None else None
+        ),
     }
     ckpt_dict.update(tiny_model_checkpoint_metadata(model))
     _torch.save(ckpt_dict, str(save_path))
