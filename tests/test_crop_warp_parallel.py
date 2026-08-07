@@ -1,9 +1,11 @@
-"""The parallel pose crop-warp must be byte-identical to the serial loop.
+"""Layer 2's parallel crop-fit must be byte-identical to the serial loop.
 
-``_warp_crops_for_obb`` runs independent cv2.warpAffine calls across a shared
-thread pool when the detection count is large enough. cv2 releases the GIL and
-each warp writes its own buffer, and ``pool.map`` preserves order, so the output
-must match the serial path exactly. This locks that invariant in.
+``apply_fit_batch`` (and, trivially, ``extract_classifier_crops`` which now
+warps every detection from a frame in a single batched torch call rather than
+per-crop) runs independent resamples across a shared thread pool when the
+detection count is large enough. Each call writes its own buffer, and
+``pool.map`` preserves order, so the output must match the serial path
+exactly. This locks that invariant in.
 """
 
 import os
@@ -43,35 +45,6 @@ def _make_obb(n: int, frame_idx: int = 0) -> OBBResult:
         corners=np.stack(corners, 0),
         detection_ids=OBBResult.make_detection_ids(frame_idx, n),
     )
-
-
-def _warp(arr, obb, threads):
-    os.environ["HYDRA_CROP_WARP_THREADS"] = str(threads)
-    try:
-        return crops_mod._warp_crops_for_obb(arr, obb, _GEOMETRY)
-    finally:
-        os.environ.pop("HYDRA_CROP_WARP_THREADS", None)
-
-
-def test_parallel_warp_is_byte_identical_to_serial():
-    arr = np.random.default_rng(7).integers(0, 256, (260, 640, 3), dtype=np.uint8)
-    obb = _make_obb(12)  # >= _WARP_MIN_PARALLEL, so the pool engages
-    serial = _warp(arr, obb, threads=1)
-    parallel = _warp(arr, obb, threads=4)
-    assert len(serial) == len(parallel) == 12
-    for i, (a, b) in enumerate(zip(serial, parallel)):
-        assert a.shape == b.shape, f"crop {i} shape mismatch"
-        assert np.array_equal(a, b), f"crop {i} differs serial vs parallel"
-
-
-def test_small_batch_stays_serial_and_matches():
-    # n below the threshold must not use the pool, and still be correct.
-    arr = np.random.default_rng(3).integers(0, 256, (200, 300, 3), dtype=np.uint8)
-    obb = _make_obb(2)
-    serial = _warp(arr, obb, threads=1)
-    parallel = _warp(arr, obb, threads=8)  # still serial: n=2 < _WARP_MIN_PARALLEL
-    for a, b in zip(serial, parallel):
-        assert np.array_equal(a, b)
 
 
 def _classifier_crops(arr, obb, threads):

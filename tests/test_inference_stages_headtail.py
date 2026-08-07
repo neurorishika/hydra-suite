@@ -172,8 +172,10 @@ def test_run_headtail_confident_prediction():
         input_size=(64, 64),
         class_names=["right", "left", "up", "down", "unknown"],
     )
-    crops = torch.zeros((2, 3, 64, 64))
-    result = run_headtail(crops, _obb(n=2), model, config, _cpu_rt())
+    # A single (C, H, W) frame -- corners are all-zero/degenerate (_obb), so
+    # extract_classifier_crops never actually samples real content from it.
+    frame = torch.zeros((3, 100, 100))
+    result = run_headtail(frame, _obb(n=2), model, config, _cpu_rt())
     assert result.directed_mask[0] == 1
     assert result.directed_mask[1] == 1
     assert result.heading_hints[0] == pytest.approx(0.0)
@@ -240,8 +242,10 @@ def test_run_headtail_below_candidate_confidence_skips_classification():
     obb = _obb(n=2)
     obb.confidences[0] = 0.10  # below candidate_confidence_threshold -> skipped
     obb.confidences[1] = 0.90  # above -> classified normally
-    crops = torch.zeros((2, 3, 64, 64))
-    result = run_headtail(crops, obb, model, config, _cpu_rt())
+    # A single (C, H, W) frame -- corners are all-zero/degenerate (_obb), so
+    # extract_classifier_crops never actually samples real content from it.
+    frame = torch.zeros((3, 100, 100))
+    result = run_headtail(frame, obb, model, config, _cpu_rt())
     assert result.directed_mask[0] == 0
     assert math.isnan(result.heading_hints[0])
     assert result.directed_mask[1] == 1

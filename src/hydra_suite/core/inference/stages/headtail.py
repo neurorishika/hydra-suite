@@ -266,13 +266,14 @@ def run_headtail_batch(
 
     Both branches derive their fit from the SAME ``fit_to_model_input(geometry
     .canvas_wh, (in_w, in_h))`` call, computed once here. The GPU (NVDEC
-    on-device) branch applies that fit on-device via ``apply_fit_gpu``
-    (``F.interpolate`` + zero-canvas paste) instead of the CPU's ``cv2``-based
-    ``apply_fit`` -- an anisotropic stretch here would silently feed the model
-    a DIFFERENT geometry than the CPU path (a model trained on letterboxed
-    crops fed non-letterboxed ones on CUDA), so both paths must letterbox
-    identically; only the resample kernel differs (grid_sample/interpolate
-    != cv2, so the acceptance gate is identity agreement, not byte-identity).
+    on-device) branch applies that fit on-device via the shared torch seam's
+    ``letterbox_fit`` (``F.interpolate`` + zero-canvas paste) instead of the
+    CPU's ``cv2``-based ``apply_fit`` -- an anisotropic stretch here would
+    silently feed the model a DIFFERENT geometry than the CPU path (a model
+    trained on letterboxed crops fed non-letterboxed ones on CUDA), so both
+    paths must letterbox identically; only the resample kernel differs
+    (grid_sample/interpolate != cv2, so the acceptance gate is identity
+    agreement, not byte-identity).
     """
     from .crops import frames_on_cuda
 
@@ -283,16 +284,16 @@ def run_headtail_batch(
         # Pure-GPU path (NVDEC): warp + forward on-device, no frame D->H copy.
         # floor-quantize to [0,255] 8-bit to match the cv2/uint8 reference regime
         # (grid_sample != cv2 -> identity-agreement gate, not byte-identity).
-        from .crops import apply_fit_gpu, extract_classifier_crops_batch_gpu
+        from hydra_suite.core.canonicalization.resample import letterbox_fit
 
-        batch = extract_classifier_crops_batch_gpu(
-            frames, obb_results, geometry, runtime.device
-        )
+        from .crops import extract_canonical_crops_batch
+
+        batch = extract_canonical_crops_batch(frames, obb_results, geometry, runtime)
         n_total = batch.crops.shape[0]
         if n_total:
             # NVDEC frames (the only CUDA frame source) are RGB -> input_is_bgr=False
             # so the model sees RGB, matching the CPU path's BGR->RGB flip.
-            fitted = apply_fit_gpu(batch.crops, fit)
+            fitted = letterbox_fit(batch.crops, fit.model_wh)
             cuda_crops = [
                 (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
             ]

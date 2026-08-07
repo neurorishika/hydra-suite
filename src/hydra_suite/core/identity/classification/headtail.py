@@ -535,7 +535,7 @@ class HeadTailAnalyzer:
         from hydra_suite.core.canonicalization.crop import gpu_canonical_crop_batch
         from hydra_suite.core.canonicalization.fit import fit_to_model_input
         from hydra_suite.core.canonicalization.geometry import canonical_affine
-        from hydra_suite.core.inference.stages.crops import apply_fit_gpu
+        from hydra_suite.core.canonicalization.resample import letterbox_fit
 
         fit = None
         if self._input_size is not None and len(self._input_size) == 2:
@@ -589,7 +589,7 @@ class HeadTailAnalyzer:
             # backend that resizes internally (predict_batch_cuda) does an
             # anisotropic stretch, not a letterbox.
             if fit is not None:
-                crops_batch = apply_fit_gpu(crops_batch, fit)
+                crops_batch = letterbox_fit(crops_batch, fit.model_wh)
 
             for i, crop in enumerate(crops_batch.unbind(0)):
                 if crop.numel() > 0:
@@ -618,7 +618,7 @@ class HeadTailAnalyzer:
         from hydra_suite.core.canonicalization.crop import gpu_canonical_crop
         from hydra_suite.core.canonicalization.fit import fit_to_model_input
         from hydra_suite.core.canonicalization.geometry import canonical_affine
-        from hydra_suite.core.inference.stages.crops import apply_fit_gpu
+        from hydra_suite.core.canonicalization.resample import letterbox_fit
 
         try:
             M_align, axis_theta, _clipped = canonical_affine(corners, self._geometry)
@@ -650,7 +650,7 @@ class HeadTailAnalyzer:
         if self._input_size is not None and len(self._input_size) == 2:
             in_h, in_w = int(self._input_size[0]), int(self._input_size[1])
             fit = fit_to_model_input(self._geometry.canvas_wh, (in_w, in_h))
-            crop_cuda = apply_fit_gpu(crop_cuda.unsqueeze(0), fit).squeeze(0)
+            crop_cuda = letterbox_fit(crop_cuda, fit.model_wh)
 
         return crop_cuda, axis_theta, M_align
 
