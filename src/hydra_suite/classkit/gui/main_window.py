@@ -429,6 +429,11 @@ class MainWindow(QMainWindow):
         load_checkpoint_action.triggered.connect(self.load_classifier_checkpoint)
         compute_menu.addAction(load_checkpoint_action)
 
+        self._recalibrate_action = QAction("&Recalibrate model...", self)
+        self._recalibrate_action.triggered.connect(self.recalibrate_model)
+        self._recalibrate_action.setEnabled(self.project_path is not None)
+        compute_menu.addAction(self._recalibrate_action)
+
         model_history_action = QAction("&Previously Trained Models...", self)
         model_history_action.setShortcut("Ctrl+Shift+H")
         model_history_action.setStatusTip(
@@ -1952,6 +1957,8 @@ class MainWindow(QMainWindow):
             self._machine_label_action.setEnabled(self.project_path is not None)
         if hasattr(self, "_machine_label_toolbar_action"):
             self._machine_label_toolbar_action.setEnabled(self.project_path is not None)
+        if hasattr(self, "_recalibrate_action"):
+            self._recalibrate_action.setEnabled(self.project_path is not None)
         if hasattr(self, "_recents_store"):
             self._recents_store.add(str(self.project_path))
         if hasattr(self, "_stacked"):
@@ -2558,6 +2565,8 @@ class MainWindow(QMainWindow):
             self._machine_label_action.setEnabled(self.project_path is not None)
         if hasattr(self, "_machine_label_toolbar_action"):
             self._machine_label_toolbar_action.setEnabled(self.project_path is not None)
+        if hasattr(self, "_recalibrate_action"):
+            self._recalibrate_action.setEnabled(self.project_path is not None)
 
     def _update_labeling_progress_indicator(self):
         """Update the status bar progress label and context panel progress bar."""
@@ -7985,6 +7994,31 @@ class MainWindow(QMainWindow):
         )
         dialog.append_log("Training Complete. Metrics tab updated.")
 
+    def _log_calibration_ece(self, dialog, results: list) -> None:
+        """Best-effort: append a "Calibration ECE (after): ..." log line per
+        trained artifact. Reads calibration_ece off the produced checkpoint's
+        metadata (results don't carry it directly) -- never breaks training
+        completion on failure.
+        """
+        try:
+            from ...training.model_publish import classifier_metadata_for_artifact
+
+            for result in results or []:
+                artifact_path = (result or {}).get("artifact_path")
+                if not artifact_path:
+                    continue
+                try:
+                    meta = classifier_metadata_for_artifact(artifact_path)
+                except Exception:
+                    continue
+                ece = meta.get("calibration_ece")
+                if not ece:
+                    continue
+                ece_str = ", ".join(f"{e:.4f}" for e in ece)
+                dialog.append_log(f"Calibration ECE (after): {ece_str}")
+        except Exception:
+            pass
+
     def _on_training_success(self, dialog, context, results: list) -> None:
         """Handle successful training completion before post-training inference."""
         self._set_heldout_validation_summary(
@@ -8003,6 +8037,7 @@ class MainWindow(QMainWindow):
         dialog.append_log("Training finished. Refreshing predictions and metrics...")
         dialog.start_btn.setEnabled(True)
         dialog.cancel_btn.setEnabled(False)
+        self._log_calibration_ece(dialog, results)
 
         self._save_training_results_to_db(
             results,
@@ -8436,6 +8471,22 @@ class MainWindow(QMainWindow):
             selected_path = Path(file_path)
 
         self._load_checkpoint_from_path(selected_path)
+
+    def recalibrate_model(self):
+        """Open the Recalibrate dialog: refit calibration for a trained
+        classifier against a labeled validation set, in place."""
+        if not self.project_path:
+            QMessageBox.warning(
+                self,
+                "No Project",
+                "Open a ClassKit project first.",
+            )
+            return
+
+        from .dialogs.recalibrate_dialog import RecalibrateDialog
+
+        dialog = RecalibrateDialog(project_path=self.project_path, parent=self)
+        dialog.exec()
 
     def _load_embedding_head_checkpoint(
         self,
