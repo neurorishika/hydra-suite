@@ -92,3 +92,12 @@ def test_tiny_train_matches_tiny_inference_nonsquare(tmp_path):
 
     np.testing.assert_array_equal(train_arr, reference_chw)
     np.testing.assert_array_equal(infer_arr, reference_chw)
+
+
+def test_transform_equals_inference_letterbox_nonsquare():
+    from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
+
+    crop = np.random.default_rng(1).integers(0, 256, (56, 112, 3), np.uint8)
+    t = CanonicalFitTransform((128, 64))  # (H, W)
+    fit = fit_to_model_input((112, 56), (64, 128))  # inference side (W, H)
+    np.testing.assert_array_equal(t(crop), apply_fit(crop, fit))
