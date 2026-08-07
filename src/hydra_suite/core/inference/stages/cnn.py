@@ -16,11 +16,6 @@ from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
-# Fallback canonical geometry for callers that omit ``geometry`` (matches the
-# project-wide default `InferenceConfig.canonical` built from
-# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults).
-_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-
 
 @dataclass
 class CNNModel:
@@ -73,7 +68,7 @@ def run_cnn(
     model: CNNModel,
     config: CNNConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> CNNResult:
     """Run CNN identity classifier; returns raw pre-calibration probabilities.
 
@@ -137,7 +132,7 @@ def run_cnn_batch(
     model: "CNNModel",
     config: CNNConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> "dict[int, CNNResult]":
     """Run CNN classifier over a window; return one CNNResult per frame.
 

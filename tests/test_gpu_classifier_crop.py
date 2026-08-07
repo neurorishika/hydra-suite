@@ -296,10 +296,11 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     )
     cfg = type("C", (), {"label": "x"})()
     rt = type("RT", (), {"tensor_on_cuda": True, "device": "cpu"})()
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
     # Gate True -> GPU path.
     monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: True)
-    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt, geometry)
     assert used["gpu"] and used["cuda_fwd"]
     assert not used["cpu"] and not used["numpy_fwd"]
 
@@ -307,7 +308,7 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     for k in used:
         used[k] = False
     monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: False)
-    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt, geometry)
     assert used["cpu"] and used["numpy_fwd"]
     assert not used["gpu"] and not used["cuda_fwd"]
 

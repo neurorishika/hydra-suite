@@ -20,12 +20,6 @@ from hydra_suite.runtime.resolver import ResolvedBackend
 
 logger = logging.getLogger(__name__)
 
-# Fallback canonical geometry for callers that construct an analyzer without an
-# explicit ``geometry`` (matches the project-wide default built from
-# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults -- mirrors
-# core.inference.stages.headtail._DEFAULT_CANONICAL_GEOMETRY).
-_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-
 HEADTAIL_CANONICAL_LABELS: frozenset[str] = frozenset(
     {"up", "down", "left", "right", "unknown"}
 )
@@ -142,9 +136,7 @@ class HeadTailAnalyzer:
         resolved: Optional[ResolvedBackend] = None,
         conf_threshold: float = 0.5,
         batch_size: int = 64,
-        reference_aspect_ratio: float = 2.0,
-        canonical_margin: float = 1.3,
-        geometry: Optional[CanonicalGeometry] = None,
+        geometry: CanonicalGeometry,
         predict_device: Optional[str] = None,
     ) -> None:
         """Construct a HeadTailAnalyzer from a classifier artifact path.
@@ -153,11 +145,9 @@ class HeadTailAnalyzer:
         when omitted, defaults to native torch on CPU.
 
         ``geometry`` is the project-wide Layer 1 :class:`CanonicalGeometry`
-        (one fixed canvas shared by every crop-consuming stage). Callers
-        should pass it explicitly; when omitted, a geometry is built from
-        ``reference_aspect_ratio``/``canonical_margin`` with a default
-        reference body size, for backward-compatible construction only --
-        there is no per-analyzer canvas any more.
+        (one fixed canvas shared by every crop-consuming stage). Callers must
+        pass it explicitly -- there is no per-analyzer canvas and no
+        self-built fallback any more.
 
         Raises:
             HeadTailFormatError: model is multi-head or labels are not a subset
@@ -165,13 +155,7 @@ class HeadTailAnalyzer:
         """
         self._conf_threshold = float(conf_threshold)
         self._batch_size = max(1, int(batch_size))
-        self._geometry: CanonicalGeometry = (
-            geometry
-            if geometry is not None
-            else CanonicalGeometry.from_reference(
-                20.0, reference_aspect_ratio, canonical_margin
-            )
-        )
+        self._geometry: CanonicalGeometry = geometry
         self._predict_device = predict_device
         self._resolved: ResolvedBackend = (
             resolved if resolved is not None else ResolvedBackend("torch", "cpu", False)

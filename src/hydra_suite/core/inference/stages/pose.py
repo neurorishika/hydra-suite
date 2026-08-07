@@ -24,13 +24,6 @@ from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
-# Fallback canonical geometry for callers that omit ``geometry`` (matches the
-# project-wide default `InferenceConfig.canonical` built from
-# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults -- mirrors the old
-# module-level _CANONICAL_ASPECT_RATIO/_CANONICAL_MARGIN constants this
-# replaces).
-_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-
 
 def model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[int, int]:
     """The pose backend's fixed (W, H) input, or ``geometry``'s own canvas.
@@ -271,7 +264,7 @@ def run_pose(
     model: PoseModel,
     config: PoseConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> PoseResult:
     """Run pose estimation on canonical crops. Returns (D, K, 3) keypoints + valid_mask.
 
@@ -383,7 +376,7 @@ def run_pose_batch(
     model: PoseModel,
     config: PoseConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> "dict[int, PoseResult]":
     """Run pose estimation over a CropBatch; return one PoseResult per frame.
 

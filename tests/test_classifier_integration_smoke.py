@@ -5,7 +5,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import ResolvedBackend
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 @pytest.mark.slow
@@ -24,6 +27,7 @@ def test_tracking_smoke_headtail_and_cnn_identity(
     headtail = HeadTailAnalyzer(
         model_path=str(tiny_flat_headtail),
         resolved=ResolvedBackend("torch", "cpu", False),
+        geometry=_TEST_GEOMETRY,
     )
     cnn_cfg = CNNIdentityConfig(
         model_path=str(tiny_flat_subset),

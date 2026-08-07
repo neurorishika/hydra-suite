@@ -17,11 +17,6 @@ from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
-# Fallback canonical geometry for callers that omit ``geometry`` (matches the
-# project-wide default `InferenceConfig.canonical` built from
-# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults).
-_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-
 _DIRECTION_OFFSET: dict[str, float] = {
     "right": 0.0,
     "left": math.pi,
@@ -104,7 +99,7 @@ def run_headtail(
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> HeadTailResult:
     """Classify head-tail orientation per detection. No I/O, no mode branching.
 
@@ -253,7 +248,7 @@ def run_headtail_batch(
     model: HeadTailModel,
     config: HeadTailConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> "dict[int, HeadTailResult]":
     """Run head-tail classification over a window; return one HeadTailResult per frame.
 

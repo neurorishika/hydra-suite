@@ -142,9 +142,11 @@ def test_pose_stage_hands_backends_uint8(monkeypatch):
     """
     import torch
 
+    from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
     from hydra_suite.core.inference.result import OBBResult
     from hydra_suite.core.inference.stages import pose as pose_stage
 
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
     backend = _RecordingBackend()
 
     class _Model:
@@ -175,6 +177,7 @@ def test_pose_stage_hands_backends_uint8(monkeypatch):
         model,
         pose_stage.PoseConfig(),
         None,
+        geometry=geometry,
     )
 
     assert backend.seen, "backend was never called"

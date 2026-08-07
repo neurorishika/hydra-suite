@@ -3,10 +3,13 @@ from unittest.mock import MagicMock
 import numpy as np
 import torch
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.config import CNNConfig
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.cnn import CNNModel, run_cnn
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 def _cpu_rt():
@@ -64,7 +67,7 @@ def test_run_cnn_flat_returns_one_factor_per_detection():
     # A single (C, H, W) frame -- corners are all-zero/degenerate (_obb), so
     # extract_classifier_crops never actually samples real content from it.
     frame = torch.zeros((3, 100, 100))
-    result = run_cnn(frame, _obb(2), model, config, _cpu_rt())
+    result = run_cnn(frame, _obb(2), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert result.label == "identity"
     assert len(result.predictions) == 2
     for pred in result.predictions:
@@ -84,7 +87,7 @@ def test_run_cnn_multihead_returns_k_factors():
         factor_class_names=[["a", "b"], ["x", "y", "z"]],
     )
     crops = torch.zeros((1, 3, 64, 64))
-    result = run_cnn(crops, _obb(1), model, config, _cpu_rt())
+    result = run_cnn(crops, _obb(1), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert len(result.predictions[0].factors) == 2
     assert result.predictions[0].factors[0].factor_name == "color"
     assert result.predictions[0].factors[1].factor_name == "posture"
@@ -100,7 +103,7 @@ def test_run_cnn_empty_crops():
         factor_class_names=[["a", "b"]],
     )
     crops = torch.zeros((0, 3, 64, 64))
-    result = run_cnn(crops, _obb(0), model, config, _cpu_rt())
+    result = run_cnn(crops, _obb(0), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert len(result.predictions) == 0
 
 
@@ -120,7 +123,7 @@ def test_run_cnn_raw_probabilities_not_calibrated():
         factor_class_names=[["a", "b", "c"]],
     )
     crops = torch.zeros((1, 3, 64, 64))
-    result = run_cnn(crops, _obb(1), model, config, _cpu_rt())
+    result = run_cnn(crops, _obb(1), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     np.testing.assert_array_almost_equal(
         result.predictions[0].factors[0].raw_probabilities, raw_probs
     )
@@ -139,5 +142,5 @@ def test_run_cnn_det_index_assigned_in_order():
     # A single (C, H, W) frame -- corners are all-zero/degenerate (_obb), so
     # extract_classifier_crops never actually samples real content from it.
     frame = torch.zeros((3, 100, 100))
-    result = run_cnn(frame, _obb(3), model, config, _cpu_rt())
+    result = run_cnn(frame, _obb(3), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert [p.det_index for p in result.predictions] == [0, 1, 2]
