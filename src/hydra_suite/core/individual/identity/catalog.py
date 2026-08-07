@@ -11,9 +11,12 @@ Indices 1..N correspond to the configured unique-identity labels.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from hydra_suite.core.individual.identity.spec import IdentityCatalogSpec
 
 UNKNOWN_LABEL: str = "unknown"
 """Reserved label for the unobserved / ambiguous state (always at index 0)."""
@@ -63,6 +66,15 @@ class IdentityCatalog:
                 "it is reserved as the unobserved state at index 0."
             )
         return IdentityCatalog(labels=(UNKNOWN_LABEL, *known))
+
+    @staticmethod
+    def from_spec(spec: "IdentityCatalogSpec") -> "IdentityCatalog":
+        """Rebuild the frozen runtime catalog from a persisted spec.
+
+        The runtime ``labels`` are byte-identical to ``from_labels`` applied to
+        the spec's display labels, so every downstream consumer is unaffected.
+        """
+        return IdentityCatalog.from_labels(list(spec.labels))
 
     # ------------------------------------------------------------------
     # Size / membership
