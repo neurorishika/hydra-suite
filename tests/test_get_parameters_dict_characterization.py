@@ -46,6 +46,11 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from hydra_suite.trackerkit import cli_config  # noqa: E402
+from hydra_suite.trackerkit.engine_params import (  # noqa: E402
+    RuntimeContext,
+    build_engine_params,
+)
 from hydra_suite.trackerkit.gui.main_window import MainWindow  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +58,206 @@ FIXTURES_CONFIG_DIR = REPO_ROOT / "tools" / "equivalence" / "fixtures" / "config
 GOLDEN_DIR = Path(__file__).resolve().parent / "data" / "get_parameters_dict_golden"
 
 CLIPS = ["fly_obb", "ant_cnn_identity"]
+
+# Task 5: full 7-clip gate matrix, used only by the identity-keys
+# characterization guard below (does not need a live MainWindow -- it drives
+# ``build_engine_params`` directly, same pattern as
+# ``tests/test_engine_params_extraction.py``).
+IDENTITY_GATE_CLIPS = [
+    "fly_obb",
+    "worm_bgsub",
+    "emi_obb_identity",
+    "ant_pose_headtail",
+    "ant_obb_sleap",
+    "ant_obb_sequential",
+    "ant_cnn_identity",
+]
+
+IDENTITY_KEYS = [
+    "IDENTITY_DISAGREE_MIN_RUN",
+    "IDENTITY_GATES_TRAJECTORY_STRUCTURE",
+    "ENABLE_IDENTITY_IN_TRACKING",
+    "ENABLE_IDENTITY_ONLINE_DECODER",
+    "IDENTITY_POSTPROCESS_MODE",
+    "ENABLE_IDENTITY_FRAGMENT_SOLVER",
+    "ASSOCIATION_IDENTITY_HINT_SCALE",
+    "IDENTITY_COMMIT_THRESHOLD",
+    "IDENTITY_DISPLAY_THRESHOLD",
+    "IDENTITY_TRANSITION_EPSILON",
+    "IDENTITY_UNKNOWN_PRIOR",
+    "IDENTITY_REJOIN_THRESHOLD",
+    "IDENTITY_SWAP_ENABLED",
+    "IDENTITY_SWAP_MIN_FRAMES",
+    "IDENTITY_SWAP_CONF_MARGIN",
+    "IDENTITY_REJOIN_VELOCITY_BUDGET",
+    "IDENTITY_REJOIN_DIST_FLOOR",
+]
+
+# Captured from the UN-MODIFIED (pre-Task-5) ``build_engine_params`` via
+# ``cli_config.load_tracker_cli_config`` + a synthetic ``RuntimeContext``
+# (fps=100.0, total_frames=500, width=640, height=480 -- same probe shape as
+# ``tests/test_engine_params_extraction.py``), advanced_config left at its
+# default. This pins the pre-refactor baseline so Task 5's swap to
+# ``IdentityConfig``-derived reads is provably inert.
+EXPECTED_IDENTITY = {
+    "fly_obb": {
+        "IDENTITY_DISAGREE_MIN_RUN": 5,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": False,
+        "ENABLE_IDENTITY_ONLINE_DECODER": False,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 1.0,
+        "IDENTITY_COMMIT_THRESHOLD": 0.85,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.6,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.5,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+    "worm_bgsub": {
+        "IDENTITY_DISAGREE_MIN_RUN": 5,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": True,
+        "ENABLE_IDENTITY_ONLINE_DECODER": False,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 1.0,
+        "IDENTITY_COMMIT_THRESHOLD": 0.85,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.6,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.5,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+    "emi_obb_identity": {
+        "IDENTITY_DISAGREE_MIN_RUN": 100,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": True,
+        "ENABLE_IDENTITY_ONLINE_DECODER": True,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 0.0,
+        "IDENTITY_COMMIT_THRESHOLD": 0.95,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.95,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.95,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+    "ant_pose_headtail": {
+        "IDENTITY_DISAGREE_MIN_RUN": 5,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": True,
+        "ENABLE_IDENTITY_ONLINE_DECODER": False,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 1.0,
+        "IDENTITY_COMMIT_THRESHOLD": 0.85,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.6,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.5,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+    "ant_obb_sleap": {
+        "IDENTITY_DISAGREE_MIN_RUN": 100,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": True,
+        "ENABLE_IDENTITY_ONLINE_DECODER": True,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 0.0,
+        "IDENTITY_COMMIT_THRESHOLD": 0.95,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.95,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.95,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+    "ant_obb_sequential": {
+        "IDENTITY_DISAGREE_MIN_RUN": 100,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": True,
+        "ENABLE_IDENTITY_ONLINE_DECODER": True,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 0.0,
+        "IDENTITY_COMMIT_THRESHOLD": 0.95,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.95,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.95,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+    "ant_cnn_identity": {
+        "IDENTITY_DISAGREE_MIN_RUN": 5,
+        "IDENTITY_GATES_TRAJECTORY_STRUCTURE": True,
+        "ENABLE_IDENTITY_IN_TRACKING": True,
+        "ENABLE_IDENTITY_ONLINE_DECODER": True,
+        "IDENTITY_POSTPROCESS_MODE": "Fragment Solver",
+        "ENABLE_IDENTITY_FRAGMENT_SOLVER": True,
+        "ASSOCIATION_IDENTITY_HINT_SCALE": 0.05,
+        "IDENTITY_COMMIT_THRESHOLD": 0.95,
+        "IDENTITY_DISPLAY_THRESHOLD": 0.95,
+        "IDENTITY_TRANSITION_EPSILON": 0.02,
+        "IDENTITY_UNKNOWN_PRIOR": 0.05,
+        "IDENTITY_REJOIN_THRESHOLD": 0.5,
+        "IDENTITY_SWAP_ENABLED": True,
+        "IDENTITY_SWAP_MIN_FRAMES": 8,
+        "IDENTITY_SWAP_CONF_MARGIN": 0.2,
+        "IDENTITY_REJOIN_VELOCITY_BUDGET": 1.5,
+        "IDENTITY_REJOIN_DIST_FLOOR": None,
+    },
+}
+
+
+def test_identity_keys_byte_identical():
+    """Task 5 golden: the ~15 scalar ``IDENTITY_*`` engine keys must stay
+    byte-identical across the ``IdentityConfig``-derivation refactor of
+    ``build_engine_params``.
+    """
+    for clip in IDENTITY_GATE_CLIPS:
+        cfg = cli_config.load_tracker_cli_config(
+            str(FIXTURES_CONFIG_DIR / f"{clip}.json")
+        )
+        probe = cli_config.TrackerCliVideoProbe(
+            fps=100.0, total_frames=500, width=640, height=480
+        )
+        rt = RuntimeContext(
+            fps=probe.fps,
+            total_frames=probe.total_frames,
+            frame_width=probe.width,
+            frame_height=probe.height,
+        )
+        params = build_engine_params(cfg, runtime=rt)
+        got = {k: params[k] for k in IDENTITY_KEYS}
+        assert got == EXPECTED_IDENTITY[clip], clip
+
 
 # Keys dropped from the golden because their VALUE embeds an absolute,
 # machine-specific filesystem path (the resolved model file under
