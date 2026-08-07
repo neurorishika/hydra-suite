@@ -1,6 +1,10 @@
 import itertools
+import json
 
-from hydra_suite.core.individual.identity.resolve import resolve_catalog_spec
+from hydra_suite.core.individual.identity.resolve import (
+    _read_factors_from_model_file,
+    resolve_catalog_spec,
+)
 
 
 def _legacy_labels(cnn_classifiers, tag_labels):
@@ -89,3 +93,104 @@ def test_tag_entry_has_empty_factors():
     spec = resolve_catalog_spec([], ["ant1"])
     assert spec.entries[0].factors == ()
     assert spec.entries[0].source == "tag"
+
+
+# --- Model-file JSON fallback (_read_factors_from_model_file) ---
+#
+# resolve_catalog_spec only consults the model file when a classifier's
+# class_names_per_factor is absent/empty and model_path exists on disk.
+
+
+def test_model_file_fallback_used_when_class_names_per_factor_absent(tmp_path):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(
+        json.dumps({"class_names_per_factor": [["red", "blue"], ["big", "small"]]})
+    )
+    spec = resolve_catalog_spec(
+        [
+            {
+                "unique_identifier": True,
+                "model_path": str(model_path),
+            }
+        ],
+        [],
+    )
+    assert list(spec.labels) == ["red_big", "red_small", "blue_big", "blue_small"]
+    first = next(e for e in spec.entries if e.display_label == "red_big")
+    assert first.factors == (("factor0", "red"), ("factor1", "big"))
+    assert first.source == "cnn"
+
+
+def test_model_file_fallback_flat_class_names_tier2(tmp_path):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(json.dumps({"class_names": ["x", "y", "z"]}))
+    spec = resolve_catalog_spec(
+        [{"unique_identifier": True, "model_path": str(model_path)}],
+        [],
+    )
+    assert list(spec.labels) == ["x", "y", "z"]
+    for entry in spec.entries:
+        assert entry.factors == (("factor0", entry.display_label),)
+        assert entry.source == "cnn"
+
+
+def test_model_file_fallback_factor_models_tier3(tmp_path):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(
+        json.dumps(
+            {
+                "factor_models": [
+                    {"class_names": ["red", "blue"]},
+                    {"class_names": ["big", "small"]},
+                ]
+            }
+        )
+    )
+    spec = resolve_catalog_spec(
+        [{"unique_identifier": True, "model_path": str(model_path)}],
+        [],
+    )
+    assert list(spec.labels) == ["red_big", "red_small", "blue_big", "blue_small"]
+
+
+def test_model_file_fallback_priority_class_names_per_factor_wins(tmp_path):
+    model_path = tmp_path / "model.json"
+    model_path.write_text(
+        json.dumps(
+            {
+                "class_names_per_factor": [["red", "blue"]],
+                "class_names": ["x", "y", "z"],
+            }
+        )
+    )
+    factors = _read_factors_from_model_file(str(model_path))
+    assert factors == [["red", "blue"]]
+
+    spec = resolve_catalog_spec(
+        [{"unique_identifier": True, "model_path": str(model_path)}],
+        [],
+    )
+    assert list(spec.labels) == ["red", "blue"]
+
+
+def test_model_file_fallback_missing_file_swallowed(tmp_path):
+    missing_path = tmp_path / "does_not_exist.json"
+    assert _read_factors_from_model_file(str(missing_path)) == []
+
+    spec = resolve_catalog_spec(
+        [{"unique_identifier": True, "model_path": str(missing_path)}],
+        [],
+    )
+    assert spec.entries == ()
+
+
+def test_model_file_fallback_corrupt_json_swallowed(tmp_path):
+    model_path = tmp_path / "corrupt.json"
+    model_path.write_text("{not valid json,,,")
+    assert _read_factors_from_model_file(str(model_path)) == []
+
+    spec = resolve_catalog_spec(
+        [{"unique_identifier": True, "model_path": str(model_path)}],
+        [],
+    )
+    assert spec.entries == ()
