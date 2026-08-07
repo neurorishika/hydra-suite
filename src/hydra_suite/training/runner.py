@@ -370,6 +370,16 @@ def _build_tiny_dataset_class(input_w, input_h):
             self.augment = augment
             self.profile = profile
             self._rng = np.random.default_rng(seed)
+            self._canon_aug = None
+            if (
+                augment
+                and profile
+                and getattr(profile, "enabled", False)
+                and getattr(profile, "canonical_aug", False)
+            ):
+                from hydra_suite.training.canonical_aug import CanonicalAug
+
+                self._canon_aug = CanonicalAug(seed=seed)
 
         def __len__(self):
             return len(self.items)
@@ -383,6 +393,11 @@ def _build_tiny_dataset_class(input_w, input_h):
             img = _apply_tiny_augmentation(
                 img, self.augment, self.profile, rng=getattr(self, "_rng", None)
             )
+            # CanonicalAug (Moderate robustness profile) runs on the canonical
+            # crop before the Layer-2 letterbox below -- training-only, opt-in
+            # via augmentation_profile.canonical_aug.
+            if self._canon_aug is not None:
+                img = self._canon_aug(img)
             if img.shape[1] != input_w or img.shape[0] != input_h:
                 img = fit_transform(img)
             x = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 255.0
@@ -1364,7 +1379,14 @@ def _train_custom_classify(
     mean, std = get_classifier_normalization_stats(
         monochrome=bool(getattr(profile, "monochrome", False))
     )
-    train_transforms = [
+    train_transforms = []
+    if getattr(profile, "enabled", False) and getattr(profile, "canonical_aug", False):
+        from hydra_suite.training.canonical_aug import CanonicalAug
+
+        train_transforms.append(
+            transforms.Lambda(CanonicalAug(seed=getattr(spec, "seed", 42)))
+        )
+    train_transforms += [
         CanonicalFitTransform(resize_hw),
         transforms.Lambda(bgr_to_rgb_pil),
     ]
@@ -1715,7 +1737,14 @@ def _train_multihead_shared_classify(
         bgr_to_rgb_pil,
     )
 
-    train_tf_steps = [
+    train_tf_steps = []
+    if getattr(profile, "enabled", False) and getattr(profile, "canonical_aug", False):
+        from hydra_suite.training.canonical_aug import CanonicalAug
+
+        train_tf_steps.append(
+            transforms.Lambda(CanonicalAug(seed=getattr(spec, "seed", 42)))
+        )
+    train_tf_steps += [
         CanonicalFitTransform(resize_hw),
         transforms.Lambda(bgr_to_rgb_pil),
     ]
