@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from hydra_suite.core.individual.classification.cnn import ClassPrediction
-from hydra_suite.core.individual.evidence import IdentityEvidence
+from hydra_suite.core.individual.identity.evidence import IdentityEvidence
 
 
 def _compute_pose_statistics(

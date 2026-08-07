@@ -1543,7 +1543,9 @@ class TrackingEngineCore:
                     "Using live CNN identity outputs for realtime tracking (%s)", label
                 )
             elif not effective_realtime_tracking_mode:
-                from hydra_suite.core.individual.calibration import CalibrationModel
+                from hydra_suite.core.individual.identity.calibration import (
+                    CalibrationModel,
+                )
                 from hydra_suite.core.individual.properties.cache import (
                     compute_classify_cache_id,
                 )
@@ -1580,7 +1582,7 @@ class TrackingEngineCore:
                     _cache = CNNIdentityCache(_path)
                     _evidence_cache = None
                     try:
-                        from hydra_suite.core.individual.cache import (
+                        from hydra_suite.core.individual.identity.cache import (
                             IdentityEvidenceCache,
                         )
 
@@ -1834,8 +1836,10 @@ class TrackingEngineCore:
                 # than single-factor labels.
                 import itertools as _itertools
 
-                from hydra_suite.core.individual.catalog import IdentityCatalog
-                from hydra_suite.core.individual.online import OnlineIdentityDecoder
+                from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+                from hydra_suite.core.individual.identity.online import (
+                    OnlineIdentityDecoder,
+                )
 
                 _known_labels_set: list[str] = []
                 for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
@@ -3002,7 +3006,7 @@ class TrackingEngineCore:
                 # falling back to compatibility top-1 priors only when needed.
                 if _identity_online_decoder is not None:
                     try:
-                        from hydra_suite.core.individual.evidence import (
+                        from hydra_suite.core.individual.identity.evidence import (
                             IdentityEvidence,
                         )
 
@@ -4308,7 +4312,7 @@ class TrackingEngineCore:
         if not factor_labels:
             return None
 
-        from hydra_suite.core.individual.calibration import CalibrationModel
+        from hydra_suite.core.individual.identity.calibration import CalibrationModel
         from hydra_suite.core.individual.properties.cache import (
             compute_classify_cache_id,
         )

@@ -63,8 +63,8 @@ def apply_identity_postprocessing_to_df(with_pose_df, params):
         # names are model identifiers, not individual animal identities.
         import itertools as _itertools
 
-        from hydra_suite.core.individual.catalog import IdentityCatalog
-        from hydra_suite.core.individual.fragment_solver import run_fragment_solver
+        from hydra_suite.core.individual.identity.catalog import IdentityCatalog
+        from hydra_suite.core.individual.identity.offline import run_fragment_solver
         from hydra_suite.core.post.identity_postprocess import (
             fill_identity_nans_with_consensus,
             sort_trajectories_by_identity,
