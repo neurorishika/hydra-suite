@@ -24,7 +24,10 @@ from hydra_suite.widgets import BaseDialog
 
 def describe_cnn_identity_candidate(model_path: str) -> dict[str, Any]:
     """Return a metadata summary suitable for the import dialog preview."""
-    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import (
+        ClassifierBackend,
+        calibration_status,
+    )
     from hydra_suite.runtime.resolver import ResolvedBackend
 
     backend = ClassifierBackend(model_path, ResolvedBackend("torch", "cpu", False))
@@ -39,6 +42,8 @@ def describe_cnn_identity_candidate(model_path: str) -> dict[str, Any]:
             "monochrome": meta.monochrome,
             "recommended_confidence_threshold": meta.recommended_confidence_threshold,
             "source_path": meta.source_path,
+            "calibration_status": calibration_status(meta, None),
+            "calibration_temperature": meta.calibration_temperature,
         }
     finally:
         backend.close()
@@ -71,6 +76,18 @@ class CNNIdentityImportDialog(BaseDialog):
             f"{float(threshold):.0%}" if isinstance(threshold, (int, float)) else "—"
         )
         layout.addRow("Recommended threshold:", QLabel(threshold_text))
+
+        cal = summary.get("calibration_status", "uncalibrated")
+        temps = summary.get("calibration_temperature")
+        if cal == "calibrated" and temps:
+            cal_text = (
+                "calibrated (T=" + ", ".join(f"{float(t):.2f}" for t in temps) + ")"
+            )
+        elif cal == "calibrated":
+            cal_text = "calibrated"
+        else:
+            cal_text = "not calibrated"
+        layout.addRow("Calibration:", QLabel(cal_text))
 
         factor_names = list(summary.get("factor_names") or ["flat"])
         cnpf = list(summary.get("class_names_per_factor") or [[]])
