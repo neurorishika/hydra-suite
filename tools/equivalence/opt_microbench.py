@@ -87,7 +87,7 @@ def _torch_devices() -> list[str]:
 def bench_classifier_runtimes(
     model_path: str, batch: int, warmup: int, repeats: int
 ) -> list[dict]:
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     rows = []
     # Candidate runtimes filtered by what the box can do.

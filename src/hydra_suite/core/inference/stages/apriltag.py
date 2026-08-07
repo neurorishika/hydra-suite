@@ -30,7 +30,7 @@ def load_apriltag_model(config: AprilTagConfig) -> AprilTagModel:
     # otherwise. We intentionally do NOT swallow that error — AprilTag enabled
     # without the fork must fail loudly rather than silently disable detection
     # (matching legacy ``AprilTagDetector`` behaviour).
-    from hydra_suite.core.identity.classification.apriltag import _get_apriltag
+    from hydra_suite.core.individual.classification.apriltag import _get_apriltag
 
     at = _get_apriltag()
     detector = at.apriltag(

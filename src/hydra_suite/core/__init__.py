@@ -9,7 +9,7 @@ object detection, and track assignment.
 from .assigners.hungarian import TrackAssigner
 from .background.model import BackgroundModel
 from .filters.kalman import KalmanFilterManager
-from .identity.dataset.generator import IndividualDatasetGenerator
+from .individual.dataset.generator import IndividualDatasetGenerator
 from .post.processing import (
     interpolate_trajectories,
     process_trajectories,

@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from hydra_suite.core.identity.dataset.oriented_video import (
+from hydra_suite.core.individual.dataset.oriented_video import (
     resolve_individual_dataset_dir,
 )
 from hydra_suite.core.inference import model_paths as _model_utils
@@ -2696,7 +2696,7 @@ class MainWindow(QMainWindow):
 
     def _resolve_current_final_media_video_dir(self):
         """Resolve the active per-session final-media video output directory."""
-        from hydra_suite.core.identity.dataset.oriented_video import (
+        from hydra_suite.core.individual.dataset.oriented_video import (
             resolve_oriented_track_video_dir,
         )
 

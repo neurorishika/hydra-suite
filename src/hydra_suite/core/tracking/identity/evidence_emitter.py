@@ -22,12 +22,12 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 
-from hydra_suite.core.identity.cache import IdentityEvidenceCache
-from hydra_suite.core.identity.classification.cnn import ClassPrediction
-from hydra_suite.core.identity.evidence import IdentityEvidence
+from hydra_suite.core.individual.cache import IdentityEvidenceCache
+from hydra_suite.core.individual.classification.cnn import ClassPrediction
+from hydra_suite.core.individual.evidence import IdentityEvidence
 
 if TYPE_CHECKING:
-    from hydra_suite.core.identity.calibration import CalibrationModel
+    from hydra_suite.core.individual.calibration import CalibrationModel
 
 log = logging.getLogger(__name__)
 

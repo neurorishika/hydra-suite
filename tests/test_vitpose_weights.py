@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import load_checkpoint
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))
 
@@ -43,7 +43,7 @@ def test_checkpoint_load_is_weights_only():
     permit arbitrary code execution via unpickling."""
     import inspect
 
-    from hydra_suite.core.identity.pose.vitpose import weights
+    from hydra_suite.core.individual.pose.vitpose import weights
 
     src = inspect.getsource(weights)
     assert "weights_only=True" in src
@@ -60,7 +60,7 @@ def test_loaded_model_produces_finite_heatmaps():
     assert torch.isfinite(out).all()
 
 
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose_moe
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose_moe
 
 requires_plus = pytest.mark.skipif(
     not (ASSET_DIR / "vitpose+_base.pth").exists(),

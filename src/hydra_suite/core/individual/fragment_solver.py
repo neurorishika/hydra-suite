@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.identity.catalog import IdentityCatalog
+from hydra_suite.core.individual.catalog import IdentityCatalog
 
 log = logging.getLogger(__name__)
 

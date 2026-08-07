@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from hydra_suite.core.identity.classification.errors import (
+from hydra_suite.core.individual.classification.errors import (
     ClassifierConfigError,
     ClassifierError,
     ClassifierFormatError,
@@ -366,7 +366,7 @@ class _ClassifierMultiheadBundleLoader:
         """Load each referenced factor model as a flat ClassifierBackend."""
         import json
 
-        from hydra_suite.core.identity.classification.errors import (
+        from hydra_suite.core.individual.classification.errors import (
             ClassifierFormatError,
         )
 

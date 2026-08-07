@@ -34,7 +34,7 @@ def test_load_pose_model_sleap_cpu_tier_uses_native_torch_cpu(monkeypatch):
     """cpu tier must run SLEAP's native (non-exported) model on torch-CPU via
     the service backend -- NOT the exported onnx_cpu path -- so pose is
     consistent across all tiers (golden rule)."""
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
 
     captured = {}
 
@@ -62,7 +62,7 @@ def test_load_pose_model_sleap_cpu_tier_uses_native_torch_cpu(monkeypatch):
 
 def test_load_pose_model_sleap_cuda_tier_still_native_cuda(monkeypatch):
     """Guard: the cuda/gpu tier must remain unchanged (native torch CUDA)."""
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
 
     captured = {}
 
@@ -133,7 +133,7 @@ def test_load_pose_backend_end_to_end_cpu_routes_native_cpu(monkeypatch):
     host, where MPS would otherwise be opportunistically selected even for
     the cpu tier (see RuntimeContext.from_config / _cpu_or_mps_device).
     """
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
     import hydra_suite.core.inference.api as inference_api
 
     monkeypatch.setattr("torch.backends.mps.is_available", lambda: False)
@@ -170,7 +170,7 @@ def test_load_pose_backend_end_to_end_cuda_routes_native_cuda(monkeypatch):
     """
     import torch
 
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
     import hydra_suite.core.inference.api as inference_api
     import hydra_suite.runtime.resolver as resolver_mod
 
@@ -212,7 +212,7 @@ def test_load_pose_backend_end_to_end_tensorrt_routes_tensorrt_cuda(monkeypatch)
     """
     import torch
 
-    import hydra_suite.core.identity.pose.api as api_mod
+    import hydra_suite.core.individual.pose.api as api_mod
     import hydra_suite.core.inference.api as inference_api
     import hydra_suite.runtime.resolver as resolver_mod
 

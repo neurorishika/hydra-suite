@@ -557,7 +557,7 @@ from __future__ import annotations
 
 import pytest
 
-from hydra_suite.core.identity.pose.vitpose.training.config import validate_run_config
+from hydra_suite.core.individual.pose.vitpose.training.config import validate_run_config
 
 pytest.importorskip("PySide6")
 

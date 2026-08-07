@@ -23,7 +23,7 @@ train (Spec 4)  →  best.pt  →  select ViTPose backend in the GUI  →  track
 
 ## What already exists (do not rebuild)
 
-**Spec 1 leaf** (`core/identity/pose/vitpose/`, PoseKit-free):
+**Spec 1 leaf** (`core/individual/pose/vitpose/`, PoseKit-free):
 - `ViTPose(nn.Module).forward(x) -> heatmaps` — device-agnostic, fp32
   (`vitpose.py:23-24`); `build_vitpose(variant, head, num_keypoints)`
   (`vitpose.py:27-32`).
@@ -87,16 +87,16 @@ posekit / trackerkit GUI ── family picker (yolo|sleap|vitpose), tier picker
         │
 create_pose_backend_from_config(registry)          ← Phase C (family axis)
         │
-core/identity/pose/backends/vitpose.py             ← Phase B (the backend)
+core/individual/pose/backends/vitpose.py             ← Phase B (the backend)
    • native torch path  (backend=torch,  device cpu/mps/cuda)
    • auto_export_vitpose_model  (caching wrapper over leaf export.py)
    • crop→keypoints driver + finetuned-ckpt adapter
         │
-core/identity/pose/runtime/  (shared pose runtime)  ← Phase A (extracted from sleap.py)
+core/individual/pose/runtime/  (shared pose runtime)  ← Phase A (extracted from sleap.py)
    • OnnxSessionRunner   • TensorRTEngineRunner   • CoreMLRunner
    • execution_providers_for(resolved)  [Gen-2]
         │
-core/identity/pose/vitpose/  (Spec 1 leaf: model, decode, export, transforms)
+core/individual/pose/vitpose/  (Spec 1 leaf: model, decode, export, transforms)
 ```
 
 ### Runtime map (what serves each ResolvedBackend)
@@ -130,7 +130,7 @@ from a code audit (2026-07-19):
    stream strategy, batching, and decode all diverge — the `Detect` and `OBB`
    executors share more with each other than with pose. Unifying them is
    abstraction-against-divergence. **The shared unit is a *pose* runtime
-   (`core/identity/pose/runtime/`), used by SLEAP + ViTPose.** The one genuine
+   (`core/individual/pose/runtime/`), used by SLEAP + ViTPose.** The one genuine
    cross-world win — the detector hardcodes ONNX providers instead of deriving
    them — is folded into Gen-2's `execution_providers_for`, not this spec.
 
@@ -153,7 +153,7 @@ from a code audit (2026-07-19):
 
 ## Components
 
-### Phase A — Shared pose runtime (`core/identity/pose/runtime/`)
+### Phase A — Shared pose runtime (`core/individual/pose/runtime/`)
 
 Extract the model-agnostic device machinery currently embedded in `sleap.py`
 (~700–750 lines, ~43% of the file; no SLEAP coupling — audit-confirmed) into a
@@ -180,7 +180,7 @@ new pose-local package, re-keyed onto `ResolvedBackend`:
 the existing `tools/equivalence/verify_sleap_exported_vs_service.py` parity
 harness, pinned *before* the extraction.
 
-### Phase B — The ViTPose backend (`core/identity/pose/backends/vitpose.py`)
+### Phase B — The ViTPose backend (`core/individual/pose/backends/vitpose.py`)
 
 Mirrors the 293-line `yolo.py` in spirit (thin), not the 1711-line `sleap.py`.
 

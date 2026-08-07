@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from hydra_suite.core.identity.geometry import normalize_theta
+from hydra_suite.core.individual.geometry import normalize_theta
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +332,7 @@ def load_pose_context_from_params(
     if not pose_enabled or not cache_path or not os.path.exists(cache_path):
         return None, [], [], [], False
 
-    from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
+    from hydra_suite.core.individual.properties.cache import IndividualPropertiesCache
 
     pose_props_cache = IndividualPropertiesCache(cache_path, mode="r")
     if not pose_props_cache.is_compatible():

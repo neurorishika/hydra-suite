@@ -6,11 +6,11 @@
 
 **Architecture:** A new frame-grouping helper (reusing MAT/FilterKit's `did<detection_id>` filename convention) groups PoseKit's flat image list into per-source frames. A single `PoseKitConfig.frame_mode` flag gates all behavior changes. A shared method on `MainWindow`, `_add_indices_to_labeling`, becomes the one place that expands a set of indices to their frame companions and asks for confirmation before mutating `self.labeling_frames`; every entry point routes through it (or, for Smart Select's Embedding Explorer sub-dialog, through an equivalent local expansion since that nested dialog has no `MainWindow` reference). Smart Select's clustering algorithm is extended with a new frame-coverage greedy selector that operates on individual embeddings directly (no averaging).
 
-**Tech Stack:** Python, PySide6 (Qt), pytest + pytest-qt-style `qapp` fixture (offscreen platform) for GUI tests, existing `hydra_suite.core.identity.dataset.naming.parse_identity_image_filename`.
+**Tech Stack:** Python, PySide6 (Qt), pytest + pytest-qt-style `qapp` fixture (offscreen platform) for GUI tests, existing `hydra_suite.core.individual.dataset.naming.parse_identity_image_filename`.
 
 ## Global Constraints
 
-- Reuse `parse_identity_image_filename` from `hydra_suite.core.identity.dataset.naming` verbatim — do not reimplement filename parsing. It returns `dict[str, Any] | None`; `None` means the filename doesn't match the identity-crop convention (treat as a singleton frame).
+- Reuse `parse_identity_image_filename` from `hydra_suite.core.individual.dataset.naming` verbatim — do not reimplement filename parsing. It returns `dict[str, Any] | None`; `None` means the filename doesn't match the identity-crop convention (treat as a singleton frame).
 - `PoseKitConfig.frame_mode: bool = False` is the single global toggle. It is unrelated to the existing `mode: str = "frame"` field (pose canvas frame/keypoint editing mode) — do not conflate the two.
 - No back-solving of frame counts anywhere. In Frame Mode, every spinbox that specifies "how many to add" means "how many frames" directly — Random Selection's `spin_random_count` and Smart Select's `n_spin` both keep their literal values as frame counts.
 - Confirmation dialog wording (used verbatim everywhere a confirmation is shown): `"This will add {frame_count} frame(s) comprising {total_count} total instance(s), including {companion_count} companion instance(s), to the labeling set. Continue?"` shown via `QMessageBox.question(self, title, message, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)`.
@@ -107,7 +107,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from hydra_suite.core.identity.dataset.naming import parse_identity_image_filename
+from hydra_suite.core.individual.dataset.naming import parse_identity_image_filename
 
 
 def group_indices_by_frame(

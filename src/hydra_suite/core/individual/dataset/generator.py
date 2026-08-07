@@ -18,11 +18,11 @@ from hydra_suite.core.canonicalization.geometry import (
     ClippingStats,
     canonical_affine,
 )
-from hydra_suite.core.identity.dataset.naming import (
+from hydra_suite.core.individual.dataset.naming import (
     build_detection_image_filename,
     build_interpolated_image_filename,
 )
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import (
     ellipse_to_obb_corners,
     resolve_directed_angle,
 )

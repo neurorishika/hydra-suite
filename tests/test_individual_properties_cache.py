@@ -7,7 +7,7 @@ import numpy as np
 from tests.helpers.module_loader import load_src_module
 
 mod = load_src_module(
-    "hydra_suite/core/identity/properties/cache.py",
+    "hydra_suite/core/individual/properties/cache.py",
     "individual_properties_cache_under_test",
 )
 
@@ -135,7 +135,7 @@ def test_live_pose_store_flush_feeds_rich_export(tmp_path: Path) -> None:
     """
     import pandas as pd
 
-    from hydra_suite.core.identity.properties.export import (
+    from hydra_suite.core.individual.properties.export import (
         augment_trajectories_with_pose_cache,
     )
     from hydra_suite.core.tracking.features.live_features import LivePosePropertiesStore

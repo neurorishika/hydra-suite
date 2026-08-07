@@ -61,6 +61,6 @@ def test_does_own_letterbox_defaults_to_false_when_absent():
 
 
 def test_vitpose_backend_class_declares_does_own_letterbox():
-    from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
+    from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
 
     assert getattr(ViTPoseBackend, "does_own_letterbox", False) is True

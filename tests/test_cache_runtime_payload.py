@@ -13,7 +13,7 @@ from hydra_suite.runtime import resolver as resolver_mod
 from tests.helpers.module_loader import load_src_module
 
 mod = load_src_module(
-    "hydra_suite/core/identity/properties/cache.py",
+    "hydra_suite/core/individual/properties/cache.py",
     "cache_runtime_payload_under_test",
 )
 

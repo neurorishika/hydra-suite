@@ -24,7 +24,7 @@ from hydra_suite.widgets import BaseDialog
 
 def describe_cnn_identity_candidate(model_path: str) -> dict[str, Any]:
     """Return a metadata summary suitable for the import dialog preview."""
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
     from hydra_suite.runtime.resolver import ResolvedBackend
 
     backend = ClassifierBackend(model_path, ResolvedBackend("torch", "cpu", False))

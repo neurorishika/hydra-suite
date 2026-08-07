@@ -1,7 +1,7 @@
 import json
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.core.identity.dataset.naming import read_canonical_provenance
+from hydra_suite.core.individual.dataset.naming import read_canonical_provenance
 
 
 def test_provenance_round_trips(tmp_path):

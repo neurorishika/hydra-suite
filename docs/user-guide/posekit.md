@@ -50,7 +50,7 @@ ViTPose is a third selectable pose backend alongside YOLO-pose and SLEAP, availa
 ViTPose can also be trained/fine-tuned outside the GUI via its standalone CLI:
 
 ```bash
-python -m hydra_suite.core.identity.pose.vitpose.training --config run.json
+python -m hydra_suite.core.individual.pose.vitpose.training --config run.json
 ```
 
 See [Runtime Integration Guide: ViTPose Training CLI](../developer-guide/runtime-integration.md#vitpose-training-cli)

@@ -355,8 +355,8 @@ class CNNIdentityBackend:
         model_path: str | None = None,
         resolved: "ResolvedBackend | None" = None,
     ) -> None:
-        from hydra_suite.core.identity.classification.backend import ClassifierBackend
-        from hydra_suite.core.identity.classification.errors import (
+        from hydra_suite.core.individual.classification.backend import ClassifierBackend
+        from hydra_suite.core.individual.classification.errors import (
             ClassifierConfigError,
         )
         from hydra_suite.runtime.resolver import ResolvedBackend

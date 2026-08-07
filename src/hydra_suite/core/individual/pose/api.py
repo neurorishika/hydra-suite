@@ -10,18 +10,21 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from hydra_suite.core.identity.pose.backends.sleap import (
+from hydra_suite.core.individual.pose.backends.sleap import (
     SleapExportedBackend,
     SleapServiceBackend,
     auto_export_sleap_model,
     looks_like_sleap_export_path,
 )
-from hydra_suite.core.identity.pose.backends.yolo import (
+from hydra_suite.core.individual.pose.backends.yolo import (
     YoloNativeBackend,
     auto_export_yolo_model,
 )
-from hydra_suite.core.identity.pose.types import PoseInferenceBackend, PoseRuntimeConfig
-from hydra_suite.core.identity.pose.utils import (
+from hydra_suite.core.individual.pose.types import (
+    PoseInferenceBackend,
+    PoseRuntimeConfig,
+)
+from hydra_suite.core.individual.pose.utils import (
     normalize_runtime_flavor,
     parse_runtime_request,
 )

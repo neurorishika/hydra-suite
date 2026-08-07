@@ -33,9 +33,9 @@ def test_build_command_uses_current_interpreter(tmp_path):
     assert cmd[0] == sys.executable
     assert cmd[1:4] == [
         "-m",
-        "hydra_suite.core.identity.pose.vitpose.training",
+        "hydra_suite.core.individual.pose.vitpose.training",
         "--config",
-    ] or cmd[1:3] == ["-m", "hydra_suite.core.identity.pose.vitpose.training"]
+    ] or cmd[1:3] == ["-m", "hydra_suite.core.individual.pose.vitpose.training"]
     assert str(rj) in cmd
 
 

@@ -4,7 +4,7 @@ Two modes:
 
 1. **Directed source active** (head-tail and/or pose-override loaded for the
    run): the caller has already resolved per-detection heading via
-   :func:`hydra_suite.core.identity.geometry.resolve_detection_tracking_theta`.
+   :func:`hydra_suite.core.individual.geometry.resolve_detection_tracking_theta`.
    High-quality directed detections become the new anchor; low-quality /
    undirected detections fall back to the OBB axis collapsed against the
    anchor.  This module simply passes that resolved heading through — no

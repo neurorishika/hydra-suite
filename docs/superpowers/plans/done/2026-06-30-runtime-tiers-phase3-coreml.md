@@ -225,7 +225,7 @@ git commit -m "feat(obb): CoreML .mlpackage export + load for YOLO OBB/pose"
 ### Task 4: Classifier CoreML load/run path
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py` (add `_derive_coreml_peer`, `_load_coreml`, `_forward_coreml`; route `compute_runtime == "coreml"` here)
+- Modify: `src/hydra_suite/core/individual/classification/backend.py` (add `_derive_coreml_peer`, `_load_coreml`, `_forward_coreml`; route `compute_runtime == "coreml"` here)
 - Test: `tests/test_classifier_coreml_backend.py`
 
 **Interfaces:**
@@ -240,7 +240,7 @@ import pytest
 
 pytest.importorskip("coremltools")
 
-from hydra_suite.core.identity.classification import backend as bmod
+from hydra_suite.core.individual.classification import backend as bmod
 
 
 def test_backend_reports_coreml_uses():
@@ -266,7 +266,7 @@ Expected: PASS (coreml-specific tests skipped off-Apple)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/classification/backend.py tests/test_classifier_coreml_backend.py
+git add src/hydra_suite/core/individual/classification/backend.py tests/test_classifier_coreml_backend.py
 git commit -m "feat(classifier): native CoreML .mlpackage load/run path"
 ```
 
@@ -353,7 +353,7 @@ pytest.importorskip("coremltools")
 )
 def test_coreml_classifier_is_deterministic_run_to_run(tmp_path):
     # Build a tiny classifier, export to mlpackage, run twice, assert identical.
-    from hydra_suite.core.identity.classification import backend as bmod  # noqa: F401
+    from hydra_suite.core.individual.classification import backend as bmod  # noqa: F401
     # (Construct a ClassifierBackend on a fixture .pth with compute_runtime="coreml",
     #  run predict_batch twice on the same crops, assert np.array_equal.)
     crops = [np.random.randint(0, 256, (96, 96, 3), dtype=np.uint8) for _ in range(8)]
@@ -448,7 +448,7 @@ FAMILIES = ["tinyclassifier", "resnet18", "efficientnet_b0"]  # timm/torchvision
 def test_every_classifier_family_has_a_coreml_exporter(arch, tmp_path):
     # Assert the backend can derive a .mlpackage peer for each family (or that a
     # documented native-MPS fallback path is taken) — no family is left unhandled.
-    from hydra_suite.core.identity.classification import backend as bmod  # noqa: F401
+    from hydra_suite.core.individual.classification import backend as bmod  # noqa: F401
     # Build a minimal ckpt per arch, call the appropriate export_* helper,
     # assert a .mlpackage is produced.
     assert True  # replace with concrete per-arch export assertions

@@ -48,12 +48,12 @@ Out of scope:
 
 ### What already exists and is sound
 
-- `core/identity/catalog.py` — `IdentityCatalog` (index 0 = unknown), prior builders.
-- `core/identity/evidence.py` — `IdentityEvidence` with a full calibrated catalog `log_probs`; `from_apriltag`, `from_cnn`, `missing`.
-- `core/identity/cache.py` — `IdentityEvidenceCache` NPZ sidecar reader/writer.
-- `core/identity/calibration.py` — `CalibrationModel` (temperature scaling, content-hash signature).
-- `core/identity/online.py` — `OnlineIdentityDecoder`: log-space predict→fuse→Hungarian→commit, swap detection, slot-lock, respawn priors.
-- `core/identity/fragment_solver.py` — offline changepoint + iterative global assignment.
+- `core/individual/catalog.py` — `IdentityCatalog` (index 0 = unknown), prior builders.
+- `core/individual/evidence.py` — `IdentityEvidence` with a full calibrated catalog `log_probs`; `from_apriltag`, `from_cnn`, `missing`.
+- `core/individual/cache.py` — `IdentityEvidenceCache` NPZ sidecar reader/writer.
+- `core/individual/calibration.py` — `CalibrationModel` (temperature scaling, content-hash signature).
+- `core/individual/online.py` — `OnlineIdentityDecoder`: log-space predict→fuse→Hungarian→commit, swap detection, slot-lock, respawn priors.
+- `core/individual/fragment_solver.py` — offline changepoint + iterative global assignment.
 - CNN calibrated-posterior path: `predict_batch_posteriors`, V3 cache with full per-factor probability vectors.
 - Inference-time raw caches: `CNNCacheHandle` (raw posteriors) and `AprilTagCacheHandle` are written by `InferenceRunner` — before tracking in non-realtime (`run_batch_pass`), inline in realtime (`run_realtime`).
 
@@ -82,7 +82,7 @@ Out of scope:
 
 ## Directory Reorganization (prep, pure move)
 
-`core/identity/` has become a grab-bag: genuine identity-resolution code sits next to pose backends, individual-properties export, dataset generation, geometry, and classification model backends (some of which — head-tail — are orientation, not identity). Before any logic changes, the tree is reorganized under a `core/individual/` umbrella, with `identity/` narrowed to identity *resolution* only.
+`core/individual/` has become a grab-bag: genuine identity-resolution code sits next to pose backends, individual-properties export, dataset generation, geometry, and classification model backends (some of which — head-tail — are orientation, not identity). Before any logic changes, the tree is reorganized under a `core/individual/` umbrella, with `identity/` narrowed to identity *resolution* only.
 
 **Target layout:**
 
@@ -105,22 +105,22 @@ core/individual/                      # umbrella: everything about one tracked i
 
 | Current | New |
 |---|---|
-| `core/identity/{catalog,evidence,cache,calibration,online}.py` | `core/individual/identity/…` (same names) |
-| `core/identity/fragment_solver.py` | `core/individual/identity/offline.py` (+ smoothing) |
-| `core/identity/geometry.py` | `core/individual/geometry.py` |
-| `core/identity/classification/` | `core/individual/classification/` |
-| `core/identity/pose/` | `core/individual/pose/` |
-| `core/identity/properties/` | `core/individual/properties/` |
-| `core/identity/dataset/` | `core/individual/dataset/` |
+| `core/individual/{catalog,evidence,cache,calibration,online}.py` | `core/individual/identity/…` (same names) |
+| `core/individual/fragment_solver.py` | `core/individual/identity/offline.py` (+ smoothing) |
+| `core/individual/geometry.py` | `core/individual/geometry.py` |
+| `core/individual/classification/` | `core/individual/classification/` |
+| `core/individual/pose/` | `core/individual/pose/` |
+| `core/individual/properties/` | `core/individual/properties/` |
+| `core/individual/dataset/` | `core/individual/dataset/` |
 
 Rules:
 
 - **Behavior-preserving.** The move rewrites imports and paths only — no logic changes in the same commit. Run the full test suite; it must be green before and after.
-- The top-level `core/identity` → `core/individual` rename is being prepared by the maintainer; this plan coordinates the subfolder slotting and the import rewrites across `src/` and `tests/`.
+- The top-level `core/individual` → `core/individual` rename is being prepared by the maintainer; this plan coordinates the subfolder slotting and the import rewrites across `src/` and `tests/`.
 - Dependency-direction rules (CLAUDE.md) are unchanged: `core/individual/*` must not import from any app layer.
 - Path artifacts (cache filename signatures, model registry) must be checked so the rename does not silently invalidate on-disk caches.
 
-**All `core/identity/...` paths in the sections below refer to their post-move `core/individual/...` locations per this mapping.** The "Current State (verified at HEAD)" section above intentionally keeps the pre-move paths, since that is where the code lives today.
+**All `core/individual/...` paths in the sections below refer to their post-move `core/individual/...` locations per this mapping.** The "Current State (verified at HEAD)" section above intentionally keeps the pre-move paths, since that is where the code lives today.
 
 ## Target Architecture
 
@@ -200,7 +200,7 @@ Calibration lives where the labeled data and the model lifecycle already are: **
 
 - A labeled validation set is materialized on disk after every ClassKit CNN training run: `<derived_dataset>/val/<class>/…` (default 20% stratified holdout, `classkit/core/export/splits.py`), retained after training and already loaded by the runner for `best_val_acc` (`training/runner.py:452-514`).
 - A working temperature-scaling fitter, `TemperatureScaling.fit` (`classkit/core/train/calibrate.py:34`) — currently wired only into the *embedding-head* trainer (`classkit/core/train/trainer.py:71/235`), whose checkpoint is **not** the artifact TrackerKit consumes.
-- An artifact metadata pattern for an optional artifact-level scalar: `recommended_confidence_threshold` on `ClassifierMetadata` (`core/identity/classification/backend.py:35-71`), parsed identically from `.pth` checkpoint / YOLO `.v2meta.json` sidecar / `.multihead.json` manifest.
+- An artifact metadata pattern for an optional artifact-level scalar: `recommended_confidence_threshold` on `ClassifierMetadata` (`core/individual/classification/backend.py:35-71`), parsed identically from `.pth` checkpoint / YOLO `.v2meta.json` sidecar / `.multihead.json` manifest.
 - A consumption seam: `CNNConfig.calibration_temperature` (`core/inference/config.py:174`) already defaults to `1.0` from the params dict and is applied downstream (`core/tracking/identity/evidence.py:144`, `cnn.py:491`). CNN caches store **raw** probabilities and exclude temperature from the cache key (`core/inference/cache/keys.py:162`), so temperature can be (re)fit without invalidating the CNN cache.
 
 **What this overhaul wires (three connections):**
@@ -215,7 +215,7 @@ Calibration lives where the labeled data and the model lifecycle already are: **
 - **Calibration status in the CNN import dialog** (`trackerkit/gui/dialogs/cnn_identity_import_dialog.py`): show "calibrated (T=…) / not calibrated / stale (signature mismatch)" at model-selection time, read from `ClassifierMetadata` alongside the metadata it already reads.
 - **Training report** surfaces ECE before/after so the user sees the calibration actually improved honesty.
 
-Note: no new `core/identity/calibration_fit.py` module is required — the fitter already exists in `classkit/core/train/calibrate.py`; the work is wiring it into the `run_training` CNN path and the artifact metadata.
+Note: no new `core/individual/calibration_fit.py` module is required — the fitter already exists in `classkit/core/train/calibrate.py`; the work is wiring it into the `run_training` CNN path and the artifact metadata.
 
 ### Layer 2 — Evidence layer (inference-time)
 
@@ -230,7 +230,7 @@ Deleted as a consequence: tracking-time `IdentityEvidenceEmitter` construction/f
 
 ### Layer 3 — Shared substrate
 
-`core/identity/substrate.py` (new) centralizes what both decoders currently reimplement:
+`core/individual/substrate.py` (new) centralizes what both decoders currently reimplement:
 
 - `map_cnn_to_catalog(...)` / `map_tag_to_catalog(...)` — the one factor→catalog mapping (also used by Layer 2).
 - `fuse_log_evidence(...)` — log-space Bayesian fusion with robustness cap/floor.

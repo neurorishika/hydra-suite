@@ -15,30 +15,30 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
-from hydra_suite.core.identity.pose.artifacts import (
+from hydra_suite.core.individual.pose.artifacts import (
     artifact_meta_matches,
     path_fingerprint_token,
     write_artifact_meta,
 )
-from hydra_suite.core.identity.pose.backends.sleap_utils import (
+from hydra_suite.core.individual.pose.backends.sleap_utils import (
     derive_sleap_export_input_hw,
     looks_like_sleap_export_path,
     run_cli_command,
 )
-from hydra_suite.core.identity.pose.runtime.onnx_session import (
+from hydra_suite.core.individual.pose.runtime.onnx_session import (
     OnnxSessionRunner as _DirectOnnxSession,
 )
-from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (  # noqa: F401
+from hydra_suite.core.individual.pose.runtime.tensorrt_engine import (  # noqa: F401
     _TRT_PROFILE_MAX_BATCH,
 )
-from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (
+from hydra_suite.core.individual.pose.runtime.tensorrt_engine import (
     TensorRTEngineRunner as _DirectTensorRTEngine,
 )
-from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (
+from hydra_suite.core.individual.pose.runtime.tensorrt_engine import (
     build_trt_engine_from_onnx as _build_trt_engine_from_onnx,
 )
-from hydra_suite.core.identity.pose.types import PoseResult, PoseRuntimeConfig
-from hydra_suite.core.identity.pose.utils import (
+from hydra_suite.core.individual.pose.types import PoseResult, PoseRuntimeConfig
+from hydra_suite.core.individual.pose.utils import (
     coerce_prediction_batch,
     empty_pose_result,
     summarize_keypoints,

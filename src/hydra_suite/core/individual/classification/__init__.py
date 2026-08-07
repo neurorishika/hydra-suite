@@ -1,14 +1,14 @@
 """Per-detection identity classifiers: AprilTag, CNN, and head-tail direction."""
 
-from hydra_suite.core.identity.classification.apriltag import (
+from hydra_suite.core.individual.classification.apriltag import (
     AprilTagConfig,
     AprilTagDetector,
 )
-from hydra_suite.core.identity.classification.backend import (
+from hydra_suite.core.individual.classification.backend import (
     ClassifierBackend,
     ClassifierMetadata,
 )
-from hydra_suite.core.identity.classification.cnn import (
+from hydra_suite.core.individual.classification.cnn import (
     ClassPrediction,
     CNNIdentityBackend,
     CNNIdentityCache,
@@ -16,14 +16,14 @@ from hydra_suite.core.identity.classification.cnn import (
     TrackCNNHistory,
     apply_cnn_identity_cost,
 )
-from hydra_suite.core.identity.classification.errors import (
+from hydra_suite.core.individual.classification.errors import (
     ClassifierConfigError,
     ClassifierError,
     ClassifierFormatError,
     ClassifierRuntimeError,
     HeadTailFormatError,
 )
-from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
 __all__ = [
     "AprilTagConfig",

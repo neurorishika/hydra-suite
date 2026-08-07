@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from hydra_suite.core.identity.pose.types import PoseResult
+from hydra_suite.core.individual.pose.types import PoseResult
 from hydra_suite.utils.gpu_utils import (
     CUDA_AVAILABLE,
     MPS_AVAILABLE,

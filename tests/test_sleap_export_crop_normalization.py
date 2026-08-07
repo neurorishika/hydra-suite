@@ -13,7 +13,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from hydra_suite.core.identity.pose.backends.sleap import (
+from hydra_suite.core.individual.pose.backends.sleap import (
     SleapExportedBackend,
     SleapServiceBackend,
     _prepare_export_crop,

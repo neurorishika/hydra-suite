@@ -28,7 +28,7 @@ def test_prefit_makes_centre_crop_a_noop():
 
 
 def test_forward_yolo_prefits(monkeypatch):
-    from hydra_suite.core.identity.classification import backend as backend_mod
+    from hydra_suite.core.individual.classification import backend as backend_mod
 
     seen = []
 

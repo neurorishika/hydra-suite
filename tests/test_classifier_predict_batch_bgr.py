@@ -3,7 +3,7 @@ import inspect
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.classification import backend
+from hydra_suite.core.individual.classification import backend
 
 
 def test_predict_batch_accepts_input_is_bgr():

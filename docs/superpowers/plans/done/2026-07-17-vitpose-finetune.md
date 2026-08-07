@@ -4,13 +4,13 @@
 
 **Goal:** Add ViTPose fine-tuning to hydra as a first-class PoseKit training backend that takes a labeled PoseKit project + a pretrained ViTPose checkpoint and produces a validated fine-tuned checkpoint, launched as an in-env subprocess.
 
-**Architecture:** Three layers along existing dependency boundaries. (1) A PoseKit-free **payload** subpackage of the Spec-1 leaf, `core/identity/pose/vitpose/training/`, holding the torch training loop, run as `python -m …vitpose.training --config run.json`. (2) Non-Qt **orchestration** in `posekit/core/` (checkpoint catalog + run-config assembly + subprocess command). (3) A thin Qt **worker** in the existing PoseKit training dialog.
+**Architecture:** Three layers along existing dependency boundaries. (1) A PoseKit-free **payload** subpackage of the Spec-1 leaf, `core/individual/pose/vitpose/training/`, holding the torch training loop, run as `python -m …vitpose.training --config run.json`. (2) Non-Qt **orchestration** in `posekit/core/` (checkpoint catalog + run-config assembly + subprocess command). (3) A thin Qt **worker** in the existing PoseKit training dialog.
 
 **Tech Stack:** PyTorch (native, no mmcv/mmpose), NumPy, OpenCV, PySide/Qt (GUI worker only), pytest.
 
 ## Global Constraints
 
-- **Leaf purity:** everything under `core/identity/pose/vitpose/` (now including `training/`) imports **nothing** from `hydra_suite`. Only relative sibling imports + torch/numpy/cv2. Enforced by an AST check (Task 9).
+- **Leaf purity:** everything under `core/individual/pose/vitpose/` (now including `training/`) imports **nothing** from `hydra_suite`. Only relative sibling imports + torch/numpy/cv2. Enforced by an AST check (Task 9).
 - **`core/` must not import `posekit/`.** Orchestration that calls `build_coco_keypoints_dataset` lives in `posekit/core/`, never in `core/`.
 - **`vitpose/__init__.py` must NOT import `training/`** — a pure-inference `from …vitpose import build_vitpose` must never load the training loop.
 - **Classic head only** (`build_head("classic", …)`). No MoE / ViTPose+ / `build_vitpose_moe`.
@@ -23,7 +23,7 @@
 
 ### Verified leaf/PoseKit APIs (call these exactly)
 
-From `hydra_suite.core.identity.pose.vitpose`:
+From `hydra_suite.core.individual.pose.vitpose`:
 - `config.py`: `IMAGE_SIZE_WH=(192,256)`, `HEATMAP_SIZE_WH=(48,64)`, `PIXEL_STD=200.0`, `PADDING_FACTOR=1.25`, `IMAGENET_MEAN`, `IMAGENET_STD`, `VARIANTS: dict[str, ViTPoseVariant]` (fields `embed_dim, depth, num_heads, part_features, drop_path_rate, layer_decay`).
 - `model.py`: `ViT(embed_dim, depth, num_heads, drop_path_rate=0.0, part_features=…)` — **`build_vitpose` does NOT pass drop_path; assemble `ViT` directly to enable stochastic depth.**
 - `heads.py`: `build_head(kind, embed_dim, num_keypoints)` → `ClassicHead` with `.deconv_layers` + `.final_layer = nn.Conv2d(256, K, 1)`.
@@ -42,7 +42,7 @@ Worker pattern to mirror — `TrainingWorker(QObject)` in `posekit/gui/dialogs/t
 ### File structure produced
 
 ```
-core/identity/pose/vitpose/training/
+core/individual/pose/vitpose/training/
   __init__.py        # minimal; NOT imported by vitpose/__init__.py
   config.py          # RunConfig dataclass + validation + json load/save
   targets.py         # UDP Gaussian heatmap encoder
@@ -63,8 +63,8 @@ tests/test_vitpose_finetune_*.py       # per-task tests
 ### Task 1: RunConfig schema (payload config)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/__init__.py`
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/config.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/__init__.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/config.py`
 - Test: `tests/test_vitpose_finetune_config.py`
 
 **Interfaces:**
@@ -77,7 +77,7 @@ tests/test_vitpose_finetune_*.py       # per-task tests
 import json
 import pytest
 from pathlib import Path
-from hydra_suite.core.identity.pose.vitpose.training.config import (
+from hydra_suite.core.individual.pose.vitpose.training.config import (
     RunConfig, validate_run_config,
 )
 
@@ -120,14 +120,14 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/__init__.py
+# src/hydra_suite/core/individual/pose/vitpose/training/__init__.py
 """ViTPose fine-tuning payload. Imports nothing from hydra_suite (leaf-pure).
-Run as: python -m hydra_suite.core.identity.pose.vitpose.training --config run.json
+Run as: python -m hydra_suite.core.individual.pose.vitpose.training --config run.json
 NOTE: never imported by vitpose/__init__.py."""
 ```
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/config.py
+# src/hydra_suite/core/individual/pose/vitpose/training/config.py
 from __future__ import annotations
 
 import json
@@ -194,8 +194,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/__init__.py \
-        src/hydra_suite/core/identity/pose/vitpose/training/config.py \
+git add src/hydra_suite/core/individual/pose/vitpose/training/__init__.py \
+        src/hydra_suite/core/individual/pose/vitpose/training/config.py \
         tests/test_vitpose_finetune_config.py
 git commit -m "feat(vitpose-finetune): run.json config schema + validation"
 ```
@@ -207,7 +207,7 @@ git commit -m "feat(vitpose-finetune): run.json config schema + validation"
 The one genuinely new numerical component (Spec 1 built *decode*; this is the *encode* inverse). Gate: encode→decode ≈ identity within the Spec-1 UDP float floor.
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/targets.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/targets.py`
 - Test: `tests/test_vitpose_finetune_targets.py`
 
 **Interfaces:**
@@ -218,8 +218,8 @@ The one genuinely new numerical component (Spec 1 built *decode*; this is the *e
 ```python
 # tests/test_vitpose_finetune_targets.py
 import numpy as np
-from hydra_suite.core.identity.pose.vitpose.training.targets import generate_udp_gaussian
-from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_cv2
+from hydra_suite.core.individual.pose.vitpose.training.targets import generate_udp_gaussian
+from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_cv2
 
 HM_WH = (48, 64)  # (W, H)
 
@@ -251,7 +251,7 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/targets.py
+# src/hydra_suite/core/individual/pose/vitpose/training/targets.py
 from __future__ import annotations
 
 import numpy as np
@@ -293,7 +293,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/targets.py tests/test_vitpose_finetune_targets.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/targets.py tests/test_vitpose_finetune_targets.py
 git commit -m "feat(vitpose-finetune): UDP Gaussian heatmap target encoder (round-trip verified)"
 ```
 
@@ -302,7 +302,7 @@ git commit -m "feat(vitpose-finetune): UDP Gaussian heatmap target encoder (roun
 ### Task 3: JointsMSELoss
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/loss.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/loss.py`
 - Test: `tests/test_vitpose_finetune_loss.py`
 
 **Interfaces:**
@@ -313,7 +313,7 @@ git commit -m "feat(vitpose-finetune): UDP Gaussian heatmap target encoder (roun
 ```python
 # tests/test_vitpose_finetune_loss.py
 import torch
-from hydra_suite.core.identity.pose.vitpose.training.loss import JointsMSELoss
+from hydra_suite.core.individual.pose.vitpose.training.loss import JointsMSELoss
 
 def test_zero_loss_when_equal():
     out = torch.rand(2, 3, 8, 6)
@@ -339,7 +339,7 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/loss.py
+# src/hydra_suite/core/individual/pose/vitpose/training/loss.py
 from __future__ import annotations
 
 import torch
@@ -380,7 +380,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/loss.py tests/test_vitpose_finetune_loss.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/loss.py tests/test_vitpose_finetune_loss.py
 git commit -m "feat(vitpose-finetune): JointsMSELoss with per-joint weighting"
 ```
 
@@ -389,7 +389,7 @@ git commit -m "feat(vitpose-finetune): JointsMSELoss with per-joint weighting"
 ### Task 4: Model assembly + fine-tune checkpoint loader
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/model_setup.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/model_setup.py`
 - Test: `tests/test_vitpose_finetune_model_setup.py`
 
 **Interfaces:**
@@ -401,11 +401,11 @@ git commit -m "feat(vitpose-finetune): JointsMSELoss with per-joint weighting"
 # tests/test_vitpose_finetune_model_setup.py
 import torch
 import pytest
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model, load_finetune_init,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
-from hydra_suite.core.identity.pose.vitpose.weights import CheckpointKeyError
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.weights import CheckpointKeyError
 
 def test_build_shapes_and_droppath():
     m = build_finetune_model("B", num_keypoints=6, drop_path=0.1)
@@ -446,7 +446,7 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/model_setup.py
+# src/hydra_suite/core/individual/pose/vitpose/training/model_setup.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -504,7 +504,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/model_setup.py tests/test_vitpose_finetune_model_setup.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/model_setup.py tests/test_vitpose_finetune_model_setup.py
 git commit -m "feat(vitpose-finetune): model assembly with drop_path + backbone-strict fine-tune loader"
 ```
 
@@ -515,7 +515,7 @@ git commit -m "feat(vitpose-finetune): model assembly with drop_path + backbone-
 The `+2` is the roadmap's named trap: `num_layers = depth + 2`; `lr_scale = layer_decay ** (num_layers - layer_id - 1)`.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/training/model_setup.py` (add `build_param_groups`)
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/training/model_setup.py` (add `build_param_groups`)
 - Test: `tests/test_vitpose_finetune_param_groups.py`
 
 **Interfaces:**
@@ -527,7 +527,7 @@ The `+2` is the roadmap's named trap: `num_layers = depth + 2`; `lr_scale = laye
 # tests/test_vitpose_finetune_param_groups.py
 import math
 import torch
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model, build_param_groups, _layer_id_for,
 )
 
@@ -609,7 +609,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/model_setup.py tests/test_vitpose_finetune_param_groups.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/model_setup.py tests/test_vitpose_finetune_param_groups.py
 git commit -m "feat(vitpose-finetune): layer-wise LR-decay param groups (num_layers=depth+2)"
 ```
 
@@ -618,7 +618,7 @@ git commit -m "feat(vitpose-finetune): layer-wise LR-decay param groups (num_lay
 ### Task 6: COCO-keypoints dataset (+ augmentation)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/dataset.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/dataset.py`
 - Test: `tests/test_vitpose_finetune_dataset.py`
 
 **Interfaces:**
@@ -634,7 +634,7 @@ import numpy as np
 import cv2
 import torch
 from pathlib import Path
-from hydra_suite.core.identity.pose.vitpose.training.dataset import (
+from hydra_suite.core.individual.pose.vitpose.training.dataset import (
     CocoKeypointsDataset, load_coco_index, FEAT_STRIDE,
 )
 
@@ -670,8 +670,8 @@ def test_getitem_shapes(tmp_path):
 def test_target_peak_matches_decoded_gt(tmp_path):
     # With no augmentation, decoding the GT heatmap and mapping back through
     # transform_preds must recover the annotated keypoints (sub-pixel).
-    from hydra_suite.core.identity.pose.vitpose.decode import decode_udp_cv2
-    from hydra_suite.core.identity.pose.vitpose.transforms import transform_preds
+    from hydra_suite.core.individual.pose.vitpose.decode import decode_udp_cv2
+    from hydra_suite.core.individual.pose.vitpose.transforms import transform_preds
     ds_dir = _make_ds(tmp_path)
     ids, _ = load_coco_index(ds_dir)
     ds = CocoKeypointsDataset(ds_dir, ids, sigma=2.0, augment=False)
@@ -693,7 +693,7 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/dataset.py
+# src/hydra_suite/core/individual/pose/vitpose/training/dataset.py
 from __future__ import annotations
 
 import json
@@ -793,7 +793,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/dataset.py tests/test_vitpose_finetune_dataset.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/dataset.py tests/test_vitpose_finetune_dataset.py
 git commit -m "feat(vitpose-finetune): COCO-keypoints dataset with UDP targets + no-flip augmentation"
 ```
 
@@ -802,7 +802,7 @@ git commit -m "feat(vitpose-finetune): COCO-keypoints dataset with UDP targets +
 ### Task 7: PCK metric + validation
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/validate.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/validate.py`
 - Test: `tests/test_vitpose_finetune_validate.py`
 
 **Interfaces:**
@@ -814,7 +814,7 @@ git commit -m "feat(vitpose-finetune): COCO-keypoints dataset with UDP targets +
 ```python
 # tests/test_vitpose_finetune_validate.py
 import numpy as np
-from hydra_suite.core.identity.pose.vitpose.training.validate import pck_from_preds
+from hydra_suite.core.individual.pose.vitpose.training.validate import pck_from_preds
 
 def test_pck_perfect_and_thresholded():
     gt = np.array([[10, 10, 2], [20, 20, 2]], np.float32)
@@ -841,7 +841,7 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/validate.py
+# src/hydra_suite/core/individual/pose/vitpose/training/validate.py
 from __future__ import annotations
 
 import numpy as np
@@ -902,7 +902,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/validate.py tests/test_vitpose_finetune_validate.py
+git add src/hydra_suite/core/individual/pose/vitpose/training/validate.py tests/test_vitpose_finetune_validate.py
 git commit -m "feat(vitpose-finetune): bbox-normalized PCK metric + validation loop"
 ```
 
@@ -911,8 +911,8 @@ git commit -m "feat(vitpose-finetune): bbox-normalized PCK metric + validation l
 ### Task 8: Training loop + CLI (the objective overfit gate)
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/train.py`
-- Create: `src/hydra_suite/core/identity/pose/vitpose/training/__main__.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/train.py`
+- Create: `src/hydra_suite/core/individual/pose/vitpose/training/__main__.py`
 - Test: `tests/test_vitpose_finetune_train.py`
 
 **Interfaces:**
@@ -928,8 +928,8 @@ import numpy as np
 import cv2
 import torch
 from pathlib import Path
-from hydra_suite.core.identity.pose.vitpose.training.config import RunConfig
-from hydra_suite.core.identity.pose.vitpose.training.train import train
+from hydra_suite.core.individual.pose.vitpose.training.config import RunConfig
+from hydra_suite.core.individual.pose.vitpose.training.train import train
 
 def _tiny_dataset(root: Path, n=8, k=3):
     (root / "images").mkdir(parents=True)
@@ -956,7 +956,7 @@ def test_tiny_overfit_drives_metrics(tmp_path):
     # architecture-agnostic, so S exercises exactly the same code paths.
     ds = tmp_path / "ds"; _tiny_dataset(ds)
     # a random-init "pretrained" checkpoint so the loader path is exercised
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
     pre = tmp_path / "pre.pth"
     torch.save({"state_dict": build_vitpose("S", "classic", 17).state_dict()}, pre)
 
@@ -987,7 +987,7 @@ Expected: FAIL (module does not exist).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/train.py
+# src/hydra_suite/core/individual/pose/vitpose/training/train.py
 from __future__ import annotations
 
 import csv
@@ -1111,7 +1111,7 @@ def _write_val_overlays(model, val_ds, device, dst: Path, k: int, limit: int = 6
 ```
 
 ```python
-# src/hydra_suite/core/identity/pose/vitpose/training/__main__.py
+# src/hydra_suite/core/individual/pose/vitpose/training/__main__.py
 from __future__ import annotations
 
 import argparse
@@ -1141,8 +1141,8 @@ Expected: PASS (train loss decreases; `best.pt` reloads into a K=3 model).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/hydra_suite/core/identity/pose/vitpose/training/train.py \
-        src/hydra_suite/core/identity/pose/vitpose/training/__main__.py \
+git add src/hydra_suite/core/individual/pose/vitpose/training/train.py \
+        src/hydra_suite/core/individual/pose/vitpose/training/__main__.py \
         tests/test_vitpose_finetune_train.py
 git commit -m "feat(vitpose-finetune): training loop, CLI, resume, val overlays (tiny-overfit gate)"
 ```
@@ -1165,7 +1165,7 @@ git commit -m "feat(vitpose-finetune): training loop, CLI, resume, val overlays 
 import ast
 from pathlib import Path
 
-VITPOSE = Path("src/hydra_suite/core/identity/pose/vitpose")
+VITPOSE = Path("src/hydra_suite/core/individual/pose/vitpose")
 
 def test_training_subpackage_is_leaf_pure():
     offenders = []
@@ -1380,7 +1380,7 @@ git commit -m "feat(vitpose-finetune): base-checkpoint catalog + SHA-pinned down
 
 **Interfaces:**
 - Consumes: `RunConfig` (Task 1, imported from the leaf payload — allowed: `posekit` may import `core`); `resolve_checkpoint` (Task 10).
-- Produces: `prepare_run(params: dict, run_dir: Path, cache_dir: Path) -> Path` (resolves checkpoint, writes+validates `run.json`, returns its path); `build_training_command(run_json: Path) -> list[str]` (`[sys.executable, "-m", "hydra_suite.core.identity.pose.vitpose.training", "--config", str(run_json)]`); `parse_progress_line(line: str) -> dict | None` (parses `EPOCH …` lines → `{"epoch","train_loss","val_loss","pck@0.05","pck@0.1"}`, else `None`).
+- Produces: `prepare_run(params: dict, run_dir: Path, cache_dir: Path) -> Path` (resolves checkpoint, writes+validates `run.json`, returns its path); `build_training_command(run_json: Path) -> list[str]` (`[sys.executable, "-m", "hydra_suite.core.individual.pose.vitpose.training", "--config", str(run_json)]`); `parse_progress_line(line: str) -> dict | None` (parses `EPOCH …` lines → `{"epoch","train_loss","val_loss","pck@0.05","pck@0.1"}`, else `None`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1409,8 +1409,8 @@ def test_build_command_uses_current_interpreter(tmp_path):
     rj = tmp_path / "run.json"
     cmd = build_training_command(rj)
     assert cmd[0] == sys.executable
-    assert cmd[1:4] == ["-m", "hydra_suite.core.identity.pose.vitpose.training", "--config"] or \
-           cmd[1:3] == ["-m", "hydra_suite.core.identity.pose.vitpose.training"]
+    assert cmd[1:4] == ["-m", "hydra_suite.core.individual.pose.vitpose.training", "--config"] or \
+           cmd[1:3] == ["-m", "hydra_suite.core.individual.pose.vitpose.training"]
     assert str(rj) in cmd
 
 def test_parse_progress():
@@ -1436,10 +1436,10 @@ import re
 import sys
 from pathlib import Path
 
-from hydra_suite.core.identity.pose.vitpose.training.config import validate_run_config
+from hydra_suite.core.individual.pose.vitpose.training.config import validate_run_config
 from hydra_suite.posekit.core.vitpose_checkpoints import resolve_checkpoint
 
-_MODULE = "hydra_suite.core.identity.pose.vitpose.training"
+_MODULE = "hydra_suite.core.individual.pose.vitpose.training"
 _LINE = re.compile(
     r"^EPOCH (?P<epoch>\d+) train_loss=(?P<tl>[\d.eE+-]+) val_loss=(?P<vl>[\d.eE+-]+) "
     r"pck@0\.05=(?P<p5>[\d.eE+-]+) pck@0\.1=(?P<p1>[\d.eE+-]+)\s*$"
@@ -1683,7 +1683,7 @@ git commit -m "feat(vitpose-finetune): PoseKit ViTPose training worker + dialog 
 
 - [ ] `pytest tests/test_vitpose_finetune_*.py tests/test_vitpose_checkpoints.py tests/test_vitpose_training_*.py -q` — all pass.
 - [ ] `pytest tests/ -k "leaf_pure or eager_import" -q` — payload stays leaf-pure.
-- [ ] `python -c "from hydra_suite.core.identity.pose.vitpose import build_vitpose"` then confirm `sys.modules` has no `…vitpose.training` key — proves `__init__` does not eager-import training.
+- [ ] `python -c "from hydra_suite.core.individual.pose.vitpose import build_vitpose"` then confirm `sys.modules` has no `…vitpose.training` key — proves `__init__` does not eager-import training.
 - [ ] `python -c "import hydra_suite.posekit.gui.dialogs.training, hydra_suite.posekit.gui.main_window"` — GUI import path intact.
-- [ ] `grep -rn "build_vitpose_moe\|dataset_index\|flip_pairs" src/hydra_suite/core/identity/pose/vitpose/training/` — empty (no MoE, no flip leaked in).
+- [ ] `grep -rn "build_vitpose_moe\|dataset_index\|flip_pairs" src/hydra_suite/core/individual/pose/vitpose/training/` — empty (no MoE, no flip leaked in).
 - [ ] `make format && make lint` per `CLAUDE.md`.

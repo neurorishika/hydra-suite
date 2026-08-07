@@ -48,9 +48,9 @@ def load_headtail_model(
       ``validate_headtail_labels``, so non-canonical-but-known labels still map
       to a heading offset instead of silently becoming undirected.
     """
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.headtail import (
         validate_headtail_labels,
     )
 
@@ -209,7 +209,7 @@ def _label_to_heading_offset(label: str) -> float | None:
     resolve to an offset (H7 parity). Returns ``None`` for ``unknown`` or any
     unrecognized token, leaving the detection undirected.
     """
-    from hydra_suite.core.identity.classification.headtail import (
+    from hydra_suite.core.individual.classification.headtail import (
         normalize_headtail_label,
     )
 

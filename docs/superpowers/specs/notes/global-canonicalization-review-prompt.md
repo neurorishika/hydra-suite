@@ -130,7 +130,7 @@ each as a hypothesis to test, not a claim to trust:
 ## Starting points, not a reading list
 
 `src/hydra_suite/core/canonicalization/`, `src/hydra_suite/core/inference/stages/`,
-`src/hydra_suite/core/identity/`, `src/hydra_suite/core/post/interpolated_crops.py`,
+`src/hydra_suite/core/individual/`, `src/hydra_suite/core/post/interpolated_crops.py`,
 `src/hydra_suite/training/`, `src/hydra_suite/classkit/`, `src/hydra_suite/posekit/`,
 `src/hydra_suite/trackerkit/`. Follow the code from each model backwards to the
 frame; that direction finds consumers the forward direction misses.

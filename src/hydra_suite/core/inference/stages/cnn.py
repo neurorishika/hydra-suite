@@ -29,7 +29,7 @@ class CNNModel:
 
 
 def load_cnn_model(config: CNNConfig, runtime: RuntimeContext) -> CNNModel:
-    from hydra_suite.core.identity.classification.backend import ClassifierBackend
+    from hydra_suite.core.individual.classification.backend import ClassifierBackend
 
     # The RuntimeContext carries the single resolved backend/device (from
     # runtime_tier); per-stage compute_runtime fields no longer exist.

@@ -4,10 +4,10 @@ import re
 import sys
 from pathlib import Path
 
-from hydra_suite.core.identity.pose.vitpose.training.config import validate_run_config
+from hydra_suite.core.individual.pose.vitpose.training.config import validate_run_config
 from hydra_suite.posekit.core.vitpose_checkpoints import resolve_checkpoint
 
-_MODULE = "hydra_suite.core.identity.pose.vitpose.training"
+_MODULE = "hydra_suite.core.individual.pose.vitpose.training"
 _LINE = re.compile(
     r"^EPOCH (?P<epoch>\d+) train_loss=(?P<tl>[\d.eE+-]+) val_loss=(?P<vl>[\d.eE+-]+) "
     r"pck@0\.05=(?P<p5>[\d.eE+-]+) pck@0\.1=(?P<p1>[\d.eE+-]+)\s*$"

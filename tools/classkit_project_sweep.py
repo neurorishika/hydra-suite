@@ -41,7 +41,7 @@ from hydra_suite.classkit.gui.project import (
 )
 from hydra_suite.classkit.jobs.task_workers import ExportWorker
 from hydra_suite.classkit.store.db import ClassKitDB
-from hydra_suite.core.identity.classification.backend import ClassifierBackend
+from hydra_suite.core.individual.classification.backend import ClassifierBackend
 from hydra_suite.training.contracts import (
     AugmentationProfile,
     CustomCNNParams,

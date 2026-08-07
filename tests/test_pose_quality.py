@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from hydra_suite.core.identity.pose.quality import (
+from hydra_suite.core.individual.pose.quality import (
     BodyLengthPrior,
     EdgeLengthPriors,
     apply_quality_to_dataframe,

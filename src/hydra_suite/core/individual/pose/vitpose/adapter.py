@@ -1,4 +1,4 @@
-# src/hydra_suite/core/identity/pose/vitpose/adapter.py
+# src/hydra_suite/core/individual/pose/vitpose/adapter.py
 """Load a fine-tuned or user-supplied ViTPose checkpoint, recovering the
 variant/head/num_keypoints needed to rebuild the module.
 

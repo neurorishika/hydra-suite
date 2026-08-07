@@ -2,7 +2,9 @@
 
 from PySide6.QtCore import Signal
 
-from hydra_suite.core.identity.dataset.oriented_video import OrientedTrackVideoExporter
+from hydra_suite.core.individual.dataset.oriented_video import (
+    OrientedTrackVideoExporter,
+)
 from hydra_suite.widgets.workers import BaseWorker
 
 

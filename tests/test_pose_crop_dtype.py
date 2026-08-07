@@ -18,7 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.pose.crop_dtype import to_uint8_image
+from hydra_suite.core.individual.pose.crop_dtype import to_uint8_image
 
 
 class TestToUint8Image:
@@ -66,7 +66,7 @@ class _StubViTPoseBackend:
     """Minimal stand-in exercising the real ``predict_batch`` body."""
 
     def __init__(self, seen):
-        from hydra_suite.core.identity.pose.vitpose.geometry import DEFAULT_GEOMETRY
+        from hydra_suite.core.individual.pose.vitpose.geometry import DEFAULT_GEOMETRY
 
         self._batch_size = 4
         self._geom = DEFAULT_GEOMETRY
@@ -83,7 +83,7 @@ class _StubViTPoseBackend:
 
 def test_predict_batch_hands_uint8_to_preprocess(monkeypatch):
     """A float [0, 1] crop must reach ``preprocess_crop`` as uint8 [0, 255]."""
-    from hydra_suite.core.identity.pose.backends import vitpose as vitpose_backend
+    from hydra_suite.core.individual.pose.backends import vitpose as vitpose_backend
 
     seen: list[np.ndarray] = []
     real_preprocess = vitpose_backend.preprocess_crop
@@ -105,7 +105,7 @@ def test_predict_batch_hands_uint8_to_preprocess(monkeypatch):
 
 def test_predict_batch_leaves_uint8_crops_untouched(monkeypatch):
     """The guard must be a no-op for the uint8 crops PoseKit already passes."""
-    from hydra_suite.core.identity.pose.backends import vitpose as vitpose_backend
+    from hydra_suite.core.individual.pose.backends import vitpose as vitpose_backend
 
     seen: list[np.ndarray] = []
     real_preprocess = vitpose_backend.preprocess_crop

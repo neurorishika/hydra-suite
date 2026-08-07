@@ -5,13 +5,13 @@ from __future__ import annotations
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
-from hydra_suite.core.identity.pose.vitpose.training.config import validate_run_config
-from hydra_suite.core.identity.pose.vitpose.training.model_setup import (
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.training.config import validate_run_config
+from hydra_suite.core.individual.pose.vitpose.training.model_setup import (
     build_finetune_model,
     load_finetune_init,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 

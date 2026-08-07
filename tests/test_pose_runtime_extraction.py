@@ -7,7 +7,7 @@ def test_onnx_runner_runs_tiny_model(tmp_path):
     import onnx
     from onnx import TensorProto, helper
 
-    from hydra_suite.core.identity.pose.runtime.onnx_session import OnnxSessionRunner
+    from hydra_suite.core.individual.pose.runtime.onnx_session import OnnxSessionRunner
     from hydra_suite.runtime.resolver import ResolvedBackend
 
     # identity ONNX: input (1,3,4,4) -> output same
@@ -30,12 +30,12 @@ def test_sleap_still_imports_after_extraction():
     # SLEAP must keep working: its module imports the moved runners
     import importlib
 
-    importlib.import_module("hydra_suite.core.identity.pose.backends.sleap")
-    from hydra_suite.core.identity.pose.runtime.accelerated import (
+    importlib.import_module("hydra_suite.core.individual.pose.backends.sleap")
+    from hydra_suite.core.individual.pose.runtime.accelerated import (
         build_accelerated_runner,
     )
-    from hydra_suite.core.identity.pose.runtime.onnx_session import OnnxSessionRunner
-    from hydra_suite.core.identity.pose.runtime.tensorrt_engine import (
+    from hydra_suite.core.individual.pose.runtime.onnx_session import OnnxSessionRunner
+    from hydra_suite.core.individual.pose.runtime.tensorrt_engine import (
         TensorRTEngineRunner,
         build_trt_engine_from_onnx,
     )

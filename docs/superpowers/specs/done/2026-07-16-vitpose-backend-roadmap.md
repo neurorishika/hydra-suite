@@ -11,7 +11,7 @@ implementation cycle.
 ## Status update (2026-07-19)
 
 - **Spec 1** (native port + parity + export) — ✅ merged (`#19`). Leaf at
-  `core/identity/pose/vitpose/`, incl. `export_onnx`/`build_tensorrt_engine`/
+  `core/individual/pose/vitpose/`, incl. `export_onnx`/`build_tensorrt_engine`/
   `export_coreml` and the on-device `decode_udp_torch`.
 - **Spec 4** (fine-tuning) — ✅ merged (`0b5b4b3`). Training payload +
   PoseKit orchestration + GUI.
@@ -120,7 +120,7 @@ within ~0.2. Requires downloading COCO val2017 + standard person detections.
 ### Spec 2 — Native runtime layer + tensor-first Protocol
 **Status:** ⟳ reshaped → consolidated into `2026-07-19-vitpose-full-integration-design.md`
 (Phase A). **Changed after 2026-07-19 audit:** scope is a *pose-only* runtime
-(`core/identity/pose/runtime/`) extracted from `sleap.py` and shared with
+(`core/individual/pose/runtime/`) extracted from `sleap.py` and shared with
 ViTPose — **not** a pose+detector runtime (the detector overlap is only
 TRT-lifecycle-deep; everything else diverges). The **tensor-first Protocol
 reshape is dropped** (the win is TensorRT-input-side only; every backend already
@@ -185,7 +185,7 @@ Known hardcoded `"yolo" | "sleap"` sites to widen: `pose/types.py:26`;
 `pose/api.py:33,53,99,159`; `pose/utils.py:350-368`;
 `core/inference/config.py:75,193,350`; `core/inference/api.py:60`;
 `core/inference/stages/pose.py:83,143`; `core/tracking/worker.py:4605,4644-4646`;
-`core/identity/properties/cache.py:171,194` (cache identity!);
+`core/individual/properties/cache.py:171,194` (cache identity!);
 `runtime/resolver.py:15`; `runtime/compute_runtime.py:187,204,305`;
 `utils/gpu_utils.py:380-415`; `posekit/gui/main_window.py:4225,4258,4359,4674,4762,4921`.
 
@@ -394,7 +394,7 @@ checklist is structurally authoritative; its function/path names are not.
 
 - **Dependency direction** (CLAUDE.md:159-165, 192-198): Core/Runtime/Data/
   Training/Utils never import from app layers or Integrations. The backend belongs
-  at `core/identity/pose/backends/vitpose.py`.
+  at `core/individual/pose/backends/vitpose.py`.
 - **~500-line rule** (CLAUDE.md:123). `yolo.py` (293 lines) is the model to follow;
   `sleap.py` (1780) is the cautionary tale.
 - **Paths** (CLAUDE.md:199-201): never `Path(__file__).parents[N]`; use

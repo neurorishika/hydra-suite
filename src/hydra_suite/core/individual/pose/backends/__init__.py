@@ -1,6 +1,6 @@
 """Pose inference backend implementations."""
 
-from hydra_suite.core.identity.pose.backends.yolo import (
+from hydra_suite.core.individual.pose.backends.yolo import (
     YoloNativeBackend,
     auto_export_yolo_model,
 )

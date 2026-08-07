@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
-from hydra_suite.core.identity.pose.vitpose.pos_embed import (
+from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
+from hydra_suite.core.individual.pose.vitpose.pos_embed import (
     resize_pos_embed,
     resolve_patch_grid,
 )
@@ -79,7 +79,7 @@ def test_resize_round_trip_approximately_recovers_a_smooth_field():
 
 
 def test_resized_weights_load_into_a_model_at_the_target_geometry():
-    from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+    from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
     src = build_vitpose("B", "classic", num_keypoints=9)  # default 192x256
     dst_geom = PoseGeometry((256, 256))

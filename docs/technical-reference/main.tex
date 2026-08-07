@@ -167,7 +167,7 @@ This manuscript documents the current implementation of the tracking system in t
     \codepath{hydra_suite.core.filters.kalman},
     \codepath{hydra_suite.core.assigners.hungarian},
     \codepath{hydra_suite.core.post.processing},
-    \codepath{hydra_suite.core.identity.runtime_api},
+    \codepath{hydra_suite.core.individual.runtime_api},
     plus the associated GUI parameter derivation in
     \codepath{hydra_suite.gui.main_window}.
   };
@@ -1268,7 +1268,7 @@ The following code paths are the highest-value audit points for the current beha
 \codepath{src/hydra_suite/core/filters/kalman.py} & vectorized Kalman prediction / correction with anisotropic process noise, maturity damping, and Joseph-form updates \\
 \codepath{src/hydra_suite/core/assigners/hungarian.py} & cost matrix construction, advanced gating, pose rejection, staged assignment, and lost-slot respawn logic \\
 \codepath{src/hydra_suite/core/post/processing.py} & fragment cleaning, conservative forward/backward resolution, relinking, and interpolation \\
-\codepath{src/hydra_suite/core/identity/runtime_api.py} & pose runtime construction shared across TrackerKit and PoseKit \\
+\codepath{src/hydra_suite/core/individual/runtime_api.py} & pose runtime construction shared across TrackerKit and PoseKit \\
 \codepath{src/hydra_suite/gui/main_window.py} & UI control collection, scaling from user multipliers to runtime values, and config compatibility logic \\
 \codepath{src/hydra_suite/posekit/ui/main_window.py} & project-driven pose annotation, prediction, smart selection, and evaluation flows \\
 \codepath{src/hydra_suite/classkit/gui/mainwindow.py} & active-learning classification workbench built on embeddings and persistent project state \\

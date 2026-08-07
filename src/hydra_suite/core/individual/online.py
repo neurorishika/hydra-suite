@@ -36,8 +36,8 @@ from typing import Any, Optional
 
 import numpy as np
 
-from hydra_suite.core.identity.catalog import IdentityCatalog
-from hydra_suite.core.identity.evidence import IdentityEvidence
+from hydra_suite.core.individual.catalog import IdentityCatalog
+from hydra_suite.core.individual.evidence import IdentityEvidence
 
 log = logging.getLogger(__name__)
 

@@ -17,11 +17,11 @@ from typing import Dict, List
 
 import numpy as np
 
-from hydra_suite.core.identity.pose.backends.vitpose import (
+from hydra_suite.core.individual.pose.backends.vitpose import (
     ViTPoseBackend,
     auto_export_vitpose_model,
 )
-from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 
 
 def _native(checkpoint: str, crops: List[np.ndarray]) -> np.ndarray:

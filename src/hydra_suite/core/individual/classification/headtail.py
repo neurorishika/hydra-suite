@@ -79,7 +79,7 @@ def validate_headtail_labels(labels: list[str]) -> list[str]:
     Returns the list of normalized labels in input order. Raises
     ``HeadTailFormatError`` listing offending entries when the check fails.
     """
-    from hydra_suite.core.identity.classification.errors import HeadTailFormatError
+    from hydra_suite.core.individual.classification.errors import HeadTailFormatError
 
     normalized: list[str] = []
     offending: list[str] = []
@@ -227,8 +227,8 @@ class HeadTailAnalyzer:
 
     def _load_model(self, model_path_str: str) -> None:
         """Load a v2 classifier artifact through the shared backend."""
-        from hydra_suite.core.identity.classification.backend import ClassifierBackend
-        from hydra_suite.core.identity.classification.errors import (
+        from hydra_suite.core.individual.classification.backend import ClassifierBackend
+        from hydra_suite.core.individual.classification.errors import (
             ClassifierFormatError,
             HeadTailFormatError,
         )
@@ -649,7 +649,7 @@ class HeadTailAnalyzer:
         if getattr(self, "_resolved", None) is not None and (
             self._resolved.backend == "tensorrt"
         ):
-            from hydra_suite.core.identity.classification.backend import (
+            from hydra_suite.core.individual.classification.backend import (
                 ClassifierBackend,
             )
 

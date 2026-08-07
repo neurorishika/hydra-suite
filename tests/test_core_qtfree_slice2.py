@@ -34,6 +34,6 @@ def test_new_core_modules_import_without_qt():
         "hydra_suite.core.post.pose_merge",
         "hydra_suite.core.post.rich_export",
         "hydra_suite.core.post.interpolated_crops",
-        "hydra_suite.core.identity.postprocess_df",
+        "hydra_suite.core.individual.postprocess_df",
     ):
         importlib.import_module(mod)

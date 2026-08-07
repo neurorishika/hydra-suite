@@ -5,12 +5,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
-from hydra_suite.core.identity.pose.vitpose.geometry import (
+from hydra_suite.core.individual.pose.vitpose.adapter import load_finetuned_checkpoint
+from hydra_suite.core.individual.pose.vitpose.geometry import (
     DEFAULT_GEOMETRY,
     PoseGeometry,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 SQUARE = PoseGeometry((256, 256))
 

@@ -219,11 +219,11 @@ ViTPose has a standalone training entry point (invoked by PoseKit's Training Run
 dialog, or directly for scripted/headless runs):
 
 ```bash
-python -m hydra_suite.core.identity.pose.vitpose.training --config run.json
+python -m hydra_suite.core.individual.pose.vitpose.training --config run.json
 ```
 
 `run.json` is validated against the `RunConfig` schema in
-`src/hydra_suite/core/identity/pose/vitpose/training/config.py`
+`src/hydra_suite/core/individual/pose/vitpose/training/config.py`
 (`validate_run_config` rejects unknown keys and bad ranges before training starts).
 Fields:
 

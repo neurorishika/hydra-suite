@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
-from hydra_suite.core.identity.pose.features import build_pose_detection_keypoint_map
+from hydra_suite.core.individual.pose.features import build_pose_detection_keypoint_map
 
 
 def _make_mock_pose_cache(frame_idx: int = 0, n_dets: int = 3, n_kpts: int = 5):

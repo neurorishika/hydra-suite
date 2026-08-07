@@ -4,14 +4,14 @@
 
 **Goal:** Build a standalone tool that runs a collaborator's external mmpose-trained ViTPose checkpoints (ant 9-keypoint, fly 29-keypoint) on individual animals cropped from our DEMO ant and fly videos, and renders skeleton-overlay contact sheets for qualitative judgement.
 
-**Architecture:** A new `tools/vitpose/external_ckpt/` package reuses the repo's already-verified pure-torch `ViT` backbone and `ClassicHead` from `src/hydra_suite/core/identity/pose/vitpose/`, constructed at 256x256 instead of the repo default 192x256. It supplies its own top-down crop geometry (sourced from existing tracking CSVs, not a fresh detector run) and its own mmpose-`default` heatmap decode, because the repo's `transforms.py`/`decode.py` are baked to 192x256 + UDP. Nothing under `src/` is modified, so the byte-identical tracking equivalence guarantees are untouched.
+**Architecture:** A new `tools/vitpose/external_ckpt/` package reuses the repo's already-verified pure-torch `ViT` backbone and `ClassicHead` from `src/hydra_suite/core/individual/pose/vitpose/`, constructed at 256x256 instead of the repo default 192x256. It supplies its own top-down crop geometry (sourced from existing tracking CSVs, not a fresh detector run) and its own mmpose-`default` heatmap decode, because the repo's `transforms.py`/`decode.py` are baked to 192x256 + UDP. Nothing under `src/` is modified, so the byte-identical tracking equivalence guarantees are untouched.
 
 **Tech Stack:** Python 3, PyTorch (MPS), OpenCV, NumPy, pandas, pytest. No mmpose / mmcv dependency — the collaborator's mmpose config files are converted once into plain JSON skeleton descriptors.
 
 ## Global Constraints
 
 - **Do not modify anything under `src/`.** This tool is read-only with respect to production code. If a repo function cannot be reused as-is, reimplement it locally in `tools/vitpose/external_ckpt/`.
-- Import repo code only from `hydra_suite.core.identity.pose.vitpose.{model,heads,vitpose,transforms,decode}`.
+- Import repo code only from `hydra_suite.core.individual.pose.vitpose.{model,heads,vitpose,transforms,decode}`.
 - Checkpoint architecture, fixed by the collaborator's configs and **not** configurable: ViT-base (`embed_dim=768, depth=12, num_heads=12, drop_path_rate=0.3`), `patch_size=16`, input **256x256 (H, W)**, heatmap **64x64**, head = `ClassicHead` (`num_deconv_layers=2, filters=(256,256), kernels=(4,4), final_conv_kernel=1`).
 - Decode is mmpose 0.x `post_process='default'` — argmax plus a `±0.25` px quarter-offset. It is **not** DARK and **not** UDP. `modulate_kernel=11` in their config is dead config (mmpose 0.x reads it only when `post_process='unbiased'`).
 - Preprocessing normalisation is ImageNet: mean `(0.485, 0.456, 0.406)`, std `(0.229, 0.224, 0.225)`, on RGB in `[0, 1]`.
@@ -686,10 +686,10 @@ import cv2
 import numpy as np
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.config import VARIANTS
-from hydra_suite.core.identity.pose.vitpose.heads import ClassicHead
-from hydra_suite.core.identity.pose.vitpose.model import ViT
-from hydra_suite.core.identity.pose.vitpose.vitpose import ViTPose
+from hydra_suite.core.individual.pose.vitpose.config import VARIANTS
+from hydra_suite.core.individual.pose.vitpose.heads import ClassicHead
+from hydra_suite.core.individual.pose.vitpose.model import ViT
+from hydra_suite.core.individual.pose.vitpose.vitpose import ViTPose
 
 IMAGE_PX = 256
 HEATMAP_PX = 64

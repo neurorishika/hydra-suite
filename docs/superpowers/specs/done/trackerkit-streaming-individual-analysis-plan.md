@@ -327,8 +327,8 @@ Make CNN analysis symmetrical with head-tail and pose in terms of runtime-aware 
 
 ### Phase 2 Files Expected
 
-- `src/hydra_suite/core/identity/classification/cnn.py`
-- `src/hydra_suite/core/identity/classification/backend.py`
+- `src/hydra_suite/core/individual/classification/cnn.py`
+- `src/hydra_suite/core/individual/classification/backend.py`
 - `src/hydra_suite/core/detectors/_runtime_artifacts.py`
 - any shared runtime config helpers used by CNN model resolution
 
@@ -356,7 +356,7 @@ Feed pose from the same post-head-tail payload instead of replaying frames for p
 
 - `src/hydra_suite/core/tracking/pose_pipeline.py`
 - `src/hydra_suite/core/tracking/worker.py`
-- `src/hydra_suite/core/identity/pose/api.py`
+- `src/hydra_suite/core/individual/pose/api.py`
 
 ### Phase 3 Exit Criteria
 
@@ -384,7 +384,7 @@ Run CNN immediately alongside pose after head-tail reorientation using the same 
 - `src/hydra_suite/core/tracking/worker.py`
 - `src/hydra_suite/core/tracking/live_features.py`
 - `src/hydra_suite/core/tracking/precompute.py`
-- `src/hydra_suite/core/identity/classification/cnn.py`
+- `src/hydra_suite/core/individual/classification/cnn.py`
 
 ### Phase 4 Exit Criteria
 

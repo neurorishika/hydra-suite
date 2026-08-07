@@ -24,12 +24,14 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from hydra_suite.core.identity.pose.vitpose.export import (  # noqa: E402
+from hydra_suite.core.individual.pose.vitpose.export import (  # noqa: E402
     build_tensorrt_engine,
     export_onnx,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose  # noqa: E402
-from hydra_suite.core.identity.pose.vitpose.weights import load_checkpoint  # noqa: E402
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose  # noqa: E402
+from hydra_suite.core.individual.pose.vitpose.weights import (  # noqa: E402
+    load_checkpoint,
+)
 from tools.vitpose.eval_coco import evaluate  # noqa: E402
 
 ASSET_DIR = Path(os.path.expanduser("~/.cache/vitpose-assets"))

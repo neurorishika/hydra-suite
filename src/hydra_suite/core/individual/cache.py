@@ -39,7 +39,7 @@ from typing import Optional
 
 import numpy as np
 
-from hydra_suite.core.identity.evidence import EvidenceSource, IdentityEvidence
+from hydra_suite.core.individual.evidence import EvidenceSource, IdentityEvidence
 
 log = logging.getLogger(__name__)
 

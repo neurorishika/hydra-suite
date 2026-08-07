@@ -23,8 +23,8 @@ from hydra_suite.core.canonicalization.geometry import (
     ClippingStats,
     canonical_geometry_from_params,
 )
-from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
-from hydra_suite.core.identity.properties.export import (
+from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
+from hydra_suite.core.individual.properties.export import (
     POSE_SUMMARY_COLUMNS,
     build_pose_keypoint_labels,
     flatten_cnn_prediction_row,
@@ -117,7 +117,7 @@ def _init_pose_backend(params, output_dir):
     if not bool(params.get("ENABLE_POSE_EXTRACTOR", False)):
         return None, [], []
     try:
-        from hydra_suite.core.identity.pose.utils import load_skeleton_from_json
+        from hydra_suite.core.individual.pose.utils import load_skeleton_from_json
 
         backend_family = str(params.get("POSE_MODEL_TYPE", "yolo")).strip().lower()
         model_path = str(params.get("POSE_MODEL_DIR", ""))
@@ -209,7 +209,7 @@ def _init_apriltag_detector(params):
     if not apriltag_enabled:
         return None
     try:
-        from hydra_suite.core.identity.classification.apriltag import (
+        from hydra_suite.core.individual.classification.apriltag import (
             AprilTagConfig,
             AprilTagDetector,
         )
@@ -228,7 +228,7 @@ def _init_cnn_backends(params):
     if not cnn_classifiers_cfg:
         return cnn_backends, cnn_labels
     try:
-        from hydra_suite.core.identity.classification.cnn import (
+        from hydra_suite.core.individual.classification.cnn import (
             CNNIdentityBackend,
             CNNIdentityConfig,
         )
@@ -275,7 +275,7 @@ def _init_headtail_analyzer(params, geometry):
     headtail_model_path = str(params.get("YOLO_HEADTAIL_MODEL_PATH", ""))
     if not headtail_model_path or not os.path.exists(headtail_model_path):
         return None
-    from hydra_suite.core.identity.classification.headtail import HeadTailAnalyzer
+    from hydra_suite.core.individual.classification.headtail import HeadTailAnalyzer
 
     analyzer = HeadTailAnalyzer(
         model_path=headtail_model_path,
@@ -653,7 +653,7 @@ def _flush_cnn_batch(
     ``core/inference/stages/cnn.py`` does -- each classifier may have a
     different input size, so the fit is computed and applied fresh for every
     backend rather than shared across them.  Without this,
-    ``core/identity/classification/backend.py`` would ANISOTROPICALLY stretch
+    ``core/individual/classification/backend.py`` would ANISOTROPICALLY stretch
     the canonical crop to the model's input.
     """
     from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
@@ -970,7 +970,7 @@ def _compute_frame_corners_and_affines(tasks, geometry, clipping_stats):
     applies (``core/tracking/worker.py``).
     """
     from hydra_suite.core.canonicalization.geometry import canonical_affine
-    from hydra_suite.core.identity.geometry import ellipse_to_obb_corners as _e2obb
+    from hydra_suite.core.individual.geometry import ellipse_to_obb_corners as _e2obb
 
     corners = [_e2obb(t["cx"], t["cy"], t["w"], t["h"], t["theta"]) for t in tasks]
     affines = []

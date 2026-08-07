@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.config import UDP_BLUR_KERNEL
-from hydra_suite.core.identity.pose.vitpose.decode import (
+from hydra_suite.core.individual.pose.vitpose.config import UDP_BLUR_KERNEL
+from hydra_suite.core.individual.pose.vitpose.decode import (
     decode_udp_cv2,
     decode_udp_torch,
     flip_back,

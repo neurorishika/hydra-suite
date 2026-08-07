@@ -14,12 +14,12 @@ A downstream-consumer audit found that the original spec, executed verbatim, wou
 |---|---|---|
 | 1 | `detection_ids` (legacy `frame_idx * 10000 + slot`) was not in any result type but is used as a primary key by CSV writer, identity evidence, pose keypoint maps, and AprilTag association | Added to `OBBResult` (see Result Types) |
 | 2 | `OnlineIdentityDecoder` needs full calibrated probability vectors per detection, not just top-1 confidence | Clarified that consumers access `cnn_factors[i].calibrated_probabilities` directly; `resolved_label`/`resolved_confidence` are CSV/visualization-only convenience fields (see Identity Evidence Layer) |
-| 3 | `core/identity/pose/features.py` (kept) reads from deleted `IndividualPropertiesCache` | Added to "Affected kept files" with a rewire to read from new `PoseCache` |
-| 4 | `core/identity/properties/export.py` (kept) imports `CNNIdentityCache` and `DetectedPropertiesCache` | Added to "Affected kept files" with rewires to new caches |
-| 5 | `core/identity/dataset/oriented_video.py` (kept) imports deleted `DetectionCache` | Added to "Affected kept files" |
+| 3 | `core/individual/pose/features.py` (kept) reads from deleted `IndividualPropertiesCache` | Added to "Affected kept files" with a rewire to read from new `PoseCache` |
+| 4 | `core/individual/properties/export.py` (kept) imports `CNNIdentityCache` and `DetectedPropertiesCache` | Added to "Affected kept files" with rewires to new caches |
+| 5 | `core/individual/dataset/oriented_video.py` (kept) imports deleted `DetectionCache` | Added to "Affected kept files" |
 | 6 | `core/tracking/optimizer.py` and `optimizer_workers.py` (kept) import `DetectionFilter` and `DetectionCache` from deleted modules | Added to "Affected kept files"; filter logic exposed as `apply_detection_filter` shim |
-| 7 | `posekit/gui/workers.py` (kept) lazy-imports from deleted `core/identity/pose/api.py` | Added to "Affected kept files" with a small public helper in `core/inference/api.py` |
-| 8 | `core/detectors/__init__.py`, `core/identity/classification/__init__.py`, `core/identity/pose/__init__.py`, `core/identity/properties/__init__.py`, `data/__init__.py` re-export deleted symbols and crash on import the moment deletion happens | Added to "Affected kept files"; `__init__.py` updates moved to a dedicated migration step *before* deletion |
+| 7 | `posekit/gui/workers.py` (kept) lazy-imports from deleted `core/individual/pose/api.py` | Added to "Affected kept files" with a small public helper in `core/inference/api.py` |
+| 8 | `core/detectors/__init__.py`, `core/individual/classification/__init__.py`, `core/individual/pose/__init__.py`, `core/individual/properties/__init__.py`, `data/__init__.py` re-export deleted symbols and crash on import the moment deletion happens | Added to "Affected kept files"; `__init__.py` updates moved to a dedicated migration step *before* deletion |
 | 9 | Backward pass pseudocode invented `_run_backward_pass()` / `_run_consensus_resolution()` methods that don't exist; backward pass is actually a separate `TrackingWorker(backward_mode=True)` launched by the GUI | Rewrote "Non-RT flow" with the actual GUI-orchestrated architecture |
 | 10 | Old CNN cache stored *post-calibration* probabilities; new CNN cache stores *raw*. Without invalidation, the feature-flag coexistence window silently corrupts identity decoding | Added `CACHE_SCHEMA_VERSION` field to `CacheKey`; mismatch invalidates all legacy caches |
 | 11 | `HeadTailResult.canonical_affines` cannot be reconstructed from a cache load | Made `canonical_affines: np.ndarray \| None`; cache path returns `None` |
@@ -752,16 +752,16 @@ These files survive the refactor but currently import from deleted modules. Each
 | File | Currently imports | Required change |
 |---|---|---|
 | `core/detectors/__init__.py` | re-exports `DetectionFilter`, `create_detector`, `YOLOOBBDetector` | Drop the three deleted re-exports; keep only `bg_detector`/`bg_optimizer` exports |
-| `core/identity/classification/__init__.py` | re-exports `CNNIdentityBackend`, `CNNIdentityCache`, `HeadTailAnalyzer`, etc. | Drop deleted symbols; add a backwards-compat shim re-exporting the new types under their old names (one cycle), then delete |
-| `core/identity/pose/__init__.py` | re-exports `YoloNativeBackend`, `SleapServiceBackend`, `auto_export_*`, `build_runtime_config`, `create_pose_backend_from_config` | Drop all deleted re-exports; keep `quality`, `artifacts`, `types` |
-| `core/identity/properties/__init__.py` | re-exports `IndividualPropertiesCache`, `DetectedPropertiesCache` | Drop both; new pose cache is internal to `core/inference/cache/pose.py` |
+| `core/individual/classification/__init__.py` | re-exports `CNNIdentityBackend`, `CNNIdentityCache`, `HeadTailAnalyzer`, etc. | Drop deleted symbols; add a backwards-compat shim re-exporting the new types under their old names (one cycle), then delete |
+| `core/individual/pose/__init__.py` | re-exports `YoloNativeBackend`, `SleapServiceBackend`, `auto_export_*`, `build_runtime_config`, `create_pose_backend_from_config` | Drop all deleted re-exports; keep `quality`, `artifacts`, `types` |
+| `core/individual/properties/__init__.py` | re-exports `IndividualPropertiesCache`, `DetectedPropertiesCache` | Drop both; new pose cache is internal to `core/inference/cache/pose.py` |
 | `data/__init__.py` | re-exports `DetectionCache` from deleted `detection_cache.py` | Drop re-export; or alias to `core/inference/cache/detection.py` for one cycle |
-| `core/identity/pose/features.py` | calls `pose_props_cache.get_frame(frame_idx)` and reads `frame["detection_ids"]` / `frame["pose_keypoints"]` | Rewire to read from new `PoseCache` via a thin adapter that returns the same dict-shaped frame; keypoint map building logic unchanged |
-| `core/identity/properties/export.py` | imports `CNNIdentityCache` and `DetectedPropertiesCache` | Rewire to read from new `CNNCache` and `PoseCache`; CSV column generation logic unchanged |
-| `core/identity/dataset/oriented_video.py` | imports `DetectionCache` for crop export | Switch to `core/inference/cache/detection.py`; OBB read path is the only consumer here |
+| `core/individual/pose/features.py` | calls `pose_props_cache.get_frame(frame_idx)` and reads `frame["detection_ids"]` / `frame["pose_keypoints"]` | Rewire to read from new `PoseCache` via a thin adapter that returns the same dict-shaped frame; keypoint map building logic unchanged |
+| `core/individual/properties/export.py` | imports `CNNIdentityCache` and `DetectedPropertiesCache` | Rewire to read from new `CNNCache` and `PoseCache`; CSV column generation logic unchanged |
+| `core/individual/dataset/oriented_video.py` | imports `DetectionCache` for crop export | Switch to `core/inference/cache/detection.py`; OBB read path is the only consumer here |
 | `core/tracking/optimizer.py`, `optimizer_workers.py` | import `DetectionFilter` from deleted `detection_filter.py`; import `DetectionCache` from deleted `data/detection_cache.py` | `DetectionFilter` logic moves to `stages/filtering.py`; expose a shim function `apply_detection_filter(raw_obb, config) -> OBBResult` that the optimizer calls. Cache reads switch to new `DetectionCache` |
 | `core/tracking/streaming_payload.py` | `StreamingAnalysisPayload` is constructed only by deleted `live_features.py` | Either: (a) construct it inside the new `runner.run_realtime()` return path so existing consumers still receive it, or (b) delete `streaming_payload.py` after confirming no consumer outside the deleted code reads it. Pick (a) to keep the GUI streaming overlay working |
-| `posekit/gui/workers.py` | lazy-imports `build_runtime_config`, `create_pose_backend_from_config` from deleted `core/identity/pose/api.py` | Replace with a small public helper in `core/inference/api.py` that wraps `_load_pose_model` for single-image use; PoseKit GUI is otherwise out of scope |
+| `posekit/gui/workers.py` | lazy-imports `build_runtime_config`, `create_pose_backend_from_config` from deleted `core/individual/pose/api.py` | Replace with a small public helper in `core/inference/api.py` that wraps `_load_pose_model` for single-image use; PoseKit GUI is otherwise out of scope |
 | `core/tracking/worker.py` | dozens of imports from deleted modules (see "shrinks significantly" below) | Rewritten as part of the migration; covered by the feature-flag plan |
 
 ### Explicitly deleted after new pipeline is verified working
@@ -777,16 +777,16 @@ core/tracking/evidence_emitter.py
 core/detectors/yolo_detector.py
 core/detectors/factory.py
 core/detectors/detection_filter.py
-core/identity/classification/cnn.py
-core/identity/classification/headtail.py
-core/identity/pose/api.py
-core/identity/pose/backends/yolo.py
-core/identity/pose/backends/sleap.py
-core/identity/pose/backends/sleap_utils.py
+core/individual/classification/cnn.py
+core/individual/classification/headtail.py
+core/individual/pose/api.py
+core/individual/pose/backends/yolo.py
+core/individual/pose/backends/sleap.py
+core/individual/pose/backends/sleap_utils.py
 data/detection_cache.py
 data/tag_observation_cache.py
-core/identity/properties/cache.py
-core/identity/properties/detected_cache.py
+core/individual/properties/cache.py
+core/individual/properties/detected_cache.py
 ```
 
 ### worker.py — shrinks significantly, not deleted
@@ -809,7 +809,7 @@ The corrected sequence:
    - This step is the longest single block of work and has the most subtle bugs (cache-shape mismatches, silent metadata loss).
 4. **Run output comparison** on at least one real video with the flag flipped. Verify trajectory CSVs and identity decoder outputs match within float tolerance. The new pipeline emits `cache_schema_version=2` caches; legacy `v1` caches are auto-invalidated on first run.
 5. **Test migration.** Update or delete every test in `tests/` that imports from a deleted module. The full list is enumerated in the plan's `Task 18` step (5 files at minimum: `test_detection_cache.py`, `test_tag_observation_cache.py`, `test_individual_properties_cache.py`, `test_pose_pipeline.py`, `test_tag_features.py`).
-6. **Update `__init__.py` re-exports.** Drop deleted symbols from `core/detectors/__init__.py`, `core/identity/classification/__init__.py`, `core/identity/pose/__init__.py`, `core/identity/properties/__init__.py`, `data/__init__.py`. This is the last step before deletion — once the re-exports are gone, the deleted files are unreachable from any kept consumer.
+6. **Update `__init__.py` re-exports.** Drop deleted symbols from `core/detectors/__init__.py`, `core/individual/classification/__init__.py`, `core/individual/pose/__init__.py`, `core/individual/properties/__init__.py`, `data/__init__.py`. This is the last step before deletion — once the re-exports are gone, the deleted files are unreachable from any kept consumer.
 7. **Remove the feature flag.**
 8. **Delete the files** listed in the deletion list. Run `python -m pytest tests/ -m "not benchmark"` and `python -c "import hydra_suite"` (and the same for each app entry point: `trackerkit`, `posekit`, etc.) to verify no `ImportError` regressions.
 9. **Remove background-subtraction references** from `InferenceConfig` only if `bg_detector.py` is not in scope for this sprint — `bg_detector.py` itself is kept, but it must not be reached through `core/detectors/__init__.py` once the YOLO factory is gone. Either re-export `bg_detector` directly or have callers import the module path explicitly.

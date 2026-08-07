@@ -74,7 +74,7 @@ def _cnn_det_pred_to_class_prediction(
     ``"unknown"``, so without this gate low-confidence guesses would be counted
     that legacy discarded.
     """
-    from hydra_suite.core.identity.classification.cnn import ClassPrediction
+    from hydra_suite.core.individual.classification.cnn import ClassPrediction
 
     threshold = float(confidence_threshold)
     names = []

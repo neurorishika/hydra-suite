@@ -516,14 +516,14 @@ Prerequisite for Layer 2 wiring. Today `ClassifierMetadata.input_size` is docume
 - Modify: `src/hydra_suite/core/inference/stages/cnn.py:55`
 - Modify: `src/hydra_suite/core/inference/stages/headtail.py:84`
 - Modify: `src/hydra_suite/core/inference/stages/crops.py:261, 367, 388, 450, 487, 506`
-- Modify: `src/hydra_suite/core/identity/classification/headtail.py:522-523, 599-601, 753-755`
+- Modify: `src/hydra_suite/core/individual/classification/headtail.py:522-523, 599-601, 753-755`
 - Modify: `src/hydra_suite/training/contracts.py:104`
 - Modify: `src/hydra_suite/training/runner.py:1170, 1195, 1832, 1855`
 - Test: `tests/test_classifier_input_size_orientation.py`
 
 **Interfaces:**
 - Consumes: nothing new
-- Produces: `CustomCNNParams.input_size: tuple[int, int]` in `(H, W)` order (was `int`). `_normalize_input_size` in `core/identity/classification/backend.py:82` remains the single parser and is unchanged.
+- Produces: `CustomCNNParams.input_size: tuple[int, int]` in `(H, W)` order (was `int`). `_normalize_input_size` in `core/individual/classification/backend.py:82` remains the single parser and is unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -534,7 +534,7 @@ Prerequisite for Layer 2 wiring. Today `ClassifierMetadata.input_size` is docume
 import numpy as np
 import pytest
 
-from hydra_suite.core.identity.classification.backend import _normalize_input_size
+from hydra_suite.core.individual.classification.backend import _normalize_input_size
 
 
 def test_normalize_returns_h_w():
@@ -1053,9 +1053,9 @@ which hashed None forever, is removed."
 ### Task 7: Identity — head-tail, crop dataset, oriented video
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/headtail.py:517-560, 594-615, 748-770`
-- Modify: `src/hydra_suite/core/identity/dataset/generator.py:75, 92-93, 152, 323-350, 434-448, 495-525, 776-791`
-- Modify: `src/hydra_suite/core/identity/dataset/oriented_video.py:180, 207, 668, 883, 1198-1220`
+- Modify: `src/hydra_suite/core/individual/classification/headtail.py:517-560, 594-615, 748-770`
+- Modify: `src/hydra_suite/core/individual/dataset/generator.py:75, 92-93, 152, 323-350, 434-448, 495-525, 776-791`
+- Modify: `src/hydra_suite/core/individual/dataset/oriented_video.py:180, 207, 668, 883, 1198-1220`
 - Modify: `src/hydra_suite/trackerkit/gui/workers/crops_worker.py:306, 657, 1456`
 - Modify: `src/hydra_suite/core/canonicalization/crop.py` and `__init__.py` — **delete the legacy functions here**, now that nothing imports them
 - Test: `tests/test_canonical_dataset_provenance.py`, `tests/test_legacy_crop_api_is_gone.py`
@@ -1095,7 +1095,7 @@ caller — do not re-export a shim to make the test pass.
 
 **Interfaces:**
 - Consumes: `CanonicalGeometry`, `canonical_affine`, `extract_canonical_crop` (Tasks 1, 5); Layer 2 (Task 2)
-- Produces: `metadata.json` gains `parameters.canonical` = `CanonicalGeometry.to_dict()` plus `clipped_count` and `worst_overflow_ratio`; `read_canonical_provenance(dataset_dir: Path) -> CanonicalGeometry | None` in `core/identity/dataset/naming.py`
+- Produces: `metadata.json` gains `parameters.canonical` = `CanonicalGeometry.to_dict()` plus `clipped_count` and `worst_overflow_ratio`; `read_canonical_provenance(dataset_dir: Path) -> CanonicalGeometry | None` in `core/individual/dataset/naming.py`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1104,7 +1104,7 @@ caller — do not re-export a shim to make the test pass.
 import json
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
-from hydra_suite.core.identity.dataset.naming import read_canonical_provenance
+from hydra_suite.core.individual.dataset.naming import read_canonical_provenance
 
 
 def test_provenance_round_trips(tmp_path):
@@ -1186,7 +1186,7 @@ sidecar naming conventions and does not need a third."
 
 **Files:**
 - Modify: `src/hydra_suite/training/runner.py:1297, 1337, 1635, 1664`
-- Modify: `src/hydra_suite/core/identity/pose/vitpose/training/dataset.py`
+- Modify: `src/hydra_suite/core/individual/pose/vitpose/training/dataset.py`
 - Modify: `src/hydra_suite/posekit/core/vitpose_training.py`
 - Create: `src/hydra_suite/training/canonical_transform.py`
 - Test: `tests/test_train_inference_fit_identity.py`
@@ -1320,7 +1320,7 @@ failure rather than a silent accuracy loss."
 `_forward_yolo` hands raw crops to Ultralytics, which applies `Resize(shortest_edge)` + `CenterCrop` at inference and `RandomResizedCrop(scale=0.08-1.0)` at training. A 128x64 canonical crop is upscaled and centre-cropped to 224x224, discarding half the animal's length, and `input_size` is ignored. Task 8's guard cannot be written for this family until that is fixed.
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/classification/backend.py:950-953`
+- Modify: `src/hydra_suite/core/individual/classification/backend.py:950-953`
 - Modify: `src/hydra_suite/training/runner.py:88-147`
 - Test: `tests/test_yolo_classify_canonical_fit.py`
 
@@ -1349,7 +1349,7 @@ def test_prefit_makes_centre_crop_a_noop():
 
 
 def test_forward_yolo_prefits(monkeypatch):
-    from hydra_suite.core.identity.classification import backend as backend_mod
+    from hydra_suite.core.individual.classification import backend as backend_mod
 
     seen = []
 

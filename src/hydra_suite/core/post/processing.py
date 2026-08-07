@@ -3408,7 +3408,7 @@ def _relink_pose_labels(df: pd.DataFrame) -> list[str]:
 def _normalize_pose_keypoints_window(
     window_df: pd.DataFrame, pose_labels: list[str], min_valid_conf: float
 ):
-    from hydra_suite.core.identity.pose.quality import (
+    from hydra_suite.core.individual.pose.quality import (
         normalize_pose_keypoints_for_relink,
     )
 

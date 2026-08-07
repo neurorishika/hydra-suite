@@ -16,16 +16,16 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
-from hydra_suite.core.identity.pose.artifacts import (
+from hydra_suite.core.individual.pose.artifacts import (
     artifact_meta_matches,
     path_fingerprint_token,
     write_artifact_meta,
 )
-from hydra_suite.core.identity.pose.backends.sleap_utils import (
+from hydra_suite.core.individual.pose.backends.sleap_utils import (
     normalize_export_result_path,
 )
-from hydra_suite.core.identity.pose.types import PoseResult, PoseRuntimeConfig
-from hydra_suite.core.identity.pose.utils import (
+from hydra_suite.core.individual.pose.types import PoseResult, PoseRuntimeConfig
+from hydra_suite.core.individual.pose.utils import (
     empty_pose_result,
     resolve_device,
     summarize_keypoints,

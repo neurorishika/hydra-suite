@@ -103,7 +103,7 @@ def merge_pose_sources_into_df(
     ignore_keypoints,
 ):
     """Merge pose cache, interpolated pose, AprilTag, CNN, and head-tail into trajectories_df."""
-    from hydra_suite.core.identity.properties.export import (
+    from hydra_suite.core.individual.properties.export import (
         augment_trajectories_with_detected_cnn_cache,
         augment_trajectories_with_detected_properties_cache,
         augment_trajectories_with_pose_cache,
@@ -141,7 +141,7 @@ def merge_pose_sources_into_df(
     _tag_cache_path = resolve_current_tag_cache_path(params, state.detection_cache_path)
     if _tag_cache_path and os.path.exists(_tag_cache_path):
         try:
-            from hydra_suite.core.identity.properties.export import (
+            from hydra_suite.core.individual.properties.export import (
                 augment_trajectories_with_detected_apriltag_cache,
             )
 
@@ -179,7 +179,7 @@ def merge_pose_sources_into_df(
     _interp_tag_path = str(state.interpolated_tag_csv_path or "").strip()
     _interp_tag_df = state.interpolated_tag_df
     try:
-        from hydra_suite.core.identity.properties.export import (
+        from hydra_suite.core.individual.properties.export import (
             merge_interpolated_apriltag_df,
         )
 
@@ -194,7 +194,7 @@ def merge_pose_sources_into_df(
     _interp_cnn_paths = state.interpolated_cnn_csv_paths or {}
     _interp_cnn_dfs = state.interpolated_cnn_dfs or {}
     try:
-        from hydra_suite.core.identity.properties.export import (
+        from hydra_suite.core.individual.properties.export import (
             merge_interpolated_cnn_df,
         )
 
@@ -218,7 +218,7 @@ def merge_pose_sources_into_df(
     _interp_ht_path = str(state.interpolated_headtail_csv_path or "").strip()
     _interp_ht_df = state.interpolated_headtail_df
     try:
-        from hydra_suite.core.identity.properties.export import (
+        from hydra_suite.core.individual.properties.export import (
             merge_interpolated_headtail_df,
         )
 
@@ -241,8 +241,8 @@ def apply_pose_quality_postprocessing(
     individual_properties_cache_path,
 ):
     """Apply quality gating and temporal post-processing to pose-augmented dataframe."""
-    from hydra_suite.core.identity.pose.features import resolve_pose_group_indices
-    from hydra_suite.core.identity.pose.quality import (
+    from hydra_suite.core.individual.pose.features import resolve_pose_group_indices
+    from hydra_suite.core.individual.pose.quality import (
         apply_quality_to_dataframe,
         apply_temporal_pose_postprocessing,
         calibrate_body_length_prior,
@@ -251,7 +251,9 @@ def apply_pose_quality_postprocessing(
 
     kpt_names = []
     try:
-        from hydra_suite.core.identity.properties.cache import IndividualPropertiesCache
+        from hydra_suite.core.individual.properties.cache import (
+            IndividualPropertiesCache,
+        )
 
         _cache_path = str(individual_properties_cache_path or "").strip()
         if _cache_path and os.path.exists(_cache_path):

@@ -404,7 +404,7 @@ flowchart TB
 - Cost matrix construction: `core/assigners/hungarian.py:71-103, 223-271, 285-348`.
 - Density gate (0.7×): `worker.py:3165-3187`.
 - 3-phase `assign_tracks`: `hungarian.py:901-1018`; committed-identity respawn at `794-862`.
-- Identity decoder: `core/identity/online.py:148+` (sticky transition `203-208`, fuse `333-351`, swap `667-729`, slot-lock `653-659`, uniqueness Hungarian `515-551`, commit `590-597`).
+- Identity decoder: `core/individual/online.py:148+` (sticky transition `203-208`, fuse `333-351`, swap `667-729`, slot-lock `653-659`, uniqueness Hungarian `515-551`, commit `590-597`).
 - State management: `worker.py:3288-3295`.
 - Identity decoder invocation: `worker.py:3301-3529` (`update_frame(visible_slots, slot_evs)`).
 - Track birth (hard reset): `worker.py:3561-3582`; identity-aware respawn (soft reset): `worker.py:3583-3596`.
@@ -562,7 +562,7 @@ flowchart TB
 - Tag identity: `core/post/tag_identity.py:resolve_tag_identities,
   detect_tag_swaps` (called at `merge_worker.py:104-110`).
 - Rich-export + fragment solver: `gui/orchestrators/tracking.py:3111-3175`
-  → `core/identity/fragment_solver.py:run_fragment_solver` (line 1335);
+  → `core/individual/fragment_solver.py:run_fragment_solver` (line 1335);
   `core/post/identity_postprocess.py:fill_identity_nans_with_consensus,
   sort_trajectories_by_identity`.
 - Forward-only short-circuit: `tracking.py:2344-2425` (`_handle_forward_tracking_done`).

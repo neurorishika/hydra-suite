@@ -7,7 +7,9 @@ import inspect
 
 import pytest
 
-from hydra_suite.core.identity.classification import headtail as classification_headtail
+from hydra_suite.core.individual.classification import (
+    headtail as classification_headtail,
+)
 from hydra_suite.core.inference.stages import cnn, headtail, pose
 
 

@@ -15,7 +15,9 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from hydra_suite.core.identity.pose.features import compute_pose_geometry_from_keypoints
+from hydra_suite.core.individual.pose.features import (
+    compute_pose_geometry_from_keypoints,
+)
 
 logger = logging.getLogger(__name__)
 

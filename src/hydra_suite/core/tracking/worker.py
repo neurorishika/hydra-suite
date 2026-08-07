@@ -17,28 +17,28 @@ import numpy as np
 
 from hydra_suite.core.assigners.hungarian import TrackAssigner
 from hydra_suite.core.filters.kalman import KalmanFilterManager
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import (
     build_detection_direction_overrides as _pf_build_direction_overrides,
 )
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import (
     resolve_detection_tracking_theta as _pf_resolve_detection_tracking_theta,
 )
-from hydra_suite.core.identity.geometry import (
+from hydra_suite.core.individual.geometry import (
     resolve_tracking_theta as _pf_resolve_tracking_theta,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     build_pose_detection_keypoint_map as _pf_build_keypoint_map,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     compute_pose_geometry_from_keypoints as _pf_compute_geometry,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     is_pose_heading_reliable as _pf_heading_reliable,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     normalize_pose_keypoints as _pf_normalize_keypoints,
 )
-from hydra_suite.core.identity.pose.features import (
+from hydra_suite.core.individual.pose.features import (
     resolve_pose_group_indices as _pf_resolve_indices,
 )
 from hydra_suite.core.tracking.confidence.density import get_density_region_flags
@@ -520,7 +520,7 @@ class TrackingEngineCore:
         it writes one ``IndividualPropertiesCache`` keyed by frame + detection ID
         and records ``individual_properties_cache_path`` for the GUI handoff.
         """
-        from hydra_suite.core.identity.properties.cache import (
+        from hydra_suite.core.individual.properties.cache import (
             IndividualPropertiesCache,
             compute_detection_hash,
             compute_extractor_hash,
@@ -638,7 +638,7 @@ class TrackingEngineCore:
     @staticmethod
     def _normalize_theta(theta):
         """Compatibility wrapper for legacy tests and call sites."""
-        from hydra_suite.core.identity import geometry as _geom
+        from hydra_suite.core.individual import geometry as _geom
 
         normalize = getattr(_geom, "normalize_theta", None)
         if normalize is None:
@@ -648,7 +648,7 @@ class TrackingEngineCore:
     @staticmethod
     def _circular_abs_diff_rad(a, b):
         """Compatibility wrapper for legacy tests and call sites."""
-        from hydra_suite.core.identity import geometry as _geom
+        from hydra_suite.core.individual import geometry as _geom
 
         diff = getattr(_geom, "circular_abs_diff_rad", None)
         if diff is not None:
@@ -659,7 +659,7 @@ class TrackingEngineCore:
     @staticmethod
     def _collapse_obb_axis_theta(theta_axis, reference_theta):
         """Compatibility wrapper for legacy tests and call sites."""
-        from hydra_suite.core.identity import geometry as _geom
+        from hydra_suite.core.individual import geometry as _geom
 
         collapse = getattr(_geom, "collapse_obb_axis_theta", None)
         if collapse is not None:
@@ -1440,7 +1440,7 @@ class TrackingEngineCore:
             # schema, which silently disabled pose-direction override.
             if _inference_cfg.pose and _inference_cfg.pose.skeleton_file:
                 try:
-                    from hydra_suite.core.identity.pose.utils import (
+                    from hydra_suite.core.individual.pose.utils import (
                         load_skeleton_from_json,
                     )
 
@@ -1543,8 +1543,8 @@ class TrackingEngineCore:
                     "Using live CNN identity outputs for realtime tracking (%s)", label
                 )
             elif not effective_realtime_tracking_mode:
-                from hydra_suite.core.identity.calibration import CalibrationModel
-                from hydra_suite.core.identity.properties.cache import (
+                from hydra_suite.core.individual.calibration import CalibrationModel
+                from hydra_suite.core.individual.properties.cache import (
                     compute_classify_cache_id,
                 )
 
@@ -1570,7 +1570,7 @@ class TrackingEngineCore:
                     label, classify_id, start_frame, end_frame
                 )
                 if _path and os.path.exists(_path):
-                    from hydra_suite.core.identity.classification.cnn import (
+                    from hydra_suite.core.individual.classification.cnn import (
                         CNNIdentityCache,
                     )
                     from hydra_suite.core.tracking.identity.evidence_emitter import (
@@ -1580,7 +1580,7 @@ class TrackingEngineCore:
                     _cache = CNNIdentityCache(_path)
                     _evidence_cache = None
                     try:
-                        from hydra_suite.core.identity.cache import (
+                        from hydra_suite.core.individual.cache import (
                             IdentityEvidenceCache,
                         )
 
@@ -1671,7 +1671,7 @@ class TrackingEngineCore:
             and pose_cache_candidate
             and os.path.exists(pose_cache_candidate)
         ):
-            from hydra_suite.core.identity.properties.cache import (
+            from hydra_suite.core.individual.properties.cache import (
                 IndividualPropertiesCache,
             )
 
@@ -1711,13 +1711,13 @@ class TrackingEngineCore:
                         "Pose direction override disabled: define both anterior/posterior keypoint groups."
                     )
 
-        from hydra_suite.core.identity.properties.cache import (
+        from hydra_suite.core.individual.properties.cache import (
             compute_detection_hash,
             compute_extractor_hash,
             compute_filter_settings_hash,
             compute_individual_properties_id,
         )
-        from hydra_suite.core.identity.properties.detected_cache import (
+        from hydra_suite.core.individual.properties.detected_cache import (
             DetectedPropertiesCache,
         )
 
@@ -1834,8 +1834,8 @@ class TrackingEngineCore:
                 # than single-factor labels.
                 import itertools as _itertools
 
-                from hydra_suite.core.identity.catalog import IdentityCatalog
-                from hydra_suite.core.identity.online import OnlineIdentityDecoder
+                from hydra_suite.core.individual.catalog import IdentityCatalog
+                from hydra_suite.core.individual.online import OnlineIdentityDecoder
 
                 _known_labels_set: list[str] = []
                 for _cnn_cfg in p.get("CNN_CLASSIFIERS", []):
@@ -3002,7 +3002,9 @@ class TrackingEngineCore:
                 # falling back to compatibility top-1 priors only when needed.
                 if _identity_online_decoder is not None:
                     try:
-                        from hydra_suite.core.identity.evidence import IdentityEvidence
+                        from hydra_suite.core.individual.evidence import (
+                            IdentityEvidence,
+                        )
 
                         # Only clear uncommitted respawns; identity-rejoin slots keep beliefs
                         for _r in respawned_matches:
@@ -4280,7 +4282,7 @@ class TrackingEngineCore:
         factor_labels = [list(f) for f in factor_labels if f]
         if not factor_labels:
             try:
-                from hydra_suite.core.identity.classification.backend import (
+                from hydra_suite.core.individual.classification.backend import (
                     ClassifierBackend,
                 )
                 from hydra_suite.runtime.resolver import ResolvedBackend
@@ -4306,8 +4308,10 @@ class TrackingEngineCore:
         if not factor_labels:
             return None
 
-        from hydra_suite.core.identity.calibration import CalibrationModel
-        from hydra_suite.core.identity.properties.cache import compute_classify_cache_id
+        from hydra_suite.core.individual.calibration import CalibrationModel
+        from hydra_suite.core.individual.properties.cache import (
+            compute_classify_cache_id,
+        )
 
         _calibration_temperature = float(
             cnn_cfg_dict.get(

@@ -25,8 +25,8 @@ Every task's requirements implicitly include these:
 
 - **`core/inference/api.py:41`** `load_pose_backend(*, backend_family, model_path, compute_runtime, keypoint_names=None, skeleton_edges=None, skeleton_file="", confidence_threshold=1e-4, batch_size=64, min_valid_confidence=0.2, out_root=".", exported_model_path="", sleap_env="sleap", sleap_batch=None, sleap_max_instances=1)`. Branch at `:83-110` (`if family == "yolo": ... else: <sleap>`). Imports `PoseViTPoseConfig` is NOT yet imported here — add it to the `from .config import (...)` block at `:71-79`.
 - **`core/inference/config.py:195`** `PoseViTPoseConfig(model_path: str, variant: str = "auto", num_keypoints: int = 0, batch_size: int = 4)`; `:204` `PoseConfig.backend: Literal["yolo","sleap","vitpose"]`; `:208` `PoseConfig.vitpose: PoseViTPoseConfig | None`.
-- **`core/identity/pose/backends/vitpose.py`** `ViTPoseBackend` (Protocol impl; `predict_batch(crops) -> List[PoseResult]`, `output_keypoint_names`, `close()`).
-- **`core/identity/pose/vitpose/vitpose.py:27`** `build_vitpose(variant, head, num_keypoints=17) -> ViTPose` (for building test checkpoints).
+- **`core/individual/pose/backends/vitpose.py`** `ViTPoseBackend` (Protocol impl; `predict_batch(crops) -> List[PoseResult]`, `output_keypoint_names`, `close()`).
+- **`core/individual/pose/vitpose/vitpose.py:27`** `build_vitpose(variant, head, num_keypoints=17) -> ViTPose` (for building test checkpoints).
 - **`posekit/gui/workers.py:21`** `_build_pose_backend(*, backend_family, model_path, exported_model_path, compute_runtime, min_valid_conf, batch_size, conf, keypoint_names, skeleton_edges, out_root, sleap_env, sleap_batch=None, sleap_max_instances=1)`. Single worker `PosePredictWorker` (`:68`), bulk `BulkPosePredictWorker` (`:248`). Fallback branch in `run()` at `:201-206` (single) / the parallel site in bulk `run()` — `if self.backend == "sleap": raise ...`.
 - **`posekit/gui/main_window.py`** — combo `:402-404`; `_pred_backend` `:4205`; `_update_pred_backend_ui` `:4312`; `_get_pred_model_or_prompt` `:4629`; `_get_pred_model_silent` `:4636`; `_pred_runtime_flavor` stage-select `:4654`; `_browse_pred_weights` `:4735`; `_get_pred_weights_or_prompt` `:4747`; `_get_pred_weights_silent`; `_set_bulk_prediction_locked` widget list `:4291-4316`; YOLO widget build `:459-472`; settings save `:1391-1392`; `_apply_pred_settings` `:1457`; worker construction in `predict_current_frame` (`:4928`) and `predict_dataset` (`:5240`).
 
@@ -68,8 +68,8 @@ import numpy as np
 import torch
 
 from hydra_suite.core.inference.api import load_pose_backend
-from hydra_suite.core.identity.pose.backends.vitpose import ViTPoseBackend
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.backends.vitpose import ViTPoseBackend
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _tiny_ckpt(tmp_path: Path, k: int = 4) -> Path:

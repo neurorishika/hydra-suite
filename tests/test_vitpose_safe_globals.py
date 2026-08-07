@@ -18,11 +18,11 @@ import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
-from hydra_suite.core.identity.pose.vitpose.safe_globals import (
+from hydra_suite.core.individual.pose.vitpose.adapter import load_finetuned_checkpoint
+from hydra_suite.core.individual.pose.vitpose.safe_globals import (
     ensure_numpy_safe_globals,
 )
-from hydra_suite.core.identity.pose.vitpose.vitpose import build_vitpose
+from hydra_suite.core.individual.pose.vitpose.vitpose import build_vitpose
 
 
 def _save_mmpose_shaped_ckpt(tmp_path: Path) -> Path:

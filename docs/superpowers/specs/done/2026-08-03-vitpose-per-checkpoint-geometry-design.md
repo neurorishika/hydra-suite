@@ -50,7 +50,7 @@ exported artifacts, so that check must still pass.
 
 ## 1. The value object
 
-New file `src/hydra_suite/core/identity/pose/vitpose/geometry.py`:
+New file `src/hydra_suite/core/individual/pose/vitpose/geometry.py`:
 
 ```python
 @dataclass(frozen=True)
@@ -158,7 +158,7 @@ Resolution order, and it must be exactly this:
 ## 4. Checkpoint metadata
 
 Serialized key is `input_size`, value `[H, W]` — the same name and the same H,W order
-as the classifier stack (`core/identity/classification/backend.py:82-97`, which
+as the classifier stack (`core/individual/classification/backend.py:82-97`, which
 explicitly rejects `[W, H]`). Internally geometry stays `(W, H)`; conversion happens
 only in `PoseGeometry.to_hw` / `from_hw`.
 

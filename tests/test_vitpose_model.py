@@ -1,7 +1,7 @@
 import torch
 
-from hydra_suite.core.identity.pose.vitpose.config import VARIANTS
-from hydra_suite.core.identity.pose.vitpose.model import PatchEmbed, ViT
+from hydra_suite.core.individual.pose.vitpose.config import VARIANTS
+from hydra_suite.core.individual.pose.vitpose.model import PatchEmbed, ViT
 
 
 def _vit_b() -> ViT:
@@ -69,7 +69,7 @@ def test_attention_head_dim_for_small():
     assert m.blocks[0].attn.head_dim == 32
 
 
-from hydra_suite.core.identity.pose.vitpose.model import MoEMlp
+from hydra_suite.core.individual.pose.vitpose.model import MoEMlp
 
 
 def test_moe_shapes_for_base():

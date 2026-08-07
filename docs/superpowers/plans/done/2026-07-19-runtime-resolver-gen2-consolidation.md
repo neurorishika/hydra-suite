@@ -34,7 +34,7 @@
 - `config.py` — loud missing-tier error; drop per-stage `compute_runtime` fields, `ComputeRuntime` Literal, `CUDA_RUNTIMES`/`CPU_RUNTIMES` frozensets; `from_params` reads only `RUNTIME_TIER` (Tasks 8, 9, 10).
 - `stages/obb.py`, `stages/pose.py`, `stages/cnn.py`, `stages/headtail.py`, `stages/crops.py` — consume `runtime.resolved`; rewrite string predicates to field checks (Task 4).
 
-**Modified — core/identity backends**
+**Modified — core/individual backends**
 - `classification/backend.py`, `classification/headtail.py`, `pose/backends/sleap.py` — accept `ResolvedBackend`; rewrite predicates; call `execution_providers_for` (Task 4).
 - `properties/cache.py` — resolve tier at the param-bag boundary; write resolved device into payload (Task 7).
 
@@ -247,7 +247,7 @@ git commit -m "feat(inference): carry ResolvedBackend on RuntimeContext"
 
 **Files:**
 - Modify: `src/hydra_suite/core/inference/stages/obb.py:295`, `stages/pose.py:98,106,138`, `stages/cnn.py:35`, `stages/headtail.py:58`, `stages/crops.py:31`
-- Modify: `src/hydra_suite/core/identity/classification/backend.py:425-562`, `classification/headtail.py:364,722,848`, `pose/backends/sleap.py:327-352`
+- Modify: `src/hydra_suite/core/individual/classification/backend.py:425-562`, `classification/headtail.py:364,722,848`, `pose/backends/sleap.py:327-352`
 - Test: `tests/core/inference/test_backend_runtime_predicates.py` (create)
 
 **Interfaces:**
@@ -273,7 +273,7 @@ git commit -m "feat(inference): carry ResolvedBackend on RuntimeContext"
 # tests/core/inference/test_backend_runtime_predicates.py
 import pytest
 from hydra_suite.runtime.resolver import ResolvedBackend
-from hydra_suite.core.identity.classification.backend import _torch_device_for_resolved
+from hydra_suite.core.individual.classification.backend import _torch_device_for_resolved
 
 FIVE = [
     (ResolvedBackend("torch", "cpu", False), "cpu"),
@@ -304,7 +304,7 @@ Expected: PASS.
 
 ```bash
 make format
-git add src/hydra_suite/core/inference/stages src/hydra_suite/core/identity tests/core/inference/test_backend_runtime_predicates.py
+git add src/hydra_suite/core/inference/stages src/hydra_suite/core/individual tests/core/inference/test_backend_runtime_predicates.py
 git commit -m "refactor(inference): backends consume ResolvedBackend, not runtime strings"
 ```
 
@@ -407,9 +407,9 @@ git commit -m "refactor(trackerkit): drop COMPUTE_RUNTIME param writes, keep RUN
 ## Task 7: Resolve tier at the `properties/cache.py` boundary; drop pose-flavor fields
 
 **Files:**
-- Modify: `src/hydra_suite/core/identity/properties/cache.py:173-196,256-271`
+- Modify: `src/hydra_suite/core/individual/properties/cache.py:173-196,256-271`
 - Modify: pose-flavor threading in `trackerkit/gui/orchestrators/{session,tracking,config}.py`, `panels/{detection_panel,identity_panel}.py`, `trackerkit/gui/main_window.py`, `posekit/gui/main_window.py`, `trackerkit/cli_config.py`
-- Test: `tests/core/identity/test_cache_runtime_payload.py` (create)
+- Test: `tests/core/individual/test_cache_runtime_payload.py` (create)
 
 **Interfaces:**
 - Consumes: `RUNTIME_TIER` param, `RuntimeResolver`, `detect_platform`.
@@ -418,8 +418,8 @@ git commit -m "refactor(trackerkit): drop COMPUTE_RUNTIME param writes, keep RUN
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/core/identity/test_cache_runtime_payload.py
-from hydra_suite.core.identity.properties.cache import _runtime_payload_for_params
+# tests/core/individual/test_cache_runtime_payload.py
+from hydra_suite.core.individual.properties.cache import _runtime_payload_for_params
 
 def test_payload_from_tier():
     payload = _runtime_payload_for_params({"RUNTIME_TIER": "cpu"})
@@ -429,21 +429,21 @@ def test_payload_from_tier():
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `python -m pytest tests/core/identity/test_cache_runtime_payload.py -v`
+Run: `python -m pytest tests/core/individual/test_cache_runtime_payload.py -v`
 Expected: FAIL — helper not defined.
 
 - [ ] **Step 3: Implement** — add `_runtime_payload_for_params(params)` that reads `RUNTIME_TIER`, resolves via `RuntimeResolver(tier, detect_platform()).resolve("sleap_pose")`, and returns `{"device": resolved.device, "backend": resolved.backend}`. Replace the `COMPUTE_RUNTIME`/`POSE_SLEAP_DEVICE` reads at 173-196 and 256-271 with it. Delete `pose_runtime_flavor`/`pose_sleap_device` set/get in the listed GUI files.
 
 - [ ] **Step 4: Run identity + GUI tests**
 
-Run: `python -m pytest tests/core/identity tests/ -k "cache or pose or identity" -v`
+Run: `python -m pytest tests/core/individual tests/ -k "cache or pose or identity" -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 make format
-git add src/hydra_suite tests/core/identity/test_cache_runtime_payload.py
+git add src/hydra_suite tests/core/individual/test_cache_runtime_payload.py
 git commit -m "refactor(identity): resolve runtime tier at cache boundary, drop pose-flavor strings"
 ```
 
@@ -645,7 +645,7 @@ git commit -m "feat(scripts): one-shot legacy runtime-config migrator; migrate b
 
 **Files:**
 - Rename: `src/hydra_suite/runtime/compute_runtime.py` → `src/hydra_suite/runtime/onnx_providers.py`
-- Modify importers: `core/identity/classification/backend.py`, `pose/backends/sleap.py`, `training/tiny_model.py`, `posekit/gui/runtimes.py`
+- Modify importers: `core/individual/classification/backend.py`, `pose/backends/sleap.py`, `training/tiny_model.py`, `posekit/gui/runtimes.py`
 - Delete from the module: `_normalize_runtime`, `runtime_label`, `CANONICAL_RUNTIMES`, `_pipeline_supports_runtime`, `supported_runtimes_for_pipeline`, `allowed_runtimes_for_pipelines`, `_onnx_available`, `_sleap_onnx_available`, `derive_onnx_execution_providers` (string API — now unused), `_best_explicit_onnx_runtime`
 
 **Interfaces:**

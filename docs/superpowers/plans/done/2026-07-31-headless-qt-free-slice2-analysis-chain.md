@@ -4,7 +4,7 @@
 
 **Goal:** Build a Qt-free `TrackingSessionCore` (`core/tracking/session.py`) that owns the post-tracking *analysis* chain — merge → post-process → pose-source merge → identity post-pass → interpolated crops → rich export — and have the GUI orchestrator delegate to it, with the CLI path left untouched this slice.
 
-**Architecture:** This is Slice 2 of the 4-slice program in `docs/superpowers/specs/2026-07-24-headless-qt-free-session-service-design.md`. It is a behavior-preserving-by-construction transform: every `signal.emit(...)` becomes a `callbacks.X(...)` call; every `self._mw.X` / `self._panels.X` widget read becomes a config-dict lookup, a service-state field read, or an injected callback; `QMessageBox.information/.warning` → `callbacks.warning(title, msg)`; `QMessageBox.critical` → `raise TrackingSessionError`. The interleaved GUI orchestrator methods are extracted **by name** into pure stage functions (`core/post/`, `core/identity/`) plus coupled `TrackingSessionCore` methods. The equivalence harness (byte-identical CSVs before/after) is the safety net.
+**Architecture:** This is Slice 2 of the 4-slice program in `docs/superpowers/specs/2026-07-24-headless-qt-free-session-service-design.md`. It is a behavior-preserving-by-construction transform: every `signal.emit(...)` becomes a `callbacks.X(...)` call; every `self._mw.X` / `self._panels.X` widget read becomes a config-dict lookup, a service-state field read, or an injected callback; `QMessageBox.information/.warning` → `callbacks.warning(title, msg)`; `QMessageBox.critical` → `raise TrackingSessionError`. The interleaved GUI orchestrator methods are extracted **by name** into pure stage functions (`core/post/`, `core/individual/`) plus coupled `TrackingSessionCore` methods. The equivalence harness (byte-identical CSVs before/after) is the safety net.
 
 **Tech Stack:** Python 3, pandas, numpy, OpenCV (`cv2`), pytest, conda env `hydra-mps`. No Qt anywhere under `src/hydra_suite/core/`.
 
@@ -32,11 +32,11 @@
 ## File Structure
 
 **New files (all Qt-free):**
-- `src/hydra_suite/core/tracking/errors.py` — `TrackingSessionError` (follows `core/identity/classification/errors.py` precedent).
+- `src/hydra_suite/core/tracking/errors.py` — `TrackingSessionError` (follows `core/individual/classification/errors.py` precedent).
 - `src/hydra_suite/core/tracking/session.py` — `SessionCallbacks`, `SessionResult`, `TrackingSessionCore`, plus the moved empty-output guard functions.
 - `src/hydra_suite/core/post/merge.py` — pure merge functions extracted from `MergeWorker`, plus the moved `_write_csv_artifact` / `_write_roi_npz` artifact writers.
 - `src/hydra_suite/core/post/pose_merge.py` — pose-source detection + merge + quality post-pass (DataFrame→DataFrame).
-- `src/hydra_suite/core/identity/postprocess_df.py` — identity post-pass (DataFrame→DataFrame).
+- `src/hydra_suite/core/individual/postprocess_df.py` — identity post-pass (DataFrame→DataFrame).
 - `src/hydra_suite/core/post/rich_export.py` — rich-export CSV builders/writers.
 - `src/hydra_suite/core/post/interpolated_crops.py` — pure crop-extraction pipeline extracted from `InterpolatedCropsWorker`.
 - `src/hydra_suite/trackerkit/gui/workers/session_worker.py` — thin `BaseWorker` running `TrackingSessionCore`.
@@ -158,7 +158,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'hydra_suite.core.trac
 # src/hydra_suite/core/tracking/errors.py
 """Error types for the Qt-free tracking session service.
 
-Follows the ``core/identity/classification/errors.py`` precedent: the service
+Follows the ``core/individual/classification/errors.py`` precedent: the service
 raises a concrete type on fatal failure so the caller (GUI or CLI) decides
 presentation instead of the service reaching for a widget.
 """
@@ -645,7 +645,7 @@ Extract `_check_pose_export_sources` (`tracking.py:2759`), `_merge_pose_sources_
 - Test: `tests/test_core_pose_merge.py`
 
 **Interfaces:**
-- Consumes: `augment_trajectories_with_*` / `merge_interpolated_*` from `core/identity/properties/export`; `resolve_pose_group_indices` from `core/identity/pose/features`; the calibration/quality helpers from `core/identity/pose/quality`; `IndividualPropertiesCache` from `core/identity/properties/cache`.
+- Consumes: `augment_trajectories_with_*` / `merge_interpolated_*` from `core/individual/properties/export`; `resolve_pose_group_indices` from `core/individual/pose/features`; the calibration/quality helpers from `core/individual/pose/quality`; `IndividualPropertiesCache` from `core/individual/properties/cache`.
 - Produces:
   ```python
   @dataclass
@@ -811,12 +811,12 @@ git commit -m "refactor(pose): extract pose-source merge + quality post-pass to 
 
 ---
 
-### Task 4: `core/identity/postprocess_df.py` — identity post-pass
+### Task 4: `core/individual/postprocess_df.py` — identity post-pass
 
 Extract `_apply_identity_postprocessing_to_df` (`tracking.py:3137-3261`). Its only widget read is `params = self._mw.get_parameters_dict()` → becomes a `params` arg. The rest is pure.
 
 **Files:**
-- Create: `src/hydra_suite/core/identity/postprocess_df.py`
+- Create: `src/hydra_suite/core/individual/postprocess_df.py`
 - Test: `tests/test_core_identity_postprocess_df.py`
 
 **Interfaces:**
@@ -828,7 +828,7 @@ Extract `_apply_identity_postprocessing_to_df` (`tracking.py:3137-3261`). Its on
 # tests/test_core_identity_postprocess_df.py
 import pandas as pd
 
-from hydra_suite.core.identity.postprocess_df import apply_identity_postprocessing_to_df
+from hydra_suite.core.individual.postprocess_df import apply_identity_postprocessing_to_df
 
 
 def test_empty_df_passthrough():
@@ -857,7 +857,7 @@ Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `src/hydra_suite/core/identity/postprocess_df.py`. Re-read the source (`sed -n '3137,3261p' src/hydra_suite/trackerkit/gui/orchestrators/tracking.py`) and move the whole `_apply_identity_postprocessing_to_df` body verbatim as a module function `apply_identity_postprocessing_to_df(with_pose_df, params)`, deleting only the `params = self._mw.get_parameters_dict()` line (now the arg). Keep the nested `_annotate_identity_summary_columns`, `_row_sources`, `_row_conflict` closures exactly as written, the `import itertools as _itertools` and the three `from hydra_suite.core...` imports inside the `try`, the entire CNN/tag label-catalog build, the `run_fragment_solver` call, `fill_identity_nans_with_consensus`, `sort_trajectories_by_identity`, and every `logger.exception` swallow block unchanged. Module header: `import logging`, `import numpy as np`, `import pandas as pd`, `logger = logging.getLogger(__name__)`.
+Create `src/hydra_suite/core/individual/postprocess_df.py`. Re-read the source (`sed -n '3137,3261p' src/hydra_suite/trackerkit/gui/orchestrators/tracking.py`) and move the whole `_apply_identity_postprocessing_to_df` body verbatim as a module function `apply_identity_postprocessing_to_df(with_pose_df, params)`, deleting only the `params = self._mw.get_parameters_dict()` line (now the arg). Keep the nested `_annotate_identity_summary_columns`, `_row_sources`, `_row_conflict` closures exactly as written, the `import itertools as _itertools` and the three `from hydra_suite.core...` imports inside the `try`, the entire CNN/tag label-catalog build, the `run_fragment_solver` call, `fill_identity_nans_with_consensus`, `sort_trajectories_by_identity`, and every `logger.exception` swallow block unchanged. Module header: `import logging`, `import numpy as np`, `import pandas as pd`, `logger = logging.getLogger(__name__)`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -868,8 +868,8 @@ Expected: PASS (2 passed).
 
 ```bash
 make format
-git add src/hydra_suite/core/identity/postprocess_df.py tests/test_core_identity_postprocess_df.py
-git commit -m "refactor(identity): extract identity post-pass to core/identity/postprocess_df"
+git add src/hydra_suite/core/individual/postprocess_df.py tests/test_core_identity_postprocess_df.py
+git commit -m "refactor(identity): extract identity post-pass to core/individual/postprocess_df"
 ```
 
 ---
@@ -948,7 +948,7 @@ Create `src/hydra_suite/core/post/rich_export.py`. Re-read each helper (`trackin
 - In `build_rich_export_dataframe`: replace `self._check_pose_export_sources()` with `sources = check_pose_export_sources(state)` (then unpack the same 7 names), `self._merge_pose_sources_into_df(trajectories_df, cache_path, cache_available, interp_pose_path, interp_available, interp_pose_df_mem, interp_mem_available)` with `merge_pose_sources_into_df(trajectories_df, sources, state, params=params, min_valid_conf=min_valid_conf, ignore_keypoints=ignore_keypoints)`, `self._apply_pose_quality_postprocessing(with_pose_df, pose_labels, params)` with `apply_pose_quality_postprocessing(with_pose_df, pose_labels, params, individual_properties_cache_path=state.individual_properties_cache_path)`, `self._apply_identity_postprocessing_to_df(with_pose_df)` with `apply_identity_postprocessing_to_df(with_pose_df, params)`, and `params = self._mw.get_parameters_dict()` with the `params` arg.
 - In `relink_and_export_rich_csv`: replace `self._build_rich_export_dataframe(final_csv_path)` with `build_rich_export_dataframe(final_csv_path, state, params=params, min_valid_conf=min_valid_conf, ignore_keypoints=ignore_keypoints)`, `params = self._mw.get_parameters_dict()` with the arg, `self._export_rich_csv(final_csv_path)` with `export_rich_csv(final_csv_path, state, params=params, min_valid_conf=min_valid_conf, ignore_keypoints=ignore_keypoints)`, and `self._write_rich_export_csv` / `self._remove_legacy_rich_exports` / `self._rich_export_path` with the module functions. Keep the `from hydra_suite.core.post.processing import relink_trajectories_with_pose` import inside the function.
 
-Preserve `_log_rich_export_summary`'s full body (the `fill`/`fill_any`/`pct` closures and per-source logging) verbatim as `log_rich_export_summary(df)`. Module header: `import logging`, `import os`, `import re`, `import pandas as pd`, the two suffix constants, `from hydra_suite.core.post.pose_merge import (apply_pose_quality_postprocessing, check_pose_export_sources, merge_pose_sources_into_df)`, `from hydra_suite.core.identity.postprocess_df import apply_identity_postprocessing_to_df`.
+Preserve `_log_rich_export_summary`'s full body (the `fill`/`fill_any`/`pct` closures and per-source logging) verbatim as `log_rich_export_summary(df)`. Module header: `import logging`, `import os`, `import re`, `import pandas as pd`, the two suffix constants, `from hydra_suite.core.post.pose_merge import (apply_pose_quality_postprocessing, check_pose_export_sources, merge_pose_sources_into_df)`, `from hydra_suite.core.individual.postprocess_df import apply_identity_postprocessing_to_df`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1033,7 +1033,7 @@ Re-read the worker in full first (`sed -n '1,60p;1453,1630p' src/hydra_suite/tra
 - `self.finished_signal.emit(payload)` in `execute()` → `return payload` (the function returns the dict instead of emitting); the early-`return` sites inside `execute()` (`setup is None`, `gap_result is None`, `interp_saved is None`) → `return {"saved": 0, "gaps": 0}`; the `except Exception:` block → `return {"saved": 0, "gaps": 0}`.
 - `from .merge_worker import _write_csv_artifact, _write_roi_npz` (used inside `_write_interpolation_artifacts`) → `from hydra_suite.core.post.merge import write_csv_artifact as _write_csv_artifact, write_roi_npz as _write_roi_npz`.
 
-Keep the `finally: _cleanup_backends(...)` block. Helper signatures drop `self` and take whatever they read (`params`, `csv_path`, `should_stop`, etc.) as explicit args; thread the six former-instance attributes through. Preserve every log line, profiler phase, and control-flow branch verbatim. Module imports mirror `crops_worker.py:1-27` minus the `PySide6` / `BaseWorker` / `.merge_worker` lines (`gc`, `logging`, `math`, `os`, `collections.defaultdict`, `pathlib.Path`, `cv2`, `numpy`, `pandas`, and the `core.identity...` / `core.inference.api` / `data.detection_cache` / `utils.geometry` imports).
+Keep the `finally: _cleanup_backends(...)` block. Helper signatures drop `self` and take whatever they read (`params`, `csv_path`, `should_stop`, etc.) as explicit args; thread the six former-instance attributes through. Preserve every log line, profiler phase, and control-flow branch verbatim. Module imports mirror `crops_worker.py:1-27` minus the `PySide6` / `BaseWorker` / `.merge_worker` lines (`gc`, `logging`, `math`, `os`, `collections.defaultdict`, `pathlib.Path`, `cv2`, `numpy`, `pandas`, and the `core.individual...` / `core.inference.api` / `data.detection_cache` / `utils.geometry` imports).
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1545,7 +1545,7 @@ def test_new_core_modules_import_without_qt():
         "hydra_suite.core.post.pose_merge",
         "hydra_suite.core.post.rich_export",
         "hydra_suite.core.post.interpolated_crops",
-        "hydra_suite.core.identity.postprocess_df",
+        "hydra_suite.core.individual.postprocess_df",
     ):
         importlib.import_module(mod)
 ```

@@ -9,7 +9,7 @@ reject jpg/jpeg outright and default to a lossless format (png).
 
 import pytest
 
-from hydra_suite.core.identity.dataset.generator import IndividualDatasetGenerator
+from hydra_suite.core.individual.dataset.generator import IndividualDatasetGenerator
 
 
 def _base_params(**overrides):

@@ -99,7 +99,7 @@ no prompt inputs — recon confirmed). Responsibilities:
   embedding is computed once per image, not once per detection.
 
 ### 5.2 Checkpoint management — `core/inference/sam2/checkpoints.py` (new)
-Mirrors `core/identity/pose/vitpose/…checkpoints`. Holds the variant registry:
+Mirrors `core/individual/pose/vitpose/…checkpoints`. Holds the variant registry:
 
 | variant key            | HF repo / file                      | model config |
 |------------------------|-------------------------------------|--------------|

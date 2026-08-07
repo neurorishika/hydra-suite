@@ -14,7 +14,7 @@ Date: 2026-08-04. Read-only survey of `main` @ `4b542729`.
 | # | Implementation | Canvas dims | Aspect handling | Anisotropic? |
 |---|---|---|---|---|
 | A | `core/canonicalization/crop.py` | per-detection | forced to `reference_aspect_ratio` | **yes** — `scale_y = own_AR / ref_AR` |
-| B | `core/identity/dataset/oriented_video.py::_compute_affine` (:1198) | per-detection | animal's **own** aspect | no |
+| B | `core/individual/dataset/oriented_video.py::_compute_affine` (:1198) | per-detection | animal's **own** aspect | no |
 | C | `core/canonicalization/dataset.py::MatMetadataCanonicalizer` (:92) | per-detection | animal's **own** aspect | no |
 
 A is the tracking/inference path. B is the oriented-track-video exporter. C is
@@ -183,9 +183,9 @@ a parity diff.
 - `core/tracking/ingest/streaming_payload.py` — `canonical_crops_cpu/cuda` shapes become uniform
 
 **Identity:**
-- `core/identity/classification/headtail.py:517, 594, 748`
-- `core/identity/dataset/generator.py:92, 323-350, 505-520` (ClassKit's source of images)
-- `core/identity/dataset/oriented_video.py:1198-1220`
+- `core/individual/classification/headtail.py:517, 594, 748`
+- `core/individual/dataset/generator.py:92, 323-350, 505-520` (ClassKit's source of images)
+- `core/individual/dataset/oriented_video.py:1198-1220`
 
 **Dataset canonicalizer:**
 - `core/canonicalization/dataset.py` — either delete (dead) or re-point at the new contract

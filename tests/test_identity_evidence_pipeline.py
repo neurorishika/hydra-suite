@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from hydra_suite.core.identity.cache import IdentityEvidenceCache
-from hydra_suite.core.identity.classification.cnn import ClassPrediction
+from hydra_suite.core.individual.cache import IdentityEvidenceCache
+from hydra_suite.core.individual.classification.cnn import ClassPrediction
 from hydra_suite.core.tracking.identity.evidence_emitter import IdentityEvidenceEmitter
 
 
@@ -93,7 +93,7 @@ def test_emitter_internal_calibration_matches_calibrate_at_source() -> None:
     Without this, any run with ``calibration_temperature != 1.0`` feeds
     uncalibrated identity evidence to the online decoder.
     """
-    from hydra_suite.core.identity.calibration import CalibrationModel
+    from hydra_suite.core.individual.calibration import CalibrationModel
 
     labels = [["a", "b", "c"]]
     raw = np.array([0.7, 0.2, 0.1], dtype=np.float64)

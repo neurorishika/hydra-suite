@@ -19,7 +19,7 @@ import pandas as pd
 # argument 'mode'`` at runtime. Until the rich-export path is rewired to read
 # from the new per-type caches directly, this module stays on the legacy
 # classes.
-from hydra_suite.core.identity.classification.cnn import CNNIdentityCache
+from hydra_suite.core.individual.classification.cnn import CNNIdentityCache
 
 from .cache import IndividualPropertiesCache
 from .detected_cache import DetectedPropertiesCache

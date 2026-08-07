@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hydra_suite.core.identity.pose.utils import (
+from hydra_suite.core.individual.pose.utils import (
     align_hw_to_stride,
     load_structured_config,
     nested_get,

@@ -16,7 +16,7 @@ from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     canonical_affine,
 )
-from hydra_suite.core.identity.pose.crop_dtype import to_uint8_image
+from hydra_suite.core.individual.pose.crop_dtype import to_uint8_image
 
 from ..config import PoseConfig
 from ..result import CropBatch, OBBResult, PoseResult
@@ -121,7 +121,7 @@ def load_pose_model(
     out_root: str = ".",
     exported_model_path: str = "",
 ) -> PoseModel:
-    from hydra_suite.core.identity.pose.utils import load_skeleton_from_json
+    from hydra_suite.core.individual.pose.utils import load_skeleton_from_json
 
     # Reuse the canonical skeleton loader so both legacy and new pipelines accept
     # the same JSON formats ("keypoint_names"/"skeleton_edges" and the legacy
@@ -151,7 +151,7 @@ def load_pose_model(
 
     if config.backend == "yolo":
         assert config.yolo is not None
-        from hydra_suite.core.identity.pose.backends.yolo import YoloNativeBackend
+        from hydra_suite.core.individual.pose.backends.yolo import YoloNativeBackend
 
         # The resolver never emits an ONNX-on-CUDA device, so device=="cuda"
         # covers native torch CUDA and TensorRT alike; coreml resolves to mps.
@@ -177,8 +177,8 @@ def load_pose_model(
 
     if config.backend == "vitpose":
         assert config.vitpose is not None
-        from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-        from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+        from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+        from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 
         if resolved.backend == "tensorrt":
             vp_flavor, vp_device = "tensorrt", "cuda"
@@ -205,8 +205,8 @@ def load_pose_model(
         )
 
     assert config.sleap is not None
-    from hydra_suite.core.identity.pose.api import create_pose_backend_from_config
-    from hydra_suite.core.identity.pose.types import PoseRuntimeConfig
+    from hydra_suite.core.individual.pose.api import create_pose_backend_from_config
+    from hydra_suite.core.individual.pose.types import PoseRuntimeConfig
 
     sleap_cfg = config.sleap
     # Debug/A-B override: force the SLEAP runtime flavor independent of the tier

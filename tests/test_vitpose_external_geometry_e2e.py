@@ -22,8 +22,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_external_checkpoint_loads_with_square_geometry():
-    from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
-    from hydra_suite.core.identity.pose.vitpose.geometry import PoseGeometry
+    from hydra_suite.core.individual.pose.vitpose.adapter import (
+        load_finetuned_checkpoint,
+    )
+    from hydra_suite.core.individual.pose.vitpose.geometry import PoseGeometry
 
     model, meta = load_finetuned_checkpoint(CKPT)
     assert meta.geometry == PoseGeometry((256, 256))
@@ -45,7 +47,9 @@ def test_production_loader_rebuilds_the_same_model_as_the_probe():
     tensor isolates what this slice actually changed -- checkpoint loading and
     model construction -- from those deliberate differences.
     """
-    from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
+    from hydra_suite.core.individual.pose.vitpose.adapter import (
+        load_finetuned_checkpoint,
+    )
     from tools.vitpose.external_ckpt.model import load_external_checkpoint, preprocess
 
     rng = np.random.default_rng(0)
@@ -64,8 +68,10 @@ def test_production_loader_rebuilds_the_same_model_as_the_probe():
 
 
 def test_production_preprocess_uses_the_checkpoint_geometry():
-    from hydra_suite.core.identity.pose.vitpose.adapter import load_finetuned_checkpoint
-    from hydra_suite.core.identity.pose.vitpose.infer import preprocess_crop
+    from hydra_suite.core.individual.pose.vitpose.adapter import (
+        load_finetuned_checkpoint,
+    )
+    from hydra_suite.core.individual.pose.vitpose.infer import preprocess_crop
 
     _, meta = load_finetuned_checkpoint(CKPT)
     chw, _, _ = preprocess_crop(

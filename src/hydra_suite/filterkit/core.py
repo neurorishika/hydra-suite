@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 
-from hydra_suite.core.identity.dataset.naming import parse_identity_image_filename
+from hydra_suite.core.individual.dataset.naming import parse_identity_image_filename
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg"}
 

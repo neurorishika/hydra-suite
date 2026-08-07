@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from hydra_suite.core.identity.catalog import IdentityCatalog
-from hydra_suite.core.identity.evidence import IdentityEvidence
-from hydra_suite.core.identity.online import OnlineIdentityDecoder
+from hydra_suite.core.individual.catalog import IdentityCatalog
+from hydra_suite.core.individual.evidence import IdentityEvidence
+from hydra_suite.core.individual.online import OnlineIdentityDecoder
 
 
 def _log_probs(*values: float) -> np.ndarray:
