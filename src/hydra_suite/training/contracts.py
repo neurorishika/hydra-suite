@@ -140,6 +140,9 @@ class AugmentationProfile:
         0.0  # 0=off; ~0.5 recommended. P(apply) decode-color re-sim.
     )
     resample_sim: float = 0.0  # 0=off; ~0.3 recommended. P(apply) alternate resampler.
+    canonical_aug: bool = False  # off by default; opt-in Moderate CanonicalAug
+    # (resample-kernel swap + sub-pixel warp jitter + mild blur/JPEG degrade)
+    # applied to the canonical crop before the Layer-2 letterbox. Training-only.
     monochrome: bool = False
     args: dict[str, Any] = field(default_factory=dict)
     # Label-switching expansion rules.

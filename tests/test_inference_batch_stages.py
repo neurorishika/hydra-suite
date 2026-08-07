@@ -16,12 +16,15 @@ import math
 import numpy as np
 import pytest
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.config import CNNConfig, HeadTailConfig
 from hydra_suite.core.inference.result import FrameResult, OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.assemble import scatter
 from hydra_suite.core.inference.stages.cnn import CNNModel, run_cnn, run_cnn_batch
 from hydra_suite.core.inference.stages.headtail import run_headtail, run_headtail_batch
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,6 +215,7 @@ def test_run_headtail_batch_keys_by_frame_and_matches_counts():
         _fake_ht_model(),
         config=HeadTailConfig(model_path="/ht.pt"),
         runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
     )
     assert set(out) == {0, 1}
     assert out[0].heading_hints.shape[0] == 2
@@ -225,7 +229,12 @@ def test_run_headtail_batch_heading_values():
     frames = [np.zeros((100, 100, 3), np.uint8), np.zeros((100, 100, 3), np.uint8)]
     config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.5)
     out = run_headtail_batch(
-        frames, [obb0, obb1], _fake_ht_model(), config=config, runtime=_cpu_rt()
+        frames,
+        [obb0, obb1],
+        _fake_ht_model(),
+        config=config,
+        runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
     )
     expected = (0.0 + (-math.pi / 2)) % (2 * math.pi)
     assert out[0].heading_hints[0] == pytest.approx(expected)
@@ -240,7 +249,12 @@ def test_run_headtail_batch_empty_frame():
     frames = [np.zeros((100, 100, 3), np.uint8), np.zeros((100, 100, 3), np.uint8)]
     config = HeadTailConfig(model_path="/ht.pt", confidence_threshold=0.5)
     out = run_headtail_batch(
-        frames, [obb0, obb1], _fake_ht_model(), config=config, runtime=_cpu_rt()
+        frames,
+        [obb0, obb1],
+        _fake_ht_model(),
+        config=config,
+        runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
     )
     assert out[0].heading_hints.shape[0] == 0
     assert out[1].heading_hints.shape[0] == 2
@@ -269,11 +283,16 @@ def test_run_headtail_batch_equivalent_to_per_frame():
     rt = _cpu_rt()
 
     batch_out = run_headtail_batch(
-        [f0, f1], [obb0, obb1], model, config=config, runtime=rt
+        [f0, f1],
+        [obb0, obb1],
+        model,
+        config=config,
+        runtime=rt,
+        geometry=_TEST_GEOMETRY,
     )
 
-    pf0 = run_headtail(f0, obb0, model, config, rt)
-    pf1 = run_headtail(f1, obb1, model, config, rt)
+    pf0 = run_headtail(f0, obb0, model, config, rt, geometry=_TEST_GEOMETRY)
+    pf1 = run_headtail(f1, obb1, model, config, rt, geometry=_TEST_GEOMETRY)
 
     np.testing.assert_array_equal(batch_out[0].directed_mask, pf0.directed_mask)
     np.testing.assert_array_equal(batch_out[1].directed_mask, pf1.directed_mask)
@@ -298,7 +317,12 @@ def test_run_cnn_batch_keys_by_frame_and_counts():
     frames = [np.zeros((100, 100, 3), np.uint8), np.zeros((100, 100, 3), np.uint8)]
     config = CNNConfig(label="identity", model_path="/cnn.pt")
     out = run_cnn_batch(
-        frames, [obb0, obb1], _fake_cnn_model(), config=config, runtime=_cpu_rt()
+        frames,
+        [obb0, obb1],
+        _fake_cnn_model(),
+        config=config,
+        runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
     )
     assert set(out) == {0, 1}
     assert len(out[0].predictions) == 2
@@ -311,7 +335,12 @@ def test_run_cnn_batch_probabilities():
     frames = [np.zeros((100, 100, 3), np.uint8), np.zeros((100, 100, 3), np.uint8)]
     config = CNNConfig(label="identity", model_path="/cnn.pt")
     out = run_cnn_batch(
-        frames, [obb0, obb1], _fake_cnn_model(), config=config, runtime=_cpu_rt()
+        frames,
+        [obb0, obb1],
+        _fake_cnn_model(),
+        config=config,
+        runtime=_cpu_rt(),
+        geometry=_TEST_GEOMETRY,
     )
     probs = out[0].predictions[0].factors[0].raw_probabilities
     np.testing.assert_array_almost_equal(
@@ -340,10 +369,17 @@ def test_run_cnn_batch_equivalent_to_per_frame():
     model = _content_cnn_model()
     rt = _cpu_rt()
 
-    batch_out = run_cnn_batch([f0, f1], [obb0, obb1], model, config=config, runtime=rt)
+    batch_out = run_cnn_batch(
+        [f0, f1],
+        [obb0, obb1],
+        model,
+        config=config,
+        runtime=rt,
+        geometry=_TEST_GEOMETRY,
+    )
 
-    pf0 = run_cnn(f0, obb0, model, config, rt)
-    pf1 = run_cnn(f1, obb1, model, config, rt)
+    pf0 = run_cnn(f0, obb0, model, config, rt, geometry=_TEST_GEOMETRY)
+    pf1 = run_cnn(f1, obb1, model, config, rt, geometry=_TEST_GEOMETRY)
 
     assert len(batch_out[0].predictions) == len(pf0.predictions)
     assert len(batch_out[1].predictions) == len(pf1.predictions)

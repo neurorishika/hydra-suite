@@ -17,17 +17,19 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional, Tuple
-
-if TYPE_CHECKING:
-    import torch
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
 
 from hydra_suite.core.canonicalization.geometry import (
     CanonicalGeometry,
     canonical_affine,
+)
+from hydra_suite.core.canonicalization.resample import (
+    canonical_warp,
+    canonical_warp_batch,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,22 @@ def _resolve_canvas(
     return int(canvas_w), int(canvas_h)
 
 
+def _geometry_from_canvas(canvas_w: int, canvas_h: int) -> CanonicalGeometry:
+    """Synthesise a :class:`CanonicalGeometry` from bare canvas dimensions.
+
+    ``margin``/``aspect_ratio`` are irrelevant to the warp seam (only
+    ``canvas_w``/``canvas_h`` are consumed), so this exists purely to give
+    callers of the legacy ``(canvas_w, canvas_h)`` ints a single geometry
+    object to hand to :func:`~hydra_suite.core.canonicalization.resample.
+    canonical_warp`/``canonical_warp_batch``.
+    """
+    return CanonicalGeometry(
+        canvas_wh=(int(canvas_w), int(canvas_h)),
+        margin=1.0,
+        aspect_ratio=max(1.0, float(canvas_w) / max(1.0, float(canvas_h))),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
@@ -110,15 +128,26 @@ def extract_canonical_crop(
     Either ``(canvas_w, canvas_h)`` or ``geometry`` (Layer 1's
     :class:`~hydra_suite.core.canonicalization.geometry.CanonicalGeometry`)
     must be given. If both are given they must agree.
+
+    Delegates to the torch seam (:func:`canonical_warp`): converts the HWC
+    uint8 frame to a CHW float tensor once, warps via ``F.grid_sample``, then
+    converts back to HWC uint8. This replaces the former OpenCV affine-warp
+    kernel; the foreign-mask call sequence below (still ``cv2.fillPoly``-based)
+    is unchanged.
     """
     canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
-    crop = cv2.warpAffine(
-        frame,
-        M_align,
-        (canvas_w, canvas_h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
+    effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
+
+    arr = np.asarray(frame)
+    frame_chw = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1).float()
+    crop_chw = canonical_warp(frame_chw, M_align, effective_geometry)
+    crop = (
+        crop_chw.round()
+        .clamp_(0, 255)
+        .to(torch.uint8)
+        .permute(1, 2, 0)
+        .contiguous()
+        .numpy()
     )
 
     if foreign_corners:
@@ -139,15 +168,12 @@ def gpu_canonical_crop(
 ) -> "torch.Tensor":
     """GPU-native affine warp replicating ``extract_canonical_crop``.
 
-    Replaces ``cv2.warpAffine`` for frames already resident on a CUDA (or MPS)
-    device.  ``M_align`` is the 2×3 forward affine produced by
+    Thin wrapper over the shared torch seam
+    (:func:`~hydra_suite.core.canonicalization.resample.canonical_warp`) for
+    frames already resident on a CUDA (or MPS) device.  ``M_align`` is the
+    2x3 forward affine produced by
     :func:`~hydra_suite.core.canonicalization.geometry.canonical_affine`
-    mapping frame pixel coords to canvas pixel
-    coords.  The function inverts it on CPU (negligible), builds a normalised
-    ``F.affine_grid`` theta, and uses ``F.grid_sample`` with bilinear
-    interpolation and zero padding — matching ``extract_canonical_crop``'s
-    ``cv2.BORDER_CONSTANT`` (value 0) so out-of-frame canvas pixels mean
-    "no data" on both CPU and GPU.
+    mapping frame pixel coords to canvas pixel coords.
 
     Parameters
     ----------
@@ -166,60 +192,12 @@ def gpu_canonical_crop(
     -------
     torch.Tensor
         ``(C, canvas_h, canvas_w)`` float32 on the same device as
-        ``frame_chw``.
+        ``frame_chw``.  Carries no autograd graph (the seam runs under
+        ``torch.inference_mode()``).
     """
-    import cv2 as _cv2
-    import torch
-    import torch.nn.functional as F
-
     canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
-    C, H_in, W_in = frame_chw.shape
-
-    # Invert M_align (forward src→dst) to get dst→src mapping required by
-    # F.grid_sample (which samples source coords for each output pixel).
-    M_inv = _cv2.invertAffineTransform(np.asarray(M_align, dtype=np.float64))
-
-    # Build normalised theta (2×3) for F.affine_grid with align_corners=True.
-    # Derivation: norm_src = theta @ [norm_dst_x, norm_dst_y, 1]^T
-    # where norm = 2*pixel / (dim-1) - 1 (align_corners=True convention).
-    #
-    # theta[row, 0] = M_inv[row, 0] * (W_out-1) / (dim_in[row]-1)
-    # theta[row, 1] = M_inv[row, 1] * (H_out-1) / (dim_in[row]-1)
-    # theta[row, 2] = theta[row,0] + theta[row,1] + 2*M_inv[row,2]/(dim_in[row]-1) - 1
-    sw = float(canvas_w - 1)
-    sh = float(canvas_h - 1)
-    inv_win = 1.0 / max(float(W_in - 1), 1.0)
-    inv_hin = 1.0 / max(float(H_in - 1), 1.0)
-
-    t00 = M_inv[0, 0] * sw * inv_win
-    t01 = M_inv[0, 1] * sh * inv_win
-    t10 = M_inv[1, 0] * sw * inv_hin
-    t11 = M_inv[1, 1] * sh * inv_hin
-
-    theta = np.array(
-        [
-            [t00, t01, t00 + t01 + 2.0 * M_inv[0, 2] * inv_win - 1.0],
-            [t10, t11, t10 + t11 + 2.0 * M_inv[1, 2] * inv_hin - 1.0],
-        ],
-        dtype=np.float32,
-    )
-
-    theta_t = torch.as_tensor(
-        theta, dtype=torch.float32, device=frame_chw.device
-    ).unsqueeze(
-        0
-    )  # (1, 2, 3)
-
-    with torch.inference_mode():
-        grid = F.affine_grid(theta_t, (1, C, canvas_h, canvas_w), align_corners=True)
-        crop = F.grid_sample(
-            frame_chw.unsqueeze(0),
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )
-        return crop.squeeze(0)  # (C, canvas_h, canvas_w)
+    effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
+    return canonical_warp(frame_chw, M_align, effective_geometry)
 
 
 def gpu_canonical_crop_batch(
@@ -232,10 +210,13 @@ def gpu_canonical_crop_batch(
 ) -> "torch.Tensor":
     """Batch version of :func:`gpu_canonical_crop` for N crops from *one* frame.
 
-    Replaces N serial ``F.affine_grid`` + ``F.grid_sample`` calls with a single
-    pair of batched calls.  This reduces GPU kernel launch overhead from O(N) to
-    O(1) when extracting many detections from the same frame, which is the
-    common case for dense multi-animal tracking (e.g. 50 animals × 8 frames).
+    Thin wrapper over
+    :func:`~hydra_suite.core.canonicalization.resample.canonical_warp_batch`,
+    which replaces N serial ``F.affine_grid`` + ``F.grid_sample`` calls with a
+    single pair of batched calls.  This reduces GPU kernel launch overhead
+    from O(N) to O(1) when extracting many detections from the same frame,
+    which is the common case for dense multi-animal tracking (e.g. 50
+    animals x 8 frames).
 
     Parameters
     ----------
@@ -254,67 +235,12 @@ def gpu_canonical_crop_batch(
     -------
     torch.Tensor
         ``(N, C, canvas_h, canvas_w)`` float32 on the same device as
-        ``frame_chw``.
+        ``frame_chw``.  Carries no autograd graph (the seam runs under
+        ``torch.inference_mode()``).
     """
-    import torch
-    import torch.nn.functional as F
-
     canvas_w, canvas_h = _resolve_canvas(canvas_w, canvas_h, geometry)
-    N = len(M_aligns)
-    if N == 0:
-        C = frame_chw.shape[0]
-        return torch.zeros(
-            0,
-            C,
-            canvas_h,
-            canvas_w,
-            dtype=frame_chw.dtype,
-            device=frame_chw.device,
-        )
-    if N == 1:
-        return gpu_canonical_crop(frame_chw, M_aligns[0], canvas_w, canvas_h).unsqueeze(
-            0
-        )
-
-    C, H_in, W_in = frame_chw.shape
-    sw = float(canvas_w - 1)
-    sh = float(canvas_h - 1)
-    inv_win = 1.0 / max(float(W_in - 1), 1.0)
-    inv_hin = 1.0 / max(float(H_in - 1), 1.0)
-
-    # Build all theta matrices on CPU (negligible cost) then transfer once.
-    thetas_np = np.empty((N, 2, 3), dtype=np.float32)
-    for i, M_align in enumerate(M_aligns):
-        M_inv = cv2.invertAffineTransform(np.asarray(M_align, dtype=np.float64))
-        t00 = M_inv[0, 0] * sw * inv_win
-        t01 = M_inv[0, 1] * sh * inv_win
-        t10 = M_inv[1, 0] * sw * inv_hin
-        t11 = M_inv[1, 1] * sh * inv_hin
-        thetas_np[i, 0, 0] = t00
-        thetas_np[i, 0, 1] = t01
-        thetas_np[i, 0, 2] = t00 + t01 + 2.0 * M_inv[0, 2] * inv_win - 1.0
-        thetas_np[i, 1, 0] = t10
-        thetas_np[i, 1, 1] = t11
-        thetas_np[i, 1, 2] = t10 + t11 + 2.0 * M_inv[1, 2] * inv_hin - 1.0
-
-    thetas_t = torch.as_tensor(
-        thetas_np, dtype=torch.float32, device=frame_chw.device
-    )  # (N, 2, 3)
-
-    with torch.inference_mode():
-        # ONE affine_grid call + ONE grid_sample call for all N crops.
-        grid = F.affine_grid(
-            thetas_t, (N, C, canvas_h, canvas_w), align_corners=True
-        )  # (N, canvas_h, canvas_w, 2)
-        frame_expanded = frame_chw.unsqueeze(0).expand(N, -1, -1, -1)  # (N, C, H, W)
-        crops = F.grid_sample(
-            frame_expanded.contiguous(),
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )  # (N, C, canvas_h, canvas_w)
-        return crops
+    effective_geometry = geometry or _geometry_from_canvas(canvas_w, canvas_h)
+    return canonical_warp_batch(frame_chw, list(M_aligns), effective_geometry)
 
 
 def apply_headtail_rotation(

@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
+import torch
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,17 @@ def fit_to_model_input(
 
 
 def apply_fit(image: np.ndarray, fit: FitResult) -> np.ndarray:
-    """Resize *image* by ``fit`` and paste it centred on a zero canvas."""
+    """Resize *image* by ``fit`` and paste it centred on a zero canvas.
+
+    Delegates to the torch seam (:func:`~hydra_suite.core.canonicalization.
+    resample.letterbox_fit`): converts the HWC uint8 input to a CHW float
+    tensor once, resamples with antialiased bilinear interpolation, then
+    converts back to HWC uint8. Import of the seam is local to avoid a
+    circular import (``resample`` imports ``fit_to_model_input`` from this
+    module).
+    """
+    from hydra_suite.core.canonicalization.resample import letterbox_fit
+
     arr = np.asarray(image)
     if arr.dtype != np.uint8:
         raise TypeError(
@@ -56,22 +66,17 @@ def apply_fit(image: np.ndarray, fit: FitResult) -> np.ndarray:
         )
     if arr.ndim == 2:
         arr = arr[:, :, None]
-    channels = arr.shape[2]
 
-    interp = cv2.INTER_AREA if fit.scale < 1.0 else cv2.INTER_LINEAR
-    resized = cv2.resize(arr, fit.inner_wh, interpolation=interp)
-    if resized.ndim == 2:
-        resized = resized[:, :, None]
-
-    mw, mh = fit.model_wh
-    if fit.inner_wh == (mw, mh):
-        # Letterbox with zero padding on both axes: the paste below would cover
-        # the whole canvas, so the canvas is exactly ``resized``. Skipping the
-        # allocation + copy is byte-identical, not an approximation.
-        return resized
-    canvas = np.zeros((mh, mw, channels), dtype=np.uint8)
-    ox, oy = fit.offset_xy
-    canvas[oy : oy + fit.inner_wh[1], ox : ox + fit.inner_wh[0]] = resized
+    chw = torch.from_numpy(np.ascontiguousarray(arr)).permute(2, 0, 1).float()
+    out_chw = letterbox_fit(chw, fit.model_wh)
+    canvas = (
+        out_chw.round()
+        .clamp_(0, 255)
+        .to(torch.uint8)
+        .permute(1, 2, 0)
+        .contiguous()
+        .numpy()
+    )
     return canvas
 
 

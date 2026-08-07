@@ -100,32 +100,18 @@ def test_canonical_and_aabb_same_count():
     assert canonical.shape[0] == len(aabb) == 3
 
 
-def test_onnx_cuda_uses_cpu_path(monkeypatch):
-    """Per Correction 3 fix 3: tensor_on_cuda=False must NOT trigger _extract_canonical_gpu
-    even when cuda_mode=True. ONNX-CUDA returns CPU numpy from the downstream model, so
-    GPU crop extraction would be wasted upload+download."""
-    gpu_called = []
-    cpu_called = []
-
-    def _fake_gpu(*a, **kw):
-        gpu_called.append(True)
-        return torch.zeros((1, 3, 4, 4))
-
-    def _fake_cpu(*a, **kw):
-        cpu_called.append(True)
-        return torch.zeros((1, 3, 4, 4))
-
-    import hydra_suite.core.inference.stages.crops as mod
-
-    monkeypatch.setattr(mod, "_extract_canonical_gpu", _fake_gpu)
-    monkeypatch.setattr(mod, "_extract_canonical_cpu", _fake_cpu)
-
+def test_onnx_cuda_numpy_frame_stays_on_cpu():
+    """The unified crop path has no separate GPU/CPU fork any more: the OUTPUT
+    device always follows the FRAME's own device, not ``runtime.tensor_on_cuda``.
+    ONNX-CUDA (cuda_mode=True, tensor_on_cuda=False) callers always hand this a
+    CPU numpy frame (their downstream model takes CPU numpy), so the crop must
+    come back on CPU regardless of ``cuda_mode`` -- there is no upload to
+    "waste" because there was never a CUDA tensor to begin with."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     obb = _obb_result(n=1)
-    extract_canonical_crops(frame, obb, _GEOM, _onnx_cuda_rt())
+    crops = extract_canonical_crops(frame, obb, _GEOM, _onnx_cuda_rt())
 
-    assert cpu_called == [True]
-    assert gpu_called == []
+    assert not crops.is_cuda
 
 
 def test_canonical_crops_dtype_normalized():

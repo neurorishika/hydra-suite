@@ -78,6 +78,15 @@ class ViTPoseBackend:
                 Path(exported_model_path), ResolvedBackend("tensorrt", "cuda", False)
             )
 
+    # ViTPose's own preprocess_crop (box2cs/top_down_affine, see
+    # ..vitpose.infer.preprocess_crop) already performs the Layer-2 fit from
+    # the canonical canvas to the model's (192, 256) input. Telling
+    # model_input_wh() this backend "does its own letterbox" makes it hand
+    # back an IDENTITY fit (canvas -> canvas) instead of a second, redundant
+    # resample to preferred_input_wh -- matching the CUDA path (which already
+    # fed the raw canvas) and training.
+    does_own_letterbox: bool = True
+
     @property
     def preferred_input_size(self) -> int:
         return max(self._geom.image_size_wh)  # the long side

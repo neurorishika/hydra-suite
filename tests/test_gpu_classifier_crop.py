@@ -1,18 +1,42 @@
-"""Unit tests for the GPU-native classifier crop + forward path.
+"""Unit tests for the unified torch canonical-crop seam (resample.py).
 
-These run on the CPU torch device (grid_sample works there), so most of the
-feature's correctness is provable off the CUDA box; only the end-to-end
-determinism/agreement/perf gate needs mehek (see the implementation plan Task 6).
+The crop path is unified on ``canonical_warp``/``canonical_warp_batch``/
+``letterbox_fit`` in ``core/canonicalization/resample.py`` -- there is no
+separate ``extract_classifier_crops_gpu``/``apply_fit_gpu`` code path any
+more. These tests prove:
+
+1. CPU-torch and device-torch (MPS here; CUDA on mehek) agree to a tight
+   tolerance running the SAME ``canonical_warp``/``letterbox_fit`` calls.
+2. A landmark placed at a known frame location lands within ~0.5px of the
+   analytic canonical location (``m_align @ point``) on BOTH devices -- using
+   a NON-square canvas, so an (H, W)/(W, H) axis swap or anisotropic scale
+   error would be caught (a square canvas can't distinguish these).
 """
+
+from __future__ import annotations
 
 import numpy as np
 import pytest
 import torch
 
-from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
+from hydra_suite.core.canonicalization.geometry import (
+    CanonicalGeometry,
+    canonical_affine,
+)
+from hydra_suite.core.canonicalization.resample import (
+    canonical_warp,
+    canonical_warp_batch,
+    letterbox_fit,
+)
 from hydra_suite.core.inference.result import OBBResult
 
-_GEOM = CanonicalGeometry(canvas_wh=(128, 128), margin=1.3, aspect_ratio=2.0)
+# Non-square canvas: from_reference(60, aspect_ratio=2.0, margin=1.3) yields
+# canvas_w != canvas_h (long edge holds margin * major axis; short edge is
+# canvas_w / aspect_ratio) -- this is the geometry a square (128, 128) test
+# cannot exercise.
+_GEOM = CanonicalGeometry.from_reference(60.0, 2.0, 1.3)
+
+_MPS_AVAILABLE = torch.backends.mps.is_available()
 
 
 def _toy_obb(n=3, frame_idx=0):
@@ -35,53 +59,165 @@ def _toy_obb(n=3, frame_idx=0):
     )
 
 
-def test_gpu_classifier_crop_shape_device():
-    from hydra_suite.core.inference.stages.crops import extract_classifier_crops_gpu
+def _single_obb_corners(cx, cy, major, minor, angle_rad):
+    """Build one rotated-rectangle OBB's 4x2 corners around (cx, cy)."""
+    import math
 
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    frame = (
-        torch.randint(0, 256, (3, 200, 300), dtype=torch.uint8).float().div(255).to(dev)
-    )
-    crops = extract_classifier_crops_gpu(frame, _toy_obb(3), _GEOM, dev)
-    assert crops.shape == (3, 3, 128, 128)
-    assert str(crops.device).startswith(dev)
-    assert crops.dtype == torch.float32
-
-
-def test_gpu_classifier_crop_empty():
-    from hydra_suite.core.inference.stages.crops import extract_classifier_crops_gpu
-
-    frame = torch.zeros((3, 50, 50))
-    empty = OBBResult(
-        frame_idx=0,
-        centroids=np.zeros((0, 2), np.float32),
-        angles=np.zeros(0, np.float32),
-        sizes=np.zeros(0, np.float32),
-        shapes=np.zeros((0, 2), np.float32),
-        confidences=np.zeros(0, np.float32),
-        corners=np.zeros((0, 4, 2), np.float32),
-        detection_ids=np.zeros(0, np.int64),
-    )
-    crops = extract_classifier_crops_gpu(frame, empty, _GEOM, "cpu")
-    assert crops.shape == (0, 3, 128, 128)
+    hw, hh = major / 2.0, minor / 2.0
+    local = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]], dtype=np.float64)
+    c, s = math.cos(angle_rad), math.sin(angle_rad)
+    rot = np.array([[c, -s], [s, c]])
+    world = local @ rot.T + np.array([cx, cy])
+    return world.astype(np.float32)
 
 
-def test_gpu_vs_cpu_classifier_crop_close():
-    """grid_sample != cv2, but the crops must be close (guards affine mistakes)."""
-    from hydra_suite.core.inference.stages.crops import (
-        extract_classifier_crops,
-        extract_classifier_crops_gpu,
-    )
+assert _GEOM.canvas_w != _GEOM.canvas_h, "test geometry must be non-square"
 
-    frame = np.random.default_rng(0).integers(0, 256, (200, 300, 3), np.uint8)
+
+def test_geometry_is_non_square():
+    assert _GEOM.canvas_wh[0] != _GEOM.canvas_wh[1]
+
+
+def test_canonical_warp_shape_and_dtype():
+    frame = torch.rand(3, 200, 300, dtype=torch.float32)
+    obb = _toy_obb(1)
+    m_align, _theta, _clipped = canonical_affine(obb.corners[0], _GEOM)
+    crop = canonical_warp(frame, m_align, _GEOM)
+    assert crop.shape == (3, _GEOM.canvas_h, _GEOM.canvas_w)
+    assert crop.dtype == torch.float32
+
+
+def test_canonical_warp_batch_empty():
+    frame = torch.zeros(3, 50, 50)
+    crops = canonical_warp_batch(frame, [], _GEOM)
+    assert crops.shape == (0, 3, _GEOM.canvas_h, _GEOM.canvas_w)
+
+
+def test_canonical_warp_batch_shape():
+    frame = torch.rand(3, 200, 300, dtype=torch.float32)
     obb = _toy_obb(3)
-    cpu = extract_classifier_crops(frame, obb, _GEOM)  # list HWC uint8
-    cpu_t = np.stack([c.astype(np.float32) / 255.0 for c in cpu])  # (N,H,W,C)
-    ft = torch.from_numpy(frame.transpose(2, 0, 1)).float().div(255.0)
-    gpu = extract_classifier_crops_gpu(ft, obb, _GEOM, "cpu")
-    gpu_hwc = gpu.permute(0, 2, 3, 1).numpy()
-    assert gpu_hwc.shape == cpu_t.shape
-    assert float(np.abs(gpu_hwc - cpu_t).mean()) < 0.03  # < ~8/255 mean abs
+    m_aligns = [canonical_affine(c, _GEOM)[0] for c in obb.corners]
+    crops = canonical_warp_batch(frame, m_aligns, _GEOM)
+    assert crops.shape == (3, 3, _GEOM.canvas_h, _GEOM.canvas_w)
+
+
+# ---- CPU vs device pixel-parity (Step 1) ------------------------------------
+
+
+@pytest.mark.parametrize("device", ["cpu"] + (["mps"] if _MPS_AVAILABLE else []))
+def test_cpu_vs_device_crop_close(device):
+    """Same canonical_warp on cpu vs an accelerator device must agree tightly."""
+    rng = np.random.default_rng(0)
+    frame_np = rng.integers(0, 256, (200, 300, 3), np.uint8)
+    frame_cpu = torch.from_numpy(frame_np.transpose(2, 0, 1)).float().div(255.0)
+
+    obb = _toy_obb(3)
+    m_aligns = [canonical_affine(c, _GEOM)[0] for c in obb.corners]
+
+    crop_cpu = canonical_warp_batch(frame_cpu, m_aligns, _GEOM)
+
+    frame_dev = frame_cpu.to(device)
+    crop_dev = canonical_warp_batch(frame_dev, m_aligns, _GEOM).to("cpu")
+
+    assert crop_dev.shape == crop_cpu.shape
+    max_abs_diff = float((crop_cpu - crop_dev).abs().max())
+    assert (
+        max_abs_diff < 2e-2
+    ), f"cpu vs {device} crop diverged: max|diff|={max_abs_diff}"
+
+
+@pytest.mark.skipif(not _MPS_AVAILABLE, reason="MPS not available on this box")
+def test_letterbox_fit_cpu_vs_mps_close():
+    """letterbox_fit (Layer 2) must also agree tightly across devices."""
+    rng = np.random.default_rng(1)
+    crop_cpu = (
+        torch.from_numpy(
+            rng.integers(0, 256, (2, 3, _GEOM.canvas_h, _GEOM.canvas_w), np.uint8)
+        )
+        .float()
+        .div(255.0)
+    )
+
+    model_wh = (96, 64)  # deliberately non-square model input too
+    fitted_cpu = letterbox_fit(crop_cpu, model_wh)
+    fitted_mps = letterbox_fit(crop_cpu.to("mps"), model_wh).to("cpu")
+
+    assert fitted_cpu.shape == fitted_mps.shape
+    max_abs_diff = float((fitted_cpu - fitted_mps).abs().max())
+    assert max_abs_diff < 2e-2
+
+
+# ---- Landmark (anisotropy / axis-swap) check --------------------------------
+
+
+def _weighted_centroid(channel_hw: np.ndarray) -> tuple[float, float]:
+    """Intensity-weighted centroid (x, y) of a single-channel 2D array."""
+    ys, xs = np.indices(channel_hw.shape)
+    total = float(channel_hw.sum())
+    assert total > 0, "landmark not found in warped crop"
+    cx = float((xs * channel_hw).sum() / total)
+    cy = float((ys * channel_hw).sum() / total)
+    return cx, cy
+
+
+@pytest.mark.parametrize("device", ["cpu"] + (["mps"] if _MPS_AVAILABLE else []))
+def test_landmark_lands_at_analytic_canonical_location(device):
+    """A bright dot at a known frame location must land at ``m_align @ point``.
+
+    Non-square canvas + non-square, rotated, off-centre OBB: this is the
+    minimal fixture that fails if the canvas (H, W) vs (W, H) axes are ever
+    swapped, or if the two axes get resampled with different effective scale
+    (anisotropy) -- a square canvas cannot distinguish either failure mode.
+    """
+    h, w = 240, 360
+    frame_np = np.zeros((h, w, 3), np.float32)
+
+    # A rotated, off-centre, non-square OBB (major != minor breaks symmetry).
+    cx, cy, major, minor, angle = 150.0, 90.0, 80.0, 40.0, 0.4
+    corners = _single_obb_corners(cx, cy, major, minor, angle)
+
+    # Bright landmark dot inside the OBB's footprint, offset from the centroid
+    # (not at the geometric centre -- that would also pass for a mirrored crop).
+    landmark_xy = (cx + 15.0, cy - 8.0)
+    lx, ly = int(round(landmark_xy[0])), int(round(landmark_xy[1]))
+    # 3x3 bright patch (sub-pixel centroid, robust to a 1px quantization jitter).
+    frame_np[ly - 1 : ly + 2, lx - 1 : lx + 2, :] = 1.0
+
+    frame_cpu = torch.from_numpy(frame_np.transpose(2, 0, 1)).contiguous()
+
+    m_align, _theta, clipped = canonical_affine(corners, _GEOM)
+    assert not clipped
+
+    frame_dev = frame_cpu.to(device)
+    crop = canonical_warp(frame_dev, m_align, _GEOM).to("cpu").numpy()  # (3, H, W)
+
+    got_x, got_y = _weighted_centroid(crop[0])
+
+    analytic = m_align @ np.array([landmark_xy[0], landmark_xy[1], 1.0])
+    exp_x, exp_y = float(analytic[0]), float(analytic[1])
+
+    dist = float(np.hypot(got_x - exp_x, got_y - exp_y))
+    assert dist < 0.5, (
+        f"landmark centroid ({got_x:.3f}, {got_y:.3f}) on {device} strayed "
+        f"{dist:.3f}px from the analytic canonical location ({exp_x:.3f}, {exp_y:.3f})"
+    )
+
+
+# ---- NVDEC HWC-layout regression (single-frame path) ------------------------
+
+
+def test_extract_canonical_crops_hwc_nvdec_layout():
+    """NvdecFrameReader yields (H, W, 3) HWC uint8 (RGB); the extractor must
+    permute to CHW and produce 3-channel crops (regression for the shape bug
+    that crashed the first real NVDEC run: 'tensor a (4512) must match b (3)')."""
+    from hydra_suite.core.inference.stages.crops import extract_canonical_crops
+
+    hwc = torch.randint(0, 256, (200, 300, 3), dtype=torch.uint8)  # (H, W, 3)
+    obb = _toy_obb(3)
+    runtime = type("RT", (), {"cuda_mode": False, "device": "cpu"})()
+    crops = extract_canonical_crops(hwc, obb, _GEOM, runtime)
+    assert crops.shape == (3, 3, _GEOM.canvas_h, _GEOM.canvas_w)
+    assert crops.dtype == torch.float32
 
 
 # ---- Task 2/3: GPU factor-bundle forward ------------------------------------
@@ -114,13 +250,6 @@ def test_forward_multi_cuda_shape_matches_numpy(monkeypatch):
     np.testing.assert_allclose(cuda_out, numpy_out, rtol=0, atol=1e-6)
 
 
-def test_supports_cuda_forward_bundle():
-    b_native = _supports_helper("native")
-    b_coreml = _supports_helper("coreml")
-    assert b_native.supports_cuda_forward() is True
-    assert b_coreml.supports_cuda_forward() is False
-
-
 def _supports_helper(active_backend):
     from hydra_suite.core.identity.classification import backend as bk
 
@@ -135,6 +264,13 @@ def _supports_helper(active_backend):
     b._uses_factor_backends = lambda: True  # type: ignore[method-assign]
     b._ensure_loaded = lambda: None  # type: ignore[method-assign]
     return b
+
+
+def test_supports_cuda_forward_bundle():
+    b_native = _supports_helper("native")
+    b_coreml = _supports_helper("coreml")
+    assert b_native.supports_cuda_forward() is True
+    assert b_coreml.supports_cuda_forward() is False
 
 
 def test_predict_batch_cuda_uses_gpu_forward_for_capable_bundle(monkeypatch):
@@ -252,32 +388,39 @@ def test_frames_on_cuda_gate():
 
 
 def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
+    """GPU path uses extract_canonical_crops_batch + letterbox_fit + predict_batch_cuda;
+    CPU path uses extract_classifier_crops_batch_np + apply_fit_batch + predict_batch
+    (the unified-seam successors of the deleted *_gpu crop helpers)."""
+    from hydra_suite.core.inference.result import CropBatch, NumpyCropBatch
     from hydra_suite.core.inference.stages import cnn as cnn_stage
     from hydra_suite.core.inference.stages import crops as crops_mod
 
     used = {"gpu": False, "cpu": False, "cuda_fwd": False, "numpy_fwd": False}
 
-    class _FakeBatch:
-        crops = torch.zeros((1, 3, 8, 8))
-        obb_by_frame = {0: _toy_obb(1)}
+    def _fake_canonical_batch(*a, **k):
+        used["gpu"] = True
+        return CropBatch(
+            crops=torch.zeros((1, 3, 8, 8)),
+            detection_ids=np.array([0]),
+            frame_index=np.array([0]),
+            obb_by_frame={0: _toy_obb(1)},
+            native_sizes=np.array([[8, 8]]),
+        )
 
-        def select_frame(self, f):
-            return np.array([0])
-
-    class _FakeNumpyBatch(_FakeBatch):
-        # CPU branch consumes uint8 HWC crops (NumpyCropBatch), not a tensor.
-        crops = [np.zeros((8, 8, 3), np.uint8)]
+    def _fake_np_batch(*a, **k):
+        used["cpu"] = True
+        return NumpyCropBatch(
+            crops=[np.zeros((8, 8, 3), np.uint8)],
+            detection_ids=np.array([0]),
+            frame_index=np.array([0]),
+            obb_by_frame={0: _toy_obb(1)},
+            native_sizes=np.array([[8, 8]]),
+        )
 
     monkeypatch.setattr(
-        crops_mod,
-        "extract_classifier_crops_batch_gpu",
-        lambda *a, **k: (used.__setitem__("gpu", True) or _FakeBatch()),
+        crops_mod, "extract_canonical_crops_batch", _fake_canonical_batch
     )
-    monkeypatch.setattr(
-        crops_mod,
-        "extract_classifier_crops_batch_np",
-        lambda *a, **k: (used.__setitem__("cpu", True) or _FakeNumpyBatch()),
-    )
+    monkeypatch.setattr(crops_mod, "extract_classifier_crops_batch_np", _fake_np_batch)
 
     class _Backend:
         def predict_batch_cuda(self, crops, input_is_bgr=True):
@@ -295,11 +438,12 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
         factor_class_names=[["a", "b"]],
     )
     cfg = type("C", (), {"label": "x"})()
-    rt = type("RT", (), {"tensor_on_cuda": True, "device": "cpu"})()
+    rt = type("RT", (), {"tensor_on_cuda": True, "device": "cpu", "cuda_mode": False})()
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
     # Gate True -> GPU path.
     monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: True)
-    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt, geometry)
     assert used["gpu"] and used["cuda_fwd"]
     assert not used["cpu"] and not used["numpy_fwd"]
 
@@ -307,22 +451,9 @@ def test_run_cnn_batch_routes_by_frame_device(monkeypatch):
     for k in used:
         used[k] = False
     monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: False)
-    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt)
+    cnn_stage.run_cnn_batch([None], [_toy_obb(1)], model, cfg, rt, geometry)
     assert used["cpu"] and used["numpy_fwd"]
     assert not used["gpu"] and not used["cuda_fwd"]
-
-
-def test_gpu_classifier_crop_hwc_nvdec_layout():
-    """NvdecFrameReader yields (H, W, 3) HWC uint8 (RGB); the extractor must
-    permute to CHW and produce 3-channel crops (regression for the shape bug
-    that crashed the first real NVDEC run: 'tensor a (4512) must match b (3)')."""
-    from hydra_suite.core.inference.stages.crops import extract_classifier_crops_gpu
-
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
-    hwc = torch.randint(0, 256, (200, 300, 3), dtype=torch.uint8).to(dev)  # (H, W, 3)
-    crops = extract_classifier_crops_gpu(hwc, _toy_obb(3), _GEOM, dev)
-    assert crops.shape == (3, 3, 128, 128)  # 3 crops, 3 channels
-    assert crops.dtype == torch.float32
 
 
 def test_predict_batch_cuda_fallback_forwards_input_is_bgr(monkeypatch):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 
+import numpy as np
 import pandas as pd
 
 from hydra_suite.core.canonicalization.geometry import CanonicalGeometry, ClippingStats
@@ -332,3 +333,69 @@ def test_compute_frame_corners_and_affines_accumulates_clipping_stats() -> None:
     summary = clipping_stats.summary()
     assert summary is not None
     assert "1/2" in summary
+
+
+def test_pose_fit_failure_skips_detection(monkeypatch) -> None:
+    """F6: an ``apply_fit`` failure on a canonical crop must drop the
+    detection, not fall back to feeding the backend a raw canvas crop while
+    still composing/inverting a fit that was never applied.
+    """
+
+    class _FakeProfiler:
+        def tick(self, *_a, **_k) -> None:
+            return None
+
+        def tock(self, *_a, **_k) -> None:
+            return None
+
+    class _FakePoseBackend:
+        def __init__(self) -> None:
+            self.calls: list[list[np.ndarray]] = []
+
+        def predict_batch(self, crops):
+            self.calls.append(list(crops))
+            return [None] * len(crops)
+
+    monkeypatch.setattr(
+        ic,
+        "apply_fit",
+        lambda *a, **k: (_ for _ in ()).throw(ValueError("fit failed")),
+    )
+
+    geometry = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
+    canvas_w, canvas_h = geometry.canvas_wh
+    raw_crop = np.full((canvas_h, canvas_w, 3), 255, dtype=np.uint8)
+
+    pose_backend = _FakePoseBackend()
+    interp_pose_rows: list[dict] = []
+    pending_crops = [raw_crop]
+    pending_entries = [
+        {
+            "task": {"frame_id": 7, "traj_id": 3},
+            "filename": "frame_7_traj_3.png",
+            "crop_info": {
+                "canonical": True,
+                "M_forward": np.eye(2, 3, dtype=np.float32),
+            },
+        }
+    ]
+
+    ic._flush_pose_batch(
+        pose_backend,
+        pending_crops,
+        pending_entries,
+        interp_pose_rows,
+        [],
+        [],
+        _FakeProfiler(),
+        geometry,
+    )
+
+    # The backend must never see the raw canvas crop for the failed fit.
+    assert len(pose_backend.calls) == 1
+    called_crops = pose_backend.calls[0]
+    assert len(called_crops) == 0
+    assert not any(np.array_equal(c, raw_crop) for c in called_crops)
+
+    # The detection is dropped entirely -- no pose row produced for it.
+    assert interp_pose_rows == []

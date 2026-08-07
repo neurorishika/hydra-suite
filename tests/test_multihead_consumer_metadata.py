@@ -10,7 +10,10 @@ import os
 
 import pytest
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.runtime.resolver import ResolvedBackend
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 @pytest.mark.skipif(
@@ -118,7 +121,9 @@ def test_headtail_rejects_shared_trunk_classifier(tmp_path):
 
     try:
         HeadTailAnalyzer(
-            model_path=str(p), resolved=ResolvedBackend("torch", "cpu", False)
+            model_path=str(p),
+            resolved=ResolvedBackend("torch", "cpu", False),
+            geometry=_TEST_GEOMETRY,
         )
         raise AssertionError("HeadTailAnalyzer accepted a multi-head classifier")
     except AssertionError:

@@ -1566,7 +1566,7 @@ class TorchvisionInferenceWorker(QRunnable):
         model_path: Path,
         image_paths: List[Path],
         class_names: List[str],
-        input_size: int = 224,
+        input_size: int | tuple[int, int] = 224,
         device: str = "cpu",
         batch_size: int = 64,
         force_monochrome: bool = False,
@@ -1582,6 +1582,18 @@ class TorchvisionInferenceWorker(QRunnable):
         self.force_monochrome = bool(force_monochrome)
         self.signals = TaskSignals()
 
+    def _input_hw(self) -> tuple[int, int]:
+        """Resolve ``self.input_size`` to a true ``(input_h, input_w)`` pair.
+
+        Mirrors how training (``training/runner.py``) derives ``(H, W)`` from
+        ``params.input_size``: a 2-tuple/list is ``(H, W)`` verbatim; a bare
+        int is treated as a legacy square size so eval == training == inference.
+        """
+        size = self.input_size
+        if isinstance(size, (list, tuple)) and len(size) == 2:
+            return int(size[0]), int(size[1])
+        return int(size), int(size)
+
     def _build_transform(self):
         import numpy as np
         from PIL import Image
@@ -1590,8 +1602,8 @@ class TorchvisionInferenceWorker(QRunnable):
         from ...training.canonical_transform import CanonicalFitTransform
         from ...training.torchvision_model import get_classifier_normalization_stats
 
-        sz = self.input_size
-        fit_transform = CanonicalFitTransform((sz, sz))
+        input_h, input_w = self._input_hw()
+        fit_transform = CanonicalFitTransform((input_h, input_w))
 
         def _fit(img):
             arr = np.asarray(img, dtype=np.uint8)
@@ -1628,7 +1640,7 @@ class TorchvisionInferenceWorker(QRunnable):
         from PIL import Image
 
         batch_tensors = []
-        sz = self.input_size
+        input_h, input_w = self._input_hw()
         for path in batch_paths:
             try:
                 img = Image.open(str(path)).convert("RGB")
@@ -1636,7 +1648,7 @@ class TorchvisionInferenceWorker(QRunnable):
                     img = img.convert("L").convert("RGB")
                 batch_tensors.append(transform(img).numpy())
             except Exception:
-                batch_tensors.append(np.zeros((3, sz, sz), dtype=np.float32))
+                batch_tensors.append(np.zeros((3, input_h, input_w), dtype=np.float32))
         return np.stack(batch_tensors).astype(np.float32)
 
     def _resolve_force_monochrome(self) -> bool:

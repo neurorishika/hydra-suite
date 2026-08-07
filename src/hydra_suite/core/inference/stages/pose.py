@@ -24,27 +24,28 @@ from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
-# Fallback canonical geometry for callers that omit ``geometry`` (matches the
-# project-wide default `InferenceConfig.canonical` built from
-# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults -- mirrors the old
-# module-level _CANONICAL_ASPECT_RATIO/_CANONICAL_MARGIN constants this
-# replaces).
-_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-
 
 def model_input_wh(model: "PoseModel", geometry: CanonicalGeometry) -> tuple[int, int]:
     """The pose backend's fixed (W, H) input, or ``geometry``'s own canvas.
 
-    Backends with a true non-square input (e.g. ViTPose 192x256, SLEAP-exported
-    fixed HxW) expose ``preferred_input_wh`` and that is used directly -- no
-    collapsing to a square, which would otherwise force a second, redundant
-    letterbox inside the backend's own preprocessing.
+    Backends that perform their own Layer-2 fit inside their preprocessing
+    (``does_own_letterbox``, e.g. ViTPose's box2cs/top_down_affine) get an
+    IDENTITY fit here: canvas -> canvas, scale 1. Doing the fit again at this
+    layer (to ``preferred_input_wh``) would be a second, redundant resample
+    that diverges from what the backend was trained on.
+
+    Backends with a true non-square input that do NOT do their own letterbox
+    (e.g. SLEAP-exported fixed HxW) expose ``preferred_input_wh`` and that is
+    used directly -- no collapsing to a square, which would otherwise force a
+    second, redundant letterbox inside the backend's own preprocessing.
 
     Backends with no fixed input size (fully convolutional, e.g. native SLEAP's
     ``preferred_input_size == 0``) get an identity fit: feed the canonical crop
     unchanged and let the backend's own preprocessing handle it, matching the
     legacy "native-extent crop, backend resizes" behaviour for those backends.
     """
+    if getattr(model.backend, "does_own_letterbox", False):
+        return geometry.canvas_wh
     wh = getattr(model.backend, "preferred_input_wh", None)
     if wh is not None:
         try:
@@ -271,7 +272,7 @@ def run_pose(
     model: PoseModel,
     config: PoseConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> PoseResult:
     """Run pose estimation on canonical crops. Returns (D, K, 3) keypoints + valid_mask.
 
@@ -383,7 +384,7 @@ def run_pose_batch(
     model: PoseModel,
     config: PoseConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> "dict[int, PoseResult]":
     """Run pose estimation over a CropBatch; return one PoseResult per frame.
 
@@ -398,6 +399,15 @@ def run_pose_batch(
     Calls predict_batch_cuda when batch.crops.is_cuda and backend supports it;
     that branch feeds the canonical-canvas crop straight through (no Layer 2
     fit), matching the no-host-round-trip on-device crop paths elsewhere.
+
+    For backends that own their Layer-2 fit (``does_own_letterbox``, e.g.
+    ViTPose), ``model_wh == geometry.canvas_wh`` and ``fit_m`` is the identity
+    affine, so composing it into back-projection on both branches is a no-op
+    -- it is done unconditionally for those backends so the CUDA and non-CUDA
+    paths compute keypoints via the exact same formula. Backends that do NOT
+    own their letterbox (SLEAP-exported, YOLO) keep the pre-existing
+    behaviour: the CUDA branch inverts ``m_align`` alone (their own
+    ``predict_batch_cuda`` resizes internally in that frame), unchanged.
     """
     import cv2
 
@@ -405,6 +415,7 @@ def run_pose_batch(
 
     n_total = batch.crops.shape[0]
     on_cuda = batch.crops.is_cuda and hasattr(model.backend, "predict_batch_cuda")
+    does_own_letterbox = getattr(model.backend, "does_own_letterbox", False)
 
     model_wh = model_input_wh(model, geometry)
     fit = fit_to_model_input(geometry.canvas_wh, model_wh)
@@ -437,7 +448,7 @@ def run_pose_batch(
                 corners = obb.corners[local_idx]
                 try:
                     m_align, _theta, _clipped = canonical_affine(corners, geometry)
-                    if on_cuda:
+                    if on_cuda and not does_own_letterbox:
                         m_inv = cv2.invertAffineTransform(m_align)
                     else:
                         m_total = compose_affine(fit_m, m_align)

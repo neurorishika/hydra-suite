@@ -920,8 +920,18 @@ class ClassifierBackend:
             _IMAGENET_STD.reshape(1, 1, 1, 3),
         )
 
-    def _preprocess(self, crops: list[np.ndarray]) -> np.ndarray:
-        """Resize, color-convert, and normalize crops into a (N, 3, H, W) batch."""
+    def _preprocess(
+        self, crops: list[np.ndarray], input_is_bgr: bool = True
+    ) -> np.ndarray:
+        """Resize, color-convert, and normalize crops into a (N, 3, H, W) batch.
+
+        Parameters
+        ----------
+        input_is_bgr:
+            When True (default, standard cv2 BGR path), flip channels to
+            convert BGR→RGB. Set False when crops come from an RGB source
+            (e.g. NVDEC). Mirrors :meth:`_preprocess_cuda`.
+        """
         import cv2
 
         h, w = self._metadata.input_size
@@ -941,7 +951,7 @@ class ClassifierBackend:
                 resized = crop
             else:
                 resized = cv2.resize(crop, (w, h), interpolation=cv2.INTER_LINEAR)
-            rgb = resized[:, :, ::-1]
+            rgb = resized[:, :, ::-1] if input_is_bgr else resized
             if self._metadata.monochrome:
                 gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
                 rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
@@ -1335,24 +1345,34 @@ class ClassifierBackend:
             self._active_execution_backend = "native"
             self._loaded = True
 
-    def predict_batch(self, crops: list[np.ndarray]) -> list[list[np.ndarray]]:
-        """Run inference on ``crops``. Returns ``[N_crops][K_factors]`` probability vectors."""
+    def predict_batch(
+        self, crops: list[np.ndarray], input_is_bgr: bool = True
+    ) -> list[list[np.ndarray]]:
+        """Run inference on ``crops``. Returns ``[N_crops][K_factors]`` probability vectors.
+
+        Parameters
+        ----------
+        input_is_bgr:
+            When True (default, standard cv2 BGR path), flip channels to
+            convert BGR→RGB during preprocessing. Set False when crops come
+            from an RGB source (e.g. NVDEC), matching :meth:`_preprocess_cuda`.
+        """
         if not crops:
             return []
         self._ensure_loaded_best_effort()
         try:
             if self._active_execution_backend == "coreml":
-                batch_np = self._preprocess(crops)
+                batch_np = self._preprocess(crops, input_is_bgr=input_is_bgr)
                 logits = self._forward_coreml(batch_np)
             elif self._active_execution_backend == "onnx":
-                batch_np = self._preprocess(crops)
+                batch_np = self._preprocess(crops, input_is_bgr=input_is_bgr)
                 logits = self._forward_onnx(batch_np)
             elif self._metadata.arch == "yolo":
                 logits = self._forward_yolo(crops)
             elif self._uses_factor_backends():
                 logits = self._forward_yolo_multi(crops)
             else:
-                batch_np = self._preprocess(crops)
+                batch_np = self._preprocess(crops, input_is_bgr=input_is_bgr)
                 logits = self._forward_torch(batch_np)
         except ClassifierError:
             raise

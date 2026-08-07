@@ -70,3 +70,10 @@ def test_fit_affine_round_trips_a_point():
     mapped = m @ pt
     back = inv @ np.array([mapped[0], mapped[1], 1.0])
     np.testing.assert_allclose(back, pt[:2], atol=1e-6)
+
+
+def test_apply_fit_nonsquare_shape_and_dtype():
+    crop = np.random.default_rng(0).integers(0, 256, (56, 112, 3), np.uint8)
+    fit = fit_to_model_input((112, 56), (64, 128))
+    out = apply_fit(crop, fit)
+    assert out.shape == (128, 64, 3) and out.dtype == np.uint8

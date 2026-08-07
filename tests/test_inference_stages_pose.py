@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import torch
 
+from hydra_suite.core.canonicalization.geometry import CanonicalGeometry
 from hydra_suite.core.inference.config import (
     PoseConfig,
     PoseSLEAPConfig,
@@ -12,6 +13,8 @@ from hydra_suite.core.inference.config import (
 from hydra_suite.core.inference.result import OBBResult
 from hydra_suite.core.inference.runtime import RuntimeContext
 from hydra_suite.core.inference.stages.pose import PoseModel, load_pose_model, run_pose
+
+_TEST_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
 
 
 def _cpu_rt():
@@ -85,7 +88,7 @@ def test_run_pose_empty_crops():
         backend=MagicMock(), n_keypoints=4, keypoint_names=["a", "b", "c", "d"]
     )
     crops = torch.zeros((0, 3, 64, 64))
-    result = run_pose(crops, _obb(0), model, config, _cpu_rt())
+    result = run_pose(crops, _obb(0), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert result.keypoints.shape == (0, 4, 3)
     assert result.valid_mask.shape == (0,)
 
@@ -104,7 +107,7 @@ def test_run_pose_shape():
         backend=mock_backend, n_keypoints=4, keypoint_names=["a", "b", "c", "d"]
     )
     crops = torch.zeros((2, 3, 64, 64))
-    result = run_pose(crops, _obb(2), model, config, _cpu_rt())
+    result = run_pose(crops, _obb(2), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert result.keypoints.shape == (2, 4, 3)
     assert result.valid_mask.shape == (2,)
 
@@ -215,6 +218,6 @@ def test_run_pose_valid_mask_high_conf():
     mock_backend.predict_batch.return_value = [r0, r1]
     model = PoseModel(backend=mock_backend, n_keypoints=4, keypoint_names=list("abcd"))
     crops = torch.zeros((2, 3, 64, 64))
-    result = run_pose(crops, _obb(2), model, config, _cpu_rt())
+    result = run_pose(crops, _obb(2), model, config, _cpu_rt(), geometry=_TEST_GEOMETRY)
     assert bool(result.valid_mask[0]) is True
     assert bool(result.valid_mask[1]) is False

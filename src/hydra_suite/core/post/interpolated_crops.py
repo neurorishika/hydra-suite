@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from hydra_suite.core.canonicalization.fit import apply_fit
 from hydra_suite.core.canonicalization.geometry import (
     ClippingStats,
     canonical_geometry_from_params,
@@ -541,16 +542,14 @@ def _flush_pose_batch(
     Layer 1 canonical by construction: ``_extract_pose_crop`` skips (rather
     than produces) a crop for the degenerate-OBB case where no rigid Layer 1
     transform exists, so there is no non-canonical entry left to special-case.
-    The ``canonical`` check + raw-crop append below stays only as a defensive
-    fallback for an ``apply_fit`` failure on an otherwise-canonical crop, not
-    a geometry escape hatch.
+    An ``apply_fit`` failure on an otherwise-canonical crop is treated the
+    same way: there is no honest crop to feed the backend (a raw canvas crop
+    would be anisotropically resized by the backend, and there is no fit to
+    invert for the keypoint back-projection), so the detection is dropped
+    exactly like the degenerate-OBB case in ``_extract_pose_crop``.
     """
     from hydra_suite.core.canonicalization.crop import invert_keypoints as _invert_kpts
-    from hydra_suite.core.canonicalization.fit import (
-        apply_fit,
-        fit_affine,
-        fit_to_model_input,
-    )
+    from hydra_suite.core.canonicalization.fit import fit_affine, fit_to_model_input
     from hydra_suite.core.inference.stages.pose import compose_affine, model_input_wh
 
     class _BackendHolder:
@@ -561,23 +560,34 @@ def _flush_pose_batch(
     fit_m = fit_affine(fit)
 
     fitted_crops = []
+    kept_entries = []
     for _crop, _entry in zip(pending_crops, pending_entries):
         _crop_info = _entry.get("crop_info") or {}
         if _crop_info.get("canonical"):
             try:
-                fitted_crops.append(apply_fit(_crop, fit))
-                continue
+                fitted_crop = apply_fit(_crop, fit)
             except Exception:
-                logger.debug(
-                    "Interp pose Layer 2 fit failed; feeding raw crop.",
+                logger.warning(
+                    "Interp pose: skipping frame_id=%s traj_id=%s -- Layer 2 "
+                    "fit (apply_fit) failed for an otherwise-canonical crop; "
+                    "the old raw-crop fallback fed the backend a "
+                    "wrongly-scaled crop and inverted a fit that was never "
+                    "applied instead of skipping.",
+                    _entry["task"]["frame_id"],
+                    _entry["task"]["traj_id"],
                     exc_info=True,
                 )
-        fitted_crops.append(_crop)
+                continue
+            fitted_crops.append(fitted_crop)
+            kept_entries.append(_entry)
+        else:
+            fitted_crops.append(_crop)
+            kept_entries.append(_entry)
 
     profiler.tick("interp_pose_inference")
     pose_results = pose_backend.predict_batch(fitted_crops)
     profiler.tock("interp_pose_inference")
-    for pidx, entry in enumerate(pending_entries):
+    for pidx, entry in enumerate(kept_entries):
         pose_out = pose_results[pidx] if pidx < len(pose_results) else None
         pose_mean_conf = 0.0
         pose_valid_fraction = 0.0

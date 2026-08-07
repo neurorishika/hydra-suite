@@ -16,11 +16,6 @@ from ..runtime import RuntimeContext, resolved_backend_for
 
 logger = logging.getLogger(__name__)
 
-# Fallback canonical geometry for callers that omit ``geometry`` (matches the
-# project-wide default `InferenceConfig.canonical` built from
-# REFERENCE_BODY_SIZE=20/aspect=2.0/margin=1.3 defaults).
-_DEFAULT_CANONICAL_GEOMETRY = CanonicalGeometry.from_reference(20.0, 2.0, 1.3)
-
 
 @dataclass
 class CNNModel:
@@ -73,7 +68,7 @@ def run_cnn(
     model: CNNModel,
     config: CNNConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> CNNResult:
     """Run CNN identity classifier; returns raw pre-calibration probabilities.
 
@@ -137,7 +132,7 @@ def run_cnn_batch(
     model: "CNNModel",
     config: CNNConfig,
     runtime: RuntimeContext,
-    geometry: CanonicalGeometry = _DEFAULT_CANONICAL_GEOMETRY,
+    geometry: CanonicalGeometry,
 ) -> "dict[int, CNNResult]":
     """Run CNN classifier over a window; return one CNNResult per frame.
 
@@ -150,13 +145,14 @@ def run_cnn_batch(
 
     Both branches derive their fit from the SAME ``fit_to_model_input(geometry
     .canvas_wh, (in_w, in_h))`` call, computed once here. The GPU (NVDEC
-    on-device) branch applies that fit on-device via ``apply_fit_gpu``
-    (``F.interpolate`` + zero-canvas paste) instead of the CPU's ``cv2``-based
-    ``apply_fit`` -- an anisotropic stretch here would silently feed the model
-    a DIFFERENT geometry than the CPU path (a model trained on letterboxed
-    crops fed non-letterboxed ones on CUDA), so both paths must letterbox
-    identically; only the resample kernel differs (grid_sample/interpolate
-    != cv2, so the acceptance gate is identity agreement, not byte-identity).
+    on-device) branch applies that fit on-device via the shared torch seam's
+    ``letterbox_fit`` (``F.interpolate`` + zero-canvas paste) instead of the
+    CPU's ``cv2``-based ``apply_fit`` -- an anisotropic stretch here would
+    silently feed the model a DIFFERENT geometry than the CPU path (a model
+    trained on letterboxed crops fed non-letterboxed ones on CUDA), so both
+    paths must letterbox identically; only the resample kernel differs
+    (grid_sample/interpolate != cv2, so the acceptance gate is identity
+    agreement, not byte-identity).
     """
     from .crops import frames_on_cuda
 
@@ -169,17 +165,17 @@ def run_cnn_batch(
         # tensors; floor-quantize to 8 bits so the input stays in the same regime
         # as the cv2/uint8 reference (grid_sample != cv2, so the acceptance gate
         # is identity agreement, not byte-identity -- see the design spec).
-        from .crops import apply_fit_gpu, extract_classifier_crops_batch_gpu
+        from hydra_suite.core.canonicalization.resample import letterbox_fit
 
-        batch = extract_classifier_crops_batch_gpu(
-            frames, obb_results, geometry, runtime.device
-        )
+        from .crops import extract_canonical_crops_batch
+
+        batch = extract_canonical_crops_batch(frames, obb_results, geometry, runtime)
         n_total = batch.crops.shape[0]
         if n_total:
             # NVDEC frames (the only source of CUDA frames) are RGB, so
             # input_is_bgr=False: the model sees RGB, matching the CPU path where
             # _preprocess flips its BGR crop to RGB.
-            fitted = apply_fit_gpu(batch.crops, fit)
+            fitted = letterbox_fit(batch.crops, fit.model_wh)
             cuda_crops = [
                 (fitted[i] * 255.0).floor().clamp(0, 255) for i in range(n_total)
             ]

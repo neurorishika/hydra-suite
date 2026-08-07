@@ -83,11 +83,12 @@ def test_every_cache_key_param_is_actually_written():
 # same zero-padded canvas -- or a model trained on letterboxed crops sees an
 # anisotropically-stretched crop on CUDA and a letterboxed one on CPU/MPS,
 # a silent accuracy divergence invisible on this (non-CUDA) box. These tests
-# exercise apply_fit_gpu on the CPU torch device (F.interpolate runs there
-# too) and compare shape + zero-padded band placement against the CPU cv2
-# apply_fit for the SAME FitResult -- the shape/offset arithmetic, not the
-# resample kernel (grid_sample/interpolate != cv2 is an accepted, pre-existing
-# identity-not-byte-identity gap elsewhere in this module).
+# exercise the shared torch seam's ``letterbox_fit`` on the CPU torch device
+# (``F.interpolate`` runs there too) and compare shape + zero-padded band
+# placement against the CPU ``apply_fit`` for the SAME ``FitResult`` -- the
+# shape/offset arithmetic, not the resample kernel (grid_sample/interpolate
+# != cv2 is an accepted, pre-existing identity-not-byte-identity gap
+# elsewhere in this module).
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +96,7 @@ def test_gpu_fit_matches_cpu_fit_shape_and_padding():
     import torch
 
     from hydra_suite.core.canonicalization.fit import apply_fit, fit_to_model_input
-    from hydra_suite.core.inference.stages.crops import apply_fit_gpu
+    from hydra_suite.core.canonicalization.resample import letterbox_fit
 
     # Non-square canonical canvas fit to a non-matching-aspect model input, so
     # BOTH scale and offset (letterbox padding) are exercised.
@@ -111,7 +112,7 @@ def test_gpu_fit_matches_cpu_fit_shape_and_padding():
     batch = (
         torch.from_numpy(crop_hwc).permute(2, 0, 1).unsqueeze(0).float() / 255.0
     )  # (1, 3, canvas_h, canvas_w)
-    gpu_out = apply_fit_gpu(batch, fit)  # (1, 3, model_h, model_w)
+    gpu_out = letterbox_fit(batch, fit.model_wh)  # (1, 3, model_h, model_w)
 
     model_h, model_w = fit.model_wh[1], fit.model_wh[0]
     assert gpu_out.shape == (1, 3, model_h, model_w)
@@ -146,7 +147,7 @@ def test_run_cnn_batch_gpu_and_cpu_branches_share_one_fit(monkeypatch):
         factor_names=["f"],
         factor_class_names=[["a", "b"]],
     )
-    expected_fit = fit_to_model_input(geometry.canvas_wh, (40, 40))
+    expected_model_wh = fit_to_model_input(geometry.canvas_wh, (40, 40)).model_wh
 
     class _FakeBatch:
         crops = torch.zeros((1, 3, geometry.canvas_h, geometry.canvas_w))
@@ -155,16 +156,18 @@ def test_run_cnn_batch_gpu_and_cpu_branches_share_one_fit(monkeypatch):
         def select_frame(self, f):
             return np.array([0])
 
-    seen_fits = []
-    real_apply_fit_gpu = crops_mod.apply_fit_gpu
+    seen_model_whs = []
+    import hydra_suite.core.canonicalization.resample as resample_mod
 
-    def _spy_apply_fit_gpu(batch, fit):
-        seen_fits.append(fit)
-        return real_apply_fit_gpu(batch, fit)
+    real_letterbox_fit = resample_mod.letterbox_fit
 
-    monkeypatch.setattr(crops_mod, "apply_fit_gpu", _spy_apply_fit_gpu)
+    def _spy_letterbox_fit(crop_chw, model_wh):
+        seen_model_whs.append(model_wh)
+        return real_letterbox_fit(crop_chw, model_wh)
+
+    monkeypatch.setattr(resample_mod, "letterbox_fit", _spy_letterbox_fit)
     monkeypatch.setattr(
-        crops_mod, "extract_classifier_crops_batch_gpu", lambda *a, **k: _FakeBatch()
+        crops_mod, "extract_canonical_crops_batch", lambda *a, **k: _FakeBatch()
     )
     monkeypatch.setattr(crops_mod, "frames_on_cuda", lambda r, f: True)
 
@@ -178,5 +181,25 @@ def test_run_cnn_batch_gpu_and_cpu_branches_share_one_fit(monkeypatch):
 
     cnn_stage.run_cnn_batch([None], [_obb(1, None)], model, cfg, rt, geometry)
 
-    assert len(seen_fits) == 1
-    assert seen_fits[0] == expected_fit
+    assert len(seen_model_whs) == 1
+    assert seen_model_whs[0] == expected_model_wh
+
+
+# ---------------------------------------------------------------------------
+# Non-square canonical canvas: extract_canonical_crops is device-agnostic and
+# uses the SAME shape on a rectangular canvas as on a square one -- the crop
+# builder's single torch seam (canonical_warp_batch) must never silently
+# collapse to a square/otherwise-transposed shape.
+# ---------------------------------------------------------------------------
+
+
+def test_crops_nonsquare_canvas_uniform():
+    from hydra_suite.core.inference.runtime import RuntimeContext
+    from hydra_suite.core.inference.stages.crops import extract_canonical_crops
+
+    geom = CanonicalGeometry.from_reference(60, 2.0, 1.3)  # non-square canvas
+    frame = np.random.default_rng(0).integers(0, 256, (300, 300, 3), np.uint8)
+    runtime = RuntimeContext(cuda_mode=False, device="cpu", use_nvdec=False)
+    crops = extract_canonical_crops(frame, _obb(3, None), geom, runtime)
+    assert crops.shape == (3, 3, geom.canvas_h, geom.canvas_w)
+    assert geom.canvas_h != geom.canvas_w
